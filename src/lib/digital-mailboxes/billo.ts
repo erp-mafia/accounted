@@ -10,12 +10,13 @@
  *   - the sender OAuth client: client credentials at the identity server,
  *     a token for the Sender API and SendEasy.
  *
- * Receiving: the company is registered as Accounted's business customer
- * (partnerCustomerId, our company id as externalCustomerId) and its own
- * mailbox is enrolled under it (enrollmentId). Billo shows only documents
- * that arrive after the enrolment. A company holds no BankID, so the mandate
- * is NotRequired: the company's consent, given by its admin in Accounted,
- * is recorded on our side (digital_mailbox_connections).
+ * Receiving: Accounted is one partner customer at Billo, and the API key is
+ * bound to it (the token's partner_customer_id claim). Each company's
+ * mailbox is enrolled under it as an end customer (enrollmentId); the key
+ * cannot register customers of its own. Billo shows only documents that
+ * arrive after the enrolment. A company holds no BankID, so the mandate is
+ * NotRequired: the company's consent, given by its admin in Accounted, is
+ * recorded on our side (digital_mailbox_connections).
  */
 import { safeFetch } from '@/lib/http/safe-fetch'
 import { formatAmountInput } from '@/lib/money'
@@ -46,17 +47,24 @@ import type {
 
 const PROVIDER = 'billo' as const
 
+/**
+ * SendEasy lives on the partner gateway, not on the Sender API host its spec
+ * names (Billo, 2026-10-22, for the sandbox; production is taken to follow
+ * the same gateway).
+ */
 export const BILLO_HOSTS = {
   sandbox: {
     partner: 'https://sandbox-api.billo.life/partner',
     mailbox: 'https://sandbox-api.billo.life/partner/mailbox',
     sender: 'https://sandbox-sender-api.billo.life',
+    sendeasy: 'https://sandbox-api.billo.life/sendeasy',
     identity: 'https://sandbox-identity.billo.life/connect/token',
   },
   production: {
     partner: 'https://api.billo.life/partner',
     mailbox: 'https://api.billo.life/partner/mailbox',
     sender: 'https://sender-api.billo.life',
+    sendeasy: 'https://api.billo.life/sendeasy',
     identity: 'https://identity.billo.life/connect/token',
   },
 } as const
@@ -115,8 +123,6 @@ export interface BilloBusinessMailboxInput {
   /** Ten digits. */
   orgNumber: string
   companyName: string
-  /** Accounted's company id: Billo's externalCustomerId. */
-  externalCustomerId: string
   addressLine1: string
   postalCode: string
   city: string
@@ -147,7 +153,20 @@ interface BilloDocumentSummary {
 }
 
 interface BilloDocumentDetail extends BilloDocumentSummary {
+  /** The sender's display name, on every document. */
+  sender?: string | null
   invoiceData?: Record<string, unknown> | null
+}
+
+/** The partner customer a partner token is bound to (its partner_customer_id claim), or null. */
+export function billoPartnerCustomerId(token: string): string | null {
+  try {
+    const claims = JSON.parse(Buffer.from(token.split('.')[1] ?? '', 'base64url').toString('utf8')) as { partner_customer_id?: unknown }
+    const id = claims.partner_customer_id
+    return typeof id === 'string' && id.trim() ? id.trim() : null
+  } catch {
+    return null
+  }
 }
 
 function billoKind(type: string | undefined): MailboxDocumentKind {
@@ -191,24 +210,20 @@ export class BilloMailboxClient implements MailboxReceiver {
     )
   }
 
+  /** Accounted's partner customer, which the API key is bound to. */
+  private async partnerCustomerId(): Promise<string> {
+    const id = await withToken(this.tokens, async (token) => billoPartnerCustomerId(token))
+    if (!id) throw new DigitalMailboxApiError(PROVIDER, 'auth', 'the partner token names no partner customer')
+    return id
+  }
+
   /**
-   * Register the company as Accounted's business customer and enrol its own
-   * mailbox. Both steps are safe to repeat: Billo answers an already
-   * registered company with the same partnerCustomerId, and an enrolment
-   * that already exists under that customer is looked up instead.
+   * Enrol the company's own mailbox as an end customer under Accounted's
+   * partner customer. Safe to repeat: an enrolment that already exists under
+   * it is looked up instead.
    */
   async createBusinessMailbox(input: BilloBusinessMailboxInput): Promise<BilloEnrolment> {
-    const registered = await this.call('POST', `${this.hosts.partner}/v1/clients/business`, 'register business customer', {
-      name: input.companyName,
-      orgNumber: input.orgNumber,
-      externalCustomerId: input.externalCustomerId,
-      email: input.representative.email,
-      phoneNumber: input.representative.phone,
-    })
-    const reg = (registered.json ?? {}) as { id?: unknown; partnerCustomerId?: unknown }
-    const partnerCustomerId = String(reg.id ?? reg.partnerCustomerId ?? '')
-    if (!partnerCustomerId) throw new DigitalMailboxApiError(PROVIDER, 'unavailable', 'customer registration answered no id')
-
+    const partnerCustomerId = await this.partnerCustomerId()
     try {
       const enrolled = await this.call(
         'POST',
@@ -287,9 +302,15 @@ export class BilloMailboxClient implements MailboxReceiver {
     }
   }
 
-  /** Register (or replace) Accounted's partner-wide webhook. */
+  /**
+   * Register (or replace) the webhook on Accounted's partner customer, which
+   * fires for every company enrolled under it. The partner-wide endpoint
+   * refuses a key bound to a partner customer.
+   */
   async registerWebhook(callbackUrl: string, secret: string): Promise<{ id: string | null }> {
-    const res = await this.call('POST', `${this.hosts.mailbox}/v1/webhook`, 'register webhook', {
+    const partnerCustomerId = await this.partnerCustomerId()
+    const url = `${this.hosts.mailbox}/v1/clients/${encodeURIComponent(partnerCustomerId)}/webhook`
+    const res = await this.call('POST', url, 'register webhook', {
       callbackUrl,
       secret,
       eventTypes: [...BILLO_WEBHOOK_EVENTS],
@@ -356,7 +377,7 @@ export class BilloMailboxClient implements MailboxReceiver {
         ref,
         receivedAt: detail?.publishedAt ?? detail?.created ?? null,
         subject: detail?.title ?? null,
-        senderName: billerName,
+        senderName: billerName ?? (detail?.sender?.trim() || null),
         senderOrgNumber: null,
         kind: billoKind(detail?.type),
         meta: { type: detail?.type ?? null, invoice_data: invoiceData },
@@ -437,9 +458,9 @@ export class BilloSenderClient implements MailboxSender {
     })
   }
 
-  private post(path: string, json: unknown, description: string) {
+  private post(path: string, json: unknown, description: string, base: string = this.hosts.sender) {
     return withToken(this.tokens, (token) =>
-      providerRequest(PROVIDER, { method: 'POST', url: `${this.hosts.sender}${path}`, headers: bearer(token), json, description }),
+      providerRequest(PROVIDER, { method: 'POST', url: `${base}${path}`, headers: bearer(token), json, description }),
     )
   }
 
@@ -510,12 +531,12 @@ export class BilloSenderClient implements MailboxSender {
   /**
    * Through SendEasy: a Billo user gets it in the mailbox, anyone else a
    * BankID or Freja protected link by email or SMS, so every employee is
-   * reached. SendEasy's auth is undocumented; it is assumed to take the same
-   * sender token (docs/integrations/billo.md, open questions).
+   * reached. SendEasy takes the same sender token (its spec names no auth;
+   * the sandbox accepts the token, docs/integrations/billo.md).
    */
   async sendPayslip(tenantRef: string, personnummer: string, payslip: OutgoingPayslip) {
     const res = await this.post(
-      '/api/v1/Send',
+      '/v1/Send',
       {
         documentType: 'Payslip',
         fileName: payslip.pdf.name,
@@ -530,6 +551,7 @@ export class BilloSenderClient implements MailboxSender {
         },
       },
       'SendEasy send',
+      this.hosts.sendeasy,
     )
     const body = (res.json ?? {}) as { id?: unknown; documentId?: unknown; status?: unknown }
     if (typeof body.status === 'string' && SENDEASY_FAILED.has(body.status)) {

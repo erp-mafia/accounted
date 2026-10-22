@@ -14,8 +14,8 @@ const CONTACT = {
   postal_code: '111 22',
   city: 'Stockholm',
   country: 'SE',
-  phone: '08-123 456 78',
-  email: 'lon@exempel.se',
+  phone: '08-465 004 05',
+  email: 'lon@example.test',
 }
 
 function settingsDb(row: Record<string, unknown> | null) {
@@ -78,7 +78,7 @@ describe('payslipStatement', () => {
   it('reads the figures the PDF prints and spans the whole pay month', () => {
     const data = {
       companyName: 'Exempel AB',
-      companyOrgNumber: '556016-0680',
+      companyOrgNumber: '442005-9208',
       grossSalary: 32500,
       taxWithheld: 6962.5,
       netSalary: 25537.5,
@@ -90,11 +90,11 @@ describe('payslipStatement', () => {
       postalCode: '111 22',
       city: 'Stockholm',
       country: 'SE',
-      email: 'lon@exempel.se',
-      phone: '08-123 456 78',
+      email: 'lon@example.test',
+      phone: '08-465 004 05',
     }
     expect(payslipStatement(data, { year: 2028, month: 2, paymentDate: '2028-02-25' }, contact)).toEqual({
-      employer: { name: 'Exempel AB', orgNumber: '556016-0680', ...contact },
+      employer: { name: 'Exempel AB', orgNumber: '442005-9208', ...contact },
       periodStart: '2028-02-01',
       periodEnd: '2028-02-29',
       payoutDate: '2028-02-25',

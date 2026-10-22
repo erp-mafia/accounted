@@ -5,6 +5,8 @@ Researched 2026-10-19 from Kivra's public developer documentation, OpenAPI specs
 - **(A) RECEIVE**: pull documents that arrive in a customer's Kivra Business (Kivra Företag) mailbox into our document inbox, using Kivra's **Partner API** ("PAPI").
 - **(B) SEND**: deliver our customers' outgoing invoices (and possibly letters and salary slips) to recipients' Kivra mailboxes, using Kivra's **Tenant API** (also called the sender API), with one Kivra tenant per sending customer.
 
+This integration is Accounted's own code, built on Kivra's public developer documentation. It is not an official Kivra product, and Kivra does not provide support for it or answer for its security.
+
 Statements are marked **[docs]** when they come straight from Kivra's documentation or OpenAPI specs, and **[inferred]** when they are our reading of it or a design suggestion. This file contains no credentials, client IDs, secrets or tenant keys, and none may ever be added to it.
 
 Canonical machine-readable specs (OpenAPI 3.1):
@@ -128,7 +130,7 @@ Activation [docs]:
 2. From then on we may read that company's inbox until the company deactivates the integration in Kivra, which triggers `integration.deleted`. After that every request under that `company_key` fails; stop calling it.
 3. We cannot grant ourselves access.
 
-Partner adapted onboarding [docs, partly inferred]: Kivra's partner news (2024-11-01) says partners can let customers sign up for Kivra Företag from inside the partner's system with the integration activated automatically, via a customized onboarding arranged with Kivra's partner team. This is what a Kivra-hosted partner URL of the form `https://sandbox-accounts.kivra.com/register/company/<partner-slug>` (production: `https://accounts.kivra.com/register/company/<partner-slug>`) does. That URL scheme, its query parameters, whether it can carry our own state or a return URL, and whether it also works for companies that already have Kivra Business are **not in the public docs**; confirm with Kivra. [inferred] Either way, the only signal we get is the `integration.created` webhook (or polling `GET /v3/partner/company`).
+Partner adapted onboarding [docs, partly inferred]: Kivra's partner news (2024-11-01) says partners can let customers sign up for Kivra Företag from inside the partner's system with the integration activated automatically, via a customized onboarding arranged with Kivra's partner team. Kivra gives each partner its own onboarding link for this. It is a partner-only flow and not in the public docs, so the link is deployment configuration (`KIVRA_ONBOARDING_URL`), never code or documentation. Either way, the only signal we get is the `integration.created` webhook (or polling `GET /v3/partner/company`).
 
 Fortnox's version of this flow, for reference: activation runs from inside Fortnox by a signatory logged in with BankID, and removal is "Ta bort koppling" in Fortnox. Other systems with live PAPI integrations: Spiris, Briox, Bflow, Reda, Accountec. [docs, third party]
 
@@ -216,9 +218,9 @@ Response `200` `FullContentMetadata` (example values from Kivra's integration gu
   "received_at": "2026-09-01T09:14:02Z",
   "transaction_at": "2026-09-01T00:00:00Z",
   "receiver_name": "Cornelias Café AB",
-  "receiver_vat_number": "SE556000475501",
+  "receiver_vat_number": "SE442005921601",
   "sender_name": "Lenas Konditori AB",
-  "sender_vat_numbers": ["SE556123456701"],
+  "sender_vat_numbers": ["SE442005921601"],
   "sender_icon_url": "https://sandbox-static.kivra.com/img/tenant/<tenantKey>/icon.png",
   "sender_contact_info": null,
   "references": null,
@@ -356,7 +358,7 @@ Envelope [docs]:
   "data": {
     "company_key": "1560774336a57b73569d594df5abad7fd2575c1070",
     "content_key": "1756718042a9813e08f783496382b0bff743ec34ae",
-    "vat_number": "SE556000475501"
+    "vat_number": "SE442005921601"
   }
 }
 ```
@@ -428,7 +430,7 @@ POST /v2/tenant
 {
   "name": "Example Energy",
   "company_id": [
-    { "name": "Example Energy AB", "orgnr": "SE556840226601" }
+    { "name": "Example Energy AB", "orgnr": "SE442005920801" }
   ]
 }
 ```
@@ -469,10 +471,10 @@ POST /v2/tenant/{tenantKey}/usermatch/ssn
 
 ```json
 POST /v2/tenant/{tenantKey}/companymatch/vatnr
-{ "list": ["SE559408724801", "SE556840226601"] }
+{ "list": ["SE442005922401", "SE442005920801"] }
 
 200
-{ "list": ["SE556840226601"] }
+{ "list": ["SE442005920801"] }
 ```
 
 Notes [docs]:
@@ -555,7 +557,7 @@ For company recipients the allowed `type` values are: `accounting.invoice`, `acc
 }
 ```
 
-For a company recipient replace `ssn` with `"vat_number": "SE556840226601"`.
+For a company recipient replace `ssn` with `"vat_number": "SE442005920801"`.
 
 #### Example: invoice to a person with OCR and bankgiro
 
@@ -587,13 +589,13 @@ For a company recipient replace `ssn` with `"vat_number": "SE556840226601"`.
 
 #### Example: invoice to a company (plain, PDF plus payment data)
 
-Same as above with `"vat_number": "SE556840226601"` instead of `ssn`. Kivra's own "invoice to company" example uses `"payable": false`, while the schema text says type `invoice` requires `payable: true`; confirm with Kivra which applies to company recipients (see section 6). [docs, contradictory]
+Same as above with `"vat_number": "SE442005920801"` instead of `ssn`. Kivra's own "invoice to company" example uses `"payable": false`, while the schema text says type `invoice` requires `payable: true`; confirm with Kivra which applies to company recipients (see section 6). [docs, contradictory]
 
 #### Example: structured invoice to a company (`accounting.invoice`)
 
 ```json
 {
-  "vat_number": "SE556840226601",
+  "vat_number": "SE442005920801",
   "subject": "Faktura 1042",
   "type": "accounting.invoice",
   "generated_at": "2026-10-19",
@@ -615,8 +617,8 @@ Same as above with `"vat_number": "SE556840226601"` instead of `ssn`. Kivra's ow
     "buyer_reference": "REF-12345",
     "order_number": "ORD-789",
     "supplier_name": "Supplier AB",
-    "supplier_organisation_number": "556123-4567",
-    "supplier_vat_number": "SE556123456701",
+    "supplier_organisation_number": "442005-9216",
+    "supplier_vat_number": "SE442005921601",
     "supplier_address_street": "Stora gatan 123",
     "supplier_address_postal_code": "11122",
     "supplier_address_city": "Stockholm"
@@ -817,7 +819,7 @@ Sources: swagger.bundle.yml "Errors", https://github.com/kivra/kivra-api-errors
 
 Things to verify with Kivra before or during build:
 
-1. **Partner-adapted onboarding URL**: the `register/company/<partner-slug>` flow is not documented publicly. Ask: exact production URL, supported query parameters (state, return URL, prefilled org number), what happens for companies that already have Kivra Business, and whether `integration.created` is guaranteed to fire for the auto-activation path.
+1. **Partner-adapted onboarding link**: the flow is not documented publicly, and Kivra hands each partner its link. Ask: supported query parameters (state, return URL, prefilled org number), what happens for companies that already have Kivra Business, and whether `integration.created` is guaranteed to fire for the auto-activation path.
 2. **Enskild firma**: Kivra Business does not support sole traders, so (A) cannot cover our enskild firma customers at all. For (B), sole trader recipients can only be reached as private persons by SSN. A sole trader's org number is their personnummer without century, so the SSN is derivable, but that needs a century decision and is personal data handling; decide deliberately. Also unknown: whether Kivra accepts an enskild firma as a **sender tenant** (`orgnr` VAT format is the same shape).
 3. **No pagination on `GET /v3/partner/company/{companyKey}/content`**: ask about max result size and whether trashed or very old content is included.
 4. **Backfill on activation**: does `content.created` fire for content received before activation? Assume not and list on `integration.created`.

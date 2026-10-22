@@ -80,9 +80,9 @@ const source = (id: IntakeSourceId, kind: IntakeSourceKind, live: boolean): Inta
  *   - bank_feed (PSD2 sync), bank_file (camt/CSV import), sie (SIE import);
  *   - billo, kivra: the company's digital mailbox, read into the Inkorg
  *     (src/lib/digital-mailboxes). Built, so live; whether a deployment
- *     carries them is runtime config (Accounted's partner credentials, see
- *     digitalMailboxAvailability), which the surfaces that offer the door
- *     ask for themselves;
+ *     carries them is runtime config (Accounted's partner credentials and
+ *     the per-company rollout, see digitalMailboxAvailability), which the
+ *     surfaces that offer the door ask for themselves;
  *   - paypal, portal: named and planned, not wired. Supplier-portal invoices
  *     reach the books today only when a person fetches them and uploads
  *     them, which is the upload door.

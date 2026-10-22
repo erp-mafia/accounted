@@ -12,7 +12,7 @@ import type { PayslipEmployer } from './types'
 
 const VAT_NUMBER_RE = /^SE(\d{10})01$/
 
-/** `SE556016068001` for an organisationsnummer in any common shape; null when it is not one. */
+/** `SE442005920801` for an organisationsnummer in any common shape; null when it is not one. */
 export function swedishVatNumber(orgNumber: string | null | undefined): string | null {
   const ten = normalizeOrgNumber(orgNumber)
   return ten ? `SE${ten}01` : null
@@ -48,7 +48,7 @@ export interface PayslipEmployerContact {
   postalCode: string
   city: string
   email: string
-  /** Digits, national form for a Swedish number (0812345678), E.164 otherwise. */
+  /** Digits, national form for a Swedish number (0846500405), E.164 otherwise. */
   phone: string
 }
 

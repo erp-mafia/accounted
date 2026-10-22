@@ -111,10 +111,10 @@ describe('resolveChannelOptions', () => {
 
 describe('mailboxRecipientIdentifiable', () => {
   it('addresses a Swedish company by a valid organisationsnummer', () => {
-    expect(mailboxRecipientIdentifiable({ customer_type: 'swedish_business', org_number: '556012-5790' })).toBe(true)
-    expect(mailboxRecipientIdentifiable({ customer_type: 'swedish_business', org_number: '5560125790' })).toBe(true)
+    expect(mailboxRecipientIdentifiable({ customer_type: 'swedish_business', org_number: '442005-9208' })).toBe(true)
+    expect(mailboxRecipientIdentifiable({ customer_type: 'swedish_business', org_number: '4420059208' })).toBe(true)
     expect(mailboxRecipientIdentifiable({ customer_type: 'swedish_business', org_number: null })).toBe(false)
-    expect(mailboxRecipientIdentifiable({ customer_type: 'swedish_business', org_number: '556012-5791' })).toBe(false)
+    expect(mailboxRecipientIdentifiable({ customer_type: 'swedish_business', org_number: '442005-9209' })).toBe(false)
   })
 
   it('addresses a private person by a personnummer on file, masked or not', () => {
@@ -127,8 +127,8 @@ describe('mailboxRecipientIdentifiable', () => {
   })
 
   it('has no mailbox address for a foreign customer or no customer', () => {
-    expect(mailboxRecipientIdentifiable({ customer_type: 'eu_business', org_number: '5560125790' })).toBe(false)
-    expect(mailboxRecipientIdentifiable({ customer_type: 'non_eu_business', org_number: '5560125790' })).toBe(false)
+    expect(mailboxRecipientIdentifiable({ customer_type: 'eu_business', org_number: '4420059208' })).toBe(false)
+    expect(mailboxRecipientIdentifiable({ customer_type: 'non_eu_business', org_number: '4420059208' })).toBe(false)
     expect(mailboxRecipientIdentifiable(null)).toBe(false)
   })
 })
@@ -140,7 +140,7 @@ describe('resolveMailboxReady', () => {
       documentType: 'invoice',
       isCreditNote: false,
       currency: 'SEK',
-      customer: { customer_type: 'swedish_business', org_number: '5560125790' },
+      customer: { customer_type: 'swedish_business', org_number: '4420059208' },
       ...overrides,
     }
   }

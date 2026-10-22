@@ -24,6 +24,12 @@ Extracted from the Redoc pages on 2026-10-19. Everything below is written in our
 
 ---
 
+
+> **Corrections from Billo (Yaojia Wang, 2026-10-22), verified in the sandbox the same day.**
+> - Accounted is **one partner customer** at Billo and our partner API key is bound to it (JWT claim `partner_customer_id`). Each Accounted company is an **end customer enrolled under it**; the key cannot create clients, so section 5.2 does not apply to us.
+> - The webhook is registered on that partner customer (`POST /v1/clients/{partnerCustomerId}/webhook`): the partner-wide endpoints answer `403` to a customer-bound key.
+> - SendEasy is `POST https://sandbox-api.billo.life/sendeasy/v1/Send`, not the spec's host. In the sandbox it still answers `400` errorCode `10020` "Sender not found" for a tenant created on the Sender API; how a sender is registered for SendEasy is an open question to Billo.
+> - A document's sender name is the detail's `sender` field; `invoiceData.billerName` exists only on invoices.
 ## 1. Overview: which API does what
 
 | API | Who authenticates | What it does | Our use case |
@@ -40,7 +46,7 @@ Billo's own guidance on choosing a send endpoint [spec, sendeasy intro]: use **S
 | Accounted concept | Billo concept |
 |---|---|
 | Accounted (the platform) | **partner** (Partner/Mailbox APIs); **client/integrator** (Sender/SendEasy) |
-| An Accounted company (AB) | a **business partner customer** (`POST /v1/clients/business`) and, for its mailbox, a **business end customer** enrolled via `POST /v1/clients/{partnerCustomerId}/enrollments/business` |
+| An Accounted company (AB) | a **business end customer** enrolled under Accounted's own partner customer via `POST /v1/clients/{partnerCustomerId}/enrollments/business`. Billo 2026-10-22: our API key is bound to Accounted as one partner customer (the token's `partner_customer_id` claim) and cannot register customers of its own (`POST /v1/clients/business` answers `403`, errorCode 8) |
 | An Accounted company (enskild firma) | a **private partner customer** (`POST /v1/clients`, by personnummer) and a **private end customer** enrolled via `POST /v1/clients/{partnerCustomerId}/enrollments` [inferred: an EF's organisationsnummer is the owner's personnummer, whose third digit is a month digit 0 or 1, so it fails the business route's "third digit >= 2" check] |
 | Our `company_id` | `externalCustomerId` (partner-side id, opaque, max 255 chars, case-sensitive) |
 | An Accounted company as a sender | a **tenant** (Sender API), identified by `tenantKey` |
@@ -55,7 +61,7 @@ Sources: https://developer.billo.life/partner/#section/Vocabulary, https://devel
 |---|---|---|---|
 | Partner | `https://sandbox-api.billo.life/partner` | `https://api.billo.life/partner` | [spec] servers list. Example: prod token endpoint is `https://api.billo.life/partner/v1/auth/token` |
 | Mailbox | `https://sandbox-api.billo.life/partner/mailbox` | `https://api.billo.life/partner/mailbox` | [spec] servers list. Paths are appended, e.g. `.../partner/mailbox/v1/webhook` |
-| SendEasy | `https://sandbox-sender-api.billo.life` | `https://sender-api.billo.life` | Spec `servers` lists only the sandbox ("Development server"); production host is from the intro text. Path is `/api/v1/Send` |
+| SendEasy | `https://sandbox-api.billo.life/sendeasy` | `https://api.billo.life/sendeasy` [inferred from the sandbox] | Billo 2026-10-22: the spec's `servers` entry (`sandbox-sender-api`, `/api/v1/Send`) is wrong; the endpoint is `POST https://sandbox-api.billo.life/sendeasy/v1/Send`. It takes the sender OAuth token |
 | Sender | `https://sandbox-sender-api.billo.life` | `https://sender-api.billo.life` | Same as SendEasy. Pattern `https://[TYPE-]sender-api.billo.life/v1/tenant/...`, `TYPE` = `sandbox` or empty |
 | Identity (OAuth2 for Sender/SendEasy) | `https://sandbox-identity.billo.life/connect/token` | `https://identity.billo.life/connect/token` | Sandbox URL is in the docs [spec]; production URL confirmed only via the OIDC discovery document [discovery] |
 
@@ -705,7 +711,7 @@ Documented `errorCode` values: `0` InvalidRequest, `6` FailedToUploadAgreementFi
 
 Source: https://developer.billo.life/sendeasy/#tag/Send
 
-`POST {senderBase}/api/v1/Send` with `Content-Type: application/json` (also accepts `text/json`, `application/*+json`). Billo classifies the document, extracts metadata, and delivers: Billo users in the app; non-users get a **secure preview link** by email and/or SMS, and must authenticate with **BankID or Freja eID** matching the provided SSN before viewing [spec, intro].
+`POST {sendeasyBase}/v1/Send` (see the corrections above) with `Content-Type: application/json` (also accepts `text/json`, `application/*+json`). Billo classifies the document, extracts metadata, and delivers: Billo users in the app; non-users get a **secure preview link** by email and/or SMS, and must authenticate with **BankID or Freja eID** matching the provided SSN before viewing [spec, intro].
 
 Request `SendB2BDocumentRequest` (no field is marked required in the schema; `additionalProperties: false`):
 

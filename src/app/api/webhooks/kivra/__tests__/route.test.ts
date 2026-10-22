@@ -53,10 +53,10 @@ describe('POST /api/webhooks/kivra', () => {
 
   it('binds the company on integration.created', async () => {
     connect.onKivraIntegrationCreated.mockResolvedValue('company-1')
-    const response = await POST(signed({ id: 'event_2', event_type: 'integration.created', data: { company_key: 'ck', vat_number: 'SE556016068001' } }))
+    const response = await POST(signed({ id: 'event_2', event_type: 'integration.created', data: { company_key: 'ck', vat_number: 'SE442005920801' } }))
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ data: { bound: true } })
-    expect(connect.onKivraIntegrationCreated).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ companyKey: 'ck', vatNumber: 'SE556016068001' }), expect.anything())
+    expect(connect.onKivraIntegrationCreated).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ companyKey: 'ck', vatNumber: 'SE442005920801' }), expect.anything())
   })
 
   it('answers content.created at once and files the content after the response', async () => {
@@ -64,7 +64,7 @@ describe('POST /api/webhooks/kivra', () => {
     findReceivingConnection.mockResolvedValue(connection)
     deliver.resolveInboxOwner.mockResolvedValue('owner-1')
     deliver.deliverMailboxDocument.mockResolvedValue('filed')
-    const response = await POST(signed({ id: 'event_3', event_type: 'content.created', data: { company_key: 'ck', content_key: 'cc', vat_number: 'SE556016068001' } }))
+    const response = await POST(signed({ id: 'event_3', event_type: 'content.created', data: { company_key: 'ck', content_key: 'cc', vat_number: 'SE442005920801' } }))
     expect(response.status).toBe(200)
     expect(deliver.deliverMailboxDocument).not.toHaveBeenCalled()
     await afterTasks[0]!()

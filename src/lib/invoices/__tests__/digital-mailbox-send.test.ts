@@ -41,23 +41,23 @@ describe('invoiceMailboxBlock', () => {
 
 describe('invoiceMailboxRecipient', () => {
   it('addresses a company by organisationsnummer and a sole trader by personnummer', () => {
-    expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'swedish_business', org_number: '556016-0680' }))).toEqual({
+    expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'swedish_business', org_number: '442005-9208' }))).toEqual({
       kind: 'company',
-      orgNumber: '5560160680',
+      orgNumber: '4420059208',
     })
-    expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'swedish_business', org_number: '811218-9876' }))).toEqual({
+    expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'swedish_business', org_number: '500118-2046' }))).toEqual({
       kind: 'person',
-      personnummer: '198112189876',
+      personnummer: '195001182046',
     })
   })
 
   it('addresses a private person by a plaintext or stored personnummer, and nothing else', () => {
-    expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'individual', personal_number: '811218-9876' }))).toEqual({
+    expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'individual', personal_number: '500118-2046' }))).toEqual({
       kind: 'person',
-      personnummer: '198112189876',
+      personnummer: '195001182046',
     })
     expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'individual', personal_number: null }))).toBeNull()
-    expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'eu_business', org_number: '556016-0680' }))).toBeNull()
+    expect(invoiceMailboxRecipient(makeCustomer({ customer_type: 'eu_business', org_number: '442005-9208' }))).toBeNull()
     expect(invoiceMailboxRecipient(null)).toBeNull()
   })
 })
@@ -100,7 +100,7 @@ describe('sendInvoiceToDigitalMailbox', () => {
     sendInvoice: vi.fn(),
     sendPayslip: vi.fn(),
   }
-  const customer = makeCustomer({ customer_type: 'swedish_business', org_number: '556016-0680', language: 'sv' })
+  const customer = makeCustomer({ customer_type: 'swedish_business', org_number: '442005-9208', language: 'sv' })
   let invoiceRow: Record<string, unknown>
   const dispatches: Array<Record<string, unknown>> = []
 
@@ -169,7 +169,7 @@ describe('sendInvoiceToDigitalMailbox', () => {
     })
     expect(issueAndBookInvoice.mock.invocationCallOrder[0]).toBeLessThan(sender.sendInvoice.mock.invocationCallOrder[0]!)
     const [, recipient, invoice] = sender.sendInvoice.mock.calls[0]!
-    expect(recipient).toEqual({ kind: 'company', orgNumber: '5560160680' })
+    expect(recipient).toEqual({ kind: 'company', orgNumber: '4420059208' })
     expect(invoice).toMatchObject({ invoiceNumber: '1042', payment: { method: 'bankgiro', account: '991-2346', referenceType: 'ocr' } })
     expect(dispatches[0]).toMatchObject({ provider: 'kivra', invoice_id: 'inv-1', status: 'sent', provider_ref: 'content-1', recipient_kind: 'company' })
   })
