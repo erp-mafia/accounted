@@ -96,7 +96,7 @@ function receiver(overrides: Partial<MailboxReceiver> = {}): MailboxReceiver {
         receivedAt: '2026-10-10T00:00:00Z',
         subject: `Faktura ${ref}`,
         senderName: 'Leverantör AB',
-        senderOrgNumber: '5561234567',
+        senderOrgNumber: '4420059216',
         kind: 'invoice' as const,
         meta: { type: 'invoice' },
       },
@@ -142,7 +142,7 @@ describe('deliverMailboxDocument', () => {
       sourceRef: 'c1',
       documentId: 'doc-1',
       inboxItemId: 'item-1',
-      sender: { name: 'Leverantör AB', org_number: '5561234567' },
+      sender: { name: 'Leverantör AB', org_number: '4420059216' },
     }))
     expect(uploadDocument).toHaveBeenCalledTimes(1)
     expect(linkArrivalOutputs).toHaveBeenCalledWith(client, { id: 'arr-1', company_id: connection.company_id }, [

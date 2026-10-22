@@ -48,12 +48,6 @@ export const KIVRA_BASE_URLS = {
   production: 'https://sender.api.kivra.com',
 } as const
 
-/** Partner-adapted onboarding: Kivra creates or finds the company account and activates Accounted on it. */
-export const KIVRA_ONBOARDING_URLS = {
-  sandbox: 'https://sandbox-accounts.kivra.com/register/company/accounted',
-  production: 'https://accounts.kivra.com/register/company/accounted',
-} as const
-
 /** File parts the Inkorg can file. Text and HTML letters have no file to archive. */
 const FILABLE_PART_TYPES = new Set(['application/pdf', 'image/jpeg', 'image/png'])
 
@@ -77,7 +71,13 @@ export interface KivraConfig {
   tenant: KivraClientCredentials | null
   /** The secret Kivra signs partner webhooks with. */
   webhookSecret: string | null
-  onboardingUrl: string
+  /**
+   * The onboarding link Kivra gives a partner (Kivra creates or finds the
+   * company account and activates the partner on it). Kivra's partner-only
+   * flow, so it lives in the deployment's settings, not in the code; without
+   * it the deployment does not receive from Kivra.
+   */
+  onboardingUrl: string | null
 }
 
 function credentials(id: string | undefined, secret: string | undefined): KivraClientCredentials | null {
@@ -94,8 +94,8 @@ function credentials(id: string | undefined, secret: string | undefined): KivraC
  *   KIVRA_ENVIRONMENT            sandbox | production
  *   KIVRA_CLIENT_ID / _SECRET    Tenant API client (sending)
  *   KIVRA_PARTNER_CLIENT_ID / _SECRET   Partner API client (receiving)
+ *   KIVRA_ONBOARDING_URL         the partner onboarding link Kivra gives us (receiving)
  *   KIVRA_WEBHOOK_SECRET         partner webhook signing secret
- *   KIVRA_ONBOARDING_URL         override of the partner onboarding link
  */
 export function readKivraConfigFromEnv(env: Record<string, string | undefined> = process.env): KivraConfig | null {
   const environment = env.KIVRA_ENVIRONMENT?.trim() === 'production' ? 'production' : 'sandbox'
@@ -109,7 +109,7 @@ export function readKivraConfigFromEnv(env: Record<string, string | undefined> =
     partner,
     tenant,
     webhookSecret: env.KIVRA_WEBHOOK_SECRET?.trim() || null,
-    onboardingUrl: onboarding && /^https:\/\//i.test(onboarding) ? onboarding : KIVRA_ONBOARDING_URLS[environment],
+    onboardingUrl: onboarding && /^https:\/\//i.test(onboarding) ? onboarding : null,
   }
 }
 
@@ -538,7 +538,9 @@ export function createKivraProvider(config: KivraConfig): KivraProvider {
   return {
     id: 'kivra',
     config,
-    receiver: config.partner ? new KivraPartnerClient(config.baseUrl, config.partner) : null,
+    // Receiving needs the onboarding link as well as the client: without it
+    // no company could be brought to activate Accounted.
+    receiver: config.partner && config.onboardingUrl ? new KivraPartnerClient(config.baseUrl, config.partner) : null,
     sender: config.tenant ? new KivraTenantClient(config.baseUrl, config.tenant) : null,
   }
 }

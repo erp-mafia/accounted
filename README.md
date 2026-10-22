@@ -66,7 +66,9 @@ See [contributing guide](.github/CONTRIBUTING.md) for the full development workf
 - **Framework**: Next.js 16 (App Router), React 19, TypeScript (strict)
 - **Database**: Supabase (PostgreSQL + Row Level Security + email/password auth + TOTP MFA)
 - **Styling**: Tailwind CSS 4 + shadcn/ui
-- **Integrations**: Enable Banking (PSD2), Qvalia (Peppol), Skatteverket, Anthropic SDK on Amazon Bedrock (eu-north-1; direct Anthropic or any OpenAI-compatible endpoint for self-hosted via the Vercel AI SDK), Resend, JSZip
+- **Integrations**: Enable Banking (PSD2), Qvalia (Peppol), Skatteverket, Kivra and Billo (digital mailboxes), Anthropic SDK on Amazon Bedrock (eu-north-1; direct Anthropic or any OpenAI-compatible endpoint for self-hosted via the Vercel AI SDK), Resend, JSZip
+
+The Kivra and Billo integrations are Accounted's own code, built on the providers' public developer documentation. They are not official Kivra or Billo products, and neither provider supports them or answers for their security. Running them takes your own agreement and credentials with each provider.
 
 ## Repository map
 

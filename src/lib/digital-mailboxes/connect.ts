@@ -35,7 +35,7 @@ import {
 } from './connections'
 import { isLegalPersonOrgNumber, orgNumberFromVatNumber } from './identifiers'
 import type { KivraProvider } from './kivra'
-import { getDigitalMailboxProviders } from './providers'
+import { getDigitalMailboxProviders, isDigitalMailboxEnabled } from './providers'
 import type { DigitalMailboxProviderId } from './types'
 
 /** Why connecting cannot start; each maps to a structured error code in the route. */
@@ -123,7 +123,7 @@ export async function connectKivraReceive(
   args: { companyId: string; userId: string; log: Logger },
 ): Promise<ConnectOutcome<KivraConnectResult>> {
   const kivra = getDigitalMailboxProviders().kivra
-  if (!kivra?.receiver) return { ok: false, code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' }
+  if (!kivra?.receiver || !isDigitalMailboxEnabled(args.companyId)) return { ok: false, code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' }
   const identity = await loadCompanyIdentity(service, args.companyId)
   const refusal = receivingGate(identity)
   if (refusal) return { ok: false, code: refusal }
@@ -302,7 +302,7 @@ export async function connectBilloReceive(
   args: { companyId: string; userId: string; representative: BilloRepresentativeInput; log: Logger },
 ): Promise<ConnectOutcome<DigitalMailboxConnection>> {
   const billo: BilloProvider | null = getDigitalMailboxProviders().billo
-  if (!billo?.receiver) return { ok: false, code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' }
+  if (!billo?.receiver || !isDigitalMailboxEnabled(args.companyId)) return { ok: false, code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' }
   const identity = await loadCompanyIdentity(service, args.companyId)
   const refusal = receivingGate(identity)
   if (refusal) return { ok: false, code: refusal }
@@ -322,7 +322,6 @@ export async function connectBilloReceive(
     enrolment = await billo.receiver.createBusinessMailbox({
       orgNumber: identity!.orgNumber!,
       companyName: identity!.name,
-      externalCustomerId: args.companyId,
       addressLine1: identity!.addressLine1!,
       postalCode: identity!.postalCode!,
       city: identity!.city!,
@@ -372,8 +371,9 @@ export async function connectBilloReceive(
 let billoWebhookRegistered = false
 
 /**
- * Billo delivers new-document events to one partner-wide webhook, registered
- * with BILLO_WEBHOOK_URL and BILLO_WEBHOOK_SECRET (an upsert, so repeating it
+ * Billo delivers new-document events to one webhook on Accounted's partner
+ * customer, for every company enrolled under it, registered with
+ * BILLO_WEBHOOK_URL and BILLO_WEBHOOK_SECRET (an upsert, so repeating it
  * is harmless). Done once per process when a mailbox is created; without the
  * two settings the cron sweep alone reads the mailboxes. Never fails the
  * connection.
@@ -424,7 +424,7 @@ export async function activateSending(
   args: { companyId: string; userId: string; provider: DigitalMailboxProviderId; log: Logger },
 ): Promise<ConnectOutcome<DigitalMailboxConnection>> {
   const provider = getDigitalMailboxProviders()[args.provider]
-  if (!provider?.sender) return { ok: false, code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' }
+  if (!provider?.sender || !isDigitalMailboxEnabled(args.companyId)) return { ok: false, code: 'DIGITAL_MAILBOX_NOT_CONFIGURED' }
   const identity = await loadCompanyIdentity(service, args.companyId)
   if (!identity || !identity.orgNumber || !identity.name) return { ok: false, code: 'DIGITAL_MAILBOX_ORG_NUMBER_MISSING' }
   if (identity.isSandbox) return { ok: false, code: 'DIGITAL_MAILBOX_SANDBOX' }

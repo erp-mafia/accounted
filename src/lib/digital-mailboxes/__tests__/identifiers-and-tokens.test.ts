@@ -11,25 +11,25 @@ import {
 
 describe('identifiers', () => {
   it('turns an organisationsnummer into the VAT shape both providers use, and back', () => {
-    expect(swedishVatNumber('556016-0680')).toBe('SE556016068001')
-    expect(swedishVatNumber('165560160680')).toBe('SE556016068001')
-    expect(swedishVatNumber('556016-0681')).toBeNull()
-    expect(orgNumberFromVatNumber('SE556016068001')).toBe('5560160680')
-    expect(orgNumberFromVatNumber('se 556016068001')).toBe('5560160680')
+    expect(swedishVatNumber('442005-9208')).toBe('SE442005920801')
+    expect(swedishVatNumber('164420059208')).toBe('SE442005920801')
+    expect(swedishVatNumber('442005-9209')).toBeNull()
+    expect(orgNumberFromVatNumber('SE442005920801')).toBe('4420059208')
+    expect(orgNumberFromVatNumber('se 442005920801')).toBe('4420059208')
     expect(orgNumberFromVatNumber('DE123')).toBeNull()
   })
 
   it('tells a legal person from a sole trader by the third digit', () => {
-    expect(isLegalPersonOrgNumber('5560160680')).toBe(true)
+    expect(isLegalPersonOrgNumber('4420059208')).toBe(true)
     // A personnummer (an enskild firma's organisationsnummer).
-    expect(isLegalPersonOrgNumber('8112189876')).toBe(false)
+    expect(isLegalPersonOrgNumber('5001182046')).toBe(false)
     expect(isLegalPersonOrgNumber(null)).toBe(false)
   })
 
   it('expands and validates a personnummer to twelve digits', () => {
-    expect(personnummer12('811218-9876')).toBe('198112189876')
-    expect(personnummer12('198112189876')).toBe('198112189876')
-    expect(personnummer12('811218-9875')).toBeNull()
+    expect(personnummer12('500118-2046')).toBe('195001182046')
+    expect(personnummer12('195001182046')).toBe('195001182046')
+    expect(personnummer12('500118-2047')).toBeNull()
     expect(personnummer12(null)).toBeNull()
   })
 
@@ -45,20 +45,20 @@ describe('identifiers', () => {
   it('reads the employer contact a payslip carries, phone in national form, or null while one is missing', () => {
     const employer = {
       name: 'Exempel AB',
-      orgNumber: '5560160680',
+      orgNumber: '4420059208',
       streetAddress: ' Storgatan 1 ',
       postalCode: '111 22',
       city: 'Stockholm',
       country: 'SE',
-      email: 'lon@exempel.se',
-      phone: '08-123 456 78',
+      email: 'lon@example.test',
+      phone: '08-465 004 05',
     }
     expect(payslipEmployerContact(employer)).toEqual({
       streetAddress: 'Storgatan 1',
       postalCode: '111 22',
       city: 'Stockholm',
-      email: 'lon@exempel.se',
-      phone: '0812345678',
+      email: 'lon@example.test',
+      phone: '0846500405',
     })
     expect(payslipEmployerContact({ ...employer, phone: '+44 20 7946 0958' })?.phone).toBe('+442079460958')
     expect(payslipEmployerContact({ ...employer, streetAddress: '  ' })).toBeNull()

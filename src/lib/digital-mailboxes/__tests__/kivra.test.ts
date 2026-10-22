@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import {
   KivraPartnerClient,
   KivraTenantClient,
+  createKivraProvider,
   parseKivraWebhook,
   readKivraConfigFromEnv,
   verifyKivraWebhookSignature,
@@ -49,7 +50,8 @@ describe('readKivraConfigFromEnv', () => {
     expect(config?.baseUrl).toBe(BASE)
     expect(config?.tenant).toEqual({ clientId: 't', clientSecret: 'ts' })
     expect(config?.partner).toEqual({ clientId: 'p', clientSecret: 'ps' })
-    expect(config?.onboardingUrl).toContain('sandbox-accounts.kivra.com')
+    // The onboarding link is Kivra's partner-only flow: settings, never a default in the code.
+    expect(config?.onboardingUrl).toBeNull()
   })
 
   it('uses production only when asked to', () => {
@@ -57,17 +59,26 @@ describe('readKivraConfigFromEnv', () => {
     expect(config?.baseUrl).toBe('https://sender.api.kivra.com')
     expect(config?.partner).toBeNull()
   })
+
+  it('receives only with the onboarding link Kivra gave the partner, which must be https', () => {
+    const env = { KIVRA_PARTNER_CLIENT_ID: 'p', KIVRA_PARTNER_CLIENT_SECRET: 'ps' }
+    expect(createKivraProvider(readKivraConfigFromEnv(env)!).receiver).toBeNull()
+    expect(readKivraConfigFromEnv({ ...env, KIVRA_ONBOARDING_URL: 'http://example.test/onboard' })?.onboardingUrl).toBeNull()
+    const config = readKivraConfigFromEnv({ ...env, KIVRA_ONBOARDING_URL: 'https://example.test/onboard' })!
+    expect(config.onboardingUrl).toBe('https://example.test/onboard')
+    expect(createKivraProvider(config).receiver).not.toBeNull()
+  })
 })
 
 describe('KivraPartnerClient', () => {
   it('authenticates with Basic client credentials and finds a company by VAT number', async () => {
-    responder = () => json([{ key: 'ck1', vat_number: 'SE556016068001' }])
+    responder = () => json([{ key: 'ck1', vat_number: 'SE442005920801' }])
     const client = new KivraPartnerClient(BASE, CLIENT)
-    await expect(client.findCompanyKey('556016-0680')).resolves.toBe('ck1')
+    await expect(client.findCompanyKey('442005-9208')).resolves.toBe('ck1')
     const auth = calls[0]!
     expect(auth.init.headers).toMatchObject({ authorization: `Basic ${Buffer.from('id:secret').toString('base64')}` })
     expect(String(auth.init.body)).toBe('grant_type=client_credentials')
-    expect(calls[1]!.url).toBe(`${BASE}/v3/partner/company?vat_number=SE556016068001`)
+    expect(calls[1]!.url).toBe(`${BASE}/v3/partner/company?vat_number=SE442005920801`)
     expect(calls[1]!.init.headers).toMatchObject({ authorization: 'Bearer tok' })
   })
 
@@ -94,7 +105,7 @@ describe('KivraPartnerClient', () => {
         subject: 'Faktura 12345',
         received_at: '2026-10-10T09:00:00Z',
         sender_name: 'Lenas Konditori AB',
-        sender_vat_numbers: ['SE556123456701'],
+        sender_vat_numbers: ['SE442005921601'],
         labels: { reminder: false },
         parts: [
           { content_type: 'application/pdf', name: 'faktura.pdf', sha256: sha, size: pdf.byteLength },
@@ -112,7 +123,7 @@ describe('KivraPartnerClient', () => {
       kind: 'invoice',
       subject: 'Faktura 12345',
       senderName: 'Lenas Konditori AB',
-      senderOrgNumber: '5561234567',
+      senderOrgNumber: '4420059216',
     })
     expect(document.meta.payment_options).toEqual([{ amount: 150000, reference: '123', type: 'bankgiro' }])
     // Only the PDF part is downloaded.
@@ -149,23 +160,23 @@ describe('KivraTenantClient', () => {
   it('registers a tenant by VAT number and takes the key from kivra-objkey', async () => {
     responder = () => json({}, { status: 201, headers: { 'kivra-objkey': 'tk1' } })
     const client = new KivraTenantClient(BASE, CLIENT)
-    await expect(client.registerSender({ orgNumber: '5560160680', name: 'Säljare AB' })).resolves.toEqual({ tenantRef: 'tk1' })
+    await expect(client.registerSender({ orgNumber: '4420059208', name: 'Säljare AB' })).resolves.toEqual({ tenantRef: 'tk1' })
     const body = JSON.parse(String(calls[1]!.init.body))
-    expect(body).toEqual({ name: 'Säljare AB', company_id: [{ name: 'Säljare AB', orgnr: 'SE556016068001' }] })
+    expect(body).toEqual({ name: 'Säljare AB', company_id: [{ name: 'Säljare AB', orgnr: 'SE442005920801' }] })
   })
 
   it('matches a company recipient by VAT number', async () => {
-    responder = () => json({ list: ['SE556016068001'] })
+    responder = () => json({ list: ['SE442005920801'] })
     const client = new KivraTenantClient(BASE, CLIENT)
-    await expect(client.isReachable('tk1', { kind: 'company', orgNumber: '5560160680' })).resolves.toBe(true)
+    await expect(client.isReachable('tk1', { kind: 'company', orgNumber: '4420059208' })).resolves.toBe(true)
     expect(calls[1]!.url).toBe(`${BASE}/v2/tenant/tk1/companymatch/vatnr`)
-    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({ list: ['SE556016068001'] })
+    expect(JSON.parse(String(calls[1]!.init.body))).toEqual({ list: ['SE442005920801'] })
   })
 
   it('sends an invoice to a person as payable, with the OCR as an SE_OCR option', async () => {
     responder = () => json({}, { status: 201, headers: { 'kivra-objkey': 'content-1' } })
     const client = new KivraTenantClient(BASE, CLIENT)
-    const receipt = await client.sendInvoice('tk1', { kind: 'person', personnummer: '199001011234' }, {
+    const receipt = await client.sendInvoice('tk1', { kind: 'person', personnummer: '195001182046' }, {
       subject: 'Faktura 1042',
       generatedAt: '2026-10-19',
       invoiceNumber: '1042',
@@ -175,7 +186,7 @@ describe('KivraTenantClient', () => {
     expect(receipt).toEqual({ providerRef: 'content-1' })
     const body = JSON.parse(String(calls[1]!.init.body))
     expect(body).toMatchObject({
-      ssn: '199001011234',
+      ssn: '195001182046',
       type: 'invoice',
       payment_multiple_options: {
         payable: true,
@@ -191,14 +202,14 @@ describe('KivraTenantClient', () => {
   it('sends to a company as not payable in Kivra, and without a giro as a letter', async () => {
     responder = () => json({}, { status: 201 })
     const client = new KivraTenantClient(BASE, CLIENT)
-    await client.sendInvoice('tk1', { kind: 'company', orgNumber: '5560160680' }, {
+    await client.sendInvoice('tk1', { kind: 'company', orgNumber: '4420059208' }, {
       subject: 'Faktura 1',
       generatedAt: '2026-10-19',
       invoiceNumber: '1',
       pdf,
       payment: { amount: 10, dueDate: '2026-11-18', method: 'plusgiro', account: '12345-6', reference: '1', referenceType: 'invoice_number' },
     })
-    await client.sendInvoice('tk1', { kind: 'company', orgNumber: '5560160680' }, {
+    await client.sendInvoice('tk1', { kind: 'company', orgNumber: '4420059208' }, {
       subject: 'Faktura 2',
       generatedAt: '2026-10-19',
       invoiceNumber: '2',
@@ -206,7 +217,7 @@ describe('KivraTenantClient', () => {
       payment: null,
     })
     const withPayment = JSON.parse(String(calls[1]!.init.body))
-    expect(withPayment.vat_number).toBe('SE556016068001')
+    expect(withPayment.vat_number).toBe('SE442005920801')
     expect(withPayment.payment_multiple_options).toMatchObject({ payable: false, method: '2', options: [{ type: 'TENANT_REF' }] })
     const letter = JSON.parse(String(calls[2]!.init.body))
     expect(letter.type).toBe('letter')
@@ -216,13 +227,13 @@ describe('KivraTenantClient', () => {
   const statement = {
     employer: {
       name: 'Säljare AB',
-      orgNumber: '556016-0680',
+      orgNumber: '442005-9208',
       streetAddress: 'Storgatan 1',
       postalCode: '111 22',
       city: 'Stockholm',
       country: 'SE',
-      email: 'lon@saljare.se',
-      phone: '08-123 456 78',
+      email: 'lon@example.test',
+      phone: '08-465 004 05',
     },
     periodStart: '2026-10-01',
     periodEnd: '2026-10-31',
@@ -241,23 +252,23 @@ describe('KivraTenantClient', () => {
     responder = () => json({}, { status: 201, headers: { 'kivra-objkey': 'slip-1' } })
     const client = new KivraTenantClient(BASE, CLIENT)
     try {
-      await expect(client.sendPayslip('tk1', '199001011234', payslip)).resolves.toEqual({ providerRef: 'slip-1' })
+      await expect(client.sendPayslip('tk1', '195001182046', payslip)).resolves.toEqual({ providerRef: 'slip-1' })
     } finally {
       vi.useRealTimers()
     }
     expect(calls[1]!.url).toBe(`${BASE}/v2/tenant/tk1/content`)
     const body = JSON.parse(String(calls[1]!.init.body))
-    expect(body).toMatchObject({ ssn: '199001011234', subject: 'Lönebesked 2026-10', generated_at: '2026-10-25', type: 'salaryslip' })
+    expect(body).toMatchObject({ ssn: '195001182046', subject: 'Lönebesked 2026-10', generated_at: '2026-10-25', type: 'salaryslip' })
     expect(body.salaryslip).toEqual({
       document_metadata: { creation_timestamp: '2026-10-20T08:15:30Z', source_system: 'Accounted' },
       employment: {
         employer: {
           legal_name: 'Säljare AB',
-          legal_identifiers: { vat_number: 'SE556016068001', org_number: '556016-0680' },
+          legal_identifiers: { vat_number: 'SE442005920801', org_number: '442005-9208' },
           contact_information: {
             address: { street_address: 'Storgatan 1', postal_code: '111 22', city: 'Stockholm', country: 'Sweden' },
-            email_address: 'lon@saljare.se',
-            telephone_number: '0812345678',
+            email_address: 'lon@example.test',
+            telephone_number: '0846500405',
           },
         },
       },
@@ -279,11 +290,11 @@ describe('KivraTenantClient', () => {
     responder = () => json({}, { status: 201 })
     const client = new KivraTenantClient(BASE, CLIENT)
     await expect(
-      client.sendPayslip('tk1', '199001011234', { ...payslip, statement: { ...statement, employer: { ...statement.employer, phone: null } } }),
+      client.sendPayslip('tk1', '195001182046', { ...payslip, statement: { ...statement, employer: { ...statement.employer, phone: null } } }),
     ).rejects.toMatchObject({ kind: 'rejected', providerCode: 'employer_contact_missing' })
 
     const big = { name: 'big.pdf', bytes: new Uint8Array(900_000) }
-    await expect(client.sendPayslip('tk1', '199001011234', { ...payslip, pdf: big })).rejects.toMatchObject({ status: 413 })
+    await expect(client.sendPayslip('tk1', '195001182046', { ...payslip, pdf: big })).rejects.toMatchObject({ status: 413 })
     expect(calls).toHaveLength(0)
   })
 })
@@ -317,8 +328,8 @@ describe('verifyKivraWebhookSignature', () => {
 describe('parseKivraWebhook', () => {
   it('reads the three partner events and ignores others', () => {
     expect(
-      parseKivraWebhook(JSON.stringify({ id: 'event_1', event_type: 'content.created', data: { company_key: 'ck', content_key: 'cc', vat_number: 'SE556016068001' } })),
-    ).toEqual({ id: 'event_1', type: 'content.created', companyKey: 'ck', contentKey: 'cc', vatNumber: 'SE556016068001' })
+      parseKivraWebhook(JSON.stringify({ id: 'event_1', event_type: 'content.created', data: { company_key: 'ck', content_key: 'cc', vat_number: 'SE442005920801' } })),
+    ).toEqual({ id: 'event_1', type: 'content.created', companyKey: 'ck', contentKey: 'cc', vatNumber: 'SE442005920801' })
     expect(parseKivraWebhook(JSON.stringify({ id: 'event_2', event_type: 'something.else', data: {} }))).toBeNull()
     expect(() => parseKivraWebhook('not json')).toThrow()
     expect(() => parseKivraWebhook(JSON.stringify({ event_type: 'integration.created', data: {} }))).toThrow()

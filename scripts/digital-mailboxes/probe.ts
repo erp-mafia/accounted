@@ -38,7 +38,7 @@ async function main(): Promise<void> {
   switch (command) {
     case 'kivra-companies': {
       const receiver = providers.kivra?.receiver
-      if (!receiver) throw new Error('Set KIVRA_PARTNER_CLIENT_ID and KIVRA_PARTNER_CLIENT_SECRET.')
+      if (!receiver) throw new Error('Set KIVRA_PARTNER_CLIENT_ID, KIVRA_PARTNER_CLIENT_SECRET and KIVRA_ONBOARDING_URL.')
       const orgNumber = args[0] ?? KIVRA_SANDBOX_TEST_COMPANY
       const key = await receiver.findCompanyKey(orgNumber)
       console.log(key ? `company ${orgNumber} has activated Accounted: company_key ${key}` : `company ${orgNumber} has not activated Accounted at Kivra`)

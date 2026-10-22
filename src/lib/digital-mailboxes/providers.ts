@@ -43,16 +43,42 @@ export function resetDigitalMailboxProviders(): void {
   cached = null
 }
 
+/**
+ * Kivra and Billo roll out per company, so a deploy with credentials opens
+ * them to one company before everyone (founder decision 2026-10-21).
+ * DIGITAL_MAILBOX_COMPANY_IDS lists the companies (comma-separated ids, or
+ * `*` for everyone); unset means nobody, so credentials alone switch nothing
+ * on. A company outside the rollout sees the doors as "Kommer snart" and
+ * cannot connect a mailbox or start sending; a connection made before it
+ * left the rollout keeps running.
+ */
+export function digitalMailboxRollout(): 'all' | string[] {
+  const raw = process.env.DIGITAL_MAILBOX_COMPANY_IDS?.trim()
+  if (!raw) return []
+  if (raw === '*') return 'all'
+  return [...new Set(raw.split(',').map((s) => s.trim()).filter(Boolean))]
+}
+
+/** Whether this company is in the Kivra and Billo rollout. */
+export function isDigitalMailboxEnabled(companyId: string | null | undefined): boolean {
+  if (!companyId) return false
+  const rollout = digitalMailboxRollout()
+  return rollout === 'all' || rollout.includes(companyId)
+}
+
 export interface DigitalMailboxAvailability {
   receive: boolean
   send: boolean
 }
 
-/** What each provider can do in this deployment: the doors the UI offers. */
-export function digitalMailboxAvailability(): Record<DigitalMailboxProviderId, DigitalMailboxAvailability> {
+/** What each provider can do for this company: the doors the UI offers. */
+export function digitalMailboxAvailability(
+  companyId: string | null | undefined,
+): Record<DigitalMailboxProviderId, DigitalMailboxAvailability> {
   const providers = getDigitalMailboxProviders()
+  const enabled = isDigitalMailboxEnabled(companyId)
   return {
-    kivra: { receive: !!providers.kivra?.receiver, send: !!providers.kivra?.sender },
-    billo: { receive: !!providers.billo?.receiver, send: !!providers.billo?.sender },
+    kivra: { receive: enabled && !!providers.kivra?.receiver, send: enabled && !!providers.kivra?.sender },
+    billo: { receive: enabled && !!providers.billo?.receiver, send: enabled && !!providers.billo?.sender },
   }
 }
