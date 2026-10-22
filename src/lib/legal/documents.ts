@@ -41,7 +41,12 @@ export const LEGAL_DOCUMENTS: Record<LegalDocumentKey, LegalDocument> = {
   terms: {
     key: 'terms',
     path: '/terms',
-    updatedAt: '2026-03-05',
+    updatedAt: '2026-10-22',
+    // 6.4–6.8 (volumes, soft limits, agent-read documents) were added
+    // 2026-10-22 for customers who sign up from that date (6.8). The
+    // acceptance version is NOT moved yet: moving it prompts every existing
+    // user to re-accept, and the owner has not notified existing customers.
+    // Move it to the notice date when that mail goes out (14.1).
     acceptanceVersion: '2026-03-05',
   },
   privacy: {
