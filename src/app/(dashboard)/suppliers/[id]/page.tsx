@@ -20,6 +20,7 @@ import type { Supplier, SupplierType, CreateSupplierInput, SupplierInvoice } fro
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
+import { CounterpartyRoleLink } from '@/components/parties/CounterpartyRoleLink'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 import { formatOrgNumber } from '@/lib/utils'
 import { supplierInvoiceStatusDisplay } from '@/lib/supplier-invoices/status-display'
@@ -289,6 +290,7 @@ export default function SupplierDetailPage() {
           }}
         />
       ) : null}
+      {partyId && party.dossier ? <CounterpartyRoleLink partyId={partyId} dossier={party.dossier} role="supplier" /> : null}
 
       <DetailSection kicker={t('contact_section_title')}>
         <DefRow label={t('def_email')}>

@@ -266,6 +266,9 @@ const RETAINED = new Set([
   // Kundförlust: who decided that a claim is doubtful, lost or recovered.
   // The company's record of why a receivable left its books (BFL 5 kap 6 §).
   'invoice_write_offs.decided_by',
+  // Kvittning: who set a customer invoice off against a supplier invoice.
+  // The company's record of why both invoices were settled (BFL 5 kap 7 §).
+  'counterparty_setoffs.user_id',
   // Company integrations: the company's accounts, not the person's
   'pos_connections.created_by',
   'pos_connections.ended_by',

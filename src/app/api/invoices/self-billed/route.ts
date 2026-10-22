@@ -68,6 +68,12 @@ function mapSelfBilledFailure(failure: SelfBilledSaleFailure, log: Logger, reque
         requestId,
         details: { pgCode: failure.pgCode, pgMessage: failure.pgMessage },
       })
+    case 'vat_breakdown_mismatch':
+      // The service works in fractions; the form sent percent rates.
+      return errorResponseFromCode('VAT_BREAKDOWN_MISMATCH', log, {
+        requestId,
+        details: { ...failure.details, rate: Math.round(failure.details.rate * 100) },
+      })
   }
 }
 
@@ -116,6 +122,7 @@ export const POST = withRouteContext(
         unit_price: it.unit_price,
         vat_rate: it.vat_rate,
       })),
+      vat_breakdown: input.vat_breakdown ?? null,
     }
 
     try {

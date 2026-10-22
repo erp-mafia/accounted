@@ -1534,7 +1534,7 @@ Cursor-paginated supplier-invoice list ordered by created_at DESC, id ASC (newes
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, paid_at: string | null, approved_at: string | null, bank_entered_at: string | null, created_at: string, open_payment: { batch: { id: string, created_at: string } | null, payment_order: { id: string, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", created_at: string, provider_status: string | null, provider_error_code: string | null } | null } | null }[],
+  data: { id: string, handle?: string, supplier_id: string, supplier_name: string, arrival_number: number, supplier_invoice_number: string | null, invoice_date: string, due_date: string, status: "registered" | "approved" | "paid" | "partially_paid" | "overdue" | "disputed" | "credited" | "reversed", currency: string, subtotal: number, vat_amount: number, total: number, paid_amount: number, remaining_amount: number, is_credit_note: boolean, is_self_billed: boolean, self_billing_number: number | null, self_billing_agreement_ref: string | null, paid_at: string | null, approved_at: string | null, bank_entered_at: string | null, created_at: string, open_payment: { batch: { id: string, created_at: string } | null, payment_order: { id: string, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", created_at: string, provider_status: string | null, provider_error_code: string | null } | null } | null }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -1609,6 +1609,9 @@ Creates a supplier invoice in `registered` status and posts the registration jou
 - Reverse charge from a supplier in another EU country books the basis pair as services (4535/4598, momsdeklaration ruta 21) unless reverse_charge_kind says "eu_goods" (4515/4598, ruta 20); the fiktiv moms on 2645/2614 is the same. reverse_charge_kind on an invoice without reverse charge, or from a supplier that is not eu_business, returns 400 SI_CREATE_INVALID_INPUT.
 - Periodisering: items[].accrual_period_start + accrual_period_end (and optionally accrual_balance_account, defaulting from the cost account to a 17xx förutbetald kostnad) spread the cost over the period under faktureringsmetoden. Refused under kontantmetoden and with reverse charge. A 29xx accrual_balance_account (e.g. 2990) books an upplupen kostnad: a period wholly before the invoice month (a period reaching that month returns 400 VALIDATION_ERROR: split the line), each month booked on its last day (debit cost / credit 29xx) right after the registration, which debits 29xx on the invoice date. A month that is locked, closed, on or before the company lock date or without a fiscal year refuses the whole registration with 400 SI_ACCRUED_COST_PERIOD_LOCKED (details.blocked); nothing is written.
 - A company that is not VAT-registered cannot book input VAT: a line with vat_rate or vat_amount above 0 returns 400 SI_CREATE_INVALID_INPUT, and an omitted vat_rate defaults to 0. items[].vat_amount overrides line_total × vat_rate (partial deduction, rounding on the supplier's side).
+- VAT is booked per rate the way the invoice states it: on the summed base of each rate (not rounded line by line), or the per-rate figure in vat_breakdown ([{ vat_rate: 0.25, vat_amount: 3864.11 }]) when it lies within half an öre per line of that. The figure is spread over the lines (items[].vat_amount in the response, at most one öre from each line's own rounding) so they sum to it. A figure further off, a rate the lines do not carry or leave out, or a rate with an items[].vat_amount override returns 400 VAT_BREAKDOWN_MISMATCH.
+- due_date is optional: omitted, it is invoice_date plus the supplier's default_payment_terms (30 days when unset).
+- Självfaktura (self-billing, ML 17 kap 15 §): set is_self_billed=true and omit supplier_invoice_number. The company issues the invoice in the supplier's name: the number comes from the company's own series (company_settings.self_billing_prefix, SF-001, SF-002, ...), and the document (with "Självfakturering", the agreement and the acceptance clause) is archived as the underlag; download it with GET /supplier-invoices/{id}/self-billing-pdf. The agreement is self_billing_agreement_ref, defaulting to the supplier's; none gives 400 SI_SELF_BILL_AGREEMENT_MISSING. A supplier or company card missing a name, address, the seller's VAT number or the buyer's org number gives 400 SI_SELF_BILL_PARTY_INCOMPLETE. SEK only, standard Swedish VAT only, no reverse charge, no document_id, inbox_item_id or paid_with_private_funds: 400 SI_SELF_BILL_UNSUPPORTED (details.reason).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1620,9 +1623,11 @@ Request body:
 {
   supplier_id: string,
   document_id?: string,
-  supplier_invoice_number: string,
+  supplier_invoice_number?: string,
+  is_self_billed?: boolean,
+  self_billing_agreement_ref?: string,
   invoice_date: string,
-  due_date: string,
+  due_date?: string,
   delivery_date?: string | "",
   currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD",
   exchange_rate?: number,
@@ -1638,6 +1643,7 @@ Request body:
   inbox_item_id?: string | null,
   payment_date?: string,
   default_dimensions?: Record<string, string>,
+  vat_breakdown?: { vat_rate: 0 | 0.06 | 0.12 | 0.25, vat_amount: number }[],
   items: { description: string, amount?: number, account_number: string, vat_rate?: 0 | 0.06 | 0.12 | 0.25, vat_amount?: number, reverse_charge_rate?: number, apply_slp?: boolean, vat_code?: string, quantity?: number, unit?: string, unit_price?: number, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[]
 }
 ```
@@ -1681,6 +1687,10 @@ Response `200`:
     total: number,
     remaining_amount: number,
     is_credit_note: boolean,
+    is_self_billed: boolean,
+    self_billing_number: number | null,
+    self_billing_agreement_ref: string | null,
+    document_id: string | null,
     registration_journal_entry_id: string | null,
     created_at: string
   },
@@ -1729,6 +1739,7 @@ Returns the full supplier-invoice record. Pass ?expand=supplier,items,payments t
 
 **Pitfalls:**
 - Credit notes return is_credit_note=true and a credited_invoice_id pointing at the original.
+- A self-billing invoice (is_self_billed=true) is one the company issued in the supplier's name: supplier_invoice_number is the company's own series number and the document is GET .../self-billing-pdf.
 - registration_journal_entry_id and payment_journal_entry_id let you trace the SI to its bokföring rows; they are null when no JE has been posted (e.g. on a kontantmetoden SI before payment).
 - status does not say whether an invoice is attested (an attested invoice past its due date is overdue): read approved_at, which kontantmetoden companies leave null (no attest step there). bank_entered_at is set while a payment entered at the bank by hand has not landed; it clears itself when a payment is recorded on the invoice.
 
@@ -1764,6 +1775,9 @@ Response `200`:
     remaining_amount: number,
     is_credit_note: boolean,
     credited_invoice_id: string | null,
+    is_self_billed: boolean,
+    self_billing_number: number | null,
+    self_billing_agreement_ref: string | null,
     registration_journal_entry_id: string | null,
     payment_journal_entry_id: string | null,
     notes: string | null,
@@ -1875,6 +1889,9 @@ Response `200`:
     remaining_amount: number,
     is_credit_note: boolean,
     credited_invoice_id: string | null,
+    is_self_billed: boolean,
+    self_billing_number: number | null,
+    self_billing_agreement_ref: string | null,
     registration_journal_entry_id: string | null,
     payment_journal_entry_id: string | null,
     notes: string | null,
@@ -2570,6 +2587,29 @@ Example response `200`:
   }
 }
 ```
+
+---
+
+### `GET /api/v1/companies/{companyId}/supplier-invoices/{id}/self-billing-pdf`
+
+**Download the self-billing invoice (självfaktura) PDF.**
+`scope:suppliers:read · risk:low · idempotent`
+
+Returns the self-billing invoice the company issued in the supplier's name as application/pdf: "Självfakturering", the number from the company's own series, both parties, the agreement and the acceptance clause. A credit note of one renders as its kreditfaktura.
+
+**Use when:** You need the document of a self-billing invoice (is_self_billed=true) to send to the supplier or archive outside Accounted.
+**Do not use for:** An ordinary supplier invoice: its document is the supplier's own, in the document archive (document_id). That answers 404.
+
+**Pitfalls:**
+- Only for is_self_billed=true; any other supplier invoice answers 404 SI_NOT_FOUND.
+- Rendered from the parties frozen at issue, so later changes to the supplier card or the company settings do not change it.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200` (`application/pdf`).
 
 ---
 
@@ -3435,6 +3475,7 @@ Request body:
   default_expense_account?: string,
   default_payment_terms?: number,
   default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
+  self_billing_agreement_ref?: string,
   notes?: string
 }
 ```
@@ -3480,6 +3521,7 @@ Response `200`:
     default_expense_account: string | null,
     default_payment_terms: number,
     default_currency: string,
+    self_billing_agreement_ref: string | null,
     notes: string | null,
     party_id: string | null,
     archived_at: string | null,
@@ -3586,6 +3628,7 @@ Response `200`:
     default_expense_account: string | null,
     default_payment_terms: number,
     default_currency: string,
+    self_billing_agreement_ref: string | null,
     notes: string | null,
     party_id: string | null,
     archived_at: string | null,
@@ -3680,6 +3723,7 @@ Request body:
   default_expense_account?: string | null,
   default_payment_terms?: number,
   default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
+  self_billing_agreement_ref?: string | null,
   notes?: string,
   archived_at?: unknown
 }
@@ -3720,6 +3764,7 @@ Response `200`:
     default_expense_account: string | null,
     default_payment_terms: number,
     default_currency: string,
+    self_billing_agreement_ref: string | null,
     notes: string | null,
     party_id: string | null,
     archived_at: string | null,
@@ -3828,7 +3873,7 @@ Bulk-create endpoint mirroring /customers/bulk-create. Each supplier is validate
 Request body:
 ```ts
 {
-  suppliers: { name: string, supplier_type?: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, notes?: string }[],
+  suppliers: { name: string, supplier_type?: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, self_billing_agreement_ref?: string, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```

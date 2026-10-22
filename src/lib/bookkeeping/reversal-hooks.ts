@@ -76,6 +76,7 @@ export const REVERSAL_MIRROR_REQUIRED: readonly JournalEntrySourceType[] = Objec
   'rot_rut_reclassification',
   'collection_settlement',
   'customer_loss',
+  'counterparty_setoff',
 ] satisfies JournalEntrySourceType[])
 
 /**

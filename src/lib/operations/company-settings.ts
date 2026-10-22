@@ -122,6 +122,9 @@ export const GENERAL_SETTINGS_FIELDS = [
   'proforma_enabled',
   'recurring_invoices_enabled',
   'self_billing_enabled',
+  'self_billing_prefix',
+  'next_self_billing_number',
+  'self_billing_acceptance_text',
   'salary_vacation_year_basis',
 ] as const
 
@@ -229,6 +232,7 @@ const SettingsResource = z.object({
       'invoice_company_name_position', 'invoice_late_fee_text', 'invoice_credit_terms_text',
       'invoice_email_reply_to', 'invoice_primary_color', 'invoice_accent_color', 'invoice_font_family',
       'invoice_header_text', 'invoice_footer_text', 'default_voucher_series', 'sector_slug',
+      'self_billing_prefix', 'self_billing_acceptance_text',
       'salary_vacation_year_basis', 'vat_number', 'moms_period', 'vat_filing_method',
       'periodisk_sammanstallning_period', 'periodisk_sammanstallning_filing_method', 'accounting_method',
       'bookkeeping_locked_through',
@@ -251,6 +255,7 @@ const SettingsResource = z.object({
       'next_invoice_number', 'next_arrival_number', 'invoice_default_days', 'reminder_days_level_1',
       'reminder_days_level_2', 'reminder_days_level_3', 'reminder_fee_amount', 'reminder_interest_rate_override',
       'fiscal_year_start_month', 'preliminary_tax_monthly', 'aktiekapital', 'antal_aktier', 'auto_lock_period_days',
+      'next_self_billing_number',
     ].map((key) => [key, nullableNumber]),
   ),
   ...Object.fromEntries(

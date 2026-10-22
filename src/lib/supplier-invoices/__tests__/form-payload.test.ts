@@ -1,11 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import { roundOre } from '@/lib/money'
+import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import {
   buildSupplierInvoicePayload,
   supplierInvoiceCreateUrl,
   inferVatTreatment,
   vatRateFromAi,
   rateToPctString,
+  statedVatFromInvoiceField,
   reverseChargeKindMissing,
   type SupplierInvoiceFormData,
   type SupplierInvoiceLineItem,
@@ -458,5 +460,44 @@ describe('supplierInvoiceCreateUrl', () => {
     expect(supplierInvoiceCreateUrl('owner', 'item-1')).toBe('/api/supplier-invoices')
     expect(supplierInvoiceCreateUrl('employee', 'item-1')).toBe('/api/supplier-invoices')
     expect(supplierInvoiceCreateUrl('unpaid', null)).toBe('/api/supplier-invoices')
+  })
+})
+
+// crm#1367: the Moms field is the invoice's own VAT. On a single-rate invoice
+// it travels as vat_breakdown when the lines take it, so the registration
+// books the moms the invoice states.
+describe('the invoice moms as vat_breakdown', () => {
+  const lines = [makeItem({ amount: 17564.15 }), makeItem({ amount: -2107.7 })]
+
+  it('statedVatFromInvoiceField names the one rate the charging lines carry', () => {
+    expect(statedVatFromInvoiceField(lines, 3864.11, false)).toEqual([{ rate: 0.25, vatAmount: 3864.11 }])
+    expect(statedVatFromInvoiceField([makeItem(), makeItem({ vat_rate: 0.12 })], 137, false)).toBeNull()
+    expect(statedVatFromInvoiceField([makeItem(), makeItem({ vat_rate: 0, amount: 50 })], 250, false))
+      .toEqual([{ rate: 0.25, vatAmount: 250 }])
+    expect(statedVatFromInvoiceField(lines, null, false)).toBeNull()
+    expect(statedVatFromInvoiceField(lines, 3864.11, true)).toBeNull()
+  })
+
+  it('sends vat_breakdown when the lines take the stated moms', () => {
+    const statedVat = statedVatFromInvoiceField(lines, 3864.12, false)
+    const payload = buildSupplierInvoicePayload(
+      makeFormData({ supplier_id: '550e8400-e29b-41d4-a716-446655440000', items: lines }),
+      makeOpts({ oreRounding: false, statedVat }),
+    )
+    expect(payload.vat_breakdown).toEqual([{ vat_rate: 0.25, vat_amount: 3864.12 }])
+    expect(CreateSupplierInvoiceSchema.safeParse(payload).success).toBe(true)
+  })
+
+  it('leaves vat_breakdown out when the stated moms does not fit, so the server books the summed base', () => {
+    const statedVat = statedVatFromInvoiceField(lines, 3900, false)
+    const payload = buildSupplierInvoicePayload(makeFormData({ items: lines }), makeOpts({ oreRounding: false, statedVat }))
+    expect(payload.vat_breakdown).toBeUndefined()
+  })
+
+  it('rounds the payable to whole kronor from the moms the invoice states', () => {
+    const statedVat = statedVatFromInvoiceField(lines, 3864.12, false)
+    const payload = buildSupplierInvoicePayload(makeFormData({ items: lines }), makeOpts({ oreRounding: true, statedVat }))
+    // 15 456,45 + 3 864,12 = 19 320,57, billed as 19 321: the rounding line takes +0,43.
+    expect(payload.items.at(-1)).toMatchObject({ account_number: '3740', amount: 0.43 })
   })
 })

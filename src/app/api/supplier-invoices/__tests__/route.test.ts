@@ -1138,6 +1138,58 @@ describe('POST /api/supplier-invoices', () => {
     expect(itemRows[0].vat_amount).toBe(1250)
   })
 
+  // crm#1367: SF-CE-202608 per line came to 3 864,12; the document says 3 864,11.
+  it('books the VAT on the summed base per rate and stores it on the items', async () => {
+    stubRegistration({ arrival: 9 })
+    mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-1' })
+
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'SF-CE-202608',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        items: [
+          { description: 'Flexintäkt', amount: 17564.15, account_number: '4010', vat_rate: 0.25 },
+          { description: 'Handelsavgift', amount: -2107.7, account_number: '4010', vat_rate: 0.25 },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    const items = mockCreateSupplierInvoiceRegistrationEntry.mock.calls[0][4] as Array<{ vat_amount: number }>
+    expect(items.map((i) => i.vat_amount)).toEqual([4391.04, -526.93])
+    const [header] = findCall('supplier_invoices', 'insert') as [Record<string, unknown>]
+    expect(header.vat_amount).toBe(3864.11)
+  })
+
+  it('returns 400 VAT_BREAKDOWN_MISMATCH for a stated VAT the lines cannot carry', async () => {
+    stubRegistration({ arrival: 10 })
+    const request = createMockRequest('/api/supplier-invoices', {
+      method: 'POST',
+      body: {
+        supplier_id: VALID_UUID,
+        supplier_invoice_number: 'SF-CE-202608',
+        invoice_date: '2024-06-01',
+        due_date: '2024-07-01',
+        vat_breakdown: [{ vat_rate: 0.25, vat_amount: 3900 }],
+        items: [
+          { description: 'Flexintäkt', amount: 17564.15, account_number: '4010', vat_rate: 0.25 },
+          { description: 'Handelsavgift', amount: -2107.7, account_number: '4010', vat_rate: 0.25 },
+        ],
+      },
+    })
+    const response = await POST(request)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: Record<string, unknown> } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VAT_BREAKDOWN_MISMATCH')
+    expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
+  })
+
   it('falls back to line_total × rate when vat_amount is omitted', async () => {
     stubRegistration({ arrival: 8 })
     mockCreateSupplierInvoiceRegistrationEntry.mockResolvedValue({ id: 'je-1' })

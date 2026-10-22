@@ -110,6 +110,7 @@ const SOURCE_TYPE_SET: Record<JournalEntrySourceType, true> = {
   rot_rut_reclassification: true,
   collection_settlement: true,
   customer_loss: true,
+  counterparty_setoff: true,
 }
 const SOURCE_TYPES = Object.keys(SOURCE_TYPE_SET) as JournalEntrySourceType[]
 

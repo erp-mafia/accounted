@@ -83,6 +83,9 @@ const V1PatchDraftInvoiceSchema = z.object({
 const InvoiceDetail = z.object({
   id: z.string().uuid(),
   invoice_number: z.string().nullable(),
+  // Self-billed sales: the customer's number; invoice_number stays null.
+  external_invoice_number: z.string().nullable().optional(),
+  is_self_billed: z.boolean().optional(),
   customer_id: z.string().uuid(),
   invoice_date: z.string(),
   due_date: z.string(),

@@ -77,7 +77,7 @@ export interface RecordInvoicePaymentRowParams {
 }
 
 /** invoice_payments.source (migration 20261012030300_invoice_payment_provenance.sql). */
-export type InvoicePaymentSource = 'manual' | 'bank' | 'stripe' | 'collections' | 'link' | 'import'
+export type InvoicePaymentSource = 'manual' | 'bank' | 'stripe' | 'collections' | 'link' | 'import' | 'setoff'
 
 export type RecordInvoicePaymentRowResult =
   | { ok: true; id: string }

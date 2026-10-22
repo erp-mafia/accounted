@@ -368,6 +368,9 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_book_collection_settlement: 'bookkeeping:write',
   // Kundförlust (served while CUSTOMER_LOSS_ENABLED is set).
   gnubok_record_customer_loss: 'invoices:write',
+  // Kvittning (served while COUNTERPARTY_SETOFF_ENABLED is set).
+  gnubok_get_counterparty_balance: 'reports:read',
+  gnubok_book_counterparty_setoff: 'invoices:write',
   gnubok_delete_supplier_invoice: 'suppliers:write',
   gnubok_uncredit_supplier_invoice: 'suppliers:write',
   gnubok_update_supplier_invoice_item_account: 'suppliers:write',

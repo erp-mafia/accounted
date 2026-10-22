@@ -41,6 +41,15 @@ export const CASH_PARTIAL_PAYMENT_RULE =
   'En delbetalning av en kundfaktura som inte bokförts som fordran bokförs vid betalningen med intäkt och utgående moms per momssats i proportion till det inbetalda beloppet. Andelarna räknas på det sammanlagt inbetalda beloppet, så att delbetalningarna tillsammans ger exakt fakturans belopp per konto och varje delbetalnings moms per momssats avviker högst 1 öre från den exakta andelen. Regeln gäller inte fakturor i utländsk valuta, fakturor med ROT/RUT-avdrag eller skattereduktion för grön teknik, betalningar med egna konteringsrader, betalningar som registreras genom bankmatchning eller med API-nyckel, eller fakturor vars tidigare delbetalningar är bokförda på annat sätt. Då avvisas den automatiska bokföringen och betalningen bokförs manuellt. Programversion och driftsättning framgår av behandlingshistoriken.'
 
 /**
+ * Kvittning (lib/invoices/counterparty-setoff): a customer invoice and a
+ * supplier invoice of the same counterparty settled against each other.
+ * Listed while COUNTERPARTY_SETOFF_ENABLED is set, and for any company whose
+ * books hold a set-off voucher.
+ */
+export const COUNTERPARTY_SETOFF_RULE =
+  'En kundfaktura och en leverantörsfaktura till samma motpart (samma organisationsnummer) kan kvittas mot varandra med ett eget verifikat: debet leverantörsskulder och kredit kundfordringar på de konton fakturornas egna verifikat bokförde, med högst det lägsta av de två återstående beloppen. Momsen påverkas inte, eftersom den bokfördes när fakturorna registrerades. Båda fakturorna får en betalningsrad daterad kvittningsdagen och nettot matchas mot bankraden som en vanlig delbetalning. En kvittningsavräkning arkiveras som underlag på verifikatet. Kvittning görs bara i svenska kronor, för fakturor som bokförts som fordran respektive skuld (inte kontantmetoden), utan ROT/RUT-avdrag, utan pågående inkassoärende och utan pågående betalning av leverantörsfakturan. En felaktig kvittning rättas genom att verifikatet återförs (storno), vilket återställer båda fakturorna; verifikatet ändras aldrig i efterhand.'
+
+/**
  * How a verifikation lands in a series, in resolution order, plus the
  * exceptions. The concrete mappings live in the data tables named here.
  */

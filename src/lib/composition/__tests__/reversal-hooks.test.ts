@@ -22,6 +22,8 @@ const leaves = vi.hoisted(() => ({
   releaseSettlementAfterReversal: vi.fn(async () => ({ released: true })),
   assertCustomerLossReversible: vi.fn(async () => {}),
   syncCustomerLossAfterReversal: vi.fn(async () => {}),
+  assertCounterpartySetoffReversible: vi.fn(async () => {}),
+  syncCounterpartySetoffAfterReversal: vi.fn(async () => {}),
 }))
 
 vi.mock('@/lib/bookkeeping/payment-sync', async (importOriginal) => ({
@@ -42,6 +44,10 @@ vi.mock('@/lib/customer-loss/reversal', () => ({
   assertCustomerLossReversible: leaves.assertCustomerLossReversible,
   syncCustomerLossAfterReversal: leaves.syncCustomerLossAfterReversal,
 }))
+vi.mock('@/lib/invoices/counterparty-setoff/reversal', () => ({
+  assertCounterpartySetoffReversible: leaves.assertCounterpartySetoffReversible,
+  syncCounterpartySetoffAfterReversal: leaves.syncCounterpartySetoffAfterReversal,
+}))
 
 import { REVERSAL_HOOKS } from '../reversal-hooks'
 import { REVERSAL_MIRROR_REQUIRED, type ReversalHookAfterContext } from '@/lib/bookkeeping/reversal-hooks'
@@ -61,6 +67,7 @@ const HOOK_LEAVES: Record<string, string> = {
   'migrated-deduction': 'invoices/migrated-deduction-reversal',
   'collections-payout': 'collections/settlement-reversal',
   'customer-loss': 'customer-loss/reversal',
+  'counterparty-setoff': 'invoices/counterparty-setoff/reversal',
 }
 
 /**
@@ -197,6 +204,16 @@ describe('reversal hook list: each hook wraps its function unchanged', () => {
     expect(leaves.syncCustomerLossAfterReversal).not.toHaveBeenCalled()
     await hook('customer-loss').afterReversal!(ctx)
     expect(leaves.syncCustomerLossAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'user-1', 'entry-1', storno)
+  })
+
+  it('counterparty-setoff: assertCounterpartySetoffReversible before, syncCounterpartySetoffAfterReversal with the actor and the storno after', async () => {
+    await hook('counterparty-setoff').beforeReversal!(ctx)
+    expect(leaves.assertCounterpartySetoffReversible).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'entry-1')
+    expect(leaves.syncCounterpartySetoffAfterReversal).not.toHaveBeenCalled()
+    await hook('counterparty-setoff').afterReversal!(ctx)
+    expect(leaves.syncCounterpartySetoffAfterReversal).toHaveBeenCalledExactlyOnceWith(supabase, 'company-1', 'user-1', 'entry-1', {
+      id: 'storno-1',
+    })
   })
 
   it('passes a leaf refusal through untouched', async () => {

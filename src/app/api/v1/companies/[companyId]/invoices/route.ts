@@ -86,6 +86,12 @@ function selfBilledFailureResponse(failure: SelfBilledSaleFailure, ctx: ApiV1Con
       })
     case 'items_failed':
       return v1ErrorResponseFromCode('INVOICE_CREATE_ITEMS_FAILED', ctx.log, { ...base, details: { pg_code: failure.pgCode } })
+    case 'vat_breakdown_mismatch':
+      // The service works in fractions; the caller sent percent rates.
+      return v1ErrorResponseFromCode('VAT_BREAKDOWN_MISMATCH', ctx.log, {
+        ...base,
+        details: { ...failure.details, rate: Math.round(failure.details.rate * 100) },
+      })
   }
 }
 
@@ -105,6 +111,10 @@ const InvoiceDocumentType = z.enum(['invoice', 'proforma', 'delivery_note', 'quo
 const InvoiceSummary = z.object({
   id: z.string().uuid(),
   invoice_number: z.string().nullable(),
+  // Self-billed sales (is_self_billed) carry the customer's number here;
+  // invoice_number stays null on them by design.
+  external_invoice_number: z.string().nullable(),
+  is_self_billed: z.boolean(),
   customer_id: z.string().uuid(),
   customer_name: z.string(),
   invoice_date: z.string(),
@@ -132,7 +142,7 @@ const ALLOWED_EXPAND = ['customer', 'items'] as const
 // fields not in the summary schema. Schema migrations adding columns must
 // update this list before the field becomes visible on the public API.
 const INVOICE_SUMMARY_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, status, document_type, valid_until, quote_status, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
+  'id, invoice_number, external_invoice_number, is_self_billed, customer_id, invoice_date, due_date, status, document_type, valid_until, quote_status, currency, subtotal, vat_amount, total, remaining_amount, paid_at, created_at'
 
 // Customer projections: three tiers for different contexts:
 //   - NAME_ONLY: default for the invoice list (inline customer_name only)
@@ -352,6 +362,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     type InvoiceRow = {
       id: string
       invoice_number: string | null
+      external_invoice_number: string | null
+      is_self_billed: boolean | null
       customer_id: string
       invoice_date: string
       due_date: string
@@ -384,6 +396,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       const base = {
         id: r.id,
         invoice_number: r.invoice_number,
+        external_invoice_number: r.external_invoice_number ?? null,
+        is_self_billed: r.is_self_billed === true,
         customer_id: r.customer_id,
         customer_name: c?.name ?? '',
         invoice_date: r.invoice_date,
@@ -444,6 +458,8 @@ const INVOICE_ITEMS_RESPONSE_COLUMNS = INVOICE_ITEM_FULL_COLUMNS
 const InvoiceCreated = z.object({
   id: z.string().uuid(),
   invoice_number: z.string().nullable(),
+  external_invoice_number: z.string().nullable().optional(),
+  is_self_billed: z.boolean().optional(),
   customer_id: z.string().uuid(),
   invoice_date: z.string(),
   due_date: z.string(),
@@ -480,6 +496,7 @@ registerEndpoint({
     'document_type=\'delivery_note\' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type=\'invoice\'.',
     'document_type=\'quote\' (offert) requires valid_until (YYYY-MM-DD, the expiry; due_date mirrors it). A quote is numbered OF-nnn from its own series at create, starts as quote_status=\'open\', never posts a journal entry, never emits invoice.created and cannot be sent-and-booked or paid: record the customer decision with POST /invoices/{id}/quote-status and convert an accepted quote to an invoice in the dashboard.',
     'is_self_billed=true registers a self-billing invoice your CUSTOMER issued on your behalf (a sale for you). It is booked immediately (not a draft, no F-number), so external_invoice_number and received_date are required and it is NOT dry-run-free of side effects on the live call. Do NOT set it for a normal invoice you issue yourself.',
+    'A self-billed sale books VAT per rate as the customer\'s document does: on the summed base of each rate, or the figure in vat_breakdown (percent rates, [{ vat_rate: 25, vat_amount: 1967.2 }]) when it lies within half an öre per line of that; else 400 VAT_BREAKDOWN_MISMATCH. vat_breakdown without is_self_billed returns 400 VALIDATION_ERROR.',
     'Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.',
     'ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.',
     'Grön teknik: items[].deduction_type "gron_teknik" on the labor AND material lines of the installation, work_type INSTALLATION_SOLCELLER (15 %), INSTALLATION_LAGRING or INSTALLATION_LADDPUNKT (50 %) of the line total incl. VAT. Put labor and material on lines of their own (the invoice must show the cost of labor and of material); travel, freight, machinery, projektering and rented material stay on lines without a deduction. At a fixed price (totalentreprenad) Skatteverket counts labor and material as 97 % of the price: flag a line with 97 % of it and leave 3 % on an unflagged line. Selling material only gives no reduction. labor_hours (the hours actually worked, also at a fixed price) are required on at least one line per installation type, not on every line. Personnummer and housing info are required as for ROT. The yearly ceiling is 50 000 kr per person, separate from ROT/RUT (a warning, never an error). A grön teknik line cannot share an invoice with ROT/RUT lines (400 INVOICE_CREATE_ROT_RUT_VALIDATION). The payout is requested in Skatteverket\'s e-tjänst for grön teknik; no begäran file is generated for it yet.',
@@ -545,6 +562,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     }
     const input = parsed.data
 
+    // vat_breakdown is the VAT a received document states: an invoice we
+    // issue computes its own VAT per line (computeLineVat).
+    if (input.vat_breakdown && !input.is_self_billed) {
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: {
+          issues: [{ field: 'vat_breakdown', message: 'vat_breakdown is only accepted with is_self_billed: true.' }],
+        },
+      })
+    }
+
     // Self-billing (mottagen självfaktura, ML 17 kap 15§): the customer issued
     // the invoice on our behalf, so for our books it is a SALE booked
     // immediately (never a draft). Optional flag; delegated to the shared
@@ -582,6 +610,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
           unit_price: it.unit_price,
           vat_rate: it.vat_rate,
         })),
+        vat_breakdown: input.vat_breakdown ?? null,
       }
 
       if (ctx.dryRun) {

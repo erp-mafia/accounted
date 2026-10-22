@@ -16,7 +16,7 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 
 /** The supplier record every door reads back. */
 export const SUPPLIER_COLUMNS =
-  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, default_expense_account, default_payment_terms, default_currency, notes, party_id, archived_at, created_at, updated_at'
+  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, default_expense_account, default_payment_terms, default_currency, self_billing_agreement_ref, notes, party_id, archived_at, created_at, updated_at'
 
 export const SupplierRecordSchema = z.object({
   id: z.string().uuid(),
@@ -42,6 +42,8 @@ export const SupplierRecordSchema = z.object({
   default_expense_account: z.string().nullable(),
   default_payment_terms: z.number(),
   default_currency: z.string(),
+  /** The self-billing agreement with the supplier (ML 2023:200 17 kap 15 §), printed on a självfaktura to it; null = none (crm#1367). */
+  self_billing_agreement_ref: z.string().nullable(),
   notes: z.string().nullable(),
   /** The party (motpart) behind the supplier: one per counterpart, shared with the customer side and the ledger. */
   party_id: z.string().uuid().nullable(),
@@ -77,6 +79,7 @@ const WRITABLE_FIELDS = [
   'default_expense_account',
   'default_payment_terms',
   'default_currency',
+  'self_billing_agreement_ref',
   'notes',
   'archived_at',
 ] as const

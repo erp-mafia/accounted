@@ -27,7 +27,7 @@ const SOURCE_TYPES = [
   'supplier_credit_note', 'currency_revaluation', 'supplier_invoice_privately_paid', 'reminder_fee', 'accrual',
   'result_appropriation', 'rot_rut_payout', 'vat_settlement', 'stripe_payout', 'webshop_order', 'expense_claim',
   'expense_payout', 'rot_rut_reclaim', 'pos_daily_sales', 'rot_rut_reclassification', 'collection_settlement',
-  'customer_loss',
+  'customer_loss', 'counterparty_setoff',
 ]
 
 const TRANSACTION_CATEGORIES: TransactionCategory[] = [
@@ -53,6 +53,7 @@ describe('business event kinds (a closed, add-only list)', () => {
     expect(BUSINESS_EVENT_KINDS.slice(30, 33)).toEqual(['asset.depreciated', 'asset.disposed', 'se.tax_account.booked'])
     expect(BUSINESS_EVENT_KINDS.slice(33, 34)).toEqual(['payroll.vacation_liability_adjusted'])
     expect(BUSINESS_EVENT_KINDS.slice(34, 35)).toEqual(['sale.customer_loss'])
+    expect(BUSINESS_EVENT_KINDS.slice(35, 36)).toEqual(['counterparty.set_off'])
   })
 
   it('gives every source type the database accepts a kind, and every kind but the producer-named ones a source type', () => {

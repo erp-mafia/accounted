@@ -1422,6 +1422,34 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
     expect(engineItems[0].vat_amount).toBe(125)
     expect(engineItems[0].vat_rate).toBe(0.25)
   })
+
+  // crm#1367: VAT per rate as the invoice states it.
+  const selfBillItems = [
+    { description: 'Flexintäkt', amount: 17564.15, account_number: '4010', vat_rate: 0.25 },
+    { description: 'Handelsavgift', amount: -2107.7, account_number: '4010', vat_rate: 0.25 },
+  ]
+
+  it('books the vat_breakdown the invoice states within the per-line rounding', async () => {
+    install()
+
+    const res = await post({ ...baseBody, items: selfBillItems, vat_breakdown: [{ vat_rate: 0.25, vat_amount: 3864.11 }] })
+
+    expect(res.status).toBe(201)
+    expect(siInsert()).toMatchObject({ vat_amount: 3864.11, total: 19320.56 })
+  })
+
+  it('returns 400 VAT_BREAKDOWN_MISMATCH and writes nothing for a stated VAT further off', async () => {
+    install()
+
+    const res = await post({ ...baseBody, items: selfBillItems, vat_breakdown: [{ vat_rate: 0.25, vat_amount: 3900 }] })
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VAT_BREAKDOWN_MISMATCH')
+    expect(body.error.details).toMatchObject({ rate: 0.25, stated: 3900, computed: 3864.11, reason: 'outside_tolerance' })
+    expect(siInsert()).toBeUndefined()
+    expect(mockedReg).not.toHaveBeenCalled()
+  })
 })
 
 describe('POST /api/v1/companies/:companyId/supplier-invoices: exchange rate + SEK amounts', () => {

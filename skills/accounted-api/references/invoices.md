@@ -2,7 +2,7 @@
 
 # Invoices (AR) endpoints
 
-Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is assigned at send, not create. Supplier bills you receive are a different resource: see suppliers.md. Customer and article registers: customers.md. Collections: overdue invoices handed to the collections provider the company activated (the handover and escalations are staged for a person to approve in Accounted), the case on each invoice, and booking what the provider collected and paid out.
+Accounts receivable invoices: draft -> send -> paid/credited; the F-series number is assigned at send, not create. Supplier bills you receive are a different resource: see suppliers.md. Customer and article registers: customers.md. Collections: overdue invoices handed to the collections provider the company activated (the handover and escalations are staged for a person to approve in Accounted), the case on each invoice, and booking what the provider collected and paid out. Setting a customer invoice off against a supplier invoice of the same counterparty: setoffs.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -348,7 +348,7 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, invoice_number: string | null, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited" | "written_off", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, invoice_number: string | null, external_invoice_number: string | null, is_self_billed: boolean, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited" | "written_off", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -415,6 +415,7 @@ Creates an invoice in draft status. The F-series invoice_number is allocated ato
 - document_type='delivery_note' produces no VAT and a different number sequence (D-series). Most use cases want the default document_type='invoice'.
 - document_type='quote' (offert) requires valid_until (YYYY-MM-DD, the expiry; due_date mirrors it). A quote is numbered OF-nnn from its own series at create, starts as quote_status='open', never posts a journal entry, never emits invoice.created and cannot be sent-and-booked or paid: record the customer decision with POST /invoices/{id}/quote-status and convert an accepted quote to an invoice in the dashboard.
 - is_self_billed=true registers a self-billing invoice your CUSTOMER issued on your behalf (a sale for you). It is booked immediately (not a draft, no F-number), so external_invoice_number and received_date are required and it is NOT dry-run-free of side effects on the live call. Do NOT set it for a normal invoice you issue yourself.
+- A self-billed sale books VAT per rate as the customer's document does: on the summed base of each rate, or the figure in vat_breakdown (percent rates, [{ vat_rate: 25, vat_amount: 1967.2 }]) when it lies within half an öre per line of that; else 400 VAT_BREAKDOWN_MISMATCH. vat_breakdown without is_self_billed returns 400 VALIDATION_ERROR.
 - Project/cost-center tagging: pass default_dimensions ({"6":"P001"} = project, {"1":"KS01"} = kostnadsställe) for the whole invoice and/or items[].dimensions per line (per-line wins per key). Tags are stored on the draft and applied to the journal entry lines when the invoice is sent. When the company has the dimension registry enabled, unknown or archived codes are rejected at :send with 400 DIMENSION_VALIDATION_FAILED — list valid codes via GET /dimensions.
 - ROT/RUT: set items[].deduction_type ("rot"|"rut") on labor lines plus labor_hours and work_type (Skatteverket arbetstypskod). The invoice must carry deduction_personnummer AND housing info: deduction_housing_designation (fastighetsbeteckning) for småhus, or deduction_apartment_number + deduction_brf_org_number for bostadsrätt. deduction_amount is computed server-side and cannot be set by the caller; the response exposes deduction_total and remaining_amount = total - deduction_total (Skatteverket pays the rest via 1513). Validation failures return 400 INVOICE_CREATE_ROT_RUT_VALIDATION.
 - Grön teknik: items[].deduction_type "gron_teknik" on the labor AND material lines of the installation, work_type INSTALLATION_SOLCELLER (15 %), INSTALLATION_LAGRING or INSTALLATION_LADDPUNKT (50 %) of the line total incl. VAT. Put labor and material on lines of their own (the invoice must show the cost of labor and of material); travel, freight, machinery, projektering and rented material stay on lines without a deduction. At a fixed price (totalentreprenad) Skatteverket counts labor and material as 97 % of the price: flag a line with 97 % of it and leave 3 % on an unflagged line. Selling material only gives no reduction. labor_hours (the hours actually worked, also at a fixed price) are required on at least one line per installation type, not on every line. Personnummer and housing info are required as for ROT. The yearly ceiling is 50 000 kr per person, separate from ROT/RUT (a warning, never an error). A grön teknik line cannot share an invoice with ROT/RUT lines (400 INVOICE_CREATE_ROT_RUT_VALIDATION). The payout is requested in Skatteverket's e-tjänst for grön teknik; no begäran file is generated for it yet.
@@ -455,6 +456,7 @@ Request body:
   external_invoice_number?: string | "",
   self_billing_agreement_ref?: string,
   received_date?: string | "",
+  vat_breakdown?: { vat_rate: 0 | 6 | 12 | 25, vat_amount: number }[],
   payment_cash_account_id?: string | "" | null,
   vat_treatment?: "standard" | "export" | "reverse_charge" | "reverse_charge_domestic" | null,
   delivery_country?: string | null,
@@ -487,6 +489,8 @@ Response `200`:
     id: string,
     handle?: string,
     invoice_number: string | null,
+    external_invoice_number?: string | null,
+    is_self_billed?: boolean,
     customer_id: string,
     invoice_date: string,
     due_date: string,
@@ -565,6 +569,8 @@ Response `200`:
     id: string,
     handle?: string,
     invoice_number: string | null,
+    external_invoice_number?: string | null,
+    is_self_billed?: boolean,
     customer_id: string,
     invoice_date: string,
     due_date: string,
@@ -677,6 +683,8 @@ Response `200`:
     id: string,
     handle?: string,
     invoice_number: string | null,
+    external_invoice_number?: string | null,
+    is_self_billed?: boolean,
     customer_id: string,
     invoice_date: string,
     due_date: string,
@@ -2005,7 +2013,7 @@ Bulk-creation endpoint. Each invoice in the request array is validated and inser
 Request body:
 ```ts
 {
-  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD", document_type?: "invoice" | "proforma" | "delivery_note" | "quote", valid_until?: string | "", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, qr_mode?: "auto" | "bank_app" | "swish" | "payment_link" | "none" | null, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", payment_cash_account_id?: string | "" | null, vat_treatment?: "standard" | "export" | "reverse_charge" | "reverse_charge_domestic" | null, delivery_country?: string | null, items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | "gron_teknik" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[] }[],
+  invoices: { customer_id: string, invoice_date: string, due_date: string, delivery_date?: string | "", currency: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD", document_type?: "invoice" | "proforma" | "delivery_note" | "quote", valid_until?: string | "", your_reference?: string, our_reference?: string, invoice_marking?: string, notes?: string, payment_link_url?: string | "", payment_link_auto?: boolean, qr_mode?: "auto" | "bank_app" | "swish" | "payment_link" | "none" | null, deduction_personnummer?: string, deduction_housing_designation?: string, deduction_apartment_number?: string, deduction_brf_org_number?: string | "", save_as_draft?: boolean, ore_rounding?: boolean, default_dimensions?: Record<string, string>, is_self_billed?: boolean, external_invoice_number?: string | "", self_billing_agreement_ref?: string, received_date?: string | "", vat_breakdown?: { vat_rate: 0 | 6 | 12 | 25, vat_amount: number }[], payment_cash_account_id?: string | "" | null, vat_treatment?: "standard" | "export" | "reverse_charge" | "reverse_charge_domestic" | null, delivery_country?: string | null, items: { line_type?: "product" | "text", description: string, quantity: number, unit: string, unit_price: number, discount_percent?: number | null, vat_rate?: number, article_id?: string | null, revenue_account?: string | null, sales_order_item_id?: string | null, deduction_type?: "rot" | "rut" | "gron_teknik" | null, labor_hours?: number | null, work_type?: string | null, housing_designation?: string | null, apartment_number?: string | null, brf_org_number?: string | "" | null, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[] }[],
   all_or_nothing?: boolean
 }
 ```
@@ -2072,6 +2080,181 @@ Example response `200`:
       "succeeded": 1,
       "failed": 0
     }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/setoffs`
+
+**Set off (kvitta) an open customer invoice against an open supplier invoice of the same counterparty: one verifikat, both invoices lowered, the net left to pay or receive.**
+`scope:invoices:write · risk:high · idempotent · dry-run · reversible`
+
+Books Dr accounts payable / Cr accounts receivable (the accounts the invoices' own vouchers booked) for amount, at most the smaller remaining amount (the default). VAT is untouched. Both invoices get a payment row dated setoff_date and their remaining amounts go down; the net is then matched to the bank line like any part payment. A kvittningsavräkning is archived on the verifikat as underlag. SEK only; refused for credit notes, ROT/RUT invoices, invoices not booked as receivable or payable (kontantmetoden), an open collection case, or a supplier invoice with a payment on its way.
+
+**Use when:** A company sells to and buys from the same legal person and settles the two against each other instead of paying both in full.
+**Do not use for:** Settling a credit note against its invoice (credit the invoice), or recording a payment received or made (mark the invoice paid or match the bank line).
+
+**Pitfalls:**
+- Both cards must belong to the same counterparty (same organisation number, or merged in Motparter): 422 SETOFF_PARTY_MISMATCH / SETOFF_NO_PARTY.
+- A supplier invoice entered at the bank, in a payment file or in an open payment order is refused (409 SETOFF_PAYMENT_IN_FLIGHT): the bank would pay the full amount.
+- A mistake is undone by reversing (storno) the set-off verifikat; it is never corrected in place.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{
+  invoice_id: string,
+  supplier_invoice_id: string,
+  amount?: number,
+  setoff_date?: string,
+  note?: string,
+  party_id?: string
+}
+```
+
+Example request:
+```json
+{
+  "invoice_id": "2a9c…",
+  "supplier_invoice_id": "79f1…",
+  "setoff_date": "2026-09-30",
+  "note": "Kvittning enligt flexavtal"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    setoff_id: string,
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    party_id: string,
+    amount: number,
+    setoff_date: string,
+    invoice: { invoice_id: string, status: string, remaining_amount: number },
+    supplier_invoice: { supplier_invoice_id: string, status: string, remaining_amount: number },
+    net: { direction: "we_pay" | "they_pay" | "settled", amount: number },
+    underlag_document_id: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "setoff_id": "5d1e…",
+    "journal_entry_id": "c41d…",
+    "amount": 1388,
+    "invoice": {
+      "invoice_id": "2a9c…",
+      "status": "paid",
+      "remaining_amount": 0
+    },
+    "supplier_invoice": {
+      "supplier_invoice_id": "79f1…",
+      "status": "partially_paid",
+      "remaining_amount": 3116
+    },
+    "net": {
+      "direction": "we_pay",
+      "amount": 3116
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/setoffs/counterparty`
+
+**A counterparty that is both customer and supplier, as one relation: its open customer and supplier invoices, the net per currency and its set-offs.**
+`scope:reports:read · risk:low · idempotent`
+
+Name the counterparty by exactly one of party_id, customer_id or supplier_id. Every customer and supplier card of the same legal person (one party, linked by organisation number) is included. Each open invoice says whether it can be set off now and why not (ineligible_reason). The net is receivable minus payable: above zero they pay us, below zero we pay them. Credit notes are not included.
+
+**Use when:** Deciding what to set off between a customer that is also a supplier, or checking what is left to pay or receive after a set-off.
+**Do not use for:** The full kund- or leverantörsreskontra (use the ledger reports).
+
+**Pitfalls:**
+- A card without an organisation number has no party until it is merged in Motparter (404 SETOFF_PARTY_NOT_FOUND).
+- Totals are per currency; only SEK invoices can be set off.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `party_id` | query | `string` | no | The counterparty (Motparter). |
+| `customer_id` | query | `string` | no | A customer card of the counterparty. |
+| `supplier_id` | query | `string` | no | A supplier card of the counterparty. |
+
+Response `200`:
+```ts
+{
+  data: {
+    party: { party_id: string, name: string, org_number: string | null },
+    customers: { customer_id: string, name: string }[],
+    suppliers: { supplier_id: string, name: string }[],
+    receivables: { invoice_id: string, customer_id: string | null, number: string | null, invoice_date: string, due_date: string | null, currency: string, total: number, remaining_amount: number, status: string, setoff_eligible: boolean, ineligible_reason: "credit_note" | "not_open" | "currency" | "deduction" | "not_booked" | "no_party" | "collection_open" | "payment_in_flight" | null }[],
+    payables: { supplier_invoice_id: string, supplier_id: string | null, number: string | null, arrival_number: number | null, invoice_date: string, due_date: string | null, currency: string, total: number, remaining_amount: number, status: string, setoff_eligible: boolean, ineligible_reason: "credit_note" | "not_open" | "currency" | "deduction" | "not_booked" | "no_party" | "collection_open" | "payment_in_flight" | null }[],
+    totals: { currency: string, receivable: number, payable: number, net: number, direction: "they_pay" | "we_pay" | "settled" }[],
+    setoffs: { setoff_id: string, setoff_date: string, amount: number, status: "booked" | "reversed", invoice_id: string, supplier_invoice_id: string, journal_entry_id: string, note: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "party": {
+      "party_id": "7fc2…",
+      "name": "Crayfish Energy AB",
+      "org_number": "5594774076"
+    },
+    "totals": [
+      {
+        "currency": "SEK",
+        "receivable": 1388,
+        "payable": 4504,
+        "net": -3116,
+        "direction": "we_pay"
+      }
+    ]
   },
   "meta": {
     "request_id": "req_…",

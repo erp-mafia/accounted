@@ -241,6 +241,8 @@ import { PAYMENT_SIGNING_LINK_OPERATIONS } from './payment-signing-links'
 import { SUPPLIER_INVOICE_ATTEST_OPERATIONS } from './supplier-invoice-attest'
 import { readCollectionsEnv } from '@/lib/collections/flags'
 import { CUSTOMER_LOSS_OPERATION_LIST } from './customer-loss'
+import { COUNTERPARTY_SETOFF_OPERATION_LIST } from './counterparty-setoff'
+import { counterpartySetoffEnabled } from '@/lib/env/counterparty-setoff-switch'
 import { customerLossEnabled } from '@/lib/env/customer-loss-switch'
 import type { AnyOperation } from './types'
 
@@ -483,6 +485,7 @@ export const ALL_OPERATIONS: readonly AnyOperation[] = [
   ...CORE_OPERATIONS,
   ...COLLECTIONS_OPERATION_LIST,
   ...CUSTOMER_LOSS_OPERATION_LIST,
+  ...COUNTERPARTY_SETOFF_OPERATION_LIST,
 ]
 
 /**
@@ -496,6 +499,8 @@ export const OPERATIONS: readonly AnyOperation[] = [
   ...(readCollectionsEnv().enabled ? COLLECTIONS_OPERATION_LIST : []),
   // Kundförlust likewise only while CUSTOMER_LOSS_ENABLED is set.
   ...(customerLossEnabled() ? CUSTOMER_LOSS_OPERATION_LIST : []),
+  // Kvittning likewise only while COUNTERPARTY_SETOFF_ENABLED is set.
+  ...(counterpartySetoffEnabled() ? COUNTERPARTY_SETOFF_OPERATION_LIST : []),
 ]
 
 const byPendingType = new Map<string, AnyOperation>()

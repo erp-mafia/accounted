@@ -128,6 +128,18 @@ describe('PUT /api/supplier-invoices/[id]', () => {
     expect(updatePayloads).toHaveLength(0)
   })
 
+  it('refuses a new number or date on an issued self-billing invoice (crm#1367)', async () => {
+    singleResults.push(existingRow({ is_self_billed: true, supplier_invoice_number: 'SF-007' }))
+
+    const response = await putRequest({ supplier_invoice_number: 'SF-099' })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { fields: string[] } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SI_SELF_BILL_IMMUTABLE')
+    expect(body.error.details.fields).toEqual(['supplier_invoice_number'])
+    expect(updatePayloads).toHaveLength(0)
+  })
+
   it('rejects an invalid body before writing anything', async () => {
     singleResults.push(existingRow())
 

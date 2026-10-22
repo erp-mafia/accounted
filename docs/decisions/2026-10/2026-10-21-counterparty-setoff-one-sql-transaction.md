@@ -1,0 +1,1 @@
+[2026-10-21] Kvittning books in one SQL function, book_counterparty_setoff, called through commitSqlPosting: the voucher, both invoices, both payment rows and the set-off row change in one transaction, and every refusal is checked under the row locks before a number is drawn (crm#1367).

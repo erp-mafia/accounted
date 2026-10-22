@@ -1887,6 +1887,64 @@ export async function commitSupplierInvoiceVoucherLink(
   return { data, error: null }
 }
 
+export interface CounterpartySetoffInput {
+  /** The set-off's id (lib/invoices/counterparty-setoff/ids.ts), the voucher's source_id. */
+  setoffId: string
+  invoiceId: string
+  supplierInvoiceId: string
+  /** In SEK, öre-exact. */
+  amount: number
+  setoffDate: string
+  note: string | null
+  /**
+   * The posting port's counterparty.set_off event, linked to the verifikat
+   * before its number is drawn. Omitted: the RPC is called without it.
+   */
+  businessEvents?: SqlBusinessEventLink
+}
+
+/**
+ * Kvittning through book_counterparty_setoff: the set-off verifikat (Dr 244x
+ * / Cr 151x), both invoices' remaining amounts, a payment row on each side
+ * and the counterparty_setoffs row, atomically in SQL. This is the RPC's one
+ * application door, so that its verifikat is announced with
+ * journal_entry.committed. Every success posts one, so every success emits; a
+ * refusal or transport error emits nothing. A dry run must never reach this
+ * door. The actor is handed on as for commitMatchBatchAllocation.
+ *
+ * Returns the RPC's answer unchanged: callers translate its refusals.
+ */
+export async function commitCounterpartySetoff(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: CounterpartySetoffInput,
+): Promise<PostingRpcAnswer> {
+  const { data, error } = await callWithBusinessEvents('book_counterparty_setoff', input.businessEvents, (events) =>
+    rpcWithActor(supabase, 'book_counterparty_setoff', {
+      p_company_id: companyId,
+      p_setoff_id: input.setoffId,
+      p_invoice_id: input.invoiceId,
+      p_supplier_invoice_id: input.supplierInvoiceId,
+      p_amount: input.amount,
+      p_setoff_date: input.setoffDate,
+      p_note: input.note,
+      // Honoured only for a service_role caller (the v1 and MCP doors run on
+      // the cookieless service client); a session caller is pinned to its
+      // own auth.uid() by the RPC.
+      p_user_id: userId,
+      ...events,
+    }),
+  )
+  if (error) return { data, error }
+
+  const result = data as { ok?: boolean; journal_entry_id?: string } | null
+  if (result?.ok === true && result.journal_entry_id) {
+    await announceRpcPostedEntry(supabase, companyId, userId, result.journal_entry_id, 'book_counterparty_setoff')
+  }
+  return { data, error: null }
+}
+
 /**
  * Get the current date in Swedish timezone (Europe/Stockholm).
  * Avoids UTC date shift when server runs in a different timezone.

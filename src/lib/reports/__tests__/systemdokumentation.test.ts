@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildSystemdokumentation, loadSystemdokumentationFacts, type SystemdokumentationFacts } from '../systemdokumentation'
-import { CASH_PARTIAL_PAYMENT_RULE, KONTANTMETOD_CUTOFF_RULES, KONTANTMETOD_EU_GOODS_RULE, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
+import { CASH_PARTIAL_PAYMENT_RULE, COUNTERPARTY_SETOFF_RULE, KONTANTMETOD_CUTOFF_RULES, KONTANTMETOD_EU_GOODS_RULE, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
 
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted', appUrl: 'https://app.accounted.se' }),
@@ -236,6 +236,25 @@ describe('buildSystemdokumentation', () => {
     expect(usedLoss).not.toContain('collection_settlement')
   })
 
+  it('describes kvittning and lists its series while its switch is on or once a set-off was booked', () => {
+    const listed = (r: ReturnType<typeof buildSystemdokumentation>) => r.verifikationsserier.per_source_type.map((row) => row.source_type)
+    const rule = (r: ReturnType<typeof buildSystemdokumentation>) => r.behandlingsregler.find((x) => x.rubrik === 'Kvittning')?.text
+    const none = { switches: { cashPartialPayments: false, collections: false, customerLoss: false }, vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false } }
+
+    const dark = buildSystemdokumentation(facts({ switchedRules: none }))
+    expect(listed(dark)).not.toContain('counterparty_setoff')
+    expect(rule(dark)).toBeUndefined()
+
+    const switchedOn = buildSystemdokumentation(facts({ switchedRules: { ...none, switches: { ...none.switches, counterpartySetoff: true } } }))
+    expect(listed(switchedOn)).toContain('counterparty_setoff')
+    expect(rule(switchedOn)).toBe(COUNTERPARTY_SETOFF_RULE)
+
+    // Switched off after use: the series and the rule that were used stay described.
+    const used = buildSystemdokumentation(facts({ switchedRules: { ...none, vouchers: { ...none.vouchers, counterpartySetoff: true } } }))
+    expect(listed(used)).toContain('counterparty_setoff')
+    expect(rule(used)).toBe(COUNTERPARTY_SETOFF_RULE)
+  })
+
   it('lists members by role with labels and API keys with scope labels and the numeric cap', () => {
     const r = buildSystemdokumentation(facts())
     expect(r.behorigheter.mfa_required).toBe(true)
@@ -343,23 +362,24 @@ describe('loadSystemdokumentationFacts', () => {
     }
     const dark = await loadSystemdokumentationFacts(tableMock({ ...base, journal_entries: { data: [] } }).client, 'company-1', 'p1')
     expect(dark!.switchedRules).toEqual({
-      switches: { cashPartialPayments: false, collections: false, customerLoss: false },
-      vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false },
+      switches: { cashPartialPayments: false, collections: false, customerLoss: false, counterpartySetoff: false },
+      vouchers: { cashPartialPayments: false, collectionSettlement: false, customerLoss: false, counterpartySetoff: false },
     })
 
     vi.stubEnv('CASH_PARTIAL_PAYMENTS_ENABLED', '1')
     vi.stubEnv('COLLECTIONS_ENABLED', 'true')
     vi.stubEnv('CUSTOMER_LOSS_ENABLED', '1')
+    vi.stubEnv('COUNTERPARTY_SETOFF_ENABLED', '1')
     const db = tableMock({ ...base, journal_entries: { data: [{ id: 'je-1' }] } })
     const used = await loadSystemdokumentationFacts(db.client, 'company-1', 'p1')
     expect(used!.switchedRules).toEqual({
-      switches: { cashPartialPayments: true, collections: true, customerLoss: true },
-      vouchers: { cashPartialPayments: true, collectionSettlement: true, customerLoss: true },
+      switches: { cashPartialPayments: true, collections: true, customerLoss: true, counterpartySetoff: true },
+      vouchers: { cashPartialPayments: true, collectionSettlement: true, customerLoss: true, counterpartySetoff: true },
     })
     const voucherReads = db.calls.filter((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'source_type').map((c) => c.args[1])
-    expect(voucherReads.sort()).toEqual(['collection_settlement', 'customer_loss', 'invoice_cash_payment'])
+    expect(voucherReads.sort()).toEqual(['collection_settlement', 'counterparty_setoff', 'customer_loss', 'invoice_cash_payment'])
     expect(db.calls.find((c) => c.table === 'journal_entries' && c.method === 'like')?.args).toEqual(['description', 'Kontant delbetalning kundfaktura%'])
-    expect(db.calls.filter((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'company_id')).toHaveLength(3)
+    expect(db.calls.filter((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'company_id')).toHaveLength(4)
   })
 
   it('refuses the document when the voucher read fails: a used series left out would be wrong', async () => {

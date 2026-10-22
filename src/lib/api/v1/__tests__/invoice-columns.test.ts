@@ -54,6 +54,12 @@ describe('v1 invoice projections feed the render amount path', () => {
     expect(parse(INVOICE_ITEM_FULL_COLUMNS)).toContain('article_number')
   })
 
+  // A received self-billed sale has invoice_number null by design: the
+  // customer's number is its only identifier on the API (crm#1367).
+  it.each(['external_invoice_number', 'is_self_billed'])('INVOICE_FULL_COLUMNS carries %s (crm#1367)', (column) => {
+    expect(parse(INVOICE_FULL_COLUMNS)).toContain(column)
+  })
+
   it('never selects the encrypted personnummer blob', () => {
     expect(INVOICE_FULL_COLUMNS).not.toContain('deduction_personnummer_encrypted')
     expect(INVOICE_PDF_COLUMNS).not.toContain('deduction_personnummer_encrypted')

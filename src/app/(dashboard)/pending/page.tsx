@@ -1006,7 +1006,7 @@ export default function PendingOperationsPage() {
               // High risk, and a registration of an already-booked invoice
               // (it cannot be undone): the consent sentence the approval
               // confirms in a dialog.
-              const rowConsent = rowConsentSentence(op)
+              const rowConsent = rowConsentSentence(op, t)
               const complianceWarning = complianceWarningOf(op)
 
               if (op.status !== 'pending') {
@@ -1288,10 +1288,10 @@ export default function PendingOperationsPage() {
                     <p className="mt-0.5 whitespace-pre-wrap break-words text-xs leading-snug">{detailOp.params.notes}</p>
                   </div>
                 )}
-                {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type, detailOp.params) && (
+                {detailOp.status === 'pending' && singleActionWarning(detailOp.operation_type, detailOp.params, t) && (
                   <div className="rounded-lg border border-border bg-secondary/25 px-3 py-2">
                     <p className="text-xs leading-snug text-muted-foreground">
-                      {singleActionWarning(detailOp.operation_type, detailOp.params)}
+                      {singleActionWarning(detailOp.operation_type, detailOp.params, t)}
                     </p>
                   </div>
                 )}
@@ -1387,7 +1387,7 @@ export default function PendingOperationsPage() {
         open={showCommitDialog}
         onOpenChange={setShowCommitDialog}
         title={selectedOp?.title || t('approve_operation_title')}
-        warningText={selectedOp ? singleActionWarning(selectedOp.operation_type, selectedOp.params) : ''}
+        warningText={selectedOp ? singleActionWarning(selectedOp.operation_type, selectedOp.params, t) : ''}
         confirmLabel={t('approve')}
         isSubmitting={isCommitting}
         onConfirm={handleCommit}

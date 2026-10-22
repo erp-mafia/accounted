@@ -291,7 +291,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     uses: ['payments', 'transactions', 'vat'],
     libFolders: ['invoices', 'customers', 'articles', 'sales-orders', 'customer-loss'],
     operationPrefixes: ['invoices', 'peppol'],
-    v1Segments: ['invoices', 'customers', 'articles', 'peppol'],
+    v1Segments: ['invoices', 'customers', 'articles', 'peppol', 'setoffs'],
     jurisdictions: SE,
   },
   {

@@ -328,6 +328,8 @@ describe('planOneClick: the form', () => {
       currency: 'SEK',
       reverse_charge: false,
       payment_reference: '1234567897',
+      // The document's VAT for the rate, booked as stated (crm#1367).
+      vat_breakdown: [{ vat_rate: 0.25, vat_amount: 250 }],
       items: [{ description: 'Konsult AB', amount: 1000, account_number: '6550', vat_rate: 0.25 }],
     })
     expect(pairs(plan)).toEqual([['6550', 1000, 0], ['2641', 250, 0], ['2440', 0, 1250]])
@@ -341,6 +343,15 @@ describe('planOneClick: the form', () => {
         bankgiro: '5050-1055',
       },
     })
+  })
+
+  it('registers the VAT the invoice states when it is the net x rate within an öre (crm#1367)', () => {
+    // 1 000,03 x 25 % = 250,0075, which rounds to 250,01; the invoice says 250,00.
+    const reading = { ...invoice, totals: { subtotal: 1000.03, vatAmount: 250, total: 1250.03 }, vatBreakdown: [{ rate: 25, base: 1000.03, amount: 250 }] }
+    const plan = planOneClick(input({ ...consulting, reading, bank: { ...BANK, date: '2026-09-28', amountSek: -1250.03 } }))
+    expect(plan.form).toBe('register_and_settle')
+    expect(plan.invoice?.vat_breakdown).toEqual([{ vat_rate: 0.25, vat_amount: 250 }])
+    expect(pairs(plan)).toEqual([['6550', 1000.03, 0], ['2641', 250, 0], ['2440', 0, 1250.03]])
   })
 
   it('books it like a receipt when Leverantörsfakturor is off', () => {

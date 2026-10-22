@@ -39,6 +39,7 @@
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import { resolveSupplierInvoiceDueDate } from '@/lib/supplier-invoices/due-date'
 import type { z } from 'zod'
 import type { CoreEvent } from '@/lib/events/types'
 import { eventBus } from '@/lib/events'
@@ -50,6 +51,7 @@ import {
   supplierInvoiceSekAmounts,
 } from '@/lib/currency/supplier-invoice-rate'
 import { defaultVatRateForTreatment } from '@/lib/vat/supplier-invoice-line-checks'
+import { allocateDocumentVat } from '@/lib/vat/document-vat'
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { roundOre } from '@/lib/money'
 import { renderChannelContextNotes } from '@/lib/documents/channel-context-notes'
@@ -105,6 +107,12 @@ export async function convertInboxItemToSupplierInvoice(
   const { supabase, companyId, userId, log } = ctx
   const emit = options.emit ?? ((event: CoreEvent) => eventBus.emit(event))
 
+  // A självfaktura is our own document (crm#1367): it is registered through
+  // POST /supplier-invoices, never converted from a supplier's underlag.
+  if (body.is_self_billed) {
+    return { ok: false, code: 'SI_SELF_BILL_UNSUPPORTED', details: { reason: 'inbox_item_id' } }
+  }
+
   const { data: item, error: fetchError } = await supabase
     .from('invoice_inbox_items')
     .select('*')
@@ -130,6 +138,8 @@ export async function convertInboxItemToSupplierInvoice(
     .eq('company_id', companyId)
     .single()
   if (supplierError || !supplier) return { ok: false, code: 'SUPPLIER_NOT_FOUND' }
+  // No förfallodatum given: the invoice date plus the supplier's terms.
+  const dueDate = resolveSupplierInvoiceDueDate(body.due_date, body.invoice_date, supplier.default_payment_terms)
 
   // The stored treatment decides what a line that omits vat_rate falls back
   // to (#2553). A foreign supplier defaults to reverse charge and the
@@ -228,7 +238,9 @@ export async function convertInboxItemToSupplierInvoice(
     const lineTotal = line.amount != null
       ? roundOre(line.amount)
       : roundOre((line.quantity ?? 1) * (line.unit_price ?? 0))
-    const vatAmount = roundOre(lineTotal * vatRate)
+    // A line's own VAT (items[].vat_amount) is kept as given; the others get
+    // their share of the document's VAT per rate below.
+    const vatAmount = line.vat_amount != null ? roundOre(line.vat_amount) : roundOre(lineTotal * vatRate)
     const accrues = Boolean(line.accrual_period_start && line.accrual_period_end)
     return {
       sort_order: index,
@@ -257,6 +269,23 @@ export async function convertInboxItemToSupplierInvoice(
   // Reverse charge: the seller charged no Swedish moms, so no line may carry a rate.
   const reverseChargeRefusal = reverseChargeLineRateRefusal(reverseCharge, pricedItems)
   if (reverseChargeRefusal) return reverseChargeRefusal
+
+  // VAT per rate as the document has it, the same rule as createSupplierInvoice:
+  // the VAT on the summed base or the stated vat_breakdown, spread onto the
+  // lines so they sum to it (crm#1367). Before the seller-VAT fold, so a
+  // company without avdragsrätt folds the document's VAT into the cost.
+  const documentVat = allocateDocumentVat(
+    pricedItems.map((line, index) => ({
+      lineTotal: line.line_total,
+      rate: line.vat_rate,
+      overrideVat: body.items[index].vat_amount ?? null,
+    })),
+    body.vat_breakdown?.map((entry) => ({ rate: entry.vat_rate, vatAmount: entry.vat_amount })) ?? null,
+  )
+  if (!documentVat.ok) return { ok: false, code: documentVat.code, details: documentVat.details }
+  documentVat.lineVat.forEach((lineVat, index) => {
+    pricedItems[index].vat_amount = lineVat
+  })
 
   // Icke momsregistrerad (feedback seq 708521): amounts arrive excluding VAT
   // with the seller's rate, and a company with no avdragsrätt owes the
@@ -317,7 +346,7 @@ export async function convertInboxItemToSupplierInvoice(
         supplier_name: (supplier.name as string | null) ?? null,
         supplier_invoice_number: body.supplier_invoice_number,
         invoice_date: body.invoice_date,
-        due_date: body.due_date,
+        due_date: dueDate,
         currency: fx.rate.currency,
         exchange_rate: fx.rate.exchangeRate,
         exchange_rate_date: fx.rate.exchangeRateDate,
@@ -332,6 +361,7 @@ export async function convertInboxItemToSupplierInvoice(
         notes,
         default_dimensions: defaultDimensions,
         items,
+        vat_by_rate: documentVat.byRate,
         ...(sellerVatFold
           ? {
               vat_registration: {
@@ -366,7 +396,7 @@ export async function convertInboxItemToSupplierInvoice(
       arrival_number: arrivalNum,
       supplier_invoice_number: body.supplier_invoice_number,
       invoice_date: body.invoice_date,
-      due_date: body.due_date,
+      due_date: dueDate,
       delivery_date: body.delivery_date || null,
       status: 'registered',
       currency: fx.rate.currency,
@@ -570,7 +600,7 @@ export async function convertInboxItemToSupplierInvoice(
       supplier_org_number: supplier.org_number ?? null,
       invoice_number: body.supplier_invoice_number,
       invoice_date: body.invoice_date,
-      due_date: body.due_date,
+      due_date: dueDate,
       payment_reference: body.payment_reference ?? null,
       currency: fx.rate.currency,
       total,

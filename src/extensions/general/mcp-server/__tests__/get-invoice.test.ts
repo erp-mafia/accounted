@@ -225,6 +225,53 @@ describe('gnubok_get_invoice: execute', () => {
     expect(findCalls('invoices', 'eq')).toContainEqual(['id', INVOICE_ID])
   })
 
+  // crm#1367: a received self-billed sale has invoice_number null by design;
+  // the customer's number is how an agent matches it to the document.
+  it('returns the self-billed flag and the customer\'s number on a received self-bill', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: invoiceRow({
+        status: 'paid',
+        invoice_number: null,
+        external_invoice_number: 'S2441',
+        is_self_billed: true,
+        journal_entry_id: 'je-1',
+      }),
+    })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as Record<string, unknown>
+
+    expect(String(findCall('invoices', 'select')?.[0])).toContain('external_invoice_number')
+    expect(result).toMatchObject({ invoice_number: null, external_invoice_number: 'S2441', is_self_billed: true })
+  })
+
+  it('returns external_invoice_number null and is_self_billed false on an invoice we issued', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: invoiceRow() })
+
+    const result = (await getInvoice.execute(
+      { invoice_id: INVOICE_ID },
+      COMPANY_ID,
+      USER_ID,
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as Record<string, unknown>
+
+    expect(result).toMatchObject({ external_invoice_number: null, is_self_billed: false })
+  })
+
+  it('declares the self-billing fields in its output schema', () => {
+    const props = (getInvoice.outputSchema as { properties: Record<string, unknown> }).properties
+    expect(props).toHaveProperty('external_invoice_number')
+    expect(props).toHaveProperty('is_self_billed')
+  })
+
   it('reports editable_draft false for an issued invoice', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: invoiceRow({ status: 'sent', invoice_number: '2026-0042', journal_entry_id: 'je-1' }) })

@@ -16,6 +16,7 @@ import {
   registerBookedInvoiceBulkLine,
   registerBookedSupplierInvoiceBulkLine,
   rowConsentSentence,
+  SINGLE_ACTION_WARNING_KEYS,
   singleActionWarning,
   singleActionWarnings,
 } from '../vocabulary'
@@ -288,6 +289,32 @@ describe('pending.preview_field labels', () => {
       'will_be_fully_paid',
     ]) {
       expect(sv[key], key).toBeTruthy()
+    }
+  })
+})
+
+describe('keyed consequence sentences (crm#1367)', () => {
+  const messages = (lang: 'sv' | 'en') =>
+    JSON.parse(fs.readFileSync(path.join(process.cwd(), 'src', 'messages', `${lang}.json`), 'utf8')) as {
+      pending: Record<string, string>
+    }
+
+  it("reads the set-off's sentence from the user's language, in the dialog and the row", () => {
+    const en = messages('en').pending
+    const t = (key: string) => en[key] ?? key
+    const sentence = singleActionWarning('book_counterparty_setoff', {}, t)
+    expect(sentence).toBe(en.warning_book_counterparty_setoff)
+    expect(sentence).toMatch(/^By clicking approve/)
+    expect(rowConsentSentence({ operation_type: 'book_counterparty_setoff', status: 'pending', risk_level: 'high', params: {} }, t)).toBe(sentence)
+  })
+
+  it('has every keyed sentence in both languages and no literal beside it', () => {
+    const sv = messages('sv').pending
+    const en = messages('en').pending
+    for (const [type, key] of Object.entries(SINGLE_ACTION_WARNING_KEYS)) {
+      expect(sv[key], `sv pending.${key}`).toBeTruthy()
+      expect(en[key], `en pending.${key}`).toBeTruthy()
+      expect(singleActionWarnings[type], `${type} literal`).toBeUndefined()
     }
   })
 })

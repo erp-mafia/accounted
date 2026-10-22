@@ -7,7 +7,8 @@ import { getVatRate } from './vat-entries'
  * Replace the rate-based VAT line of a template booking with the underlag's
  * actual moms. A clean 25 % receipt gives the same figure either way; one
  * with dricks, mixed rates or öresavrundning does not, and the document is
- * the truth (ML 8 kap. 17 §: the deduction follows the invoice).
+ * the truth: the deduction (ML 2023:200 13 kap.) is of the VAT amount the
+ * invoice states (17 kap. 24 § p.11).
  *
  * Same rules and bounds as buildMappingResultFromCategory's
  * vatAmountOverride: only on a rate-based treatment, positive, at most the

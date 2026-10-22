@@ -218,6 +218,74 @@ describe('createSupplierInvoice dry run', () => {
   })
 })
 
+// crm#1367: the VAT per rate as the document has it. SF-CE-202608 rounded
+// line by line came to 3 864,12; the document says 3 864,11.
+describe('createSupplierInvoice: VAT as the document states it', () => {
+  const selfBillLines = [
+    { description: 'Flexintäkt', amount: 17564.15, account_number: '4010', vat_rate: 0.25 as const },
+    { description: 'Handelsavgift', amount: -2107.7, account_number: '4010', vat_rate: 0.25 as const },
+  ]
+
+  beforeEach(() => {
+    setTable('company_settings', { data: { accounting_method: 'accrual', vat_registered: true } })
+  })
+
+  it('books the VAT on the summed base per rate and spreads it over the lines', async () => {
+    const result = await createSupplierInvoice(ctx(), body({ items: selfBillLines }), { dryRun: true })
+
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview).toMatchObject({ subtotal: 15456.45, vat_amount: 3864.11, total: 19320.56 })
+    expect(result.preview.items.map((i) => i.vat_amount)).toEqual([4391.04, -526.93])
+    expect(result.preview.vat_by_rate).toEqual([{ rate: 0.25, base: 15456.45, vat: 3864.11, source: 'computed' }])
+    expectNothingWritten()
+  })
+
+  it('books the vat_breakdown the document states when it is within the per-line rounding', async () => {
+    const result = await createSupplierInvoice(
+      ctx(),
+      body({ items: selfBillLines, vat_breakdown: [{ vat_rate: 0.25, vat_amount: 3864.12 }] }),
+      { dryRun: true },
+    )
+
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview).toMatchObject({ vat_amount: 3864.12, total: 19320.57 })
+    expect(result.preview.vat_by_rate[0]).toMatchObject({ vat: 3864.12, source: 'stated' })
+  })
+
+  it('refuses a vat_breakdown further off than a seller\'s rounding, writing nothing', async () => {
+    const result = await createSupplierInvoice(
+      ctx(),
+      body({ items: selfBillLines, vat_breakdown: [{ vat_rate: 0.25, vat_amount: 3870 }] }),
+      { dryRun: true },
+    )
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'VAT_BREAKDOWN_MISMATCH',
+      details: { rate: 0.25, stated: 3870, computed: 3864.11, reason: 'outside_tolerance' },
+    })
+    expectNothingWritten()
+  })
+
+  it('keeps a line\'s own vat_amount as given', async () => {
+    const result = await createSupplierInvoice(
+      ctx(),
+      body({
+        items: [
+          { description: 'Bil', amount: 1000, account_number: '5611', vat_rate: 0.25, vat_amount: 125 },
+          { description: 'Material', amount: 9.98, account_number: '4010', vat_rate: 0.25 },
+          { description: 'Material', amount: 9.98, account_number: '4010', vat_rate: 0.25 },
+        ],
+      }),
+      { dryRun: true },
+    )
+
+    if (!result.ok || !result.dryRun) throw new Error('expected a dry-run preview')
+    expect(result.preview.items.map((i) => i.vat_amount)).toEqual([125, 2.49, 2.5])
+    expect(result.preview.vat_amount).toBe(129.99)
+  })
+})
+
 // Upplupen kostnad (29xx): July-September electricity on an October invoice.
 // A month that cannot take its entry refuses the registration before an
 // ankomstnummer is drawn, live and dry run alike.

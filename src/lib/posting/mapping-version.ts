@@ -118,6 +118,10 @@ export const MAPPING_SOURCES = {
   // reserve and its release, the konstaterad write-off with its moms per
   // rate, and a recovery.
   customerLoss: 'se.customer-loss-lines',
+  // A kvittning verifikat (lib/invoices/counterparty-setoff): Dr the supplier
+  // invoice's 244x / Cr the customer invoice's 151x, drawn in SQL by
+  // book_counterparty_setoff.
+  counterpartySetoff: 'se.counterparty-setoff-lines',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

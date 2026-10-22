@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 363 endpoints.
+  pagination, scopes), and all 366 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -218,7 +218,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 363 operations. Paths are shown without
+API version `2026-05-12`, 366 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (22)
@@ -331,7 +331,7 @@ POST /companies/{companyId}/skatteverket/agi/validate-individuppgift : Pre-valid
 GET /companies/{companyId}/skatteverket/vat-declarations : Read a filed momsdeklaration (submitted and/or decided) from Skatteverket [scope:compliance:read risk:low idempotent]
 ```
 
-### Invoices (AR) (25)
+### Invoices (AR) (27)
 
 Full detail: [references/invoices.md](references/invoices.md)
 
@@ -361,6 +361,8 @@ POST /companies/{companyId}/invoices/{id}/send : Send a draft invoice to the cus
 POST /companies/{companyId}/invoices/{id}/send-peppol : Send a customer invoice as a Peppol e-invoice (BIS Billing 3) through the access point [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-book : Book many customer invoices in one call, each with its own outcome [scope:invoices:write risk:high idempotent dry-run]
 POST /companies/{companyId}/invoices/bulk-create : Create up to 50 draft invoices in one call (partial-success) [scope:invoices:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/setoffs : Set off (kvitta) an open customer invoice against an open supplier invoice of the same counterparty: one verifikat, both invoices lowered, the net left to pay or receive [scope:invoices:write risk:high idempotent dry-run reversible]
+GET /companies/{companyId}/setoffs/counterparty : A counterparty that is both customer and supplier, as one relation: its open customer and supplier invoices, the net per currency and its set-offs [scope:reports:read risk:low idempotent]
 ```
 
 ### Customers and articles (7)
@@ -377,7 +379,7 @@ DELETE /companies/{companyId}/customers/{id} : Archive a customer (soft-delete) 
 POST /companies/{companyId}/customers/bulk-create : Create up to 50 customers in one call (partial-success) [scope:customers:write risk:low idempotent dry-run reversible]
 ```
 
-### Suppliers (AP) (47)
+### Suppliers (AP) (48)
 
 Full detail: [references/suppliers.md](references/suppliers.md)
 
@@ -414,6 +416,7 @@ POST /companies/{companyId}/supplier-invoices/{id}/credit : Issue a credit note 
 PATCH /companies/{companyId}/supplier-invoices/{id}/items/{itemId} : Move one supplier-invoice line to another account, correcting the registration verifikat inline [scope:suppliers:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/supplier-invoices/{id}/mark-paid : Record a payment against a supplier invoice [scope:suppliers:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/supplier-invoices/{id}/reject : Reject (neka) the attest of a supplier invoice that waits for it, with an optional comment [scope:suppliers:write risk:low idempotent dry-run]
+GET /companies/{companyId}/supplier-invoices/{id}/self-billing-pdf : Download the self-billing invoice (självfaktura) PDF [scope:suppliers:read risk:low idempotent]
 POST /companies/{companyId}/supplier-invoices/{id}/uncredit : Undo the credit of a supplier invoice ("Ångra kreditering"): storno the credit note's verifikat and restore the invoice [scope:suppliers:write risk:high idempotent dry-run]
 GET /companies/{companyId}/supplier-invoices/attest-policy : Read the company's attest policy for supplier invoices [scope:suppliers:read risk:low idempotent]
 PUT /companies/{companyId}/supplier-invoices/attest-policy : Save the company's attest policy for supplier invoices [scope:suppliers:write risk:high idempotent dry-run reversible]

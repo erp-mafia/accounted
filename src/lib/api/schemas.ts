@@ -37,7 +37,7 @@ import {
   isAccruedCostAccount,
   periodEndsBeforeInvoiceMonth,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
-import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
+import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
@@ -453,6 +453,7 @@ export const JournalEntrySourceTypeSchema = z.enum([
   'pos_daily_sales',
   'collection_settlement',
   'customer_loss',
+  'counterparty_setoff',
   'rot_rut_reclassification',
 ])
 
@@ -761,6 +762,38 @@ export const InvoiceVatOverrideShape = {
     ),
 }
 
+/**
+ * The VAT per rate a received document states (lib/vat/document-vat.ts): one
+ * entry per rate, the rate in the unit of the items it sits beside. Supplier
+ * invoices carry fractions (0.25), self-billed sales percent (25).
+ */
+function uniqueRates(entries: ReadonlyArray<{ vat_rate: number }>, ctx: z.RefinementCtx) {
+  const seen = new Set<number>()
+  entries.forEach((entry, index) => {
+    if (seen.has(entry.vat_rate)) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [index, 'vat_rate'], message: 'Each VAT rate may appear once in vat_breakdown' })
+    }
+    seen.add(entry.vat_rate)
+  })
+}
+
+export const SupplierVatBreakdownSchema = z
+  .array(z.object({ vat_rate: vatRateDecimal, vat_amount: z.number() }).strict())
+  .min(1)
+  .max(4)
+  .superRefine(uniqueRates)
+
+export const SelfBilledVatBreakdownSchema = z
+  .array(
+    z.object({
+      vat_rate: z.union([z.literal(0), z.literal(6), z.literal(12), z.literal(25)]),
+      vat_amount: z.number(),
+    }).strict(),
+  )
+  .min(1)
+  .max(4)
+  .superRefine(uniqueRates)
+
 const CreateInvoiceBaseSchema = z.object({
   customer_id: uuid,
   invoice_date: isoDate,
@@ -867,6 +900,10 @@ const CreateInvoiceBaseSchema = z.object({
     .transform((v) => v || undefined)
     .optional(),
   received_date: optionalIsoDate,
+  // Self-billed sales only (refused otherwise): the VAT per rate the
+  // customer's document states, booked instead of the VAT on the summed base
+  // when it is within the per-line rounding (lib/vat/document-vat.ts).
+  vat_breakdown: SelfBilledVatBreakdownSchema.optional(),
   // Which of the company's bank accounts the invoice asks the customer to pay
   // to (migration 20260904011000). Omitted/null = the per-currency default.
   // The route checks the account belongs to the company, is flagged as a
@@ -905,7 +942,7 @@ export const CreateInvoiceSchema = CreateInvoiceBaseSchema
 // only rewrites the draft's header + line items. The PATCH route guards that the
 // target is still a draft (status='draft', no journal entry, not self-billed).
 export const UpdateInvoiceSchema = CreateInvoiceBaseSchema
-  .omit({ save_as_draft: true })
+  .omit({ save_as_draft: true, vat_breakdown: true })
   .superRefine(refineRotRutLineCompleteness)
   .superRefine(refineQuoteFields)
 
@@ -1138,6 +1175,9 @@ export const SelfBillingInvoiceItemSchema = z.object({
 
 export const CreateSelfBillingInvoiceSchema = z.object({
   customer_id: uuid,
+  // The VAT per rate the customer's document states (percent rates, like the
+  // items). Omitted: the VAT on the summed base per rate (crm#1367).
+  vat_breakdown: SelfBilledVatBreakdownSchema.optional(),
   external_invoice_number: z.string().min(1, 'External invoice number is required').max(64),
   self_billing_agreement_ref: z.string().max(128).optional(),
   invoice_date: isoDate,
@@ -1743,6 +1783,10 @@ export const CreateSupplierSchema = z.object({
   // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
   default_payment_terms: z.number().int().min(0).max(365).optional(),
   default_currency: CurrencySchema.nullable().optional(),
+  // The self-billing agreement with the supplier (ML 2023:200 17 kap 15 §
+  // p.1): the reference a självfaktura to it prints (crm#1367). Without one
+  // no self-billing invoice can be issued to the supplier.
+  self_billing_agreement_ref: emptyStringAsUndefined(z.string().trim().min(1).max(128)),
   notes: z.string().max(2000).optional(),
 })
 
@@ -1764,6 +1808,7 @@ function emptyStringAsNull<T extends z.ZodTypeAny>(inner: T) {
 export const UpdateSupplierSchema = CreateSupplierSchema.partial().extend({
   email: emptyStringAsNull(z.string().email('Invalid email address')),
   default_expense_account: emptyStringAsNull(accountNumber),
+  self_billing_agreement_ref: emptyStringAsNull(z.string().trim().min(1).max(128)),
 })
 
 // ============================================================
@@ -1779,8 +1824,9 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   // 2641/2645 instead of recomputing line_total × vat_rate. Use for partial-
   // deductible cases (bilförmån 50%, representation 300 kr-tak), foreign-
   // currency rounding, or POS receipts where supplier-side rounding makes the
-  // VAT off by öre.
-  vat_amount: z.number().min(0).optional(),
+  // VAT off by öre. Carries the line's sign: a negative line (a discount or
+  // a credited period inside the invoice) carries negative VAT.
+  vat_amount: z.number().optional(),
   // Self-assessed VAT rate for omvänd skattskyldighet (reverse charge). The
   // supplier charges no VAT (vat_rate stays 0); this is the Swedish statutory
   // rate the buyer self-assesses at: 25% huvudregel default, 12%/6% for
@@ -1814,18 +1860,18 @@ export const CreateSupplierInvoiceItemSchema = z.object({
   dimensions: DimensionsBagSchema.optional(),
 }).refine(
   (item) => {
-    if (item.vat_amount == null) return true
+    if (item.vat_amount == null || item.vat_amount === 0) return true
     const lineTotal = item.amount != null
       ? item.amount
       : (item.quantity ?? 1) * (item.unit_price ?? 0)
     const vatRate = item.vat_rate ?? 0.25
-    const maxVat = Math.round(lineTotal * vatRate * 100) / 100
+    if (Math.sign(item.vat_amount) !== Math.sign(lineTotal)) return false
     // 1-öre tolerance covers POS rounding; anything beyond is an upstream bug
     // or a client trying to inflate 2641 debit beyond the statutory ceiling.
-    return item.vat_amount <= maxVat + 0.01
+    return roundOre(Math.abs(item.vat_amount)) <= roundOre(Math.abs(roundOre(lineTotal * vatRate)) + 0.01)
   },
   {
-    message: 'vat_amount cannot exceed line_total × vat_rate',
+    message: 'vat_amount must have the sign of the line and cannot exceed line_total × vat_rate',
     path: ['vat_amount'],
   },
 ).superRefine((item, ctx) => {
@@ -1849,19 +1895,66 @@ export const CreateSupplierInvoiceItemSchema = z.object({
 // (supplier_invoices_number_not_blank): a missing number is NULL, never ''.
 // Registering by hand or through the API still needs a number; only the
 // provider import stores an invoice without one (crm#1039).
-const supplierInvoiceNumber = z
+export const supplierInvoiceNumber = z
   .string()
   .min(1, 'Supplier invoice number is required')
   .regex(/\S/, 'Supplier invoice number is required')
+
+/**
+ * The number rules of a supplier invoice: the supplier's own number is
+ * required on an ordinary one, and refused on a self-billing invoice, whose
+ * number the database assigns from the company's series (crm#1367). The
+ * agreement reference belongs to a self-billing invoice only.
+ */
+function addSelfBillingNumberIssues(
+  invoice: { is_self_billed?: boolean; supplier_invoice_number?: string; self_billing_agreement_ref?: string },
+  ctx: z.RefinementCtx,
+): void {
+  if (invoice.is_self_billed) {
+    if (invoice.supplier_invoice_number !== undefined) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['supplier_invoice_number'],
+        message: 'A self-billing invoice takes its number from the company series: omit supplier_invoice_number',
+      })
+    }
+    return
+  }
+  if (invoice.supplier_invoice_number === undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['supplier_invoice_number'],
+      message: 'Supplier invoice number is required',
+    })
+  }
+  if (invoice.self_billing_agreement_ref !== undefined) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['self_billing_agreement_ref'],
+      message: 'self_billing_agreement_ref is only accepted with is_self_billed',
+    })
+  }
+}
 
 export const CreateSupplierInvoiceSchema = z.object({
   supplier_id: uuid,
   // Optional invoice PDF/image already stored in the WORM document archive.
   // The route verifies company ownership and that the document is unused.
   document_id: uuid.optional(),
-  supplier_invoice_number: supplierInvoiceNumber,
+  // Required, except on a self-billing invoice, which takes its number from
+  // the company's own series (refused there: superRefine below).
+  supplier_invoice_number: supplierInvoiceNumber.optional(),
+  // Självfaktura (crm#1367): we issue the invoice in the supplier's name
+  // under a prior agreement (ML 2023:200 17 kap 15 §). The number comes from
+  // the company's self-billing series and Accounted makes the document.
+  is_self_billed: z.boolean().optional(),
+  // The agreement the self-billing invoice is issued under. Defaults to the
+  // supplier card's self_billing_agreement_ref; only with is_self_billed.
+  self_billing_agreement_ref: z.string().trim().min(1).max(128).optional(),
   invoice_date: isoDate,
-  due_date: isoDate,
+  // Omitted: invoice_date + the supplier's default_payment_terms (30 days
+  // when unset), the same rule the dashboard form and the inbox apply.
+  due_date: isoDate.optional(),
   delivery_date: optionalIsoDate,
   currency: CurrencySchema.optional(),
   // Bounded by the shared `exchangeRate` primitive so the value can never
@@ -1896,14 +1989,28 @@ export const CreateSupplierInvoiceSchema = z.object({
   // Dimensions PR7: invoice-level bag applied to every generated journal line;
   // items[].dimensions merge over it per expense line.
   default_dimensions: DimensionsBagSchema.optional(),
+  // The VAT per rate the supplier's document states. Omitted: the VAT on the
+  // summed base per rate. Either way it is spread onto the lines so they sum
+  // to it (lib/vat/document-vat.ts, crm#1367). Refused under reverse charge
+  // and for exempt or export purchases, which carry no Swedish VAT.
+  vat_breakdown: SupplierVatBreakdownSchema.optional(),
   items: z.array(CreateSupplierInvoiceItemSchema).min(1, 'At least one item is required'),
 }).superRefine((invoice, ctx) => {
+  addSelfBillingNumberIssues(invoice, ctx)
+
   // The per-item vat_amount ceiling can only assume 25 % when a line omits
   // vat_rate: the invoice's vat_treatment, which actually decides the rate,
   // is visible one level up (issue #2553). Two rules follow from it.
   const treatment = invoice.vat_treatment
   const deducts = treatmentDeductsInputVat(treatment)
   const treatmentRate = defaultVatRateForTreatment(treatment)
+  if (invoice.vat_breakdown && (!deducts || invoice.reverse_charge === true || treatment === 'reverse_charge')) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['vat_breakdown'],
+      message: 'vat_breakdown is only accepted on an invoice that charges Swedish VAT (not reverse charge, exempt or export)',
+    })
+  }
   invoice.items.forEach((item, index) => {
     const lineTotal = item.amount != null
       ? item.amount
@@ -1937,9 +2044,9 @@ export const CreateSupplierInvoiceSchema = z.object({
     //    on a reduced_12 invoice the item-level check would otherwise wave
     //    through a 25 % override.
     if (item.vat_amount == null || item.vat_rate != null) return
-    const maxVat = Math.round(lineTotal * treatmentRate * 100) / 100
+    const maxVat = Math.abs(roundOre(lineTotal * treatmentRate))
     // Same 1-öre POS tolerance as the item-level refine.
-    if (item.vat_amount > maxVat + 0.01) {
+    if (roundOre(Math.abs(item.vat_amount)) > roundOre(maxVat + 0.01)) {
       ctx.addIssue({
         code: z.ZodIssueCode.custom,
         path: ['items', index, 'vat_amount'],
@@ -3521,6 +3628,23 @@ export const UpdateSettingsSchema = z.object({
   proforma_enabled: z.boolean().optional(),
   recurring_invoices_enabled: z.boolean().optional(),
   self_billing_enabled: z.boolean().optional(),
+  // Self-billing on the purchase side (crm#1367): the series' prefix (letters,
+  // digits and hyphens, never ending in a digit, which would run into the
+  // number), where it continues, and the acceptance clause the document
+  // prints (empty = the built-in text). The insert trigger never lets the
+  // series reuse a number, whatever next_self_billing_number says.
+  self_billing_prefix: z
+    .string()
+    .trim()
+    .max(12)
+    .regex(/^[A-Za-z0-9-]*$/, 'Prefixet får bara innehålla bokstäver, siffror och bindestreck')
+    .refine((prefix) => !/[0-9]$/.test(prefix), 'Prefixet får inte sluta med en siffra')
+    .optional(),
+  next_self_billing_number: z.number().int().min(1).max(999_999_999).optional(),
+  self_billing_acceptance_text: z.preprocess(
+    (v) => (typeof v === 'string' && v.trim() === '' ? null : v),
+    z.string().trim().max(1000).nullable().optional(),
+  ),
   // Salary payment file
   preferred_payment_format: z.enum(['bg_lb', 'pain001']).optional(),
   // Salary settings (migration 20260703190000). Day of month salaries are

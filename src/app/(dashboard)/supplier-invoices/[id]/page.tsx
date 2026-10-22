@@ -492,11 +492,14 @@ export default function SupplierInvoiceDetailPage() {
   // moves to the meta line and the facts below; an invoice registered without
   // a supplier number keeps the arrival number as its title.
   const docNumber = invoice.supplier_invoice_number
+  // A självfaktura (crm#1367) is titled as one: the number is the company's.
   const title = !docNumber
     ? t('arrival_header', { number: invoice.arrival_number })
     : invoice.is_credit_note
       ? t('title_credit_note', { number: docNumber })
-      : t('title_invoice', { number: docNumber })
+      : invoice.is_self_billed
+        ? t('title_self_billed', { number: docNumber })
+        : t('title_invoice', { number: docNumber })
 
   // One status element, the same as the list row and the supplier page
   // (lib/supplier-invoices/status-display.ts): approved and paid render as
@@ -523,6 +526,9 @@ export default function SupplierInvoiceDetailPage() {
     invoice.supplier?.name ?? null,
     docNumber ? t('arrival_header', { number: invoice.arrival_number }) : null,
     t('created_at', { date: formatDate(invoice.created_at) }),
+    invoice.is_self_billed && invoice.self_billing_agreement_ref
+      ? t('self_billing_agreement_meta', { agreement: invoice.self_billing_agreement_ref })
+      : null,
     // The mellanlage (#2220) reads as a dated fact here, next to the bock.
     invoice.bank_entered_at
       ? t('bank_entered_meta', { date: formatDate(invoice.bank_entered_at) })
@@ -663,6 +669,7 @@ export default function SupplierInvoiceDetailPage() {
                 {t('badge_accrued')}
               </Badge>
             )}
+            {invoice.is_self_billed && <Badge variant="outline">{t('badge_self_billed')}</Badge>}
           </div>
           <p className="page-header-desc mt-1 text-sm text-muted-foreground">{metaParts.join(' · ')}</p>
         </div>
@@ -677,6 +684,15 @@ export default function SupplierInvoiceDetailPage() {
           {/* The supplier's own document, reviewed in the browser (#1190). */}
           {invoice.document_id && (
             <DocumentViewButton documentId={invoice.document_id} label={t('view_document')} iconOnly />
+          )}
+          {/* A självfaktura is our document: rendered from the frozen parties (crm#1367). */}
+          {invoice.is_self_billed && (
+            <Button size="sm" variant="outline" asChild>
+              <a href={`/api/supplier-invoices/${invoice.id}/self-billing-pdf?disposition=inline`} target="_blank" rel="noreferrer">
+                <FileText className="mr-2 h-4 w-4" />
+                {t('download_self_billing')}
+              </a>
+            </Button>
           )}
           {canApprove && (
             <Button size="sm"

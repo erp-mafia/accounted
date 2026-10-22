@@ -182,6 +182,38 @@ describe('POST /api/v1/.../invoices with is_self_billed', () => {
     expect(json.error.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
   })
 
+  // crm#1367: the VAT the customer's document states, in percent rates.
+  it('passes vat_breakdown to the service and maps its mismatch to 400 with the rate in percent', async () => {
+    mockCreate.mockResolvedValue({
+      ok: false,
+      failure: {
+        code: 'vat_breakdown_mismatch',
+        details: { rate: 0.25, stated: 2600, computed: 2500, tolerance: 0.01, reason: 'outside_tolerance' },
+      },
+    })
+    const res = await createInvoice(
+      makePost({ ...VALID_BODY, vat_breakdown: [{ vat_rate: 25, vat_amount: 2600 }] }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error.code).toBe('VAT_BREAKDOWN_MISMATCH')
+    expect(json.error.details).toMatchObject({ rate: 25, stated: 2600, reason: 'outside_tolerance' })
+    expect(mockCreate.mock.calls[0][3]).toMatchObject({ vat_breakdown: [{ vat_rate: 25, vat_amount: 2600 }] })
+  })
+
+  it('400 when vat_breakdown comes without is_self_billed', async () => {
+    const { is_self_billed: _f, external_invoice_number: _e, received_date: _r, ...normal } = VALID_BODY
+    const res = await createInvoice(
+      makePost({ ...normal, vat_breakdown: [{ vat_rate: 25, vat_amount: 2500 }] }),
+      companyParams(COMPANY_ID),
+    )
+    expect(res.status).toBe(400)
+    const json = await res.json()
+    expect(json.error.code).toBe('VALIDATION_ERROR')
+    expect(mockCreate).not.toHaveBeenCalled()
+  })
+
   it('does not touch the self-billed path for a normal invoice', async () => {
     const { is_self_billed: _f, external_invoice_number: _e, received_date: _r, ...normal } = VALID_BODY
     // A normal invoice create hits the draft path (not our mocked service).

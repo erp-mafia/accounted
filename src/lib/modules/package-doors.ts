@@ -304,6 +304,8 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'op:invoices.bulk-book',
     'op:invoices.cancel',
     'op:invoices.customer-loss.record',
+    // A set-off of two invoices already issued and registered.
+    'op:invoices.setoff.book',
     'op:invoices.send-peppol',
     'op:peppol.register',
     'op:peppol.request-access',

@@ -29,6 +29,7 @@ import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { CustomerCollectionsExclusion } from '@/components/collections/CustomerCollectionsExclusion'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
+import { CounterpartyRoleLink } from '@/components/parties/CounterpartyRoleLink'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
 import { invoiceRowStatus } from '@/lib/invoices/status-display'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -331,6 +332,7 @@ export default function CustomerDetailPage({
           }}
         />
       ) : null}
+      {partyId && party.dossier ? <CounterpartyRoleLink partyId={partyId} dossier={party.dossier} role="customer" /> : null}
 
       <DetailSection kicker={t('section_business')}>
         {customer.customer_number && (

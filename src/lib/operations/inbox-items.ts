@@ -15,7 +15,7 @@
  * tools.
  */
 import { z } from 'zod'
-import { CreateSupplierInvoiceItemSchema, CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
+import { CreateSupplierInvoiceItemSchema, CreateSupplierInvoiceSchema, supplierInvoiceNumber } from '@/lib/api/schemas'
 import {
   deleteInboxItem,
   getInboxItem,
@@ -363,11 +363,11 @@ export const inboxItemsUpdateExtractedData = defineOperation({
 })
 
 // The convert request carries exactly the fields the conversion honours. The
-// dashboard form posts the full supplier-invoice schema, but this path has
-// never read per-line vat_amount, öresavrundning or the private-payment
-// fields: a strict object refuses them with 400 instead of accepting and
-// silently dropping them. The dimensions bags are honoured, as on the
-// dashboard door and the MCP one.
+// dashboard form posts the full supplier-invoice schema, but this path does
+// not read öresavrundning or the private-payment fields: a strict object
+// refuses them with 400 instead of accepting and silently dropping them. The
+// dimensions bags are honoured, as on the dashboard door and the MCP one, and
+// so are a line's own VAT and the document's VAT per rate (crm#1367).
 const invoiceShape = CreateSupplierInvoiceSchema.shape
 const itemShape = CreateSupplierInvoiceItemSchema.shape
 
@@ -379,6 +379,9 @@ const ConvertItem = z.strictObject({
   unit_price: itemShape.unit_price,
   account_number: itemShape.account_number.describe('BAS cost account as a STRING, e.g. "6110".'),
   vat_rate: itemShape.vat_rate.describe('0, 0.06, 0.12 or 0.25. Omitted follows vat_treatment.'),
+  vat_amount: itemShape.vat_amount.describe(
+    'This line\'s own VAT, booked as given (partial deduction). Omitted: the line\'s share of the VAT per rate.',
+  ),
   vat_code: itemShape.vat_code,
   reverse_charge_rate: itemShape.reverse_charge_rate,
   apply_slp: itemShape.apply_slp,
@@ -393,7 +396,9 @@ const ConvertItem = z.strictObject({
 const ConvertInput = z.strictObject({
   inbox_item_id: INBOX_ITEM_ID,
   supplier_id: invoiceShape.supplier_id.describe('The supplier (supplier_id from GET /suppliers).'),
-  supplier_invoice_number: invoiceShape.supplier_invoice_number,
+  // Required here: an underlag carries the supplier's own number (only a
+  // självfaktura, which is never converted, takes one from our series).
+  supplier_invoice_number: supplierInvoiceNumber,
   invoice_date: invoiceShape.invoice_date,
   due_date: invoiceShape.due_date,
   delivery_date: invoiceShape.delivery_date,
@@ -406,6 +411,9 @@ const ConvertInput = z.strictObject({
   notes: invoiceShape.notes,
   default_dimensions: invoiceShape.default_dimensions.describe(
     'Tags for every line {"<sie_dim_no>":"<code>"}, e.g. {"1":"KS01","6":"P001"}: kostnadsställe 1, projekt 6, codes from GET /dimensions.',
+  ),
+  vat_breakdown: invoiceShape.vat_breakdown.describe(
+    'The VAT per rate the document states, e.g. [{"vat_rate":0.25,"vat_amount":3864.11}]. Omitted: the VAT on the summed base per rate.',
   ),
   items: z.array(ConvertItem).min(1, 'At least one item is required'),
 })
@@ -426,7 +434,7 @@ export const inboxItemsConvertToSupplierInvoice = defineOperation({
     pitfalls: [
       'An item already converted returns 409 INBOX_ITEM_ALREADY_CONVERTED; a supplier invoice number the supplier already has returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER with details.existing.',
       'A credit note (read as one, or with a negative net or VAT) returns 409 INBOX_ITEM_IS_CREDIT_NOTE with details.credit_target: the invoice it credits, or the candidates to choose from.',
-      'amount is per line EXCLUDING VAT; VAT is computed from vat_rate. Per-line vat_amount and private-payment fields are not accepted here.',
+      'amount is per line EXCLUDING VAT. VAT is booked per rate as the document states it: on the summed base of each rate, or the figure in vat_breakdown when it is within half an öre per line of that (else 400 VAT_BREAKDOWN_MISMATCH), spread over the lines. items[].vat_amount books a line\'s own VAT as given. Private-payment fields are not accepted here.',
       'Reverse charge follows POST /supplier-invoices: an EU or non-EU supplier without reverse_charge defaults to it, vat_treatment follows the flag, the payable is the net, and a line with a vat_rate other than 0 returns 400 VALIDATION_ERROR. Send reverse_charge: false for a foreign supplier that charged its own or no VAT. Goods from an EU supplier take reverse_charge_kind: "eu_goods" (basis 4515, ruta 20); omitted books services (4535, ruta 21).',
       'With dimensions enabled, an unknown or archived code in default_dimensions or items[].dimensions returns DIMENSION_VALIDATION_FAILED and registers nothing when the company books on registration; a company that defers booking meets it when the invoice is booked.',
       'No fiscal year for invoice_date returns SI_CREATE_NO_FISCAL_PERIOD and registers nothing.',
@@ -478,6 +486,7 @@ export const inboxItemsConvertToSupplierInvoice = defineOperation({
     'SI_CREATE_SLP_INVALID_ACCOUNT',
     'SI_CREATE_SLP_ACCRUAL',
     'SI_CREATE_ACCRUAL_REVERSE_CHARGE',
+    'VAT_BREAKDOWN_MISMATCH',
     'SI_ACCRUED_COST_PERIOD_INVALID',
     'SI_ACCRUED_COST_PERIOD_LOCKED',
     'SI_CREATE_INVALID_INPUT',

@@ -170,6 +170,18 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     'En kundförlustverifikation rättas inte. Återför verifikationen (storno) och bokför kundförlusten på nytt.',
   ],
   [
+    // guard_counterparty_setoff_voucher_* (migration 20261022130100): the
+    // set-off row and both invoices name the voucher's amount and date.
+    /SETOFF_VOUCHER_LOCKED/,
+    'En kvittningsverifikation rättas inte. Återför verifikationen (storno) och bokför kvittningen på nytt.',
+  ],
+  [
+    // counterparty_setoffs_guard (migration 20261022130100): delete_last_voucher
+    // or any delete reaching a set-off row.
+    /SETOFF_DELETE_BLOCKED|SETOFF_IMMUTABLE/,
+    'En kvittning tas aldrig bort eller ändras. Återför kvittningsverifikationen (storno) i stället.',
+  ],
+  [
     /Cannot attach documents to entries in a locked/i,
     'Kan inte bifoga dokument till verifikationer i en låst period.',
   ],

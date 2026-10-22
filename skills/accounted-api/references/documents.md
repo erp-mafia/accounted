@@ -923,7 +923,7 @@ Registers a supplier invoice (status registered, next ankomstnummer) from the gi
 **Pitfalls:**
 - An item already converted returns 409 INBOX_ITEM_ALREADY_CONVERTED; a supplier invoice number the supplier already has returns 409 SI_CREATE_DUPLICATE_INVOICE_NUMBER with details.existing.
 - A credit note (read as one, or with a negative net or VAT) returns 409 INBOX_ITEM_IS_CREDIT_NOTE with details.credit_target: the invoice it credits, or the candidates to choose from.
-- amount is per line EXCLUDING VAT; VAT is computed from vat_rate. Per-line vat_amount and private-payment fields are not accepted here.
+- amount is per line EXCLUDING VAT. VAT is booked per rate as the document states it: on the summed base of each rate, or the figure in vat_breakdown when it is within half an öre per line of that (else 400 VAT_BREAKDOWN_MISMATCH), spread over the lines. items[].vat_amount books a line's own VAT as given. Private-payment fields are not accepted here.
 - Reverse charge follows POST /supplier-invoices: an EU or non-EU supplier without reverse_charge defaults to it, vat_treatment follows the flag, the payable is the net, and a line with a vat_rate other than 0 returns 400 VALIDATION_ERROR. Send reverse_charge: false for a foreign supplier that charged its own or no VAT. Goods from an EU supplier take reverse_charge_kind: "eu_goods" (basis 4515, ruta 20); omitted books services (4535, ruta 21).
 - With dimensions enabled, an unknown or archived code in default_dimensions or items[].dimensions returns DIMENSION_VALIDATION_FAILED and registers nothing when the company books on registration; a company that defers booking meets it when the invoice is booked.
 - No fiscal year for invoice_date returns SI_CREATE_NO_FISCAL_PERIOD and registers nothing.
@@ -941,7 +941,7 @@ Request body:
   supplier_id: string,
   supplier_invoice_number: string,
   invoice_date: string,
-  due_date: string,
+  due_date?: string,
   delivery_date?: string | "",
   currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD",
   exchange_rate?: number,
@@ -951,7 +951,8 @@ Request body:
   payment_reference?: string,
   notes?: string,
   default_dimensions?: Record<string, string>,
-  items: { description: string, amount?: number, quantity?: number, unit?: string, unit_price?: number, account_number: string, vat_rate?: 0 | 0.06 | 0.12 | 0.25, vat_code?: string, reverse_charge_rate?: number, apply_slp?: boolean, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[]
+  vat_breakdown?: { vat_rate: 0 | 0.06 | 0.12 | 0.25, vat_amount: number }[],
+  items: { description: string, amount?: number, quantity?: number, unit?: string, unit_price?: number, account_number: string, vat_rate?: 0 | 0.06 | 0.12 | 0.25, vat_amount?: number, vat_code?: string, reverse_charge_rate?: number, apply_slp?: boolean, accrual_period_start?: string | null, accrual_period_end?: string | null, accrual_balance_account?: string | null, dimensions?: Record<string, string> }[]
 }
 ```
 

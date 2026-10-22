@@ -181,6 +181,9 @@ export const STANDARD_VOUCHER_SERIES_MAP: Readonly<Record<JournalEntrySourceType
   // Kundförlust adjusts kundfordringar already booked in B and C; it is
   // neither a kundfaktura nor an inbetalning, so the general series.
   customer_loss: 'A',
+  // Kvittning settles a kundfordran against a leverantörsskuld; no money
+  // moves, so neither inbetalning (C) nor utbetalning (E): the general series.
+  counterparty_setoff: 'A',
 }
 
 /**

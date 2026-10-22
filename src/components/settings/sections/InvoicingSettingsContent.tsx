@@ -10,6 +10,7 @@ import { InvoicePaymentLinkSettings } from '@/components/settings/InvoicePayment
 import { InvoicePaymentAccountsSettings } from '@/components/settings/InvoicePaymentAccountsSettings'
 import { InvoicePreviewCard } from '@/components/settings/InvoicePreviewCard'
 import { PdfPrintSettings } from '@/components/settings/PdfPrintSettings'
+import { SelfBillingSettings, selfBillingSettingsUpdates } from '@/components/settings/SelfBillingSettings'
 import { SettingsFormWrapper } from '@/components/settings/SettingsFormWrapper'
 import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
@@ -38,6 +39,7 @@ export function InvoicingSettingsContent() {
       invoice_default_notes: (formData.get('invoice_default_notes') as string) || null,
       default_our_reference: (formData.get('default_our_reference') as string) || null,
       ...(settings ? swedbankFileIdUpdates(formData, settings) : {}),
+      ...selfBillingSettingsUpdates(formData),
     }
     return {
       updates,
@@ -68,6 +70,8 @@ export function InvoicingSettingsContent() {
           // switch saves itself, independent of the form's Spara.
           afterInvoiceSettings={<InvoiceTypesSettings />}
         />
+        {/* Självfakturor on the purchase side, saved with this form (crm#1367). */}
+        <SelfBillingSettings settings={settings} />
       </SettingsFormWrapper>
 
       {/* Payment link opt-in: saves individually via toggle switch */}

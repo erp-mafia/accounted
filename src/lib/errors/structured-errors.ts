@@ -5943,6 +5943,21 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
     message_en:
       'Särskild löneskatt (payroll tax on pension costs) can only be added on lines booked to a pension account 7410-7419 (e.g. 7412 occupational pension premiums). Change the line account or remove the flag.',
   },
+  // A received document's stated VAT per rate (vat_breakdown) that is not the
+  // VAT of its lines: further from the VAT on the summed base than a seller's
+  // per-line rounding can be, a rate the lines do not carry or leave out, or
+  // a rate whose lines carry their own VAT (lib/vat/document-vat.ts, crm#1367).
+  VAT_BREAKDOWN_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Momsen per momssats stämmer inte med raderna. Ange den moms dokumentet anger för varje momssats raderna har, eller utelämna vat_breakdown så räknas momsen på summan per momssats.',
+    message_en:
+      'The VAT per rate does not match the lines. State the VAT the document gives for every rate the lines carry, or omit vat_breakdown to compute the VAT on the summed base per rate.',
+    remediation: {
+      description:
+        'details names the rate, the stated and computed VAT, the tolerance and the reason (outside_tolerance, rate_not_on_lines, rate_missing, rate_has_overrides, duplicate_rate, cannot_spread). Correct the figure or the lines; a line that needs its own VAT goes in items[].vat_amount instead.',
+    },
+  },
   SI_CREATE_SLP_ACCRUAL: {
     httpStatus: 400,
     message_sv:
@@ -6166,6 +6181,56 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
       'Kreditfakturor kan inte tas bort direkt. Gå till originalfakturan och välj "Ångra kreditering" för att frigöra numret och återställa bokföringen.',
     message_en:
       'A credit note cannot be deleted directly. Undo the credit on the original invoice (uncredit), which cancels its verifikat with a storno and restores the original.',
+  },
+  // ── Self-billing on the purchase side (självfaktura, crm#1367) ──
+  SI_DELETE_SELF_BILLED: {
+    httpStatus: 400,
+    message_sv:
+      'En utfärdad självfaktura kan inte tas bort: numret är taget ur er serie och säljaren kan ha fått dokumentet. Kreditera den i stället.',
+    message_en:
+      'An issued self-billing invoice cannot be deleted: its number is taken from the company series and the seller may have the document. Credit it instead.',
+  },
+  SI_SELF_BILL_AGREEMENT_MISSING: {
+    httpStatus: 400,
+    message_sv:
+      'Det finns inget självfaktureringsavtal med leverantören. Lägg in avtalet på leverantörskortet eller ange det på fakturan.',
+    message_en:
+      'There is no self-billing agreement with this supplier (ML 2023:200 17 kap 15 §). Set self_billing_agreement_ref on the supplier or on the invoice.',
+    remediation: {
+      description: 'Set the agreement reference on the supplier (self_billing_agreement_ref) or pass it on the invoice.',
+    },
+  },
+  SI_SELF_BILL_PARTY_INCOMPLETE: {
+    httpStatus: 400,
+    message_sv:
+      'Självfakturan saknar uppgifter som måste stå på den: säljarens namn, adress och momsregistreringsnummer, eller ert företagsnamn, organisationsnummer och adress. Komplettera leverantörskortet eller företagsinställningarna.',
+    message_en:
+      'The self-billing invoice lacks a field it must print (ML 2023:200 17 kap 24 §): details.missing names the seller (supplier card) or buyer (company settings) fields to fill in.',
+  },
+  SI_SELF_BILL_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv:
+      'Den här självfakturan kan inte utfärdas här: självfakturor görs i SEK med svensk moms, utan omvänd betalningsskyldighet, bifogat underlag eller privat betalning.',
+    message_en:
+      'This self-billing invoice cannot be issued: SEK only, standard Swedish VAT only, no reverse charge, no document_id, inbox_item_id or paid_with_private_funds; a self-billing credit note takes no number, document or inbox item of its own. details.reason names the cause.',
+  },
+  SI_SELF_BILL_IMMUTABLE: {
+    httpStatus: 409,
+    message_sv:
+      'Numret, datumet, avtalet och parterna på en utfärdad självfaktura kan inte ändras. Kreditera den och utfärda en ny.',
+    message_en:
+      'The number, date, agreement and parties of an issued self-billing invoice cannot change. Credit it and issue a new one.',
+  },
+  SI_SELF_BILL_NUMBER_ASSIGNED: {
+    httpStatus: 400,
+    message_sv: 'En självfaktura får sitt nummer ur er serie och kan inte ges ett eget.',
+    message_en: 'A self-billing invoice takes its number from the company series; do not supply one.',
+  },
+  SI_SELF_BILL_DOCUMENT_UNAVAILABLE: {
+    httpStatus: 500,
+    message_sv: 'Självfakturans dokument kunde inte skapas. Försök igen eller kontakta supporten.',
+    message_en: 'The self-billing invoice document could not be rendered.',
+    retryable: true,
   },
   SI_DELETE_INVALID_STATUS: {
     httpStatus: 400,
@@ -9972,6 +10037,154 @@ const CUSTOMER_LOSS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// Kvittning: a customer invoice set off against a supplier invoice of the
+// same counterparty (lib/invoices/counterparty-setoff, migration
+// 20261022130100). book_counterparty_setoff answers the same codes.
+const SETOFF: Record<string, StructuredErrorEntry> = {
+  SETOFF_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Kvittning kan inte bokföras här just nu.',
+    message_en: 'Set-offs cannot be booked here right now.',
+  },
+  SETOFF_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att bokföra kvittningar i det här företaget.',
+    message_en: 'You are not allowed to book set-offs in this company.',
+  },
+  SETOFF_INVALID_REQUEST: {
+    httpStatus: 400,
+    message_sv: 'Kvittningen saknar en kundfaktura eller leverantörsfaktura, eller anteckningen är för lång.',
+    message_en: 'The set-off lacks a customer invoice or supplier invoice, or the note is too long.',
+  },
+  SETOFF_INVOICE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kundfakturan hittades inte.',
+    message_en: 'The customer invoice was not found.',
+  },
+  SETOFF_SUPPLIER_INVOICE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Leverantörsfakturan hittades inte.',
+    message_en: 'The supplier invoice was not found.',
+  },
+  SETOFF_PARTY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Motparten hittades inte. Kortet saknar organisationsnummer eller är inte kopplat till en motpart.',
+    message_en: 'The counterparty was not found. The card has no organisation number or is not linked to a counterparty.',
+  },
+  SETOFF_INVOICE_NOT_ELIGIBLE: {
+    httpStatus: 422,
+    message_sv: 'Bara en vanlig kundfaktura kan kvittas, inte en kreditfaktura, proformafaktura eller offert.',
+    message_en: 'Only an ordinary customer invoice can be set off, not a credit note, proforma invoice or quote.',
+  },
+  SETOFF_SUPPLIER_INVOICE_NOT_ELIGIBLE: {
+    httpStatus: 422,
+    message_sv: 'En kreditfaktura från leverantören kan inte kvittas. Den kvittas mot sin egen faktura.',
+    message_en: 'A supplier credit note cannot be set off. It settles its own invoice.',
+  },
+  SETOFF_INVOICE_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Kundfakturan är inte öppen: den måste vara skickad och inte betald, krediterad eller avskriven.',
+    message_en: 'The customer invoice is not open: it must be sent and not paid, credited or written off.',
+  },
+  SETOFF_SUPPLIER_INVOICE_NOT_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Leverantörsfakturan är inte öppen: den måste vara registrerad och inte betald, krediterad eller återförd.',
+    message_en: 'The supplier invoice is not open: it must be registered and not paid, credited or reversed.',
+  },
+  SETOFF_CURRENCY_UNSUPPORTED: {
+    httpStatus: 422,
+    message_sv: 'Kvittning görs här bara för fakturor i kronor.',
+    message_en: 'Set-offs are only booked here for invoices in Swedish kronor.',
+  },
+  SETOFF_DEDUCTION_UNSUPPORTED: {
+    httpStatus: 422,
+    message_sv: 'En faktura med ROT-, RUT- eller grön teknik-avdrag kan inte kvittas här. Bokför kvittningen manuellt.',
+    message_en: 'An invoice with a ROT, RUT or green technology deduction cannot be set off here. Book the set-off by hand.',
+  },
+  SETOFF_INVOICE_NOT_BOOKED: {
+    httpStatus: 422,
+    message_sv: 'Fakturan är inte bokförd som fordran respektive skuld (till exempel med kontantmetoden), så den kan inte kvittas här. Bokför kvittningen manuellt.',
+    message_en: 'The invoice is not booked as a receivable or payable (under the cash method, for example), so it cannot be set off here. Book the set-off by hand.',
+  },
+  SETOFF_NO_PARTY: {
+    httpStatus: 422,
+    message_sv: 'Kund- eller leverantörskortet är inte kopplat till en motpart. Lägg till organisationsnumret eller slå ihop motparterna under Motparter.',
+    message_en: 'The customer or supplier card is not linked to a counterparty. Add the organisation number or merge the counterparties under Counterparties.',
+  },
+  SETOFF_PARTY_MISMATCH: {
+    httpStatus: 422,
+    message_sv: 'Fakturorna tillhör inte samma motpart. Bara fordringar och skulder mellan samma parter kan kvittas.',
+    message_en: 'The invoices do not belong to the same counterparty. Only claims and debts between the same parties can be set off.',
+  },
+  SETOFF_COLLECTION_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Kundfakturan ligger hos inkasso. Kvitta den inte förrän ärendet är avslutat.',
+    message_en: 'The customer invoice is with the collections provider. Do not set it off until the case is closed.',
+  },
+  SETOFF_PAYMENT_IN_FLIGHT: {
+    httpStatus: 409,
+    message_sv: 'Leverantörsfakturan har en betalning på väg (inlagd i banken, i en betalfil eller en betalningsorder). Ta bort betalningen först, annars betalas hela beloppet.',
+    message_en: 'The supplier invoice has a payment on its way (entered at the bank, in a payment file or a payment order). Remove that payment first, or the full amount is paid.',
+  },
+  SETOFF_INVALID_AMOUNT: {
+    httpStatus: 400,
+    message_sv: 'Beloppet måste vara större än noll och anges i hela ören.',
+    message_en: 'The amount must be above zero and given in whole öre.',
+  },
+  SETOFF_AMOUNT_EXCEEDS_REMAINING: {
+    httpStatus: 422,
+    message_sv: 'Beloppet är större än det som återstår på någon av fakturorna.',
+    message_en: 'The amount is larger than what remains on one of the invoices.',
+  },
+  SETOFF_DATE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Kvittningsdagen kan inte ligga i framtiden eller före någon av fakturornas datum.',
+    message_en: 'The set-off date cannot be in the future or before either invoice date.',
+  },
+  SETOFF_NO_FISCAL_PERIOD: {
+    httpStatus: 422,
+    message_sv: 'Det finns inget räkenskapsår för kvittningsdagen. Skapa räkenskapsåret först.',
+    message_en: 'There is no fiscal year for the set-off date. Create the fiscal year first.',
+  },
+  SETOFF_PERIOD_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'Perioden för kvittningsdagen är stängd eller låst. Välj en dag i en öppen period.',
+    message_en: 'The period of the set-off date is closed or locked. Pick a date in an open period.',
+  },
+  SETOFF_LEDGER_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Fakturans verifikat bokför ingen kundfordran respektive leverantörsskuld, så kvittningen kan inte bokas här. Kontrollera verifikatet eller bokför kvittningen manuellt.',
+    message_en: 'The invoice voucher books no receivable or payable, so the set-off cannot be booked here. Check the voucher or book the set-off by hand.',
+  },
+  SETOFF_RACE: {
+    httpStatus: 409,
+    message_sv: 'Kvittningen bokförs redan. Uppdatera sidan och försök igen.',
+    message_en: 'The set-off is already being booked. Refresh the page and try again.',
+    retryable: true,
+  },
+  SETOFF_BOOKING_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Kvittningen kunde inte bokföras. Ingenting har ändrats. Försök igen eller kontakta support.',
+    message_en: 'The set-off could not be booked. Nothing was changed. Try again or contact support.',
+    retryable: true,
+  },
+  SETOFF_REVERSAL_BLOCKED: {
+    httpStatus: 409,
+    message_sv: 'En av fakturorna i kvittningen har krediterats eller skrivits av sedan dess, så kvittningen kan inte återföras.',
+    message_en: 'One of the set-off invoices has been credited or written off since, so the set-off cannot be reversed.',
+  },
+  SETOFF_VOUCHER_LOCKED: {
+    httpStatus: 409,
+    message_sv: 'En kvittningsverifikation rättas inte. Återför verifikationen (storno) och bokför kvittningen på nytt.',
+    message_en: 'A set-off voucher is not corrected in place. Reverse it and book the set-off again.',
+  },
+  SETOFF_DELETE_BLOCKED: {
+    httpStatus: 409,
+    message_sv: 'En kvittning tas aldrig bort. Återför kvittningsverifikationen (storno) i stället.',
+    message_en: 'A set-off is never deleted. Reverse the set-off voucher instead.',
+  },
+}
+
 // The payment signing link (lib/payments/orders/signing-links.ts): a basket
 // of approved bank payments a firmatecknare signs at /betala/<token>.
 const PAYMENT_SIGNING_LINKS: Record<string, StructuredErrorEntry> = {
@@ -10143,6 +10356,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...COLLECTIONS,
   ...OPEN_BANKING,
   ...CUSTOMER_LOSS,
+  ...SETOFF,
   ...PAYMENT_SIGNING_LINKS,
   ...PENDING_OPERATIONS,
 }

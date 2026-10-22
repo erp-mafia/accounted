@@ -118,6 +118,8 @@ import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/approve/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/mark-paid/route'
 import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/credit/route'
+// Självfaktura document (crm#1367).
+import '@/app/api/v1/companies/[companyId]/supplier-invoices/[id]/self-billing-pdf/route'
 
 // Phase 5 PR-1: Payroll registers: employees + salary-runs CRUD.
 import '@/app/api/v1/companies/[companyId]/employees/route'
@@ -399,5 +401,10 @@ import '@/app/api/v1/companies/[companyId]/skatteverket/vat-declarations/route'
 
 // Portfolio: cross-company overview for multi-company keys.
 import '@/app/api/v1/portfolio/overview/route'
+
+// crm#1367: kvittning, a customer invoice set off against a supplier invoice
+// of the same counterparty, and the counterparty's open items and net.
+import '@/app/api/v1/companies/[companyId]/setoffs/route'
+import '@/app/api/v1/companies/[companyId]/setoffs/counterparty/route'
 
 export {}

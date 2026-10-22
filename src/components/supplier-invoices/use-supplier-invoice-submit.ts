@@ -252,7 +252,8 @@ export function useSupplierInvoiceSubmit({
       else toast({ title: t('supplier_missing_title'), description: t('supplier_missing_description'), variant: 'destructive' })
       return
     }
-    if (!data.supplier_invoice_number) {
+    // A självfaktura takes its number from the company's series (crm#1367).
+    if (!data.supplier_invoice_number && !data.is_self_billed) {
       if (onMissingField) onMissingField('invoice_number')
       else toast({ title: t('invoice_number_missing_title'), description: t('invoice_number_missing_description'), variant: 'destructive' })
       return

@@ -738,6 +738,14 @@ export interface CompanySettings {
   proforma_enabled: boolean
   recurring_invoices_enabled: boolean
   self_billing_enabled: boolean
+  // Self-billing on the purchase side (migration 20261022130000, crm#1367):
+  // the series our självfakturor are numbered in (prefix + at least three
+  // digits, assigned by the insert trigger) and the acceptance clause the
+  // document prints (null = the built-in text). Optional: narrow selects and
+  // rows read before the migration do not carry them.
+  self_billing_prefix?: string
+  next_self_billing_number?: number
+  self_billing_acceptance_text?: string | null
   // Per-company counter behind generate_sales_order_number (OR-<n>).
   next_sales_order_number?: number
 
@@ -1166,6 +1174,13 @@ export interface Supplier {
   default_expense_account: string | null
   default_payment_terms: number
   default_currency: string
+  /**
+   * The self-billing agreement with this supplier (ML 2023:200 17 kap 15 §
+   * p.1): the reference a self-billing invoice prints. Null = no agreement,
+   * so no self-billing invoice can be issued to it. Optional: narrow selects
+   * and rows read before 20261022130000 do not carry it.
+   */
+  self_billing_agreement_ref?: string | null
 
   notes: string | null
 
@@ -1475,6 +1490,19 @@ export interface SupplierInvoice {
   // directly against 2893 (AB) or 2018 (EF). Status is set to 'paid' at
   // creation and mark-paid is rejected by the existing status guard.
   paid_with_private_funds: boolean
+
+  /**
+   * A self-billing invoice we issued in the supplier's name (crm#1367,
+   * ML 2023:200 17 kap 15 §). Its number is ours: self_billing_number is the
+   * position in the company's series and supplier_invoice_number the
+   * formatted number, both assigned on insert. The document is made by the
+   * app from self_billing_snapshot. Optional: narrow selects and rows read
+   * before 20261022130000 do not carry them.
+   */
+  is_self_billed?: boolean
+  self_billing_number?: number | null
+  self_billing_agreement_ref?: string | null
+  self_billing_snapshot?: Record<string, unknown> | null
 
   /**
    * "Inlagd i banken" (#2220): the user entered this payment in the internet
@@ -2051,6 +2079,8 @@ export interface CreateSupplierInput {
   default_expense_account?: string
   default_payment_terms?: number
   default_currency?: string
+  /** The self-billing agreement with the supplier (crm#1367); empty clears it. */
+  self_billing_agreement_ref?: string | null
   notes?: string
 }
 
@@ -2157,6 +2187,10 @@ export type JournalEntrySourceType =
   // write-off (6351 + 26xx / 1510) and a recovery (3950 + 26xx).
   // lib/customer-loss.
   | 'customer_loss'
+  // Kvittning: a customer invoice settled against a supplier invoice of the
+  // same counterparty (Dr 244x / Cr 151x, VAT untouched).
+  // lib/invoices/counterparty-setoff.
+  | 'counterparty_setoff'
   // A migrated invoice's household deduction moved from 1510 onto 1513
   // (debit 1513 / credit 1510), the claim on Skatteverket an invoice issued
   // here books on day one. lib/invoices/migrated-deduction-apply.ts.

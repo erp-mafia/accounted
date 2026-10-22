@@ -95,6 +95,9 @@ export const DIMENSION_RULE_POLICY: Readonly<Record<JournalEntrySourceType, Dime
   // Kundförlust is computed from the invoice's own booked lines (1510,
   // 26xx, the reserve on 1519); a required rule could never be met by it.
   customer_loss: 'exempt',
+  // Kvittning moves the two invoices' own open amounts; each line carries its
+  // invoice's default dimensions, a required rule could not be met here.
+  counterparty_setoff: 'exempt',
   rot_rut_reclassification: 'exempt',
   expense_payout: 'exempt',
   stripe_payout: 'exempt',

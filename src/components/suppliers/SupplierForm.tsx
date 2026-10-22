@@ -91,6 +91,9 @@ export default function SupplierForm({
       .min(0, t('default_payment_terms_invalid'))
       .max(365, t('default_payment_terms_invalid')),
     default_currency: z.string().optional(),
+    // The self-billing agreement with the supplier (crm#1367): with one, a
+    // självfaktura can be issued to it from the supplier invoice form.
+    self_billing_agreement_ref: z.string().max(128, t('self_billing_agreement_invalid')).optional(),
     notes: z.string().optional(),
   }), [t])
 
@@ -130,6 +133,7 @@ export default function SupplierForm({
       // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
       default_payment_terms: initialData?.default_payment_terms ?? 30,
       default_currency: initialData?.default_currency || 'SEK',
+      self_billing_agreement_ref: initialData?.self_billing_agreement_ref || '',
       notes: initialData?.notes || '',
     },
   })
@@ -499,6 +503,21 @@ export default function SupplierForm({
             />
           </div>
         </div>
+      </div>
+
+      {/* Självfaktureringsavtal (crm#1367) */}
+      <div className="space-y-2">
+        <Label htmlFor="self_billing_agreement_ref">{t('self_billing_agreement_label')}</Label>
+        <Input
+          id="self_billing_agreement_ref"
+          placeholder={t('self_billing_agreement_placeholder')}
+          autoComplete="off"
+          {...register('self_billing_agreement_ref')}
+        />
+        <p className="text-xs text-muted-foreground">{t('self_billing_agreement_help')}</p>
+        {errors.self_billing_agreement_ref && (
+          <p className="text-sm text-destructive">{errors.self_billing_agreement_ref.message}</p>
+        )}
       </div>
 
       {/* Notes */}

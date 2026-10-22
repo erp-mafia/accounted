@@ -171,6 +171,33 @@ describe('POST /api/invoices/self-billed', () => {
     expect(body.error.code).toBe('INVOICE_CREATE_VAT_RULE_VIOLATION')
   })
 
+  // crm#1367: the VAT the customer's document states, in percent rates.
+  it('returns 400 VAT_BREAKDOWN_MISMATCH with the rate in percent when the stated VAT does not fit', async () => {
+    mockDomesticVat()
+    enqueue({ data: makeCustomer({ id: VALID_UUID }), error: null })
+
+    const request = createMockRequest('/api/invoices/self-billed', {
+      method: 'POST',
+      body: { ...validBody, vat_breakdown: [{ vat_rate: 25, vat_amount: 2600 }] },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: Record<string, unknown> } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('VAT_BREAKDOWN_MISMATCH')
+    expect(body.error.details).toMatchObject({ rate: 25, stated: 2600, computed: 2500, reason: 'outside_tolerance' })
+    expect(mockCreateInvoiceJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a vat_breakdown in fractions', async () => {
+    const request = createMockRequest('/api/invoices/self-billed', {
+      method: 'POST',
+      body: { ...validBody, vat_breakdown: [{ vat_rate: 0.25, vat_amount: 2500 }] },
+    })
+    const response = await POST(request, { params: Promise.resolve({}) })
+    expect(response.status).toBe(400)
+  })
+
   it('accepts 12% to a VAT-validated EU business (taxed where performed)', async () => {
     // A Stockholm hotel night self-billed by a German customer: 12% Swedish VAT
     // is lawful even though the picker default for that customer is 0%. Refusing

@@ -171,6 +171,7 @@ import {
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
+import { supplierPaymentTermsDays } from '@/lib/supplier-invoices/due-date'
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { eventBus } from '@/lib/events/bus'
 import {
@@ -543,6 +544,7 @@ import {
   undatedSettlementsNote,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
 import { fetchKontantmetodCutoffVatFacts } from '@/lib/vat/kontantmetod-cutoff-vat-facts'
+import { allocateDocumentVat, statedVatFromExtraction, type DocumentRateVat } from '@/lib/vat/document-vat'
 import {
   describeFiledVatPeriodsSv,
   kontantmetodCutoffPreflight,
@@ -8896,7 +8898,7 @@ export const tools: McpTool[] = [
 
       let query = supabase
         .from('invoices')
-        .select('id, invoice_number, status, customer_id, total, paid_amount, remaining_amount, currency, invoice_date, due_date, document_type, credited_invoice_id, valid_until, quote_status, default_dimensions, customers(name)', { count: 'exact' })
+        .select('id, invoice_number, external_invoice_number, is_self_billed, status, customer_id, total, paid_amount, remaining_amount, currency, invoice_date, due_date, document_type, credited_invoice_id, valid_until, quote_status, default_dimensions, customers(name)', { count: 'exact' })
         .eq('company_id', companyId)
 
       // Overdue is derived from the due date and the open remainder
@@ -8936,6 +8938,10 @@ export const tools: McpTool[] = [
       const invoices = rows.slice(0, limit).map((inv: Record<string, unknown>) => ({
         id: inv.id,
         invoice_number: inv.invoice_number,
+        // A received self-billed sale has no number of ours (invoice_number
+        // stays null by design): the customer's number is how it is found.
+        external_invoice_number: inv.external_invoice_number ?? null,
+        is_self_billed: inv.is_self_billed === true,
         status: effectiveInvoiceStatus(inv as unknown as OverdueInvoiceInput, today),
         customer_name: (inv.customers as Record<string, unknown>)?.name ?? null,
         total: inv.total,
@@ -9008,7 +9014,9 @@ export const tools: McpTool[] = [
       type: 'object',
       properties: {
         invoice_id: { type: 'string' },
-        invoice_number: { type: ['string', 'null'], description: 'null until sent' },
+        invoice_number: { type: ['string', 'null'], description: 'null until sent; always null on a self-billed sale (see external_invoice_number)' },
+        external_invoice_number: { type: ['string', 'null'], description: 'Self-billed sales only: the number the customer gave it' },
+        is_self_billed: { type: 'boolean', description: 'true: a self-billing invoice the customer issued in our name' },
         status: { type: 'string' },
         document_type: { type: 'string' },
         valid_until: { type: ['string', 'null'] },
@@ -9108,7 +9116,7 @@ export const tools: McpTool[] = [
       const { data: invoice, error } = await supabase
         .from('invoices')
         .select(
-          'id, invoice_number, status, document_type, valid_until, quote_status, converted_from_id, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
+          'id, invoice_number, external_invoice_number, status, document_type, valid_until, quote_status, converted_from_id, customer_id, invoice_date, due_date, delivery_date, currency, subtotal, vat_amount, total, paid_amount, remaining_amount, your_reference, our_reference, invoice_marking, notes, default_dimensions, journal_entry_id, is_self_billed, credited_invoice_id, customer:customers(name), items:invoice_items(id, sort_order, line_type, description, quantity, unit, unit_price, discount_percent, line_total, vat_rate, vat_amount, article_id, revenue_account, sales_order_item_id, deduction_type, labor_hours, work_type, housing_designation, apartment_number, brf_org_number, accrual_period_start, accrual_period_end, accrual_balance_account, dimensions)',
         )
         .eq('id', invoiceId)
         .eq('company_id', companyId)
@@ -9248,6 +9256,8 @@ export const tools: McpTool[] = [
       return {
         invoice_id: invoice.id,
         invoice_number: invoice.invoice_number ?? null,
+        external_invoice_number: invoice.external_invoice_number ?? null,
+        is_self_billed: invoice.is_self_billed === true,
         // As gnubok_list_invoices reports it: overdue follows the due date.
         status: effectiveInvoiceStatus(invoice as unknown as OverdueInvoiceInput),
         document_type: invoice.document_type ?? 'invoice',
@@ -11462,7 +11472,9 @@ export const tools: McpTool[] = [
       let query = supabase
         .from('supplier_invoices')
         .select(
-          'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, approved_at, bank_entered_at, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, default_dimensions, ' +
+          // is_self_billed: a självfaktura the company issued in the
+          // supplier's name, numbered from its own series (crm#1367).
+          'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, approved_at, bank_entered_at, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, is_self_billed, self_billing_number, default_dimensions, ' +
             `${STATED_PAYEE_COLUMNS}, supplier:suppliers(id, name, ${CARD_PAYEE_COLUMNS})`,
           { count: 'exact' },
         )
@@ -16295,13 +16307,8 @@ export const tools: McpTool[] = [
       }
       const supplierDefaultExpenseAccount = resolvedSupplier.default_expense_account ?? null
       // Drives the due-date default below when the document carries no
-      // förfallodatum. 30 is the column default on suppliers and the Swedish
-      // norm; anything that is not a non-negative integer falls back to it.
-      const rawPaymentTerms: unknown = resolvedSupplier.default_payment_terms
-      const supplierPaymentTermsDays =
-        typeof rawPaymentTerms === 'number' && Number.isInteger(rawPaymentTerms) && rawPaymentTerms >= 0
-          ? rawPaymentTerms
-          : 30
+      // förfallodatum: the same rule every supplier invoice door applies.
+      const paymentTermsDays = supplierPaymentTermsDays(resolvedSupplier.default_payment_terms)
 
       // What the invoice states it is paid to, read as every door reads it,
       // against the supplier card. Approval keeps it on the invoice and fills
@@ -16359,7 +16366,7 @@ export const tools: McpTool[] = [
             { code: 'SI_CREATE_INVALID_INPUT' },
           )
         }
-        dueDate = addDaysIso(invoiceDate, supplierPaymentTermsDays)
+        dueDate = addDaysIso(invoiceDate, paymentTermsDays)
         dueDateSource = 'defaulted'
       }
 
@@ -16660,6 +16667,9 @@ export const tools: McpTool[] = [
       const printedLines: PrintedLineAmount[] = []
       // Foreign VAT carried in the cost of each line (net reading), for the preview.
       const foreignVatInCost: number[] = []
+      // Lines whose VAT the document (or the agent) gave line by line, or that
+      // carry foreign VAT in the cost: kept as they are by the per-rate VAT below.
+      const lineVatGiven: boolean[] = []
       const extractedLineItems = lineItemsExt.map((li, idx) => {
         const lineNumber = idx + 1
         const dimensions = resolvedDimBags[idx + 1]
@@ -16698,6 +16708,7 @@ export const tools: McpTool[] = [
         const unitPrice = Number(li.unit_price ?? li.unitPrice ?? li.amount) || 0
         printedLines.push({ amount: lineTotal, rate: documentRate, deductible: vatRate > 0 })
         foreignVatInCost.push(foreignVat)
+        lineVatGiven.push(rawVatAmount != null || foreignRate > 0)
         const accountNumber = lineAccounts[idx] as string
         // Särskild löneskatt: same guard the create routes and the executor
         // enforce (SI_CREATE_SLP_INVALID_ACCOUNT). Reject at staging time on
@@ -16730,6 +16741,37 @@ export const tools: McpTool[] = [
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
         }
       })
+
+      // VAT per rate as the document has it (crm#1367): the lines without a
+      // VAT of their own get their rate's share of the document's VAT (its
+      // breakdown, or its VAT total on a single-rate invoice) when that is
+      // within a seller's per-line rounding of the summed base, else of the
+      // VAT on the summed base. Per-line rounding drifted an öre or more from
+      // the document on long invoices. An OCR'd figure that does not fit
+      // falls back to the summed base; the preview says which was used.
+      let vatByRate: DocumentRateVat[] | null = null
+      if (!noDeductibleSellerVat) {
+        const vatLines = extractedLineItems.map((li, idx) => ({
+          lineTotal: li.line_total,
+          rate: li.vat_rate,
+          overrideVat: lineVatGiven[idx] ? li.vat_amount : null,
+        }))
+        const stated = statedVatFromExtraction(
+          {
+            vatBreakdown: (extracted.vatBreakdown as Array<{ rate?: unknown; amount?: unknown }> | null | undefined) ?? null,
+            totals: { vatAmount: totalsExt?.vat ?? totalsExt?.vatAmount },
+          },
+          vatLines.filter((line) => line.overrideVat == null).map((line) => line.rate),
+        )
+        const withStated = stated ? allocateDocumentVat(vatLines, stated) : null
+        const allocated = withStated?.ok ? withStated : allocateDocumentVat(vatLines)
+        if (allocated.ok) {
+          allocated.lineVat.forEach((lineVat, idx) => {
+            extractedLineItems[idx].vat_amount = lineVat
+          })
+          vatByRate = allocated.byRate
+        }
+      }
 
       // Under reverse charge, and under exempt / export, no line carries
       // deductible seller VAT: the executor zeroes the item rows too, so the
@@ -16968,6 +17010,9 @@ export const tools: McpTool[] = [
         subtotal: params.subtotal,
         vat_amount: params.vat_amount,
         total: params.total,
+        // VAT per rate as booked, and whether it is the document's own figure
+        // ('stated') or the VAT on the summed base ('computed').
+        ...(vatByRate && !linesReadAsGross ? { vat_by_rate: vatByRate } : {}),
         ...(payableRecomputed ? { payable_recomputed: payableRecomputed, warning: payableWarning } : {}),
         ...(foreignVatAsCost !== 0
           ? {

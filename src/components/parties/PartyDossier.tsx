@@ -12,6 +12,7 @@ import { SlideOver, SlideOverBody, SlideOverContent, SlideOverHeader } from '@/c
 import type { Dossier, PartyRole, RegisterPeriod } from '@/lib/parties/register'
 import { formatCurrency, formatDate, formatOrgNumber } from '@/lib/utils'
 import { AccountNub } from './AccountNub'
+import { CounterpartyOpenItems } from './CounterpartyOpenItems'
 import { registryFacts, registryLabel, registryValue } from './RegistryFacts'
 import { regionName } from './region-name'
 import { formatPaymentIdentity, reasonText, rhythmLabel, roleLabel } from './format'
@@ -220,6 +221,9 @@ export function PartyDossier({
                   </DropdownMenu>
                 </div>
               </div>
+
+              {/* A counterparty that is both customer and supplier: open items, the net and Kvitta. */}
+              <CounterpartyOpenItems partyId={p.id} canWrite={canWrite} reloadKey={reloadKey} />
 
               <section className="space-y-3">
                 <SectionTitle>{t('section_money')}</SectionTitle>

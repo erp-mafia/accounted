@@ -503,7 +503,8 @@ describe('POST /inbox-items/:id/convert', () => {
 
   it('400 for a field the conversion does not honour, and for a line contradicting the VAT treatment', async () => {
     mockServiceClient.mockReturnValue(makeClient({ company_members: MEMBER }))
-    const dropped = await post({ ...BODY, items: [{ ...BODY.items[0], vat_amount: 50 }] })
+    // A line's own vat_amount is honoured since crm#1367; öresavrundning is not.
+    const dropped = await post({ ...BODY, ore_rounding: true })
     expect(dropped.status).toBe(400)
     const exempt = await post({ ...BODY, vat_treatment: 'exempt' })
     expect(exempt.status).toBe(400)

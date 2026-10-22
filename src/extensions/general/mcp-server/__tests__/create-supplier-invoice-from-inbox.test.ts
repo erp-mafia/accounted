@@ -5,6 +5,7 @@
  * already-converted guard, and the missing-extraction error.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { roundOre } from '@/lib/money'
 import { tools } from '../server'
 import { toToolError } from '../tool-result'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
@@ -2008,13 +2009,49 @@ describe('gnubok_create_supplier_invoice_from_inbox: line amounts that include V
     const { result, params } = await stage(netBill)
 
     expect(result.staged).toBe(true)
-    // VAT derived from the net line (1 130.10 x 25 % = 282.525, 282.53),
-    // the öre the document rounded to the krona carried on 3740.
-    expect(params!.items[0]).toMatchObject({ line_total: 1130.1, vat_amount: 282.53 })
-    expect(params!.items[2]).toMatchObject({ account_number: '3740', line_total: 0.37 })
+    // The document's own VAT for the rate (282.52), within the öre of the
+    // net line's 1 130.10 x 25 % = 282.525 (crm#1367); the öre the document
+    // rounded to the krona carried on 3740.
+    expect(params!.items[0]).toMatchObject({ line_total: 1130.1, vat_amount: 282.52 })
+    expect(params!.items[2]).toMatchObject({ account_number: '3740', line_total: 0.38 })
     expect(params!.total).toBe(1488)
+    expect(result.preview.vat_by_rate).toEqual([
+      { rate: 0.25, base: 1130.1, vat: 282.52, source: 'stated' },
+      { rate: 0, base: 75, vat: 0, source: 'computed' },
+    ])
     expect(result.preview.line_amounts_interpreted_as).toBeUndefined()
     expect(result.preview.warning).toBeUndefined()
+  })
+
+  // crm#1367: SF-CE-202608 rounded line by line came to 3 864,12; the
+  // document computes on the summed base and says 3 864,11.
+  const selfBill = {
+    supplier: { name: 'Crayfish Energy AB' },
+    invoice: { invoiceNumber: 'SF-CE-202608', invoiceDate: '2026-09-30', dueDate: '2026-10-30', currency: 'SEK', paymentReference: null },
+    totals: { subtotal: 15456.45, vatAmount: 3864.11, total: 19320.56 },
+    lineItems: [
+      { description: 'Flexintäkt', quantity: 1, unitPrice: 17564.15, lineTotal: 17564.15, vatRate: 25, accountSuggestion: '4010' },
+      { description: 'Handelsavgift', quantity: 1, unitPrice: -2107.7, lineTotal: -2107.7, vatRate: 25, accountSuggestion: '4010' },
+    ],
+  }
+
+  it('books the VAT the document states for the rate, spread over the lines (crm#1367)', async () => {
+    const { result, params } = await stage(selfBill)
+
+    expect(result.staged).toBe(true)
+    expect(roundOre(params!.items.reduce((sum, i) => sum + i.vat_amount, 0))).toBe(3864.11)
+    expect(params!.vat_amount).toBe(3864.11)
+    expect(params!.total).toBe(19320.56)
+    expect(params!.items.some((i) => i.account_number === '3740')).toBe(false)
+    expect(result.preview.vat_by_rate).toEqual([{ rate: 0.25, base: 15456.45, vat: 3864.11, source: 'stated' }])
+  })
+
+  it('falls back to the VAT on the summed base when the OCR\'d VAT does not fit the lines', async () => {
+    const { result, params } = await stage({ ...selfBill, totals: { ...selfBill.totals, vatAmount: 3900 } })
+
+    expect(result.staged).toBe(true)
+    expect(params!.vat_amount).toBe(3864.11)
+    expect(result.preview.vat_by_rate).toEqual([{ rate: 0.25, base: 15456.45, vat: 3864.11, source: 'computed' }])
   })
 
   it('leaves reverse charge on its own path: the line nets are the payable, nothing is refused', async () => {
