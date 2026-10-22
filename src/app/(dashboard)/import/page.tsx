@@ -672,11 +672,20 @@ function SkattekontoImportWizard({ onBack }: { onBack: () => void }) {
 function SIEImportWizard({
   onBack,
   onOpenManualOpeningBalances,
+  initialFile,
+  onInitialFileTaken,
 }: {
   /** Back to the import choices: the rail's first crumb. */
   onBack: () => void
-  /** Switch to the manual "Ingående balanser" wizard (SIE preview, issue #2082). */
-  onOpenManualOpeningBalances?: () => void
+  /**
+   * Switch to the manual "Ingående balanser" wizard (SIE preview, issue #2082),
+   * handing over the file being previewed so the import can resume after.
+   */
+  onOpenManualOpeningBalances?: (file: File | null) => void
+  /** A file to read straight away: the one previewed before the manual IB detour. */
+  initialFile?: File | null
+  /** Called once initialFile is being read, so a remount does not read it again. */
+  onInitialFileTaken?: () => void
 }) {
   const { toast } = useToast()
 
@@ -868,6 +877,17 @@ function SIEImportWizard({
       setIsLoading(false)
     }
   }, [toast, flowT, locale])
+
+  // Back from the manual opening balances (crm#1374): without this the file
+  // was dropped and the year kept only its IB. Read again, the vouchers now
+  // land on top of the IB just booked.
+  const initialFileRead = useRef(false)
+  useEffect(() => {
+    if (!initialFile || jobId || initialFileRead.current) return
+    initialFileRead.current = true
+    onInitialFileTaken?.()
+    void handleFileSelect(initialFile)
+  }, [initialFile, jobId, onInitialFileTaken, handleFileSelect])
 
   const handleUndo = useCallback(async (importId:string) => {
     const response = await fetch('/api/import/sie/'+importId+'/action',{
@@ -1176,7 +1196,7 @@ function SIEImportWizard({
             unused: unusedSourceAccounts.size, own: preview?.unusedOwnAccounts?.length ?? 0, total: mappings.length } : undefined}
           onCreateAccounts={handleCreateAccounts} isCreatingAccounts={isCreatingAccounts}
           onContinue={() => goToStep(showMappingStep ? 'mapping' : 'review')} onBack={goBack}
-          onOpenManualOpeningBalances={onOpenManualOpeningBalances} />
+          onOpenManualOpeningBalances={onOpenManualOpeningBalances ? () => onOpenManualOpeningBalances(file) : undefined} />
       )}
       {step === 'mapping' && (
         <AccountMappingStep mappings={effectiveMappings} basAccounts={basAccounts}
@@ -1216,7 +1236,12 @@ const OB_STEP_LABELS: Record<OpeningBalanceStep, string> = {
   result: 'Resultat',
 }
 
-function OpeningBalanceFlow({ onBack, entityPicker }: { onBack: () => void; entityPicker: React.ReactNode }) {
+function OpeningBalanceFlow({ onBack, entityPicker, onResumeSieImport }: {
+  onBack: () => void
+  entityPicker: React.ReactNode
+  /** Set when the user came here from a SIE preview: back to that file once the IB is booked. */
+  onResumeSieImport?: () => void
+}) {
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
   const router = useRouter()
@@ -1456,6 +1481,7 @@ function OpeningBalanceFlow({ onBack, entityPicker }: { onBack: () => void; enti
         <OpeningBalanceResultStep
           result={executeResult}
           onNewImport={handleNewImport}
+          onResumeSieImport={onResumeSieImport}
         />
       )}
 
@@ -1478,9 +1504,11 @@ const ENTITY_OPTIONS: { value: CsvDataEntity; label: string }[] = [
 function CSVDataImportWizard({
   initialEntity,
   onBack,
+  onResumeSieImport,
 }: {
   initialEntity: CsvDataEntity | null
   onBack: () => void
+  onResumeSieImport?: () => void
 }) {
   // Opens on "Ingående balanser" unless a register page deep-linked a tab
   // (/import?mode=csv_data&entity=customers, see register-import-link.ts).
@@ -1534,7 +1562,7 @@ function CSVDataImportWizard({
   )
 
   return entity === 'opening_balance' ? (
-    <OpeningBalanceFlow key="ob-flow" onBack={onBack} entityPicker={entityPicker} />
+    <OpeningBalanceFlow key="ob-flow" onBack={onBack} entityPicker={entityPicker} onResumeSieImport={onResumeSieImport} />
   ) : (
     <RegisterImportFlow key={entity} entity={entity} onBack={onBack} entityPicker={entityPicker} />
   )
@@ -1586,6 +1614,11 @@ export default function ImportPage() {
   const [mode, setMode] = useState<ImportMode>(null)
   const [initialProvider, setInitialProvider] = useState<string | null>(null)
   const [initialCsvEntity, setInitialCsvEntity] = useState<CsvDataEntity | null>(null)
+  // The SIE file previewed when the user left for the manual opening balances
+  // (#2082), and the same file once they come back to finish its import.
+  const [manualIbSieFile, setManualIbSieFile] = useState<File | null>(null)
+  const [resumeSieFile, setResumeSieFile] = useState<File | null>(null)
+  const clearResumeSieFile = useCallback(() => setResumeSieFile(null), [])
   const [view, setView] = useState<'import' | 'export'>('import')
   const [sieDialogOpen, setSieDialogOpen] = useState(false)
   const [archiveDialogOpen, setArchiveDialogOpen] = useState(false)
@@ -1689,6 +1722,8 @@ export default function ImportPage() {
     // mode would auto-jump again.
     setInitialProvider(null)
     setInitialCsvEntity(null)
+    setManualIbSieFile(null)
+    setResumeSieFile(null)
     // A deep link also left the mode in the URL. Drop it, or the next
     // URL change (the Exportera tab's router.replace keeps every
     // param) re-runs the sync effect above and reopens the mode.
@@ -2057,9 +2092,14 @@ export default function ImportPage() {
       {mode === 'skattekonto' && <SkattekontoImportWizard onBack={backToChoices} />}
       {/* The CSV/Excel wizard opens on "Ingående balanser" by default, which is
           exactly the manual path the SIE preview offers on an IB imbalance. */}
-      {mode === 'sie' && <SIEImportWizard key={searchParams.get('job') ?? 'new'} onBack={backToChoices} onOpenManualOpeningBalances={() => setMode('csv_data')} />}
+      {mode === 'sie' && <SIEImportWizard key={searchParams.get('job') ?? 'new'} onBack={backToChoices}
+        onOpenManualOpeningBalances={(file) => { setManualIbSieFile(file); setMode('csv_data') }}
+        initialFile={resumeSieFile} onInitialFileTaken={clearResumeSieFile} />}
       {mode === 'underlag' && <UnderlagImportWizard onBack={backToChoices} />}
-      {mode === 'csv_data' && <CSVDataImportWizard initialEntity={initialCsvEntity} onBack={backToChoices} />}
+      {mode === 'csv_data' && <CSVDataImportWizard initialEntity={initialCsvEntity} onBack={backToChoices}
+        onResumeSieImport={manualIbSieFile
+          ? () => { setResumeSieFile(manualIbSieFile); setManualIbSieFile(null); setMode('sie') }
+          : undefined} />}
       {mode === 'migration' && (
         <MigrationWizard userId={userId} initialProvider={initialProvider ?? undefined} />
       )}
