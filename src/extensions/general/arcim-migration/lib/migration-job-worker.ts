@@ -6,7 +6,7 @@ import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execu
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
 import { classifyProviderError, providerRefusalReason, ProviderCallError } from '@/lib/providers/with-provider-call'
 import { fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
-import { fetchCompanyInfoDirect, fetchMigrationPage, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
+import { fetchCompanyInfoDirect, fetchMigrationPage, hydrateCustomers, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
 import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
@@ -95,6 +95,26 @@ function mappedParty(job: ProviderMigrationJob, resource: MigrationResource, dto
 }
 
 /**
+ * The listed customer with its detail form where the list left the terms out
+ * (Fortnox, see hydrateCustomers; crm#1245). A customer whose detail cannot
+ * be read still imports from its list form, with the default terms as before:
+ * its card is worth more than its absence, and the invoices that name it
+ * would otherwise make a bare stub. Running out of time leaves it pending.
+ */
+async function customerWithDetail(job: ProviderMigrationJob, listed: CustomerDto,
+  connection: ResolvedConsent, deadline: number): Promise<CustomerDto> {
+  const budget = Math.min(MAX_DETAIL_BUDGET_MS, Math.max(0, deadline - Date.now() - 5000))
+  const hydrated = await hydrateCustomers(job.provider as ProviderName, connection.accessToken,
+    connection.providerCompanyId, [listed], budget)
+  if (!hydrated.unhydratedIds.has(listed.id)) return hydrated.customers[0]
+  if (hydrated.hydration.abortedBy === 'budget' && budget < MAX_DETAIL_BUDGET_MS) throw new Error('MIGRATION_DEADLINE')
+  if (hydrated.hydration.abortedBy === 'auth') {
+    throw await readProviderRefusal(hydrated.authError ?? new Error('PROVIDER_AUTH_EXPIRED'), job, connection, deadline)
+  }
+  return listed
+}
+
+/**
  * `parties` collects the source customer behind each prepared record, keyed by
  * chunk id, for adoptExistingCustomers to match before the commit.
  */
@@ -105,8 +125,9 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
   if (c.resource === 'customers') {
     if (!(dto as CustomerDto).active) return { id: c.id, skip: 'inactive' }
-    parties.set(c.id, { sourceId: c.source_id, facts: customerRegisterFacts(job.provider, dto as CustomerDto) })
-    return { id: c.id, row: mapCustomer(dto as CustomerDto, job.user_id, job.company_id) }
+    const customer = await customerWithDetail(job, dto as CustomerDto, connection, deadline)
+    parties.set(c.id, { sourceId: c.source_id, facts: customerRegisterFacts(job.provider, customer) })
+    return { id: c.id, row: mapCustomer(customer, job.user_id, job.company_id) }
   }
   if (c.resource === 'suppliers') {
     if (!(dto as SupplierDto).active) return { id: c.id, skip: 'inactive' }

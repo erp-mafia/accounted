@@ -401,17 +401,25 @@ export async function fetchAccountingAccountsDirect(
   return [];
 }
 
+/**
+ * The customer register. `detailBudgetMs` bounds the detail pass for a
+ * provider whose list form leaves the terms out (Fortnox, see
+ * hydrateCustomers); a customer the pass does not reach keeps its list form.
+ */
 export async function fetchCustomersDirect(
   provider: ProviderName,
   accessToken: string,
   providerCompanyId?: string,
+  options: { detailBudgetMs?: number } = {},
 ): Promise<CustomerDto[]> {
   if (provider === 'fortnox') {
     const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.Customers]!;
     const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
       accessToken, config.listEndpoint, config.listKey,
     );
-    return items.map((item) => config.mapper(item) as CustomerDto);
+    const listed = items.map((item) => config.mapper(item) as CustomerDto);
+    const { customers } = await hydrateCustomers(provider, accessToken, providerCompanyId, listed, options.detailBudgetMs);
+    return customers;
   }
 
   if (provider === 'visma') {
@@ -647,10 +655,14 @@ export async function fetchSupplierInvoicesDirect(
 //   2. Whatever the budget does not cover is REPORTED, never silently
 //      dropped. A migration that hydrated 300 of 1 900 invoices says so.
 
-/** The two resources hydration applies to. */
-type InvoiceResource =
+/**
+ * The resources hydration applies to: both invoice registers, and Fortnox's
+ * customer register, whose list form leaves the terms out (hydrateCustomers).
+ */
+type DetailResource =
   | typeof ResourceType.SalesInvoices
-  | typeof ResourceType.SupplierInvoices;
+  | typeof ResourceType.SupplierInvoices
+  | typeof ResourceType.Customers;
 
 /** What a hydration pass managed to do, for the migration summary. */
 export interface HydrationReport {
@@ -777,7 +789,7 @@ function detailId(dto: { id: string; _raw?: Record<string, unknown> }, idField: 
 
 function detailFetcher(
   provider: ProviderName,
-  resource: InvoiceResource,
+  resource: DetailResource,
   accessToken: string,
   providerCompanyId?: string,
 ): DetailFetch | null {
@@ -857,9 +869,9 @@ function detailFetcher(
 /** Resolve the mapper for a provider/resource pair, or null if unsupported. */
 function resourceMapper(
   provider: ProviderName,
-  resource: InvoiceResource,
+  resource: DetailResource,
 ): ((raw: Record<string, unknown>) => unknown) | null {
-  const configs: Partial<Record<InvoiceResource, { mapper: (raw: Record<string, unknown>) => unknown }>> = {
+  const configs: Partial<Record<DetailResource, { mapper: (raw: Record<string, unknown>) => unknown }>> = {
     fortnox: FORTNOX_RESOURCE_CONFIGS,
     visma: VISMA_RESOURCE_CONFIGS,
     briox: BRIOX_RESOURCE_CONFIGS,
@@ -928,11 +940,23 @@ function bokioVoucherEnrichment<T extends SalesInvoiceDto | SupplierInvoiceDto>(
 }
 
 /**
- * Replace list-form invoices with their detail form, open ones first.
+ * Drafts first, then the other unpaid invoices, then the paid ones. A draft
+ * is the next document the user sends, and without its detail form it has
+ * no rows and no VAT to send with (crm#1245: 29 of 63 drafts lost the
+ * budget to sent invoices). Unpaid invoices are the ones a later payment
+ * match or credit note will book.
+ */
+function invoiceHydrationRank(dto: SalesInvoiceDto | SupplierInvoiceDto): number {
+  return dto.status === 'draft' ? 0 : dto.paymentStatus.paid ? 2 : 1;
+}
+
+/**
+ * Replace list-form records with their detail form, in `rank` order (invoices:
+ * open ones first, see invoiceHydrationRank).
  *
  * Returns a NEW array in the original order; entries that were not hydrated
  * (already complete, out of budget, or the fetch failed) retain the latest
- * successfully mapped payload. The caller never loses an invoice.
+ * successfully mapped payload. The caller never loses a record.
  *
  * `unhydratedIds` names the invoices that NEEDED a detail form and did not
  * get one (budget, abort, or a failed fetch). A consumer that reads a field
@@ -940,7 +964,7 @@ function bokioVoucherEnrichment<T extends SalesInvoiceDto | SupplierInvoiceDto>(
  * tell "the provider reported none" from "we never asked" only through this
  * set; the counts in the report do not say which invoices they were.
  */
-async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
+async function hydrateRegister<T extends { id: string }>(
   items: T[],
   needsDetail: (dto: T) => boolean,
   fetchDetail: DetailFetch | null,
@@ -948,6 +972,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
   label: string,
   budgetMs: number,
   enrichment?: InvoiceEnrichment<T>,
+  rank: (dto: T) => number = () => 0,
 ): Promise<{ items: T[]; report: HydrationReport; unhydratedIds: Set<string>; authError?: unknown }> {
   if (!fetchDetail || !mapper) {
     return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
@@ -961,13 +986,7 @@ async function hydrateInvoices<T extends SalesInvoiceDto | SupplierInvoiceDto>(
     return { items, report: { ...EMPTY_HYDRATION_REPORT }, unhydratedIds: new Set() };
   }
 
-  // Drafts first, then the other unpaid invoices, then the paid ones. A draft
-  // is the next document the user sends, and without its detail form it has
-  // no rows and no VAT to send with (crm#1245: 29 of 63 drafts lost the
-  // budget to sent invoices). Unpaid invoices are the ones a later payment
-  // match or credit note will book. The sort is stable, so list order holds
-  // within each group.
-  const rank = (dto: T): number => (dto.status === 'draft' ? 0 : dto.paymentStatus.paid ? 2 : 1);
+  // The sort is stable, so list order holds within each rank.
   pending.sort((a, b) => rank(a.dto) - rank(b.dto));
 
   const hydrated = [...items];
@@ -1093,7 +1112,7 @@ export async function fetchSalesInvoicesHydrated(
  * progress on exactly those. Invoices that need nothing (a list payload that
  * carried its rows) pass through unrequested, as in the full pass.
  *
- * Returns the invoices in the order given; see `hydrateInvoices` for the
+ * Returns the invoices in the order given; see `hydrateRegister` for the
  * report and `unhydratedIds` semantics.
  */
 export async function hydrateSalesInvoices(
@@ -1103,7 +1122,7 @@ export async function hydrateSalesInvoices(
   invoices: SalesInvoiceDto[],
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
 ): Promise<HydratedInvoices<SalesInvoiceDto>> {
-  const { items, report, unhydratedIds, authError } = await hydrateInvoices<SalesInvoiceDto>(
+  const { items, report, unhydratedIds, authError } = await hydrateRegister<SalesInvoiceDto>(
     invoices,
     salesInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SalesInvoices, accessToken, providerCompanyId),
@@ -1111,6 +1130,7 @@ export async function hydrateSalesInvoices(
     `${provider} sales-invoice`,
     budgetMs,
     bokioVoucherEnrichment(provider, accessToken, providerCompanyId),
+    invoiceHydrationRank,
   );
 
   return { invoices: items, hydration: report, unhydratedIds, authError };
@@ -1142,7 +1162,7 @@ export async function hydrateSupplierInvoices(
   invoices: SupplierInvoiceDto[],
   budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
 ): Promise<HydratedInvoices<SupplierInvoiceDto>> {
-  const { items, report, unhydratedIds, authError } = await hydrateInvoices<SupplierInvoiceDto>(
+  const { items, report, unhydratedIds, authError } = await hydrateRegister<SupplierInvoiceDto>(
     invoices,
     provider === 'bokio' ? () => false : supplierInvoiceNeedsDetail,
     detailFetcher(provider, ResourceType.SupplierInvoices, accessToken, providerCompanyId),
@@ -1150,7 +1170,61 @@ export async function hydrateSupplierInvoices(
     `${provider} supplier-invoice`,
     budgetMs,
     bokioVoucherEnrichment(provider, accessToken, providerCompanyId, true),
+    invoiceHydrationRank,
   );
 
   return { invoices: provider === 'bokio' ? items.map(dto => dto.supplierEvidence ? dto : enrichBokioSupplierInvoice(dto)) : items, hydration: report, unhydratedIds, authError };
+}
+
+/**
+ * Does this listed customer still need its detail form for its terms?
+ *
+ * Fortnox lists customers in a short form (number, name, org number, address,
+ * e-mail, phone). TermsOfPayment, VATNumber, EmailInvoice and its copies,
+ * YourReference and Type are only on the customer itself, so a register mapped
+ * from the list alone gave every migrated Fortnox customer the 30-day default
+ * (crm#1245). The other providers' customer lists carry the terms, so they are
+ * left alone.
+ */
+function customerNeedsDetail(provider: ProviderName): (dto: CustomerDto) => boolean {
+  if (provider !== 'fortnox') return () => false;
+  return (dto) => {
+    const terms = dto._raw?.['TermsOfPayment'];
+    return terms === undefined || terms === null || terms === '';
+  };
+}
+
+/** A customer register with its detail payloads merged in, plus what the pass missed. */
+export interface HydratedCustomers {
+  customers: CustomerDto[];
+  hydration: HydrationReport;
+  /** Ids of customers that needed their detail form and did not get it. */
+  unhydratedIds: Set<string>;
+  /** The provider's own error when the pass stopped on it (`abortedBy: 'auth'`). */
+  authError?: unknown;
+}
+
+/**
+ * Listed customers with their detail form where the list left the terms out,
+ * in the order given. Bounded like the invoice passes: a customer the budget
+ * does not reach, or whose detail cannot be read, keeps its list form and is
+ * named in `unhydratedIds`.
+ */
+export async function hydrateCustomers(
+  provider: ProviderName,
+  accessToken: string,
+  providerCompanyId: string | undefined,
+  customers: CustomerDto[],
+  budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
+): Promise<HydratedCustomers> {
+  const { items, report, unhydratedIds, authError } = await hydrateRegister<CustomerDto>(
+    customers,
+    customerNeedsDetail(provider),
+    detailFetcher(provider, ResourceType.Customers, accessToken, providerCompanyId),
+    resourceMapper(provider, ResourceType.Customers),
+    `${provider} customer`,
+    budgetMs,
+  );
+
+  return { customers: items, hydration: report, unhydratedIds, authError };
 }
