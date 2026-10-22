@@ -576,6 +576,45 @@ function invoiceOf(
   return { ok: true, invoice, lines }
 }
 
+/**
+ * What one plan came to, in codes only: never an amount, a name or a
+ * document's text. One log line per read of the plan, so how often the
+ * page's one click books, asks or opens the editor, and why, can be counted.
+ */
+export interface OneClickOutcome {
+  /** The plan books with nothing asked. */
+  oneClick: boolean
+  form: OneClickForm | null
+  ask: OneClickAsk | null
+  reason: OneClickReason
+  vat: OneClickVat['kind']
+  category: PurchaseCategoryCode | null
+  region: SellerRegion | null
+  bank: OneClickBankRow['source'] | 'none'
+  kind: InboxDocumentKind | null
+  /** What the person had answered on the page when this plan was read. */
+  answered: { category: boolean; seller: boolean }
+}
+
+export function oneClickOutcome(
+  input: OneClickInput,
+  plan: OneClickPlan,
+  answered: { category: boolean; seller: boolean },
+): OneClickOutcome {
+  return {
+    oneClick: plan.form !== null && plan.ask === null,
+    form: plan.form,
+    ask: plan.ask,
+    reason: plan.reason,
+    vat: plan.vat.kind,
+    category: plan.category,
+    region: plan.seller.region,
+    bank: input.bank?.source ?? 'none',
+    kind: input.kind,
+    answered,
+  }
+}
+
 export function planOneClick(input: OneClickInput): OneClickPlan {
   const at = situation(input)
   const reading = input.reading
