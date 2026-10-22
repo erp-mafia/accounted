@@ -126,10 +126,9 @@ describe('fortnoxNumberRecord', () => {
   })
 
   it('never takes the mapper invoiceNumber for the supplier number', () => {
-    const d = dto(raw('14', undefined))
-    // The pre-fix mapper puts the löpnummer in invoiceNumber.
-    expect(d.invoiceNumber).toBe('14')
-    expect(fortnoxNumberRecord(d, COMPANY, 'fortnox')?.invoice_number).toBeNull()
+    // A payload stored before step 2 carries the löpnummer in invoiceNumber.
+    const d = { ...dto(raw('14', undefined)), invoiceNumber: '14' }
+    expect(fortnoxNumberRecord(d, COMPANY, 'stored_payload')?.invoice_number).toBeNull()
   })
 })
 

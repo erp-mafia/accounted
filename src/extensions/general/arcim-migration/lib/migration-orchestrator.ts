@@ -73,13 +73,22 @@ import {
 } from './entity-mapper'
 import { invoiceWithinScope, type FiscalYearScope } from './invoice-scope'
 import {
-  existingInvoiceKeys, fortnoxNumberOf, listedInvoiceKeys, listedMatchNumber, type ExistingSupplierInvoiceIdentity,
+  existingInvoiceKeys, fortnoxNumberOf, listedInvoiceKeys, listedMatchNumber, supplierNumberLedger,
+  type ExistingSupplierInvoiceIdentity, type SupplierNumberRow,
 } from './supplier-invoice-identity'
 import {
   existingSalesInvoiceKey, listedSalesInvoiceKeys, type ExistingSalesInvoiceIdentity,
 } from './sales-invoice-identity'
 
 const log = createLogger('extensions/arcim-migration/migration-orchestrator')
+
+/**
+ * Why a Fortnox supplier invoice was refused under the reused-number rule
+ * (supplierNumberLedger). The wizard prints the first sample after
+ * "misslyckades:", in Swedish like its other reasons.
+ */
+const SUPPLIER_NUMBER_TAKEN =
+  'leverantören har redan en faktura med samma nummer och datum, eller fakturan har en annan betalningsreferens'
 
 export interface MigrationOptions {
   consentId: string
@@ -1260,10 +1269,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         // Load every existing supplier invoice's identity once: (supplier,
         // number), or (supplier, date, amount) for a number-less one, and the
         // Fortnox löpnummer of a Fortnox import.
-        const existingSuppInv = await fetchAllRows<ExistingSupplierInvoiceIdentity>(({ from, to }) =>
+        const existingSuppInv = await fetchAllRows<ExistingSupplierInvoiceIdentity & SupplierNumberRow>(({ from, to }) =>
           supabase
             .from('supplier_invoices')
-            .select('supplier_invoice_number, supplier_id, invoice_date, total, fortnox_number')
+            .select('supplier_invoice_number, supplier_id, invoice_date, total, fortnox_number, status, payment_reference')
             .eq('company_id', companyId)
             .range(from, to)
         )
@@ -1272,6 +1281,10 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         )
         const isStored = (supplierId: string, inv: SupplierInvoiceDto): boolean =>
           listedInvoiceKeys(supplierId, inv, provider).some((key) => existingSuppInvKeys.has(key))
+        // A Fortnox supplier number a supplier reuses (crm#1039): the same rule
+        // as the background import. Other providers' records are found again by
+        // (supplier, number) alone, so the rule would not hold for them here.
+        const supplierNumbers = provider === 'fortnox' ? supplierNumberLedger(existingSuppInv) : null
 
         // Compute next arrival number locally. Unique index is
         // (company_id, arrival_number); we're the only writer during
@@ -1479,15 +1492,33 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         const creditNotesToPair: { invoiceId: string; sourceId: string; refId: string; invoiceNumber: string }[] = []
 
         for (const batch of chunk(ready, INSERT_CHUNK_SIZE)) {
-          const mappedBatch = batch.map((r) => {
+          const mappedBatch = batch.flatMap((r) => {
             const { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, rowsMismatch: rowsOff, rowsUnaccounted: rowsNoAccount, creditedInvoiceRef } = mapSupplierInvoice(
               r.dto, userId, companyId, r.supplierId, fxRates
             )
-            invoice.arrival_number = nextArrivalNumber++
             const fortnoxNumber = fortnoxNumberOf(provider, r.dto)
             if (fortnoxNumber) invoice.fortnox_number = fortnoxNumber
-            return { invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, rowsMismatch: rowsOff === true, rowsUnaccounted: rowsNoAccount === true, creditedInvoiceRef, dto: r.dto, supplierId: r.supplierId }
+            if (supplierNumbers) {
+              const numbered = invoice as unknown as SupplierNumberRow
+              const plan = supplierNumbers.plan(numbered)
+              if (plan === 'numberTaken') {
+                skipReasons.failed = (skipReasons.failed ?? 0) + 1
+                skipped++
+                errorSample ??= SUPPLIER_NUMBER_TAKEN
+                console.warn(`[migration] Supplier invoice ${r.dto.id}: ${SUPPLIER_NUMBER_TAKEN}`)
+                return []
+              }
+              if (plan === 'asPaymentReference') {
+                invoice.payment_reference = invoice.supplier_invoice_number
+                invoice.supplier_invoice_number = null
+                console.warn(`[migration] Supplier invoice ${r.dto.id}: the supplier reuses its number; kept as payment reference.`)
+              }
+              supplierNumbers.record(numbered)
+            }
+            invoice.arrival_number = nextArrivalNumber++
+            return [{ invoice, items, fxUnresolved: fx, vatUnresolved: vatMissing, rowsMismatch: rowsOff === true, rowsUnaccounted: rowsNoAccount === true, creditedInvoiceRef, dto: r.dto, supplierId: r.supplierId }]
           })
+          if (mappedBatch.length === 0) continue
 
           const outcome = await insertWithPerRowFallback(
             supabase, 'supplier_invoices', mappedBatch.map((m) => m.invoice), 'id'
