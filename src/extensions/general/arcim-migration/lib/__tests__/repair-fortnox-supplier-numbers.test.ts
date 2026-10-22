@@ -92,11 +92,20 @@ describe('fortnoxNumberRecord', () => {
   })
 
   it('reads the header of a stored list record whose Total Fortnox serialised as a string (crm#1157)', () => {
-    // The stored payload is the list form: JSON round-tripped, Total as text.
-    // A string total once left the header without one, and every ordinary
-    // invoice read as header_mismatch.
-    const stored = JSON.parse(JSON.stringify(dto(raw('403', '6994', { Total: '1415.00', Balance: '1415.00' }))))
-    expect(fortnoxNumberRecord(stored, COMPANY, 'stored_payload')).toMatchObject({
+    // The stored payload is the list form, sealed with the mapper of its
+    // import day: one from before the string Total was parsed carries the
+    // string in its amounts. Read from the DTO, the header had no total and
+    // every ordinary invoice read as header_mismatch; read from _raw it has.
+    const listed = dto(raw('403', '6994', { Total: '1415.00', Balance: '1415.00' }))
+    const sealedBefore = JSON.parse(JSON.stringify({
+      ...listed,
+      legalMonetaryTotal: {
+        ...listed.legalMonetaryTotal,
+        taxInclusiveAmount: { ...listed.legalMonetaryTotal.taxInclusiveAmount, value: '1415.00' },
+        payableAmount: { ...listed.legalMonetaryTotal.payableAmount, value: '1415.00' },
+      },
+    }))
+    expect(fortnoxNumberRecord(sealedBefore, COMPANY, 'stored_payload')).toMatchObject({
       given_number: '403', invoice_number: '6994', invoice_date: '2026-06-01', total: 1415, currency: 'SEK', is_credit_note: false,
     })
   })
