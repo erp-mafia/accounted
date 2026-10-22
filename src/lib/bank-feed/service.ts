@@ -24,7 +24,9 @@
  *              when the bank says the first is over);
  *   select     the same account selection every bank feed uses
  *              (resolvePsd2LedgerAccount, save_bank_account_selection), the
- *              Enable Banking row a switch replaces handed over, then the
+ *              Enable Banking rows it takes over handed over (the one a
+ *              switch named, and any reading only accounts this connection
+ *              now reads: ./handover.ts), then the
  *              first import inline; Svea gets its second consent instead,
  *              started as the first was (the bank's page with the entry
  *              point's return when that is how the bank signs), the listing
@@ -47,7 +49,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { hasSignerOnFile } from '@/lib/auth/bankid-signer'
 import { rememberConnectionPsu, type ConnectionPsuSource } from '@/lib/auth/resource-psu'
 import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
-import { aggregatorOf, AGGREGATOR_SESSION_NAMESPACE, OPEN_PAYMENTS_AGGREGATOR, OPEN_PAYMENTS_PROVIDER_SLUG } from '@/lib/bank-sync/aggregator'
+import { aggregatorOf, AGGREGATOR_SESSION_NAMESPACE, LIVE_CONNECTION_STATUSES, OPEN_PAYMENTS_AGGREGATOR, OPEN_PAYMENTS_PROVIDER_SLUG } from '@/lib/bank-sync/aggregator'
 import { disconnectBankConnection, readBankConfiguration, saveBankAccountSelection, type BankAccountSelection } from '@/lib/cash-accounts/configuration'
 import { resolvePsd2LedgerAccount } from '@/lib/cash-accounts/service'
 import { endOfDayIsoStockholm } from '@/lib/dates/iso'
@@ -61,6 +63,7 @@ import { BANK_FEED_NOT_FOUND, BankFeedError, BankFeedRefusedError, ConsentOverEr
 import { openBankFeedDoor } from './door'
 import { consentFailureText, OPEN_BANKING_FAILURE_TEXTS } from './failure-text'
 import { runOpenPaymentsSync } from './feed'
+import { enableBankingRowsTakenOver, type HandoverCandidate } from './handover'
 import { accountContextOf, buildBankFeedParty, psuTypeOf, UNATTENDED_SIGNER, type BankFeedSignerInput, type PsuType } from './party'
 import { BANK_CONNECT_SIGNATORY_TARGET, bankConnectReturnUrl, type BankConnectReturnTarget } from './return-url'
 import { viaCanonicalOrigin } from '@/lib/connect/return-bounce'
@@ -1070,17 +1073,32 @@ async function saveSelection(
     },
   })
 
-  // Switch mode: the Enable Banking row hands over its history now that the
-  // selection has adopted its cash rows, and is revoked. Its consent at Enable
-  // Banking lapses on its own; the Enable Banking paths never touch a revoked row.
+  // The Enable Banking rows this connection takes over (./handover.ts): the
+  // one a switch named, and any whose every account this connection now
+  // reads, whichever door the connection came through. Each hands over its
+  // history now that the selection has adopted its cash rows, and is revoked.
+  // Its consent at Enable Banking lapses on its own; the Enable Banking paths
+  // never touch a revoked row. Every save asks, so a handover that failed is
+  // tried again by the next one.
   const replaced = row.consent_attempt?.selection?.replace_connection_id ?? row.consent_attempt?.replace_connection_id ?? null
-  if (replaced && connection.status === 'pending_selection') {
+  const { data: liveRows, error: liveError } = await ctx.supabase
+    .from('bank_connections')
+    .select('id, aggregator, accounts_data')
+    .eq('company_id', ctx.companyId)
+    .in('status', [...LIVE_CONNECTION_STATUSES])
+    .is('superseded_by', null)
+    .neq('id', connection.id)
+  if (liveError) ctx.log.warn('enable banking rows to take over not read', { connectionId: connection.id, message: liveError.message })
+  const takenOver = liveError
+    ? (replaced ? [replaced] : [])
+    : enableBankingRowsTakenOver({ reads: enabled, replaced, live: Array.isArray(liveRows) ? (liveRows as HandoverCandidate[]) : [] })
+  for (const old of takenOver) {
     const { data: handover, error: supersedeError } = await ctx.supabase.rpc('supersede_enable_banking_connection', {
-      p_company_id: ctx.companyId, p_user_id: ctx.userId, p_new: connection.id, p_old: replaced,
+      p_company_id: ctx.companyId, p_user_id: ctx.userId, p_new: connection.id, p_old: old,
     })
     if (supersedeError) {
       // The selection stands; the switch is reported, not undone.
-      ctx.log.warn('enable banking connection not superseded', { connectionId: connection.id, replaced, message: supersedeError.message })
+      ctx.log.warn('enable banking connection not superseded', { connectionId: connection.id, replaced: old, message: supersedeError.message })
     } else {
       const moved = (handover as { superseded?: Array<{ id: string }> } | null)?.superseded ?? []
       for (const sibling of moved) {
@@ -1207,6 +1225,11 @@ export async function selectBankFeedAccounts(
       state: 'pending',
       started_at: new Date(now).toISOString(),
       listing_only: false,
+      // finalize_open_payments_consent keeps only these top-level facts for
+      // the selection step, as from the first consent: nested under
+      // `selection` alone, the switch's row and the history window were lost.
+      replace_connection_id: row.consent_attempt?.selection?.replace_connection_id ?? null,
+      extended_history_days: row.consent_attempt?.selection?.extended_history_days ?? null,
       listing_consent_id: row.session_id,
       return_to: ret?.surface ?? null,
       selection: {
