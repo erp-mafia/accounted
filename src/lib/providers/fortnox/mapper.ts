@@ -427,9 +427,16 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
     balance: amount(balance, currency),
   };
 
+  // Fortnox numbers every supplier invoice itself (`GivenNumber`, the
+  // löpnummer): it is the record id, and the importer keeps it in
+  // fortnox_number. The number the supplier printed is `InvoiceNumber`
+  // (crm#1157); an invoice without one gets none, never the löpnummer.
+  const supplierNumber = raw['InvoiceNumber'];
+
   return {
     id: String(raw['GivenNumber'] ?? ''),
-    invoiceNumber: String(raw['GivenNumber'] ?? ''),
+    invoiceNumber: typeof supplierNumber === 'number' ? String(supplierNumber)
+      : typeof supplierNumber === 'string' ? supplierNumber.trim() : '',
     issueDate: (raw['InvoiceDate'] as string) ?? '',
     dueDate: raw['DueDate'] as string | undefined,
     invoiceTypeCode,

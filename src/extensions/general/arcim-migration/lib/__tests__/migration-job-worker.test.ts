@@ -842,6 +842,19 @@ describe('pairMigratedCreditNotes', () => {
       expect(db.reads.some(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'supplier_invoice_number'))).toBe(false)
     })
 
+    it('still pairs a Fortnox credit note on the löpnummer once the supplier\'s own number is the invoice number (crm#1157 step 2)', async () => {
+      const fortnoxJob = { ...job, provider: 'fortnox' } as ProviderMigrationJob
+      const dto = mapFortnoxToSupplierInvoice({ GivenNumber: '312', InvoiceNumber: 'K-5531', SupplierNumber: '7', SupplierName: 'Leverantör AB',
+        InvoiceDate: '2026-03-10', DueDate: '2026-04-09', Currency: 'SEK', Credit: true, CreditReference: 311, Total: -1250, Balance: 0 })
+      expect(dto.invoiceNumber).toBe('K-5531')
+      const db = pairingDb({ chunkTarget: null, supplierIdsByFortnoxNumber: [{ id: 'orig-row' }], supplierRows: { 'scn-row': credit, 'orig-row': original } })
+      await pairMigratedCreditNotes(db.supabase, fortnoxJob, [supplierChunk({ receipt: { link: { kind: 'supplier', sourceVoucher: null,
+        invoiceDate: dto.issueDate, totalSek: -1250, creditedInvoiceRef: dto.creditedInvoiceRef } } })], deadline())
+      expect(db.updates.map(u => u.payload)).toEqual([{ credited_invoice_id: 'orig-row' }])
+      expect(db.reads.find(r => r.table === 'supplier_invoices' && r.filters.some(f => f[1] === 'fortnox_number'))).toMatchObject({
+        filters: expect.arrayContaining([['eq', 'fortnox_number', '311']]) })
+    })
+
     it('falls back for Fortnox only to a row imported before the löpnummer column', async () => {
       const fortnoxJob = { ...job, provider: 'fortnox' } as ProviderMigrationJob
       const db = pairingDb({ chunkTarget: null, supplierIdsByNumber: [{ id: 'orig-row' }], supplierRows: { 'scn-row': credit, 'orig-row': original } })

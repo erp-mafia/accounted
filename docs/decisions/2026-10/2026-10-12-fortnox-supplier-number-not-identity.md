@@ -1,0 +1,1 @@
+[2026-10-12] /migrate never takes a Fortnox supplier invoice for a row by the supplier number alone (a hand-entered copy needs number, date and amount; a row with another löpnummer never) and applies crm#1039's reused-number rule for Fortnox only: suppliers reuse numbers (crm#1157).

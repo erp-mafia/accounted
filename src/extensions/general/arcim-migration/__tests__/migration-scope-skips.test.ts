@@ -292,6 +292,42 @@ describe('executeMigration: per-step requests (#2469)', () => {
     expect(results.supplierInvoices).toMatchObject({ total: 3, imported: 1, skipped: 2, skipReasons: { duplicate: 2 } })
   })
 
+  it('stores a Fortnox supplier number the supplier reuses on another date as the payment reference, and refuses what cannot be stored (crm#1039, crm#1157)', async () => {
+    vi.mocked(resolveConsent).mockResolvedValueOnce({
+      consent: { provider: 'fortnox' }, accessToken: 'tok', providerCompanyId: null,
+    } as unknown as Awaited<ReturnType<typeof resolveConsent>>)
+    const lev = { name: 'Leverantör AB', identifications: [{ schemeId: 'SE:ORGNR', id: '5566778899' }] }
+    const reused = (id: string, issueDate: string, ocrNumber?: string) =>
+      ({ ...supplierDto('AVT-1', issueDate, false), id, supplier: lev, ...(ocrNumber ? { ocrNumber } : {}) })
+    mListSupplier.mockResolvedValue([
+      reused('11', '2026-10-01'),
+      // The date of the invoice already stored with the number.
+      reused('12', '2026-09-01'),
+      // Another date, but its own payment reference already: both cannot be kept.
+      reused('13', '2026-11-01', '4455667788'),
+      // The date of the one this run stores as a payment reference.
+      reused('14', '2026-10-01'),
+    ])
+    ;(fetchAllRows as Mock)
+      .mockResolvedValueOnce([{ id: 'supp-existing', org_number: '5566778899', name: 'Leverantör AB' }])
+      .mockResolvedValueOnce([
+        { supplier_invoice_number: 'AVT-1', supplier_id: 'supp-existing', invoice_date: '2026-09-01', total: 2500,
+          fortnox_number: '10', status: 'registered', payment_reference: null },
+      ])
+      .mockResolvedValue([])
+
+    const results = await executeMigration(baseOptions({ importSupplierInvoices: true }))
+
+    expect(hydratedNumbers(mHydrateSupplier)).toEqual(['AVT-1', 'AVT-1', 'AVT-1', 'AVT-1'])
+    const rows = (insertWithPerRowFallback as Mock).mock.calls.find((c) => c[1] === 'supplier_invoices')![2]
+    expect(rows).toHaveLength(1)
+    expect(rows[0]).toMatchObject({
+      supplier_id: 'supp-existing', supplier_invoice_number: null, payment_reference: 'AVT-1', fortnox_number: '11', arrival_number: 1,
+    })
+    expect(results.supplierInvoices).toMatchObject({ total: 4, imported: 1, skipped: 3, skipReasons: { failed: 3 } })
+    expect(results.supplierInvoices?.errorSample).toContain('samma nummer och datum')
+  })
+
   it('stores no löpnummer for another provider', async () => {
     mListSupplier.mockResolvedValue([supplierDto('L-9', '2026-03-01', false)])
 
