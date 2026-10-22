@@ -583,3 +583,38 @@ describe('planOneClick: construction work with no VAT on it', () => {
     expect(plan.vat).toEqual({ kind: 'input', amount: 2000, rates: [0.25] })
   })
 })
+
+describe('oneClickOutcome', () => {
+  it('says the Wispr plan books in one click, in codes only', async () => {
+    const { oneClickOutcome } = await import('../inkorg-one-click')
+    const wispr = input({ kind: 'supplier_invoice', reading: WISPR, paidByReceipt: true, receiptDate: '2026-10-13' })
+    const outcome = oneClickOutcome(wispr, planOneClick(wispr), { category: false, seller: false })
+    expect(outcome).toEqual({
+      oneClick: true,
+      form: 'direct',
+      ask: null,
+      reason: 'paid_by_receipt',
+      vat: 'reverse_charge',
+      category: 'expense.software.saas',
+      region: 'non_eu',
+      bank: 'proposal',
+      kind: 'supplier_invoice',
+      answered: { category: false, seller: false },
+    })
+    // Nothing a person wrote, no amount and no name, reaches the log.
+    const text = JSON.stringify(outcome)
+    expect(text).not.toMatch(/Wispr|150|Market Street/)
+  })
+
+  it('names why a plan does not book', async () => {
+    const { oneClickOutcome } = await import('../inkorg-one-click')
+    const noCategory = input({ category: null })
+    expect(oneClickOutcome(noCategory, planOneClick(noCategory), { category: false, seller: false })).toMatchObject({
+      oneClick: false,
+      ask: 'category',
+      reason: 'no_category',
+    })
+    const noBank = input({ bank: null })
+    expect(oneClickOutcome(noBank, planOneClick(noBank), { category: false, seller: false })).toMatchObject({ oneClick: false, bank: 'none' })
+  })
+})

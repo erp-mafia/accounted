@@ -44,7 +44,7 @@ import { bookInboxItemDirectly } from './inbox-book-direct'
 import { convertInboxItemToSupplierInvoice } from './inbox-convert'
 import { refuseWhenPairBooked } from './inbox-pair-guard'
 import { registerAndSettleInboxItem } from './inbox-register-and-settle'
-import { planOneClick, type OneClickForm, type OneClickPlan, type OneClickSupplierCreate } from './inkorg-one-click'
+import { oneClickOutcome, planOneClick, type OneClickForm, type OneClickInput, type OneClickPlan, type OneClickSupplierCreate } from './inkorg-one-click'
 import { readOneClickInput, type OneClickItem } from './inkorg-one-click-read'
 import { computePreviewToken } from './preview-token'
 import { sessionFailureResponse } from './session'
@@ -89,7 +89,7 @@ export interface InkorgBooked {
 export type InkorgBookOutcome = { ok: true; data: InkorgBooked } | { ok: false; response: NextResponse }
 
 type Planned =
-  | { ok: true; plan: OneClickPlan; token: string; item: OneClickItem; accountingCash: boolean }
+  | { ok: true; plan: OneClickPlan; token: string; item: OneClickItem; accountingCash: boolean; input: OneClickInput }
   | { ok: false; code: string; details?: Record<string, unknown> }
 
 async function planItem(ctx: OperationContext, itemId: string, answers: InkorgBookingAnswers): Promise<Planned> {
@@ -115,7 +115,7 @@ async function planItem(ctx: OperationContext, itemId: string, answers: InkorgBo
     input: { inbox_item_id: itemId, purchase_category: answers.purchase_category ?? null, seller_country: answers.seller_country ?? null },
     preview: plan as unknown as Record<string, unknown>,
   })
-  return { ok: true, plan, token, item: read.item, accountingCash: read.input.company.cashMethod }
+  return { ok: true, plan, token, item: read.item, accountingCash: read.input.company.cashMethod, input: read.input }
 }
 
 /** GET .../booking-plan: the plan and its token. */
@@ -126,6 +126,11 @@ export async function readInkorgBookingPlan(
 ): Promise<OperationOutcome<InkorgBookingPlan>> {
   const planned = await planItem(ctx, itemId, answers)
   if (!planned.ok) return { ok: false, code: planned.code, details: planned.details }
+  // Codes only (oneClickOutcome): what the one click would do for this item, and why not when it would not.
+  ctx.log.info('one-click plan', {
+    itemId,
+    ...oneClickOutcome(planned.input, planned.plan, { category: !!answers.purchase_category, seller: !!answers.seller_country }),
+  })
   return { ok: true, data: { plan: planned.plan, preview_token: planned.token } }
 }
 
