@@ -6,6 +6,7 @@ import {
   inferVatTreatment,
   vatRateFromAi,
   rateToPctString,
+  reverseChargeKindMissing,
   type SupplierInvoiceFormData,
   type SupplierInvoiceLineItem,
   type BuildSupplierInvoicePayloadOptions,
@@ -258,6 +259,18 @@ describe('buildSupplierInvoicePayload', () => {
     expect(
       buildSupplierInvoicePayload({ ...goods, reverse_charge: false }, makeOpts({ euSupplier: true })),
     ).not.toHaveProperty('reverse_charge_kind')
+    // Unanswered is never sent as an answer.
+    expect(
+      buildSupplierInvoicePayload({ ...goods, reverse_charge_kind: '' }, makeOpts({ euSupplier: true })),
+    ).not.toHaveProperty('reverse_charge_kind')
+  })
+
+  it('an EU supplier under reverse charge waits for goods or services; nothing else does (crm#1323)', () => {
+    expect(reverseChargeKindMissing({ reverse_charge: true, reverse_charge_kind: '' }, true)).toBe(true)
+    expect(reverseChargeKindMissing({ reverse_charge: true, reverse_charge_kind: 'eu_goods' }, true)).toBe(false)
+    expect(reverseChargeKindMissing({ reverse_charge: true, reverse_charge_kind: 'eu_services' }, true)).toBe(false)
+    expect(reverseChargeKindMissing({ reverse_charge: true, reverse_charge_kind: '' }, false)).toBe(false)
+    expect(reverseChargeKindMissing({ reverse_charge: false, reverse_charge_kind: '' }, true)).toBe(false)
   })
 
   it('non-RC: reverse_charge_rate is stripped to undefined', () => {

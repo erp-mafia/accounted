@@ -45,8 +45,11 @@ export interface SupplierInvoiceFormData {
   currency: string
   exchange_rate: string
   reverse_charge: boolean
-  /** Goods or services, asked only under reverse charge from an EU supplier. */
-  reverse_charge_kind: SupplierInvoiceReverseChargeKind
+  /**
+   * Goods or services, asked only under reverse charge from an EU supplier.
+   * Empty until answered: there is no silent default (crm#1323).
+   */
+  reverse_charge_kind: SupplierInvoiceReverseChargeKind | ''
   payment_reference: string
   notes: string
   /** Vem betalade? Decides the endpoint, the primary action and the credit account. */
@@ -56,6 +59,18 @@ export interface SupplierInvoiceFormData {
   /** employees.id for payer 'employee'. */
   employee_id: string
   items: SupplierInvoiceLineItem[]
+}
+
+/**
+ * An EU supplier's reverse-charge invoice still waits for goods or services.
+ * One predicate for the editor's next-step line and its submit check, so
+ * the two always agree.
+ */
+export function reverseChargeKindMissing(
+  data: Pick<SupplierInvoiceFormData, 'reverse_charge' | 'reverse_charge_kind'>,
+  euSupplier: boolean,
+): boolean {
+  return data.reverse_charge && euSupplier && !data.reverse_charge_kind
 }
 
 export function inferVatTreatment(
@@ -132,7 +147,7 @@ export function buildSupplierInvoicePayload(
     reverse_charge: data.reverse_charge,
     // Goods (ruta 20) or services (ruta 21): only an EU supplier's reverse
     // charge has the choice, and the API refuses it anywhere else.
-    ...(data.reverse_charge && euSupplier ? { reverse_charge_kind: data.reverse_charge_kind } : {}),
+    ...(data.reverse_charge && euSupplier && data.reverse_charge_kind ? { reverse_charge_kind: data.reverse_charge_kind } : {}),
     payment_reference: data.payment_reference || undefined,
     notes: data.notes || undefined,
     paid_with_private_funds: paidByPerson,

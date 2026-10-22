@@ -6,7 +6,12 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { findIllegalVatRateRow } from '@/lib/vat/supplier-invoice-line-checks'
-import { rateToPctString, supplierInvoiceCreateUrl, type SupplierInvoiceFormData } from '@/lib/supplier-invoices/form-payload'
+import {
+  rateToPctString,
+  reverseChargeKindMissing,
+  supplierInvoiceCreateUrl,
+  type SupplierInvoiceFormData,
+} from '@/lib/supplier-invoices/form-payload'
 import { isPersonPayer } from '@/lib/expenses/payer'
 import type { InvoiceExtractionResult } from '@/types'
 
@@ -74,14 +79,16 @@ interface UseSupplierInvoiceSubmitParams {
    * invoice is registered and settled against that row in one request.
    */
   settleTransactionId?: string | null
+  /** The supplier is in another EU country: its reverse charge must say goods or services. */
+  euSupplier: boolean
   /**
    * Focus router for the always-enabled primary: called instead of a toast
-   * when a required field is missing (supplier, invoice number, row account),
-   * in the same priority order as the next-step line. Optional so the hook
-   * can ship before the shell rebuild wires it.
+   * when a required field is missing (supplier, invoice number, row account,
+   * goods or services), in the same priority order as the next-step line.
+   * Optional so the hook can ship before the shell rebuild wires it.
    */
   onMissingField?: (
-    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account',
+    field: 'supplier' | 'invoice_number' | 'rows' | 'row_account' | 'reverse_charge_kind',
     rowIndex?: number,
   ) => void
 }
@@ -112,6 +119,7 @@ export function useSupplierInvoiceSubmit({
   onExpenseRegistered,
   onMissingField,
   settleTransactionId = null,
+  euSupplier,
 }: UseSupplierInvoiceSubmitParams) {
   const [isSubmitting, setIsSubmitting] = useState(false)
   const [showReview, setShowReview] = useState(false)
@@ -273,6 +281,13 @@ export function useSupplierInvoiceSubmit({
           variant: 'destructive',
         })
       }
+      return
+    }
+    // Goods (ruta 20) or services (ruta 21) has no default: a silent
+    // "services" booked EU goods in the wrong box (crm#1323).
+    if (reverseChargeKindMissing(data, euSupplier)) {
+      if (onMissingField) onMissingField('reverse_charge_kind')
+      else toast({ title: t('warning_title'), description: t('reverse_charge_kind_missing'), variant: 'destructive' })
       return
     }
     // Only 25/12/6/0 % are legal Swedish VAT rates (ML 2023:200). The free-text
