@@ -32,8 +32,8 @@ export default function DPAPage() {
           </li>
         </ul>
         <p>
-          Avtalet är en bilaga till användarvillkoren och gäller när Kunden har godkänt det i
-          Tjänsten; Tjänsten sparar vem som godkände vilken version och när. Använder Kunden Tjänsten för ett annat företags räkning, till exempel som
+          Avtalet är en bilaga till användarvillkoren och gäller när Kunden har godkänt dem.
+          Använder Kunden Tjänsten för ett annat företags räkning, till exempel som
           redovisningsbyrå för sina klienter, ansvarar Kunden för att ha rätt att ge instruktionerna
           i detta avtal för det företaget.
         </p>

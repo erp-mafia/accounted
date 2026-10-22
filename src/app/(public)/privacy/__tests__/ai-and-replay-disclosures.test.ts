@@ -288,8 +288,11 @@ describe('consent and data choices match the code', () => {
     expect(flat(DPA)).toContain('om inte Kunden har slagit på Bidra med innehåll i Tjänsten')
   })
 
-  it('records who accepted which version, as the DPA says', () => {
+  it('claims recorded acceptances only while the acceptance prompt is on', () => {
     expect(MIGRATION).toContain('CREATE TABLE public.legal_acceptances')
-    expect(flat(DPA)).toContain('Tjänsten sparar vem som godkände vilken version och när')
+    const gate = code(read('components/legal/LegalAcceptanceGate.tsx'))
+    const promptOn = gate.includes('PROMPT_ENABLED = true')
+    expect(gate).toMatch(/PROMPT_ENABLED = (true|false)/)
+    expect(flat(DPA).includes('Tjänsten sparar vem som godkände vilken version och när')).toBe(promptOn)
   })
 })
