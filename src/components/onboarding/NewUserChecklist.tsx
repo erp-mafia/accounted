@@ -12,7 +12,7 @@ import JourneyOrb from '@/components/onboarding/journey/JourneyOrb'
 import { cn } from '@/lib/utils'
 import { useErrorToast } from '@/lib/hooks/use-error-toast'
 import { useFormat } from '@/lib/hooks/use-format'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { isAnalyticsActive } from '@/lib/analytics/client'
 import {
   canRecordInitialSetup,
   checklistNumbers,
@@ -70,7 +70,7 @@ interface NewUserChecklistProps {
  * initial_setup is seeded completed+dismissed), so no sandbox gate needed.
  */
 function captureSetup(event: string, properties?: Record<string, unknown>) {
-  if (!isAnalyticsEnabled()) return
+  if (!isAnalyticsActive()) return
   try {
     posthog.capture(event, properties)
   } catch {

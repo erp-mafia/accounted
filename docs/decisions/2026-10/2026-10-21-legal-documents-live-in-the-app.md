@@ -1,0 +1,1 @@
+[2026-10-21] The app is the one home of the legal documents (/terms, /privacy, /dpa, /subprocessors, from lib/legal); accounted.se redirects there: claims sit next to the code they describe and are pinned by tests, which the website copy never was.

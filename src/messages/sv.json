@@ -467,6 +467,8 @@
     "keywords_invoicing": "Fakturanummer, Prefix, Betalningsvillkor, Vår referens, Fakturatyper, Offert, Proforma, Återkommande, Självfaktura, Bankkonton, Bankgiro, Swish, IBAN, Betallänk, PDF, Utskrift, Swedbank, SignerID, Betalfil",
     "keywords_sending": "Avsändare, Egen domän, Svarsadress, Kopia, E-posttexter, Påminnelser, Påminnelsetexter",
     "keywords_connections": "Bank, PSD2, Skatteverket, Ombud, Peppol, E-faktura, WhatsApp, Gmail, Kvitton i mejlen, Inkorgsadress, Vidarebefordra, Stripe, Shopify, WooCommerce, Zettle",
+    "data_sharing": "Datadelning och AI",
+    "keywords_data_sharing": "AI, Stäng av AI, Dela, Anonym statistik, Mönster, Bidra med innehåll, Samtycke, Integritet, GDPR",
     "keywords_api": "MCP, Claude, ChatGPT, Grok, API-nycklar, OAuth",
     "attest": "Attest",
     "keywords_attest": "Attestera, Attestant, Attestflöde, Attestregler, Beloppsgräns, Fyra ögon, Godkänn leverantörsfaktura, Leverantörsfakturor",
@@ -681,7 +683,11 @@
     "install_app_hint_generic": "Installera {appName} som app via installationsikonen i webbläsarens adressfält (Chrome och Edge).",
     "legal_title": "Sekretess och avtal",
     "legal_privacy": "Integritetspolicy",
-    "legal_dpa": "Personuppgiftsbiträdesavtal (DPA)"
+    "legal_dpa": "Personuppgiftsbiträdesavtal (DPA)",
+    "legal_terms": "Användarvillkor",
+    "analytics_consent_label": "Produktanalys",
+    "analytics_consent_help": "Händelser, enkäter och sessionsinspelningar där allt du skriver och allt ditt innehåll är maskerat. Hjälper oss se var appen krånglar. Sidan laddas om när du ändrar valet.",
+    "analytics_consent_failed": "Det gick inte att spara valet"
   },
   "help": {
     "title": "Hjälp & Ordlista",
@@ -1587,6 +1593,8 @@
     "terms_prefix": "Genom att skapa konto godkänner du våra",
     "terms_link": "villkor",
     "terms_and": "och",
+    "dpa_link": "personuppgiftsbiträdesavtal",
+    "privacy_prefix": "Läs också vår",
     "privacy_link": "integritetspolicy",
     "bankid_failed_title": "BankID misslyckades",
     "bankid_cancel_failed": "Kunde inte avbryta BankID-identifieringen. Försök igen.",
@@ -16020,5 +16028,43 @@
         "description": "Kassasystem och webbshoppar, försäljningen bokförd per dag."
       }
     }
+  },
+  "legal_acceptance": {
+    "title": "Villkor och dina val",
+    "intro": "Läs igenom och godkänn användarvillkoren och personuppgiftsbiträdesavtalet för att fortsätta. Integritetspolicyn beskriver hur vi behandlar dina uppgifter.",
+    "doc_terms": "Användarvillkor",
+    "doc_dpa": "Personuppgiftsbiträdesavtal",
+    "doc_privacy": "Integritetspolicy",
+    "doc_subprocessors": "Underbiträden",
+    "analytics_label": "Produktanalys",
+    "analytics_help": "Låt oss se hur appen används och var den krånglar: händelser, enkäter och sessionsinspelningar där allt du skriver och allt ditt innehåll är maskerat. Du kan ändra dig under Inställningar, Konto.",
+    "contribution_label": "Bidra med innehåll",
+    "contribution_help": "Låt oss använda verifikat och underlag från {company} för att utvärdera och förbättra förslagen. Personnummer tas bort först, allt stannar inom EU och inget lämnas ut. Du kan ändra dig under Inställningar, Datadelning och AI.",
+    "pooling_note": "Enligt villkoren bidrar {company} med anonyma mönster, till exempel vilket konto en leverantör brukar bokföras på, så att förslagen blir bättre för alla. En ägare eller administratör kan stänga av det under Inställningar, Datadelning och AI.",
+    "export_note": "Vill du bara ta ut din bokföring?",
+    "export_link": "Exportera arkivet",
+    "accept_documents": "Godkänn villkoren",
+    "accept_all": "Godkänn allt",
+    "failed": "Det gick inte att spara. Försök igen.",
+    "stale": "Villkoren har just uppdaterats. Läs den nya versionen."
+  },
+  "settings_data_sharing": {
+    "title": "Datadelning och AI",
+    "intro": "Företagets val om AI och om vad Accounted får göra med företagets uppgifter. Varje ändring sparas med vem som gjorde den och när, och syns i behandlingshistoriken.",
+    "group_label": "Företagets val",
+    "read_only_help": "Bara ägare och administratörer kan ändra de här valen.",
+    "ai_label": "AI-funktioner",
+    "ai_help": "Automatisk kontering, läsning av kvitton och fakturor, och assistenten. Avstängt skickas inget av innehållet i {company} till AI-tjänsten. En egen agent som ni kopplat via API eller MCP påverkas inte.",
+    "pooling_label": "Dela anonyma mönster",
+    "pooling_help": "Anonyma mönster från {company}, till exempel vilket konto en leverantör brukar bokföras på, gör förslagen bättre för alla. Inga belopp och inga personer delas.",
+    "contribution_label": "Bidra med innehåll",
+    "contribution_help": "Låt oss använda verifikat och underlag från {company} för att utvärdera och förbättra förslagen. Personnummer tas bort först, allt stannar inom EU och inget lämnas ut.",
+    "ai_on_toast": "AI-funktionerna är påslagna",
+    "ai_off_toast": "AI-funktionerna är avstängda",
+    "pooling_on_toast": "Företaget delar anonyma mönster",
+    "pooling_off_toast": "Företaget delar inte längre anonyma mönster",
+    "contribution_on_toast": "Tack, företaget bidrar med innehåll",
+    "contribution_off_toast": "Företaget bidrar inte längre med innehåll",
+    "save_failed": "Det gick inte att spara valet"
   }
 }

@@ -5,7 +5,7 @@ import posthog from 'posthog-js'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/client'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { isAnalyticsActive } from '@/lib/analytics/client'
 import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import {
   authCookieNames,
@@ -56,7 +56,7 @@ export function BrowserSessionGuard() {
       })
       if (cancelled || (await probeBrowserSession()) !== 'missing' || cancelled) return
 
-      if (isAnalyticsEnabled()) {
+      if (isAnalyticsActive()) {
         try {
           // Counts only, never cookie values.
           posthog.capture('browser_session_missing', {

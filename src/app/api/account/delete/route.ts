@@ -6,6 +6,7 @@ import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { getMailSearchService, type PreparedGrantRevocation } from '@/lib/mail-search/service'
+import { deletePostHogPerson } from '@/lib/analytics/delete-person'
 
 const log = createLogger('api/account/delete')
 
@@ -108,6 +109,11 @@ export async function POST(request: Request) {
       log.error('mailbox grants not revoked after erasure', { userId: user.id, err })
     }
   }
+
+  // The person's analytics at PostHog (profile, events, session recordings).
+  // Best-effort and never blocking: it logs and moves on when PostHog is not
+  // configured for deletion or does not answer.
+  await deletePostHogPerson(user.id)
 
   // Ban the tombstone row ~100 years. The RPC has already removed every way
   // to sign in (email, identities, sessions, refresh tokens, MFA factors), so

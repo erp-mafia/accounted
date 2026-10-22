@@ -24,6 +24,7 @@ import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { BOOKS_GATE_COOKIE, decideBooksGate } from '@/lib/onboarding/books-gate'
 import { isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
 import { normalizeHost, resolveBrandByHost } from '@/lib/branding/resolve'
+import { LEGAL_PATHS } from '@/lib/legal/documents'
 import {
   apiRequestSkipsSessionTimeout,
   createSessionTimeoutState,
@@ -384,6 +385,14 @@ async function updateSessionInner(
     pathname === '/docs' ||
     pathname.startsWith('/docs/')
   ) {
+    return supabaseResponse
+  }
+
+  // The legal documents (terms, privacy policy, DPA, sub-processor list) are
+  // read before an account exists: the register page links them, and a
+  // prospect's lawyer opens them cold. Bouncing them to /login, as every
+  // unlisted path is, made the published privacy policy unreachable.
+  if (LEGAL_PATHS.includes(pathname)) {
     return supabaseResponse
   }
 

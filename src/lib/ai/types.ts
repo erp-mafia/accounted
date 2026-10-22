@@ -156,6 +156,8 @@ export interface ExtractFromDocumentRequest {
 export type ExtractionSkipReason =
   | 'ai_unconfigured'
   | 'ai_no_vision'
+  /** The company switched AI off (lib/ai/meter.ts refuses before the model is called). */
+  | 'ai_switched_off'
   | 'pdf_rasterizer_missing'
   | 'pdf_rasterize_failed'
 

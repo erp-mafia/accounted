@@ -1,10 +1,11 @@
 # Data use clause for the customer agreement (draft for counsel)
 
 Status: DRAFT. Not legal advice, not in force, and not yet in any signed
-agreement. Accounted has no terms-of-service document in this repo; the only
-customer-facing legal surfaces are `/privacy` and `/dpa`. The clause below has
-to land in a signed customer agreement, and `/dpa` has to be amended to match,
-before anything in it takes effect.
+agreement. The terms now live in this repo (`src/app/(public)/terms`, the
+2026-03-05 text moved from accounted.se). Since 2026-10-21 `/dpa` point 5
+covers the counterparty directory and the anonymised statistics as
+instructions; the broader grant below still has to land in a new terms
+version, accepted in the app, before anything in it takes effect.
 
 ## Why this exists
 

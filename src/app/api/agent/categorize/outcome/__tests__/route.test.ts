@@ -101,4 +101,38 @@ describe('POST /api/agent/categorize/outcome', () => {
     await POST(createMockRequest('/x', { method: 'POST', body: body({ proposed_account: null, booked_account: '5410' }) }))
     expect(inserts[0].was_correct).toBe(false)
   })
+
+  describe('pooling choice (Datadelning och AI)', () => {
+    const companyId = '11111111-1111-4111-8111-111111111111'
+    // company_capability_config answers which of the asked companies opted out.
+    function withPooling(optedOut: boolean) {
+      const base = makeSupabase()
+      return {
+        from(table: string) {
+          if (table !== 'company_capability_config') return base.from(table)
+          const result = { data: optedOut ? [{ company_id: companyId }] : [], error: null }
+          const chain = {
+            select: () => chain,
+            eq: () => chain,
+            in: () => chain,
+            then: (resolve: (v: unknown) => void) => resolve(result),
+          }
+          return chain
+        },
+      }
+    }
+
+    it('adds no sample for a company that opted out of pooling', async () => {
+      requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: withPooling(true), error: null })
+      const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ company_id: companyId, proposed_account: '5410' }) }))
+      expect(res.status).toBe(204)
+      expect(inserts).toHaveLength(0)
+    })
+
+    it('adds the sample for a company that pools (the default)', async () => {
+      requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase: withPooling(false), error: null })
+      await POST(createMockRequest('/x', { method: 'POST', body: body({ company_id: companyId, proposed_account: '5410' }) }))
+      expect(inserts).toHaveLength(1)
+    })
+  })
 })

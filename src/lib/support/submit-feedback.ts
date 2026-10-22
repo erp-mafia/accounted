@@ -1,5 +1,5 @@
 import posthog from 'posthog-js'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { isAnalyticsActive } from '@/lib/analytics/client'
 
 export interface SubmitFeedbackInput {
   message: string
@@ -106,7 +106,7 @@ function noteInAnalytics(
   { subject }: SubmitFeedbackInput,
   outcomes: { email: 'ok' | 'failed' | 'skipped'; ticket: ChannelOutcome | 'skipped' }
 ): void {
-  if (!isAnalyticsEnabled()) return
+  if (!isAnalyticsActive()) return
   try {
     const delivered = outcomes.ticket === 'ok' || outcomes.email === 'ok'
     posthog.capture('support_feedback_submitted', {
@@ -136,7 +136,7 @@ function noteInAnalytics(
  * disabled, no analytics, older SDK) the user still gets the email path.
  */
 async function submitViaTicket({ message, subject, newTicket }: SubmitFeedbackInput): Promise<ChannelOutcome> {
-  if (!isAnalyticsEnabled()) return 'unavailable'
+  if (!isAnalyticsActive()) return 'unavailable'
   try {
     const conversations = posthog.conversations
     if (!conversations?.isAvailable?.()) return 'unavailable'

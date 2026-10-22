@@ -921,11 +921,10 @@ export function LoginClient({
 
         <p className="mt-3 text-center text-xs text-muted-foreground/80 leading-relaxed">
           {tAuth('terms_prefix')}{' '}
-          {/* The platform's terms live on the marketing site; the privacy
-              policy is the in-app /privacy page (host-relative, so it works
-              on branded byrå domains too). New tab: don't lose login state. */}
+          {/* The in-app legal pages (host-relative, so they work on branded
+              byrå domains too). New tab: don't lose login state. */}
           <a
-            href="https://accounted.se/terms"
+            href="/terms"
             target="_blank"
             rel="noopener noreferrer"
             className="underline underline-offset-2 hover:text-foreground transition-colors"

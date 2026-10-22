@@ -467,6 +467,8 @@
     "keywords_invoicing": "Invoice number, Prefix, Payment terms, Our reference, Invoice types, Quote, Pro forma, Recurring, Self-billing, Bank accounts, Bankgiro, Swish, IBAN, Payment link, PDF, Print, Swedbank, SignerID, Payment file",
     "keywords_sending": "Sender, Own domain, Reply-to, Copy, Email texts, Reminders, Reminder texts",
     "keywords_connections": "Bank, PSD2, Skatteverket, Agent, Peppol, E-invoice, WhatsApp, Gmail, Receipts in email, Inbox address, Forwarding, Stripe, Shopify, WooCommerce, Zettle",
+    "data_sharing": "Data sharing and AI",
+    "keywords_data_sharing": "AI, Switch off AI, Share, Anonymous statistics, Patterns, Contribute content, Consent, Privacy, GDPR",
     "keywords_api": "MCP, Claude, ChatGPT, Grok, API keys, OAuth",
     "attest": "Attest",
     "keywords_attest": "Attest, Attester, Approval, Approval policy, Threshold, Four eyes, Approve supplier invoice, Supplier invoices",
@@ -681,7 +683,11 @@
     "install_app_hint_generic": "Install {appName} as an app via the install icon in your browser's address bar (Chrome and Edge).",
     "legal_title": "Privacy & agreements",
     "legal_privacy": "Privacy policy",
-    "legal_dpa": "Data Processing Agreement (DPA)"
+    "legal_dpa": "Data Processing Agreement (DPA)",
+    "legal_terms": "Terms of service",
+    "analytics_consent_label": "Product analytics",
+    "analytics_consent_help": "Events, surveys and session recordings where everything you type and all your content is masked. Helps us see where the app gets in the way. The page reloads when you change the choice.",
+    "analytics_consent_failed": "Could not save the choice"
   },
   "help": {
     "title": "Help & Glossary",
@@ -1587,6 +1593,8 @@
     "terms_prefix": "By creating an account you agree to our",
     "terms_link": "terms",
     "terms_and": "and",
+    "dpa_link": "data processing agreement",
+    "privacy_prefix": "Also read our",
     "privacy_link": "privacy policy",
     "bankid_failed_title": "BankID failed",
     "bankid_cancel_failed": "Could not cancel the BankID identification. Please try again.",
@@ -16020,5 +16028,43 @@
         "description": "Tills and webshops, sales booked per day."
       }
     }
+  },
+  "legal_acceptance": {
+    "title": "Terms and your choices",
+    "intro": "Read and accept the terms of service and the data processing agreement to continue. The privacy policy describes how we process your data.",
+    "doc_terms": "Terms of service",
+    "doc_dpa": "Data processing agreement",
+    "doc_privacy": "Privacy policy",
+    "doc_subprocessors": "Sub-processors",
+    "analytics_label": "Product analytics",
+    "analytics_help": "Let us see how the app is used and where it gets in the way: events, surveys and session recordings where everything you type and all your content is masked. You can change your mind under Settings, Account.",
+    "contribution_label": "Contribute content",
+    "contribution_help": "Let us use vouchers and documents from {company} to evaluate and improve the suggestions. Personal identity numbers are removed first, everything stays in the EU and nothing is passed on. You can change your mind under Settings, Data sharing and AI.",
+    "pooling_note": "Under the terms, {company} contributes anonymous patterns, such as which account a supplier is usually booked to, so the suggestions get better for everyone. An owner or admin can switch this off under Settings, Data sharing and AI.",
+    "export_note": "Only want to take your books out?",
+    "export_link": "Export the archive",
+    "accept_documents": "Accept the terms",
+    "accept_all": "Accept all",
+    "failed": "Could not save. Please try again.",
+    "stale": "The terms were just updated. Read the new version."
+  },
+  "settings_data_sharing": {
+    "title": "Data sharing and AI",
+    "intro": "The company's choices about AI and about what Accounted may do with the company's data. Every change is saved with who made it and when, and shows in the processing history.",
+    "group_label": "The company's choices",
+    "read_only_help": "Only owners and admins can change these choices.",
+    "ai_label": "AI features",
+    "ai_help": "Automatic categorisation, reading receipts and invoices, and the assistant. Switched off, none of the content in {company} is sent to the AI service. Your own agent connected through the API or MCP is not affected.",
+    "pooling_label": "Share anonymous patterns",
+    "pooling_help": "Anonymous patterns from {company}, such as which account a supplier is usually booked to, make the suggestions better for everyone. No amounts and no people are shared.",
+    "contribution_label": "Contribute content",
+    "contribution_help": "Let us use vouchers and documents from {company} to evaluate and improve the suggestions. Personal identity numbers are removed first, everything stays in the EU and nothing is passed on.",
+    "ai_on_toast": "AI features are on",
+    "ai_off_toast": "AI features are off",
+    "pooling_on_toast": "The company shares anonymous patterns",
+    "pooling_off_toast": "The company no longer shares anonymous patterns",
+    "contribution_on_toast": "Thanks, the company contributes content",
+    "contribution_off_toast": "The company no longer contributes content",
+    "save_failed": "Could not save the choice"
   }
 }

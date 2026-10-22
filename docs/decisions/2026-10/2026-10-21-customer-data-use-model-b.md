@@ -1,0 +1,1 @@
+[2026-10-21] Customer data use, model B: pooled anonymous patterns via the terms and DPA (on, opt-out per company); real content for evaluation or training only by explicit per-company opt-in: holds up in byrå sales and in a public repo, matches IMY's 2025 sandbox view on training.

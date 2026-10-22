@@ -111,6 +111,7 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   grants: null,
   import: null,
   kpi: null,
+  legal: null,
   log: null,
   'mcp-oauth': null,
   notices: null,

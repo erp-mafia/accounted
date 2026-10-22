@@ -1249,6 +1249,8 @@ function serviceAccountAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEve
 function packageChoiceAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
   if (row.action !== 'INSERT' && row.action !== 'UPDATE') return null
   const key = str(row.new_state?.capability_key)
+  const dataChoice = key ? dataChoiceAuditEvent(row, key) : null
+  if (dataChoice) return dataChoice
   const packageId = key ? packageForConfigKey(key) : null
   if (!packageId) return null
   const enabled = row.new_state?.enabled === true
@@ -1261,6 +1263,33 @@ function packageChoiceAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEven
     event: enabled ? 'Paket påslaget' : 'Paket avstängt',
     object: getPackage(packageId).nameSv,
     details,
+  })
+}
+
+const DATA_CHOICE_OBJECTS: Record<string, string> = {
+  ai: 'AI-bearbetning',
+  'data:pooling': 'Anonyma mönster delas',
+  'data:contribution': 'Innehåll till utvärdering och förbättring',
+}
+
+/**
+ * A company data choice (set_company_data_choice, migration 20261021170000):
+ * AI processing on or off changes how the system handles the bookkeeping, and
+ * what the company lets us do with its data is its own instruction, so both
+ * are dated lines next to the package switches. Only rows the company itself
+ * wrote (source 'company') render: an `ai` row without a source is
+ * entitlement state, as before.
+ */
+function dataChoiceAuditEvent(row: AuditLogEntry, key: string): RawBehandlingshistorikEvent | null {
+  const object = DATA_CHOICE_OBJECTS[key]
+  if (!object || str(row.new_state?.source) !== 'company') return null
+  const enabled = row.new_state?.enabled === true
+  return auditEvent(row, {
+    category: 'installningar',
+    code: enabled ? 'data_choice.switched_on' : 'data_choice.switched_off',
+    event: enabled ? 'Inställning påslagen' : 'Inställning avstängd',
+    object,
+    details: ['Källa: företagets eget val'],
   })
 }
 

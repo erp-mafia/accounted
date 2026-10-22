@@ -16,7 +16,7 @@ export type {
 export { getAiStatus, readAiConfig } from './config'
 export { extractJsonObject } from './json'
 export type { AiMeter } from './meter'
-export { withAiMeter } from './meter'
+export { withAiMeter, AiSwitchedOffError, isAiSwitchedOffError } from './meter'
 
 // One service per resolved configuration. Keyed on the non-secret parts of
 // the config plus credential presence, so a changed environment (tests, the

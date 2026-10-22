@@ -78,6 +78,7 @@ const PAYMENT_SIGNING_LINK = 'token route of the payment signing link (/betala/<
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
 const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
+const CONSENT = 'a person accepts the terms or gives or withdraws consent in person (terms, analytics, the company\'s data choices); an agent or API key never decides what may be done with the data'
 
 export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Auth, account, user preferences ────────────────────────────────
@@ -92,6 +93,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/user/profile': uiOnly('per-user profile (name) of the logged-in person'),
   'POST /api/user/ui-state': uiOnly(PREFS),
   'PATCH /api/user/preferences': uiOnly(PREFS),
+  'PUT /api/user/analytics-consent': uiOnly(CONSENT),
+  'POST /api/legal/accept': uiOnly(CONSENT),
+  'PATCH /api/settings/data-sharing': uiOnly(CONSENT),
   'POST /api/notices/dismiss': uiOnly(PREFS),
   'PUT /api/kpi/preferences': uiOnly(PREFS),
   'PATCH /api/onboarding/state': uiOnly('onboarding wizard UI state'),

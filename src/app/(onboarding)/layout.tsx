@@ -6,6 +6,8 @@ import { SessionTimeoutController } from '@/components/auth/SessionTimeoutContro
 import { Button } from '@/components/ui/button'
 import { AllMessagesProvider } from '@/components/providers/AllMessagesProvider'
 import { ACCOUNT_DELETION_HREF } from '@/lib/company/no-company-routes'
+import { LegalAcceptanceGate } from '@/components/legal/LegalAcceptanceGate'
+import { readAcceptanceState } from '@/lib/legal/acceptance'
 
 type MembershipCompany = { archived_at: string | null }
 
@@ -44,6 +46,10 @@ export default async function OnboardingLayout({
 
   const t = onlyArchivedCompanies ? await getTranslations('onboarding') : null
 
+  // A new signup meets the acceptance prompt here, before the first company
+  // exists (the dashboard layout shows it to everyone else).
+  const acceptance = user && !user.is_anonymous ? await readAcceptanceState(supabase, user.id) : null
+
   // The onboarding journey reads most of the catalog; the root layout hands
   // client components only the public and auth namespaces.
   return (
@@ -72,6 +78,7 @@ export default async function OnboardingLayout({
         </Button>
       )}
 
+      {acceptance && <LegalAcceptanceGate state={acceptance} pathname="/onboarding" company={null} role={null} />}
     </div>
     </AllMessagesProvider>
   )

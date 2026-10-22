@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import posthog from 'posthog-js'
-import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
+import { initAnalytics } from '@/lib/analytics/client'
 import {
   buildPersonProperties,
   buildGroupProperties,
@@ -11,17 +11,19 @@ import {
 } from '@/lib/analytics/properties'
 
 /**
- * Attaches the logged-in user and their active company to PostHog.
+ * Starts PostHog for a person who consented, and attaches them and their
+ * active company to it.
  *
  * Mounted from app/(dashboard)/layout.tsx, which is the only place that has
- * both the auth user and the resolved company in one render, and gated there
- * on `!isSandbox` so demo companies never pollute funnels or get surveyed.
+ * the auth user, the resolved company and the stored consent in one render,
+ * and gated there on `!isSandbox` so demo companies never pollute funnels or
+ * get surveyed. Without consent (`analyticsConsent` false or not given yet)
+ * this does nothing at all: PostHog is never started (lib/analytics/client.ts).
  *
  * identify() runs on every dashboard load rather than only at login, per
- * PostHog's guidance: with `persistence: 'memory'` (see
- * instrumentation-client.ts) nothing survives a hard reload, so re-identifying
- * on each load is what keeps person-level analytics correct without storing
- * anything on the device.
+ * PostHog's guidance: with `persistence: 'memory'` nothing survives a hard
+ * reload, so re-identifying on each load is what keeps person-level analytics
+ * correct without storing an identity on the device.
  *
  * A useEffect is correct here despite the general rule against it: this
  * synchronises with an external, non-React system (the PostHog SDK).
@@ -30,12 +32,15 @@ export default function AnalyticsIdentify({
   user,
   company,
   identityHash,
+  analyticsConsent,
 }: {
   user: AnalyticsUserInput
   company: AnalyticsCompanyInput
   /** Server-computed HMAC of userId (lib/analytics/identity-hash.ts). Null
    *  when POSTHOG_SECRET_API_KEY is unset, which is normal off hosted. */
   identityHash?: string | null
+  /** user_preferences.analytics_consent === true. Anything else keeps PostHog off. */
+  analyticsConsent: boolean
 }) {
   const { userId, email, fullName, role } = user
   const {
@@ -55,7 +60,8 @@ export default function AnalyticsIdentify({
   const capabilityKey = capabilities ? [...capabilities].sort().join(',') : ''
 
   useEffect(() => {
-    if (!isAnalyticsEnabled()) return
+    if (!analyticsConsent) return
+    if (!initAnalytics()) return
 
     // Verified identity first: it tells PostHog Support this browser really
     // is `userId`, so a support ticket follows the person across devices
@@ -78,6 +84,7 @@ export default function AnalyticsIdentify({
       })
     )
   }, [
+    analyticsConsent,
     userId,
     email,
     fullName,

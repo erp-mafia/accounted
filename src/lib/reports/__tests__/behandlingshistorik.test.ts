@@ -600,6 +600,36 @@ describe('auditRowToEvent: system changes', () => {
     ).toBeNull()
   })
 
+  it('company_capability_config: the company\'s own data choices are dated settings lines too', () => {
+    const aiOff = auditRowToEvent(
+      auditRow({
+        table_name: 'company_capability_config',
+        action: 'INSERT',
+        new_state: { capability_key: 'ai', enabled: false, source: 'company' },
+      }),
+    )!
+    expect(aiOff).toMatchObject({
+      category: 'installningar',
+      code: 'data_choice.switched_off',
+      event: 'Inställning avstängd',
+      object: 'AI-bearbetning',
+      details: ['Källa: företagets eget val'],
+    })
+
+    const contributionOn = auditRowToEvent(
+      auditRow({
+        table_name: 'company_capability_config',
+        action: 'INSERT',
+        new_state: { capability_key: 'data:contribution', enabled: true, source: 'company' },
+      }),
+    )!
+    expect(contributionOn).toMatchObject({ code: 'data_choice.switched_on', object: 'Innehåll till utvärdering och förbättring' })
+
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'company_capability_config', action: 'UPDATE', new_state: { capability_key: 'data:pooling', enabled: false, source: 'company' } })),
+    ).toMatchObject({ object: 'Anonyma mönster delas', event: 'Inställning avstängd' })
+  })
+
   it('a commit by a service account names the account and its sponsor', () => {
     const event = commitEventFromEntry({
       ...baseEntry,
