@@ -141,6 +141,39 @@ const widgetsRename = defineOperation({
 const POST_STAGED = v1OperationHandler(widgetsCreate)
 const POST_DIRECT = v1OperationHandler(widgetsRename)
 
+// Writes that stage as types only a person approves in the app (risk-tiers.ts
+// requiresWebApproval): always for a handover, per action for a case action.
+const handoverRun = vi.fn<(...args: unknown[]) => Promise<OperationOutcome<{ case_id: string }>>>()
+const caseActionRun = vi.fn<(...args: unknown[]) => Promise<OperationOutcome<{ case_id: string }>>>()
+const widgetsHandOver = defineOperation({
+  id: 'widgets.hand-over',
+  kind: 'write',
+  scope: 'invoices:write',
+  risk: 'high',
+  reversible: false,
+  docs: DOCS,
+  input: z.object({ invoice_id: z.string() }),
+  output: z.object({ case_id: z.string() }),
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/widgets/hand-over' },
+  mcp: { name: 'gnubok_hand_over_widget', title: 'Hand Over Widget', stage: { pendingType: 'open_collection_case', title: () => 'Lämna över' } },
+  run: (...args) => handoverRun(...args),
+})
+const widgetsCaseAction = defineOperation({
+  id: 'widgets.case-action',
+  kind: 'write',
+  scope: 'invoices:write',
+  risk: 'high',
+  reversible: false,
+  docs: DOCS,
+  input: z.object({ invoice_id: z.string(), action: z.string() }),
+  output: z.object({ case_id: z.string() }),
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/widgets/case-action' },
+  mcp: { name: 'gnubok_widget_case_action', title: 'Widget Case Action', stage: { pendingType: 'collection_case_action', title: () => 'Åtgärd' } },
+  run: (...args) => caseActionRun(...args),
+})
+const POST_HAND_OVER = v1OperationHandler(widgetsHandOver)
+const POST_CASE_ACTION = v1OperationHandler(widgetsCaseAction)
+
 // A hand-written v1 write (not an operation): never stages.
 registerEndpoint({
   operation: 'widgets.hand-written',
@@ -222,6 +255,13 @@ beforeEach(() => {
       : { ok: true, data: { widget_id: 'w-1' }, created: true },
   )
   directRun.mockResolvedValue({ ok: true, data: { widget_id: 'w-2' } })
+  for (const run of [handoverRun, caseActionRun]) {
+    run.mockImplementation(async (_ctx, input, options) =>
+      (options as { dryRun: boolean }).dryRun
+        ? { ok: true, dryRun: true, preview: { invoice_id: (input as { invoice_id: string }).invoice_id } }
+        : { ok: true, data: { case_id: 'case-1' } },
+    )
+  }
 })
 
 describe('v1 stage mode', () => {
@@ -359,5 +399,71 @@ describe('v1 stage mode', () => {
     }
     expect(Object.keys(stagedView.properties.data.properties).slice(0, 2)).toEqual(['pending_operation_id', 'handle'])
     expect(stagedView.properties.data.properties.handle?.pattern).toBe('^pop_[0-9a-f]{32}$')
+  })
+})
+
+describe('v1 stage required: a write only a person approves is never committed from a key', () => {
+  const INVOICE = '44444444-4444-4444-8444-444444444444'
+
+  beforeEach(() => {
+    mockValidate.mockResolvedValue({ ...auth(), scopes: ['invoices:write'] })
+  })
+
+  it('400 STAGE_REQUIRED for a direct handover, before the operation runs', async () => {
+    const mock = client()
+    const res = await POST_HAND_OVER(post('widgets/hand-over', { invoice_id: INVOICE }), params)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('STAGE_REQUIRED')
+    expect(body.error.details).toMatchObject({ operation_type: 'open_collection_case' })
+    expect(handoverRun).not.toHaveBeenCalled()
+    expect(mock.payloads('pending_operations', 'insert')).toHaveLength(0)
+  })
+
+  it('a Preview-Token commit is a commit: refused the same way', async () => {
+    client()
+    const request = post('widgets/hand-over', { invoice_id: INVOICE })
+    request.headers.set('Preview-Token', `pv1.${'A'.repeat(43)}`)
+    const res = await POST_HAND_OVER(request, params)
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('STAGE_REQUIRED')
+    expect(handoverRun).not.toHaveBeenCalled()
+  })
+
+  it('400 STAGE_REQUIRED for an escalating case action, a direct commit for an agent-approvable one', async () => {
+    client()
+    const escalate = await POST_CASE_ACTION(post('widgets/case-action', { invoice_id: INVOICE, action: 'approve_step' }), params)
+    expect(escalate.status).toBe(400)
+    expect((await escalate.json()).error.code).toBe('STAGE_REQUIRED')
+    expect(caseActionRun).not.toHaveBeenCalled()
+
+    client()
+    const pause = await POST_CASE_ACTION(post('widgets/case-action', { invoice_id: INVOICE, action: 'pause' }), params)
+    expect(pause.status).toBe(200)
+    expect(caseActionRun).toHaveBeenCalledTimes(1)
+    expect(caseActionRun.mock.calls[0][2]).toEqual({ dryRun: false })
+  })
+
+  it('the dry run and ?stage=true work as for any write', async () => {
+    client()
+    const dry = await POST_HAND_OVER(post('widgets/hand-over', { invoice_id: INVOICE }, { query: '?dry_run=true' }), params)
+    expect(dry.status).toBe(200)
+    expect((await dry.json()).data).toMatchObject({ dry_run: true })
+    expect(handoverRun.mock.calls[0][2]).toEqual({ dryRun: true })
+
+    const mock = client()
+    const staged = await POST_HAND_OVER(post('widgets/hand-over', { invoice_id: INVOICE }, { query: '?stage=true' }), params)
+    expect(staged.status).toBe(202)
+    expect((await staged.json()).data).toMatchObject({ operation_type: 'open_collection_case', status: 'pending', risk_level: 'high' })
+    expect(mock.payloads('pending_operations', 'insert')).toHaveLength(1)
+    // Only dry runs ran: nothing was handed over.
+    expect(handoverRun.mock.calls.every((call) => (call[2] as { dryRun: boolean }).dryRun)).toBe(true)
+  })
+
+  it('a write whose staged type any approver may approve commits directly as before', async () => {
+    mockValidate.mockResolvedValue(auth())
+    client()
+    const res = await POST_STAGED(post('widgets', { name: 'Acme' }), params)
+    expect(res.status).toBe(201)
   })
 })

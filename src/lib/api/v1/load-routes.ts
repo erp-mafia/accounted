@@ -325,6 +325,15 @@ import '@/app/api/v1/companies/[companyId]/pos-sales/fetch/route'
 import '@/app/api/v1/companies/[companyId]/webshop-orders/route'
 import '@/app/api/v1/companies/[companyId]/webshop-orders/[orderId]/route'
 import '@/app/api/v1/companies/[companyId]/webshop-orders/[orderId]/book/route'
+
+// Collections (reminders and debt collection through the company's provider): lib/operations/collections.ts
+// and collections-booking.ts. The handover and the escalating case actions are stage-only over REST.
+import '@/app/api/v1/companies/[companyId]/collections/candidates/route'
+import '@/app/api/v1/companies/[companyId]/collections/settlements/route'
+import '@/app/api/v1/companies/[companyId]/collections/settlements/[settlementId]/book/route'
+import '@/app/api/v1/companies/[companyId]/collections/payments/[paymentId]/book/route'
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/collection/route'
+import '@/app/api/v1/companies/[companyId]/invoices/[id]/collection/actions/route'
 // Operation registry, wave 2: booking, payment files, utlägg, payroll.
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/send-payslips/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/revert/route'

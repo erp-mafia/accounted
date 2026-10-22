@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `356`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `363`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -46,6 +46,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/bank-feed/switch-progress",
   "GET /api/v1/companies/:companyId/capabilities",
   "GET /api/v1/companies/:companyId/cash-accounts",
+  "GET /api/v1/companies/:companyId/collections/candidates",
+  "GET /api/v1/companies/:companyId/collections/settlements",
   "GET /api/v1/companies/:companyId/compliance/check",
   "GET /api/v1/companies/:companyId/customers",
   "GET /api/v1/companies/:companyId/customers/:id",
@@ -75,6 +77,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/inbox-items/:id",
   "GET /api/v1/companies/:companyId/invoices",
   "GET /api/v1/companies/:companyId/invoices/:id",
+  "GET /api/v1/companies/:companyId/invoices/:id/collection",
   "GET /api/v1/companies/:companyId/invoices/:id/pdf",
   "GET /api/v1/companies/:companyId/invoices/:id/peppol",
   "GET /api/v1/companies/:companyId/invoices/:id/peppol/deliveries",
@@ -211,6 +214,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/bank-feed/invites",
   "POST /api/v1/companies/:companyId/cash-accounts",
   "POST /api/v1/companies/:companyId/cash-accounts/:id/set-primary",
+  "POST /api/v1/companies/:companyId/collections/payments/:paymentId/book",
+  "POST /api/v1/companies/:companyId/collections/settlements/:settlementId/book",
   "POST /api/v1/companies/:companyId/customers",
   "POST /api/v1/companies/:companyId/customers/bulk-create",
   "POST /api/v1/companies/:companyId/dimensions",
@@ -255,6 +260,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/invoices",
   "POST /api/v1/companies/:companyId/invoices/:id/book",
   "POST /api/v1/companies/:companyId/invoices/:id/cancel",
+  "POST /api/v1/companies/:companyId/invoices/:id/collection",
+  "POST /api/v1/companies/:companyId/invoices/:id/collection/actions",
   "POST /api/v1/companies/:companyId/invoices/:id/credit",
   "POST /api/v1/companies/:companyId/invoices/:id/mark-paid",
   "POST /api/v1/companies/:companyId/invoices/:id/mark-sent",
@@ -368,6 +375,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "assets": 6,
   "bank-feed": 7,
   "byra": 1,
+  "collections": 7,
   "expenses": 5,
   "import": 7,
   "inbox": 11,

@@ -99,6 +99,16 @@ describe('collections.cases.open run()', () => {
   })
 })
 
+describe('collections.candidates.list input', () => {
+  it('takes include_ineligible as a boolean (MCP) or as the query string words true and false (v1 GET)', async () => {
+    const { collectionsCandidatesList } = await import('../collections')
+    for (const value of [true, false, 'true', 'false', undefined]) {
+      expect(collectionsCandidatesList.input.safeParse(value === undefined ? {} : { include_ineligible: value }).success).toBe(true)
+    }
+    expect(collectionsCandidatesList.input.safeParse({ include_ineligible: 'yes' }).success).toBe(false)
+  })
+})
+
 describe('collections case tools output', () => {
   it('qualify every identifier (no bare id), as the MCP tool rules require', async () => {
     const { COLLECTIONS_OPERATION_LIST } = await import('../collections')

@@ -90,7 +90,10 @@ Poll `GET /pending-operations/{id}` until `task_state` is terminal:
 `completed` (committed, `result` holds the outcome), `failed` (the approved
 commit did not go through) or `cancelled` (rejected, expired or superseded).
 `stage=true` on any other endpoint is `400 STAGE_NOT_SUPPORTED`; values other
-than `true`/`false` are `400`. With `dry_run=true` (or a test key) the staging
+than `true`/`false` are `400`. A write only a person may approve in the app
+(handing an invoice to collection, an escalating collection case action) is
+never committed from a key: without `?stage=true` it answers
+`400 STAGE_REQUIRED` and does nothing. With `dry_run=true` (or a test key) the staging
 is previewed and nothing is stored. Approving twice never commits twice: the
 second approval answers `409 PENDING_OPERATION_NOT_PENDING` with the
 operation as it stands.

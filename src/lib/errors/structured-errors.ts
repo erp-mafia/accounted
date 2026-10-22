@@ -10053,6 +10053,18 @@ const PENDING_OPERATIONS: Record<string, StructuredErrorEntry> = {
         'Send the request without stage=true to commit it directly, or stage through an endpoint that lists the stage query parameter.',
     },
   },
+  // A direct v1 commit of a write only a person may approve in the app
+  // (lib/operations/v1.ts needsPersonApproval): it is staged instead.
+  STAGE_REQUIRED: {
+    httpStatus: 400,
+    message_sv: 'Den här åtgärden måste godkännas av en person i Accounted. Lägg fram den för godkännande i stället.',
+    message_en:
+      'This write is approved only by a person in Accounted: send it with stage=true to stage it for that approval. Nothing was done.',
+    remediation: {
+      description:
+        'Send the same request with ?stage=true. It answers 202 with the pending operation; a person approves it in Accounted (Att göra), never a key or an agent.',
+    },
+  },
   // A commit sent with a preview token whose dry run, recomputed at commit
   // time, no longer fingerprints the same (lib/operations/preview-token.ts).
   // Nothing was written; details carry the fresh preview and its token.

@@ -18,9 +18,12 @@
  * no customer answer to our reminders, a bank check that passed. Attestation
  * fields are refused (COLLECTION_ATTESTATION_WEB_ONLY), and both staged
  * types are approvable only by a person in the web UI when they hand over
- * or escalate (risk-tiers.ts requiresWebApproval). There is no v1 REST door
- * yet: it would publish the operations in the OpenAPI document while the
- * feature is dark.
+ * or escalate (risk-tiers.ts requiresWebApproval). Over the v1 REST doors
+ * (app/api/v1/companies/[companyId]/collections and .../invoices/[id]/collection)
+ * the same writes stage with ?stage=true, and a direct call to a write only a
+ * person may approve answers STAGE_REQUIRED before anything runs
+ * (lib/operations/v1.ts). Those doors are always registered: while the
+ * feature is switched off the start paths answer COLLECTIONS_DISABLED.
  */
 import { z } from 'zod'
 import { collectionsActionSchema, type CollectionsAction } from '@accounted/connect-contract'
@@ -214,7 +217,11 @@ export const collectionsCandidatesList = defineOperation({
     },
   },
   input: z.object({
-    include_ineligible: z.boolean().optional().describe('Also list overdue invoices that fail a check, with the checks they fail.'),
+    // A boolean over MCP, the strings 'true'/'false' in a v1 query string.
+    include_ineligible: z
+      .union([z.boolean(), z.enum(['true', 'false'])])
+      .optional()
+      .describe('Also list overdue invoices that fail a check, with the checks they fail.'),
   }),
   output: z.object({
     candidates: z.array(
@@ -234,6 +241,7 @@ export const collectionsCandidatesList = defineOperation({
     ),
   }),
   errorCodes: ['COLLECTIONS_DISABLED', 'COLLECTIONS_NOT_ACTIVE', 'COLLECTIONS_CAPABILITY_BLOCKED'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/collections/candidates' },
   mcp: {
     name: 'gnubok_list_collection_candidates',
     title: 'List Collection Candidates',
@@ -252,7 +260,7 @@ export const collectionsCandidatesList = defineOperation({
       companyId: ctx.companyId,
       connection,
       features: provider?.features ?? null,
-      includeIneligible: input.include_ineligible === true,
+      includeIneligible: input.include_ineligible === true || input.include_ineligible === 'true',
     })
     return { ok: true, data: { candidates } }
   },
@@ -302,6 +310,7 @@ export const collectionsCasesGet = defineOperation({
       .describe('For an open case: whether withdrawing it may cost a fee.'),
   }),
   errorCodes: ['INVOICE_NOT_FOUND'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/invoices/:id/collection', pathParams: { id: 'invoice_id' } },
   mcp: {
     name: 'gnubok_get_collection_case',
     title: 'Get Collection Case',
@@ -358,6 +367,7 @@ export const collectionsCasesOpen = defineOperation({
       '409 COLLECTION_BANK_STALE: the account the customer pays to was not synced in 24 hours.',
       '409 COLLECTION_REMINDER_FEE_NOT_AGREED: a reminder needs a reminder fee agreed by the invoice date; omit start_step to start at the inkassokrav.',
       'Approval is web-only: a person approves the staged operation in Accounted.',
+      'Over REST, send it with ?stage=true: a direct call answers 400 STAGE_REQUIRED and hands nothing over.',
     ],
     example: {
       request: { invoice_id: '7d1e…', expected_remaining: 12500, start_step: 'collection' },
@@ -388,7 +398,9 @@ export const collectionsCasesOpen = defineOperation({
     'COLLECTION_PAYMENT_HISTORY_UNSUPPORTED',
     'COLLECTION_START_STEP_UNAVAILABLE',
     'COLLECTION_REMINDER_FEE_NOT_AGREED',
+    'STAGE_REQUIRED',
   ],
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/invoices/:id/collection', pathParams: { id: 'invoice_id' } },
   mcp: {
     name: 'gnubok_send_invoice_to_collection',
     title: 'Send Invoice to Collection',
@@ -464,6 +476,7 @@ export const collectionsCasesAction = defineOperation({
       'already_paid is never sent: record the payment on the invoice instead (409 COLLECTION_REGISTER_PAYMENT); it is reported to the provider.',
       'start is not taken here: starting a delivered invoice is a handover, through gnubok_send_invoice_to_collection (409 COLLECTION_START_VIA_HANDOVER).',
       '409 CONNECTOR_COLLECTIONS_ACTION_UNAVAILABLE: the case does not offer that action in its current stage.',
+      'Over REST, an escalation (approve_step, contest_dispute, confirm_not_paid, approve_legal_action) is sent with ?stage=true: a direct call answers 400 STAGE_REQUIRED. pause, resume, withdraw and dispute also commit directly.',
     ],
     example: {
       request: { invoice_id: '7d1e…', action: 'pause', until: '2026-11-01' },
@@ -506,7 +519,13 @@ export const collectionsCasesAction = defineOperation({
     'INVOICE_NOT_FOUND',
     'COLLECTIONS_DISABLED',
     'COLLECTIONS_CAPABILITY_BLOCKED',
+    'STAGE_REQUIRED',
   ],
+  http: {
+    method: 'POST',
+    path: '/api/v1/companies/:companyId/invoices/:id/collection/actions',
+    pathParams: { id: 'invoice_id' },
+  },
   mcp: {
     name: 'gnubok_collection_case_action',
     title: 'Collection Case Action',
