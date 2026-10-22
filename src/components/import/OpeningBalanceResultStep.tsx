@@ -4,17 +4,22 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { CheckCircle2, XCircle, ArrowRight } from 'lucide-react'
 import Link from 'next/link'
+import { useTranslations } from 'next-intl'
 import type { OpeningBalanceExecuteResult } from '@/lib/import/opening-balance/types'
 
 interface OpeningBalanceResultStepProps {
   result: OpeningBalanceExecuteResult
   onNewImport: () => void
+  /** The user came from a SIE preview: its vouchers are still to be imported. */
+  onResumeSieImport?: () => void
 }
 
 export default function OpeningBalanceResultStep({
   result,
   onNewImport,
+  onResumeSieImport,
 }: OpeningBalanceResultStepProps) {
+  const t = useTranslations('import')
   const isCorrection = !!result.reversed_entry_id
   return (
     <Card>
@@ -65,20 +70,31 @@ export default function OpeningBalanceResultStep({
               </div>
             </div>
 
-            {/* Next steps */}
-            <div className="space-y-2">
-              <h4 className="text-sm font-medium">Nästa steg</h4>
-              <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
-                <li>Granska verifikationen i bokföringen</li>
-                <li>Kontrollera balansrapporten att beloppen stämmer</li>
-                <li>Börja importera banktransaktioner eller skapa verifikationer</li>
-              </ol>
-            </div>
+            {/* Next steps. Coming from a SIE preview, the one step left is
+                its vouchers: the file was set aside, not imported. */}
+            {onResumeSieImport ? (
+              <p className="text-sm text-muted-foreground">{t('ob_result_resume_sie_hint')}</p>
+            ) : (
+              <div className="space-y-2">
+                <h4 className="text-sm font-medium">Nästa steg</h4>
+                <ol className="text-sm text-muted-foreground space-y-1.5 list-decimal list-inside">
+                  <li>Granska verifikationen i bokföringen</li>
+                  <li>Kontrollera balansrapporten att beloppen stämmer</li>
+                  <li>Börja importera banktransaktioner eller skapa verifikationer</li>
+                </ol>
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex flex-wrap gap-3">
+              {onResumeSieImport && (
+                <Button onClick={onResumeSieImport}>
+                  {t('ob_result_resume_sie')}
+                  <ArrowRight className="h-4 w-4 ml-2" />
+                </Button>
+              )}
               {result.journal_entry_id && (
-                <Button asChild>
+                <Button asChild variant={onResumeSieImport ? 'outline' : 'default'}>
                   <Link href={`/bookkeeping/${result.journal_entry_id}`}>
                     Visa verifikation
                     <ArrowRight className="h-4 w-4 ml-2" />
