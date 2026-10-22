@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { SupplierInvoiceDto } from '@/lib/providers/dto'
+import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
 import { openMigrationPayload } from '@/lib/providers/migration-payload'
 import { fetchMigrationPage } from '@/lib/providers/provider-data-fetcher'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
@@ -141,8 +142,12 @@ export function fortnoxNumberRecord(
   }
   try {
     // The header exactly as the import stores it: a credit note as
-    // magnitudes beside its flag, a missing currency as SEK.
-    const { invoice } = mapSupplierInvoice(dto, NIL_UUID, companyId, NIL_UUID)
+    // magnitudes beside its flag, a missing currency as SEK. Mapped again
+    // from the raw Fortnox fields: a stored payload keeps the DTO of its
+    // import day, and one sealed before the list's string Total was parsed
+    // carries no numeric total (crm#1157).
+    const current = Object.keys(raw).length > 0 ? mapFortnoxToSupplierInvoice(raw) : dto
+    const { invoice } = mapSupplierInvoice(current, NIL_UUID, companyId, NIL_UUID)
     record.invoice_date = typeof invoice.invoice_date === 'string' && invoice.invoice_date ? invoice.invoice_date : null
     record.total = typeof invoice.total === 'number' ? invoice.total : null
     record.currency = typeof invoice.currency === 'string' ? invoice.currency : null
