@@ -108,60 +108,33 @@ function lastActivity(t: TicketSummary): number {
   return new Date(t.lastMessageAt ?? t.createdAt).getTime()
 }
 
-/**
- * The ticket the customer can reply in: the SDK's current ticket when it is
- * still open, otherwise the most recently active unresolved one. Null means
- * there is nothing to reply to.
- */
-export function pickActiveTicket(tickets: TicketSummary[], currentId?: string | null): TicketSummary | null {
-  const open = tickets.filter((t) => !isResolved(t.status))
-  const current = currentId ? open.find((t) => t.id === currentId) : undefined
-  if (current) return current
-  return [...open].sort((a, b) => lastActivity(b) - lastActivity(a))[0] ?? null
-}
-
 export function sortByActivity(tickets: TicketSummary[]): TicketSummary[] {
   return [...tickets].sort((a, b) => lastActivity(b) - lastActivity(a))
 }
 
-/**
- * reply  the ticket can be continued (it is the active ticket)
- * read   shown read-only, for an answer the customer has not seen yet
- */
-export type OpenMode = 'reply' | 'read'
+export type StartView = { view: 'compose' } | { view: 'list' } | { view: 'thread'; ticketId: string }
 
 /**
- * The ticket the dialog opens on. An open ticket wins and opens for replying.
- * With nothing open, the most recently active ticket with unread support
- * messages opens read-only (every ticket is resolved by then): support often
- * answers and resolves in one go, the trigger shows the unread dot and the
- * nudge mail says there is an answer, so an empty composer reads as the
- * answer being gone. Null means there is nothing to reply to and nothing new
- * to read: the dialog starts with a composer.
+ * Where the dialog opens. With no tickets, on the composer. With one ticket
+ * that is still open or has an unread answer, straight in that thread: a list
+ * of one is a detour. Otherwise on the list, so every open ticket and every
+ * new answer is in sight at once (crm#1138). The list also covers a single
+ * resolved ticket: an empty composer would read as the answer being gone.
  */
-export function pickTicketToOpen(
-  tickets: TicketSummary[],
-  currentId?: string | null
-): { ticket: TicketSummary; mode: OpenMode } | null {
-  const active = pickActiveTicket(tickets, currentId)
-  if (active) return { ticket: active, mode: 'reply' }
-  const unread = sortByActivity(tickets).find((t) => t.unreadCount > 0)
-  return unread ? { ticket: unread, mode: 'read' } : null
+export function startView(tickets: TicketSummary[]): StartView {
+  if (tickets.length === 0) return { view: 'compose' }
+  const [only] = tickets
+  if (tickets.length === 1 && (!isResolved(only.status) || only.unreadCount > 0)) {
+    return { view: 'thread', ticketId: only.id }
+  }
+  return { view: 'list' }
 }
 
-/**
- * The customer's tickets besides the one on screen. Open ones are always
- * listed, so it is visible what is still in progress and one click switches
- * to it; resolved ones are history and wait behind a toggle.
- */
-export function otherTickets(
-  tickets: TicketSummary[],
-  viewingId: string | null
-): { open: TicketSummary[]; resolved: TicketSummary[] } {
-  const others = tickets.filter((t) => t.id !== viewingId)
+/** Open tickets first in the list, resolved ones below as history. */
+export function splitByStatus(tickets: TicketSummary[]): { open: TicketSummary[]; resolved: TicketSummary[] } {
   return {
-    open: others.filter((t) => !isResolved(t.status)),
-    resolved: others.filter((t) => isResolved(t.status)),
+    open: tickets.filter((t) => !isResolved(t.status)),
+    resolved: tickets.filter((t) => isResolved(t.status)),
   }
 }
 
