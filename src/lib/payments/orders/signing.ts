@@ -890,8 +890,36 @@ export async function startPaymentSigning(
   }
 
   const started = await sendAndSign(ctx, provider, party.ctx, { batch: claimed.batch, orders: claimed.orders }, plan.method, ret)
-  if (started.ok) await rememberTypedSigner(ctx, input.signer)
+  if (!started.ok) return withSigningAsItStands(ctx, claimed.batch.id, started)
+  await rememberTypedSigner(ctx, input.signer)
   return started
+}
+
+/**
+ * A start refused after its claim moved the payments. An order that did not
+ * go back to approved (held with an unknown outcome, refused by the bank, or
+ * waiting unsigned at the bank) stays in this signing, and the same start
+ * can only be refused for it again, as changed in the meantime (crm#1357).
+ * The refusal then carries the signing as it stands (details.signing), so
+ * the screen signs it again or says where it stopped instead of offering the
+ * same start. A released order leaves the signing: with none left in it, the
+ * refusal stays as it was, and the same start may be tried again.
+ */
+async function withSigningAsItStands(
+  ctx: OperationContext,
+  batchId: string,
+  refusal: Extract<OperationOutcome<SigningView>, { ok: false }>,
+): Promise<OperationOutcome<SigningView>> {
+  let loaded
+  try {
+    loaded = await loadBatch(createServiceClient(), ctx.companyId, batchId)
+  } catch (error) {
+    ctx.log.warn('refused signing could not be read back', { batchId, error: error instanceof Error ? error.message : String(error) })
+    return refusal
+  }
+  if (!loaded || loaded.orders.length === 0) return refusal
+  const providerCode = typeof refusal.details?.provider_code === 'string' ? refusal.details.provider_code : null
+  return { ...refusal, details: { ...(refusal.details ?? {}), signing: view(loaded.batch, loaded.orders, null, providerCode) } }
 }
 
 /**

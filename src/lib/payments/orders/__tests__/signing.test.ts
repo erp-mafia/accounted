@@ -406,6 +406,7 @@ describe('startPaymentSigning', () => {
       { data: [{ id: 'o2' }] }, // o2 failed
       { data: [waitingOrder('o1', 1), claimedOrder('o2', { status: 'failed' }), claimedOrder('o3')] }, // stopSigning reads the signing
       { data: { id: 'o1', status: 'submitted', outcome_unknown_at: null } }, // o1 still this payment in this signing
+      { data: [claimedOrder('o2', { status: 'failed' })] }, // the refused signing read back: o1 and o3 released
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', {
       data: { ok: true, batch: batch({ order_count: 3 }), orders: [claimedOrder('o1'), claimedOrder('o2'), claimedOrder('o3')] },
@@ -451,6 +452,7 @@ describe('startPaymentSigning', () => {
       { data: [{ id: 'o2' }] }, // o2 failed
       { data: [waitingOrder('o1', 1), claimedOrder('o2', { status: 'failed' })] },
       { data: { id: 'o1', status: 'submitted', outcome_unknown_at: null } },
+      { data: [waitingOrder('o1', 1), claimedOrder('o2', { status: 'failed' })] }, // the refused signing read back
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: batch(), orders: [claimedOrder('o1'), claimedOrder('o2')] } })
     db.setTable('payment_order_batches', { data: batch() })
@@ -501,6 +503,7 @@ describe('startPaymentSigning', () => {
       { data: [{ id: 'o2' }] }, // o2 held
       { data: [waitingOrder('o1', 1), claimedOrder('o2', { outcome_unknown_at: '2026-09-30T08:01:00Z' })] },
       { data: { id: 'o1', status: 'submitted', outcome_unknown_at: null } },
+      { data: [claimedOrder('o2', { outcome_unknown_at: '2026-09-30T08:01:00Z' })] }, // the refused signing read back: o1 released
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: batch(), orders: [claimedOrder('o1'), claimedOrder('o2')] } })
     db.setTable('payment_order_batches', { data: batch() })
@@ -592,6 +595,7 @@ describe('startPaymentSigning', () => {
       { data: [waitingOrder('o1', 1)] }, // beginSca
       { data: [waitingOrder('o1', 1)] }, // stopSigning reads the signing
       { data: { id: 'o1', status: 'submitted', outcome_unknown_at: null } },
+      { data: [] }, // the refused signing read back: o1 released
     ])
     db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single, orders: [claimedOrder('o1')] } })
     db.setTable('payment_order_batches', { data: single })
@@ -699,6 +703,103 @@ describe('startPaymentSigning', () => {
 
   it('is unavailable without a registered provider', async () => {
     expect(await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })).toMatchObject({ ok: false, code: 'PAYMENTS_UNAVAILABLE' })
+  })
+})
+
+describe('a refused start says where it left the payments (crm#1357)', () => {
+  const single = () => batch({ signing_target: 'payment', order_count: 1, total_amount: 737.5 })
+  const timedOut = () => new PaymentProviderError('The answer was lost', 'CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN', false, 502, true)
+
+  it("carries the signing when the bank's create timed out: the order is held, and the same start could only be refused again", async () => {
+    // Production, 2026-10-21: one payment signed from a phone; the bank did not answer the create within Connect's 20 s.
+    const provider = fakeProvider({ createPayment: vi.fn().mockRejectedValue(timedOut()) })
+    registerPaymentInitiationProvider(provider)
+    const held = claimedOrder('o1', { outcome_unknown_at: '2026-10-21T04:35:46Z', provider_error_code: 'CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN' })
+    db.setTable('payment_orders', [
+      { data: [order('o1')] }, // preview
+      { data: [{ id: 'o1' }] }, // create started
+      { data: [{ id: 'o1' }] }, // held as outcome unknown
+      { data: [held] }, // stopSigning, then the refused signing read back
+    ])
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single(), orders: [claimedOrder('o1')] } })
+    db.setTable('payment_order_batches', [{ data: single() }, { data: { ...single(), status: 'failed' } }])
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'PAYMENT_ORDERS_OUTCOME_UNKNOWN',
+      details: {
+        payment_order_id: 'o1',
+        signing: {
+          batch_id: 'batch-1',
+          status: 'failed',
+          challenge: null,
+          failure_code: 'CONNECTOR_PAYMENTS_OUTCOME_UNKNOWN',
+          orders: [{ id: 'o1', status: 'submitted', outcome_unknown: true }],
+        },
+      },
+    })
+    expect(provider.startSigning).not.toHaveBeenCalled()
+  })
+
+  it('carries the signing still waiting at the bank when BankID did not start, so it is signed again, not started anew', async () => {
+    const provider = fakeProvider({
+      startSigning: vi.fn().mockRejectedValue(new PaymentProviderError('busy', 'CONNECTOR_PAYMENTS_PROVIDER_FAILED', true, 503)),
+    })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_orders', [{ data: [order('o1')] }, { data: [{ id: 'o1' }] }, { data: [{ id: 'o1' }] }, { data: [waitingOrder('o1', 1)] }])
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single(), orders: [claimedOrder('o1')] } })
+    db.setTable('payment_order_batches', { data: single() })
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'PAYMENT_PROVIDER_UNAVAILABLE',
+      details: {
+        provider_code: 'CONNECTOR_PAYMENTS_PROVIDER_FAILED',
+        signing: { batch_id: 'batch-1', status: 'created', failure_code: 'CONNECTOR_PAYMENTS_PROVIDER_FAILED', orders: [{ id: 'o1', status: 'submitted', outcome_unknown: false }] },
+      },
+    })
+    expect(provider.cancelPayment).not.toHaveBeenCalled()
+  })
+
+  it('carries nothing when every order went back to approved: the same start may be tried again', async () => {
+    const provider = fakeProvider({ createPayment: vi.fn().mockRejectedValue(new PaymentProviderError('busy', 'RATE_LIMITED', true, 429)) })
+    registerPaymentInitiationProvider(provider)
+    // A released order leaves the signing: reading it back finds none.
+    db.setTable('payment_orders', [{ data: [order('o1')] }, { data: [{ id: 'o1' }] }, { data: [] }])
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single(), orders: [claimedOrder('o1')] } })
+    db.setTable('payment_order_batches', [{ data: single() }, { data: { ...single(), status: 'failed' } }])
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })
+
+    expect(result).toMatchObject({ ok: false, code: 'PAYMENT_PROVIDER_UNAVAILABLE' })
+    if (result.ok) throw new Error('unexpected')
+    expect(result.details).not.toHaveProperty('signing')
+    expect(releases()).toEqual([expect.objectContaining({ p_order_id: 'o1', p_reason: 'CREATE_NOT_SENT' })])
+  })
+
+  it('carries nothing when the signing cannot be read back: the refusal stands as it was', async () => {
+    const provider = fakeProvider({ createPayment: vi.fn().mockRejectedValue(timedOut()) })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_orders', [
+      { data: [order('o1')] },
+      { data: [{ id: 'o1' }] },
+      { data: [{ id: 'o1' }] },
+      { data: [claimedOrder('o1', { outcome_unknown_at: '2026-10-21T04:35:46Z' })] }, // stopSigning
+      { error: { message: 'connection reset' } }, // the refused signing read back
+    ])
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single(), orders: [claimedOrder('o1')] } })
+    db.setTable('payment_order_batches', { data: single() })
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })
+
+    expect(result).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_OUTCOME_UNKNOWN', details: { payment_order_id: 'o1' } })
+    if (result.ok) throw new Error('unexpected')
+    expect(result.details).not.toHaveProperty('signing')
+    expect(log.warn).toHaveBeenCalledWith('refused signing could not be read back', expect.objectContaining({ batchId: 'batch-1' }))
   })
 })
 
