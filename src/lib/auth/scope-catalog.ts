@@ -421,6 +421,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_correct_salary_run: 'payroll:write',
   gnubok_mark_salary_run_paid: 'payroll:write',
   gnubok_list_salary_payment_files: 'payroll:read',
+  // Fora's monthly report, summary only (lib/operations/salary-fora-report.ts).
+  gnubok_get_fora_report: 'payroll:read',
   // Payroll over MCP, employee setup (lib/operations/salary-employee-setup.ts).
   gnubok_list_worked_days: 'payroll:read',
   gnubok_set_worked_days: 'payroll:write',

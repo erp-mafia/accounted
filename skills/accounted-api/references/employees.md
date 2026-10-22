@@ -97,6 +97,7 @@ Creates a new employee for the company. Requires Idempotency-Key (UUID). Support
 - For A-skatt employees who are not sidoinkomst, tax_table_number is required (29-42).
 - salary_type drives which salary field is required: monthly_salary for monthly, hourly_rate for hourly.
 - personnel_category defaults to tjansteman (72xx wage accounts). Set arbetare for kollektivanställda so their wages book on 7010, vacation pay on 7082 and the vacation liability change on 7090. Ignored for company_owner and board_member.
+- A worker reported to Fora every month (Avtalspension SAF-LO) needs fora_fok_id (FOK plus six digits, from Fora's Mina sidor) together with fora_fok_start_date; never on company_owner or board_member (400).
 - The response masks personnummer; never echo back the supplied value. Detail endpoint (deliberate drill-in) returns the full value.
 - vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
 
@@ -132,6 +133,8 @@ Request body:
   vacation_days_per_year?: number,
   semestertillagg_rate?: number,
   vacation_pay_rate?: number | null,
+  fora_fok_id?: string,
+  fora_fok_start_date?: string,
   email?: string,
   phone?: string,
   address_line1?: string,
@@ -293,6 +296,8 @@ Response `200`:
     address_line1: string | null,
     postal_code: string | null,
     city: string | null,
+    fora_fok_id: string | null,
+    fora_fok_start_date: string | null,
     vaxa_stod_eligible: boolean,
     vaxa_stod_start: string | null,
     vaxa_stod_end: string | null,
@@ -362,6 +367,7 @@ Partial update of an employee. Only the fields supplied in the body are changed:
 - tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.
 - extra_tax_amount and extra_tax_percentage are exclusive: setting one while the other is stored returns 400, so send the other as null in the same PATCH. A draft run picks the change up at its next calculation.
 - personnel_category (arbetare or tjansteman) is read when a salary run is booked: every unbooked run, including one already approved or paid, books on the new category. A booked run keeps the category it was booked with.
+- fora_fok_id (FOK plus six digits, from Fora's Mina sidor) and fora_fok_start_date go together: one without the other returns 400, and so does a code on company_owner or board_member. Changing employment_type away from employee needs fora_fok_id: null in the same PATCH. With a code the employee is in the monthly Fora report (GET /salary/fora-report).
 - An enskild firma cannot employ its owner or board: employment_type company_owner or board_member returns 400 VALIDATION_ERROR on employment_type (the owner takes eget uttag, not salary).
 - Changing employment_degree on a sammaloneregeln employee returns 400 EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED (semesterlagen 16 § second paragraph points 3-4 then calculates holiday pay under procentregeln). Send vacation_rule: "procentregeln" in the same PATCH, or sammaloneregeln_kollektivavtal_confirmed: true when a central kollektivavtal keeps sammalöneregeln (2 a §); the confirmation is recorded in the audit trail. hours_per_week and workdays_per_week do not trigger it.
 - vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.
@@ -399,6 +405,8 @@ Request body:
   vacation_days_per_year?: number,
   semestertillagg_rate?: number,
   vacation_pay_rate?: number | null,
+  fora_fok_id?: string | null,
+  fora_fok_start_date?: string | null,
   email?: string | null,
   phone?: string | null,
   address_line1?: string | null,
@@ -460,6 +468,8 @@ Response `200`:
     address_line1: string | null,
     postal_code: string | null,
     city: string | null,
+    fora_fok_id: string | null,
+    fora_fok_start_date: string | null,
     vaxa_stod_eligible: boolean,
     vaxa_stod_start: string | null,
     vaxa_stod_end: string | null,
@@ -1932,6 +1942,87 @@ Example response `200`:
         "locked": false
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/salary/fora-report`
+
+**The Fora monthly report for a payment month: each coded worker, their FOK code and the pay Fora is told about.**
+`scope:payroll:read · risk:low · idempotent`
+
+Employers with workers under Avtalspension SAF-LO (usually arbetare) report each worker's cash gross pay to Fora every month, by the last day of the month after the payment month, by uploading a JSON file on Fora's Mina sidor. This answers what that file says for one payment month: every employee with a Fora code (fora_fok_id on the employee) who was employed or paid in the month, their code, the pay in whole kronor and the employment end date, plus warnings to look at before uploading. The month is the payment month (payment_date), like the AGI; approved, paid and booked salary runs count. Pay is the bruttolön minus taxable traktamente and taxable car allowance, which Fora leaves out. Nothing is stored: a regenerated file replaces the month at Fora.
+
+**Use when:** The user asks what to report to Fora for a month, why a worker is missing from the Fora file, or whether the Fora figures match the payroll.
+**Do not use for:** Getting the file itself (the user opens "Fora-fil" in the salary run page's menu and downloads it there), the yearly total for tjänstemän (GET /reports/salary-journal groupTotals), or Fora's premiums (Fora invoices them).
+
+**Pitfalls:**
+- An employee is only reported with a Fora code: set fora_fok_id and fora_fok_start_date on the employee (the code is on Fora's Mina sidor, FOK plus six digits). Owners and board members never get one.
+- A draft or a salary run in review is not in the month: approve it first (warning FORA_RUN_NOT_APPROVED).
+- A worker with a code and no payout in the month is reported with pay_amount 0, as Fora asks for every marked-up worker every month.
+- Bonus earned in earlier months is reported in the payment month; attributing it to the months it was earned is not supported yet.
+- 400 FORA_REPORT_INCOMPLETE lists in details.issues what blocks the file: FORA_ORG_NUMBER_MISSING, FORA_ADDRESS_REQUIRED (a samordningsnummer needs street, postal code and city), FORA_NO_CODED_EMPLOYEES or FORA_NOTHING_IN_MONTH.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `year` | query | `number` | yes | Payment year. |
+| `month` | query | `number` | yes | Payment month, 1-12. |
+
+Response `200`:
+```ts
+{
+  data: {
+    year: number,
+    month: number,
+    filename: string,
+    payrolls: { employee_id: string, employee_name: string, personnummer_masked: string, fok_id: string, pay_amount: number, employment_end: string | null }[],
+    employee_count: number,
+    total_pay_amount: number,
+    salary_run_ids: string[],
+    warnings: { code: "FORA_PAID_BEFORE_CODE_START" | "FORA_NEGATIVE_PAY" | "FORA_RUN_NOT_APPROVED" | "FORA_ARBETARE_WITHOUT_CODE", message: string, employee_id?: string, employee_name?: string, fok_start_date?: string, pay_amount?: number, salary_run_id?: string, run_period?: string, payment_date?: string }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "year": 2026,
+    "month": 10,
+    "filename": "Fora_5565601712_202610.json",
+    "payrolls": [
+      {
+        "employee_id": "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        "employee_name": "Kalle Hall",
+        "personnummer_masked": "19540801-XXXX",
+        "fok_id": "FOK306834",
+        "pay_amount": 31250,
+        "employment_end": null
+      }
+    ],
+    "employee_count": 1,
+    "total_pay_amount": 31250,
+    "salary_run_ids": [
+      "cccccccc-cccc-4ccc-8ccc-cccccccccccc"
+    ],
+    "warnings": []
   },
   "meta": {
     "request_id": "req_…",

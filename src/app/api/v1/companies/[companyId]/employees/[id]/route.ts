@@ -78,6 +78,10 @@ const EmployeeDetail = z.object({
   address_line1: z.string().nullable(),
   postal_code: z.string().nullable(),
   city: z.string().nullable(),
+  // Fora uppmärkning (lib/salary/fora/markup.ts): the FOK code the employee
+  // is reported to Fora under every month, and the date it applies from.
+  fora_fok_id: z.string().nullable(),
+  fora_fok_start_date: z.string().nullable(),
   vaxa_stod_eligible: z.boolean(),
   vaxa_stod_start: z.string().nullable(),
   vaxa_stod_end: z.string().nullable(),
@@ -102,7 +106,7 @@ const EmployeeDetail = z.object({
 })
 
 const EMPLOYEE_DETAIL_COLUMNS =
-  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, vacation_pay_rate, email, phone, address_line1, postal_code, city, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, default_dimensions, is_active, created_at, updated_at'
+  'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, semestertillagg_rate, vacation_pay_rate, email, phone, address_line1, postal_code, city, fora_fok_id, fora_fok_start_date, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, default_dimensions, is_active, created_at, updated_at'
 
 /**
  * Shape returned by PATCH (success + dry-run preview) and by no-change PATCH.
@@ -224,6 +228,7 @@ registerEndpoint({
     'tax_table_number changes only take effect on future salary runs; runs already in `review` or beyond use a frozen snapshot.',
     'extra_tax_amount and extra_tax_percentage are exclusive: setting one while the other is stored returns 400, so send the other as null in the same PATCH. A draft run picks the change up at its next calculation.',
     'personnel_category (arbetare or tjansteman) is read when a salary run is booked: every unbooked run, including one already approved or paid, books on the new category. A booked run keeps the category it was booked with.',
+    'fora_fok_id (FOK plus six digits, from Fora\'s Mina sidor) and fora_fok_start_date go together: one without the other returns 400, and so does a code on company_owner or board_member. Changing employment_type away from employee needs fora_fok_id: null in the same PATCH. With a code the employee is in the monthly Fora report (GET /salary/fora-report).',
     'An enskild firma cannot employ its owner or board: employment_type company_owner or board_member returns 400 VALIDATION_ERROR on employment_type (the owner takes eget uttag, not salary).',
     'Changing employment_degree on a sammaloneregeln employee returns 400 EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED (semesterlagen 16 § second paragraph points 3-4 then calculates holiday pay under procentregeln). Send vacation_rule: "procentregeln" in the same PATCH, or sammaloneregeln_kollektivavtal_confirmed: true when a central kollektivavtal keeps sammalöneregeln (2 a §); the confirmation is recorded in the audit trail. hours_per_week and workdays_per_week do not trigger it.',
     'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',

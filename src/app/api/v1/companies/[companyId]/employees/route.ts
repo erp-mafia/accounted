@@ -289,6 +289,7 @@ registerEndpoint({
     'For A-skatt employees who are not sidoinkomst, tax_table_number is required (29-42).',
     'salary_type drives which salary field is required: monthly_salary for monthly, hourly_rate for hourly.',
     'personnel_category defaults to tjansteman (72xx wage accounts). Set arbetare for kollektivanställda so their wages book on 7010, vacation pay on 7082 and the vacation liability change on 7090. Ignored for company_owner and board_member.',
+    'A worker reported to Fora every month (Avtalspension SAF-LO) needs fora_fok_id (FOK plus six digits, from Fora\'s Mina sidor) together with fora_fok_start_date; never on company_owner or board_member (400).',
     'The response masks personnummer; never echo back the supplied value. Detail endpoint (deliberate drill-in) returns the full value.',
     'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',
   ],

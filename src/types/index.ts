@@ -4699,6 +4699,10 @@ export interface Employee {
   address_line1: string | null
   postal_code: string | null
   city: string | null
+  /** Fora uppmärkning (FOK code, e.g. FOK306834); null = not reported to Fora. */
+  fora_fok_id: string | null
+  /** The date fora_fok_id applies from; set together with it. */
+  fora_fok_start_date: string | null
   specification_number: number | null
   vaxa_stod_eligible: boolean
   vaxa_stod_start: string | null

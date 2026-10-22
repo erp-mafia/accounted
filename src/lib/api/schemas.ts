@@ -42,6 +42,7 @@ import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
 import { validateJamkning } from '@/lib/salary/jamkning-rules'
+import { FORA_FOK_ID_FORMAT, FORA_FOK_ID_PATTERN, validateForaMarkup } from '@/lib/salary/fora/markup'
 import {
   EXTRA_TAX_AMOUNT_MAX,
   EXTRA_TAX_AMOUNT_RANGE,
@@ -4418,6 +4419,11 @@ const EmployeeSchemaBase = z.object({
   // lib/salary/vacation-pay-rate: below the floor is illegal, above 30 % is
   // a unit typo.
   vacation_pay_rate: z.number().min(0.12).max(0.3).nullable().optional(),
+  // Fora uppmärkning (lib/salary/fora/markup.ts): the FOK code the employee
+  // is reported to Fora under every month, and the date it applies from. Set
+  // together; never on owners or board members (checked below and on update).
+  fora_fok_id: z.string().trim().toUpperCase().regex(FORA_FOK_ID_PATTERN, FORA_FOK_ID_FORMAT).optional(),
+  fora_fok_start_date: isoDate.optional(),
   email: z.string().email().optional(),
   phone: z.string().max(20).optional(),
   address_line1: z.string().max(200).optional(),
@@ -4528,6 +4534,11 @@ export const CreateEmployeeSchema = EmployeeSchemaBase.superRefine((data, ctx) =
     ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: [issue.field] })
   }
 
+  // Fora code: with its start date, and only on employment_type 'employee'.
+  for (const issue of validateForaMarkup(data)) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: issue.message, path: [issue.field] })
+  }
+
   // Bank details: validate clearing/kontonummer structure at entry so a typo is
   // caught here rather than at Bankgirot LB generation. Both empty is allowed.
   // Update path is validated in the PATCH route (only when the fields actually
@@ -4570,6 +4581,8 @@ const EmployeeSchemaPatchBase = EmployeeSchemaBase.extend({
   address_line1: EmployeeSchemaBase.shape.address_line1.nullable(),
   postal_code: EmployeeSchemaBase.shape.postal_code.nullable(),
   city: EmployeeSchemaBase.shape.city.nullable(),
+  fora_fok_id: EmployeeSchemaBase.shape.fora_fok_id.nullable(),
+  fora_fok_start_date: EmployeeSchemaBase.shape.fora_fok_start_date.nullable(),
   vaxa_stod_start: EmployeeSchemaBase.shape.vaxa_stod_start.nullable(),
   vaxa_stod_end: EmployeeSchemaBase.shape.vaxa_stod_end.nullable(),
   employment_type: EmploymentTypeSchema,

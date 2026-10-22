@@ -3506,6 +3506,8 @@ describe('UpdateEmployeeSchema clearing optional fields', () => {
     'address_line1',
     'postal_code',
     'city',
+    'fora_fok_id',
+    'fora_fok_start_date',
     'vaxa_stod_start',
     'vaxa_stod_end',
     'jamkning_percentage',

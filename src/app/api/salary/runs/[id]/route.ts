@@ -41,7 +41,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         // client offer an already-added employee and get a confusing 409.
         supabase
           .from('salary_run_employees')
-          .select('*, employee:employees(id, first_name, last_name, personnummer, employment_type, default_dimensions, f_skatt_status, salary_type, monthly_salary, hourly_rate, employment_degree), line_items:salary_line_items(*)')
+          .select('*, employee:employees(id, first_name, last_name, personnummer, employment_type, default_dimensions, f_skatt_status, salary_type, monthly_salary, hourly_rate, employment_degree, fora_fok_id), line_items:salary_line_items(*)')
           .eq('salary_run_id', id)
           .order('created_at'),
         // Skatteverket arbetsgivare ID for AGI submission.

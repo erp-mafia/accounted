@@ -19084,7 +19084,7 @@ export const tools: McpTool[] = [
       const { data: e, error } = await supabase
         .from('employees')
         .select(
-          'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vacation_pay_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, email, phone, address_line1, postal_code, city, default_dimensions, is_active',
+          'id, first_name, last_name, personnummer, employment_type, personnel_category, employment_start, employment_end, employment_degree, hours_per_week, workdays_per_week, salary_type, monthly_salary, hourly_rate, tax_table_number, tax_column, tax_municipality, is_sidoinkomst, f_skatt_status, f_skatt_verified_at, jamkning_percentage, jamkning_valid_from, jamkning_valid_to, extra_tax_amount, extra_tax_percentage, clearing_number, bank_account_number, vacation_rule, vacation_days_per_year, vacation_days_saved, semestertillagg_rate, vacation_pay_rate, vaxa_stod_eligible, vaxa_stod_start, vaxa_stod_end, email, phone, address_line1, postal_code, city, default_dimensions, is_active, fora_fok_id, fora_fok_start_date',
         )
         .eq('id', employeeId)
         .eq('company_id', companyId)
@@ -19101,6 +19101,8 @@ export const tools: McpTool[] = [
         employment: {
           employment_type: e.employment_type,
           personnel_category: e.personnel_category,
+          fora_fok_id: e.fora_fok_id ?? null,
+          fora_fok_start_date: e.fora_fok_start_date ?? null,
           employment_start: e.employment_start,
           employment_end: e.employment_end,
           employment_degree: e.employment_degree,
@@ -19791,11 +19793,13 @@ export const tools: McpTool[] = [
         personnummer: { type: 'string', description: '12 digits (YYYYMMDDNNNN). Encrypted at staging.' },
         employment_type: { type: 'string', enum: ['employee', 'company_owner', 'board_member'] },
         personnel_category: { type: 'string', enum: ['arbetare', 'tjansteman'], description: 'arbetare 70xx, tjansteman 72xx (default)' },
+        fora_fok_id: { type: 'string' },
+        fora_fok_start_date: { type: 'string' },
         employment_start: { type: 'string' },
         employment_end: { type: 'string' },
         employment_degree: { type: 'number', description: '1-100 (default 100)' },
-        hours_per_week: { type: 'number', description: 'Schedule hours/week (default 40; drives hourly divisor)' },
-        workdays_per_week: { type: 'number', description: 'Schedule days/week (default 5; drives daily divisor and vacation days off)' },
+        hours_per_week: { type: 'number', description: 'Default 40; drives hourly divisor' },
+        workdays_per_week: { type: 'number', description: 'Default 5; drives daily divisor and vacation days off' },
         salary_type: { type: 'string', enum: ['monthly', 'hourly'] },
         monthly_salary: { type: 'number' },
         hourly_rate: { type: 'number' },
@@ -19814,7 +19818,7 @@ export const tools: McpTool[] = [
         address_line1: { type: 'string' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
-        vaxa_stod_eligible: { type: 'boolean', description: 'Never lowers avgifter: from 2026 the AGI declares them in full and the company applies to Skatteverket for the refund; runs in the window note the expected amount' },
+        vaxa_stod_eligible: { type: 'boolean', description: 'Never lowers avgifter: the AGI declares them in full; apply to Skatteverket for the refund' },
         vaxa_stod_start: { type: 'string' },
         vaxa_stod_end: { type: 'string' },
         jamkning_percentage: { type: 'number', description: 'Requires both dates, else rejected' },
@@ -19911,6 +19915,8 @@ export const tools: McpTool[] = [
         last_name: { type: 'string' },
         employment_type: { type: 'string', enum: ['employee', 'company_owner', 'board_member'] },
         personnel_category: { type: 'string', enum: ['arbetare', 'tjansteman'] },
+        fora_fok_id: { type: ['string', 'null'] },
+        fora_fok_start_date: { type: ['string', 'null'] },
         employment_start: { type: 'string' },
         employment_end: { type: ['string', 'null'] },
         employment_degree: { type: 'number' },
@@ -19937,7 +19943,7 @@ export const tools: McpTool[] = [
         is_active: { type: 'boolean', description: 'false deactivates (row kept), true reactivates' },
         // The refusal (EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED) explains it.
         sammaloneregeln_kollektivavtal_confirmed: { type: 'boolean' },
-        vaxa_stod_eligible: { type: 'boolean', description: 'Never lowers avgifter: from 2026 the AGI declares them in full and the company applies to Skatteverket for the refund; runs in the window note the expected amount' },
+        vaxa_stod_eligible: { type: 'boolean', description: 'Never lowers avgifter: the AGI declares them in full; apply to Skatteverket for the refund' },
         vaxa_stod_start: { type: ['string', 'null'] },
         vaxa_stod_end: { type: ['string', 'null'] },
         jamkning_percentage: { type: ['number', 'null'], description: 'Requires both dates' },

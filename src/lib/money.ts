@@ -94,6 +94,24 @@ export function truncateToWholeKronor(n: number): number {
 }
 
 /**
+ * Round a SEK amount to the nearest whole krona, 50 öre up (Math.round's
+ * half toward +∞, so -0,50 becomes 0, not -1).
+ *
+ * For recipients that ask for whole kronor without the tax rule that drops
+ * öre: Fora's payAmount (lib/salary/fora) is an integer of the pay paid out
+ * in the month, and nothing in Fora's specification truncates it. Anything
+ * Skatteverket-bound uses truncateToWholeKronor instead.
+ *
+ * Runs through `roundOre` first so IEEE drift (31 249,4999… for a true
+ * 31 249,50) cannot flip the krona. The -0 Math.round leaves on small
+ * negatives is normalized to 0.
+ */
+export function roundToWholeKronor(n: number): number {
+  const whole = Math.round(roundOre(n))
+  return whole === 0 ? 0 : whole
+}
+
+/**
  * A percentage of an amount in whole kronor, öretal dropped: how every
  * percentage-based skatteavdrag is stated (SFF 2011:1261 22 kap. 1 §).
  * Computed in integer öre and hundredths of a percent: truncating the raw

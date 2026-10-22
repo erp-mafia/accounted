@@ -161,6 +161,7 @@ import '@/app/api/v1/companies/[companyId]/salary/vacation-year-close/route'
 // provisioning), worked days (tidrapport for hourly staff and OB) and the
 // salary payment file (pain.001 / Bankgirot LB) for a run.
 import '@/app/api/v1/companies/[companyId]/salary/settings/route'
+import '@/app/api/v1/companies/[companyId]/salary/fora-report/route'
 import '@/app/api/v1/companies/[companyId]/employees/[id]/worked-days/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/payment-file/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/payment-files/route'

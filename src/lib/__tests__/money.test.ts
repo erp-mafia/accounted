@@ -8,6 +8,7 @@ import {
   parseDecimalInput,
   formatAmountInput,
   truncateToWholeKronor,
+  roundToWholeKronor,
   ORE_TOLERANCE,
   ORE_ROUNDING_ACCOUNT,
   equalOre,
@@ -104,6 +105,24 @@ describe('roundOre', () => {
       if (!Object.is(actual, expected)) failures.push(`${literal} → ${actual}, expected ${expected}`)
     }
     expect(failures).toEqual([])
+  })
+})
+
+describe('roundToWholeKronor', () => {
+  it('rounds to the nearest krona, 50 öre up', () => {
+    expect(roundToWholeKronor(31249.5)).toBe(31250)
+    expect(roundToWholeKronor(31249.49)).toBe(31249)
+    expect(roundToWholeKronor(31250)).toBe(31250)
+  })
+
+  it('does not flip a krona on IEEE drift around the half', () => {
+    expect(roundToWholeKronor(31249.499999999996)).toBe(31250)
+  })
+
+  it('rounds a negative half toward zero and normalizes -0', () => {
+    expect(roundToWholeKronor(-0.5)).toBe(0)
+    expect(Object.is(roundToWholeKronor(-0.4), -0)).toBe(false)
+    expect(roundToWholeKronor(-1200.5)).toBe(-1200)
   })
 })
 

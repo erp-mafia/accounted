@@ -196,6 +196,19 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
     setSaving(true)
 
     const form = new FormData(e.currentTarget)
+    // Fora code (lib/salary/fora/markup.ts): edited for employees only, seeded
+    // from the row like the contact fields. Leaving 'employee' clears it:
+    // owners and board members are never marked up at Fora, and a code they
+    // cannot see would refuse the save.
+    const foraFields =
+      employmentType === 'employee'
+        ? {
+            fora_fok_id: clearableField(form.get('fora_fok_id'), employee?.fora_fok_id),
+            fora_fok_start_date: clearableField(form.get('fora_fok_start_date'), employee?.fora_fok_start_date),
+          }
+        : employee?.fora_fok_id
+          ? { fora_fok_id: null, fora_fok_start_date: null }
+          : {}
     const body: Record<string, unknown> = {
       first_name: form.get('first_name') as string,
       last_name: form.get('last_name') as string,
@@ -203,6 +216,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
       // Shown (and sent) for employees only: owners and board members book on
       // their own accounts whatever it says, so a hidden field changes nothing.
       personnel_category: employmentType === 'employee' ? personnelCategory : undefined,
+      ...foraFields,
       employment_start: form.get('employment_start') as string || undefined,
       // Optional fields seeded from the row: emptying one sends null, which
       // clears the column (#3008). Before, the emptied value was omitted and
@@ -499,6 +513,16 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
             )}
           </DefRow>
         )}
+        {employee.employment_type === 'employee' && employee.fora_fok_id && (
+          <DefRow label={t('form_fora_fok_id')}>
+            <span className="tabular-nums">
+              {t('detail_fora_code', {
+                code: employee.fora_fok_id,
+                date: employee.fora_fok_start_date ? formatDate(employee.fora_fok_start_date) : '',
+              })}
+            </span>
+          </DefRow>
+        )}
         <DefRow label={t('form_employment_start')}>
           {employee.employment_start ? (
             <span className="tabular-nums">{formatDate(employee.employment_start)}</span>
@@ -752,6 +776,34 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                         </Select>
                         <p className="text-xs text-muted-foreground">{t('form_personnel_category_hint')}</p>
                       </div>
+                    )}
+                    {employmentType === 'employee' && (
+                      <>
+                        <div className="space-y-2">
+                          <Label htmlFor="fora_fok_id">{t('form_fora_fok_id')}</Label>
+                          <Input
+                            id="fora_fok_id"
+                            name="fora_fok_id"
+                            defaultValue={employee.fora_fok_id ?? ''}
+                            placeholder="FOK306834"
+                            autoCapitalize="characters"
+                            maxLength={9}
+                            disabled={!canWrite}
+                          />
+                          <p className="text-xs text-muted-foreground">{t('form_fora_fok_id_hint')}</p>
+                        </div>
+                        <div className="space-y-2">
+                          <Label htmlFor="fora_fok_start_date">{t('form_fora_fok_start_date')}</Label>
+                          <Input
+                            id="fora_fok_start_date"
+                            name="fora_fok_start_date"
+                            type="date"
+                            defaultValue={employee.fora_fok_start_date ?? ''}
+                            disabled={!canWrite}
+                          />
+                          <p className="text-xs text-muted-foreground">{t('form_fora_fok_start_date_hint')}</p>
+                        </div>
+                      </>
                     )}
                     <div className="space-y-2">
                       <Label htmlFor="employment_degree">{t('form_employment_degree')}</Label>

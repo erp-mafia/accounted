@@ -18,6 +18,7 @@ import {
 } from '../employee-update-rules'
 import { JAMKNING_END_REQUIRED } from '../jamkning-rules'
 import { EXTRA_TAX_ONE_FORM } from '../extra-tax'
+import { FORA_FOK_EMPLOYEE_ONLY, FORA_FOK_START_REQUIRED } from '../fora/markup'
 import { BANK_ISSUE_MESSAGES_SV } from '@/lib/payments/bank-account'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 
@@ -189,6 +190,33 @@ describe('validateEmployeeUpdate: förhöjt skatteavdrag', () => {
  * needs the switch to procentregeln (16 § första stycket) or the
  * kollektivavtal confirmation (2 a § andra stycket) in the same update (#31).
  */
+describe('validateEmployeeUpdate: Fora code', () => {
+  const CODED = { ...VALID_ROW, employment_type: 'employee', fora_fok_id: 'FOK306834', fora_fok_start_date: '2024-01-01' }
+
+  it('sets and clears a code with its start date', () => {
+    expect(validateEmployeeUpdate(VALID_ROW, { fora_fok_id: 'FOK306834', fora_fok_start_date: '2024-01-01' })).toEqual([])
+    expect(validateEmployeeUpdate(CODED, { fora_fok_id: null, fora_fok_start_date: null })).toEqual([])
+    expect(validateEmployeeUpdate(CODED, { fora_fok_id: 'FOK301123' })).toEqual([])
+  })
+
+  it('refuses clearing the start date of a stored code', () => {
+    expect(validateEmployeeUpdate(CODED, { fora_fok_start_date: null })).toEqual([
+      { field: 'fora_fok_start_date', message: FORA_FOK_START_REQUIRED },
+    ])
+  })
+
+  it('refuses turning a coded employee into an owner unless the code goes too', () => {
+    expect(validateEmployeeUpdate(CODED, { employment_type: 'company_owner' })).toEqual([
+      { field: 'fora_fok_id', message: FORA_FOK_EMPLOYEE_ONLY },
+    ])
+    expect(validateEmployeeUpdate(CODED, { employment_type: 'company_owner', fora_fok_id: null, fora_fok_start_date: null })).toEqual([])
+  })
+
+  it('leaves a stored row alone on unrelated edits', () => {
+    expect(validateEmployeeUpdate({ ...VALID_ROW, fora_fok_id: 'FOK306834', fora_fok_start_date: null }, { phone: '070' })).toEqual([])
+  })
+})
+
 describe('validateEmployeeUpdate: sammalöneregeln and a changed employment degree', () => {
   const SAMMALONE = { ...VALID_ROW, vacation_rule: 'sammaloneregeln', employment_degree: 100, workdays_per_week: 5, hours_per_week: 40 }
   const REFUSAL = {
