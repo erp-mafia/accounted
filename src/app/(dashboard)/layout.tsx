@@ -716,7 +716,7 @@ export default async function DashboardLayout({
               role: memberRow.role as CompanyRole,
             }}
             identityHash={computeIdentityHash(user.id)}
-            analyticsConsent={acceptance.analyticsConsent === true}
+            analyticsConsent={acceptance.analyticsConsent !== false}
             company={{
               id: companyId,
               name: displayName,

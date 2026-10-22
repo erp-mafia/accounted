@@ -265,14 +265,17 @@ describe('consent and data choices match the code', () => {
   const DIRECTORY = code(read('lib/parties/resolver/directory.ts'))
   const MIGRATION = readRepo('supabase/migrations/20261021170000_legal_acceptances_and_data_choices.sql')
 
-  it('never starts PostHog at module load: only AnalyticsIdentify, and only on stored consent', () => {
+  it('starts PostHog only from AnalyticsIdentify, on unless the person switched it off', () => {
+    // Founder decision 2026-10-22: on by default, opt-out in settings. The
+    // page must say opt-out and legitimate interest, never consent.
     expect(INSTRUMENTATION).not.toContain('posthog.init')
     expect(INSTRUMENTATION).not.toContain("from 'posthog-js'")
     expect(IDENTIFY).toContain('if (!analyticsConsent) return')
     expect(IDENTIFY).toContain('initAnalytics()')
+    expect(code(read('app/(dashboard)/layout.tsx'))).toContain('analyticsConsent={acceptance.analyticsConsent !== false}')
     const page = flat(PRIVACY)
-    expect(page).toContain('startar först när du har godkänt dem i appen')
-    expect(page).toContain('samtycke (art. 6.1 a, och 9 kap. 28 § lagen om elektronisk kommunikation)')
+    expect(page).toContain('påslagna när du är inloggad, och du kan när som helst stänga av dem')
+    expect(page).not.toContain('startar först när du har godkänt dem')
   })
 
   it('the AI switch is enforced where every model call passes', () => {
