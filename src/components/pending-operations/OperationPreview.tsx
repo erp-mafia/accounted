@@ -328,6 +328,15 @@ function RegisterBookedInvoicePreview({ data }: { data: Record<string, unknown> 
         <span className="tabular-nums text-right">{money(data.vat_amount, currency)}</span>
         <span className="text-muted-foreground">{t('preview_field.total')}</span>
         <span className="tabular-nums text-right">{money(data.total, currency)}</span>
+        {/* A foreign invoice: the rate read from its verifikat, and the kronor that verifikat books. */}
+        {typeof data.exchange_rate === 'number' && (
+          <>
+            <span className="text-muted-foreground">{t('preview_field.exchange_rate')}</span>
+            <span className="tabular-nums text-right">
+              {new Intl.NumberFormat('sv-SE', { maximumFractionDigits: 6 }).format(data.exchange_rate)} ({money(data.total_sek, 'SEK')})
+            </span>
+          </>
+        )}
         <span className="font-medium">{t('preview_field.invoice_remaining')}</span>
         <span className="tabular-nums font-medium text-right">{money(data.remaining_amount, currency)}</span>
         {typeof data.balance_as_of === 'string' && data.balance_as_of && (

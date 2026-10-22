@@ -34,6 +34,7 @@ import { sessionFailureResponse } from '@/lib/operations/session'
 import { planRegistrationBeforeSettlement } from '@/lib/supplier-invoices/registration-first'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import type { CreateJournalEntryLineInput, SupplierInvoice, SupplierInvoiceItem } from '@/types'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 type PreviewLine = {
   account_number: string
@@ -111,13 +112,16 @@ export const GET = withRouteContext(
       return errorResponseFromCode('VALIDATION_ERROR', log, { requestId, details: sekInputIssue })
     }
 
-    const { data: settings } = await supabase
+    const settingsRead = await supabase
       .from('company_settings')
       .select('accounting_method, last_supplier_payment_account')
       .eq('company_id', companyId)
       .single()
+    const settings = settingsRead.data
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
+    // The preview shows the verifikat the payment will post: an unreadable
+    // method refuses rather than show a shape it may not book (accounted#58).
+    const accountingMethod = requireAccountingMethod(settingsRead)
     const creditAccount =
       payment_account ||
       (settings as { last_supplier_payment_account?: string } | null)?.last_supplier_payment_account ||

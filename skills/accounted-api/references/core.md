@@ -1878,7 +1878,7 @@ Example response `200`:
 
 Patches the settings that decide how the books are kept and declared: VAT registration, VAT number and moms period, EU trade and periodisk sammanställning, F-skatt, preliminary tax, employer registration, fiscal year start month, accounting method (faktureringsmetoden/kontantmetoden), deferred invoice booking, share capital and the optional deadline reminders. Runs the settings page rules and, like it, regenerates the tax deadlines. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
 
-**Use when:** The company registered or deregistered for VAT or as an employer, Skatteverket changed its moms period, or the fiscal year or accounting method was changed with the authorities.
+**Use when:** The company registered or deregistered for VAT or as an employer, Skatteverket changed its moms period, the fiscal year or accounting method was changed with the authorities, or an accounting method set wrong at onboarding is corrected.
 **Do not use for:** Invoice, contact or payment details (PATCH /settings), the bookkeeping lock (PATCH /settings/bookkeeping-lock), entity type or org number (fixed).
 
 **Pitfalls:**
@@ -1891,7 +1891,7 @@ Patches the settings that decide how the books are kept and declared: VAT regist
 - aktiekapital and antal_aktier are set or cleared together.
 - accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).
 - defer_invoice_booking=true: sent customer invoices and registered supplier invoices get no verifikat until they are booked with POST /invoices/{id}/book (or /invoices/bulk-book) and POST /supplier-invoices/{id}/book.
-- accounting_method can only change while the current fiscal year has no posted verifikat (409 ACCOUNTING_METHOD_CHANGE_MID_YEAR): the method governs the whole year (BFL 5 kap 2 §), and for VAT a move to bokslutsmetoden also needs Skatteverket (ML 7 kap 17 §).
+- accounting_method changes freely only while the current fiscal year has no posted verifikat. Later it is a correction of a wrong setting: send accounting_method_correction_reason (else 409 ACCOUNTING_METHOD_CHANGE_MID_YEAR); refused with 409 ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES while an open invoice has no verifikat of its own. The method governs the whole year (BFL 5 kap 2 §); a real move to bokslutsmetoden needs Skatteverket first (ML 7 kap 17 §).
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1927,7 +1927,8 @@ Request body:
   accounting_method?: "accrual" | "cash",
   defer_invoice_booking?: boolean,
   aktiekapital?: number | null,
-  antal_aktier?: number | null
+  antal_aktier?: number | null,
+  accounting_method_correction_reason?: string
 }
 ```
 

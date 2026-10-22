@@ -1488,4 +1488,33 @@ describe('executeRecurringSchedule text rows and placeholders', () => {
     ).rejects.toThrow(/no billable items/)
     expect(inserted['invoices']).toBeUndefined()
   })
+
+  it('dates the invoice on the Stockholm day of the run, not the UTC day (#58)', async () => {
+    // Winter time: 23:30Z on 31 October is 00:30 on 1 November in Stockholm
+    // (a "Skapa faktura nu" click, or a schedule sending at 00:00).
+    enqueueSpawn()
+    await executeRecurringSchedule(client, makeSchedule(), new Date('2026-10-31T23:30:00Z'))
+    const header = inserted['invoices'][0] as Record<string, unknown>
+    expect(header).toMatchObject({ invoice_date: '2026-11-01', due_date: '2026-12-01' })
+    expect(header.notes).toBe('Fakturan avser november 2026. Period 2026-10-01 - 2026-10-31.')
+    const rows = inserted['invoice_items'][0] as Array<Record<string, unknown>>
+    expect(rows[1].description).toBe('Konsulttimmar november')
+  })
+
+  it('dates the invoice on the Stockholm day in summer time too (#58)', async () => {
+    // 22:30Z on 31 August is 00:30 on 1 September in Stockholm (CEST).
+    enqueueSpawn()
+    await executeRecurringSchedule(client, makeSchedule(), new Date('2026-08-31T22:30:00Z'))
+    const header = inserted['invoices'][0] as Record<string, unknown>
+    expect(header).toMatchObject({ invoice_date: '2026-09-01', due_date: '2026-10-01' })
+    expect(header.notes).toMatch(/^Fakturan avser september 2026\./)
+  })
+
+  it('keeps the same day for a run late in the Swedish evening', async () => {
+    // 21:30Z on 31 August is 23:30 the same day in Stockholm.
+    enqueueSpawn()
+    await executeRecurringSchedule(client, makeSchedule(), new Date('2026-08-31T21:30:00Z'))
+    const header = inserted['invoices'][0] as Record<string, unknown>
+    expect(header).toMatchObject({ invoice_date: '2026-08-31', due_date: '2026-09-30' })
+  })
 })

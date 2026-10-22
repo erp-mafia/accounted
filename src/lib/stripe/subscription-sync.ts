@@ -1,7 +1,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type Stripe from 'stripe'
 import { CAPABILITY, PAID_CAPABILITIES } from '@/lib/entitlements/keys'
+import { createLogger } from '@/lib/logger'
 import type { BillingPlan } from './client'
+import { syncCompanyStripeIdentity } from './customer-identity'
+
+const log = createLogger('stripe/subscription-sync')
 
 /**
  * Stripe → DB reconciliation for subscriptions. The single source of truth for
@@ -131,16 +135,60 @@ export async function applySubscriptionState(
   }
 }
 
-async function companyIdForCustomer(
-  supabase: SupabaseClient,
-  customerId: string,
+/** The one company whose row holds this subscription or customer; null when none or several do. */
+async function soleCompany(
+  query: PromiseLike<{ data: unknown; error: { message: string } | null }>,
 ): Promise<string | null> {
-  const { data } = await supabase
-    .from('company_subscriptions')
-    .select('company_id')
-    .eq('stripe_customer_id', customerId)
-    .maybeSingle()
-  return (data as { company_id: string } | null)?.company_id ?? null
+  const { data, error } = await query
+  // Thrown, not read as "unknown": a guess at the company could write the
+  // wrong one, and the webhook answers 500 so Stripe delivers the event again.
+  if (error) throw new Error(`company_subscriptions lookup failed: ${error.message}`)
+  const rows = (data ?? []) as Array<{ company_id: string }>
+  return rows.length === 1 ? rows[0].company_id : null
+}
+
+/**
+ * The company a subscription event is for. The mirror leads: a migration
+ * reset moves the company_subscriptions row to the replacement company but
+ * leaves the subscription's metadata naming the archived source, so an event
+ * resolved by metadata first wrote the source's row and grants and let the
+ * paying replacement's grants lapse. Metadata answers only when no single
+ * row holds the subscription or its customer, as for an event that outruns
+ * the row checkout writes.
+ */
+async function companyIdForSubscription(
+  supabase: SupabaseClient,
+  sub: Stripe.Subscription,
+): Promise<string | null> {
+  const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer.id
+  return (
+    (await soleCompany(
+      supabase.from('company_subscriptions').select('company_id').eq('stripe_subscription_id', sub.id).limit(2),
+    )) ??
+    (await soleCompany(
+      supabase.from('company_subscriptions').select('company_id').eq('stripe_customer_id', customerId).limit(2),
+    )) ??
+    sub.metadata?.company_id ??
+    null
+  )
+}
+
+/**
+ * The identity sync never fails the webhook: the access state above is what
+ * the event is for, and a Stripe retry of the whole event over a customer
+ * update would only repeat it. The next subscription event writes it again.
+ */
+async function syncIdentityBestEffort(
+  supabase: SupabaseClient,
+  stripe: Stripe,
+  companyId: string,
+  customerId: string | null,
+): Promise<void> {
+  try {
+    await syncCompanyStripeIdentity(supabase, companyId, { stripe, customerId })
+  } catch (err) {
+    log.error('writing the company identity onto its Stripe customer failed', err as Error, { companyId })
+  }
 }
 
 /**
@@ -169,10 +217,16 @@ export async function handleStripeEvent(
     case 'customer.subscription.updated':
     case 'customer.subscription.deleted': {
       const sub = event.data.object as Stripe.Subscription
-      const companyId =
-        sub.metadata?.company_id ??
-        (await companyIdForCustomer(supabase, typeof sub.customer === 'string' ? sub.customer : sub.customer.id))
-      if (companyId) await applySubscriptionState(supabase, subscriptionToState(sub, companyId))
+      const companyId = await companyIdForSubscription(supabase, sub)
+      if (!companyId) return
+      const state = subscriptionToState(sub, companyId)
+      await applySubscriptionState(supabase, state)
+      // Keep the customer's name, address and tax IDs the company's own
+      // (crm#1378). A renewal sends this event while its invoice is still a
+      // draft, which takes the customer's details when it is finalized.
+      if (event.type !== 'customer.subscription.deleted' && statusGrantsAccess(state.status)) {
+        await syncIdentityBestEffort(supabase, stripe, companyId, state.stripeCustomerId)
+      }
       return
     }
     default:

@@ -52,6 +52,7 @@ import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource
 import { bookedEntryOf } from '@/lib/bookkeeping/booking-answer'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
+import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
 import {
   foldGeneratedVatLines,
   groupVoucherLinesWithVatCodes,
@@ -1539,7 +1540,7 @@ export default function JournalEntryForm({
           {selectedPeriodObj && (
             <span className="text-muted-foreground">
               {t('fiscal_year')}:{' '}
-              <span className="text-foreground">{selectedPeriodObj.name}</span>
+              <span className="text-foreground">{fiscalYearShortName(selectedPeriodObj.name)}</span>
               {nextVoucherNumber != null && (
                 <span className="ml-2 font-mono text-foreground">
                   {voucherSeries}{nextVoucherNumber}

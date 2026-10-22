@@ -223,3 +223,86 @@ describe('planMatchPayment', () => {
     expect(plan).toEqual({ ...step, fx: { required: false } })
   })
 })
+
+// crm#1364: a card payment the customer made in full, paid out to the bank
+// net of the payment provider's fee. Named, the fee settles the invoice.
+describe('planTransactionInvoiceMatch: feeAccount (crm#1364)', () => {
+  const invoice = { currency: 'SEK', total: 10000, paid_amount: 0, remaining_amount: 10000 }
+
+  it('settles the invoice in full and hands the shortfall to 6570 as the fee', async () => {
+    const r = await planTransactionInvoiceMatch(supabase, sekTx(9809.5), invoice, { feeAccount: '6570' })
+    expect(r).toMatchObject({
+      ok: true,
+      paidAmount: 10000,
+      plan: { newStatus: 'paid', newPaidAmount: 10000, newRemaining: 0, isFullyPaid: true, oreSettled: false },
+      overpayment: null,
+      fee: { account: '6570', amount: 190.5 },
+    })
+  })
+
+  it('stays a partial payment without the account, and books no fee when the payment settles anyway', async () => {
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(9809.5), invoice)).toMatchObject({
+      ok: true,
+      fee: null,
+      plan: { newStatus: 'partially_paid', newPaidAmount: 9809.5, newRemaining: 190.5 },
+    })
+    // Exact, and a sub-krona gap (öresavrundning on 3740): nothing for 6570.
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(10000), invoice, { feeAccount: '6570' })).toMatchObject({
+      ok: true,
+      fee: null,
+      plan: { newStatus: 'paid' },
+    })
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(9999.5), invoice, { feeAccount: '6570' })).toMatchObject({
+      ok: true,
+      fee: null,
+      plan: { newStatus: 'paid', oreSettled: true },
+    })
+  })
+
+  it('refuses a shortfall of a tenth or more of the remaining amount: that is a partial payment, not a fee', async () => {
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(9000), invoice, { feeAccount: '6570' })).toEqual({
+      ok: false,
+      code: 'MATCH_PAYMENT_FEE_NOT_ALLOWED',
+      currency: 'SEK',
+      details: { transaction_amount: 9000, remaining_amount: 10000, shortfall: 1000, reason: 'cap' },
+    })
+    // Just under the cap is a fee.
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(9000.01), invoice, { feeAccount: '6570' })).toMatchObject({
+      ok: true,
+      fee: { account: '6570', amount: 999.99 },
+    })
+  })
+
+  it('measures the fee against what is still owed after earlier partial payments', async () => {
+    const partly = { currency: 'SEK', total: 10000, paid_amount: 6000, remaining_amount: 4000 }
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(3900), partly, { feeAccount: '6570' })).toMatchObject({
+      ok: true,
+      paidAmount: 4000,
+      plan: { newPaidAmount: 10000, newRemaining: 0, newStatus: 'paid' },
+      fee: { account: '6570', amount: 100 },
+    })
+  })
+
+  it('refuses a fee on a cross-currency match and ignores an unknown account', async () => {
+    mockFetchExchangeRate.mockResolvedValueOnce({ rate: 11.5, date: '2026-09-30' })
+    const fx = await planTransactionInvoiceMatch(
+      supabase,
+      sekTx(1127),
+      { currency: 'EUR', total: 100, paid_amount: 0, remaining_amount: 100 },
+      { feeAccount: '6570' },
+    )
+    expect(fx).toMatchObject({ ok: false, code: 'MATCH_PAYMENT_FEE_NOT_ALLOWED', details: { reason: 'currency' } })
+
+    expect(await planTransactionInvoiceMatch(supabase, sekTx(9809.5), invoice, { feeAccount: '6064' })).toMatchObject({
+      ok: true,
+      fee: null,
+      plan: { newStatus: 'partially_paid' },
+    })
+  })
+
+  it('agrees with planMatchPayment on the same SEK amounts', async () => {
+    const step = planMatchPayment(invoice, 9809.5, { pureSek: true, feeAccount: '6570' })
+    const plan = await planTransactionInvoiceMatch(supabase, sekTx(9809.5), invoice, { feeAccount: '6570' })
+    expect(plan).toEqual({ ...step, fx: { required: false } })
+  })
+})

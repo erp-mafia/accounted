@@ -1180,6 +1180,7 @@ describe('gnubok_update_employee', () => {
   it('advertises only fields the update writes, and null exactly where UpdateEmployeeSchema accepts it (door parity)', async () => {
     const { UpdateEmployeeSchema } = await import('@/lib/api/schemas')
     const { EMPLOYEE_UPDATE_COLUMNS } = await import('@/lib/salary/employee-commands')
+    const { EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS } = await import('@/lib/salary/employee-update-rules')
     const properties = (updateEmployee.inputSchema as { properties: Record<string, { type?: unknown }> }).properties
     const mismatches: string[] = []
     // Advertised here, written nowhere. The schema strips a key it does not
@@ -1191,7 +1192,8 @@ describe('gnubok_update_employee', () => {
       // employee_id is the target of the update, not a column.
       if (field === 'employee_id') continue
       const zodField = UpdateEmployeeSchema.shape[field as keyof typeof UpdateEmployeeSchema.shape]
-      if (!zodField || !EMPLOYEE_UPDATE_COLUMNS.has(field)) {
+      // A request-only key is read by the update itself, not written.
+      if (!zodField || !(EMPLOYEE_UPDATE_COLUMNS.has(field) || EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS.has(field))) {
         dropped.push(field)
         continue
       }
@@ -1200,6 +1202,37 @@ describe('gnubok_update_employee', () => {
     }
     expect(dropped).toEqual([])
     expect(mismatches).toEqual([])
+  })
+
+  // Semesterlagen 16 § andra stycket 3-4 (#31): the executor's rule in dry
+  // run refuses at staging, and the confirmation rides in the staged patch.
+  it('refuses at staging a changed employment_degree that keeps sammalöneregeln', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { ...EXISTING, vacation_rule: 'sammaloneregeln', employment_degree: 100 } })
+    await expect(
+      updateEmployee.execute(
+        { employee_id: 'emp-1', employment_degree: 80 },
+        'company-1', 'user-1', supabase as never, { type: 'user' },
+      ),
+    ).rejects.toThrow(/EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED/)
+  })
+
+  it('stages the change with the kollektivavtal confirmation in the patch the executor reads', async () => {
+    const supabaseMock = makeCapturingSupabase({
+      employees: { data: { ...EXISTING, vacation_rule: 'sammaloneregeln', employment_degree: 100 } },
+      fiscal_periods: { data: null },
+      company_settings: { data: null },
+      pending_operations: { data: { id: 'op-sammalone' }, error: null },
+    })
+
+    const result = (await updateEmployee.execute(
+      { employee_id: 'emp-1', employment_degree: 80, sammaloneregeln_kollektivavtal_confirmed: true },
+      'company-1', 'user-1', supabaseMock as never, { type: 'user' },
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    const inserted = supabaseMock.inserts.pending_operations?.[0] as { params: { patch: Record<string, unknown> } }
+    expect(inserted.params.patch).toEqual({ employment_degree: 80, sammaloneregeln_kollektivavtal_confirmed: true })
   })
 
   it('stages a reactivation: is_active reaches the staged patch and the changes preview', async () => {

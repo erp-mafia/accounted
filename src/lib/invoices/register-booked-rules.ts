@@ -20,7 +20,11 @@ export const registeredAmountSchema = z
   .positive('must be greater than 0')
   .refine(wholeOre, 'must be in whole öre (at most two decimals)')
 
-/** The invoice's currency per the reskontra; the plans refuse anything but SEK. */
+/**
+ * The invoice's currency per the reskontra. The supplier plan refuses
+ * anything but SEK; the customer plan registers a foreign invoice against a
+ * verifikat that books it in that currency.
+ */
 export const reskontraCurrencySchema = z
   .string()
   .trim()
@@ -56,6 +60,28 @@ export function refineRegistrationDatesAndAmounts(
   if (value.balance_as_of && value.balance_as_of > todayIsoStockholm()) {
     ctx.addIssue({ code: 'custom', path: ['balance_as_of'], message: 'Reskontrans datum får inte ligga i framtiden' })
   }
+}
+
+/** invoices_exchange_rate_check and supplier_invoices_exchange_rate_check. */
+const MAX_EXCHANGE_RATE = 100000
+
+/**
+ * The rate a foreign-currency invoice takes from the verifikat that booked
+ * it (crm#1039, founder decision 2026-10-06): one that gives the booked
+ * kronor back, so the reskontra agrees with 151x/244x and a payment clears
+ * them exactly. The first of `stated` (the rate the verifikat's own line
+ * names), totalSek / total at four decimals and at six whose product lies
+ * within 0.004 kr of totalSek, so roundOre and the plain öre rounding of
+ * the reskontra and the payment lines both give totalSek back; else the
+ * quotient itself. Null when no rate the column accepts exists.
+ */
+export function rateGivingBack(total: number, totalSek: number, stated?: number | null): number | null {
+  const quotient = totalSek / total
+  if (!Number.isFinite(quotient) || quotient <= 0 || quotient >= MAX_EXCHANGE_RATE) return null
+  const candidates = [stated, ...[4, 6].map((places) => Math.round(quotient * 10 ** places) / 10 ** places)]
+  return candidates.find((rate): rate is number =>
+    rate != null && rate > 0 && rate < MAX_EXCHANGE_RATE && Math.abs(total * rate - totalSek) <= 0.004,
+  ) ?? quotient
 }
 
 /** The verifikat's name in messages: series and number, else the start of its id. */

@@ -39,6 +39,7 @@ vi.mock('../vat-entries', () => ({
 const { createJournalEntry } = await import('../engine')
 const mockedCreateEntry = vi.mocked(createJournalEntry)
 const { createInvoiceJournalEntry, createCreditNoteJournalEntry, createInvoiceCashEntry } = await import('../invoice-entries')
+const { buildDeductionCarryLines } = await import('../invoice-lines')
 const { proposeSendLines } = await import('../propose-send-lines')
 const { proposePaymentLines } = await import('../propose-payment-lines')
 const { createRotRutPayoutEntry, createRotRutReclaimEntry } = await import('../rot-rut-entries')
@@ -236,7 +237,7 @@ describe('proposals: grön teknik', () => {
     expect(lines.find((line) => line.account_number === '1510')?.debit_amount).toBe('86250')
   })
 
-  it('the cash-method payment preview names grön teknik on its 1513 legs', () => {
+  it("the cash-method payment preview books the customer's share only: the grön teknik share waits for the payout", () => {
     const lines = proposePaymentLines({
       invoice: {
         id: 'invoice-1',
@@ -256,36 +257,37 @@ describe('proposals: grön teknik', () => {
       accountingMethod: 'cash',
       entityType: 'aktiebolag',
     })
+    // Bokslutsmetoden (ML 2023:200 7 kap. 16 §): 15 000 kr reduktion holds
+    // 3 000 kr moms (12 000 + 3 000), booked when Skatteverket pays.
     expect(lines.find((line) => line.account_number === '1930')?.debit_amount).toBe('86250')
-    // One 1513 leg per item, as createInvoiceCashEntry books it.
-    const legs1513 = lines.filter((line) => line.account_number === '1513')
-    expect(legs1513.map((line) => line.debit_amount)).toEqual(['3750', '11250'])
+    expect(lines.filter((line) => line.account_number === '1513')).toEqual([])
+    expect(lines.find((line) => line.account_number === '3001')?.credit_amount).toBe('69000')
+    expect(lines.find((line) => line.account_number === '2611')?.credit_amount).toBe('17250')
+  })
+
+  it("Skatteverket's share names its kind on the year-end carry: grön teknik, and ROT on a ROT invoice", () => {
+    const carry = buildDeductionCarryLines(invoice({ items: items() }), 'aktiebolag')!
+    const legs1513 = carry.filter((line) => line.account_number === '1513')
+    expect(legs1513.map((line) => line.debit_amount)).toEqual([3750, 11250])
     for (const leg of legs1513) {
       expect(leg.line_description).toBe('Skattereduktion grön teknik faktura 1001')
     }
-  })
-
-  it('a ROT invoice names ROT on its cash-method 1513 leg, as createInvoiceCashEntry books it', () => {
-    const lines = proposePaymentLines({
-      invoice: {
-        id: 'invoice-1',
-        invoice_number: '1001',
-        total: 12500,
-        total_sek: null,
-        subtotal: 10000,
-        subtotal_sek: null,
-        vat_amount: 2500,
-        vat_amount_sek: null,
-        currency: 'SEK',
-        exchange_rate: null,
-        vat_treatment: 'standard_25',
-        items: [item({ unit_price: 10000, line_total: 10000, vat_amount: 2500, deduction_type: 'rot', work_type: 'EL' })],
-        deduction_total: 3750,
-      },
-      accountingMethod: 'cash',
-      entityType: 'aktiebolag',
+    expect(carry.find((line) => line.account_number === '3001')).toMatchObject({
+      credit_amount: 12000,
+      line_description: 'Försäljning faktura 1001, skattereduktion grön teknik',
     })
-    expect(lines.find((line) => line.account_number === '1513')?.line_description).toBe('ROT-avdrag faktura 1001')
+    expect(carry.find((line) => line.account_number === '2611')?.credit_amount).toBe(3000)
+
+    const rot = buildDeductionCarryLines(
+      invoice({
+        total: 12500,
+        subtotal: 10000,
+        vat_amount: 2500,
+        items: [item({ unit_price: 10000, line_total: 10000, vat_amount: 2500, deduction_type: 'rot', work_type: 'EL' })],
+      }),
+      'aktiebolag',
+    )!
+    expect(rot.find((line) => line.account_number === '1513')?.line_description).toBe('ROT-avdrag faktura 1001')
   })
 })
 

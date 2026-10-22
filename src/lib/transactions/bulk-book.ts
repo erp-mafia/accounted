@@ -55,6 +55,7 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
 import { applyTemplate, libraryLinesForCompanySkattekonto } from '@/lib/bookkeeping/template-library'
 import { bankNetAccountTest } from '@/lib/bookkeeping/bank-leg'
+import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
 import { isGeneratedVatAccount } from '@/lib/bookkeeping/vat-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
@@ -359,6 +360,14 @@ export async function bulkBookTransactions(
       // A BookkeepingError: the doors translate it verbatim.
       if (isBookkeepingError(err)) return { ok: false, code: 'UNKNOWN_ERROR', error: err }
       throw err
+    }
+
+    // Importmoms with no ruta 50 line, as a company's own mall books it when
+    // its fiktiv moms sits on 2615 (#83). The RPC does not know momsrutor,
+    // so the rule runs here, in the dry run too.
+    const importVat = await refuseImportVatWithoutBase(supabase, companyId, newEntryPayload.lines)
+    if (importVat) {
+      return { ok: false, code: importVat.code, details: importVat.details, messageSv: importVat.messageSv }
     }
   }
 

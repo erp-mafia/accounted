@@ -2,7 +2,7 @@ import type { Skill } from '../types'
 // Kontantmetoden (#3440): the year-end cut-off declares the moms of invoices
 // unpaid at year end in the VAT period that holds balansdagen.
 const YEAR_END_CUTOFF_NOTE =
-  'If this period contains the fiscal year-end, the year-end cut-off from `year-end-close` must be posted before filing: it declares the moms on invoices unpaid at balansdagen in this period, and the payments next year then book no moms. While it is missing, `gnubok_vat_close_check` warns `KONTANTMETOD_CUTOFF_INCOMPLETE`; tell the user before they file, and never book that moms or the receivables and payables by hand instead. A warning `LEGACY_KONTANTMETOD_VANDNING` means an older cut-off with vändning exists: its figures stand, never storno its vändningar.'
+  'If this period contains the fiscal year-end, the year-end cut-off from `year-end-close` must be posted before filing: it declares the moms on invoices unpaid at balansdagen in this period, and the payments next year then book no moms. While it is missing, `gnubok_vat_close_check` reports `KONTANTMETOD_CUTOFF_INCOMPLETE` as a high blocker (a WARNING to the filing gate); tell the user before they file, and never book that moms or the receivables and payables by hand instead. A warning `LEGACY_KONTANTMETOD_VANDNING` means an older cut-off with vändning exists: its figures stand, never storno its vändningar.'
 
 const body = `# Quarterly VAT Review (Momsdeklaration): Accounted
 
@@ -47,7 +47,7 @@ Before starting, tell the user in two lines what you found (company, cadence, pe
 | kind | What it means | What you do |
 |------|---------------|-------------|
 | \`uncategorized_transactions\` | Bank rows in the period with no verifikat | Hand off to \`bookkeep\`. If the affärshändelse is already booked, the hint names \`gnubok_link_transaction_to_journal_entry\` (no new booking). |
-| \`unapproved_supplier_invoices\` | Registered but not attested leverantörsfakturor; their ingående moms is missing from ruta 48 | Ask the user whether to attest each one. \`gnubok_approve_supplier_invoice\` stages; the user approves. |
+| \`unapproved_supplier_invoices\` | Faktureringsmetoden only: registered but not attested leverantörsfakturor; their ingående moms is missing from ruta 48 | Ask the user whether to attest each one. \`gnubok_approve_supplier_invoice\` stages; the user approves. |
 | \`bank_unreconciled\` | Bank and 19xx disagree | Hand off to \`reconcile-month\`. VAT is computed from the ledger, so a difference hides errors. |
 | \`missing_high_value_receipts\` | Verifikat without underlag | Offer \`kvittojakten\`. Medium severity, but the deduction needs the underlag. |
 | \`reverse_charge_input_missing\` | Omvänd skattskyldighet booked on one side only | See step 3. Read \`check_code\`. |
@@ -55,6 +55,7 @@ Before starting, tell the user in two lines what you found (company, cadence, pe
 | \`deadline_unavailable\` | Settings do not allow a safe deadline (cadence, 40M flag, filing profile, fiscal year) | Tell the user which setting looks missing. Never state a deadline yourself. |
 | \`fiscal_year_not_found\` | Yearly period fell back to the calendar year | Re-run with \`year\` = the year the fiscal year ends; check \`gnubok_list_fiscal_periods\`. |
 | \`momsredovisning_entries_excluded\` | Information only: verifikat treated as momsredovisning and kept out of the rutor | Not a blocker. When a ruta disagrees with the ledger, these explain it; inspect with \`gnubok_query_journal\`. |
+| \`unattributed_eu_sale\` | EU sales in ruta 35/38 (high) or 39 (medium) that no customer invoice names a buyer for, so the periodisk sammanställning cannot list them | \`eu_sales\` names each verifikat. Never book the sale again; follow the hint, or the user adds the buyer in Skatteverket's e-tjänst. |
 
 \`declaration_checks\` codes you can meet: \`RC_BASIS_MISSING\`, \`RC_OUTPUT_MISSING\`, \`RC_INPUT_VAT_MISMATCH\`, \`TAXABLE_SALES_WITHOUT_OUTPUT\`, \`OUTPUT_VAT_WITHOUT_SALES_BASE\`, \`SALES_OUTPUT_VAT_SHORTFALL\`, \`REVENUE_ACCOUNT_WITHOUT_RUTA\` (a class 3 account with a balance but no momskod or momssats, so its sales reach no ruta: ask the user what the account is and set its momskod), \`IMPORT_BASE_WITHOUT_OUTPUT\`, \`IMPORT_OUTPUT_WITHOUT_BASE\`, \`SUMMA_MOMS_DRIFT\`. Each has a \`status\` (\`ERROR\` blocks filing, \`WARNING\` needs a human look) and the \`rutor\` involved. A \`WARNING\` with \`reviewable: true\` that the user confirms is right as booked (an \`RC_BASIS_MISSING\` whose basis sits in a rättelseverifikat, say) can be marked reviewed for the period with \`gnubok_mark_vat_check_reviewed\` and a note on what was checked; it then leaves the blockers and returns if the figures change. Never mark one on your own judgement, and an \`ERROR\` cannot be marked.
 

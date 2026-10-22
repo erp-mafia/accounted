@@ -536,7 +536,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
-        company_settings: { data: { bookkeeping_locked_through: '2026-12-31' }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: '2026-12-31' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -610,7 +610,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
-        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -632,7 +632,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
-        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -742,7 +742,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
-        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -764,7 +764,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
-        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -878,7 +878,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
         supabaseFor({
           company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
           suppliers: { data: SAMPLE_SUPPLIER, error: null },
-          company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+          company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
           fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
           idempotency_keys: { data: null, error: null },
         }).supabase,
@@ -1103,7 +1103,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices', () => {
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         suppliers: { data: SAMPLE_SUPPLIER, error: null },
-        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -1240,6 +1240,46 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
     expect(siInsert()).toMatchObject({ status: 'paid', paid_with_private_funds: true, remaining_amount: 0 })
     const payment = insertedRow(mock, 'supplier_invoice_payments')
     expect(payment).toMatchObject({ journal_entry_id: JE_ID, amount: 1250 })
+  })
+
+  it('paid_with_private_funds with reverse charge books the utlägg with fiktiv moms (crm#1377)', async () => {
+    install({
+      companies: { data: { entity_type: 'aktiebolag' }, error: null },
+      suppliers: { data: { ...SAMPLE_SUPPLIER, supplier_type: 'eu_business' }, error: null },
+      supplier_invoices: {
+        data: { ...SAMPLE_SI, status: 'paid', reverse_charge: true, vat_treatment: 'reverse_charge', vat_amount: 0, total: 1000 },
+        error: null,
+      },
+      chart_of_accounts: { data: [], error: null },
+    })
+    mockRegisterExpenseClaim.mockResolvedValue({
+      ok: true,
+      claim: { id: 'claim-1', journal_entry_id: JE_ID, claimant_name: 'Ägare', liability_account: '2893' },
+    })
+
+    const res = await post({
+      ...baseBody,
+      paid_with_private_funds: true,
+      reverse_charge: true,
+      items: [{ description: 'Licens', amount: 1000, account_number: '6540', vat_rate: 0 }],
+    })
+
+    expect(res.status).toBe(201)
+    expect(mockedReg).not.toHaveBeenCalled()
+    const input = mockRegisterExpenseClaim.mock.calls[0][3] as {
+      amount: number
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.amount).toBe(1000)
+    const byAccount = Object.fromEntries(input.lines.map((l) => [l.account_number, l]))
+    expect(byAccount['6540'].debit_amount).toBe(1000)
+    expect(byAccount['2645'].debit_amount).toBe(250)
+    expect(byAccount['2614'].credit_amount).toBe(250)
+    expect(byAccount['4535'].debit_amount).toBe(1000)
+    expect(byAccount['4598'].credit_amount).toBe(1000)
+    expect(byAccount['2641']).toBeUndefined()
+    expect(byAccount['2893'].credit_amount).toBe(1000)
+    expect(siInsert()).toMatchObject({ status: 'paid', paid_with_private_funds: true, reverse_charge: true, total: 1000 })
   })
 
   it('periodisering items get accrual schedules under faktureringsmetoden', async () => {
@@ -1903,7 +1943,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/mark-paid', ()
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: approvedSI, error: null },
-        company_settings: { data: { bookkeeping_locked_through: '2030-01-01' }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: '2030-01-01' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -2341,7 +2381,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: registeredSI, error: null },
-        company_settings: { data: { bookkeeping_locked_through: '2030-01-01' }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: '2030-01-01' }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -2362,7 +2402,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
         supplier_invoices: { data: registeredSI, error: null },
-        company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+        company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
         fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
@@ -2386,7 +2426,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/credit', () =>
     const flexible = supabaseFor({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       supplier_invoices: { data: { ...registeredSI, items: [] }, error: null },
-      company_settings: { data: { bookkeeping_locked_through: null }, error: null },
+      company_settings: { data: { accounting_method: 'accrual', bookkeeping_locked_through: null }, error: null },
       fiscal_periods: { data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null },
       idempotency_keys: { data: null, error: null },
     }).supabase
@@ -2569,10 +2609,10 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invo
     expect(mockedReg).not.toHaveBeenCalled()
   })
 
-  // ML 8 kap. 1 §: representation moms is deductible on at most 300 kr per
-  // person. Every registration path books the full VAT, so every path warns,
-  // not only the privately paid one.
-  it('warns REPRESENTATION_VAT_CAP on an ordinary invoice booked on 6071', async () => {
+  // ML 13 kap. 24-25 §§: representation moms is deductible on a base of at
+  // most 300 kr excl. moms per person and occasion. Every registration path
+  // books the full VAT, so every path warns, not only the privately paid one.
+  it('warns REPRESENTATION_VAT_CAP on an ordinary invoice booked on 6072', async () => {
     mockServiceClient.mockReturnValue(
       supabaseFor({
         company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -2597,7 +2637,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invo
           invoice_date: '2026-05-10',
           due_date: '2026-06-09',
           items: [
-            { description: 'Kundlunch', amount: 2000, account_number: '6071', vat_rate: 0.12 },
+            { description: 'Kundlunch', amount: 2000, account_number: '6072', vat_rate: 0.12 },
           ],
         }),
       }),
@@ -2607,5 +2647,12 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices honours defer_invo
     expect(res.status).toBe(201)
     const body = await res.json()
     expect(body.meta.warnings?.map((w: { code: string }) => w.code)).toContain('REPRESENTATION_VAT_CAP')
+    // 300 kr is the base, not the deduction (accounted#86), under the current
+    // ML 2023:200 paragraph, not ML 1994:200 8 kap. 1 §.
+    const cap = body.meta.warnings.find((w: { code: string }) => w.code === 'REPRESENTATION_VAT_CAP')
+    expect(cap.message_sv).toContain('underlag om högst 300 kr exkl. moms per person och tillfälle')
+    expect(cap.message_sv).toContain('ML 13 kap. 24-25 §§')
+    expect(cap.message_sv).not.toContain('8 kap. 1 §')
+    expect(cap.message_en).toContain('base of at most SEK 300 excl. VAT per person')
   })
 })

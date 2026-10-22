@@ -31,6 +31,7 @@ const SE_EXPECTED: Record<AccountRole, { account: string; name: string }> = {
   vat_receivable: { account: '1650', name: 'Momsfordran' },
   rounding: { account: '3740', name: 'Öres- och kronutjämning' },
   customer_advances: { account: '2420', name: 'Förskott från kunder' },
+  payment_fees: { account: '6570', name: 'Bankkostnader' },
   operating_fx_gain: { account: '3960', name: 'Valutakursvinster på fordringar och skulder av rörelsekaraktär' },
   operating_fx_loss: { account: '7960', name: 'Valutakursförluster på fordringar och skulder av rörelsekaraktär' },
   input_vat_reverse_charge_foreign: { account: '2645', name: 'Beräknad ingående moms på förvärv från utlandet' },

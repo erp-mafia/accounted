@@ -295,6 +295,14 @@ describe('planOneClick: the category and the account', () => {
   it('reads a company sub-account as its main account', () => {
     expect(costAccountFor('expense.software.saas', '5421', null)).toBe('5421')
   })
+
+  // accounted#86: a customer meal is not income-tax deductible since 2017
+  // (IL 16 kap. 2 §), so the category's usual account is 6072. A company
+  // that books the counterparty on 6071 keeps it: its own history wins.
+  it('takes 6072 for a customer meal, unless the counterparty is booked on 6071', () => {
+    expect(costAccountFor('expense.representation.client', null, null)).toBe('6072')
+    expect(costAccountFor('expense.representation.client', '6071', null)).toBe('6071')
+  })
 })
 
 describe('planOneClick: the form', () => {
@@ -497,7 +505,7 @@ describe('planOneClick: deductions a click cannot settle', () => {
     expect(plan.reason).toBe('limited_deduction')
     expect(plan.vat).toEqual({ kind: 'input', amount: 39.65, rates: [0.12] })
     expect(pairs(plan)).toEqual([
-      ['7631', 330.35, 0],
+      ['7632', 330.35, 0],
       ['2641', 39.65, 0],
       ['1930', 0, 370],
     ])

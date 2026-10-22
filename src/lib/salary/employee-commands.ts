@@ -35,7 +35,14 @@ import { isEmploymentTypeAllowedForEntity, EF_OWNER_EMPLOYMENT_ERROR } from '@/l
 import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
 import { jamkningIssueFromDbError, validateJamkning, type JamkningFields } from '@/lib/salary/jamkning-rules'
 import { extraTaxIssueFromDbError, validateExtraTax } from '@/lib/salary/extra-tax'
-import { validateEmployeeUpdate, type EmployeeUpdateIssue } from '@/lib/salary/employee-update-rules'
+import {
+  EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS,
+  SAMMALONEREGELN_KOLLEKTIVAVTAL_KEY,
+  sammaloneregelnDegreeChange,
+  validateEmployeeUpdate,
+  type EmployeeUpdateIssue,
+} from '@/lib/salary/employee-update-rules'
+import { recordSammaloneregelnKollektivavtal } from '@/lib/salary/sammaloneregeln-kollektivavtal-record'
 import { followEmployeeSalaryInDraftRuns } from '@/lib/salary/run-employees'
 
 export type EmployeeCommandResult<T> =
@@ -119,10 +126,13 @@ export function sealPersonnummer(
  * after the preview had shown the change (crm#1133). The create and update
  * sets differ exactly where the schemas do: is_active is update-only.
  * personnummer is in both schemas and never writable here (see the PII
- * contract above).
+ * contract above), and neither is a request-only key such as the
+ * sammalöneregeln kollektivavtal confirmation (not a column).
  */
 function writableColumns(shape: Record<string, unknown>): ReadonlySet<string> {
-  return new Set(Object.keys(shape).filter((key) => key !== 'personnummer'))
+  return new Set(
+    Object.keys(shape).filter((key) => key !== 'personnummer' && !EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS.has(key)),
+  )
 }
 
 export const EMPLOYEE_CREATE_COLUMNS = writableColumns(CreateEmployeeSchema.shape)
@@ -200,10 +210,15 @@ function summaryOf(masked: Record<string, unknown>, employeeId: string | null): 
   }
 }
 
+/**
+ * VALIDATION_ERROR, or the issues' own registered code when every issue
+ * carries the same one (the sammalöneregeln rule), so a door can phrase it.
+ */
 function issuesRefusal(issues: EmployeeUpdateIssue[]): EmployeeCommandResult<never> {
+  const code = issues[0].code && issues.every((i) => i.code === issues[0].code) ? issues[0].code : 'VALIDATION_ERROR'
   return {
     ok: false,
-    code: 'VALIDATION_ERROR',
+    code,
     details: {
       field: issues[0].field,
       message: issues.map((i) => i.message).join('. '),
@@ -335,6 +350,10 @@ export async function updateEmployee(
     dryRun?: boolean
     /** employees columns for `row` and `previous` ('*' by default). */
     columns?: string
+    /** Who the change is attributed to in audit_log (a kollektivavtal
+     * confirmation is recorded there): the signed-in user, the key's owner
+     * or the approver of a staged operation. */
+    userId?: string
   },
 ): Promise<EmployeeCommandResult<EmployeeUpdateData>> {
   if ('personnummer' in args.patch || 'personnummer_encrypted' in args.patch) {
@@ -364,9 +383,13 @@ export async function updateEmployee(
   const previous = project(maskRow(stored), args.columns)
 
   // Merged-state validation (#3008): `updates` keeps explicit nulls (clear)
-  // and has no undefined (unchanged) keys.
-  const issues = validateEmployeeUpdate(stored, updates)
+  // and has no undefined (unchanged) keys. The kollektivavtal confirmation is
+  // a request key, not a column, so it is read off the patch itself.
+  const kollektivavtalConfirmed = args.patch[SAMMALONEREGELN_KOLLEKTIVAVTAL_KEY] === true
+  const issues = validateEmployeeUpdate(stored, updates, { sammaloneregelnKollektivavtal: kollektivavtalConfirmed })
   if (issues.length > 0) return issuesRefusal(issues)
+  // Non-null only when the confirmation is what lets this update through.
+  const keptByKollektivavtal = kollektivavtalConfirmed ? sammaloneregelnDegreeChange(stored, updates) : null
 
   if ('employment_type' in updates) {
     // Only when the caller changes it, like the enforce_ef_no_owner_employee
@@ -416,6 +439,19 @@ export async function updateEmployee(
     const extraTaxIssue = extraTaxIssueFromDbError(error)
     if (extraTaxIssue) return issuesRefusal([extraTaxIssue])
     return { ok: false, code: 'INTERNAL_ERROR', details: { message: error.message }, cause: error }
+  }
+
+  // Semesterlagen 16 § andra stycket 3-4 would have moved this employee to
+  // procentregeln; the caller confirmed a central kollektivavtal (2 a §).
+  // Record who said so, never failing the saved update.
+  if (keptByKollektivavtal) {
+    await recordSammaloneregelnKollektivavtal({
+      companyId: args.companyId,
+      employeeId: args.employeeId,
+      userId: args.userId ?? null,
+      employmentDegreeFrom: keptByKollektivavtal.from,
+      employmentDegreeTo: keptByKollektivavtal.to,
+    })
   }
 
   // A corrected monthly salary reaches the draft runs that still start from

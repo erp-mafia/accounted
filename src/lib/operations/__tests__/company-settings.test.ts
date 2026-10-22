@@ -36,6 +36,11 @@ const NOT_ON_THE_API: Record<string, string> = {
   salary_deviation_period: 'payroll: PATCH /salary/settings',
 }
 
+/** Dashboard fields that are not columns but a parameter of one door's save. */
+const DOOR_PARAMETERS: Record<string, () => string[]> = {
+  accounting_method_correction_reason: () => keys(settingsUpdateTaxProfile.input),
+}
+
 describe('settings operations: field split', () => {
   it('lets the API and MCP read and write the bank-app payment QR switch next to the Swish one (crm#249)', () => {
     expect(keys(settingsUpdate.input)).toContain('invoice_show_payment_qr')
@@ -111,7 +116,7 @@ describe('settings operations: field split', () => {
     const doors = [...GENERAL_SETTINGS_FIELDS, ...TAX_PROFILE_FIELDS, ...BOOKKEEPING_LOCK_FIELDS] as string[]
     expect(new Set(doors).size).toBe(doors.length)
     for (const field of Object.keys(UpdateSettingsSchema.shape)) {
-      expect(doors.includes(field) || field in NOT_ON_THE_API, field).toBe(true)
+      expect(doors.includes(field) || field in NOT_ON_THE_API || !!DOOR_PARAMETERS[field]?.().includes(field), field).toBe(true)
     }
   })
 })
@@ -130,5 +135,13 @@ describe('settings resource: the org number of an enskild firma', () => {
   it("returns a legal person's org number as it is: it is public", () => {
     const resource = toSettingsResource('c1', { entity_type: 'aktiebolag', org_number: '5566778899' } as never)
     expect(resource.org_number).toBe('5566778899')
+  })
+})
+
+describe('settings resource: parameters are not settings', () => {
+  it('never answers the correction reason as a setting', () => {
+    const resource = toSettingsResource('c1', { accounting_method: 'cash', accounting_method_correction_reason: 'x' } as never)
+    expect(resource).not.toHaveProperty('accounting_method_correction_reason')
+    expect(keys(settingsUpdate.input)).not.toContain('accounting_method_correction_reason')
   })
 })

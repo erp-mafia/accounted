@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { findCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { CategorizationTemplate, Transaction } from '@/types'
 
 const RenameCounterpartyTemplateSchema = z.object({
@@ -44,14 +45,23 @@ export const GET = withRouteContext(
       })
     }
 
-    const { data, error } = await supabase
-      .from('categorization_templates')
-      .select('*')
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .order('occurrence_count', { ascending: false })
-
-    if (error) return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    // Paged: one company holds more than PostgREST's 1,000-row page; id
+    // breaks occurrence_count ties so the pages never overlap or skip.
+    let data: CategorizationTemplate[]
+    try {
+      data = await fetchAllRows<CategorizationTemplate>(({ from, to }) =>
+        supabase
+          .from('categorization_templates')
+          .select('*')
+          .eq('company_id', companyId)
+          .eq('is_active', true)
+          .order('occurrence_count', { ascending: false })
+          .order('id')
+          .range(from, to),
+      )
+    } catch (error) {
+      return NextResponse.json({ error: getUserErrorMessage(error) }, { status: 500 })
+    }
 
     return NextResponse.json({ data })
   },

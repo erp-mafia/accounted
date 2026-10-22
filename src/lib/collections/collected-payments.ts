@@ -8,6 +8,7 @@ import { normalizeCollectedPaymentRow, type CollectedPaymentRow, type CollectedP
 import { normalizeConnectionRow, type CollectionConnectionRow } from './connection'
 import { archivePaymentRecord, buildPaymentRecordModel, paymentRecordFilename, type PaymentRecordModel } from './payment-record'
 import { linkDocumentOnce } from './underlag'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 /**
  * Payments a debtor made to the collections provider instead of to the
@@ -509,13 +510,15 @@ export async function bookCollectedPayment(
     if (!invoice) return await review('INVOICE_NOT_FOUND')
     if ((invoice as { currency?: string }).currency !== 'SEK') return await review('CURRENCY_NOT_SEK')
 
-    const { data: settings, error: settingsError } = await db
+    const settingsRead = await db
       .from('company_settings')
       .select('accounting_method, entity_type')
       .eq('company_id', companyId)
       .maybeSingle()
-    if (settingsError) throw new Error(`company_settings lookup failed: ${settingsError.message}`)
-    const accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method || 'accrual'
+    // Fail closed (accounted#58): a missing row is no more "accrual" than a
+    // failed read is.
+    const accountingMethod = requireAccountingMethod(settingsRead)
+    const settings = settingsRead.data
     const entityType = await resolveCompanyEntityType(db, companyId, (settings as { entity_type?: string | null } | null)?.entity_type)
 
     // A written-off invoice: återvunnen kundförlust, never automatic (build spec 4.2 H).

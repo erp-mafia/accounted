@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
+  invalidRowsNoticeParams,
   columnsToMapping,
   countMatchedRows,
   mappingToOverrides,
@@ -191,5 +192,33 @@ describe('countMatchedRows', () => {
         { duplicate_match: null },
       ]),
     ).toBe(2)
+  })
+})
+
+// PH 204: every row was red and the reason sat behind a hover per row.
+describe('invalidRowsNoticeParams', () => {
+  it('counts the invalid rows and names the first one with its file line and error', () => {
+    const rows = [
+      { is_valid: true, validation_errors: [], row_index: 2 },
+      { is_valid: false, validation_errors: ['Ogiltig e-postadress "123 45" i kolumnen "X"'], row_index: 3 },
+      { is_valid: false, validation_errors: ['Ogiltig e-postadress "411 01" i kolumnen "X"'], row_index: 4 },
+    ]
+    expect(invalidRowsNoticeParams(rows)).toEqual({
+      count: 2,
+      row: 3,
+      error: 'Ogiltig e-postadress "123 45" i kolumnen "X"',
+    })
+  })
+
+  it('is null when every row can be imported', () => {
+    expect(invalidRowsNoticeParams([{ is_valid: true, validation_errors: [] }])).toBeNull()
+  })
+
+  it('falls back to the position when a row carries no file line', () => {
+    const rows = [
+      { is_valid: true, validation_errors: [] },
+      { is_valid: false, validation_errors: ['Fel'] },
+    ]
+    expect(invalidRowsNoticeParams(rows)?.row).toBe(3)
   })
 })

@@ -30,7 +30,11 @@ import { readV1JsonBody } from '@/lib/api/v1/body'
 import { PersonnelCategorySchema, UpdateEmployeeSchema } from '@/lib/api/schemas'
 import { decryptPersonnummer } from '@/lib/salary/personnummer'
 import { JAMKNING_END_REQUIRED, JAMKNING_START_REQUIRED } from '@/lib/salary/jamkning-rules'
-import { VAXA_START_REQUIRED, type EmployeeUpdateIssue } from '@/lib/salary/employee-update-rules'
+import {
+  EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED,
+  VAXA_START_REQUIRED,
+  type EmployeeUpdateIssue,
+} from '@/lib/salary/employee-update-rules'
 import { softDeleteEmployee } from '@/lib/salary/employee-soft-delete'
 import { updateEmployee } from '@/lib/salary/employee-commands'
 
@@ -221,6 +225,7 @@ registerEndpoint({
     'extra_tax_amount and extra_tax_percentage are exclusive: setting one while the other is stored returns 400, so send the other as null in the same PATCH. A draft run picks the change up at its next calculation.',
     'personnel_category (arbetare or tjansteman) is read when a salary run is booked: every unbooked run, including one already approved or paid, books on the new category. A booked run keeps the category it was booked with.',
     'An enskild firma cannot employ its owner or board: employment_type company_owner or board_member returns 400 VALIDATION_ERROR on employment_type (the owner takes eget uttag, not salary).',
+    'Changing employment_degree on a sammaloneregeln employee returns 400 EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED (semesterlagen 16 § second paragraph points 3-4 then calculates holiday pay under procentregeln). Send vacation_rule: "procentregeln" in the same PATCH, or sammaloneregeln_kollektivavtal_confirmed: true when a central kollektivavtal keeps sammalöneregeln (2 a §); the confirmation is recorded in the audit trail. hours_per_week and workdays_per_week do not trigger it.',
     'vaxa_stod_eligible never lowers the arbetsgivaravgifter: from redovisningsperiod 202601 (Lag 2025:1334) the AGI declares the full avgifter and the company applies to Skatteverket for the refund after filing. A salary run paid inside vaxa_stod_start..vaxa_stod_end (end optional; never past the 24th calendar month counted from the start month) notes the expected refund per employee and warns to apply.',
   ],
   example: {
@@ -324,10 +329,17 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
       patch: updates,
       dryRun: ctx.dryRun,
       columns: EMPLOYEE_DETAIL_COLUMNS,
+      userId: ctx.userId,
     })
     if (!result.ok) {
       if (result.code === 'EMPLOYEE_NOT_FOUND') {
         return v1ErrorResponseFromCode('EMPLOYEE_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
+      }
+      if (result.code === EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED) {
+        return v1ErrorResponseFromCode(EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED, ctx.log, {
+          requestId: ctx.requestId,
+          details: { field: 'vacation_rule' },
+        })
       }
       if (result.code === 'VALIDATION_ERROR') {
         // The first issue; a missing companion field names the key to send in

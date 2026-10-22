@@ -33,6 +33,7 @@ import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
 import { bankSideOf, isCashLedger, settleBankLeg, type BankSide } from './bank-leg'
 import { isSkatteverketPayment } from './skatteverket-payment'
 import { createLogger } from '@/lib/logger'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type {
   CategorizationTemplate,
   CategorizationTemplateSource,
@@ -46,6 +47,25 @@ import type {
 import type { SIEVoucher } from '@/lib/import/types'
 
 const log = createLogger('counterparty-templates')
+
+/**
+ * Every active template of the company, paged: one company holds more than
+ * PostgREST's 1,000-row page (1,527 in production), and an unpaged read
+ * returned an arbitrary 1,000, so a rule past the cut never matched and the
+ * SIE learner inserted a duplicate of it into the UNIQUE conflict. Ordered by
+ * id so the pages never overlap or skip.
+ */
+async function fetchActiveTemplates(supabase: SupabaseClient, companyId: string): Promise<CategorizationTemplate[]> {
+  return fetchAllRows<CategorizationTemplate>(({ from, to }) =>
+    supabase
+      .from('categorization_templates')
+      .select('*')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .order('id')
+      .range(from, to),
+  )
+}
 
 // ── Normalization ──────────────────────────────────────────────
 
@@ -356,18 +376,14 @@ export async function findCounterpartyTemplatesBatch(
 ): Promise<Map<string, CounterpartyTemplateMatch>> {
   const result = new Map<string, CounterpartyTemplateMatch>()
 
-  const { data: allTemplates } = await supabase
-    .from('categorization_templates')
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('is_active', true)
+  const allTemplates = await fetchActiveTemplates(supabase, companyId)
 
-  if (!allTemplates || allTemplates.length === 0) return result
+  if (allTemplates.length === 0) return result
 
   // A template learned from a line that names no one ("internet bet 1",
   // stored before namesCounterparty guarded learning) is identity-free: in
   // the token and fuzzy tiers it would claim any descriptor near its words.
-  const templates = (allTemplates as CategorizationTemplate[]).filter((t) =>
+  const templates = allTemplates.filter((t) =>
     namesCounterparty(t.counterparty_name),
   )
 
@@ -1968,24 +1984,18 @@ export async function populateTemplatesFromSieVouchers(
   if (accepted.length === 0) return 0
 
   // Step 4: Batch write
-  const { data: existingTemplates } = await supabase
-    .from('categorization_templates')
-    .select('*')
-    .eq('company_id', companyId)
-    .eq('is_active', true)
+  const existingTemplates = await fetchActiveTemplates(supabase, companyId)
 
   // Keyed by counterparty_name, then by alias: a renamed template keeps its
   // old bank-derived key as an alias (see findTemplateByKey), and a SIE
   // re-import must update that row rather than insert a duplicate.
   const templateMap = new Map<string, CategorizationTemplate>()
-  if (existingTemplates) {
-    for (const t of existingTemplates) {
-      templateMap.set(t.counterparty_name, t as CategorizationTemplate)
-    }
-    for (const t of existingTemplates) {
-      for (const alias of (t.counterparty_aliases as string[] | null) || []) {
-        if (!templateMap.has(alias)) templateMap.set(alias, t as CategorizationTemplate)
-      }
+  for (const t of existingTemplates) {
+    templateMap.set(t.counterparty_name, t)
+  }
+  for (const t of existingTemplates) {
+    for (const alias of t.counterparty_aliases || []) {
+      if (!templateMap.has(alias)) templateMap.set(alias, t)
     }
   }
 

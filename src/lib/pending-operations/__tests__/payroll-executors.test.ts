@@ -1344,6 +1344,82 @@ describe('commitPendingOperation: update_employee', () => {
     expect(result.status).not.toBe('committed')
     expect(result.error).toBe(JAMKNING_ROW_INCOMPLETE)
   })
+
+  // Semesterlagen 16 § andra stycket 3-4 (#31): a staged degree change on a
+  // sammalöneregeln employee commits only with the kollektivavtal
+  // confirmation, which is recorded as the approver and the relaying actor.
+  describe('employment degree on sammalöneregeln', () => {
+    async function sammaloneRow() {
+      const { encryptPersonnummer } = await import('@/lib/salary/personnummer')
+      return {
+        id: 'emp-1',
+        first_name: 'Anna',
+        last_name: 'Andersson',
+        personnummer: encryptPersonnummer('190001010000'),
+        salary_type: 'monthly',
+        monthly_salary: 35000,
+        employment_degree: 100,
+        vacation_rule: 'sammaloneregeln',
+        tax_table_number: 33,
+        is_sidoinkomst: false,
+        f_skatt_status: 'a_skatt',
+        vaxa_stod_eligible: false,
+        jamkning_percentage: null,
+        is_active: true,
+      }
+    }
+
+    it('refuses a staged change without the confirmation, with the Swedish sentence', async () => {
+      const { SAMMALONEREGELN_DEGREE_CHANGED } = await import('@/lib/salary/employee-update-rules')
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: await sammaloneRow() }) // fetch existing
+      enqueue({ data: null, error: null }) // finalize
+
+      const op = makePendingOp({
+        operation_type: 'update_employee',
+        params: { employee_id: 'emp-1', patch: { employment_degree: 80 } },
+      })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(result.status).not.toBe('committed')
+      expect(result.error).toBe(SAMMALONEREGELN_DEGREE_CHANGED)
+      expect(result.http_status).toBe(400)
+      expect(findCall('employees', 'update')).toBeUndefined()
+    })
+
+    it('commits with the confirmation and records it as the approver and the relaying actor', async () => {
+      const { createServiceClient } = await import('@/lib/supabase/server')
+      const auditInsert = vi.fn().mockResolvedValue({ error: null })
+      ;(createServiceClient as ReturnType<typeof vi.fn>).mockReturnValue({ from: () => ({ insert: auditInsert }) })
+      const row = await sammaloneRow()
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: row }) // fetch existing
+      enqueue({ data: { id: 'emp-1', first_name: 'Anna', last_name: 'Andersson', personnummer: row.personnummer, is_active: true } }) // update
+      enqueue({ data: null, error: null }) // finalize
+
+      const op = makePendingOp({
+        operation_type: 'update_employee',
+        params: { employee_id: 'emp-1', patch: { employment_degree: 80, sammaloneregeln_kollektivavtal_confirmed: true } },
+      })
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op, {
+        actor: { type: 'mcp_oauth', label: 'Agent' },
+      })
+
+      expect(result.status).toBe('committed')
+      expect(findCall('employees', 'update')).toEqual([{ employment_degree: 80 }])
+      expect(auditInsert).toHaveBeenCalledTimes(1)
+      expect(auditInsert.mock.calls[0][0]).toMatchObject({
+        user_id: 'user-1',
+        action: 'GUARD_BYPASSED',
+        table_name: 'employees',
+        record_id: 'emp-1',
+        actor_type: 'mcp_oauth',
+        actor_label: 'Agent',
+      })
+    })
+  })
 })
 
 describe('commitPendingOperation: generate_agi', () => {

@@ -334,6 +334,39 @@ describe('mapOrderToWebshopRow', () => {
     expect(rows[0]).toMatchObject({ is_paid: false, paid_date: null, order_date: '2026-08-01' })
   })
 
+  it('dates an order on the Swedish day, not the GMT day (#58)', () => {
+    // _gmt timestamps carry no zone suffix; they are UTC whatever zone the
+    // server runs in. Winter time: 23:30 GMT on 31 October is 00:30 on 1
+    // November in Stockholm.
+    const [winter] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      date_created_gmt: '2026-10-31T23:30:00',
+      date_paid_gmt: '2026-10-31T23:31:00',
+    }))
+    expect(winter).toMatchObject({ order_date: '2026-11-01', paid_date: '2026-11-01' })
+    // Summer time: 22:30 GMT on 31 August is 00:30 on 1 September.
+    const [summer] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      date_created_gmt: '2026-08-31T22:30:00',
+      date_paid_gmt: '2026-08-31T22:31:00',
+    }))
+    expect(summer).toMatchObject({ order_date: '2026-09-01', paid_date: '2026-09-01' })
+    // 21:30 GMT is still 23:30 on 31 August there.
+    const [evening] = mapOrderToWebshopRow(connection, 's', makeOrder({
+      date_created_gmt: '2026-08-31T21:30:00',
+      date_paid_gmt: null,
+    }))
+    expect(evening).toMatchObject({ order_date: '2026-08-31', paid_date: null })
+  })
+
+  it('dates a refund on the Swedish day too (#58)', () => {
+    const [row] = mapRefundToWebshopRow(connection, 's', makeOrder(), {
+      id: 78,
+      amount: '250.00',
+      reason: 'Retur',
+      date_created_gmt: '2026-10-31T23:30:00',
+    })
+    expect(row).toMatchObject({ order_date: '2026-11-01', paid_date: '2026-11-01' })
+  })
+
   it('skips trashed, unparseable-total and zero-total orders', () => {
     expect(mapOrderToWebshopRow(connection, 's', makeOrder({ status: 'trash' }))).toEqual([])
     expect(

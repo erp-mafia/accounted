@@ -91,6 +91,14 @@ export const SUPPLIER_PAYMENT_RULES = {
 export const KONTANTMETOD_CUTOFF_RULES =
   'Enligt kontantmetoden bokförs kund- och leverantörsfakturor som är obetalda vid räkenskapsårets utgång (BFL 5 kap 2 §) genom årsomföring: en verifikation per faktura, daterad räkenskapsårets sista dag och bokförd som fakturans registrering enligt faktureringsmetoden (intäkt eller kostnad, moms på de ordinarie momskontona, kundfordran på 1510 eller leverantörsskuld på 2440 och för ROT/RUT Skatteverkets del på 1513). Verifikationen kopplas till fakturan, så betalningen nästa år bokförs mot 1510 eller 2440 utan intäkt, kostnad eller moms, och momsen redovisas en gång, i den momsperiod som innehåller räkenskapsårets sista dag. Ingen vändning bokförs. En faktura som betalades efter årsskiftet men innan årsomföringen bokfördes rättas genom storno och rättelse av betalningsverifikationen på dess eget datum. En årsomföring kan bara ångras genom storno daterad samma dag, och bara så länge fakturan saknar betalningar och krediteringar. Äldre bokslutsavgränsningar med vändning ändras inte. Regeln infördes med ärende #3440; programversion och driftsättning framgår av behandlingshistoriken.'
 
+/**
+ * Kontantmetoden and an EU goods acquisition (#73): booked at registration,
+ * because ML 2023:200 7 kap. 26 and 40 §§ fix the moms period whatever the
+ * method. Shown in the systemdokumentation of a cash-method company.
+ */
+export const KONTANTMETOD_EU_GOODS_RULE =
+  'Enligt kontantmetoden bokförs leverantörsfakturor när de betalas. En faktura för varor från ett annat EU-land (unionsinternt förvärv, omvänd skattskyldighet) bokförs ändå när den registreras, daterad fakturadatum och som en registrering enligt faktureringsmetoden (kostnad, beskattningsunderlag på 4515, 4516 eller 4517 mot 4598, beräknad moms på 2614, 2624 eller 2634 och 2645, leverantörsskuld på 2440), eftersom momsen ska redovisas för den period då fakturan utfärdats (ML 7 kap. 26 och 40 §§). Betalningen bokförs sedan mot 2440 utan kostnad eller moms. Köp av tjänster från utlandet bokförs som tidigare vid betalning (ML 7 kap. 16 och 34 §§). Regeln infördes med ärende #73; programversion och driftsättning framgår av behandlingshistoriken.'
+
 /** Retention and integrity of the stored räkenskapsinformation. */
 export const ARCHIVE_RULES = {
   lagringsregel: 'Till och med utgången av det sjunde kalenderåret efter det kalenderår då räkenskapsåret avslutades',

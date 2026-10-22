@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { chunk } from '@/lib/utils'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 /**
  * Kontantmetoden guard for the samlingsbetalning / batch allocation
@@ -49,15 +50,17 @@ export async function findCashMethodUnbookedAllocations(
   companyId: string,
   allocations: readonly BatchAllocationRef[],
 ): Promise<CashMethodBatchCheck> {
-  const { data: settings, error: settingsError } = await supabase
-    .from('company_settings')
-    .select('accounting_method')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (settingsError) return { ok: false, error: settingsError }
-  // No settings row: the historical default is accrual, same as every other
-  // booking path.
-  if ((settings?.accounting_method || 'accrual') !== 'cash') return { ok: true, unbooked: [] }
+  // Fail closed (accounted#58): a failed read or a missing row refuses the
+  // batch instead of reading as faktureringsmetoden.
+  const method = checkAccountingMethod(
+    await supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', companyId)
+      .maybeSingle(),
+  )
+  if (!method.ok) return { ok: false, error: method.error }
+  if (method.accountingMethod !== 'cash') return { ok: true, unbooked: [] }
 
   const customerIds = Array.from(
     new Set(

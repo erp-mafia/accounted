@@ -780,6 +780,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
       },
       error: null,
     })
+    enqueue({ data: { accounting_method: 'accrual' }, error: null })
 
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
     const { status, body } = await parseJsonResponse<{ error: unknown }>(res)

@@ -193,9 +193,13 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
       }
       const bookedCount: number = json.data?.booked_count ?? 0
       const skippedCount: number = json.data?.skipped_count ?? 0
+      const noBoxCount = Array.isArray(json.data?.skipped)
+        ? (json.data.skipped as Array<{ reason?: string }>).filter((s) => s.reason === 'reverse_charge_box_unknown').length
+        : 0
       const parts: string[] = []
       if (bookedCount > 0) parts.push(`${bookedCount} bokförda`)
       if (skippedCount > 0) parts.push(`${skippedCount} överhoppade`)
+      if (noBoxCount > 0) parts.push(t('reverse_charge_skipped', { count: noBoxCount }))
       toast({
         title: 'Bulkbokföring klar',
         description: parts.join(' · ') || 'Inga underlag bokfördes',
@@ -274,14 +278,13 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
               </SelectContent>
             </Select>
 
+            {/* The box (ruta 20, 21 or 22) is each underlag's own: the server
+                reads it off the seller and the category, and leaves out an
+                underlag whose box cannot be told (lib/vat/reverse-charge-box.ts). */}
             {vatTreatment === 'reverse_charge' && (
               <div className="rounded-lg border border-border bg-secondary/40 p-3 text-xs text-muted-foreground">
-                <strong className="font-medium text-foreground">Kontrollera säljaren.</strong>{' '}
-                Omvänd skattskyldighet gäller bara köp från en <strong className="font-medium text-foreground">utländsk
-                säljare utan svenskt momsregistreringsnummer</strong>: t.ex. EU-tjänster, EU-varor,
-                byggtjänster eller viss elektronik. Valutan avgör inte: en svensk säljare kan fakturera i
-                EUR och ändå debitera 25% moms. Är säljaren svensk och momsen står på kvittot, välj i
-                stället rätt momssats ovan.
+                <strong className="font-medium text-foreground">{t('reverse_charge_check_title')}</strong>{' '}
+                {t('reverse_charge_check_body')}
               </div>
             )}
           </div>

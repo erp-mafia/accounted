@@ -55,7 +55,10 @@ const EXPENSE_ACCOUNTS: Record<string, string> = {
   expense_office: '6110',              // Kontorsförbrukning
   expense_marketing: '5910',           // Annonsering
   expense_professional_services: '6530', // Redovisningstjänster
-  expense_representation: '6071',      // Representation, avdragsgill
+  // Representation, ej avdragsgill: what this category books is nearly always
+  // a meal, which is not income-tax deductible since 2017 (IL 16 kap. 2 §).
+  // 6071 (avdragsgill) is for enklare förtäring and the like (accounted#86).
+  expense_representation: '6072',
   expense_consumables: '5460',         // Förbrukningsvaror
   expense_vehicle: '5611',             // Drivmedel bil
   expense_telecom: '6230',             // Datakommunikation (6200 är gruppkonto)

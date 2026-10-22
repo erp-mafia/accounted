@@ -59,6 +59,7 @@ import {
   bookRegistrationBeforeSettlement,
   planRegistrationBeforeSettlement,
 } from '@/lib/supplier-invoices/registration-first'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 /**
  * The transactions row as the doors read it (`select('*')`): the fields the
@@ -125,13 +126,21 @@ export async function bookSupplierBankMatch(
   const transactionId = transaction.id
   const supplierInvoiceId = invoice.id
 
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('accounting_method')
-    .eq('company_id', companyId)
-    .single()
-
-  const accountingMethod = settings?.accounting_method || 'accrual'
+  // Fail closed (accounted#58): planned as faktureringsmetoden, a
+  // kontantmetod invoice that was never booked would only clear 2440 and its
+  // cost and ingående moms would never be booked.
+  const method = checkAccountingMethod(
+    await supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', companyId)
+      .single(),
+  )
+  if (!method.ok) {
+    log.error('supplier bank match refused: accounting method unavailable', method.error)
+    return { ok: false, code: method.code, details: method.details }
+  }
+  const { accountingMethod } = method
 
   // Credit the cash account THIS transaction actually belongs to, never a
   // company-wide "last used" preference: last_supplier_payment_account is

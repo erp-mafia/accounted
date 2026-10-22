@@ -38,6 +38,13 @@ vi.mock('@/lib/tax/deadline-generator', async (importOriginal) => {
   return { ...actual, regenerateTaxDeadlinesForUser: deadlineMocks.regenerate }
 })
 
+// The correction record goes to audit_log with the service role.
+const auditInsert = vi.hoisted(() => vi.fn().mockResolvedValue({ error: null }))
+vi.mock('@/lib/supabase/server', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/supabase/server')>()
+  return { ...actual, createServiceClient: () => ({ from: () => ({ insert: auditInsert }) }) }
+})
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { propagateLegacyPayeeWrite } from '@/lib/cash-accounts/invoice-payee'
 import { GET as getSettings, PATCH as updateSettings } from '../route'
@@ -418,6 +425,65 @@ describe('PATCH /api/v1/companies/:companyId/settings/tax-profile', () => {
     expect(body.error.code).toBe('ACCOUNTING_METHOD_CHANGE_MID_YEAR')
     expect(body.error.details).toMatchObject({ fiscal_period_id: 'fp-2026', posted_entries: 12 })
     expect(client.updates('company_settings')).toHaveLength(0)
+  })
+
+  it('corrects the method mid-year with a stated reason and records it as a correction (PH 187)', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: [
+        { data: { ...STORED, id: 'settings-1', accounting_method: 'accrual' } },
+        { data: { ...STORED, id: 'settings-1', accounting_method: 'cash' } },
+      ],
+      fiscal_periods: { data: { id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' } },
+      journal_entries: [{ data: null, count: 112, error: null }, { data: [], count: 0, error: null }],
+      invoices: { data: null, count: 0, error: null },
+      supplier_invoices: { data: null, count: 0, error: null },
+      deadlines: HAS_DEADLINES,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(
+      patch(URL_, { accounting_method: 'cash', accounting_method_correction_reason: 'Fel metod valdes vid inflyttningen' }),
+      params,
+    )
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.accounting_method).toBe('cash')
+    // The reason is not a column: the row gets the method, audit_log the why.
+    expect(client.updates('company_settings')).toEqual([
+      expect.not.objectContaining({ accounting_method_correction_reason: expect.anything() }),
+    ])
+    expect(auditInsert).toHaveBeenCalledWith(expect.objectContaining({
+      action: 'GUARD_BYPASSED',
+      table_name: 'company_settings',
+      new_state: expect.objectContaining({ guard: 'accounting_method_mid_year', reason: 'Fel metod valdes vid inflyttningen' }),
+    }))
+  })
+
+  it('409 ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES while an open invoice has no verifikat of its own', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      company_settings: { data: { ...STORED, accounting_method: 'accrual' } },
+      fiscal_periods: { data: { id: 'fp-2026', name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' } },
+      journal_entries: { data: null, count: 12, error: null },
+      invoices: { data: null, count: 3, error: null },
+      supplier_invoices: { data: null, count: 0, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await updateTaxProfile(
+      patch(URL_, { accounting_method: 'cash', accounting_method_correction_reason: 'Fel metod valdes vid inflyttningen' }),
+      params,
+    )
+    expect(res.status).toBe(409)
+    expect((await res.json()).error.code).toBe('ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES')
+    expect(client.updates('company_settings')).toHaveLength(0)
+    expect(auditInsert).not.toHaveBeenCalled()
+  })
+
+  it('400 for a correction reason too short to say anything, and for a reason alone', async () => {
+    mockServiceClient.mockReturnValue(makeClient({ company_members: OWNER }))
+    const short = await updateTaxProfile(patch(URL_, { accounting_method: 'cash', accounting_method_correction_reason: 'fel' }), params)
+    expect(short.status).toBe(400)
+    const alone = await updateTaxProfile(patch(URL_, { accounting_method_correction_reason: 'Fel metod valdes vid inflyttningen' }), params)
+    expect(alone.status).toBe(400)
   })
 
   it('lets the method change while the current fiscal year has no posted verifikat (the onboarding fix)', async () => {

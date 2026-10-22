@@ -26,6 +26,7 @@ import {
 import { CUSTOMER_RECORD_COLUMNS, CustomerRecordSchema } from '@/lib/customers/customer-record'
 import { SUPPLIER_RECORD_COLUMNS, SupplierRecordSchema } from '@/lib/suppliers/supplier-record'
 import { encryptPersonnummer } from '@/lib/salary/personnummer'
+import { EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS } from '@/lib/salary/employee-update-rules'
 import { tools } from '../server'
 
 const tool = (name: string) => {
@@ -143,10 +144,12 @@ describe('party readers return every field their writers accept', () => {
       { employee_id: EMPLOYEE_ID }, COMPANY_ID, 'user-1', supabase as never, { type: 'api_key' },
     )) as Record<string, unknown>
 
+    // A request-only key (the sammalöneregeln kollektivavtal confirmation)
+    // stores nothing on the employee: its record is the audit_log row.
     const writerKeys = [
       ...schemaKeys(UpdateEmployeeSchema),
       ...toolArgKeys('gnubok_update_employee', ['employee_id']),
-    ]
+    ].filter((key) => !EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS.has(key))
     expect(unreadable(writerKeys, output)).toEqual([])
     expect(output.contact).toEqual({
       email: 'v:email',

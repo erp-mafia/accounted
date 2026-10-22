@@ -31,7 +31,13 @@
  *              consent ended once the second is valid;
  *   sync       "Synka nu": one read with the person present;
  *   disconnect the shared disconnect RPC, then the consent ended at the bank
- *              under the revocation claim of the 'openpayments' namespace.
+ *              under the revocation claim of the 'openpayments' namespace; a
+ *              consent the bank did not end stays named on the removed row.
+ *
+ * Connect counts one bank connection per company: a consent holds the place
+ * until it is ended. When it refuses a new consent over that, start ends the
+ * consents the company no longer needs (the one a renewal replaces, and the
+ * removed rows' unended ones) and asks once more.
  *
  * The signer's personnummer comes from their BankID login or the number they
  * typed; it is sent to the bank and never logged. The number a consent was
@@ -185,6 +191,13 @@ export interface ConsentAttempt {
    * was created with. Cleared when a new consent is created for the row.
    */
   co_signing?: boolean
+  /**
+   * A removed connection only: its consent, which the bank did not end when
+   * the connection was removed. Connect counts it against the company's one
+   * bank connection until it is ended, so the next attempt ends it first
+   * (releaseHeldConsents); cleared once it is.
+   */
+  unended_consent_id?: string | null
   /** Kept through finalize for the selection step (listing_only, replace_connection_id, extended_history_days, and Svea's chosen accounts). */
   selection?: {
     listing_only?: boolean
@@ -224,6 +237,10 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 /** Connect's refusal when the company already holds its one bank connection (or an attempt in progress). */
 const CONNECTOR_QUOTA_EXCEEDED = 'CONNECTOR_QUOTA_EXCEEDED'
+
+function isQuotaRefusal(error: unknown): boolean {
+  return error instanceof BankFeedError && error.code === CONNECTOR_QUOTA_EXCEEDED
+}
 
 function providerFailure(error: unknown, log?: Pick<OperationContext['log'], 'warn'>): Failure {
   if (error instanceof ConsentOverError) return { ok: false, code: 'BANK_CONSENT_OVER', details: { provider_code: error.providerCode } }
@@ -517,12 +534,15 @@ export interface StartInput {
   now?: number
 }
 
-/** What a renewal takes from the Open Payments row it replaces: the bank and the agreement the consent was granted under. */
+/** What a renewal takes from the Open Payments row it replaces: the bank and the agreement the consent was granted under, and the consent it holds. */
 interface RenewedConnection {
+  id: string
   bic: string | null
   affiliated_aspsp_id: string | null
   bank_name: string | null
   psu_type: string | null
+  /** The consent being replaced: ended when Connect needs the company's one place for the new one (releaseHeldConsents). */
+  session_id: string | null
 }
 
 /** Where a redirect signing sends the browser back: the entry point, on the resolved app origin; the signatory page carries its link token. */
@@ -613,12 +633,12 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
   if (input.replaceConnectionId) {
     const { data: replaced, error } = await ctx.supabase
       .from('bank_connections')
-      .select('id, status, aggregator, bic, affiliated_aspsp_id, bank_name, psu_type')
+      .select('id, status, aggregator, bic, affiliated_aspsp_id, bank_name, psu_type, session_id')
       .eq('id', input.replaceConnectionId)
       .eq('company_id', ctx.companyId)
       .maybeSingle()
     if (error) throw error
-    const old = replaced as ({ id: string; status: string; aggregator?: string | null } & RenewedConnection) | null
+    const old = replaced as ({ status: string; aggregator?: string | null } & RenewedConnection) | null
     if (!old || old.status === 'revoked') return { ok: false, code: 'NOT_FOUND', details: { field: 'replace_connection_id' } }
     if (aggregatorOf(old) === 'open_payments') renewed = old
   }
@@ -698,12 +718,26 @@ export async function startBankFeedConsent(ctx: OperationContext, input: StartIn
   }
 
   const listingOnly = bank.bic === SVEA_BIC
-  let created
+  const createConsent = () => connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now) })
+  let created: Awaited<ReturnType<typeof createConsent>> | null = null
   try {
-    created = await connect.createConsent(ctx.companyId, { party: party.party, validUntil: validUntilRequested(now) })
+    created = await createConsent()
   } catch (error) {
-    ctx.log.warn('bank consent did not start', { code: error instanceof BankFeedError ? error.code : undefined })
-    return providerFailure(error, ctx.log)
+    // Connect holds one bank connection per company. A place held by a
+    // consent this company no longer needs (the one a renewal replaces, or a
+    // removed connection's that the bank did not end at the time) is freed,
+    // and the consent asked for once more.
+    let failure: unknown = error
+    if (isQuotaRefusal(error) && (await releaseHeldConsents(ctx, connect, renewed))) {
+      created = await createConsent().catch((retryError: unknown) => {
+        failure = retryError
+        return null
+      })
+    }
+    if (!created) {
+      ctx.log.warn('bank consent did not start', { code: failure instanceof BankFeedError ? failure.code : undefined })
+      return providerFailure(failure, ctx.log)
+    }
   }
 
   const attempt: ConsentAttempt = {
@@ -1254,6 +1288,92 @@ export async function syncBankFeedConnection(
   return { ok: false, code, details }
 }
 
+/**
+ * Ends the consent of a removed connection at the bank, under the claim that
+ * fences a new holder while the call is out: 'ended' now, 'already_ended'
+ * earlier, 'busy' while another call holds the claim, 'failed' when the
+ * bank, Connect or the claim did not answer (the consent may still be live).
+ */
+async function endRemovedConsent(
+  ctx: OperationContext,
+  connect: BankFeedConnect,
+  row: Pick<Row, 'id' | 'bic' | 'affiliated_aspsp_id' | 'psu_type'>,
+  consentId: string,
+): Promise<'ended' | 'already_ended' | 'busy' | 'failed'> {
+  const service = createServiceClient()
+  const identity = { p_provider: AGGREGATOR_SESSION_NAMESPACE.open_payments, p_session_id: consentId }
+  try {
+    const { data: claim, error: claimError } = await service.rpc('claim_bank_session_revocation', identity)
+    if (claimError) throw claimError
+    const token = claim as { claimed?: boolean; token?: string; reason?: string } | null
+    if (token?.claimed !== true || typeof token.token !== 'string') return token?.reason === 'already-revoked' ? 'already_ended' : 'busy'
+    let succeeded = false
+    const party = await partyFor(ctx, row, UNATTENDED_SIGNER, false)
+    if (party.ok) {
+      succeeded = await connect.revokeConsent(ctx.companyId, { party: party.party, consentId }).then(() => true, () => false)
+    }
+    await service.rpc('finish_bank_session_revocation', { ...identity, p_claim_token: token.token, p_succeeded: succeeded })
+    if (!succeeded) ctx.log.warn('bank consent not ended at the bank', { connectionId: row.id })
+    return succeeded ? 'ended' : 'failed'
+  } catch (error) {
+    ctx.log.warn('bank consent not ended at the bank', { connectionId: row.id, message: error instanceof Error ? error.message : String(error) })
+    return 'failed'
+  }
+}
+
+/** The removed connection's consent, kept on the row while the bank has not ended it; null clears it once it has. */
+async function markUnendedConsent(ctx: OperationContext, row: Pick<Row, 'id' | 'consent_attempt'>, consentId: string | null): Promise<void> {
+  const { unended_consent_id: _previous, ...attempt } = row.consent_attempt ?? {}
+  const { error } = await ctx.supabase
+    .from('bank_connections')
+    .update({ consent_attempt: consentId ? { ...attempt, unended_consent_id: consentId } : attempt })
+    .eq('id', row.id)
+    .eq('company_id', ctx.companyId)
+    .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
+    .eq('status', 'revoked')
+  if (error) ctx.log.warn('unended bank consent not recorded', { connectionId: row.id, message: error.message })
+}
+
+/**
+ * Frees the company's one place at Connect (one bank connection per company:
+ * an active consent holds it until ended, an unsigned one for 15 minutes)
+ * from consents the company no longer needs: the consent a renewal replaces,
+ * and the consents of removed connections the bank did not end at the time.
+ * Called when Connect refuses a new consent over that limit. True when a
+ * consent was ended now, so asking again can succeed.
+ */
+async function releaseHeldConsents(ctx: OperationContext, connect: BankFeedConnect, renewed: RenewedConnection | null): Promise<boolean> {
+  let freed = false
+  // The renewal's own consent: the person asked for a new one in its place,
+  // and the new one supersedes the row once it is valid.
+  if (renewed?.session_id) {
+    const party = await partyFor(ctx, renewed, UNATTENDED_SIGNER, false)
+    if (party.ok) {
+      freed = await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: renewed.session_id }).then(() => true, () => false)
+    }
+    if (!freed) ctx.log.warn('renewed bank consent not ended before the new one', { connectionId: renewed.id })
+  }
+  const { data, error } = await ctx.supabase
+    .from('bank_connections')
+    .select('id, bic, affiliated_aspsp_id, psu_type, consent_attempt')
+    .eq('company_id', ctx.companyId)
+    .eq('aggregator', OPEN_PAYMENTS_AGGREGATOR)
+    .eq('status', 'revoked')
+    .not('consent_attempt->>unended_consent_id', 'is', null)
+  if (error) {
+    ctx.log.warn('removed connections with a live consent not read', { message: error.message })
+    return freed
+  }
+  for (const removed of (data ?? []) as Array<Pick<Row, 'id' | 'bic' | 'affiliated_aspsp_id' | 'psu_type' | 'consent_attempt'>>) {
+    const consentId = removed.consent_attempt?.unended_consent_id
+    if (!consentId) continue
+    const outcome = await endRemovedConsent(ctx, connect, removed, consentId)
+    if (outcome === 'ended' || outcome === 'already_ended') await markUnendedConsent(ctx, removed, null)
+    if (outcome === 'ended') freed = true
+  }
+  return freed
+}
+
 /** Remove the connection and end its consent at the bank. */
 export async function disconnectBankFeedConnection(ctx: OperationContext, connectionId: string): Promise<OperationOutcome<{ connection_id: string }>> {
   const row = await loadRow(ctx, connectionId)
@@ -1267,26 +1387,12 @@ export async function disconnectBankFeedConnection(ctx: OperationContext, connec
   }
 
   // The local disconnect stands. Ending the consent at the bank is best
-  // effort, under a claim that fences a new holder while the call is out.
+  // effort; one the bank did not end stays on the row, because Connect keeps
+  // counting it as the company's bank connection: the next attempt ends it.
   const connect = getBankFeedConnect()
   if (released.session_id && row.bic && connect) {
-    const service = createServiceClient()
-    const identity = { p_provider: AGGREGATOR_SESSION_NAMESPACE.open_payments, p_session_id: released.session_id }
-    try {
-      const { data: claim, error: claimError } = await service.rpc('claim_bank_session_revocation', identity)
-      if (claimError) throw claimError
-      const token = (claim as { claimed?: boolean; token?: string } | null)
-      if (token?.claimed === true && typeof token.token === 'string') {
-        let succeeded = false
-        const party = await partyFor(ctx, row, UNATTENDED_SIGNER, false)
-        if (party.ok) {
-          succeeded = await connect.revokeConsent(ctx.companyId, { party: party.party, consentId: released.session_id }).then(() => true, () => false)
-        }
-        await service.rpc('finish_bank_session_revocation', { ...identity, p_claim_token: token.token, p_succeeded: succeeded })
-      }
-    } catch (error) {
-      ctx.log.warn('bank consent not ended at the bank', { message: error instanceof Error ? error.message : String(error) })
-    }
+    const outcome = await endRemovedConsent(ctx, connect, row, released.session_id)
+    if (outcome === 'failed') await markUnendedConsent(ctx, row, released.session_id)
   }
   await emitQuietly(ctx, {
     type: 'bank_connection.revoked',

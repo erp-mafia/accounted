@@ -689,6 +689,8 @@ describe('POST /items/:id/convert: exchange rate + SEK amounts', () => {
     const { supabase, enqueue, captured } = setup()
     enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
     enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+    // The settings row is read (and must be readable, #58) before the rate.
+    enqueue({ data: makeCompanySettings({ accounting_method: 'cash' }) })
     mockFetchExchangeRate.mockResolvedValue(null)
 
     const res = await route.handler(request({ currency: 'USD' }), buildCtx(supabase))

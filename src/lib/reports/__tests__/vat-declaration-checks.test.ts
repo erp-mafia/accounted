@@ -702,6 +702,104 @@ describe('runVatDeclarationChecks', () => {
   })
 })
 
+// #83: Skatteverket's FK001-FK004 test presence ("om belopp anges", any filed
+// whole-krona amount, negative included), the same as FK005/FK006 (crm#1348).
+// The proportional and binary checks only see a positive side, so a credit
+// that moved one half of a sale or a reverse-charge purchase read as clean.
+describe('FK001-FK004 presence (#83)', () => {
+  // The messages format kronor as sv-SE does (minus sign, no-break space).
+  const kr = (amount: number) => `${amount.toLocaleString('sv-SE')} kr`
+
+  it('flags ERROR for a negative sales base with rutor 10-12 empty (FK001)', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta05: -2000.4 }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['TAXABLE_SALES_WITHOUT_OUTPUT'])
+    const [finding] = findings
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toContain('FK001')
+    expect(finding.message).toContain(`ruta 05 ${kr(-2000)}`)
+    expect(finding.message).toContain('kreditfaktura')
+    expect(finding.detail).toContain('4.1.1.5')
+    expect(isFilingBlocked(findings)).toBe(true)
+  })
+
+  it('flags ERROR for negative output VAT with rutor 05-08 empty (FK002)', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta10: -500, ruta49: -500 }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['OUTPUT_VAT_WITHOUT_SALES_BASE'])
+    expect(findings[0].status).toBe('ERROR')
+    expect(findings[0].message).toContain('FK002')
+    expect(findings[0].message).toContain(`ruta 10 ${kr(-500)}`)
+  })
+
+  it('flags ERROR for a negative reverse-charge basis with rutor 30-32 empty (FK003)', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta21: -4000 }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['RC_OUTPUT_MISSING'])
+    expect(findings[0].status).toBe('ERROR')
+    expect(findings[0].message).toContain('FK003')
+    expect(findings[0].message).toContain('storno')
+    expect(isFilingBlocked(findings)).toBe(true)
+  })
+
+  it('flags ERROR for negative fiktiv moms with rutor 20-24 empty (FK004)', () => {
+    const rutor: VatDeclarationRutor = { ...emptyRutor, ruta30: -1000, ruta48: -1000, ruta49: 0 }
+    const findings = runVatDeclarationChecks(rutor)
+    expect(findings.map((f) => f.code)).toEqual(['RC_BASIS_MISSING'])
+    expect(findings[0].status).toBe('ERROR')
+    expect(findings[0].message).toContain('FK004')
+    expect(findings[0].message).toContain(`ruta 30 ${kr(-1000)}`)
+  })
+
+  it('does not flag a sale or a reverse-charge purchase credited in full, both halves together', () => {
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta05: -1000, ruta10: -250, ruta49: -250 })).toEqual([])
+    expect(runVatDeclarationChecks({
+      ...emptyRutor, ruta21: -4000, ruta30: -1000, ruta48: -1000, ruta49: 0,
+    })).toEqual([])
+  })
+
+  // Presence is per ruta: two rutor of one side that net to zero still file
+  // two amounts, while the proportional rule sees a zero sum.
+  it('flags fiktiv moms rutor that net to zero when rutor 20-24 are empty', () => {
+    const findings = runVatDeclarationChecks({ ...emptyRutor, ruta30: 120, ruta31: -120 })
+    const finding = findings.find((f) => f.code === 'RC_BASIS_MISSING')
+    expect(finding?.status).toBe('ERROR')
+    expect(finding?.message).toContain('FK004')
+    expect(finding?.message).toContain(`ruta 30 ${kr(120)}, ruta 31 ${kr(-120)}`)
+  })
+
+  // A counterpart of öre only files as 0 kr, so Skatteverket sees no amount:
+  // 4 kr of sales with 0.90 kr of moms is refused (FK001), while the binary
+  // check reads the 0.90 as output VAT and the proportional one stays inside
+  // its 1 kr tolerance.
+  it('flags a whole-krona sales base whose output VAT is öre only (FK001)', () => {
+    const findings = runVatDeclarationChecks({ ...emptyRutor, ruta05: 4, ruta10: 0.9, ruta49: 0.9 })
+    expect(findings.map((f) => f.code)).toEqual(['TAXABLE_SALES_WITHOUT_OUTPUT'])
+    expect(findings[0].message).toContain('FK001')
+  })
+
+  // A negative side of öre only files as 0 kr. (A positive one above the
+  // 0.50 kr epsilon is the existing checks' to judge, as before.)
+  it('does not flag a negative side that holds öre only', () => {
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta05: -0.8 })).toEqual([])
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta10: -0.8, ruta49: -0.8 })).toEqual([])
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta21: -0.8 })).toEqual([])
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta30: -0.8, ruta48: -0.8 })).toEqual([])
+    expect(runVatDeclarationChecks({ ...emptyRutor, ruta21: 0.8 })).toEqual([])
+  })
+
+  // The positive cases keep the findings and messages they had: the presence
+  // rule only adds what they missed.
+  it('keeps the proportional and binary messages for positive sides', () => {
+    const [rcBasis] = runVatDeclarationChecks({ ...emptyRutor, ruta30: 2500, ruta48: 2500 })
+    expect(rcBasis.code).toBe('RC_BASIS_MISSING')
+    expect(rcBasis.message).toMatch(/^Omvänd moms utan underlag/)
+    const [sales] = runVatDeclarationChecks({ ...emptyRutor, ruta05: 10000 })
+    expect(sales.code).toBe('TAXABLE_SALES_WITHOUT_OUTPUT')
+    expect(sales.message).toMatch(/^Du har redovisat momspliktig försäljning/)
+  })
+})
+
 // #3387: revenue on a class 3 account the declaration cannot classify reaches
 // no ruta, while its output VAT on 2611 still reaches ruta 10. With other
 // ruta 05 sales in the period every rutor-level check stays green, so the

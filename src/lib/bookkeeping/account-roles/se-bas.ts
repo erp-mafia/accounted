@@ -35,6 +35,8 @@ export const SE_BAS_ACCOUNT_ROLES: Readonly<Record<AccountRole, string>> = Objec
   rounding: '3740',
   /** 2420 Förskott från kunder. */
   customer_advances: '2420',
+  /** 6570 Bankkostnader. */
+  payment_fees: '6570',
   /** 3960 Valutakursvinster på fordringar och skulder av rörelsekaraktär. */
   operating_fx_gain: '3960',
   /** 7960 Valutakursförluster på fordringar och skulder av rörelsekaraktär. */

@@ -605,17 +605,28 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'representation',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '6071',
+    // A meal (the restaurant MCCs, 12 % moms, lunch and middag below) is not
+    // deductible for income tax since 2017 (IL 16 kap. 2 §), so it books on
+    // 6072 Representation, ej avdragsgill; 6071 is for what stays deductible,
+    // such as enklare förtäring (swedish-daily-bookkeeping, B1). accounted#86.
+    debit_account: '6072',
     credit_account: '1930',
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,
     deductibility: 'conditional',
-    deductibility_note_sv: 'Momsavdrag på högst 300 kr/person (schablon 46 kr/person vid mat och alkohol); måltider inte avdragsgilla för inkomstskatt sedan 2017',
+    // 300 kr is the VAT BASE per person and occasion, not the deduction
+    // (ML 13 kap. 24-25 §§). The template has no participant count, so it
+    // books the VAT on the whole amount: right up to the cap, and the note
+    // tells the reviewer to check the moms line above it.
+    deductibility_note_sv: 'Måltider är inte avdragsgilla för inkomstskatt sedan 2017 och bokas på 6072. Momsen är avdragsgill på ett underlag om högst 300 kr exkl. moms per person och tillfälle (högst 36 kr per person för enbart mat på restaurang, schablon 46 kr vid mat och alkohol): kontrollera momsraden mot antalet deltagare. Enklare förtäring (fika, högst 60 kr per person exkl. moms) bokas på 6071.',
     // Said where it goes: "Dokumentera" alone read as "upload a file", and
     // a written note on the verifikat is enough (crm#1342).
     special_rules_sv: 'Skriv syfte och deltagare (namn och företag) i verifikatets anteckning, eller bifoga ett underlag där de står.',
     mcc_codes: [5812, 5813, 5814],
-    keywords: ['representation', 'lunch', 'middag', 'restaurang', 'restaurant', 'kund', 'kundmöte', 'gåva', 'present', 'representationsgåva'],
+    // Meal words only. A gift is not a meal: within 300 kr excl. moms it is
+    // deductible (6071) and usually carries 25 % moms, so proposing this
+    // template (6072, 12 %) for one was wrong twice (accounted#86).
+    keywords: ['representation', 'lunch', 'middag', 'restaurang', 'restaurant', 'kund', 'kundmöte'],
     risk_level: 'HIGH',
     requires_review: true,
     impact_score: 7,
@@ -632,13 +643,17 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     group: 'representation',
     direction: 'expense',
     entity_applicability: 'all',
-    debit_account: '7631',
+    // The staff twin of representation_external: a teamlunch or a julbord is
+    // a meal, not income-tax deductible since 2017 (IL 16 kap. 2 §), so it
+    // books on 7632; 7631 is for enklare förtäring and the personalfest's
+    // kringkostnader (swedish-daily-bookkeeping, B2). accounted#86.
+    debit_account: '7632',
     credit_account: '1930',
     vat_treatment: 'reduced_12',
     vat_rate: 0.12,
     deductibility: 'conditional',
-    deductibility_note_sv: 'Enklare förtäring avdragsgill upp till 60 kr/person; måltider inte avdragsgilla för inkomstskatt sedan 2017',
-    special_rules_sv: 'Personalfest, teamlunch, fika. Momsavdrag på högst 300 kr/person (schablon 46 kr/person vid mat och alkohol).',
+    deductibility_note_sv: 'Måltider är inte avdragsgilla för inkomstskatt sedan 2017 och bokas på 7632. Enklare förtäring (fika, högst 60 kr per person exkl. moms) och kringkostnader vid personalfest (högst 180 kr per person exkl. moms) bokas på 7631.',
+    special_rules_sv: 'Personalfest, teamlunch, fika. Momsen är avdragsgill på ett underlag om högst 300 kr exkl. moms per person och tillfälle (högst 36 kr per person för enbart mat på restaurang, schablon 46 kr vid mat och alkohol).',
     mcc_codes: [5812, 5813, 5814],
     keywords: ['personalfest', 'intern representation', 'teamlunch', 'personallunch', 'fika', 'julfest', 'after work', 'intern lunch'],
     risk_level: 'LOW',

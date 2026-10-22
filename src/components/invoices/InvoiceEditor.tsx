@@ -3501,6 +3501,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
             entityType,
           },
           paidAccount,
+          { deferDeductionShare: accountingMethod === 'cash' },
         )
       : []
     confirmVoucher =

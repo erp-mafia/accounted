@@ -7,6 +7,7 @@
 
 import { NextResponse } from 'next/server'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 export function employeeCommandErrorResponse(result: {
   code: string
@@ -17,6 +18,18 @@ export function employeeCommandErrorResponse(result: {
     case 'VALIDATION_ERROR':
       return NextResponse.json(
         { error: (result.details?.message as string | undefined) ?? 'Ogiltiga uppgifter för den anställda' },
+        { status: 400 },
+      )
+    case 'EMPLOYEE_SAMMALONEREGELN_DEGREE_CHANGED':
+      // The sentence names both ways out (procentregeln, or the kollektivavtal
+      // confirmation); the code rides along for a client that dispatches on it.
+      return NextResponse.json(
+        {
+          error: result.details?.message
+            ? `${result.details.message as string}.`
+            : getErrorEntry(result.code)?.message_sv,
+          code: result.code,
+        },
         { status: 400 },
       )
     case 'EMPLOYEE_DUPLICATE_PERSONNUMMER':

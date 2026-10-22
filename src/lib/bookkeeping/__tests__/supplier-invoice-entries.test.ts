@@ -3008,6 +3008,93 @@ describe('dimensions propagation (PR7): createSupplierInvoiceCashEntry', () => {
   })
 })
 
+// crm#1377: a reverse-charge invoice someone paid privately (an EU SaaS on
+// the owner's card). The company still reports the moms, so the utlägg books
+// the reverse-charge sets of the registration verifikat instead of 2641, and
+// the person is owed the net.
+describe('buildSupplierInvoicePrivatelyPaidLines: reverse charge', () => {
+  const NO_MOMSKODER: Momskoder = new Map()
+  const rcInvoice = (overrides: Partial<SupplierInvoice> = {}) =>
+    makeSupplierInvoice({
+      subtotal: 100,
+      vat_amount: 0,
+      total: 100,
+      currency: 'EUR',
+      exchange_rate: 11.123,
+      reverse_charge: true,
+      vat_treatment: 'reverse_charge',
+      ...overrides,
+    })
+  const rcItem = (overrides: Partial<SupplierInvoiceItem> = {}) =>
+    makeItem({ line_total: 100, account_number: '6540', vat_rate: 0, vat_amount: 0, reverse_charge_rate: 0.25, ...overrides })
+
+  it('EU service on an ordinary cost account: fiktiv moms and the ruta 21 basis pair, in the invoice currency', () => {
+    const lines = buildSupplierInvoicePrivatelyPaidLines(rcInvoice(), [rcItem()], '2893', DESC, {
+      supplierType: 'eu_business',
+      chartVatTreatments: NO_MOMSKODER,
+    })
+
+    expect(claimLinesByAccount(lines, '6540')[0].debit_amount).toBe(100)
+    expect(claimLinesByAccount(lines, '2645')[0].debit_amount).toBe(25)
+    expect(claimLinesByAccount(lines, '2614')[0].credit_amount).toBe(25)
+    expect(claimLinesByAccount(lines, '4535')[0].debit_amount).toBe(100)
+    expect(claimLinesByAccount(lines, '4598')[0].credit_amount).toBe(100)
+    expect(claimLinesByAccount(lines, '2641')).toHaveLength(0)
+    // The seller charged no moms: the liability is what the person paid.
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(100)
+    assertClaimLinesBalanced(lines)
+  })
+
+  it('a cost on 4535 reports ruta 21 itself: fiktiv moms only, no basis pair', () => {
+    const lines = buildSupplierInvoicePrivatelyPaidLines(
+      rcInvoice({ subtotal: 180, total: 180 }),
+      [rcItem({ line_total: 180, account_number: '4535' })],
+      '2893',
+      DESC,
+      { supplierType: 'eu_business', chartVatTreatments: NO_MOMSKODER },
+    )
+
+    expect(lines.map((l) => l.account_number).sort()).toEqual(['2614', '2645', '2893', '4535'])
+    expect(claimLinesByAccount(lines, '2645')[0].debit_amount).toBe(45)
+    expect(claimLinesByAccount(lines, '2614')[0].credit_amount).toBe(45)
+    expect(claimLinesByAccount(lines, '2893')[0].credit_amount).toBe(180)
+    assertClaimLinesBalanced(lines)
+  })
+
+  it('books what the registration books: non-EU (ruta 22), EU goods (ruta 20) and one 26x4 per self-assessed rate', () => {
+    const nonEu = buildSupplierInvoicePrivatelyPaidLines(rcInvoice(), [rcItem()], '2893', DESC, {
+      supplierType: 'non_eu_business',
+      chartVatTreatments: NO_MOMSKODER,
+    })
+    expect(claimLinesByAccount(nonEu, '4531')[0].debit_amount).toBe(100)
+    expect(claimLinesByAccount(nonEu, '4535')).toHaveLength(0)
+
+    const goods = buildSupplierInvoicePrivatelyPaidLines(
+      rcInvoice({ reverse_charge_kind: 'eu_goods' }), [rcItem({ account_number: '4010' })], '2893', DESC,
+      { supplierType: 'eu_business', chartVatTreatments: NO_MOMSKODER },
+    )
+    expect(claimLinesByAccount(goods, '4515')[0].debit_amount).toBe(100)
+
+    const mixed = buildSupplierInvoicePrivatelyPaidLines(
+      rcInvoice({ subtotal: 300, total: 300 }),
+      [rcItem({ line_total: 200 }), rcItem({ line_total: 100, account_number: '6250', reverse_charge_rate: 0.12 })],
+      '2893',
+      DESC,
+      { supplierType: 'eu_business', chartVatTreatments: NO_MOMSKODER },
+    )
+    expect(claimLinesByAccount(mixed, '2614')[0].credit_amount).toBe(50)
+    expect(claimLinesByAccount(mixed, '2624')[0].credit_amount).toBe(12)
+    expect(claimLinesByAccount(mixed, '2893')[0].credit_amount).toBe(300)
+    assertClaimLinesBalanced(mixed)
+  })
+
+  it('refuses to guess the momskoder: a reverse-charge invoice without them throws', () => {
+    expect(() =>
+      buildSupplierInvoicePrivatelyPaidLines(rcInvoice(), [rcItem()], '2893', DESC, { supplierType: 'eu_business' }),
+    ).toThrow(/momskoder/)
+  })
+})
+
 describe('dimensions propagation (PR7): buildSupplierInvoicePrivatelyPaidLines', () => {
   it('expense lines carry merged bags; 2641 and the liability carry the default', () => {
     const invoice = makeSupplierInvoice({
@@ -3467,5 +3554,102 @@ describe('supplier payment bank origins', () => {
       transaction_id: tx.id, cash_account_id: tx.cash_account_id, settlement_account: '1940',
       date: tx.date, amount: tx.amount, currency: tx.currency,
     }] })
+  })
+})
+
+// ============================================================
+// #73: an EU goods acquisition under kontantmetoden reports its moms in the
+// invoice's period (ML 2023:200 7 kap. 26 and 40 §§), not at payment
+// ============================================================
+
+describe('kontantmetoden: EU goods registered in March and paid in May (#73)', () => {
+  const kontant = { accounting_method: 'cash' }
+  const vatAccounts = (lines: CreateJournalEntryLineInput[]) =>
+    lines.filter((l) => /^26/.test(l.account_number) || /^45/.test(l.account_number)).map((l) => l.account_number).sort()
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  it('books the reverse-charge moms on the March invoice date; the May payment only clears 2440', async () => {
+    const { supplierInvoiceBooksOnRegistration } = await import('../booking-mode')
+    const { planSupplierBankMatch } = await import('@/lib/invoices/apply-supplier-payment')
+    const invoice = makeSupplierInvoice({
+      invoice_date: '2026-03-10', due_date: '2026-05-20',
+      subtotal: 1000, vat_amount: 0, total: 1000, remaining_amount: 1000,
+      reverse_charge: true, reverse_charge_kind: 'eu_goods',
+    })
+    const items = [makeItem({ line_total: 1000, account_number: '4010', vat_rate: 0 })]
+
+    // Registering it posts now, under kontantmetoden too.
+    expect(supplierInvoiceBooksOnRegistration(kontant, invoice, 'eu_business')).toBe(true)
+    const registration = await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, items, 'eu_business',
+    )
+    const reg = mockedCreateEntry.mock.calls[0][3]
+    expect(reg.entry_date).toBe('2026-03-10')
+    expect(mockedFindFiscalPeriod).toHaveBeenCalledWith(null, 'company-1', '2026-03-10')
+    // Ruta 20 (4515), ruta 30 (2614) and ruta 48 (2645), all in March.
+    expect(vatAccounts(reg.lines)).toEqual(['2614', '2645', '4515', '4598'])
+    expect(findByAccount(reg.lines, '2614')[0].credit_amount).toBe(250)
+    expect(findByAccount(reg.lines, '2645')[0].debit_amount).toBe(250)
+    expect(findByAccount(reg.lines, '2440')[0].credit_amount).toBe(1000)
+    assertBalanced(reg)
+
+    // Every payment door routes on the registration link: a clearing, not
+    // the kontantmetoden cash entry that would book the moms again in May.
+    const planned = planSupplierBankMatch({
+      invoice: { ...invoice, registration_journal_entry_id: registration!.id },
+      transaction: { amount: -1000, currency: 'SEK' },
+      accountingMethod: 'cash',
+    })
+    expect(planned.ok && planned.plan.booking.kind).toBe('clearing')
+
+    await createSupplierInvoicePaymentEntry(null as never, 'company-1', 'user-1', invoice, 1000, '2026-05-20')
+    const pay = mockedCreateEntry.mock.calls[1][3]
+    expect(pay.entry_date).toBe('2026-05-20')
+    expect(vatAccounts(pay.lines)).toEqual([])
+    expect(findByAccount(pay.lines, '2440')[0].debit_amount).toBe(1000)
+    expect(findByAccount(pay.lines, '1930')[0].credit_amount).toBe(1000)
+    assertBalanced(pay)
+  })
+
+  it('an EU service stays at payment under kontantmetoden (7 kap. 16 § andra stycket, 34 §)', async () => {
+    const { supplierInvoiceBooksOnRegistration } = await import('../booking-mode')
+    const invoice = makeSupplierInvoice({
+      invoice_date: '2026-03-10', subtotal: 1000, vat_amount: 0, total: 1000,
+      reverse_charge: true, reverse_charge_kind: 'eu_services',
+    })
+    const items = [makeItem({ line_total: 1000, account_number: '6540', vat_rate: 0 })]
+
+    expect(supplierInvoiceBooksOnRegistration(kontant, invoice, 'eu_business')).toBe(false)
+    await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, items, '2026-05-20', 'eu_business')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.entry_date).toBe('2026-05-20')
+    expect(vatAccounts(input.lines)).toEqual(['2614', '2645', '4535', '4598'])
+    assertBalanced(input)
+  })
+
+  it('a domestic invoice stays at payment under kontantmetoden, with its 2641', async () => {
+    const { supplierInvoiceBooksOnRegistration } = await import('../booking-mode')
+    const invoice = makeSupplierInvoice({ invoice_date: '2026-03-10', subtotal: 1000, vat_amount: 250, total: 1250 })
+    const items = [makeItem({ line_total: 1000, account_number: '4010', vat_rate: 0.25 })]
+
+    expect(supplierInvoiceBooksOnRegistration(kontant, invoice, 'swedish_business')).toBe(false)
+    await createSupplierInvoiceCashEntry(null as never, 'company-1', 'user-1', invoice, items, '2026-05-20', 'swedish_business')
+    const input = mockedCreateEntry.mock.calls[0][3]
+    expect(input.entry_date).toBe('2026-05-20')
+    expect(findByAccount(input.lines, '2641')[0].debit_amount).toBe(250)
+    expect(findByAccount(input.lines, '1930')[0].credit_amount).toBe(1250)
+    assertBalanced(input)
+  })
+
+  it('faktureringsmetoden registers every supplier invoice, as before', async () => {
+    const { supplierInvoiceBooksOnRegistration } = await import('../booking-mode')
+    const accrual = { accounting_method: 'accrual' }
+    expect(supplierInvoiceBooksOnRegistration(accrual, { reverse_charge: true, reverse_charge_kind: 'eu_goods' }, 'eu_business')).toBe(true)
+    expect(supplierInvoiceBooksOnRegistration(accrual, { reverse_charge: true, reverse_charge_kind: 'eu_services' }, 'eu_business')).toBe(true)
+    expect(supplierInvoiceBooksOnRegistration(accrual, { reverse_charge: false }, 'swedish_business')).toBe(true)
   })
 })

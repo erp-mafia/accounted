@@ -57,7 +57,10 @@ function client(row: Record<string, unknown> | null, inserts: Array<{ table: str
         get(_t, prop) {
           if (prop === 'then') return (resolve: (v: unknown) => void) => resolve({ data: row, error: null })
           if (prop === 'single' || prop === 'maybeSingle') {
-            return () => Promise.resolve(table === 'pending_operations' ? { data: { id: 'op-1' }, error: null } : { data: row, error: null })
+            if (table === 'pending_operations') return () => Promise.resolve({ data: { id: 'op-1' }, error: null })
+            // The credit refuses a settings row it cannot read (accounted#58).
+            if (table === 'company_settings') return () => Promise.resolve({ data: { accounting_method: 'accrual' }, error: null })
+            return () => Promise.resolve({ data: row, error: null })
           }
           return (...args: unknown[]) => {
             if (prop === 'insert') inserts.push({ table, payload: args[0] })

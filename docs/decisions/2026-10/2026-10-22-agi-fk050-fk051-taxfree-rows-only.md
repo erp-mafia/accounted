@@ -1,0 +1,1 @@
+[2026-10-22] AGI FK050 Bilersattning / FK051 Traktamente are set from the payslip's mileage_taxfree / traktamente_taxfree rows only; a *_taxable row (excess over schablon) sets no flag, since Fältlista 1.1.18.1 makes the excess lön, and a person paid only a tax-free allowance gets an IU.

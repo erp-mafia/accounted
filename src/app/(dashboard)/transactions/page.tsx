@@ -2504,6 +2504,8 @@ export default function TransactionsPage() {
     }>
     overpayment_account?: string
     overpayment_amount?: number
+    fee_account?: string
+    fee_amount?: number
   }) {
     if (!selectedTransaction) return
     const isSupplier = !!selectedTransaction.potential_supplier_invoice
@@ -2540,6 +2542,12 @@ export default function TransactionsPage() {
       if (!isSupplier && opts?.overpayment_account && opts.overpayment_amount !== undefined) {
         body.overpayment_account = opts.overpayment_account
         body.overpayment_amount = opts.overpayment_amount
+      }
+      // The payment provider's fee on 6570, with the fee the dialog showed
+      // (crm#1364): booked exactly or refused, like the overpayment.
+      if (!isSupplier && opts?.fee_account && opts.fee_amount !== undefined) {
+        body.fee_account = opts.fee_account
+        body.fee_amount = opts.fee_amount
       }
 
       const response = await fetch(url, {
@@ -3985,7 +3993,7 @@ export default function TransactionsPage() {
     resolve?.(confirmed)
   }
 
-  async function handleBatchCategorize(category: TransactionCategory, vatTreatment?: VatTreatment) {
+  async function handleBatchCategorize(category: TransactionCategory, vatTreatment?: VatTreatment, reverseChargeKind?: ReverseChargeKind) {
     const ids = Array.from(selectedIds)
     // Fresh collector per batch: rows the guard flags park here instead of
     // fighting over the single-row modal slot.
@@ -4001,6 +4009,8 @@ export default function TransactionsPage() {
         isBusiness: true,
         category,
         vatTreatment,
+        // The box the person named for the selection (BatchCategorySelector).
+        reverseChargeKind,
         confirmNoMatch: false,
         silent: true,
       })

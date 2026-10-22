@@ -264,31 +264,267 @@ describe('generateAGIXml: Individuppgift (IU)', () => {
   })
 })
 
-describe('generateAGIXml: F-skatt payee IU (FK131)', () => {
-  // Data layer (generate-declaration.ts) zeroes grossSalary for F-skatt
-  // payees and routes the cash to fSkattPayment: the same payment must
-  // never appear as both FK011 (underlag AG) and FK131 (ej underlag SA).
-  const fSkattEmployee: AGIEmployeeData = {
+describe('generateAGIXml: ej underlag för socialavgifter IU (FK131)', () => {
+  // The underlag picks the cash field: the same payment must never appear as
+  // both FK011 (underlag AG) and FK131 (ej underlag SA).
+  const ejUlagSAEmployee: AGIEmployeeData = {
     personnummer: 'emp2_encrypted',
     specificationNumber: 3,
-    grossSalary: 0,
+    grossSalary: 15000,
     taxWithheld: 0,
     avgifterBasis: 0,
-    fSkattPayment: 15000,
+    underlag: 'ej_socialavgifter',
   }
 
   it('emits KontantErsattningEjUlagSA FK131 with the payment amount', () => {
-    const xml = generateAGIXml(company, [fSkattEmployee], totals)
+    const xml = generateAGIXml(company, [ejUlagSAEmployee], totals)
     expect(xml).toContain(
       '<gem:KontantErsattningEjUlagSA faltkod="131">15000</gem:KontantErsattningEjUlagSA>'
     )
   })
 
-  it('does not emit FK011 for the F-skatt payment, and declares FK001 as 0', () => {
-    const xml = generateAGIXml(company, [fSkattEmployee], totals)
+  it('does not emit FK011 for the payment, and declares FK001 as 0', () => {
+    const xml = generateAGIXml(company, [ejUlagSAEmployee], totals)
     expect(xml).not.toContain('faltkod="011"')
     // Teknisk beskrivning 5.4: no tax withheld on FK131 means 0 in FK001.
     expect(xml).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+  })
+
+  it('declares every benefit in its ej-UlagSA field, never the UlagAG one (crm#1372)', () => {
+    // Fältlista 1.1.18.1: FK132 övriga förmåner (housing amount included),
+    // FK133 bil, FK134 drivmedel, FK137/FK138 housing flags.
+    const withBenefits: AGIEmployeeData = {
+      ...ejUlagSAEmployee,
+      grossSalary: 600,
+      benefitOther: 450,
+      benefitCar: 900,
+      benefitFuel: 120,
+      housingBenefit: 'smahus',
+    }
+    const xml = generateAGIXml(company, [withBenefits], totals)
+    expect(xml).toContain('<gem:KontantErsattningEjUlagSA faltkod="131">600</gem:KontantErsattningEjUlagSA>')
+    expect(xml).toContain('<gem:SkatteplOvrigaFormanerEjUlagSA faltkod="132">450</gem:SkatteplOvrigaFormanerEjUlagSA>')
+    expect(xml).toContain('<gem:SkatteplBilformanEjUlagSA faltkod="133">900</gem:SkatteplBilformanEjUlagSA>')
+    expect(xml).toContain('<gem:DrivmVidBilformanEjUlagSA faltkod="134">120</gem:DrivmVidBilformanEjUlagSA>')
+    expect(xml).toContain('<gem:BostadsformanSmahusEjUlagSA faltkod="137">1</gem:BostadsformanSmahusEjUlagSA>')
+    for (const fk of ['011', '012', '013', '018', '041', '043']) {
+      expect(xml).not.toContain(`faltkod="${fk}"`)
+    }
+  })
+
+  it('keeps the default underlag on FK011/FK012/FK013/FK018/FK043', () => {
+    const regular: AGIEmployeeData = {
+      ...ejUlagSAEmployee,
+      underlag: undefined,
+      grossSalary: 600,
+      benefitOther: 450,
+      benefitCar: 900,
+      benefitFuel: 120,
+      housingBenefit: 'ej_smahus',
+    }
+    const xml = generateAGIXml(company, [regular], totals)
+    expect(xml).toContain('<gem:KontantErsattningUlagAG faltkod="011">600</gem:KontantErsattningUlagAG>')
+    expect(xml).toContain('<gem:SkatteplOvrigaFormanerUlagAG faltkod="012">450</gem:SkatteplOvrigaFormanerUlagAG>')
+    expect(xml).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">900</gem:SkatteplBilformanUlagAG>')
+    expect(xml).toContain('<gem:DrivmVidBilformanUlagAG faltkod="018">120</gem:DrivmVidBilformanUlagAG>')
+    expect(xml).toContain('<gem:BostadsformanEjSmahusUlagAG faltkod="043">1</gem:BostadsformanEjSmahusUlagAG>')
+    for (const fk of ['131', '132', '133', '134', '137', '138']) {
+      expect(xml).not.toContain(`faltkod="${fk}"`)
+    }
+  })
+})
+
+describe('generateAGIXml: F-skatt payee IU (FK125, #82)', () => {
+  // Bilaga Fältlista 1.1.18.1 FK125: "Det kan till exempel vara inkomst av
+  // tjänst för mottagare med F-skatt". Underlag for the recipient's
+  // egenavgifter (SAL 3 kap. 8 §), not FK131 (no underlag for SA at all).
+  const fSkattEmployee: AGIEmployeeData = {
+    personnummer: 'emp2_encrypted',
+    specificationNumber: 3,
+    grossSalary: 15000,
+    taxWithheld: 0,
+    avgifterBasis: 0,
+    underlag: 'egenavgifter',
+    benefitOther: 1200,
+    benefitCar: 900,
+    benefitFuel: 120,
+    housingBenefit: 'smahus',
+  }
+
+  it('declares cash in FK125 and every benefit in its UlagEA field', () => {
+    const xml = generateAGIXml(company, [fSkattEmployee], totals)
+    expect(xml).toContain('<gem:KontantErsattningUlagEA faltkod="125">15000</gem:KontantErsattningUlagEA>')
+    expect(xml).toContain('<gem:SkatteplOvrigaFormanerUlagEA faltkod="126">1200</gem:SkatteplOvrigaFormanerUlagEA>')
+    expect(xml).toContain('<gem:SkatteplBilformanUlagEA faltkod="127">900</gem:SkatteplBilformanUlagEA>')
+    expect(xml).toContain('<gem:DrivmVidBilformanUlagEA faltkod="128">120</gem:DrivmVidBilformanUlagEA>')
+    // S_157: FK123/FK124 need FK126, which carries the housing amount.
+    expect(xml).toContain('<gem:BostadsformanSmahusUlagEA faltkod="123">1</gem:BostadsformanSmahusUlagEA>')
+    expect(xml).toContain('<gem:AvdrPrelSkatt faltkod="001">0</gem:AvdrPrelSkatt>')
+    for (const fk of ['011', '012', '013', '018', '041', '131', '132', '133', '134', '137']) {
+      expect(xml).not.toContain(`faltkod="${fk}"`)
+    }
+  })
+
+  it('uses FK124 for a housing benefit outside a småhus', () => {
+    const xml = generateAGIXml(company, [{ ...fSkattEmployee, housingBenefit: 'ej_smahus' }], totals)
+    expect(xml).toContain('<gem:BostadsformanEjSmahusUlagEA faltkod="124">1</gem:BostadsformanEjSmahusUlagEA>')
+    expect(xml).not.toContain('faltkod="123"')
+  })
+})
+
+describe('generateAGIXml: FK048 only next to a benefit S_017 accepts (#82)', () => {
+  // Kontroll S_017 (Bilaga Kontroller 1.1.18.1): "Om FK048 finns måste FK012
+  // eller FK013 eller FK132 eller FK133 eller FK126 eller FK127 finnas".
+  const S_017_FIELDS = ['012', '013', '132', '133', '126', '127']
+  const base: AGIEmployeeData = {
+    personnummer: 'emp1_encrypted',
+    specificationNumber: 1,
+    grossSalary: 30000,
+    taxWithheld: 9000,
+    avgifterBasis: 30000,
+    benefitsAdjusted: true,
+  }
+  const FK048 = '<gem:FormanHarJusterats faltkod="048">1</gem:FormanHarJusterats>'
+
+  function passesS017(xml: string): boolean {
+    return !xml.includes('faltkod="048"') || S_017_FIELDS.some((fk) => xml.includes(`faltkod="${fk}"`))
+  }
+
+  const cases: Array<[string, AGIEmployeeData, string]> = [
+    ['an employee with kost (FK012)', { ...base, benefitOther: 1200 }, '012'],
+    ['an employee with bilförmån (FK013)', { ...base, benefitCar: 4000 }, '013'],
+    ['an F-skatt payee with kost (FK126)', { ...base, underlag: 'egenavgifter', benefitOther: 1200 }, '126'],
+    ['an F-skatt payee with bilförmån (FK127)', { ...base, underlag: 'egenavgifter', benefitCar: 4000 }, '127'],
+    ['pay with no avgiftsunderlag and kost (FK132)', { ...base, underlag: 'ej_socialavgifter', benefitOther: 450 }, '132'],
+    ['pay with no avgiftsunderlag and bilförmån (FK133)', { ...base, underlag: 'ej_socialavgifter', benefitCar: 4000 }, '133'],
+  ]
+  for (const [label, emp, field] of cases) {
+    it(`emits FK048 for ${label}`, () => {
+      const xml = generateAGIXml(company, [emp], totals)
+      expect(xml).toContain(FK048)
+      expect(xml).toContain(`faltkod="${field}"`)
+      expect(passesS017(xml)).toBe(true)
+    })
+  }
+
+  const without: Array<[string, AGIEmployeeData]> = [
+    ['cash only', base],
+    ['only drivmedel (FK018 is not in S_017)', { ...base, benefitFuel: 600 }],
+    ['an F-skatt payee with cash only', { ...base, underlag: 'egenavgifter' }],
+    ['pay with no avgiftsunderlag and no benefit', { ...base, underlag: 'ej_socialavgifter' }],
+  ]
+  for (const [label, emp] of without) {
+    it(`drops FK048 for ${label}, which S_017 would reject`, () => {
+      const xml = generateAGIXml(company, [emp], totals)
+      expect(xml).not.toContain('faltkod="048"')
+      expect(passesS017(xml)).toBe(true)
+    })
+  }
+
+  it('never emits FK048 when no decision is recorded', () => {
+    const xml = generateAGIXml(company, [{ ...base, benefitsAdjusted: false, benefitOther: 1200 }], totals)
+    expect(xml).not.toContain('faltkod="048"')
+  })
+})
+
+describe('generateAGIXml: a benefit paid in full by nettolöneavdrag is declared as 0', () => {
+  // Teknisk beskrivning 1.1.18.2 avsnitt 5.3: the field "ska ändå redovisas"
+  // with the value 0. Undefined means no such benefit and stays out.
+  const base: AGIEmployeeData = {
+    personnummer: 'emp1_encrypted',
+    specificationNumber: 1,
+    grossSalary: 30000,
+    taxWithheld: 9000,
+    avgifterBasis: 30000,
+  }
+
+  it('emits FK013 = 0 and FK012 = 0 for a benefit valued at 0', () => {
+    const xml = generateAGIXml(company, [{ ...base, benefitCar: 0, benefitOther: 0 }], totals)
+    expect(xml).toContain('<gem:SkatteplBilformanUlagAG faltkod="013">0</gem:SkatteplBilformanUlagAG>')
+    expect(xml).toContain('<gem:SkatteplOvrigaFormanerUlagAG faltkod="012">0</gem:SkatteplOvrigaFormanerUlagAG>')
+  })
+
+  it('uses the family field for the 0 as well (FK127 for an F-skatt payee, FK133 with no avgiftsunderlag)', () => {
+    expect(generateAGIXml(company, [{ ...base, underlag: 'egenavgifter', benefitCar: 0 }], totals)).toContain(
+      '<gem:SkatteplBilformanUlagEA faltkod="127">0</gem:SkatteplBilformanUlagEA>',
+    )
+    expect(generateAGIXml(company, [{ ...base, underlag: 'ej_socialavgifter', benefitCar: 0 }], totals)).toContain(
+      '<gem:SkatteplBilformanEjUlagSA faltkod="133">0</gem:SkatteplBilformanEjUlagSA>',
+    )
+  })
+
+  it('leaves both fields out when there is no benefit', () => {
+    const xml = generateAGIXml(company, [base], totals)
+    expect(xml).not.toContain('faltkod="012"')
+    expect(xml).not.toContain('faltkod="013"')
+  })
+
+  it('keeps FK048 next to an FK013 of 0: the field is there, so S_017 holds', () => {
+    const xml = generateAGIXml(company, [{ ...base, benefitCar: 0, benefitsAdjusted: true }], totals)
+    expect(xml).toContain('<gem:FormanHarJusterats faltkod="048">1</gem:FormanHarJusterats>')
+  })
+})
+
+describe('generateAGIXml: FK050 Bilersattning and FK051 Traktamente flags', () => {
+  // Bilaga Fältlista 1.1.18.1: FK050 and FK051 are KRYSS fields, "Sätts till
+  // 1 eller true om ikryssad, annars utelämnas fältet".
+  const base: AGIEmployeeData = {
+    personnummer: 'emp1_encrypted',
+    specificationNumber: 1,
+    grossSalary: 30000,
+    taxWithheld: 9000,
+    avgifterBasis: 30000,
+  }
+  const FK050 = '<gem:Bilersattning faltkod="050">1</gem:Bilersattning>'
+  const FK051 = '<gem:Traktamente faltkod="051">1</gem:Traktamente>'
+
+  it('emits FK050 when a tax-free milersättning was paid', () => {
+    const xml = generateAGIXml(company, [{ ...base, mileageAllowancePaid: true }], totals)
+    expect(xml).toContain(FK050)
+    expect(xml).not.toContain('faltkod="051"')
+  })
+
+  it('emits FK051 when a tax-free traktamente was paid', () => {
+    const xml = generateAGIXml(company, [{ ...base, traktamentePaid: true }], totals)
+    expect(xml).toContain(FK051)
+    expect(xml).not.toContain('faltkod="050"')
+  })
+
+  it('emits both flags once each when both were paid', () => {
+    const xml = generateAGIXml(company, [{ ...base, mileageAllowancePaid: true, traktamentePaid: true }], totals)
+    expect(xml.split(FK050)).toHaveLength(2)
+    expect(xml.split(FK051)).toHaveLength(2)
+  })
+
+  it('leaves both fields out when neither was paid', () => {
+    for (const emp of [base, { ...base, mileageAllowancePaid: false, traktamentePaid: false }]) {
+      const xml = generateAGIXml(company, [emp], totals)
+      expect(xml).not.toContain('faltkod="050"')
+      expect(xml).not.toContain('faltkod="051"')
+    }
+  })
+
+  it('sets the flags in every underlag family: they have no UlagEA or EjUlagSA variant', () => {
+    for (const underlag of ['egenavgifter', 'ej_socialavgifter'] as const) {
+      const xml = generateAGIXml(
+        company,
+        [{ ...base, underlag, mileageAllowancePaid: true, traktamentePaid: true }],
+        totals,
+      )
+      expect(xml).toContain(FK050)
+      expect(xml).toContain(FK051)
+    }
+  })
+
+  it('keeps a borttag IU free of the flags (S_003: identity fields only)', () => {
+    const xml = generateAGIXml(
+      company,
+      [{ ...base, removed: true, mileageAllowancePaid: true, traktamentePaid: true }],
+      totals,
+    )
+    expect(xml).toContain('<gem:Borttag faltkod="205">1</gem:Borttag>')
+    expect(xml).not.toContain('faltkod="050"')
+    expect(xml).not.toContain('faltkod="051"')
   })
 })
 
@@ -356,7 +592,7 @@ describe('generateAGIXml: every IU carries a skattefält (kontroll S_183, crm#12
     const roster: AGIEmployeeData[] = [
       ...employees,
       { ...zeroTaxEmployee, specificationNumber: 3 },
-      { ...zeroTaxEmployee, specificationNumber: 4, grossSalary: 0, avgifterBasis: 0, fSkattPayment: 5000 },
+      { ...zeroTaxEmployee, specificationNumber: 4, grossSalary: 5000, avgifterBasis: 0, underlag: 'ej_socialavgifter' },
       { ...zeroTaxEmployee, specificationNumber: 5, removed: true },
     ]
     const ius = iuBlocks(generateAGIXml(company, roster, totals))

@@ -94,6 +94,8 @@ import type {
 } from '@/types'
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { purchaseSellerRegion, reverseChargeBoxFor } from '@/lib/vat/reverse-charge-box'
+import type { SellerIdentity, SellerRegion } from '@/lib/vat/seller-country'
 
 const log = createLogger('transactions/categorize-core')
 
@@ -1280,7 +1282,9 @@ export interface BulkBookInboxResult {
  * booked, already linked to a leverantörsfaktura, or still mid AI extraction
  * (staged upload, status 'processing') are skipped: never an error: so one bad
  * underlag never blocks the rest ("Bokför valda hoppar över"). A per-item throw (period locked, accounts not in chart) is caught and
- * recorded as a skip with the actionable message.
+ * recorded as a skip with the actionable message. Under reverse charge each
+ * item books the box its own seller and the category give (ruta 20, 21 or
+ * 22), and an item whose box cannot be told is skipped.
  *
  * Shared by the direct UI route (POST /items/bulk-book) and the
  * `bulk_book_inbox_items` pending-operation executor (Lena-driven flow).
@@ -1310,7 +1314,7 @@ export async function bulkBookMatchedInboxItems(
   for (const itemId of item_ids) {
     const { data: item, error: itemError } = await supabase
       .from('invoice_inbox_items')
-      .select('id, status, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, channel_context, document_id, extracted_data')
+      .select('id, status, matched_transaction_id, created_journal_entry_id, created_supplier_invoice_id, channel_context, document_id, extracted_data, matched_supplier_id')
       .eq('id', itemId)
       .eq('company_id', companyId)
       .maybeSingle()
@@ -1347,6 +1351,20 @@ export async function bulkBookMatchedInboxItems(
       continue
     }
 
+    // Omvänd skattskyldighet: the box (ruta 20, 21 or 22) belongs to this
+    // purchase, read off its own seller and the shared category, never to the
+    // batch. An item whose box cannot be told is left out with the reason
+    // (lib/vat/reverse-charge-box.ts) instead of landing in ruta 21 by default.
+    let reverseChargeKind: ReverseChargeKind | undefined
+    if (vat_treatment === 'reverse_charge' && category.startsWith('expense_')) {
+      const box = reverseChargeBoxFor(await inboxItemSellerRegion(supabase, companyId, item), category)
+      if (!box.ok) {
+        skipped.push({ item_id: itemId, reason: 'reverse_charge_box_unknown', detail: box.messageSv })
+        continue
+      }
+      reverseChargeKind = box.kind
+    }
+
     // WhatsApp-sourced underlag carry verified human context (representation
     // deltagare + syfte, sender note) in channel_context. Thread it into the
     // verifikat description ALONGSIDE the caller's shared batch note: bulk
@@ -1375,7 +1393,7 @@ export async function bulkBookMatchedInboxItems(
         userId,
         companyId,
         item.matched_transaction_id as string,
-        { category, vatTreatment: vat_treatment, vatAmount: vat_amount, notes: itemNotes, allowDuplicate: allow_duplicate, dimensions, loadChart },
+        { category, vatTreatment: vat_treatment, reverseChargeKind, vatAmount: vat_amount, notes: itemNotes, allowDuplicate: allow_duplicate, dimensions, loadChart },
         // Snapshot copies so the guard sees only the prior bookings of this batch.
         { excludeTransactionIds: [...bookedTransactionIds], excludeJournalEntryIds: [...bookedJournalEntryIds] },
       )
@@ -1433,4 +1451,25 @@ export async function bulkBookMatchedInboxItems(
   }
 
   return { booked, skipped }
+}
+
+/**
+ * Where an inbox item's seller is: its reading, then a matched supplier
+ * card's type (read only when the reading says nothing).
+ */
+async function inboxItemSellerRegion(
+  supabase: SupabaseClient,
+  companyId: string,
+  item: { extracted_data?: unknown; matched_supplier_id?: string | null },
+): Promise<SellerRegion | null> {
+  const reading = (item.extracted_data as { supplier?: SellerIdentity | null } | null)?.supplier ?? null
+  const fromReading = purchaseSellerRegion(reading)
+  if (fromReading || !item.matched_supplier_id) return fromReading
+  const { data: supplier } = await supabase
+    .from('suppliers')
+    .select('supplier_type')
+    .eq('id', item.matched_supplier_id)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  return purchaseSellerRegion(reading, (supplier as { supplier_type?: string | null } | null)?.supplier_type)
 }

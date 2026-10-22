@@ -1296,19 +1296,8 @@ export const arcimMigrationExtension: Extension = {
             .filter(a => !isSystemAccount(a.number))
             .map(a => ({ number: a.number, name: a.name }))
 
-          // Load existing user mappings
-          const existingMappings = await loadMappings(supabase, companyId)
-          const existingRecords = [...existingMappings.values()].map(m => ({
-            id: '',
-            user_id: ctx.userId,
-            source_account: m.sourceAccount,
-            source_name: m.sourceName,
-            target_account: m.targetAccount,
-            confidence: m.confidence,
-            match_type: m.matchType,
-            created_at: '',
-            updated_at: '',
-          }))
+          // The company's remembered mappings, every one of them (paged).
+          const existingRecords = await loadMappings(supabase, companyId)
 
           // Mapping targets are the company's OWN chart of accounts first,
           // then BAS for anything it does not have yet. BAS alone cannot

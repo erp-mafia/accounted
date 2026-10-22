@@ -68,16 +68,19 @@ describe('gnubok_register_booked_invoice: registration', () => {
     expect(TOOL_SCOPE_MAP.gnubok_register_booked_invoice).toBe('invoices:write')
   })
 
-  it('tells the agent the limits before it calls: faktureringsmetoden, SEK, no opening balance, no undo', () => {
+  it('tells the agent the limits before it calls: faktureringsmetoden, the currency rule, no opening balance, no undo', () => {
     const properties = (tool.inputSchema as { properties: Record<string, { description?: string }> }).properties
-    expect(tool.description).toMatch(/SEK, faktureringsmetoden only; cannot be undone/)
+    expect(tool.description).toMatch(/Faktureringsmetoden only; cannot be undone/)
     // The #2298 rule counts a verifikat an invoice is linked to as backed:
     // nothing asks for the PDF after the approval.
     expect(tool.description).toMatch(/Approval counts the verifikat as backed: attach the invoice PDF in the same session/)
     expect(properties.journal_entry_id.description).toMatch(/Never the opening balance/)
     expect(properties.invoice_number.description).toMatch(/next_invoice_number/)
     expect(properties.balance_as_of.description).toMatch(/Required when remaining_amount is below the total/)
-    expect(properties.currency.description).toMatch(/Only SEK registers/)
+    // #90: another currency registers when the verifikat books it; the rate is never the caller's.
+    expect(properties.currency.description).toMatch(/151x line must carry it and its amount; the rate is read from the verifikat/)
+    expect(properties.total.description).toMatch(/in currency/)
+    expect(properties).not.toHaveProperty('exchange_rate')
   })
 })
 
@@ -122,6 +125,43 @@ describe('gnubok_register_booked_invoice: staging', () => {
 
     const writes = calls.filter((call) => ['insert', 'update', 'upsert', 'delete'].includes(call.method))
     expect(writes.map((call) => `${call.method} ${call.table}`)).toEqual(['insert pending_operations'])
+  })
+
+  it('stages a euro invoice with its euro amounts, the rate its verifikat books and those kronor (#90)', async () => {
+    const lines = [
+      { account_number: '1510', debit_amount: 11482.5, credit_amount: 0, currency: 'EUR', amount_in_currency: 1000, exchange_rate: 11.4825, line_description: null },
+      { account_number: '3308', debit_amount: 0, credit_amount: 11482.5, currency: 'EUR', amount_in_currency: 1000, exchange_rate: 11.4825, line_description: null },
+    ]
+    const { supabase, findCall } = books(lines)
+    const args = { ...ARGS, currency: 'eur', total: 1000, remaining_amount: 1000 }
+    const { balance_as_of: _balanceAsOf, ...unpaid } = args
+    await tool.execute(unpaid, COMPANY_ID, USER_ID, supabase as never, ACTOR)
+
+    const staged = findCall('pending_operations', 'insert')?.[0] as { title: string; params: Record<string, unknown>; preview_data: Record<string, unknown> }
+    // The staged params carry no rate: the commit reads it from the verifikat again.
+    expect(RegisterBookedInvoiceParamsSchema.parse(staged.params)).toMatchObject({ currency: 'EUR', total: 1000 })
+    expect(staged.params).not.toHaveProperty('exchange_rate')
+    expect(staged.title).toBe('Registrera bokförd faktura 1023: Testkund AB 1000 EUR (verifikat B45)')
+    expect(staged.preview_data).toMatchObject({
+      currency: 'EUR',
+      exchange_rate: 11.4825,
+      total_sek: 11482.5,
+      vat_amount_sek: 0,
+      total: 1000,
+      subtotal: 1000,
+      vat_amount: 0,
+      vat_treatment: 'reverse_charge',
+      remaining_amount: 1000,
+    })
+  })
+
+  it('keeps a kronor registration\'s preview free of a rate', async () => {
+    const { supabase, findCall } = books()
+    await tool.execute(ARGS, COMPANY_ID, USER_ID, supabase as never, ACTOR)
+    const staged = findCall('pending_operations', 'insert')?.[0] as { preview_data: Record<string, unknown> }
+    expect(staged.preview_data.currency).toBe('SEK')
+    expect(staged.preview_data).not.toHaveProperty('exchange_rate')
+    expect(staged.preview_data).not.toHaveProperty('total_sek')
   })
 
   it('stages nothing on a dry run', async () => {

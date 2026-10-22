@@ -29,8 +29,10 @@ import { fetchKontantmetodCutoffVatFacts } from '@/lib/vat/kontantmetod-cutoff-v
 import { applyVatCheckReviews, isReviewableVatCheck, type VatCheckReview, type VatCheckReviewInputs } from '@/lib/vat/check-reviews'
 import { isFilingBlocked, type RcBasisGapScan, withRcBasisGapFindings } from '@/lib/reports/vat-filing-gate'
 import { buildFiledAmounts } from '@/lib/reports/vat-manual-filing'
+import { findUnattributedEuSales, type PsWarning } from '@/lib/reports/periodisk-sammanstallning'
 import { euTradeInRutor, formatEuTradeBoxes } from '@/lib/vat/eu-trade'
 import { roundOre } from '@/lib/money'
+import { formatCurrency } from '@/lib/utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
@@ -489,6 +491,7 @@ interface VatCloseBlocker {
     | 'fiscal_year_not_found'
     | 'momsredovisning_entries_excluded'
     | 'eu_trade_setting_off'
+    | 'unattributed_eu_sale'
   severity: 'high' | 'medium' | 'low'
   count: number
   message: string
@@ -499,6 +502,12 @@ interface VatCloseBlocker {
    * the outputSchema, so this costs no tools/list budget.
    */
   entries?: VatExcludedSettlementEntry[]
+  /**
+   * Only on `unattributed_eu_sale`: one item per sale, the periodisk
+   * sammanställning's own finding (verifikat, amount, message), capped at
+   * EXCLUDED_SETTLEMENT_ENTRIES_CAP; `count` is the uncapped total.
+   */
+  eu_sales?: Array<{ journal_entry_id: string | null; amount: number | null; message: string }>
   /**
    * Stable rule id when this blocker comes from the shared momsdeklaration
    * completeness checks (lib/reports/vat-declaration-checks.ts), so an agent
@@ -597,6 +606,78 @@ export const REVENUE_ACCOUNT_WITHOUT_RUTA_HINT =
   'Fråga användaren vad kontot avser och sätt sedan default_vat_treatment på kontot med ' +
   'gnubok_update_account (standard_25/reduced_12/reduced_6 för ruta 05, exempt för ruta 42). ' +
   'Avser kontot inte försäljning, sätt default_vat_rate 0. Inga verifikat ändras.'
+
+/**
+ * Hint for the unattributed_eu_sale blocker (crm#1362): the sale is already
+ * booked, so the fix names a buyer for it without booking it again, or files
+ * the buyer in Skatteverket's e-tjänst. Exported so the test can pin the
+ * contract.
+ */
+export const UNATTRIBUTED_EU_SALE_HINT =
+  'Bokför inget på nytt. Finns en kundfaktura till köparen (kund med land och VAT-nummer), koppla den till ' +
+  'verifikatet: under kontantmetoden med gnubok_link_invoice_to_voucher, under faktureringsmetoden en redan bokförd ' +
+  'faktura med gnubok_register_booked_invoice. Annars lägg till köparen i periodisk sammanställning i Skatteverkets ' +
+  'e-tjänst. Verifikaten står i eu_sales; per köpare: gnubok_get_periodisk_sammanstallning.'
+
+/**
+ * Hint for KONTANTMETOD_CUTOFF_INCOMPLETE in the close check (#88): what
+ * kontantmetoden requires at the year end is booking the invoices still
+ * unpaid at balansdagen, through the cut-off; never an attest, never by hand.
+ * Exported so the test can pin the contract.
+ */
+export const KONTANTMETOD_CUTOFF_HINT =
+  'Under kontantmetoden bokförs kund- och leverantörsfakturor som är obetalda vid räkenskapsårets slut ' +
+  '(BFL 5 kap 2 §). gnubok_year_end_readiness visar dem under kontantmetod_cutoff_required; bokför ' +
+  'avgränsningen med gnubok_post_kontantmetod_cutoff före inlämning. Bokför aldrig momsen, fordringarna ' +
+  'eller skulderna för hand.'
+
+/**
+ * The periodisk sammanställning's UNATTRIBUTED_EU_SALE findings as close-check
+ * blockers, one per severity, with the PS's own rule: an EU goods or
+ * trepartshandel sale (ruta 35/38) without a buyer blocks, as it blocks the
+ * PS file; a service (ruta 39) warns. `null` is a read that failed: said, not
+ * silenced, since an empty list would read as "every EU sale has a buyer".
+ */
+function unattributedEuSaleBlockers(sales: PsWarning[] | null): VatCloseBlocker[] {
+  if (sales === null) {
+    return [{
+      kind: 'unattributed_eu_sale',
+      severity: 'medium',
+      count: 0,
+      message:
+        'Periodisk sammanställning kunde inte stämmas av mot rutorna 35, 38 och 39: det går inte att säga om ' +
+        'varje EU-försäljning i perioden har en köpare med VAT-nummer.',
+      hint: 'Kör gnubok_get_periodisk_sammanstallning för perioden före inlämning.',
+    }]
+  }
+  const blockers: VatCloseBlocker[] = []
+  for (const level of ['error', 'warning'] as const) {
+    const group = sales.filter((sale) => sale.level === level)
+    if (group.length === 0) continue
+    const total = roundOre(group.reduce((sum, sale) => sum + (sale.amount ?? 0), 0))
+    const what = `${group.length} verifikat bokför EU-försäljning ${level === 'error' ? 'av varor eller trepartshandel (ruta 35/38)' : 'av tjänster (ruta 39)'} ` +
+      `på sammanlagt ${formatCurrency(total)} utan någon kundfaktura som anger köparens VAT-nummer`
+    blockers.push({
+      kind: 'unattributed_eu_sale',
+      severity: level === 'error' ? 'high' : 'medium',
+      count: group.length,
+      // One sale: the PS's own words. Several: what they add up to, each one
+      // in eu_sales.
+      message: group.length === 1
+        ? group[0].message
+        : level === 'error'
+          ? `${what}. En EU-varuförsäljning ska alltid redovisas per köpare, så periodisk sammanställning kan inte lämnas förrän köparna finns med.`
+          : `${what}, så periodisk sammanställning kan vara ofullständig. Om köparen har ett VAT-nummer och tjänsten beskattas i köparens land ska köparen redovisas.`,
+      hint: UNATTRIBUTED_EU_SALE_HINT,
+      eu_sales: group.slice(0, EXCLUDED_SETTLEMENT_ENTRIES_CAP).map((sale) => ({
+        journal_entry_id: sale.journalEntryId ?? null,
+        amount: sale.amount ?? null,
+        message: sale.message,
+      })),
+    })
+  }
+  return blockers
+}
 
 /**
  * Completeness codes that describe the omvänd-skattskyldighet pair. They keep
@@ -809,53 +890,6 @@ export async function getScopedReconciliationStatus(
   return { status, scope }
 }
 
-/**
- * Whether a momsperiod [start, end] (whole months, YYYY-MM-DD) holds the last
- * day of a räkenskapsår that starts in fiscalYearStartMonth (1-12). Fiscal
- * years end on the last day of the month before their start month, so this is
- * whether that month falls inside the period.
- */
-export function vatPeriodContainsFiscalYearEnd(start: string, end: string, fiscalYearStartMonth: number): boolean {
-  const fiscalYearEndMonth = fiscalYearStartMonth === 1 ? 12 : fiscalYearStartMonth - 1
-  let year = Number(start.slice(0, 4))
-  let month = Number(start.slice(5, 7))
-  const endKey = Number(end.slice(0, 4)) * 12 + Number(end.slice(5, 7))
-  while (year * 12 + month <= endKey) {
-    if (month === fiscalYearEndMonth) return true
-    month += 1
-    if (month > 12) {
-      month = 1
-      year += 1
-    }
-  }
-  return false
-}
-
-/**
- * Whether the momsperiod [start, end] holds the end of a räkenskapsår, from
- * the company's fiscal_periods rows that overlap it; the configured
- * fiscal_year_start_month only when no such row exists. null when neither
- * answers (a failed read, or no row and no setting).
- */
-async function vatPeriodHoldsFiscalYearEnd(
-  supabase: SupabaseClient,
-  companyId: string,
-  start: string,
-  end: string,
-  configuredStartMonth: number | null,
-): Promise<boolean | null> {
-  const { data, error } = await supabase
-    .from('fiscal_periods')
-    .select('period_end')
-    .eq('company_id', companyId)
-    .lte('period_start', end)
-    .gte('period_end', start)
-  if (error) return null
-  const rows = (data ?? []) as Array<{ period_end: string }>
-  if (rows.length > 0) return rows.some((r) => r.period_end >= start && r.period_end <= end)
-  return configuredStartMonth === null ? null : vatPeriodContainsFiscalYearEnd(start, end, configuredStartMonth)
-}
-
 export async function computeVatCloseCheck(
   args: Record<string, unknown>,
   companyId: string,
@@ -945,37 +979,33 @@ export async function computeVatCloseCheck(
     })
   }
 
-  // Kontantmetoden (bokslutsmetoden): ingående moms is recognised when a
-  // supplier invoice is paid, except at the räkenskapsår's end, when every
-  // invoice unpaid at balansdagen is booked. Which of the two this momsperiod
-  // is decides what unattested supplier invoices mean for it (agent feedback
-  // seq 878478). null = not known: treated as the year end (fail closed).
+  // Kontantmetoden (bokslutsmetoden) has no attest step: a supplier invoice's
+  // ingående moms is recognised when it is paid, and at the räkenskapsår's
+  // end every invoice still unpaid at balansdagen is booked by the year-end
+  // cut-off (BFL 5 kap 2 §). Whether that is done is the cut-off's own
+  // finding, KONTANTMETOD_CUTOFF_INCOMPLETE in step 4b, over attested and
+  // unattested invoices alike. Counting unattested invoices here instead sent
+  // the agent to attest, a step that books nothing (#88).
   const cashMethod = settings?.accounting_method === 'cash'
-  const fiscalYearEndInPeriod = cashMethod
-    ? await vatPeriodHoldsFiscalYearEnd(supabase, companyId, start, end, configuredStartMonth)
-    : null
-  const cashOutsideYearEnd = cashMethod && fiscalYearEndInPeriod === false
-  const cashAtYearEnd = cashMethod && !cashOutsideYearEnd
 
   // 4) Blocker scans: run in parallel
-  const [unbooked, unapprovedRes, recon, missingUnderlag] = await Promise.all([
+  const [unbooked, unapprovedRes, recon, missingUnderlag, unattributedEuSales] = await Promise.all([
     // The shared "no verifikat" predicate (lib/transactions/unbooked.ts), the
     // same one the period-lock guard, attention and report data_status use.
     // The local journal_entry_id IS NULL count it replaced also counted
     // private rows and bulk-booked rows anchored via transaction_voucher_links.
     countUnbookedBankTransactions(supabase, companyId, { fromDate: start, toDate: end }),
-    // Unattested supplier invoices dated in the period; under kontantmetoden
-    // at the räkenskapsår's end, every one dated up to the period end, since
-    // all of them are unpaid at balansdagen and are booked then.
-    (() => {
-      const query = supabase
-        .from('supplier_invoices')
-        .select('id', { count: 'exact', head: true })
-        .eq('company_id', companyId)
-        .eq('status', 'registered')
-        .lte('invoice_date', end)
-      return cashAtYearEnd ? query : query.gte('invoice_date', start)
-    })(),
+    // Unattested supplier invoices dated in the period, where there is an
+    // attest step at all (not under kontantmetoden, above).
+    cashMethod
+      ? Promise.resolve(null)
+      : supabase
+          .from('supplier_invoices')
+          .select('id', { count: 'exact', head: true })
+          .eq('company_id', companyId)
+          .eq('status', 'registered')
+          .gte('invoice_date', start)
+          .lte('invoice_date', end),
     // No account_number argument: the close check wants "the company's bank
     // account", so the scope resolver may land on the primary cash account for
     // a company that has no 1930 row.
@@ -985,6 +1015,18 @@ export async function computeVatCloseCheck(
     // locally: countMissingUnderlagInPeriod documents what the hand-rolled
     // scan that used to sit here got wrong.
     countMissingUnderlagInPeriod(supabase, companyId, start, end),
+    // EU sales in rutor 35/38/39 that the periodisk sammanställning has no
+    // buyer for (crm#1362), found by the PS itself over this momsperiod. Asked
+    // only when the declaration holds EU sales at all.
+    ledgerEuTrade.sales.length > 0
+      ? findUnattributedEuSales(supabase, companyId, start, end).catch((err: unknown) => {
+          log.warn('periodisk sammanställning check unavailable', {
+            companyId,
+            error: err instanceof Error ? err.message : String(err),
+          })
+          return null
+        })
+      : Promise.resolve([] as PsWarning[]),
   ])
 
   const blockers: VatCloseBlocker[] = []
@@ -1042,25 +1084,13 @@ export async function computeVatCloseCheck(
       hint: UNCATEGORIZED_TRANSACTIONS_HINT,
     })
   }
-  const unapprovedCount = unapprovedRes.count ?? 0
-  // Kontantmetoden outside the year end: an unattested invoice does not move
-  // this period's moms, so it is information, not a blocker.
-  if (unapprovedCount > 0 && cashOutsideYearEnd) {
-    blockers.push({
-      kind: 'unapproved_supplier_invoices',
-      severity: 'low',
-      count: unapprovedCount,
-      message: `Information: ${unapprovedCount} oattesterade leverantörsfakturor i perioden påverkar inte momsen för perioden under kontantmetoden`,
-      hint: 'Blockerar inte. Under kontantmetoden redovisas ingående moms när fakturan betalas; vid räkenskapsårets slut bokförs obetalda fakturor och påverkar då momsen. Attestera dem via gnubok_approve_supplier_invoice före bokslutet.',
-    })
-  } else if (unapprovedCount > 0) {
+  const unapprovedCount = unapprovedRes?.count ?? 0
+  if (unapprovedCount > 0) {
     blockers.push({
       kind: 'unapproved_supplier_invoices',
       severity: 'high',
       count: unapprovedCount,
-      message: cashAtYearEnd
-        ? `${unapprovedCount} oattesterade leverantörsfakturor daterade till och med ${end}: under kontantmetoden bokförs obetalda fakturor vid räkenskapsårets slut`
-        : `${unapprovedCount} oattesterade leverantörsfakturor i perioden`,
+      message: `${unapprovedCount} oattesterade leverantörsfakturor i perioden`,
       hint: 'Attestera via gnubok_approve_supplier_invoice: ingående moms (ruta 48) påverkas.',
     })
   }
@@ -1127,6 +1157,12 @@ export async function computeVatCloseCheck(
       hint: `BFL 5 kap 6-7 §: varje affärshändelse måste ha en verifikation med hänvisning till sitt underlag. Lista dem med gnubok_list_verifikat_without_documents (via gnubok_call_tool; since=${start}, min_amount=${MISSING_UNDERLAG_MIN_GROSS_SEK}) och para ihop via gnubok_list_unmatched_documents.`,
     })
   }
+  // The periodisk sammanställning is the per-buyer breakdown of rutor 35, 38
+  // and 39 and a filing of its own: a sale those rutor count with no buyer
+  // to file it under means the two filings disagree. Until crm#1362 nothing
+  // here read the PS, so such a period answered ready with no finding.
+  const euSaleBlockers = unattributedEuSaleBlockers(unattributedEuSales)
+  blockers.push(...euSaleBlockers)
   // Untagged verifikat the report classified as momsredovisning BY SHAPE and
   // therefore kept out of the rutor. Informational (severity low, never part
   // of ready_to_close): a manual or imported settlement is supposed to be
@@ -1200,7 +1236,13 @@ export async function computeVatCloseCheck(
     if (check.review) continue
     const escalated =
       check.status === 'ERROR' ||
-      (check.code === 'RC_INPUT_VAT_MISMATCH' && noInputVatAtAll)
+      (check.code === 'RC_INPUT_VAT_MISMATCH' && noInputVatAtAll) ||
+      // Kontantmetoden's year-end cut-off not booked (or not checkable):
+      // filed now, the moms on invoices unpaid at balansdagen is missing from
+      // this period. A WARNING to the filing gate (founder decision
+      // 2026-10-03), but the close is not ready, which the unattested-invoice
+      // count used to say at the year end (agent feedback seq 878478, #88).
+      check.code === 'KONTANTMETOD_CUTOFF_INCOMPLETE'
     const baseHint =
       // Only the blocking variant: the advisory RC_BASIS_MISSING (period
       // consistent per rate) and the scan-unavailable one must not be told to
@@ -1211,9 +1253,11 @@ export async function computeVatCloseCheck(
           ? RC_BASIS_ADVISORY_HINT
           : check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA'
             ? REVENUE_ACCOUNT_WITHOUT_RUTA_HINT
-            : check.rutor?.length
-              ? `Granska ${check.rutor.join(', ')} i huvudboken innan inlämning (gnubok_get_general_ledger).`
-              : 'Granska underlaget i huvudboken innan inlämning (gnubok_get_general_ledger).'
+            : check.code === 'KONTANTMETOD_CUTOFF_INCOMPLETE'
+              ? KONTANTMETOD_CUTOFF_HINT
+              : check.rutor?.length
+                ? `Granska ${check.rutor.join(', ')} i huvudboken innan inlämning (gnubok_get_general_ledger).`
+                : 'Granska underlaget i huvudboken innan inlämning (gnubok_get_general_ledger).'
     blockers.push({
       kind: RC_COMPLETENESS_CODES.has(check.code)
         ? 'reverse_charge_input_missing'
@@ -1324,11 +1368,19 @@ export async function computeVatCloseCheck(
   const direction: 'pay' | 'refund' | 'zero' = netDue > 0 ? 'pay' : netDue < 0 ? 'refund' : 'zero'
 
   const declarationErrors = declarationChecks.filter((c) => c.status === 'ERROR').length
+  // A ruta 39 sale without a buyer does not stop the close, but "klart" must
+  // not read as "nothing for the periodisk sammanställning" (crm#1362).
+  const psWarning = euSaleBlockers.find((b) => b.severity !== 'high')
+  const psNote = !psWarning
+    ? ''
+    : psWarning.count > 0
+      ? ` Periodisk sammanställning: ${psWarning.count} EU-försäljning${psWarning.count === 1 ? '' : 'ar'} i ruta 39 saknar köpare.`
+      : ' Periodisk sammanställning kunde inte stämmas av.'
   let summary: string
   if (readyToClose && anomalies.length === 0) {
-    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}`
+    summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}${psNote}`
   } else if (readyToClose) {
-    summary = `Klart för stängning men ${anomalies.length} avvikelse(r) att granska.`
+    summary = `Klart för stängning men ${anomalies.length} avvikelse(r) att granska.${psNote}`
   } else if (declarationBlocked) {
     summary = `Inte klart: deklarationsunderlaget är ofullständigt (${declarationErrors} fel), ${highBlockers} kritiska blockerare totalt.`
   } else {

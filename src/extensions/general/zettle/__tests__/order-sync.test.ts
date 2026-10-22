@@ -206,6 +206,19 @@ describe('zettle order-sync mapping', () => {
     expect(fromMinor(12500)).toBe(125)
     expect(fromMinor(-50)).toBe(-0.5)
   })
+
+  it('dates a purchase on the Swedish day, not the UTC day (#58)', () => {
+    const conn = { id: 'conn-1', organization_name: 'Caféet' }
+    // Winter time: 23:30 UTC on 31 October is 00:30 on 1 November in Stockholm.
+    const [winter] = mapPurchaseToWebshopRows(conn, 'org-1', sale({ created: '2026-10-31T23:30:00.000+0000' }))
+    expect(winter).toMatchObject({ order_date: '2026-11-01', paid_date: '2026-11-01' })
+    // Summer time: 22:30 UTC on 31 August is 00:30 on 1 September.
+    const [summer] = mapPurchaseToWebshopRows(conn, 'org-1', sale({ created: '2026-08-31T22:30:00.000Z' }))
+    expect(summer).toMatchObject({ order_date: '2026-09-01', paid_date: '2026-09-01' })
+    // 21:30 UTC is still 23:30 on 31 August there.
+    const [evening] = mapPurchaseToWebshopRows(conn, 'org-1', sale({ created: '2026-08-31T21:30:00.000+0000' }))
+    expect(evening).toMatchObject({ order_date: '2026-08-31', paid_date: '2026-08-31' })
+  })
 })
 
 const CONNECTED_AT = '2026-09-09T10:00:00.000Z'

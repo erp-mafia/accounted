@@ -26,6 +26,7 @@ import { computeLineNet } from '@/lib/bookkeeping/invoice-line-amounts'
 import { createLogger } from '@/lib/logger'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import type { EntityType, Invoice } from '@/types'
+import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 const log = createLogger('self-billed-sale')
 
@@ -304,13 +305,24 @@ export async function createSelfBilledSaleInvoice(
     return { ok: false, failure: { code: 'items_failed', pgCode: itemsError.code, pgMessage: itemsError.message } }
   }
 
-  const { data: settings } = await supabase
+  const settingsRead = await supabase
     .from('company_settings')
     .select('accounting_method, entity_type')
     .eq('company_id', companyId)
     .maybeSingle()
-  const accountingMethod = settings?.accounting_method || 'accrual'
-  const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+  // Fail closed (accounted#58): whether the sale is booked now or at payment
+  // follows the method, so an unreadable one rolls the header back instead of
+  // guessing faktureringsmetoden.
+  const method = checkAccountingMethod(settingsRead)
+  if (!method.ok) {
+    await supabase.from('invoices').delete().eq('id', invoice.id)
+    log.error('self-billed invoice refused: accounting method unavailable; rolled back', method.error, {
+      invoiceId: invoice.id,
+    })
+    throw method.error
+  }
+  const { accountingMethod } = method
+  const entityType = await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type)
 
   const { data: completeInvoice } = await supabase
     .from('invoices')

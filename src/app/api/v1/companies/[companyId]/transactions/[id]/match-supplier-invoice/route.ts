@@ -47,6 +47,7 @@ import {
   planRegistrationBeforeSettlement,
   type RegistrationFirstRefusal,
 } from '@/lib/supplier-invoices/registration-first'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 const MatchSIResponse = z.object({
   success: z.boolean(),
@@ -212,15 +213,19 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // kontantmetoden refusals. This door used to derive its own copy, which
     // cleared the whole bank row off 2440 with no fee or öre line and no
     // overshoot guard.
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('accounting_method')
-      .eq('company_id', ctx.companyId!)
-      .single()
+    // Fail closed (accounted#58): planned as faktureringsmetoden, a
+    // kontantmetod refusal would only surface after the storno below.
+    const accountingMethod = requireAccountingMethod(
+      await ctx.supabase
+        .from('company_settings')
+        .select('accounting_method')
+        .eq('company_id', ctx.companyId!)
+        .single(),
+    )
     const planned = planSupplierBankMatch({
       invoice,
       transaction,
-      accountingMethod: settings?.accounting_method,
+      accountingMethod,
     })
     if (!planned.ok) {
       return v1ErrorResponseFromCode(planned.code, txLog, {

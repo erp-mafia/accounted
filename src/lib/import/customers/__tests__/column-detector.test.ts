@@ -126,6 +126,46 @@ describe('detectCustomerColumns', () => {
     expect(result.org_number_col).toBe(2)
   })
 
+  // PH 204: the Spiris (formerly Visma eEkonomi) customer register export.
+  // "InvoicePostalCode" used to win the e-mail column, so every row failed the
+  // e-mail check, and the org, VAT, customer and postal numbers were dropped.
+  it('maps the Spiris customer register export', () => {
+    const headers = [
+      'IsActive', 'CustomerNumber', 'Namn', 'IsPrivatePerson', 'CorporateIdentityNumber',
+      'Postadress 1', 'Postadress 2', 'InvoicePostalCode', 'InvoiceCity', 'InvoiceCountryCode',
+      'SalesDocumentLanguage', 'EdiGlnNumber', 'VatNumber', 'Telephone', 'MobilePhone',
+      'EmailAddress', 'CcEmailAddresses', 'WwwAddress', 'Note', 'ForceBookkeepVat',
+      'ReverseChargeOnConstructionServices', 'ContactPersonName', 'ContactPersonEmail',
+      'ContactPersonPhone', 'ContactPersonMobile', 'TermOfDeliveryCode', 'DeliveryMethodCode',
+      'DeliveryCustomerName', 'DeliveryAddress1', 'DeliveryAddress2', 'DeliveryPostalCode',
+      'DeliveryCity', 'DeliveryCountryCode', 'TermsofPaymentCode', 'CurrencyCode',
+      'PayToAccount', 'DiscountPercentage', 'CustomerLabels',
+    ]
+    const result = detectCustomerColumns(headers)
+    const at = (col: number | null) => (col === null ? null : headers[col])
+    expect(at(result.name_col)).toBe('Namn')
+    expect(at(result.customer_number_col)).toBe('CustomerNumber')
+    expect(at(result.org_number_col)).toBe('CorporateIdentityNumber')
+    expect(at(result.customer_type_col)).toBe('IsPrivatePerson')
+    expect(at(result.email_col)).toBe('EmailAddress')
+    expect(at(result.phone_col)).toBe('Telephone')
+    expect(at(result.address_line1_col)).toBe('Postadress 1')
+    expect(at(result.address_line2_col)).toBe('Postadress 2')
+    expect(at(result.postal_code_col)).toBe('InvoicePostalCode')
+    expect(at(result.city_col)).toBe('InvoiceCity')
+    expect(at(result.country_col)).toBe('InvoiceCountryCode')
+    expect(at(result.vat_number_col)).toBe('VatNumber')
+    expect(at(result.notes_col)).toBe('Note')
+    expect(result.confidence).toBeGreaterThanOrEqual(0.8)
+  })
+
+  it('never fills the invoice address from a delivery or web address column', () => {
+    const headers = ['Namn', 'WwwAddress', 'DeliveryAddress1', 'Leveransort', 'Fakturaadress', 'Ort']
+    const result = detectCustomerColumns(headers)
+    expect(result.address_line1_col).toBe(4)
+    expect(result.city_col).toBe(5)
+  })
+
   it('does not take another number column as the customer number', () => {
     const headers = ['Namn', 'Organisationsnummer', 'Telefonnummer', 'Postnummer', 'Momsnr']
     const result = detectCustomerColumns(headers)

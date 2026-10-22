@@ -15,8 +15,9 @@ import '@/components/onboarding/journey/journey.css'
  * BankID company picker: the companies the user's BankID says they run
  * (CompanyRoles) that are not in Accounted yet, as the journey's searchable
  * list (founder decision 2026-07-24: the list is the standard at ANY count).
- * Picking one routes to /onboarding?org_number=… (one Lens lookup happens
- * there, on pick); "Lägg till manuellt" is the journey without a prefill.
+ * Picking one routes to /onboarding?pick=<TIC companyId> (one Lens lookup
+ * happens there, on pick); "Lägg till manuellt" is the journey without a
+ * prefill.
  * The roster itself is free CompanyRoles data: this page never calls TIC.
  * Companies the user already belongs to are not listed: the page redirects
  * before rendering when there is nothing new to add (founder direction
@@ -76,12 +77,14 @@ export default function BankIdCompanyPicker({
     [roles, q],
   )
 
-  // Every engagement pick routes to the journey with the orgnr; the journey
-  // runs ONE Lens lookup on arrival and prefills facts (plan addendum
-  // 2026-07-24). CompanyRoles itself is on the Identity API: separate quota.
+  // Every engagement pick routes to the journey, which runs ONE Lens lookup
+  // on arrival and prefills facts (plan addendum 2026-07-24). CompanyRoles
+  // itself is on the Identity API: separate quota. The URL names the pick by
+  // TIC's opaque companyId, resolved server-side against this user's roles,
+  // never by the registration number: a sole trader's carries the owner's
+  // personnummer, and the URL lands in analytics and request logs.
   function handleCreateFromTic(role: EnrichmentCompanyRole) {
-    const orgNumber = role.companyRegistrationNumber.replace(/[\s-]/g, '')
-    router.push(`/onboarding?org_number=${encodeURIComponent(orgNumber)}`)
+    router.push(`/onboarding?pick=${encodeURIComponent(String(role.companyId))}`)
   }
 
   function onSearchEnter() {

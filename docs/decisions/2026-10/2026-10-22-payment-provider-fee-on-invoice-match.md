@@ -1,0 +1,1 @@
+[2026-10-22] A bank row 1 kr or more short of a SEK customer invoice settles it in full when the user names fee_account 6570: the payment provider's withheld fee, booked in the match verifikat without VAT (ML 10 kap. 33 §), under 10 % of the remaining; feed rows keep their rule (crm#1364).

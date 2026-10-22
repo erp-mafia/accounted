@@ -43,6 +43,7 @@ import {
   headerToSekOrThrow,
   installmentOutputVat,
   invoiceCashBankSek,
+  splitDeductionShare,
 } from './invoice-lines'
 export { buildInvoiceCashLines, buildInvoiceCashPartialLines } from './invoice-lines'
 
@@ -397,6 +398,8 @@ export async function createCreditNoteJournalEntry(
   originalVoucherRef?: string,
   /** What the door saw, read by the posting port only while POSTING_EVENTS is on. */
   posting?: () => InvoicePostingContext,
+  /** See buildCreditNoteLines' options.deductionUnbooked. */
+  options: { deductionUnbooked?: boolean } = {},
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
   if (!fiscalPeriodId) {
@@ -404,7 +407,10 @@ export async function createCreditNoteJournalEntry(
     return null
   }
 
-  const lines = buildCreditNoteLines(creditNote, entityType, originalVoucherRef)
+  const lines = buildCreditNoteLines(creditNote, entityType, originalVoucherRef, options)
+  // A credit of the customer's share alone takes back only that moms.
+  const customerShareOnly =
+    !!options.deductionUnbooked && splitDeductionShare(creditNote.items, creditNote.currency) !== null
 
   const baseDescription = buildInvoiceDescription('Kreditfaktura', creditNote.invoice_number, customerName, creditNote.id)
   const input: CreateJournalEntryInput = {
@@ -424,7 +430,13 @@ export async function createCreditNoteJournalEntry(
     supabase,
     companyId,
     userId,
-    event: () => creditNoteBusinessEvent(creditNote, posting?.()),
+    event: () => {
+      const vat = Math.abs(installmentOutputVat(input.lines))
+      return creditNoteBusinessEvent(
+        customerShareOnly ? { ...creditNote, vat_amount: vat, vat_amount_sek: vat } : creditNote,
+        posting?.(),
+      )
+    },
     input,
   })
 }
@@ -437,7 +449,12 @@ export async function createCreditNoteJournalEntry(
  * With a matched bank row, the bank leg is what arrived on it
  * (invoiceCashBankSek) and a sub-krona gap goes to 3740; the mark-paid doors
  * pass no row and book the customer share. `overpaymentAccount` books an
- * excess of a krona or more on that row (buildInvoiceCashLines).
+ * excess of a krona or more on that row, `options.feeAccount` a payment
+ * provider's fee that left the row short of it (buildInvoiceCashLines).
+ *
+ * `options.deferDeductionShare`: kontantmetoden's two steps for a ROT/RUT
+ * or grön teknik invoice (buildInvoiceCashLines); only a kontantmetod
+ * company passes true.
  *
  * Posting port (step 2f-2), as createInvoicePaymentJournalEntry: the
  * sale.payment_received event, with the moms the sale books at payment, is
@@ -455,6 +472,7 @@ export async function createInvoiceCashEntry(
   bankTransaction?: Pick<Transaction, 'id' | 'cash_account_id' | 'date' | 'amount' | 'currency'>,
   overpaymentAccount?: string,
   posting?: () => InvoicePaymentPostingContext,
+  options: { deferDeductionShare?: boolean; feeAccount?: string } = {},
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, paymentDate)
   if (!fiscalPeriodId) {
@@ -469,7 +487,11 @@ export async function createInvoiceCashEntry(
     settlementAccountNumber,
     invoiceCashBankSek(bankTransaction),
     overpaymentAccount,
+    options,
   )
+  // Bokslutsmetoden's first step books only the moms of the customer's
+  // share: the event states that, as an installment states its own.
+  const twoSteps = !!options.deferDeductionShare && splitDeductionShare(invoice.items, invoice.currency) !== null
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
@@ -485,13 +507,15 @@ export async function createInvoiceCashEntry(
     supabase,
     companyId,
     userId,
-    event: () =>
-      invoicePaymentBusinessEvent(
-        invoice,
+    event: () => {
+      const vat = installmentOutputVat(input.lines)
+      return invoicePaymentBusinessEvent(
+        twoSteps ? { ...invoice, vat_amount: vat, vat_amount_sek: vat } : invoice,
         input,
         { paymentAccount: settlementAccountNumber, generated: true, bankLine: !!bankTransaction },
         posting?.(),
-      ),
+      )
+    },
     input,
   })
 }

@@ -42,6 +42,7 @@ import { registerSupplierInvoiceHandler } from '@/lib/invoices/supplier-invoice-
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
 import { convertInboxItemToSupplierInvoice } from '../inbox-convert'
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupplierType } from '@/types'
 
 const mockCreateEntry = vi.mocked(createSupplierInvoiceRegistrationEntry)
 const mockCreateClient = vi.mocked(createClient)
@@ -82,10 +83,25 @@ function subscriberClient(settings: Record<string, unknown>) {
   return { from: (table: string) => chain({ data: rows[table] ?? null, error: null }) }
 }
 
-async function convert(settings: Record<string, unknown>) {
+// An EU goods acquisition (ruta 20): reverse charge, no seller moms.
+const EU_GOODS_BODY = CreateSupplierInvoiceSchema.parse({
+  supplier_id: SUPPLIER_UUID,
+  supplier_invoice_number: 'EU-2026-001',
+  invoice_date: '2026-09-15',
+  due_date: '2026-11-15',
+  reverse_charge: true,
+  reverse_charge_kind: 'eu_goods',
+  items: [{ description: 'Varor', amount: 10000, account_number: '4010', vat_rate: 0 }],
+})
+
+async function convert(
+  settings: Record<string, unknown>,
+  body: typeof BODY = BODY,
+  supplierType: SupplierType = 'swedish_business',
+) {
   const { supabase, enqueue } = createQueuedMockSupabase()
   enqueue({ data: makeInvoiceInboxItem({ status: 'received' }) })
-  enqueue({ data: makeSupplier({ id: SUPPLIER_UUID }) })
+  enqueue({ data: makeSupplier({ id: SUPPLIER_UUID, supplier_type: supplierType }) })
   enqueue({ data: makeCompanySettings(settings) })
   enqueue({ data: 42 })
   enqueue({ data: { id: 'invoice-1', status: 'registered', registration_journal_entry_id: null } })
@@ -101,7 +117,7 @@ async function convert(settings: Record<string, unknown>) {
       log: createLogger('inbox-convert-test'),
     },
     'item-1',
-    BODY,
+    body,
   )
 }
 
@@ -138,6 +154,25 @@ describe('inbox convert: registration verifikat follows booksInvoicesOnIssue', (
 
   it('posts nothing for a kontantmetoden company', async () => {
     const outcome = await convert({ accounting_method: 'cash', defer_invoice_booking: false })
+
+    expect(outcome.ok).toBe(true)
+    if (outcome.ok && !outcome.dryRun) expect(outcome.data.registration_journal_entry_id).toBeNull()
+    expect(mockCreateEntry).not.toHaveBeenCalled()
+  })
+
+  // #73: ML 2023:200 7 kap. 26 § puts an EU goods acquisition's moms in the
+  // invoice's period whatever the method, so kontantmetoden registers it too.
+  it('posts the registration for a kontantmetoden company buying goods from another EU country', async () => {
+    const outcome = await convert({ accounting_method: 'cash', defer_invoice_booking: false }, EU_GOODS_BODY, 'eu_business')
+
+    expect(outcome.ok).toBe(true)
+    if (outcome.ok && !outcome.dryRun) expect(outcome.data.registration_journal_entry_id).toBe('je-1')
+    expect(mockCreateEntry).toHaveBeenCalledTimes(1)
+  })
+
+  it('still posts nothing for a kontantmetoden company buying EU services (paid, then reported)', async () => {
+    const services = { ...EU_GOODS_BODY, reverse_charge_kind: 'eu_services' as const }
+    const outcome = await convert({ accounting_method: 'cash', defer_invoice_booking: false }, services, 'eu_business')
 
     expect(outcome.ok).toBe(true)
     if (outcome.ok && !outcome.dryRun) expect(outcome.data.registration_journal_entry_id).toBeNull()

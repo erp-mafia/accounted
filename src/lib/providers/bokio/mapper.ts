@@ -15,7 +15,7 @@ import {
   lineVatFromPercent,
   multiplyIfBothPresent,
 } from '../amounts';
-import { creditNoteTypeCode } from '../dto';
+import { creditNoteTypeCode, salesDocumentNumber, statedDocumentNumber } from '../dto';
 
 /**
  * Bokio's live payloads have repeatedly differed from its published spec (the
@@ -217,25 +217,6 @@ function mapBokioSalesLines(
 }
 
 /**
- * The number of a Bokio sales document. Bokio generates it when the
- * document is published, so a draft has none (`invoiceNumber` null; the
- * spec: "generated at the time of publishing"). Substituting Bokio's record
- * id put a UUID in "Fakturanummer" on every unnumbered draft and on the
- * drafts later cancelled (crm#1084). Empty becomes NULL at the insert, which
- * invoices_sent_requires_number allows for draft and cancelled.
- *
- * Every other status requires a number, so a published document that
- * arrives without one keeps the id as before: refused at the insert, it
- * would not be imported at all.
- */
-function bokioDocumentNumber(raw: Record<string, unknown>, status: InvoiceStatusCode): string {
-  const stated = raw['invoiceNumber'] == null ? '' : String(raw['invoiceNumber']).trim();
-  if (stated) return stated;
-  if (status === 'draft' || status === 'cancelled') return '';
-  return String(raw['id'] ?? '');
-}
-
-/**
  * Map Bokio Invoice to SalesInvoiceDto.
  *
  * Bokio Invoice fields (company-api spec, schema `invoice`):
@@ -279,7 +260,7 @@ export function mapBokioToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
 
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: bokioDocumentNumber(raw, status),
+    invoiceNumber: salesDocumentNumber(raw['invoiceNumber'], raw['id'], status),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
     // An /invoices row Bokio itself labels `credit` is a credit document,
@@ -365,7 +346,7 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
 
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: bokioDocumentNumber(raw, status),
+    invoiceNumber: salesDocumentNumber(raw['invoiceNumber'], raw['id'], status),
     issueDate: (raw['creditDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
     invoiceTypeCode: '381',
@@ -617,7 +598,7 @@ export function mapBokioToSupplierInvoice(raw: Record<string, unknown>): Supplie
     // invoice number: substituting it put a UUID in "Fakturanummer" on every
     // number-less invoice. Empty becomes NULL at the insert, and the import
     // recognises a number-less invoice by supplier, date and amount instead.
-    invoiceNumber: raw['invoiceNumber'] == null ? '' : String(raw['invoiceNumber']).trim(),
+    invoiceNumber: statedDocumentNumber(raw['invoiceNumber']),
     issueDate: (raw['invoiceDate'] as string) ?? '',
     dueDate: raw['dueDate'] as string | undefined,
     invoiceTypeCode,

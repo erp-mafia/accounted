@@ -1,0 +1,1 @@
+[2026-10-22] Once Open Payments is open to a company, Enable Banking's Anslut ny bank lists only the banks Open Payments does not reach and the import page's PSD2 choice opens bank settings: a new Enable Banking connection to a covered bank ends with that feed in November (crm#1363).

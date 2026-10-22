@@ -123,3 +123,52 @@ describe('createRotRutPayoutSetEntry öre rounding', () => {
     expectBalanced()
   })
 })
+
+describe('kontantmetoden: a leg that recognises the deduction share', () => {
+  const recognition = {
+    amount: 3000,
+    lines: [
+      { account_number: '3001', debit_amount: 0, credit_amount: 2400, line_description: 'Försäljning faktura 1042, ROT-avdrag' },
+      { account_number: '2611', debit_amount: 0, credit_amount: 600, line_description: 'Utgående moms 25% faktura 1042, ROT-avdrag' },
+    ],
+  }
+
+  it('books revenue and moms instead of 1513 when the whole leg is recognised', async () => {
+    await createRotRutPayoutEntry(supabase, 'company-1', 'user-1', { ...base, amount: 3000, recognition })
+    expect(bookedLines()).toEqual([
+      { account: '1930', debit: 3000, credit: 0 },
+      { account: '3001', debit: 0, credit: 2400 },
+      { account: '2611', debit: 0, credit: 600 },
+    ])
+    expectBalanced()
+  })
+
+  it('clears 1513 with the rest of a leg that also pays invoices booked on 1513', async () => {
+    await createRotRutPayoutSetEntry(supabase, 'company-1', 'user-1', {
+      paymentDate: '2026-07-10',
+      legs: [{ ...base, amount: 5000, oreRounding: 0.4, invoiceCount: 2, recognition }],
+    })
+    expect(bookedLines()).toEqual([
+      { account: '1930', debit: 5000, credit: 0 },
+      { account: '3740', debit: 0.4, credit: 0 },
+      { account: '1513', debit: 0, credit: 2000.4 },
+      { account: '3001', debit: 0, credit: 2400 },
+      { account: '2611', debit: 0, credit: 600 },
+    ])
+    expectBalanced()
+  })
+
+  it('refuses a recognition above the leg or one its lines do not carry exactly', async () => {
+    await expect(
+      createRotRutPayoutEntry(supabase, 'company-1', 'user-1', { ...base, amount: 2000, recognition }),
+    ).rejects.toThrow(/Invalid revenue recognition/)
+    await expect(
+      createRotRutPayoutEntry(supabase, 'company-1', 'user-1', {
+        ...base,
+        amount: 3000,
+        recognition: { ...recognition, amount: 2999 },
+      }),
+    ).rejects.toThrow(/Invalid revenue recognition/)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})

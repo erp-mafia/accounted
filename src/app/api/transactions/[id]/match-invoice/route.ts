@@ -46,6 +46,7 @@ import {
   SALE_FIRST_NOT_REQUIRED,
 } from '@/lib/invoices/sale-first'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 
 /**
  * POST /api/transactions/[id]/match-invoice
@@ -91,6 +92,8 @@ export const POST = withRouteContext(
       lines: customLines,
       overpayment_account,
       overpayment_amount,
+      fee_account,
+      fee_amount,
     } = validation.data
 
     const txLog = log.child({ transactionId, invoiceId: invoice_id })
@@ -433,11 +436,14 @@ export const POST = withRouteContext(
     // agent (commit) path run too, so the dialog never shows a booking this
     // refuses. Pure-SEK settlements absorb sub-krona öresavrundning (3740) so a
     // whole-krona payment settles in full; an excess of a krona or more books
-    // only on the account the user picked in the dialog (crm#1045).
+    // only on the account the user picked in the dialog (crm#1045), and a
+    // payout short of the invoice by the payment provider's fee settles it in
+    // full only when the user named it one (6570, crm#1364).
     const pureSek = transaction.currency === 'SEK' && invoice.currency === 'SEK'
     const payment = planMatchPayment(invoice, paidAmountInInvoiceCurrency, {
       pureSek,
       overpaymentAccount: overpayment_account,
+      feeAccount: fee_account,
     })
     if (!payment.ok) {
       return errorResponseFromCode(payment.code, txLog, {
@@ -455,18 +461,28 @@ export const POST = withRouteContext(
         details: { shown_excess: shownExcess, current_excess: payment.overpayment?.amount ?? 0 },
       })
     }
+    // The same for the fee the dialog showed on 6570.
+    const shownFee = fee_amount === undefined ? 0 : roundOre(fee_amount)
+    if (shownFee !== (payment.fee?.amount ?? 0)) {
+      return errorResponseFromCode('MATCH_PAYMENT_FEE_CHANGED', txLog, {
+        requestId,
+        details: { shown_fee: shownFee, current_fee: payment.fee?.amount ?? 0 },
+      })
+    }
     const overpaymentAccount = payment.overpayment?.account
+    const feeAccount = payment.fee?.account
     const { newPaidAmount, newRemaining, isFullyPaid, newStatus } = payment.plan
     const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
 
-    const { data: settings } = await supabase
+    const settingsRead = await supabase
       .from('company_settings')
       .select('accounting_method, entity_type')
       .eq('company_id', companyId)
       .single()
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+    // Fail closed (accounted#58), before the storno below.
+    const accountingMethod = requireAccountingMethod(settingsRead)
+    const entityType = await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type)
 
     // Debit the cash account THIS transaction actually belongs to, never a
     // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
@@ -558,6 +574,7 @@ export const POST = withRouteContext(
               // The bank amount createInvoiceCashEntry derives from the same row.
               invoiceCashBankSek(transaction),
               overpaymentAccount,
+              { deferDeductionShare: accountingMethod === 'cash', feeAccount },
             ).lines
           : buildInvoiceMatchClearingLines(
               {
@@ -581,6 +598,7 @@ export const POST = withRouteContext(
               fx.required ? fx.paidInInvoiceCurrency : undefined,
               paymentAccount,
               overpaymentAccount,
+              feeAccount,
             ).lines
     } catch (err) {
       return bookingFailure(err)
@@ -688,6 +706,7 @@ export const POST = withRouteContext(
           supabase, companyId, user.id, invoice as Invoice, transaction.date,
           entityType, invoice.customer?.name, paymentAccount,
           transaction, overpaymentAccount, posting,
+          { deferDeductionShare: accountingMethod === 'cash', feeAccount },
         )
         journalEntryId = journalEntry?.id ?? null
       } else {

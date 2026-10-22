@@ -9,8 +9,7 @@ import { submitSIEJob, SIEJobValidationError } from '@/lib/import/sie-jobs'
 import { sieJobValidationResponse } from '@/lib/import/sie-job-validation-response'
 import { runSIEWorker } from '@/lib/import/sie-job-worker'
 import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import type { SIEAccountMappingRecord } from '@/lib/import/types'
+import { loadMappings } from '@/lib/import/sie-import'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
 import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
 
@@ -47,8 +46,7 @@ export const POST = withRouteContext('sie_import.execute', async (request,ctx) =
       mappings = checked.data
     }
     else {
-      const stored = await fetchAllRows<SIEAccountMappingRecord>(({from,to}) => supabase.from('sie_account_mappings')
-        .select('*').eq('company_id',companyId).order('source_account').range(from,to))
+      const stored = await loadMappings(supabase,companyId!)
       // The upload's own decision (#3312): a stored 9xxx target for an account
       // with amounts would otherwise reach the job's class check and refuse.
       mappings = SIEJobMappingsSchema.parse(suggestSIEMappings(parseSIEFile(content),BAS_REFERENCE,stored).mappings)

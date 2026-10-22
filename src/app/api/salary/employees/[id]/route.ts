@@ -36,7 +36,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
 export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
   'salary.employees.update',
-  async (request, { supabase, companyId }, { params }) => {
+  async (request, { supabase, companyId, user }, { params }) => {
     const { id } = await params
 
     const validation = await validateBody(request, UpdateEmployeeSchema)
@@ -69,6 +69,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       patch,
       identity,
       columns: '*',
+      userId: user.id,
     })
     if (!result.ok) return employeeCommandErrorResponse(result)
 

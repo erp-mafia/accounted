@@ -483,12 +483,20 @@ export function computeDeduction(item: ItemForDeduction): number {
   // Net of any line discount: the deduction follows what the customer pays.
   const lineTotal = computeLineNet(item.quantity, item.unit_price, item.discount_percent)
   if (lineTotal <= 0) return 0
-  const lineTotalInclVat = lineTotal + lineVatAmount(item.vat_rate, lineTotal)
-  const raw = lineTotalInclVat * percent
+  const lineTotalInclVat = roundOre(lineTotal + lineVatAmount(item.vat_rate, lineTotal))
+  // The share is taken in whole öre times basis points, an exact integer
+  // product, so a half öre (RUT 50 % of an odd öre amount, ROT 30 % of one
+  // ending in 5 öre) reaches roundOre as a real tie. Kronor times 0.3 is not
+  // exact: 2,05 kr x 0.3 is 0.6149999999999999 and would round to 0,61, not
+  // 0,62. The quotient has far fewer than 15 significant digits, so roundOre
+  // reads it back as the exact decimal.
+  const inclVatOre = Math.round(lineTotalInclVat * 100)
+  const shareBasisPoints = Math.round(percent * 10_000)
+  const raw = (inclVatOre * shareBasisPoints) / 1_000_000
   // Cap at line total incl. VAT: defensive against future rule changes that
   // would push percent past 1.0.
   const capped = Math.min(raw, lineTotalInclVat)
-  return Math.round(capped * 100) / 100
+  return roundOre(capped)
 }
 
 /** The stored invoice_items.vat_amount of a line with this net total. */

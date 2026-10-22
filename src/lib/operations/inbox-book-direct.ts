@@ -32,6 +32,7 @@ import {
   ownRowsStornoBusinessEvent,
 } from '@/lib/bookkeeping/bank-line-business-events'
 import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
+import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -166,6 +167,18 @@ export async function bookInboxItemDirectly(
       details: { currency: documentCurrency },
       messageSv: `Beloppen är underlagets belopp i ${documentCurrency}, inte kronor. Ange beloppen i kronor, eller välj banktransaktionen som betalade underlaget. Är valutan fel rättar du den på underlaget.`,
       messageEn: `The amounts are the document's amounts in ${documentCurrency}, not SEK. Enter the amounts in SEK, or pick the bank transaction that paid the document. If the currency is wrong, correct it on the document.`,
+    }))
+  }
+
+  // Importmoms with no ruta 50 line, as a company's own mall books it when
+  // its fiktiv moms sits on 2615 (#83): refused before anything is posted.
+  const importVat = await refuseImportVatWithoutBase(ctx.supabase, ctx.companyId, body.lines)
+  if (importVat) {
+    return refused(errorResponseFromCode(importVat.code, ctx.log, {
+      requestId: ctx.requestId,
+      details: importVat.details,
+      messageSv: importVat.messageSv,
+      messageEn: importVat.messageEn,
     }))
   }
 

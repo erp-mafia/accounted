@@ -15,12 +15,12 @@ import {
   checkDuplicateImport,
   checkDuplicatePeriodImport,
   precheckFiscalPeriod,
+  loadMappings,
 } from '@/lib/import/sie-import'
 import { BAS_REFERENCE } from '@/lib/bookkeeping/bas-data'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import type { SIEAccountMappingRecord } from '@/lib/import/types'
 import { hasSIEFileExtension } from '@/lib/import/sie-file-extensions'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { readSIERequestFile } from '@/lib/import/sie-intake'
@@ -110,15 +110,12 @@ export const POST = withRouteContext(
         })
       }
 
-      const { data: storedMappings } = await supabase
-        .from('sie_account_mappings')
-        .select('*')
-        .eq('company_id', companyId)
+      const storedMappings = await loadMappings(supabase, companyId!)
 
       const { mappings, archivedOnlyAccounts, excludedSystemAccounts, unusedAccounts, unusedOwnAccounts } = suggestSIEMappings(
         parsed,
         BAS_REFERENCE,
-        (storedMappings as SIEAccountMappingRecord[]) || undefined,
+        storedMappings,
       )
 
       const preview = generateImportPreview(parsed, mappings)

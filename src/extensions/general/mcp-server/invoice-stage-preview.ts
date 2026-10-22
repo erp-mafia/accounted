@@ -158,7 +158,10 @@ export async function buildMarkPaidPreview(
         .order('sort_order', { ascending: true })
       if (error) throw new Error(error.message)
       const withItems = { ...invoice, items: (rows ?? []) as InvoiceItem[] } as unknown as Invoice
-      lines = buildInvoiceCashLines(withItems, entityType, customerName, settlementAccount).lines
+      lines = buildInvoiceCashLines(
+        withItems, entityType, customerName, settlementAccount, undefined, undefined,
+        { deferDeductionShare: companyMethod === 'cash' },
+      ).lines
     } else {
       lines = buildInvoicePaymentLines(invoice as unknown as Invoice, customerName, settlementAccount).lines
     }
@@ -229,7 +232,7 @@ export async function buildPaidAtIssuePreview(
   try {
     const { data: settings } = await supabase
       .from('company_settings')
-      .select('entity_type')
+      .select('entity_type, accounting_method')
       .eq('company_id', companyId)
       .maybeSingle()
     const entityType = await resolveCompanyEntityType(
@@ -238,8 +241,14 @@ export async function buildPaidAtIssuePreview(
       (settings as { entity_type?: unknown } | null)?.entity_type,
     )
     const withItems = { ...invoice, items } as unknown as Invoice
+    // Kontantmetoden books a ROT/RUT invoice in two steps (settleInvoicePayment
+    // passes the same flag); faktureringsmetoden reports the whole moms now.
+    const cashMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method === 'cash'
     journalEntryPreview = entryPreviewOf(
-      buildInvoiceCashLines(withItems, entityType, invoice.customer?.name ?? undefined, accountNumber).lines,
+      buildInvoiceCashLines(
+        withItems, entityType, invoice.customer?.name ?? undefined, accountNumber, undefined, undefined,
+        { deferDeductionShare: cashMethod },
+      ).lines,
     )
   } catch (err) {
     // Advisory, as for mark paid: the approval builds the same entry and

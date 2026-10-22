@@ -10,6 +10,7 @@ import {
   syncStripeCustomerIdentity,
   type SyncedBillingIdentity,
 } from '@/lib/stripe/customer-identity'
+import { payingCompanySubscription, readCompanyStripeRef } from '@/lib/stripe/company-subscription'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { localeFromCookieHeader } from '@/i18n/config'
@@ -65,13 +66,11 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
 
   // Reuse the company's Stripe customer if we already created one, and read
   // the trial expiry for the deferred-first-charge decision below. Independent
-  // reads, so one round-trip batch.
-  const [{ data: existing }, { data: trialGrant, error: trialGrantError }] = await Promise.all([
-    service
-      .from('company_subscriptions')
-      .select('stripe_customer_id')
-      .eq('company_id', companyId)
-      .maybeSingle(),
+  // reads, so one round-trip batch. A failed customer read throws (500): read
+  // as "no customer" it would mint a second customer and skip the one-
+  // subscription check below.
+  const [existing, { data: trialGrant, error: trialGrantError }] = await Promise.all([
+    readCompanyStripeRef(service, companyId),
     service
       .from('capability_grants')
       .select('expires_at')
@@ -112,7 +111,29 @@ export const POST = withRouteContext('billing.checkout', async (request, ctx) =>
       ? Math.floor(trialExpiryMs / 1000)
       : undefined
 
-  let customerId = (existing as { stripe_customer_id: string | null } | null)?.stripe_customer_id ?? null
+  // One subscription per company (crm#1373). Stripe lets a customer hold
+  // any number, so a second checkout would start a second subscription that
+  // charges alongside the first; the billing page hides the button for a
+  // paying company, but only once the webhook has landed. A plan change is a
+  // change of the one subscription, in the portal.
+  if (existing) {
+    const paying = await payingCompanySubscription(stripe, companyId, existing)
+    if (paying) {
+      log.info('billing.checkout: refused, the company already has a subscription', { subscriptionId: paying })
+      return NextResponse.json(
+        {
+          error: {
+            code: 'SUBSCRIPTION_EXISTS',
+            message: 'Företaget har redan ett abonnemang. Byt plan under Hantera abonnemang.',
+            message_en: 'The company already has a subscription. Change plan under Manage subscription.',
+          },
+        },
+        { status: 409 },
+      )
+    }
+  }
+
+  let customerId = existing?.customerId ?? null
   const justCreated = !customerId
   if (!customerId) {
     const customer = await stripe.customers.create({

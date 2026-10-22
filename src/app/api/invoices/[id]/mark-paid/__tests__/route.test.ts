@@ -399,7 +399,50 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
       undefined, // bankTransaction: no bank row
       undefined, // overpaymentAccount
       expect.any(Function), // the posting port's context, read only while POSTING_EVENTS is on
+      { deferDeductionShare: true }, // kontantmetoden: a ROT/RUT invoice's two steps
     )
+  })
+
+  // accounted#58: a failed settings read used to fall back to accrual, so a
+  // never-booked kontantmetod invoice got Dr 1930 / Cr 1510 and its revenue
+  // and moms were never booked.
+  describe('when the accounting method cannot be read', () => {
+    function enqueueUpToSettings() {
+      const invoice = makeInvoice({ id: 'inv-1', status: 'sent', total: 12500, customer: makeCustomer() })
+      enqueue({ data: invoice, error: null })
+      enqueue({ data: [], error: null }) // duplicate guard: counterparty probe
+      enqueue({ data: [], error: null }) // duplicate guard: aggregate sweep
+    }
+
+    it('refuses with 503 SETTINGS_ACCOUNTING_METHOD_UNREADABLE and books nothing on a failed read', async () => {
+      enqueueUpToSettings()
+      enqueue({ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } })
+
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(503)
+      expect(body.error.code).toBe('SETTINGS_ACCOUNTING_METHOD_UNREADABLE')
+      expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+      expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+      expect(findCalls('invoice_payments', 'insert')).toHaveLength(0)
+      expect(findCalls('invoices', 'update')).toHaveLength(0)
+    })
+
+    it('refuses with 409 SETTINGS_ACCOUNTING_METHOD_MISSING when the settings row is missing', async () => {
+      enqueueUpToSettings()
+      enqueue({ data: null, error: { code: 'PGRST116', message: 'JSON object requested, multiple (or no) rows returned' } })
+
+      const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+      const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('SETTINGS_ACCOUNTING_METHOD_MISSING')
+      expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
+      expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+    })
   })
 
   it('returns 500 when journal entry creation fails (invoice not marked paid)', async () => {

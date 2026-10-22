@@ -842,9 +842,12 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
       lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
     }
     const booked = rows(input.lines)
+    // Kontantmetoden: the customer's share only (ML 2023:200 7 kap. 16 §);
+    // the 337,50 RUT-avdrag (270 + 67,50 moms) waits for the payout.
     expect(booked).toContainEqual(['1930', 340, 0])
-    expect(booked).toContainEqual(['1513', 337.5, 0])
-    expect(booked).toContainEqual(['2611', 0, 135])
+    expect(booked.some(([account]) => account === '1513')).toBe(false)
+    expect(booked).toContainEqual(['3001', 0, 270])
+    expect(booked).toContainEqual(['2611', 0, 67.5])
     expect(booked).toContainEqual(['3740', 0, 2.5])
     const debit = input.lines.reduce((s, l) => s + l.debit_amount, 0)
     const credit = input.lines.reduce((s, l) => s + l.credit_amount, 0)
@@ -922,5 +925,149 @@ describe('commitPendingOperation: match_transaction_invoice with overpayment_acc
     expect(result.status).toBe('failed')
     expect(result.code).toBe('MATCH_OVERPAYMENT_ROUNDING_CAP')
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1364: the customer paid in full by card, the provider paid out net of
+// its fee. The approved match books the fee on 6570 and settles in full.
+describe('commitPendingOperation: match_transaction_invoice with fee_account (crm#1364)', () => {
+  function enqueueCommit(
+    enqueue: (r: { data?: unknown; error?: unknown }) => void,
+    tx: Record<string, unknown>,
+    invoice: Record<string, unknown>,
+    accountingMethod: 'accrual' | 'cash',
+  ) {
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', currency: 'SEK', date: '2026-10-21', invoice_id: null, journal_entry_id: null, cash_account_id: null, ...tx },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: '001', status: 'sent', paid_amount: 0, currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, ...invoice },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: accountingMethod, entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // invoice CAS update
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transactions update (link)
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+  }
+
+  const rows = (lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>) =>
+    lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  // 8 000 + 2 000 moms = 10 000, never booked; the payout is 9 809,50.
+  const cashInvoice = {
+    total: 10000,
+    subtotal: 8000,
+    vat_amount: 2000,
+    vat_treatment: 'standard_25',
+    remaining_amount: 10000,
+    items: [{
+      id: 'item-1', invoice_id: 'inv-1', description: 'Skyltar', quantity: 1, unit: 'st',
+      unit_price: 8000, line_total: 8000, vat_rate: 25, vat_amount: 2000, sort_order: 0,
+    }],
+  }
+
+  it('kontantmetod: revenue and moms on the whole invoice, 1930 the payout, 6570 the fee, invoice paid', async () => {
+    const actual = await vi.importActual<typeof import('@/lib/bookkeeping/invoice-entries')>(
+      '@/lib/bookkeeping/invoice-entries',
+    )
+    mockCreateCashEntry.mockImplementationOnce(actual.createInvoiceCashEntry)
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueueCommit(enqueue, { amount: 9809.5 }, cashInvoice, 'cash')
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', fee_account: '6570', fee_amount: 190.5 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      source_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.source_type).toBe('invoice_cash_payment')
+    expect(rows(input.lines)).toEqual([
+      ['1930', 9809.5, 0],
+      ['3001', 0, 8000],
+      ['2611', 0, 2000],
+      ['6570', 190.5, 0],
+    ])
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 10000,
+      remaining_amount: 0,
+    })
+    // The AR sub-ledger row carries what the customer paid, not the payout.
+    expect(findCalls('invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({ amount: 10000 })
+  })
+
+  it('faktureringsmetod: 1510 is credited the whole remaining and 6570 debited the fee', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueueCommit(enqueue, { amount: 9809.5 }, { total: 10000, remaining_amount: 10000, journal_entry_id: 'je-sent' }, 'accrual')
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', fee_account: '6570', fee_amount: 190.5 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(rows(input.lines)).toEqual([
+      ['1930', 9809.5, 0],
+      ['1510', 0, 10000],
+      ['6570', 190.5, 0],
+    ])
+  })
+
+  it('refuses when the fee differs from the one staged, before anything is posted', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', amount: 9809.5, currency: 'SEK', date: '2026-10-21', invoice_id: null, journal_entry_id: null, cash_account_id: null },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: '001', status: 'sent', total: 10000, paid_amount: 0, remaining_amount: 9900, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-sent', customer: { name: 'Test AB' } },
+      error: null,
+    }) // invoice fetch: the remaining moved after staging
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({
+      params: { transaction_id: 'tx-1', invoice_id: 'inv-1', fee_account: '6570', fee_amount: 190.5 },
+    })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('rejected')
+    expect(result.code).toBe('MATCH_PAYMENT_FEE_CHANGED')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    const rejected = findCalls('pending_operations', 'update').at(-1)?.[0] as { result_data: Record<string, unknown> }
+    expect(rejected.result_data).toMatchObject({ details: { staged_fee: 190.5, current_fee: 90.5 } })
+  })
+
+  it('without fee_account a kontantmetod payout short of the invoice stays refused at approval', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'tx-1', company_id: 'company-1', amount: 9809.5, currency: 'SEK', date: '2026-10-21', invoice_id: null, journal_entry_id: null, cash_account_id: null },
+      error: null,
+    }) // transaction fetch
+    enqueue({
+      data: { id: 'inv-1', invoice_number: '001', status: 'sent', currency: 'SEK', exchange_rate: null, journal_entry_id: null, customer: { name: 'Test AB' }, paid_amount: 0, ...cashInvoice },
+      error: null,
+    }) // invoice fetch
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'aktiebolag' }, error: null }) // settings
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+
+    const op = makePendingOp({ params: { transaction_id: 'tx-1', invoice_id: 'inv-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).not.toBe('committed')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
   })
 })

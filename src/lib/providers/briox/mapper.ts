@@ -8,7 +8,7 @@ import type {
   CompanyInformationDto,
   AmountType, PartyDto,
 } from '../dto';
-import { creditNoteTypeCode } from '../dto';
+import { creditNoteTypeCode, salesDocumentNumber, statedDocumentNumber } from '../dto';
 import { readNumber, resolveVatTriple, lineVatFromPercent } from '../amounts';
 
 function amount(value: number | undefined | null, currency: string = 'SEK'): AmountType {
@@ -143,14 +143,18 @@ export function mapBrioxToSalesInvoice(raw: Record<string, unknown>): SalesInvoi
     balance: amount(balance, currency),
   };
 
+  const status = deriveInvoiceStatus(raw, invoiceTypeCode !== undefined);
+
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: String(raw['invoice_number'] ?? raw['id'] ?? ''),
+    // Briox's own number; an unnumbered draft gets none, never Briox's
+    // record id (dto.ts salesDocumentNumber, issue #51).
+    invoiceNumber: salesDocumentNumber(raw['invoice_number'], raw['id'], status),
     issueDate: (raw['invoice_date'] as string) ?? '',
     dueDate: raw['due_date'] as string | undefined,
     invoiceTypeCode,
     currencyCode: currency,
-    status: deriveInvoiceStatus(raw, invoiceTypeCode !== undefined),
+    status,
     supplier: buildParty(''),
     customer: buildParty(
       (raw['customer_name'] ?? '') as string,
@@ -216,7 +220,10 @@ export function mapBrioxToSupplierInvoice(raw: Record<string, unknown>): Supplie
 
   return {
     id: String(raw['id'] ?? ''),
-    invoiceNumber: String(raw['invoice_number'] ?? raw['id'] ?? ''),
+    // The supplier's own number, or nothing: Briox's record id is not an
+    // invoice number. Empty becomes NULL at the insert, and the import
+    // recognises a number-less invoice by supplier, date and amount (issue #51).
+    invoiceNumber: statedDocumentNumber(raw['invoice_number']),
     issueDate: (raw['invoice_date'] as string) ?? '',
     dueDate: raw['due_date'] as string | undefined,
     invoiceTypeCode,

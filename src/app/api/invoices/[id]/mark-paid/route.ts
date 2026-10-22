@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
+import { requireAccountingMethod } from '@/lib/company/accounting-method'
 import { MarkInvoicePaidSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -234,14 +235,16 @@ export const POST = withRouteContext(
       })
     }
 
-    const { data: settings } = await supabase
+    const settingsRead = await supabase
       .from('company_settings')
       .select('accounting_method, entity_type')
       .eq('company_id', companyId)
       .single()
 
-    const accountingMethod = settings?.accounting_method || 'accrual'
-    const entityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+    // Fail closed (accounted#58): an unreadable method refuses, never books
+    // a kontantmetod invoice's payment as a 1510 clearing.
+    const accountingMethod = requireAccountingMethod(settingsRead)
+    const entityType = await resolveCompanyEntityType(supabase, companyId, settingsRead.data?.entity_type)
 
     // paymentAmountInInvoiceCurrency was resolved above, before the
     // duplicate-payment guard, so the guard comparison and the ledger math run

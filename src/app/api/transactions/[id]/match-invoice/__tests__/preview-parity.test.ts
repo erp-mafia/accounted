@@ -384,10 +384,11 @@ describe('a customer who paid a krona or more too much', () => {
     expect(shown.overpayment).toEqual({ excess: 1.25, accounts: ['2420', '3740'], account: '3740' })
     expect(shown.lines).toEqual(booked.lines)
     expect(shown.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      // Kontantmetoden: the customer's share only (ML 2023:200 7 kap. 16 §);
+      // the 418,75 kr ROT-avdrag (335 + 83,75 moms) waits for the payout.
       ['1930', 420, 0],
-      ['1513', 418.75, 0],
-      ['3001', 0, 670],
-      ['2611', 0, 167.5],
+      ['3001', 0, 335],
+      ['2611', 0, 83.75],
       ['3740', 0, 1.25],
     ])
   })

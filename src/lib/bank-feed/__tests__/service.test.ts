@@ -161,6 +161,99 @@ describe('startBankFeedConsent', () => {
       bank_connections: [{ data: [], error: null }],
     })
     expect(await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, replaceConnectionId: null, now: NOW })).toEqual({ ok: false, code: 'BANK_CONNECTION_IN_PROGRESS' })
+    // Nothing the company holds could be freed: no second ask, nothing ended.
+    expect(connect.createConsent).toHaveBeenCalledTimes(1)
+    expect(connect.revokeConsent).not.toHaveBeenCalled()
+  })
+
+  describe('when Connect refuses a new consent over the company\'s one bank connection (crm#1363)', () => {
+    const quota = () => new BankFeedRefusedError('Bank connection quota reached for this company', { code: 'CONNECTOR_QUOTA_EXCEEDED', status: 403 })
+    const created = { consentId: 'consent-1', consentStatus: 'received', validUntil: '2027-04-10' }
+    const claims = () =>
+      mocks.serviceRpc.mockImplementation(async (name: string) =>
+        name === 'claim_bank_session_revocation' ? { data: { claimed: true, token: 'claim-1' }, error: null } : { data: true, error: null })
+    const order = (fn: unknown, call = 0) => (fn as ReturnType<typeof vi.fn>).mock.invocationCallOrder[call]
+
+    it('a renewal ends the consent it replaces and asks once more', async () => {
+      const OLD = '7a6c1a2b-9c0d-4e8f-8a1b-2c3d4e5f6a7b'
+      const connect = fakeConnect({ createConsent: vi.fn().mockRejectedValueOnce(quota()).mockResolvedValueOnce(created) })
+      mocks.door.mockResolvedValue({ ok: true, connect })
+      const { supabase } = stub({
+        ...orgAnswers(),
+        companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
+        bank_connections: [
+          { data: { id: OLD, status: 'error', aggregator: 'open_payments', bic: 'SWEDSESS', affiliated_aspsp_id: null, bank_name: 'Swedbank', psu_type: 'business', session_id: 'consent-0' }, error: null },
+          { data: [], error: null },
+          { data: [], error: null },
+          { data: row({ authorization_id: null }), error: null },
+          { data: null, error: null },
+        ],
+      })
+      const result = await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, replaceConnectionId: OLD, now: NOW })
+      expect(result).toMatchObject({ ok: true, data: { connection_id: CONNECTION, attempt: { state: 'pending' } } })
+      expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-0' }))
+      expect(connect.createConsent).toHaveBeenCalledTimes(2)
+      expect(order(connect.revokeConsent)).toBeLessThan(order(connect.createConsent, 1))
+    })
+
+    it('ends the consent of a removed connection the bank did not end at the time, clears it from the row, and asks once more', async () => {
+      claims()
+      const connect = fakeConnect({ createConsent: vi.fn().mockRejectedValueOnce(quota()).mockResolvedValueOnce(created) })
+      mocks.door.mockResolvedValue({ ok: true, connect })
+      const removed = row({ id: EB_ROW, status: 'revoked', session_id: null, authorization_id: null, consent_attempt: { selection: { listing_only: false }, unended_consent_id: 'consent-gone' } })
+      const { supabase, payload } = stub({
+        ...orgAnswers(),
+        companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
+        bank_connections: [
+          { data: [], error: null },
+          { data: [removed], error: null },
+          { data: null, error: null },
+          { data: row({ authorization_id: null }), error: null },
+          { data: null, error: null },
+        ],
+      })
+      const result = await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, replaceConnectionId: null, now: NOW })
+      expect(result).toMatchObject({ ok: true, data: { connection_id: CONNECTION } })
+      expect(mocks.serviceRpc).toHaveBeenCalledWith('claim_bank_session_revocation', { p_provider: 'openpayments', p_session_id: 'consent-gone' })
+      expect(connect.revokeConsent).toHaveBeenCalledWith('co-1', expect.objectContaining({ consentId: 'consent-gone' }))
+      expect(mocks.serviceRpc).toHaveBeenCalledWith('finish_bank_session_revocation', expect.objectContaining({ p_session_id: 'consent-gone', p_succeeded: true }))
+      expect(payload('bank_connections', 'update')[0]).toEqual({ consent_attempt: { selection: { listing_only: false } } })
+      expect(connect.createConsent).toHaveBeenCalledTimes(2)
+      expect(order(connect.revokeConsent)).toBeLessThan(order(connect.createConsent, 1))
+    })
+
+    it('keeps the refusal and the unended consent on the row when the bank still does not end it', async () => {
+      claims()
+      const connect = fakeConnect({
+        createConsent: vi.fn().mockRejectedValue(quota()),
+        revokeConsent: vi.fn().mockRejectedValue(new ProviderUnavailableError('down', { code: 'CONNECTOR_AIS_PROVIDER_FAILED' })),
+      })
+      mocks.door.mockResolvedValue({ ok: true, connect })
+      const removed = row({ id: EB_ROW, status: 'revoked', session_id: null, consent_attempt: { unended_consent_id: 'consent-gone' } })
+      const { supabase, payload } = stub({
+        ...orgAnswers(),
+        companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
+        bank_connections: [{ data: [], error: null }, { data: [removed], error: null }],
+      })
+      expect(await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, replaceConnectionId: null, now: NOW })).toEqual({ ok: false, code: 'BANK_CONNECTION_IN_PROGRESS' })
+      expect(mocks.serviceRpc).toHaveBeenCalledWith('finish_bank_session_revocation', expect.objectContaining({ p_succeeded: false }))
+      expect(payload('bank_connections', 'update')).toEqual([])
+      expect(connect.createConsent).toHaveBeenCalledTimes(1)
+    })
+
+    it('frees nothing for any other refusal', async () => {
+      const connect = fakeConnect({ createConsent: vi.fn().mockRejectedValue(new BankFeedRefusedError('refused', { code: 'CONNECTOR_AIS_REFUSED', status: 422 })) })
+      mocks.door.mockResolvedValue({ ok: true, connect })
+      const { supabase, calls } = stub({
+        ...orgAnswers(),
+        companies: [{ data: { entity_type: 'aktiebolag' }, error: null }],
+        bank_connections: [{ data: [], error: null }],
+      })
+      expect(await startBankFeedConsent({ ...ctx, supabase }, { bic: 'SWEDSESS', method: 'qr', signer, replaceConnectionId: null, now: NOW })).toMatchObject({ ok: false, code: 'BANK_PROVIDER_REFUSED' })
+      expect(calls).not.toContainEqual(expect.objectContaining({ table: 'bank_connections', method: 'not' }))
+      expect(connect.revokeConsent).not.toHaveBeenCalled()
+      expect(connect.createConsent).toHaveBeenCalledTimes(1)
+    })
   })
 
   it('creates the consent, stores the pending attempt with provider open_payments and starts BankID', async () => {
@@ -824,8 +917,9 @@ describe('disconnectBankFeedConnection', () => {
     mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, aggregator: 'open_payments' } })
     mocks.disconnect.mockResolvedValue({ connection_id: CONNECTION, session_id: 'consent-1', bank_name: 'Swedbank', released_cash_accounts: 1 })
     mocks.serviceRpc.mockImplementation(async (name: string) => name === 'claim_bank_session_revocation' ? { data: { claimed: true, token: 'claim-1' }, error: null } : { data: true, error: null })
-    const { supabase } = stub({ bank_connections: [{ data: row({ status: 'active' }), error: null }], ...orgAnswers() })
+    const { supabase, payload } = stub({ bank_connections: [{ data: row({ status: 'active' }), error: null }], ...orgAnswers() })
     expect(await disconnectBankFeedConnection({ ...ctx, supabase }, CONNECTION)).toEqual({ ok: true, data: { connection_id: CONNECTION } })
+    expect(payload('bank_connections', 'update')).toEqual([])
     expect(mocks.disconnect).toHaveBeenCalledWith(supabase, 'co-1', 'user-1', CONNECTION, 'tok')
     expect(mocks.serviceRpc).toHaveBeenCalledWith('claim_bank_session_revocation', { p_provider: 'openpayments', p_session_id: 'consent-1' })
     expect(mocks.serviceRpc).toHaveBeenCalledWith('finish_bank_session_revocation', { p_provider: 'openpayments', p_session_id: 'consent-1', p_claim_token: 'claim-1', p_succeeded: true })
@@ -837,9 +931,12 @@ describe('disconnectBankFeedConnection', () => {
     mocks.readConfig.mockResolvedValue({ token: 'tok', connection: { id: CONNECTION, aggregator: 'open_payments' } })
     mocks.disconnect.mockResolvedValue({ connection_id: CONNECTION, session_id: 'consent-1', bank_name: 'Swedbank', released_cash_accounts: 0 })
     mocks.serviceRpc.mockImplementation(async (name: string) => name === 'claim_bank_session_revocation' ? { data: { claimed: true, token: 'claim-1' }, error: null } : { data: true, error: null })
-    const { supabase } = stub({ bank_connections: [{ data: row({ status: 'active' }), error: null }], ...orgAnswers() })
+    const { supabase, payload } = stub({ bank_connections: [{ data: row({ status: 'active' }), error: null }], ...orgAnswers() })
     expect(await disconnectBankFeedConnection({ ...ctx, supabase }, CONNECTION)).toMatchObject({ ok: true })
     expect(mocks.serviceRpc).toHaveBeenCalledWith('finish_bank_session_revocation', expect.objectContaining({ p_succeeded: false }))
+    // Connect keeps counting a consent the bank did not end as the company's
+    // bank connection (crm#1363): the removed row names it for the next attempt.
+    expect(payload('bank_connections', 'update')).toEqual([{ consent_attempt: expect.objectContaining({ method: 'qr', unended_consent_id: 'consent-1' }) }])
     const none = stub({ bank_connections: [{ data: null, error: null }] })
     expect(await disconnectBankFeedConnection({ ...ctx, supabase: none.supabase }, CONNECTION)).toEqual({ ok: false, code: 'NOT_FOUND' })
   })

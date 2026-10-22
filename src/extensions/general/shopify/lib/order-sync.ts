@@ -4,6 +4,7 @@ import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre as round } from '@/lib/money'
 import { resolveWindowStartMs } from '@/lib/feed-sync/cursor-window'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import {
   createShopifySession,
@@ -147,9 +148,15 @@ export function orderAmountUnparseable(order: Pick<ShopifyOrder, 'totalPriceSet'
   return parseAmount(order.totalPriceSet.shopMoney.amount) === null
 }
 
-/** Date part of an ISO timestamp. */
+/**
+ * The Swedish calendar day of a Shopify timestamp ("2026-10-31T23:30:00Z").
+ * The order date becomes the verifikat date, its VAT period and its FX date:
+ * a sale at 00:30 on 1 November in Stockholm belongs to November, not to the
+ * UTC day before it (#58). An unparseable value keeps its own date part.
+ */
 function isoDateOf(timestamp: string): string {
-  return timestamp.split('T')[0]
+  const ms = Date.parse(timestamp)
+  return Number.isFinite(ms) ? todayIsoStockholm(new Date(ms)) : timestamp.split('T')[0]
 }
 
 /**

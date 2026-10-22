@@ -420,6 +420,40 @@ describe('registerExpenseClaim', () => {
     expect(insert?.[0]).toMatchObject({ vat_sek: 0 })
   })
 
+  it('crm#1377: a privately paid EU reverse-charge invoice posts its fiktiv moms in SEK, the person owed the net', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
+    enqueue({ data: { id: 'claim-rc' } }) // insert
+    enqueue({ data: null }) // update
+
+    // The lines buildSupplierInvoicePrivatelyPaidLines hands over for one EUR
+    // row on 4535 (which reports ruta 21 itself, so no basis pair).
+    const result = await registerExpenseClaim(sb, COMPANY, USER, {
+      description: 'Faktura RC-1',
+      expense_date: '2026-10-21',
+      amount: 180,
+      vat_amount: 0,
+      currency: 'EUR',
+      exchange_rate: 11.123,
+      expense_account: '4535',
+      claimant_name: 'Ägare',
+      lines: [
+        { account_number: '4535', debit_amount: 180, credit_amount: 0 },
+        { account_number: '2645', debit_amount: 45, credit_amount: 0 },
+        { account_number: '2614', debit_amount: 0, credit_amount: 45 },
+        { account_number: '2893', debit_amount: 0, credit_amount: 180 },
+      ],
+    })
+
+    expect(result.ok).toBe(true)
+    const input = createJournalEntryMock.mock.calls[0][3]
+    const byAccount = Object.fromEntries(input.lines.map((l: { account_number: string }) => [l.account_number, l]))
+    expect(byAccount['4535'].debit_amount).toBe(2002.14)
+    expect(byAccount['2645'].debit_amount).toBe(500.54)
+    expect(byAccount['2614'].credit_amount).toBe(500.54)
+    expect(byAccount['2893'].credit_amount).toBe(2002.14)
+    expect(findCall('expense_claims', 'insert')?.[0]).toMatchObject({ amount_sek: 2002.14, vat_sek: 0 })
+  })
+
   it('rejects unbalanced custom lines before touching the ledger', async () => {
     enqueue({ data: { entity_type: 'aktiebolag' } }) // companies entity_type
     const result = await registerExpenseClaim(sb, COMPANY, USER, {

@@ -58,6 +58,7 @@ import {
 } from '@/lib/documents/voucher-ref-resolver'
 import type { SourceVoucherRefDto } from '@/lib/providers/dto'
 import { attachSupplierInvoiceSettlementVoucher } from './attach-settlement-voucher'
+import { rateGivingBack } from './register-booked-rules'
 
 const log = createLogger('link-migrated-registration-vouchers')
 
@@ -242,9 +243,6 @@ interface ForeignInvoiceRow {
   is_credit_note?: boolean | null
 }
 
-/** invoices_exchange_rate_check and supplier_invoices_exchange_rate_check. */
-const MAX_EXCHANGE_RATE = 100000
-
 function isForeignCurrency(code: string | null | undefined): boolean {
   return !!code && code.toUpperCase() !== 'SEK'
 }
@@ -271,15 +269,11 @@ function sourceRateValues(row: ForeignInvoiceRow | undefined, kind: MigratedInvo
   if (!row || !isForeignCurrency(row.currency) || !entryDate) return null
   const total = Number(row.total)
   const totalSek = roundOre(kind === 'supplier' && row.is_credit_note ? -booked : booked)
-  const quotient = totalSek / total
-  if (!Number.isFinite(quotient) || quotient <= 0 || quotient >= MAX_EXCHANGE_RATE) return null
-  // The source's own rate usually has four decimals. Take the shortest rate
-  // whose product lies within 0.004 kr of the booked amount: every öre
-  // rounding then gives that amount back, roundOre as well as the plain one
-  // the reskontra and the payment lines use.
-  const exchangeRate = [4, 6]
-    .map((places) => Math.round(quotient * 10 ** places) / 10 ** places)
-    .find((rate) => Math.abs(total * rate - totalSek) <= 0.004) ?? quotient
+  // The source's own rate usually has four decimals: the shortest rate that
+  // gives the booked amount back (the one rule register-booked-invoice.ts
+  // follows too).
+  const exchangeRate = rateGivingBack(total, totalSek)
+  if (exchangeRate === null) return null
   return {
     total,
     totalSek,

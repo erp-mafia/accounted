@@ -43,6 +43,7 @@ function templateTable(rows: CategorizationTemplate[]) {
       },
       order: () => chain,
       limit: () => chain,
+      range: () => chain,
       maybeSingle: async () => ({ data: matching()[0] ?? null, error: null }),
       then: (resolve: (v: { data: CategorizationTemplate[]; error: null }) => void) =>
         resolve({ data: matching(), error: null }),

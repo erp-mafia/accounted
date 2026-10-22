@@ -23,6 +23,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { formatCurrency } from '@/lib/utils'
 import type { Transaction } from '@/types'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.book',
@@ -193,6 +194,19 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       })
     }
     checks.push(passed('counter_legs'))
+
+    // Importmoms on 2615/2625/2635 with no ruta 50 line: the shape a
+    // company's own mall books when its fiktiv moms sits on the import
+    // account (#83). Refused while no draft exists, naming what to change.
+    const importVat = await refuseImportVatWithoutBase(supabase, companyId, lines)
+    if (importVat) {
+      return errorResponseFromCode(importVat.code, log, {
+        requestId,
+        messageSv: importVat.messageSv,
+        messageEn: importVat.messageEn,
+        details: importVat.details,
+      })
+    }
 
     // Series: the dialog's explicit pick wins; otherwise the bank account the
     // row will sit on after this booking (the live sibling when the guard

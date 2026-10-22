@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { findCashMethodUnbookedAllocations } from '../batch-cash-method-guard'
 import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
+import { AccountingMethodUnavailableError } from '@/lib/company/accounting-method'
 
 const INV_BOOKED = '11111111-1111-4111-8111-111111111111'
 const INV_UNBOOKED = '22222222-2222-4222-8222-222222222222'
@@ -26,7 +27,9 @@ describe('findCashMethodUnbookedAllocations', () => {
     expect(supabase.from).toHaveBeenCalledWith('company_settings')
   })
 
-  it('treats a missing settings row as accrual (the historical default)', async () => {
+  // accounted#58: a missing row used to read as faktureringsmetoden and let
+  // a kontantmetod batch clear 1510 for invoices never booked.
+  it('refuses a missing settings row instead of reading it as accrual', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: null, error: null })
 
@@ -34,7 +37,11 @@ describe('findCashMethodUnbookedAllocations', () => {
       { kind: 'customer_invoice', invoice_id: INV_UNBOOKED },
     ])
 
-    expect(result).toEqual({ ok: true, unbooked: [] })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toBeInstanceOf(AccountingMethodUnavailableError)
+    expect((result.error as AccountingMethodUnavailableError).code).toBe('SETTINGS_ACCOUNTING_METHOD_MISSING')
+    expect(supabase.from).toHaveBeenCalledTimes(1)
   })
 
   it('flags only the customer invoices with no booking under kontantmetoden', async () => {
@@ -94,7 +101,10 @@ describe('findCashMethodUnbookedAllocations', () => {
       { kind: 'customer_invoice', invoice_id: INV_UNBOOKED },
     ])
 
-    expect(result).toEqual({ ok: false, error: err })
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.error).toBeInstanceOf(AccountingMethodUnavailableError)
+    expect((result.error as AccountingMethodUnavailableError).code).toBe('SETTINGS_ACCOUNTING_METHOD_UNREADABLE')
   })
 
   it('surfaces an invoice lookup error so callers fail closed', async () => {

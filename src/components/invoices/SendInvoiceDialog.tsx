@@ -34,6 +34,7 @@ import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { creditNoteNeedsJournalEntry, issueBooksDocument } from '@/lib/bookkeeping/booking-mode'
+import { isDeductionShareUnbooked } from '@/lib/invoices/rot-rut-payout-recognition'
 import { itemHasAccrual } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/invoices/vat-rules'
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
@@ -151,6 +152,9 @@ export default function SendInvoiceDialog({
   const deferBooking = !!companySettings?.defer_invoice_booking
   const [isInitialized, setIsInitialized] = useState(false)
   const [shouldBookOnIssue, setShouldBookOnIssue] = useState(true)
+  // A kontantmetod ROT/RUT original whose Skatteverket share is not booked
+  // yet: its credit reverses the customer's share alone.
+  const [deductionUnbooked, setDeductionUnbooked] = useState(false)
   const [catalog, setCatalog] = useState<CatalogAccount[]>([])
   const [editLines, setEditLines] = useState<FormLine[]>([])
   const [hasEdited, setHasEdited] = useState(false)
@@ -254,6 +258,17 @@ export default function SendInvoiceDialog({
         const bookOnIssue = invoice.credited_invoice_id && originalResult.data
           ? creditNoteNeedsJournalEntry(method, originalResult.data)
           : issueBooksDocument(invoice, companySettings)
+        let unbookedShare = false
+        if (
+          bookOnIssue && method === 'cash' && originalResult.data &&
+          (invoice.items ?? []).some((item) => !!item.deduction_type)
+        ) {
+          const state = await isDeductionShareUnbooked(supabase, company.id, originalResult.data)
+          // Preview only: issueCreditNote decides again when it books.
+          unbookedShare = state.ok && state.unbooked
+        }
+        if (cancelled) return
+        setDeductionUnbooked(unbookedShare)
 
         // Line editing needs the BAS catalogue; only the accrual
         // book-at-issue path renders the editor, so skip the load elsewhere.
@@ -296,8 +311,8 @@ export default function SendInvoiceDialog({
 
     // The whole row: the server books from all of it (item accounts and
     // dimensions, delivery_country), so the preview must read the same.
-    return proposeSendLines({ invoice, entityType })
-  }, [isInitialized, shouldBookOnIssue, entityType, invoice])
+    return proposeSendLines({ invoice, entityType, deductionUnbooked })
+  }, [isInitialized, shouldBookOnIssue, entityType, invoice, deductionUnbooked])
 
   const additionalCc = useMemo(
     () => parseInvoiceRecipientText(additionalCcText),

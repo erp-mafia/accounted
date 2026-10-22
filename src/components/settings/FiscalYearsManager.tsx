@@ -22,7 +22,7 @@ import { FiscalYearResetDialog } from '@/components/settings/FiscalYearResetDial
 import { FiscalYearReopenDialog } from '@/components/settings/FiscalYearReopenDialog'
 import { FiscalYearEditDialog } from '@/components/settings/FiscalYearEditDialog'
 import { SIEOpeningBalanceReview } from '@/components/settings/SIEOpeningBalanceReview'
-import { suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
+import { fiscalYearShortName, suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -178,7 +178,7 @@ export function FiscalYearsManager() {
           return (
             <div key={p.id} className="flex flex-col items-start gap-3 border-b border-border px-1 py-3 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
-                <span className="text-sm font-medium">{p.name}</span>
+                <span className="text-sm font-medium">{fiscalYearShortName(p.name)}</span>
                 <span className="ml-2 text-sm text-muted-foreground tabular-nums">
                   {formatDate(p.period_start)} - {formatDate(p.period_end)}
                 </span>

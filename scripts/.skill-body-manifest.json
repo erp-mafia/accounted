@@ -56,8 +56,8 @@
     "version": 1
   },
   "horizontal/swedish-daily-bookkeeping/foreign-purchases": {
-    "hash": "1cb99a96a67f7e01cbd429d8b1d90b75d1baf7b3c2e8fdbfc24550bb9f794c37",
-    "version": 1
+    "hash": "f0495335bac1b825ee725202057dc4c828a800177509dd0018c34502397fd962",
+    "version": 2
   },
   "horizontal/swedish-daily-bookkeeping/payment-providers": {
     "hash": "f6ecc4197547bc88eb32039f52e1bf015e593be2faa43a998721eaafbf561d65",
@@ -496,8 +496,8 @@
     "version": 3
   },
   "vertical/reklambyra-marknadsforing": {
-    "hash": "7514fd8f6da851837691ceb4c92a3419108f8594c7536ddaaef35094ce5ccac6",
-    "version": 3
+    "hash": "73bc72b6dd79c06d35a528734144ca82e290d6802f67963b172d98cc6ac29dfe",
+    "version": 4
   },
   "vertical/restaurang-cafe": {
     "hash": "bf64cc3966305caf10414735161b291f04448bc057b967d1c96771950e01f2da",

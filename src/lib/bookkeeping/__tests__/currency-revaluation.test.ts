@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { CreateJournalEntryInput, Currency } from '@/types'
 import { makeInvoice, makeSupplierInvoice } from '@/tests/helpers'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { AccountingMethodUnavailableError } from '@/lib/company/accounting-method'
 
 // Mock riksbanken. The revaluation deliberately uses fetchExchangeRate, the
 // documented booking path that returns null rather than one of the hardcoded
@@ -81,7 +82,9 @@ function buildFromMap(config: MockTablesConfig): Record<string, unknown[]> {
   return {
     invoices: config.invoices || [],
     supplier_invoices: config.supplierInvoices || [],
-    company_settings: config.settings ? [config.settings] : [],
+    // Every company has a settings row (accounting_method is NOT NULL); the
+    // posting path refuses one it cannot read (accounted#58).
+    company_settings: [config.settings ?? { company_id: 'company-1', accounting_method: 'accrual' }],
     invoice_payments: config.invoicePayments || [],
     supplier_invoice_payments: config.supplierInvoicePayments || [],
   }
@@ -1439,6 +1442,42 @@ describe('currency-revaluation', () => {
 
       expect(preview.items).toHaveLength(1)
       expect(preview.totalGain).toBe(1000)
+    })
+
+    // accounted#58: the posting path used the preview's lenient scope, so an
+    // unreadable settings row revalued a kontantmetod or deferring company's
+    // unbooked rows and posted a write-down of an account standing at zero.
+    it('executeCurrencyRevaluation refuses when settings cannot be read, and posts nothing', async () => {
+      const eurInvoice = makeInvoice({
+        status: 'sent',
+        currency: 'EUR',
+        exchange_rate: 11.0,
+        total: 1000,
+        invoice_date: '2024-11-15',
+      })
+      mockRates({ EUR: 12.0 })
+      const supabase = createFullMockSupabase({ invoices: [eurInvoice], existingRevaluation: false })
+      const original = supabase.from
+      supabase.from = vi.fn().mockImplementation((table: string) => {
+        if (table === 'company_settings') {
+          return {
+            select: vi.fn().mockReturnValue({
+              eq: vi.fn().mockReturnValue({
+                maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: 'connection reset' } }),
+              }),
+            }),
+          }
+        }
+        return original(table)
+      })
+
+      const err = await executeCurrencyRevaluation(supabase, 'company-1', '2024-12-31', 'period-1').catch(
+        (e: unknown) => e,
+      )
+
+      expect(err).toBeInstanceOf(AccountingMethodUnavailableError)
+      expect((err as AccountingMethodUnavailableError).code).toBe('SETTINGS_ACCOUNTING_METHOD_UNREADABLE')
+      expect(mockedCreateEntry).not.toHaveBeenCalled()
     })
 
     it('under deferred booking only revalues rows whose registration is booked', async () => {

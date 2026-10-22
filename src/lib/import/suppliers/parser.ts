@@ -1,6 +1,7 @@
 import { CURRENCIES, type SupplierType } from '@/types'
 import { detectSupplierColumns } from './column-detector'
 import { cellOrNull, parsePaymentTerms } from '../shared/column-utils'
+import { columnName, unmapColumnsTheDataContradicts, type ColumnShapeCheck } from '../shared/column-checks'
 import { classifySupplier } from '../shared/classify'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import { readBestSheet } from '../shared/workbook-reader'
@@ -18,6 +19,18 @@ const VALID_SUPPLIER_TYPES: SupplierType[] = [
 const VALID_CURRENCIES: ReadonlySet<string> = new Set(CURRENCIES)
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+const ORG_NUMBER_RE = /^[\d\s\-]{6,20}$/
+
+const IBAN_RE = /^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/
+
+/** The detected columns the file's own data can overrule (lib/import/shared/column-checks.ts). */
+const SHAPE_CHECKS: ColumnShapeCheck<keyof DetectedSupplierColumns & string>[] = [
+  { key: 'email_col', field: 'E-post', accepts: (v) => EMAIL_RE.test(v) },
+  { key: 'org_number_col', field: 'Org-/personnummer', accepts: (v) => ORG_NUMBER_RE.test(v) },
+  { key: 'country_col', field: 'Land', accepts: (v) => normalizeCountryCode(v) !== null },
+  { key: 'iban_col', field: 'IBAN', accepts: (v) => IBAN_RE.test(v.replace(/\s/g, '').toUpperCase()) },
+]
 
 function normalizeSupplierType(value: string | null): SupplierType | null {
   if (!value) return null
@@ -111,7 +124,11 @@ export async function parseSuppliersFile(
 
   const headers = rawData[0].map((h) => String(h))
   const dataRows = rawData.slice(1)
-  const columns = columnOverrides || detectSupplierColumns(headers)
+  const checked = columnOverrides
+    ? { columns: columnOverrides, warnings: [] }
+    : unmapColumnsTheDataContradicts(detectSupplierColumns(headers), headers, dataRows, SHAPE_CHECKS)
+  const columns = checked.columns
+  const header = (index: number | null) => (index === null ? '' : columnName(headers, index))
 
   // Detection leaves name_col at -1 when no header looked like a name. Read the
   // first column so the preview still has rows and the mapping step (confidence
@@ -120,7 +137,7 @@ export async function parseSuppliersFile(
   const nameCol = columns.name_col >= 0 ? columns.name_col : 0
 
   const rows: ParsedSupplierRow[] = []
-  const warnings: string[] = []
+  const warnings: string[] = [...checked.warnings]
 
   for (let i = 0; i < dataRows.length; i++) {
     const row = dataRows[i]
@@ -161,18 +178,22 @@ export async function parseSuppliersFile(
         country: countryRaw,
       })
 
+    // Each error names the file's column and the value, so a wrong column
+    // reads as one.
     const validationErrors: string[] = []
     if (email && !EMAIL_RE.test(email)) {
-      validationErrors.push('Ogiltig e-postadress')
+      validationErrors.push(`Ogiltig e-postadress "${email}" i kolumnen "${header(columns.email_col)}"`)
     }
     if (countryRaw && !normalizeCountryCode(countryRaw)) {
-      validationErrors.push(`Okänt land: ${countryRaw.trim()} (ange landskod, t.ex. SE eller DE)`)
+      validationErrors.push(
+        `Okänt land "${countryRaw.trim()}" i kolumnen "${header(columns.country_col)}" (ange landskod, t.ex. SE eller DE)`,
+      )
     }
-    if (orgNumber && !/^[\d\s\-]{6,20}$/.test(orgNumber)) {
-      validationErrors.push('Ogiltigt org-/personnummer')
+    if (orgNumber && !ORG_NUMBER_RE.test(orgNumber)) {
+      validationErrors.push(`Ogiltigt org-/personnummer "${orgNumber}" i kolumnen "${header(columns.org_number_col)}"`)
     }
-    if (iban && !/^[A-Z]{2}\d{2}[A-Z0-9]{11,30}$/.test(iban)) {
-      validationErrors.push('Ogiltigt IBAN')
+    if (iban && !IBAN_RE.test(iban)) {
+      validationErrors.push(`Ogiltigt IBAN "${iban}" i kolumnen "${header(columns.iban_col)}"`)
     }
 
     rows.push({

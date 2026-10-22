@@ -639,3 +639,41 @@ describe('buildInvoicePaymentClearingLines: overpaymentAccount (crm#253)', () =>
     expect(ore.oreRoundingSek).toBe(-0.5)
   })
 })
+
+// crm#1364, faktureringsmetoden: the payment provider paid out the invoice
+// net of its fee. 1510 clears in full, 1930 takes the payout, 6570 the fee.
+describe('buildInvoicePaymentClearingLines: feeAccount (crm#1364)', () => {
+  const tx = (amount: number) => ({ amount, amount_sek: null, currency: 'SEK', exchange_rate: null })
+  const invoice = { currency: 'SEK', exchange_rate: null, remaining_amount: 34429.04, total: 34429.04, paid_amount: 0 }
+  const rows = (r: ReturnType<typeof buildInvoicePaymentClearingLines>) =>
+    r.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+
+  it('1930 the payout, 1510 the full remaining, 6570 the fee', () => {
+    const r = buildInvoicePaymentClearingLines(tx(33773.05), invoice, 'Inbetalning', undefined, '1930', undefined, '6570')
+    expect(rows(r)).toEqual([
+      ['1930', 33773.05, 0],
+      ['1510', 0, 34429.04],
+      ['6570', 655.99, 0],
+    ])
+    expect(r.feeSek).toBe(655.99)
+    expect(r.lines[2].line_description).toBe('Avgift betaltjänst')
+  })
+
+  it('stays a partial without the account, at the cap, or for a cross-currency row', () => {
+    expect(rows(buildInvoicePaymentClearingLines(tx(33773.05), invoice, 'x'))).toEqual([
+      ['1930', 33773.05, 0],
+      ['1510', 0, 33773.05],
+    ])
+    expect(buildInvoicePaymentClearingLines(tx(30000), invoice, 'x', undefined, '1930', undefined, '6570').feeSek).toBe(0)
+    const foreign = buildInvoicePaymentClearingLines(
+      { amount: 3000, amount_sek: 33773.05, currency: 'EUR', exchange_rate: 11.26 },
+      invoice,
+      'x',
+      undefined,
+      '1930',
+      undefined,
+      '6570',
+    )
+    expect(foreign.feeSek).toBe(0)
+  })
+})

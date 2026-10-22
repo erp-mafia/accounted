@@ -4,6 +4,7 @@ import { isEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-
 import { normalizeOrgNumber } from '@/lib/invariants/org-number'
 import { isValidSwedishVatNumber, normalizeVatNumber } from '@/lib/vat/vat-number'
 import { formatOrgNumber } from '@/lib/utils'
+import { getStripe } from './client'
 
 /**
  * The company's billing identity on its Stripe customer (PH 191).
@@ -16,6 +17,15 @@ import { formatOrgNumber } from '@/lib/utils'
  * Writing the identity onto the customer lets Checkout skip those fields
  * (Stripe hides tax ID collection for a customer that already has a tax ID)
  * and puts the details on every invoice and receipt Stripe issues.
+ *
+ * The customer is a copy of what the company holds in Accounted, so it is
+ * written again whenever that may have moved (crm#1378): at checkout, when
+ * a settings save changes one of the identity columns, and on every
+ * subscription event of a paying company. A renewal sends one while its
+ * invoice is still a draft, and a draft invoice takes the customer's name,
+ * address and tax IDs as they are when it is finalized, so the renewal
+ * carries the current identity even for a customer that subscribed before
+ * the prefill existed.
  */
 export interface CompanyBillingIdentity {
   /** Legal name: company_settings.company_name, falling back to companies.name. */
@@ -140,13 +150,15 @@ export const NOTHING_ON_FILE: SyncedBillingIdentity = Object.freeze({
 })
 
 /**
- * Writes the identity onto the company's Stripe customer before Checkout.
- * An existing customer is updated, never recreated. The VAT number is added
+ * Writes the identity onto the company's Stripe customer: before Checkout,
+ * and again at every later sync (syncCompanyStripeIdentity below). An
+ * existing customer is updated, never recreated. The VAT number is added
  * as an eu_vat tax ID (Stripe's type for Swedish VAT numbers) only when the
  * customer has no tax ID yet, so one the payer entered earlier is kept and
  * no duplicate appears on the invoice.
  *
- * Throws on any Stripe error; the caller then opens Checkout as before.
+ * Throws on any Stripe error; Checkout then opens as before, and a later
+ * sync tries again.
  */
 export async function syncStripeCustomerIdentity(
   stripe: Stripe,
@@ -164,10 +176,72 @@ export async function syncStripeCustomerIdentity(
       taxIdOnFile = existing.data.length > 0
     }
     if (!taxIdOnFile) {
-      await stripe.customers.createTaxId(customerId, { type: 'eu_vat', value: identity.vatNumber })
+      // Keyed: a renewal and a checkout send several subscription events at
+      // once, and two syncs that both found no tax ID must add one, not two.
+      await stripe.customers.createTaxId(
+        customerId,
+        { type: 'eu_vat', value: identity.vatNumber },
+        { idempotencyKey: `customer-tax-id:${customerId}:${identity.vatNumber}` },
+      )
       taxIdOnFile = true
     }
   }
 
   return { taxIdOnFile, addressOnFile: identity.address !== null, nameOnFile: identity.name !== null }
+}
+
+/**
+ * The company_settings columns the identity is read from. A save that
+ * changes none of them leaves the Stripe customer as it is.
+ */
+export const BILLING_IDENTITY_COLUMNS = [
+  'entity_type',
+  'company_name',
+  'org_number',
+  'address_line1',
+  'address_line2',
+  'postal_code',
+  'city',
+  'country',
+  'vat_registered',
+  'vat_number',
+] as const
+
+/** Whether a settings save moved anything the Stripe customer carries. */
+export function billingIdentityChanged(
+  before: Record<string, unknown> | null,
+  after: Record<string, unknown> | null,
+): boolean {
+  return BILLING_IDENTITY_COLUMNS.some((column) => (before?.[column] ?? null) !== (after?.[column] ?? null))
+}
+
+/**
+ * Writes the company's current identity onto its existing Stripe customer
+ * (crm#1378): the one function every later moment calls (a settings save,
+ * a subscription event). Pass the customer id when the caller has it;
+ * otherwise it is read from company_subscriptions. A company that never
+ * reached checkout has no customer: null, and Stripe is not asked.
+ *
+ * Throws on a failed read or any Stripe error; every caller treats the sync
+ * as best effort, since the next save or subscription event writes it again.
+ */
+export async function syncCompanyStripeIdentity(
+  db: Pick<SupabaseClient, 'from'>,
+  companyId: string,
+  opts: { stripe?: Stripe; customerId?: string | null } = {},
+): Promise<SyncedBillingIdentity | null> {
+  let customerId = opts.customerId ?? null
+  if (!customerId) {
+    const { data, error } = await db
+      .from('company_subscriptions')
+      .select('stripe_customer_id')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (error) throw new Error(`company_subscriptions lookup failed: ${error.message}`)
+    customerId = (data as { stripe_customer_id: string | null } | null)?.stripe_customer_id ?? null
+  }
+  if (!customerId) return null
+
+  const identity = await loadCompanyBillingIdentity(db, companyId)
+  return syncStripeCustomerIdentity(opts.stripe ?? getStripe(), customerId, identity, { justCreated: false })
 }

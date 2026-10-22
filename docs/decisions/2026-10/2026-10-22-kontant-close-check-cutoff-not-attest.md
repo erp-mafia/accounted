@@ -1,0 +1,1 @@
+[2026-10-22] Under kontantmetoden vat_close_check stops counting unattested supplier invoices; its year-end gate is the cut-off's own KONTANTMETOD_CUTOFF_INCOMPLETE, now a high blocker there (still a WARNING to the filing gate): attest books nothing, the cut-off is what BFL 5 kap 2 § asks (#88).

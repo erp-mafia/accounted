@@ -74,7 +74,7 @@ describe('parseCustomersFile', () => {
 
     const result = await parseCustomersFile(buffer, 'bad-email.xlsx')
     expect(result.rows[0].is_valid).toBe(false)
-    expect(result.rows[0].validation_errors).toContain('Ogiltig e-postadress')
+    expect(result.rows[0].validation_errors).toContain('Ogiltig e-postadress "not-an-email" i kolumnen "E-post"')
   })
 
   it('parses payment terms with day suffix', async () => {
@@ -227,6 +227,6 @@ describe('parseCustomersFile', () => {
     const result = await parseCustomersFile(buffer, 'kunder.xlsx')
 
     expect(result.rows[0].is_valid).toBe(false)
-    expect(result.rows[0].validation_errors).toContain('Kundnumret får vara högst 32 tecken')
+    expect(result.rows[0].validation_errors).toContain('Kundnumret i kolumnen "Kundnummer" får vara högst 32 tecken')
   })
 })

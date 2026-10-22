@@ -3,6 +3,7 @@ import { upsertWebshopOrders } from '@/lib/webshop-orders/ingest'
 import type { WebshopOrderUpsert } from '@/lib/webshop-orders/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre as round } from '@/lib/money'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { WebshopOrderLineItem, WebshopVatBreakdownLine } from '@/types'
 import { isRevokedCredentialsError, listPurchasesPage } from './api-client'
 import { encryptCredential, refreshTokenOf } from './credentials'
@@ -71,11 +72,16 @@ export function fromMinor(amount: number): number {
   return round(amount / 100)
 }
 
-/** ISO date part from a Zettle timestamp (+0000 or Z). */
+/**
+ * The Swedish calendar day of a Zettle timestamp (+0000 or Z). The purchase
+ * date becomes the verifikat date, its VAT period and its FX date: a sale at
+ * 00:30 on 1 November in Stockholm belongs to November, not to the UTC day
+ * before it (#58). An unparseable value keeps its own date part.
+ */
 export function isoDateOf(timestamp: string): string {
   const normalized = timestamp.replace(/([+-]\d{4})$/, (m) => `${m.slice(0, 3)}:${m.slice(3)}`)
   const ms = Date.parse(normalized)
-  if (Number.isFinite(ms)) return new Date(ms).toISOString().split('T')[0]
+  if (Number.isFinite(ms)) return todayIsoStockholm(new Date(ms))
   return timestamp.split('T')[0]
 }
 

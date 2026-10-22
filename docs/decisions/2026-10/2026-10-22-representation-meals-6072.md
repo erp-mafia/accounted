@@ -1,0 +1,1 @@
+[2026-10-22] Representation meals default to 6072 (ej avdragsgill) in the Extern representation template and the expense_representation category; only future proposals change, posted lines and each company's learned counterparty templates and rules keep their account (IL 16 kap. 2 §, accounted#86).

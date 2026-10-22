@@ -23,6 +23,10 @@
  *     taxable base over SEK 40 million means monthly moms, periodisk
  *     sammanställning needs registration and EU trade;
  *   - kontantmetoden has no deferred invoice booking (#967, accrual only);
+ *   - the accounting method changes freely only while the current fiscal
+ *     year has no posted verifikat; later only as a stated correction, and
+ *     not while an open invoice lacks its own verifikat
+ *     (lib/company/accounting-method-change.ts), recorded in audit_log;
  *   - payment instructions are written through to the default payee cash
  *     account FIRST (migration 20260904010000), so a failure writes nothing;
  *   - tax deadlines are regenerated when a tax-relevant field is saved, or
@@ -32,7 +36,11 @@
  *     dimension codes already on journal lines as archived values
  *     (lib/dimensions/import-existing.ts), so the registry is complete for
  *     the history on whichever door flipped the flag. A failed registration
- *     never fails the save; it comes back as a warning.
+ *     never fails the save; it comes back as a warning;
+ *   - a save that changes the company's name, legal form, org number,
+ *     address or VAT registration writes them onto its Stripe customer, so
+ *     the next subscription invoice is made out to the company as it now
+ *     stands (crm#1378). A failed sync never fails the save.
  *
  * A dry run performs every read and every check and writes nothing: no payee
  * write-through, no settings update, no deadline regeneration, no code
@@ -52,6 +60,11 @@ import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { invoiceSeriesBehindMessages, readInvoiceSeries } from '@/lib/company/invoice-number-series'
 import { resolveOrgNumberChange } from '@/lib/company/org-number'
+import { billingIdentityChanged, syncCompanyStripeIdentity } from '@/lib/stripe/customer-identity'
+import {
+  checkAccountingMethodChange,
+  recordAccountingMethodCorrection,
+} from '@/lib/company/accounting-method-change'
 
 /** The dashboard's settings body after validation: column names, all optional. */
 export type CompanySettingsChanges = z.output<typeof UpdateSettingsSchema>
@@ -416,6 +429,20 @@ export async function updateCompanySettings(
   if (body.employer_registered === false) {
     body.employer_seasonal = false
   }
+  // The accounting method: free while the current fiscal year has no posted
+  // verifikat, afterwards only as a stated correction (the same rule on every
+  // door, recorded below once the row is saved).
+  const methodChange = await checkAccountingMethodChange(ctx, {
+    stored: oldSettings?.accounting_method as string | null | undefined,
+    requested: body.accounting_method,
+    reason: body.accounting_method_correction_reason,
+  })
+  if (methodChange.kind === 'refused') {
+    if (methodChange.outcome.error) log.error('accounting method check failed before a settings save', methodChange.outcome.error as Error)
+    return methodChange.outcome
+  }
+  const methodWarnings = methodChange.kind === 'correction' ? methodChange.warnings : []
+
   // Deferred booking is an accrual-only concept (#967): kontantmetoden books
   // on payment, so a stale true flag must not survive a switch to it (the
   // bookkeeping settings form sends false in that case too).
@@ -515,7 +542,7 @@ export async function updateCompanySettings(
         proposed: { ...oldSettings, ...changes },
         deadlines_will_regenerate: willRegenerate,
         dimension_codes_will_import: turnsDimensionsOn,
-        warnings: lockWarnings(oldSettings, body),
+        warnings: [...lockWarnings(oldSettings, body), ...methodWarnings],
       },
     }
   }
@@ -574,7 +601,15 @@ export async function updateCompanySettings(
     }
   }
 
-  const warnings = lockWarnings(oldSettings, body)
+  const warnings = [...lockWarnings(oldSettings, body), ...methodWarnings]
+  if (methodChange.kind === 'correction') {
+    const notRecorded = await recordAccountingMethodCorrection(
+      ctx,
+      methodChange.correction,
+      ((data as SettingsRow).id as string | undefined) ?? null,
+    )
+    if (notRecorded) warnings.push(notRecorded)
+  }
 
   let dimensionCodesImported: number | null = null
   if (turnsDimensionsOn) {
@@ -589,6 +624,19 @@ export async function updateCompanySettings(
         code: imported.ok ? 'UNEXPECTED_DRY_RUN' : imported.code,
       })
       warnings.push(DIMENSION_CODES_IMPORT_FAILED)
+    }
+  }
+
+  // The Stripe customer is a copy of the company's identity, written at
+  // checkout; a later change has to reach it too, or every renewal keeps
+  // invoicing the details as they stood that day (crm#1378). Only when an
+  // identity column moved, and best effort: the next subscription event
+  // writes it again.
+  if (billingIdentityChanged(oldSettings, data as SettingsRow)) {
+    try {
+      await syncCompanyStripeIdentity(supabase, companyId)
+    } catch (err) {
+      log.error('failed to write the company identity onto its Stripe customer', err as Error)
     }
   }
 

@@ -1,0 +1,1 @@
+[2026-10-22] Importmoms (rutor 60-62) with no ruta 50 line is refused at the bank-row, inbox and bulk doors, by the company's own momsruta, not given a base line by the mall builder: in production the shape is mostly reverse charge on the pre-2015 2615, where a base is wrong (#83).

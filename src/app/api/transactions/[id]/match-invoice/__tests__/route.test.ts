@@ -730,6 +730,8 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     enqueue({ data: invoice, error: null })
     // Hard-duplicate check: no prior payment voucher
     enqueue({ data: [], error: null })
+    // Settings, read before the storno (an unreadable method refuses there)
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null })
 
     mockReverseEntry.mockRejectedValue(new Error('Period locked'))
 
@@ -951,6 +953,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
     expect(mockCreateInvoiceCashEntry).toHaveBeenCalledWith(
       expect.anything(), 'company-1', 'user-1', expect.anything(), '2024-06-15',
       'enskild_firma', undefined, '1930', tx, undefined, expect.any(Function),
+      { deferDeductionShare: true },
     )
     expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
       status: 'paid',
@@ -1126,6 +1129,7 @@ describe('POST /api/transactions/[id]/match-invoice', () => {
         tx,
         undefined, // no overpayment account
         expect.any(Function), // the posting port's context, read only while POSTING_EVENTS is on
+        { deferDeductionShare: true }, // no payment fee account
       )
     })
 
@@ -1953,6 +1957,120 @@ describe('POST /api/transactions/[id]/match-invoice: a customer overpayment (crm
     const { status, body } = await post({ overpayment_account: '2420', overpayment_amount: 500 })
     expect(status).toBe(409)
     expect(body.error.code).toBe('MATCH_OVERPAYMENT_CHANGED')
+    expectNothingWritten()
+  })
+})
+
+// crm#1364: the dialog named the payout's shortfall the payment provider's fee.
+describe('POST /api/transactions/[id]/match-invoice: a payment provider fee (crm#1364)', () => {
+  // A booked invoice of 12 500, paid out net of a 237,50 fee.
+  const TX = { id: 'tx-1', amount: 12262.5, invoice_id: null, date: '2024-06-15' }
+  const BOOKED = { id: VALID_UUID, status: 'sent' as const, total: 12500, remaining_amount: 12500, paid_amount: 0, journal_entry_id: 'je-sent', invoice_number: 'F-2024001' }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
+    mockDetectDuplicate.mockResolvedValue(null)
+    mockFindUnresolvableAccounts.mockResolvedValue([])
+    mockFindFiscalPeriod.mockResolvedValue('fp-1')
+    mockCreateJournalEntry.mockResolvedValue({ id: 'je-payment' })
+    mockCreateInvoiceCashEntry.mockResolvedValue({ id: 'je-cash' })
+  })
+
+  function enqueueUpToRefusal(tx: Record<string, unknown> = {}, invoice: Record<string, unknown> = {}) {
+    enqueue({ data: makeTransaction({ ...TX, ...tx }), error: null })
+    enqueue({ data: makeInvoice({ ...BOOKED, customer: makeCustomer(), ...invoice }), error: null })
+    enqueue({ data: [], error: null }) // hard-duplicate check
+  }
+
+  async function post(body: Record<string, unknown>) {
+    const request = createMockRequest('/api/transactions/tx-1/match-invoice', {
+      method: 'POST',
+      body: { invoice_id: VALID_UUID, ...body },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    return parseJsonResponse<{ error: { code: string; details?: Record<string, unknown> } }>(response)
+  }
+
+  function expectNothingWritten() {
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
+    expect(findCalls('invoices', 'update')).toHaveLength(0)
+    expect(findCalls('transactions', 'update')).toHaveLength(0)
+  }
+
+  it('returns 400 when the fee account comes without the fee the dialog showed, or names another account', async () => {
+    expect((await post({ fee_account: '6570' })).status).toBe(400)
+    expect((await post({ fee_account: '6064', fee_amount: 237.5 })).status).toBe(400)
+    expectNothingWritten()
+  })
+
+  it('faktureringsmetod: 1510 settles in full, 1930 takes the payout and 6570 the fee', async () => {
+    enqueueUpToRefusal()
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount -> 1930
+    enqueue({ data: null, error: null }) // invoice PDF lookup for the payment verifikat
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice update
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transaction link
+
+    const { status } = await post({ fee_account: '6570', fee_amount: 237.5 })
+
+    expect(status).toBe(200)
+    const input = mockCreateJournalEntry.mock.calls[0][3] as {
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+    }
+    expect(input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1930', 12262.5, 0],
+      ['1510', 0, 12500],
+      ['6570', 237.5, 0],
+    ])
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 12500,
+      remaining_amount: 0,
+    })
+    expect(findCalls('invoice_payments', 'insert').at(-1)?.[0]).toMatchObject({ amount: 12500 })
+  })
+
+  it('kontantmetod: the cash entry gets the fee account and the invoice settles in full', async () => {
+    enqueueUpToRefusal({}, { journal_entry_id: null })
+    enqueue({ data: { accounting_method: 'cash', entity_type: 'enskild_firma' }, error: null })
+    enqueue({ data: [], error: null }) // resolveSettlementAccount -> 1930
+    enqueue({ data: [{ id: VALID_UUID }], error: null }) // invoice update
+    enqueue({ data: { id: 'ip-1' }, error: null }) // invoice_payments insert
+    enqueue({ data: null, error: null }) // transaction link
+
+    const { status } = await post({ fee_account: '6570', fee_amount: 237.5 })
+
+    expect(status).toBe(200)
+    expect(mockCreateInvoiceCashEntry).toHaveBeenCalledWith(
+      expect.anything(), 'company-1', 'user-1', expect.anything(), '2024-06-15',
+      'enskild_firma', 'Test AB', '1930', expect.anything(), undefined, expect.any(Function),
+      { deferDeductionShare: true, feeAccount: '6570' },
+    )
+    expect(findCalls('invoices', 'update').at(-1)?.[0]).toMatchObject({
+      status: 'paid',
+      paid_amount: 12500,
+      remaining_amount: 0,
+    })
+  })
+
+  it('refuses MATCH_PAYMENT_FEE_CHANGED when the fee is not the one the dialog showed', async () => {
+    enqueueUpToRefusal()
+    const { status, body } = await post({ fee_account: '6570', fee_amount: 200 })
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_PAYMENT_FEE_CHANGED')
+    expect(body.error.details).toMatchObject({ shown_fee: 200, current_fee: 237.5 })
+    expectNothingWritten()
+  })
+
+  it('refuses a shortfall of a tenth or more as a fee before anything is written', async () => {
+    enqueueUpToRefusal({ amount: 10000 })
+    const { status, body } = await post({ fee_account: '6570', fee_amount: 2500 })
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('MATCH_PAYMENT_FEE_NOT_ALLOWED')
     expectNothingWritten()
   })
 })

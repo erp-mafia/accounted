@@ -454,6 +454,67 @@ describe('commitPendingOperation: create_supplier_invoice_from_inbox', () => {
     expect(linkToJournalEntry).not.toHaveBeenCalled()
   })
 
+  // #73: ML 2023:200 7 kap. 26 § puts an EU goods acquisition's moms in the
+  // invoice's period whatever the method, so the approval registers it.
+  it('posts the registration JE for an EU goods acquisition under the cash method', async () => {
+    vi.mocked(createSupplierInvoiceRegistrationEntry).mockResolvedValueOnce(
+      makeJournalEntry({ id: 'je-goods', voucher_number: 11 })
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'inbox-1', created_supplier_invoice_id: null, status: 'ready' },
+      error: null,
+    })
+    enqueue({
+      data: { id: 'supplier-1', name: 'EU Vendor SA', supplier_type: 'eu_business' },
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'cash' }, error: null }) // company_settings → cash
+    enqueue({ data: 51, error: null }) // arrival number
+    enqueue({
+      data: makeSupplierInvoice({
+        id: 'inv-goods', supplier_invoice_number: 'INV-G-1', vat_treatment: 'reverse_charge',
+        reverse_charge: true, reverse_charge_kind: 'eu_goods',
+      }),
+      error: null,
+    }) // invoice insert
+    enqueue({ data: null, error: null }) // items insert
+    enqueue({ data: null, error: null }) // supplier_invoices update with JE id
+    enqueue({ data: null, error: null }) // invoice_inbox_items update
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const result = await commitPendingOperation(
+      supabase as never,
+      'user-1',
+      'company-1',
+      makePendingOp({
+        params: {
+          inbox_item_id: 'inbox-1',
+          supplier_id: 'supplier-1',
+          document_id: null,
+          supplier_invoice_number: 'INV-G-1',
+          invoice_date: '2026-03-10',
+          due_date: '2026-05-20',
+          currency: 'SEK',
+          vat_treatment: 'reverse_charge',
+          reverse_charge_kind: 'eu_goods',
+          subtotal: 1000,
+          vat_amount: 0,
+          total: 1000,
+          notes: null,
+          items: [
+            { line_number: 1, description: 'Varor', quantity: 1, unit: 'st', unit_price: 1000, line_total: 1000, account_number: '4010', vat_rate: 0, vat_amount: 0 },
+          ],
+        },
+      }),
+    )
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ supplier_invoice_id: 'inv-goods', registration_journal_entry_id: 'je-goods' })
+    expect(createSupplierInvoiceRegistrationEntry).toHaveBeenCalledTimes(1)
+  })
+
   it('persists document_id on the supplier_invoices row (so it can carry to the payment verifikat under cash method)', async () => {
     let capturedInsert: Record<string, unknown> | null = null
     const { supabase, enqueue } = createQueuedMockSupabase()
