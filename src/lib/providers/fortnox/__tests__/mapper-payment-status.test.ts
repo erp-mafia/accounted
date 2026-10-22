@@ -62,7 +62,16 @@ describe('Fortnox mapper: paid-status consistency', () => {
     const open = mapFortnoxToSupplierInvoice(supplierRaw({ Total: '608.00', Balance: '608.00' }))
     expect(open.status).toBe('booked')
     expect(open.paymentStatus.paid).toBe(false)
-    expect(Number(open.paymentStatus.balance.value)).toBe(608)
+    expect(open.paymentStatus.balance.value).toBe(608)
+  })
+
+  it('supplier: a string Total and Balance are amounts, not strings (crm#1157)', () => {
+    const dto = mapFortnoxToSupplierInvoice(supplierRaw({ Total: '1415.00', Balance: '1415.00' }))
+    expect(dto.legalMonetaryTotal.payableAmount.value).toBe(1415)
+    expect(dto.legalMonetaryTotal.taxInclusiveAmount?.value).toBe(1415)
+    expect(dto.paymentStatus.balance.value).toBe(1415)
+    // Absent Balance still defaults to the parsed total.
+    expect(mapFortnoxToSupplierInvoice(supplierRaw({ Total: '1415.00' })).paymentStatus.balance.value).toBe(1415)
   })
 
   it('supplier: FullyPaid flag with absent Balance keeps status and paid CONSISTENT', () => {

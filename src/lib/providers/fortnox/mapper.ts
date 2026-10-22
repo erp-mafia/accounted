@@ -368,7 +368,10 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
 
 export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): SupplierInvoiceDto {
   const currency = (raw['Currency'] as string) ?? 'SEK';
-  const total = raw['Total'] as number ?? 0;
+  // The supplier invoice list serialises Total and Balance as strings. A cast
+  // kept the string in every amount below, and roundOre and every number check
+  // downstream read it as no amount (crm#1157).
+  const total = readNumber(raw, ['Total']) ?? 0;
   // Default an ABSENT Balance to the full total (= fully unpaid), never 0.
   // The supplier-invoice list is fetched with ?filter=unpaid, so a missing
   // Balance must not be mistaken for "settled": that would flip a genuinely
@@ -377,7 +380,7 @@ export function mapFortnoxToSupplierInvoice(raw: Record<string, unknown>): Suppl
   // (paid ⇒ nothing outstanding): an explicit FullyPaid with no Balance field
   // would otherwise leave balance = total alongside paid = true.
   const paid = isFullyPaid(raw);
-  const balance = paid ? 0 : ((raw['Balance'] as number | undefined) ?? total);
+  const balance = paid ? 0 : (readNumber(raw, ['Balance']) ?? total);
   // 381 for a supplier kreditfaktura: the one signal the importer reads
   // (dto.ts). Fortnox's schema types `Credit` as a boolean here and as a
   // string on the sales side, so both spellings are read. The negative total
