@@ -1,7 +1,6 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { Check, Loader2, Circle, AlertTriangle } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -67,7 +66,6 @@ export default function AgentOnboarding({
   alreadyVerified,
   existingSummary,
 }: Props) {
-  const router = useRouter()
   const [phase, setPhase] = useState<'building' | 'review' | 'done'>(
     alreadyVerified ? 'review' : 'building',
   )
@@ -131,7 +129,12 @@ export default function AgentOnboarding({
         initialFields={initialFields}
         atomTitles={atomTitles}
         profile={profile}
-        onVerified={() => router.push('/chat/intake')}
+        // A full page load, not router.push: until a moment ago the chat
+        // layout's gate redirected /chat here, and Next's client router
+        // cache (staleTimes) replays that redirect, bouncing the freshly
+        // verified user straight back to this page.
+        // eslint-disable-next-line @next/next/no-location-assign-relative-destination
+        onVerified={() => window.location.assign('/chat/intake')}
       />
     )
   }
