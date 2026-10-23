@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
 import {
+  BANK_MATCH_RULES_VERSION,
   BankMatchSchema,
+  bankMatchCheckKey,
   bankMatchLinkEvidence,
+  bankMatchRulesOf,
   bankMatchSourceKey,
   readInboxBankMatch,
   readInboxBankMatches,
@@ -89,9 +92,39 @@ describe('bankMatchSourceKey', () => {
   })
 })
 
+describe('bankMatchCheckKey and bankMatchRulesOf', () => {
+  it('a check stores the reading\'s fingerprint and the rules in force', () => {
+    expect(BANK_MATCH_RULES_VERSION).toBe(2)
+    expect(bankMatchCheckKey(item())).toBe(`${bankMatchSourceKey(item())}-r2`)
+    expect(bankMatchCheckKey(item()).length).toBeLessThanOrEqual(64)
+    expect(bankMatchRulesOf(bankMatchCheckKey(item()))).toBe(2)
+  })
+
+  it('a key from before rules carried a version is rules 1; no key is none', () => {
+    expect(bankMatchRulesOf(bankMatchSourceKey(item()))).toBe(1)
+    expect(bankMatchRulesOf(null)).toBeNull()
+    expect(bankMatchRulesOf(undefined)).toBeNull()
+    expect(bankMatchRulesOf('')).toBeNull()
+  })
+})
+
 describe('storedBankMatch', () => {
   it('reads the proposal of an open item that still reads the same', () => {
     expect(storedBankMatch(item())).toEqual({ transactionId: 'tx-1', basis: 'rule_ocr_reference', evidenceLevel: 'exakt' })
+  })
+
+  it('whichever rules wrote it: an older answer stands until the item is looked at again', () => {
+    const base = item()
+    expect(storedBankMatch({ ...base, bank_match_source_key: bankMatchCheckKey(base) })).toEqual({
+      transactionId: 'tx-1',
+      basis: 'rule_ocr_reference',
+      evidenceLevel: 'exakt',
+    })
+    expect(storedBankMatch({ ...base, bank_match_source_key: bankMatchSourceKey(base) })?.transactionId).toBe('tx-1')
+  })
+
+  it('none while a check claimed the item and has not written its answer: the claim clears the key', () => {
+    expect(storedBankMatch({ ...item(), bank_match_source_key: null })).toBeNull()
   })
 
   it.each([
@@ -103,6 +136,7 @@ describe('storedBankMatch', () => {
     ['with a basis outside the vocabulary', { bank_match_basis: 'user_confirmed' }],
     ['with a level outside the vocabulary', { bank_match_evidence_level: 'ditt_val' }],
     ['whose reading changed since', { bank_match_source_key: 'v1:00000000' }],
+    ['whose reading changed since, under the rules in force', { bank_match_source_key: 'v1:00000000-r2' }],
   ])('none for an item %s', (_label, overrides) => {
     expect(storedBankMatch(item(overrides as Partial<BankMatchItemRow>))).toBeNull()
   })

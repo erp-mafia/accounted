@@ -32,6 +32,8 @@ export interface BankMatchFacts {
   /** The giro on the matched supplier's card, which the bank feed's matcher also compares. */
   supplierBankgiro: string | null
   supplierPlusgiro: string | null
+  /** The IBAN the document (or, without one, its supplier's card) asks to be paid to. Absent for none. */
+  iban?: string | null
   issueDate: string | null
   dueDate: string | null
   /** The seller's name as read, then the matched supplier's own name: the counterparty and its alias. */
@@ -92,6 +94,7 @@ export function bankMatchFacts(
     plusgiro: text(valueOf(reading, 'payment_account_plusgiro')),
     supplierBankgiro: text(supplier?.bankgiro),
     supplierPlusgiro: text(supplier?.plusgiro),
+    iban: text(valueOf(reading, 'payment_account_iban')),
     issueDate: isoDate(valueOf(reading, 'invoice_issue_date')),
     dueDate: kind === 'receipt' ? null : isoDate(valueOf(reading, 'payment_due_date')),
     names,
@@ -106,7 +109,22 @@ export interface PaymentWindow {
   /** The days the payment is expected on: the issue date to the due date. */
   coreStart: string
   coreEnd: string
+  /**
+   * The last day a late payment is looked for on the amount and the name
+   * alone (the payee's giro needs no end): `end` for a receipt, which is paid
+   * the day it is dated.
+   */
+  lateEnd: string
 }
+
+/**
+ * How late an invoice may be paid and still be proposed on the amount and the
+ * name alone: one more credit period (the thirty days the window assumes when
+ * the due date is missing) past the due date. A company that pays in weekly
+ * or monthly runs pays within it; a payment later than that is more likely
+ * the next period's than this one's.
+ */
+export const LATE_PAYMENT_DAYS = 30
 
 /**
  * The days a payment of this document may fall on.
@@ -123,13 +141,22 @@ export interface PaymentWindow {
 export function paymentWindow(facts: BankMatchFacts): PaymentWindow | null {
   if (facts.kind === 'receipt') {
     const day = facts.issueDate ?? facts.arrivedOn
-    return { start: addDaysIso(day, -5), end: addDaysIso(day, DATE_TOLERANCE_DAYS), coreStart: day, coreEnd: day }
+    const end = addDaysIso(day, DATE_TOLERANCE_DAYS)
+    return { start: addDaysIso(day, -5), end, coreStart: day, coreEnd: day, lateEnd: end }
   }
   const { issueDate, dueDate } = facts
   if (!issueDate && !dueDate) return null
   const start = issueDate ? addDaysIso(issueDate, -5) : addDaysIso(dueDate as string, -35)
   const end = dueDate ? addDaysIso(dueDate, 5) : addDaysIso(issueDate as string, 35)
-  return { start, end, coreStart: issueDate ?? (dueDate as string), coreEnd: dueDate ?? (issueDate as string) }
+  // The due date, or the thirty days of credit the window assumes without one.
+  const due = dueDate ?? addDaysIso(issueDate as string, 30)
+  return {
+    start,
+    end,
+    coreStart: issueDate ?? (dueDate as string),
+    coreEnd: dueDate ?? (issueDate as string),
+    lateEnd: addDaysIso(due, LATE_PAYMENT_DAYS),
+  }
 }
 
 /**

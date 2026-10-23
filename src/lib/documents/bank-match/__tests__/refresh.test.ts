@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
-import { bankMatchSourceKey } from '@/lib/documents/inbox-bank-match'
+import { bankMatchCheckKey, bankMatchSourceKey } from '@/lib/documents/inbox-bank-match'
 import type { DocumentReading, ReadingFields } from '@/lib/documents/reading/types'
 
 const loadDocumentReading = vi.fn()
@@ -12,6 +12,8 @@ vi.mock('@/lib/documents/reading/load', () => ({
 
 import {
   ITEMS_REFRESHED_PER_ARRIVAL,
+  OPEN_ITEMS_SCANNED,
+  RIVALS_READ,
   mayBePaidBy,
   refreshInboxBankMatchesForTransactions,
   refreshInboxItemBankMatch,
@@ -128,7 +130,7 @@ describe('refreshInboxItemBankMatch', () => {
       bank_match_transaction_id: 'tx-1',
       bank_match_basis: 'rule_ocr_reference',
       bank_match_evidence_level: 'exakt',
-      bank_match_source_key: bankMatchSourceKey(itemRow()),
+      bank_match_source_key: bankMatchCheckKey(itemRow()),
     })
     expect(typeof write.bank_match_checked_at).toBe('string')
     // Only while the item is still open, in this company.
@@ -161,10 +163,18 @@ describe('refreshInboxItemBankMatch', () => {
     expect(await refreshInboxItemBankMatch(first.supabase as never, COMPANY, 'item-1', RULES, DEPS)).toEqual({ status: 'updated', decision: null })
     expect(first.payloads('invoice_inbox_items', 'update')[0]).toMatchObject({ bank_match_transaction_id: null, bank_match_basis: null })
 
-    const checked = itemRow({ bank_match_checked_at: '2026-09-02T08:01:00Z', bank_match_source_key: bankMatchSourceKey(itemRow()) })
+    const checked = itemRow({ bank_match_checked_at: '2026-09-02T08:01:00Z', bank_match_source_key: bankMatchCheckKey(itemRow()) })
     const again = createTableMockSupabase({ invoice_inbox_items: inboxItems(checked), transactions: { data: [] } })
     expect(await refreshInboxItemBankMatch(again.supabase as never, COMPANY, 'item-1', RULES, DEPS)).toEqual({ status: 'unchanged', decision: null })
     expect(again.payloads('invoice_inbox_items', 'update')).toEqual([])
+  })
+
+  it('an answer older rules wrote is written again with the rules in force, the same answer or not', async () => {
+    // The key a check stored before rules carried a version: the reading's fingerprint alone.
+    const older = itemRow({ bank_match_checked_at: '2026-09-02T08:01:00Z', bank_match_source_key: bankMatchSourceKey(itemRow()) })
+    const { supabase, payloads } = createTableMockSupabase({ invoice_inbox_items: inboxItems(older), transactions: { data: [] } })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, DEPS)).toEqual({ status: 'updated', decision: null })
+    expect(payloads('invoice_inbox_items', 'update')[0]).toMatchObject({ bank_match_source_key: bankMatchCheckKey(itemRow()) })
   })
 
   it('clears a proposal whose bank row is no longer free', async () => {
@@ -356,6 +366,173 @@ describe('refreshInboxItemBankMatch', () => {
     const { supabase, payloads } = createTableMockSupabase({ invoice_inbox_items: { error: { message: 'boom' } } })
     await expect(refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, DEPS)).rejects.toThrow('boom')
     expect(payloads('invoice_inbox_items', 'update')).toEqual([])
+  })
+})
+
+describe('refreshInboxItemBankMatch: a late payment and the other open items', () => {
+  // The same amount to the same giro every month: September's invoice (item-1) and October's (item-2).
+  const giroReading = (issue: string, due: string) =>
+    reading({
+      document_type: 'supplier_invoice',
+      seller_name: 'Kontorsbolaget AB',
+      amount_due_for_payment: 1250,
+      invoice_currency_code: 'SEK',
+      payment_account_bankgiro: '999-0003',
+      invoice_issue_date: issue,
+      payment_due_date: due,
+    })
+  const SEPTEMBER = giroReading('2026-09-01', '2026-09-30')
+  const OCTOBER = giroReading('2026-10-01', '2026-10-31')
+  const september = itemRow()
+  const october = itemRow({
+    id: 'item-2',
+    document_id: 'doc-2',
+    created_at: '2026-10-02T08:00:00Z',
+    extracted_data: { ...READ, invoice: { ...READ.invoice, invoiceDate: '2026-10-01', dueDate: '2026-10-31', paymentReference: null } },
+  })
+  const TODAY = { today: '2026-10-28' }
+  // Paid on 2026-10-25: inside October's window, 25 days after September's due date.
+  const paid = bankRow({ id: 'tx-paid', date: '2026-10-25', reference: null, counterparty_account: '999-0003' })
+  /** The same-currency read answers the row, the foreign-currency read nothing. */
+  const bank: TableMockResolver = (calls) => (calls.some((c) => c.method === 'neq') ? { data: [] } : { data: [paid] })
+
+  /** Items by id, the open queue, and the items whose standing proposal names a row. */
+  function inbox(byId: Record<string, Record<string, unknown>>, open: unknown[], proposers: string[] = []): TableMockResolver {
+    return (calls) => {
+      if (calls.some((c) => c.method === 'update')) return { data: null }
+      if (calls.some((c) => c.method === 'maybeSingle')) {
+        const id = calls.find((c) => c.method === 'eq' && c.args[0] === 'id')?.args[1] as string
+        return { data: byId[id] ?? null }
+      }
+      if (calls.some((c) => c.method === 'in' && c.args[0] === 'bank_match_transaction_id')) return { data: proposers.map((id) => ({ id })) }
+      if (calls.some((c) => c.method === 'in')) return { data: [] }
+      return { data: open }
+    }
+  }
+
+  beforeEach(() => {
+    loadDocumentReading.mockImplementation(async (_s: unknown, _c: unknown, target: { item: { id: string } }) =>
+      target.item.id === 'item-2' ? OCTOBER : SEPTEMBER,
+    )
+  })
+
+  it('late and alone: the payee giro proposes it, stark', async () => {
+    const { supabase } = createTableMockSupabase({ invoice_inbox_items: inbox({ 'item-1': september }, [september]), transactions: bank })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, TODAY)).toEqual({
+      status: 'updated',
+      decision: { transactionId: 'tx-paid', basis: 'rule_counterparty', evidenceLevel: 'stark' },
+    })
+  })
+
+  it('this month\'s item, read as it reads itself, holds the row: last month\'s late claim gives it up', async () => {
+    const { supabase } = createTableMockSupabase({ invoice_inbox_items: inbox({ 'item-1': september }, [september, october]), transactions: bank })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, TODAY)).toEqual({ status: 'updated', decision: null })
+    // The rival was read through the same reading as the item itself.
+    expect(loadDocumentReading).toHaveBeenCalledWith(supabase, COMPANY, { item: october }, undefined)
+  })
+
+  it('rivals are read only when a late claim could be proposed', async () => {
+    const onTime = bankRow({ id: 'tx-on-time', date: '2026-09-28', reference: null, counterparty_account: '999-0003' })
+    const { supabase, findCalls } = createTableMockSupabase({
+      invoice_inbox_items: inbox({ 'item-1': september }, [september, october]),
+      transactions: (calls) => (calls.some((c) => c.method === 'neq') ? { data: [] } : { data: [onTime, paid] }),
+    })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, TODAY)).toMatchObject({ decision: { transactionId: 'tx-on-time' } })
+    expect(loadDocumentReading).toHaveBeenCalledTimes(1)
+    // No read of the open queue.
+    expect(findCalls('invoice_inbox_items', 'limit')).not.toContainEqual([OPEN_ITEMS_SCANNED])
+  })
+
+  it('more open items with the amount than can be weighed: no late claim', async () => {
+    const many = Array.from({ length: RIVALS_READ + 1 }, (_, i) => ({ ...october, id: `other-${i}` }))
+    const { supabase } = createTableMockSupabase({ invoice_inbox_items: inbox({ 'item-1': september }, [september, ...many]), transactions: bank })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, TODAY)).toEqual({ status: 'updated', decision: null })
+    expect(loadDocumentReading).toHaveBeenCalledTimes(1)
+  })
+
+  it('a rival that cannot be read: no late claim, and the check itself still answers', async () => {
+    loadDocumentReading.mockImplementation(async (_s: unknown, _c: unknown, target: { item: { id: string } }) => {
+      if (target.item.id === 'item-2') throw new Error('unreadable')
+      return SEPTEMBER
+    })
+    const { supabase } = createTableMockSupabase({ invoice_inbox_items: inbox({ 'item-1': september }, [september, october]), transactions: bank })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, TODAY)).toEqual({ status: 'updated', decision: null })
+  })
+
+  it('an item that arrives later and holds a row better: the other item\'s standing late claim is looked at again, once', async () => {
+    // September proposed the row while October was not yet in the inbox.
+    const proposed = itemRow({
+      bank_match_transaction_id: 'tx-paid',
+      bank_match_basis: 'rule_counterparty',
+      bank_match_evidence_level: 'stark',
+      bank_match_checked_at: '2026-10-26T08:00:00Z',
+      bank_match_source_key: bankMatchCheckKey(september),
+    })
+    const { supabase, payloads, findCalls } = createTableMockSupabase({
+      invoice_inbox_items: inbox({ 'item-1': proposed, 'item-2': october }, [proposed, october], ['item-1']),
+      transactions: bank,
+    })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-2', RULES, TODAY)).toEqual({
+      status: 'updated',
+      decision: { transactionId: 'tx-paid', basis: 'rule_counterparty', evidenceLevel: 'stark' },
+      others: { checked: 1, failed: 0 },
+    })
+    // October's answer, then September's withdrawn: the row is October's.
+    expect(payloads('invoice_inbox_items', 'update')).toEqual([
+      expect.objectContaining({ bank_match_transaction_id: 'tx-paid' }),
+      expect.objectContaining({ bank_match_transaction_id: null, bank_match_source_key: bankMatchCheckKey(september) }),
+    ])
+    // The others asked for are the open ones proposing a row October could claim, never October itself.
+    expect(findCalls('invoice_inbox_items', 'in')).toContainEqual(['bank_match_transaction_id', ['tx-paid']])
+    expect(findCalls('invoice_inbox_items', 'neq')).toContainEqual(['id', 'item-2'])
+    // September's look goes no further: one ask for others in all.
+    expect(findCalls('invoice_inbox_items', 'in').filter(([column]) => column === 'bank_match_transaction_id')).toHaveLength(1)
+  })
+
+  it('nothing to look at again when the answer stands, or the item could claim no row', async () => {
+    const standing = { ...october, bank_match_checked_at: '2026-10-26T08:00:00Z', bank_match_source_key: bankMatchCheckKey(october), bank_match_transaction_id: 'tx-paid', bank_match_basis: 'rule_counterparty', bank_match_evidence_level: 'stark' }
+    const stands = createTableMockSupabase({ invoice_inbox_items: inbox({ 'item-2': standing }, [september, standing], ['item-1']), transactions: bank })
+    expect(await refreshInboxItemBankMatch(stands.supabase as never, COMPANY, 'item-2', RULES, TODAY)).toMatchObject({ status: 'unchanged' })
+    expect(stands.findCalls('invoice_inbox_items', 'in')).not.toContainEqual(['bank_match_transaction_id', ['tx-paid']])
+
+    const none = createTableMockSupabase({ invoice_inbox_items: inbox({ 'item-2': october }, [september, october], ['item-1']), transactions: { data: [] } })
+    expect(await refreshInboxItemBankMatch(none.supabase as never, COMPANY, 'item-2', RULES, TODAY)).toEqual({ status: 'updated', decision: null })
+    expect(none.payloads('invoice_inbox_items', 'update')).toHaveLength(1)
+  })
+
+  it('a look at the others that fails is counted, never thrown: the item\'s own answer is written', async () => {
+    const failing: TableMockResolver = (calls) => {
+      if (calls.some((c) => c.method === 'in' && c.args[0] === 'bank_match_transaction_id')) return { data: null, error: { message: 'boom' } }
+      return inbox({ 'item-2': october }, [october])(calls)
+    }
+    const { supabase, payloads } = createTableMockSupabase({ invoice_inbox_items: failing, transactions: bank })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-2', RULES, TODAY)).toMatchObject({
+      status: 'updated',
+      decision: { transactionId: 'tx-paid' },
+      others: { checked: 0, failed: 1 },
+    })
+    expect(payloads('invoice_inbox_items', 'update')).toHaveLength(1)
+  })
+
+  it('without recheckOthers, the check looks no further', async () => {
+    const { supabase, findCalls } = createTableMockSupabase({ invoice_inbox_items: inbox({ 'item-2': october }, [october], ['item-1']), transactions: bank })
+    expect(await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-2', RULES, { ...TODAY, recheckOthers: false })).toEqual({
+      status: 'updated',
+      decision: { transactionId: 'tx-paid', basis: 'rule_counterparty', evidenceLevel: 'stark' },
+    })
+    expect(findCalls('invoice_inbox_items', 'in')).not.toContainEqual(['bank_match_transaction_id', ['tx-paid']])
+  })
+
+  it('a bank arrival reads the open queue once: each check weighs its rivals from it and looks no further', async () => {
+    const arrived = [{ id: 'tx-paid', company_id: COMPANY, amount: -1250, currency: 'SEK', journal_entry_id: null, is_ignored: false }]
+    const { supabase, findCalls } = createTableMockSupabase({
+      invoice_inbox_items: inbox({ 'item-1': september, 'item-2': october }, [october, september], ['item-1']),
+      transactions: bank,
+    })
+    expect(await refreshInboxBankMatchesForTransactions(supabase as never, COMPANY, arrived, RULES, TODAY)).toEqual({ items_checked: 2, failed: 0 })
+    // One read of the open queue, none of the others' proposals.
+    expect(findCalls('invoice_inbox_items', 'limit')).toEqual([[OPEN_ITEMS_SCANNED]])
+    expect(findCalls('invoice_inbox_items', 'in').filter(([column]) => column === 'bank_match_transaction_id')).toEqual([])
   })
 })
 

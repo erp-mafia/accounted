@@ -16,6 +16,7 @@ import {
   type ArrivedBankRow,
   type BankMatchRefreshRules,
 } from '@/lib/documents/bank-match/refresh'
+import { BANK_MATCH_RULES_VERSION, bankMatchRulesOf } from '@/lib/documents/inbox-bank-match'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import { peppolReader } from '@/lib/invoices/peppol-reading'
 import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
@@ -42,7 +43,9 @@ export async function proposeBankMatchForInboxItem(
   log: Pick<Logger, 'warn'> = defaultLog,
 ): Promise<void> {
   try {
-    await refreshInboxItemBankMatch(supabase, companyId, inboxItemId, INBOX_BANK_MATCH_RULES)
+    const outcome = await refreshInboxItemBankMatch(supabase, companyId, inboxItemId, INBOX_BANK_MATCH_RULES)
+    const failed = 'others' in outcome ? (outcome.others?.failed ?? 0) : 0
+    if (failed > 0) log.warn('inbox bank match: other items not looked at again', { inboxItemId, failed })
   } catch (err) {
     log.warn('inbox bank match failed', { inboxItemId, reason: reason(err) })
   }
@@ -64,7 +67,8 @@ export async function proposeBankMatchesForArrivedRows(
 }
 
 // ---------------------------------------------------------------------------
-// Never checked: the items and bank rows from before match on arrival
+// Never checked: the items and bank rows from before match on arrival, and
+// the items checked only under older rules (BANK_MATCH_RULES_VERSION)
 // ---------------------------------------------------------------------------
 
 /**
@@ -93,17 +97,26 @@ export interface NeverCheckedRow {
   created_journal_entry_id?: string | null
   routed_to_arkiv_at?: string | null
   bank_match_checked_at?: string | null
+  bank_match_source_key?: string | null
+}
+
+/** Checked, and the answer written, under older rules than the ones in force: only a key read with the row says so. */
+function checkedUnderOlderRules(row: NeverCheckedRow): boolean {
+  const rules = bankMatchRulesOf(row.bank_match_source_key)
+  return row.bank_match_checked_at != null && rules !== null && rules < BANK_MATCH_RULES_VERSION
 }
 
 /**
- * Open, read, with a document, and never looked at: bank_match_checked_at
- * is null. Only an explicit null counts; a row read without the column says
- * nothing about it. The same open items the bank-arrival scan reads
- * (refreshInboxBankMatchesForTransactions).
+ * Open, read, with a document, and never looked at under the rules in force:
+ * bank_match_checked_at is null, or the stored key says older rules wrote
+ * the answer. Only an explicit null counts, and only a key that was read; a
+ * row read without the columns says nothing about them, and a claimed item
+ * (checked_at set, no key yet) is not picked again. The same open items the
+ * bank-arrival scan reads (refreshInboxBankMatchesForTransactions).
  */
 export function neverChecked(row: NeverCheckedRow): boolean {
   return (
-    row.bank_match_checked_at === null &&
+    (row.bank_match_checked_at === null || checkedUnderOlderRules(row)) &&
     row.status === 'received' &&
     !!row.document_id &&
     !row.matched_transaction_id &&
@@ -137,12 +150,14 @@ export function neverCheckedToCheck(
 }
 
 /**
- * Look in the bank for items it was never checked for (bounded by the
- * caller). Each item is claimed first: bank_match_checked_at is set where it
- * is still null, in one write, so a read running at the same time never
- * checks it too, and an item whose check fails is not picked again by the
- * next read (the doors that re-check, a correction or a bank arrival, still
- * do). Then the proposal is written as on arrival. Never throws; returns the
+ * Look in the bank for items it was never checked for under the rules in
+ * force (bounded by the caller). Each item is claimed first, in one write:
+ * bank_match_checked_at is set and the key cleared where it is still null or
+ * the key is older rules', so a read running at the same time never checks it
+ * too, and an item whose check fails is not picked again by the next read
+ * (the doors that re-check, a correction or a bank arrival, still do). An
+ * older answer is not shown from the claim until the check writes the new
+ * one. Then the proposal is written as on arrival. Never throws; returns the
  * ids this call checked.
  */
 export async function checkNeverCheckedInboxItems(
@@ -157,10 +172,13 @@ export async function checkNeverCheckedInboxItems(
   try {
     const { data, error } = await supabase
       .from('invoice_inbox_items')
-      .update({ bank_match_checked_at: new Date().toISOString() })
+      .update({ bank_match_checked_at: new Date().toISOString(), bank_match_source_key: null })
       .eq('company_id', companyId)
       .in('id', ids)
-      .is('bank_match_checked_at', null)
+      // Never checked, or a key the rules in force (-r2, BANK_MATCH_RULES_VERSION)
+      // did not write; spelled out so the phantom-column guard can read it. A
+      // claimed item's null key is neither: NULL NOT LIKE is not true.
+      .or('bank_match_checked_at.is.null,bank_match_source_key.not.like.*-r2')
       .is('created_supplier_invoice_id', null)
       .is('created_journal_entry_id', null)
       .is('matched_transaction_id', null)

@@ -101,6 +101,17 @@ describe('GET /items: never-checked items', () => {
     expect(scheduled).toHaveLength(0)
   })
 
+  it('the backlog: items checked only under older rules are checked again, in the same batch', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const olderRules = { bank_match_checked_at: '2026-10-01T00:00:00Z', bank_match_source_key: 'v1:0000abcd' }
+    const currentRules = { bank_match_checked_at: '2026-10-01T00:00:00Z', bank_match_source_key: 'v1:0000abcd-r2' }
+    enqueue({ data: [unchecked('older', '2026-09-01T00:00:00Z', olderRules), unchecked('current', '2026-09-02T00:00:00Z', currentRules)] })
+    await route.handler(req(), buildCtx(supabase))
+    expect(scheduled).toHaveLength(1)
+    await scheduled[0]()
+    expect(checkNeverChecked).toHaveBeenCalledWith(supabase, 'company-1', ['older'], expect.anything())
+  })
+
   it('reads bank_match_checked_at with the list', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: [] })
@@ -123,6 +134,17 @@ describe('GET /items/:id: a never-checked item', () => {
     expect(status).toBe(200)
     expect(checkNeverChecked).toHaveBeenCalledWith(supabase, 'company-1', ['item-1'], expect.anything())
     expect(body.data).toMatchObject({ bank_match_checked_at: '2026-10-19T10:00:00Z', bank_match: null })
+  })
+
+  it('an item checked only under older rules is checked again when opened', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: unchecked('item-1', '2026-09-01T00:00:00Z', { bank_match_checked_at: '2026-10-01T00:00:00Z', bank_match_source_key: 'v1:0000abcd' }) })
+    enqueue({ data: { bank_match_transaction_id: null, bank_match_basis: null, bank_match_evidence_level: null, bank_match_checked_at: '2026-10-19T10:00:00Z', bank_match_source_key: 'v1:0000abcd-r2' } })
+    checkNeverChecked.mockResolvedValue(['item-1'])
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(await route.handler(req('item-1'), buildCtx(supabase)))
+    expect(status).toBe(200)
+    expect(checkNeverChecked).toHaveBeenCalledWith(supabase, 'company-1', ['item-1'], expect.anything())
+    expect(body.data).toMatchObject({ bank_match_source_key: 'v1:0000abcd-r2', bank_match: null })
   })
 
   it('checks nothing for an item checked before, or one that is not open', async () => {

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DocumentReading, ReadingFields } from '@/lib/documents/reading/types'
-import { bankMatchFacts, paymentWindow, searchRange, windowDueDate } from '../facts'
+import { bankMatchFacts, LATE_PAYMENT_DAYS, paymentWindow, searchRange, windowDueDate } from '../facts'
 
 function reading(fields: Record<string, unknown>): DocumentReading {
   const out: Record<string, unknown> = {}
@@ -37,11 +37,16 @@ describe('bankMatchFacts', () => {
       plusgiro: null,
       supplierBankgiro: null,
       supplierPlusgiro: null,
+      iban: null,
       issueDate: '2026-09-01',
       dueDate: '2026-09-30',
       names: ['Kontorsbolaget AB'],
       arrivedOn: '2026-09-02',
     })
+  })
+
+  it('reads the IBAN the document asks to be paid to', () => {
+    expect(bankMatchFacts(reading({ ...INVOICE, payment_account_iban: 'SE45 5000 0000 0583 9825 7466' }), null, '2026-09-02')?.iban).toBe('SE45 5000 0000 0583 9825 7466')
   })
 
   it('a credit note expects money back, its amount as a magnitude', () => {
@@ -86,7 +91,13 @@ describe('paymentWindow', () => {
   const facts = (over: Record<string, unknown>) => bankMatchFacts(reading({ ...INVOICE, ...over }), null, '2026-09-02')!
 
   it('an invoice: five days before the invoice date to five days after the due date (the matcher\'s pass 3)', () => {
-    expect(paymentWindow(facts({}))).toEqual({ start: '2026-08-27', end: '2026-10-05', coreStart: '2026-09-01', coreEnd: '2026-09-30' })
+    expect(paymentWindow(facts({}))).toEqual({
+      start: '2026-08-27',
+      end: '2026-10-05',
+      coreStart: '2026-09-01',
+      coreEnd: '2026-09-30',
+      lateEnd: '2026-10-30',
+    })
   })
 
   it('about thirty days of credit on the side that is missing', () => {
@@ -94,13 +105,20 @@ describe('paymentWindow', () => {
     expect(paymentWindow(facts({ invoice_issue_date: undefined }))).toMatchObject({ start: '2026-08-26', end: '2026-10-05' })
   })
 
+  it('a late payment on the name alone: one more credit period past the due date, or past the thirty days assumed without one', () => {
+    expect(LATE_PAYMENT_DAYS).toBe(30)
+    expect(paymentWindow(facts({}))?.lateEnd).toBe('2026-10-30')
+    expect(paymentWindow(facts({ payment_due_date: undefined }))?.lateEnd).toBe('2026-10-31')
+    expect(paymentWindow(facts({ invoice_issue_date: undefined }))?.lateEnd).toBe('2026-10-30')
+  })
+
   it('none without a date: only the OCR can pair it', () => {
     expect(paymentWindow(facts({ invoice_issue_date: undefined, payment_due_date: undefined }))).toBeNull()
   })
 
-  it('a receipt: five days before its date to ten after, the matcher handed a due date five days on', () => {
+  it('a receipt: five days before its date to ten after, never late, the matcher handed a due date five days on', () => {
     const receipt = bankMatchFacts(reading({ document_type: 'receipt', amount_due_for_payment: 99, invoice_issue_date: '2026-09-10' }), null, '2026-09-11')!
-    expect(paymentWindow(receipt)).toEqual({ start: '2026-09-05', end: '2026-09-20', coreStart: '2026-09-10', coreEnd: '2026-09-10' })
+    expect(paymentWindow(receipt)).toEqual({ start: '2026-09-05', end: '2026-09-20', coreStart: '2026-09-10', coreEnd: '2026-09-10', lateEnd: '2026-09-20' })
     expect(windowDueDate(receipt)).toBe('2026-09-15')
   })
 
