@@ -69,10 +69,10 @@ export const BankMatchSchema = z
     counterparty: z.string().nullable().describe('What the bank row says about the other party.'),
     basis: z
       .enum(BANK_MATCH_BASES)
-      .describe('What paired them: rule_ocr_reference (the OCR), rule_counterparty (the payee\'s bankgiro or plusgiro), rule_amount_date (amount and date, with the name or the card that paid it).'),
+      .describe('What paired them: rule_ocr_reference (the OCR), rule_counterparty (the payee\'s bankgiro, plusgiro or bank account), rule_amount_date (amount and date, with the name or the card that paid it).'),
     evidence_level: z
       .enum(BANK_MATCH_EVIDENCE_LEVELS)
-      .describe('exakt: OCR and amount agree. stark: amount and the payee\'s giro agree in the payment window (or amount, window, name and the card that paid it). trolig: amount, the payment window and the name agree, or the name is missing and the bank row names the card the document was paid with. Never a score.'),
+      .describe('exakt: OCR and amount agree. stark: amount and the payee\'s giro or bank account agree, from the payment window on, however late (or amount, window, name and the card that paid it). trolig: amount, the payment window and the name agree (for an invoice paid late, up to 30 days after its due date), or the name is missing and the bank row names the card the document was paid with. Never a score.'),
   })
   .describe('A proposal, never a booking: the item looks already paid by this bank row.')
 
@@ -152,6 +152,42 @@ export function bankMatchSourceKey(item: BankMatchItemRow): string {
   return `v1:${fnv1a(stableJson(projection))}`
 }
 
+/**
+ * The rules match on arrival decides by (lib/documents/bank-match/decide.ts),
+ * raised whenever they change what is proposed: an item checked under older
+ * rules is looked at once more (lib/operations/inbox-bank-match.ts
+ * neverChecked), instead of keeping the answer the old rules gave until a
+ * bank row with its amount arrives or the item is corrected.
+ *   1  the first rules; a key written then carries no version;
+ *   2  late payments: the payee's giro however late, the name within
+ *      LATE_PAYMENT_DAYS, and a late claim yields to another open item;
+ *      the payee's bank account inside a Swedish IBAN counts as its giro.
+ */
+export const BANK_MATCH_RULES_VERSION = 2
+
+/** "-r2" at the end of a stored key; a fingerprint is hex and never ends so. */
+const RULES_SUFFIX = /-r(\d+)$/
+
+/**
+ * What a check stores in bank_match_source_key: the reading's fingerprint
+ * (bankMatchSourceKey) and the rules it was decided by.
+ */
+export function bankMatchCheckKey(item: BankMatchItemRow): string {
+  return `${bankMatchSourceKey(item)}-r${BANK_MATCH_RULES_VERSION}`
+}
+
+/** The rules a stored key was decided by: 1 for a key from before versions, null for no key. */
+export function bankMatchRulesOf(storedKey: string | null | undefined): number | null {
+  if (typeof storedKey !== 'string' || storedKey === '') return null
+  const version = RULES_SUFFIX.exec(storedKey)
+  return version ? Number(version[1]) : 1
+}
+
+/** The reading's fingerprint a stored key carries, whichever rules decided it. */
+function readingOf(storedKey: string | null | undefined): string | null {
+  return typeof storedKey === 'string' ? storedKey.replace(RULES_SUFFIX, '') : null
+}
+
 export interface StoredBankMatch {
   transactionId: string
   basis: BankMatchBasis
@@ -161,15 +197,16 @@ export interface StoredBankMatch {
 /**
  * The proposal stored on the item, when it still stands as far as the item
  * alone can tell: the item is open, every part is there, and the item reads
- * as it did when the proposal was written. The bank row is checked by
- * readInboxBankMatch.
+ * as it did when the proposal was written. A proposal older rules made stands
+ * until the item is looked at again under the new ones. The bank row is
+ * checked by readInboxBankMatch.
  */
 export function storedBankMatch(item: BankMatchItemRow): StoredBankMatch | null {
   if (!isOpenInboxItem(item)) return null
   const transactionId = item.bank_match_transaction_id ?? null
   if (!transactionId) return null
   if (!isBankMatchBasis(item.bank_match_basis) || !isBankMatchEvidenceLevel(item.bank_match_evidence_level)) return null
-  if (item.bank_match_source_key !== bankMatchSourceKey(item)) return null
+  if (readingOf(item.bank_match_source_key) !== bankMatchSourceKey(item)) return null
   return { transactionId, basis: item.bank_match_basis, evidenceLevel: item.bank_match_evidence_level }
 }
 

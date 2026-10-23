@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import { counterpartyGiroDigits, giroKey } from '@/lib/transactions/giro-counterparty'
 import type { ProposableBankRow } from '@/lib/documents/inbox-bank-match'
-import { decideBankMatch, type BankMatchRules } from '../decide'
+import { bankRowClaims, decideBankMatch, type BankMatchRules } from '../decide'
 import type { BankMatchFacts } from '../facts'
 
 /** The rules the callers bind (lib/operations/inbox-bank-match.ts), real, not mocked. */
@@ -109,8 +109,234 @@ describe('decideBankMatch: stark (the amount and the payee giro, in the window)'
     expect(decision?.evidenceLevel).toBe('stark')
   })
 
-  it('never outside the payment window: last month\'s payment to the same giro is not this invoice\'s', () => {
+  it('never before the payment window: last month\'s payment to the same giro is not this invoice\'s', () => {
     expect(decideBankMatch(invoice({ reference: null }), [row({ counterparty_account: '999-0003', date: '2026-08-02' })], RULES, 1250)).toBeNull()
+    expect(decideBankMatch(invoice({ reference: null }), [row({ counterparty_account: '999-0003', date: '2026-08-26' })], RULES, 1250)).toBeNull()
+    expect(decideBankMatch(invoice({ reference: null }), [row({ counterparty_account: '999-0003', date: '2026-08-27' })], RULES, 1250)?.evidenceLevel).toBe('stark')
+  })
+})
+
+describe('decideBankMatch: a late payment', () => {
+  // Due 2026-09-30; the window ends five days after, 2026-10-05.
+  const noOcr = invoice({ reference: null })
+  const byName = invoice({ reference: null, bankgiro: null })
+  // As an internet bank prints a giro payment: the payee, its padded bankgiro, the payment kind.
+  const giroRow = (overrides: Partial<ProposableBankRow> = {}) =>
+    row({
+      description: 'KONTORSBOLAGET BG 0000009990003',
+      original_description: 'KONTORSBOLAGET BG 0000009990003 Bg-bet. via internet',
+      ...overrides,
+    })
+
+  it('the amount and the payee giro after the due date: stark, the basis the giro', () => {
+    expect(decideBankMatch(noOcr, [giroRow({ date: '2026-10-12' })], RULES, 1250)).toEqual({
+      transactionId: 'tx-1',
+      basis: 'rule_counterparty',
+      evidenceLevel: 'stark',
+    })
+  })
+
+  it('the giro needs no end: the bank feed\'s own bankgiro pass reads no date', () => {
+    expect(decideBankMatch(noOcr, [giroRow({ date: '2026-12-20' })], RULES, 1250)?.evidenceLevel).toBe('stark')
+  })
+
+  it('the giro still has to agree to the öre', () => {
+    expect(decideBankMatch(noOcr, [giroRow({ date: '2026-10-12', amount: -1250.5 })], RULES, 1250)).toBeNull()
+  })
+
+  it('the amount and the name alone, within thirty days of the due date: trolig', () => {
+    expect(decideBankMatch(byName, [row({ date: '2026-10-20', merchant_name: 'KONTORSBOLAGET' })], RULES, 1250)).toEqual({
+      transactionId: 'tx-1',
+      basis: 'rule_amount_date',
+      evidenceLevel: 'trolig',
+    })
+    expect(decideBankMatch(byName, [row({ date: '2026-10-30', merchant_name: 'KONTORSBOLAGET' })], RULES, 1250)?.evidenceLevel).toBe('trolig')
+  })
+
+  it('too late on the name alone: nothing', () => {
+    expect(decideBankMatch(byName, [row({ date: '2026-10-31', merchant_name: 'KONTORSBOLAGET' })], RULES, 1250)).toBeNull()
+    expect(decideBankMatch(byName, [row({ date: '2026-12-01', merchant_name: 'KONTORSBOLAGET' })], RULES, 1250)).toBeNull()
+  })
+
+  it('late on the name alone needs the amount to the öre and no other payee\'s giro on the row', () => {
+    expect(decideBankMatch(byName, [row({ date: '2026-10-20', amount: -1251, merchant_name: 'KONTORSBOLAGET' })], RULES, 1250)).toBeNull()
+    // The document names its giro; the row pays another one.
+    const otherGiro = row({ date: '2026-10-20', description: 'KONTORSBOLAGET BG 5050-1055', original_description: null })
+    expect(decideBankMatch(noOcr, [otherGiro], RULES, 1250)).toBeNull()
+    // Inside the window the same row stays what it was: the name and the window agree.
+    expect(decideBankMatch(noOcr, [{ ...otherGiro, date: '2026-09-25' }], RULES, 1250)?.evidenceLevel).toBe('trolig')
+  })
+
+  it('never on the amount and a late date alone', () => {
+    expect(decideBankMatch(byName, [row({ date: '2026-10-12', merchant_name: 'IKEA' })], RULES, 1250)).toBeNull()
+  })
+
+  it('without a due date the thirty days of credit the window assumes come first', () => {
+    const undated = invoice({ reference: null, bankgiro: null, dueDate: null })
+    expect(decideBankMatch(undated, [row({ date: '2026-10-31', merchant_name: 'KONTORSBOLAGET' })], RULES, 1250)?.evidenceLevel).toBe('trolig')
+    expect(decideBankMatch(undated, [row({ date: '2026-11-01', merchant_name: 'KONTORSBOLAGET' })], RULES, 1250)).toBeNull()
+  })
+
+  it('a row inside the window outranks a late one at the same level', () => {
+    const rows = [giroRow({ id: 'late', date: '2026-10-15' }), giroRow({ id: 'on-time', date: '2026-09-28' })]
+    expect(decideBankMatch(noOcr, rows, RULES, 1250)?.transactionId).toBe('on-time')
+  })
+
+  it('the levels come first: a late giro outranks a name inside the window', () => {
+    const rows = [row({ id: 'name', date: '2026-09-25', merchant_name: 'KONTORSBOLAGET' }), giroRow({ id: 'giro', date: '2026-10-15' })]
+    expect(decideBankMatch(noOcr, rows, RULES, 1250)?.transactionId).toBe('giro')
+  })
+
+  it('late rows are ranked by how late they are, and a tie proposes nothing', () => {
+    const rows = [giroRow({ id: 'later', date: '2026-10-22' }), giroRow({ id: 'late', date: '2026-10-12' })]
+    expect(decideBankMatch(noOcr, rows, RULES, 1250)?.transactionId).toBe('late')
+    expect(decideBankMatch(noOcr, [giroRow({ id: 'a', date: '2026-10-12' }), giroRow({ id: 'b', date: '2026-10-12' })], RULES, 1250)).toBeNull()
+  })
+
+  it('a receipt is never late, whatever agrees', () => {
+    const receipt = invoice({ kind: 'receipt', reference: null, issueDate: '2026-09-10', dueDate: null })
+    expect(decideBankMatch(receipt, [giroRow({ date: '2026-09-19' })], RULES, 1250)?.evidenceLevel).toBe('stark')
+    expect(decideBankMatch(receipt, [giroRow({ date: '2026-09-21' })], RULES, 1250)).toBeNull()
+  })
+
+  it('a late row naming another card is another payment', () => {
+    const otherCard = row({ date: '2026-10-12', merchant_name: 'KONTORSBOLAGET', description: 'KONTORSBOLAGET K1234' })
+    expect(decideBankMatch({ ...byName, cardLast4: '3667' }, [otherCard], RULES, 1250)).toBeNull()
+  })
+})
+
+describe('decideBankMatch: the payee\'s bank account in place of a giro', () => {
+  // A made-up Swedbank account: clearing 81234, account 123 456 789-0, inside the IBAN's last seventeen digits.
+  const byAccount = invoice({ reference: null, bankgiro: null, iban: 'SE78 8000 0812 3412 3456 7890' })
+  const transfer = (overrides: Partial<ProposableBankRow> = {}) =>
+    row({ description: 'Överföring', original_description: 'Överföring', reference: '812341234567890', ...overrides })
+
+  it('the row\'s reference is the clearing and account number inside the IBAN: stark, like a giro', () => {
+    expect(decideBankMatch(byAccount, [transfer()], RULES, 1250)).toEqual({ transactionId: 'tx-1', basis: 'rule_counterparty', evidenceLevel: 'stark' })
+  })
+
+  it('in the counterparty account too, spaced or hyphenated, and late like a giro', () => {
+    expect(decideBankMatch(byAccount, [transfer({ reference: null, counterparty_account: '81234-123 456 789-0' })], RULES, 1250)?.evidenceLevel).toBe('stark')
+    expect(decideBankMatch(byAccount, [transfer({ date: '2026-11-20' })], RULES, 1250)?.basis).toBe('rule_counterparty')
+  })
+
+  it('a bank whose IBAN carries the clearing with a four-digit one', () => {
+    const seb = invoice({ reference: null, bankgiro: null, iban: 'SE45 5000 0000 0583 9825 7466' })
+    expect(decideBankMatch(seb, [transfer({ reference: '5839 8257466' })], RULES, 1250)?.evidenceLevel).toBe('stark')
+  })
+
+  it('never on part of the number, another account, text around it, another amount, or an IBAN that is not Swedish', () => {
+    expect(decideBankMatch(byAccount, [transfer({ reference: '1234567890' })], RULES, 1250)).toBeNull()
+    expect(decideBankMatch(byAccount, [transfer({ reference: '812341234567891' })], RULES, 1250)).toBeNull()
+    expect(decideBankMatch(byAccount, [transfer({ reference: 'Faktura 812341234567890' })], RULES, 1250)).toBeNull()
+    expect(decideBankMatch(byAccount, [transfer({ amount: -1200 })], RULES, 1250)).toBeNull()
+    expect(decideBankMatch({ ...byAccount, iban: 'DE89 3704 0044 0532 0130 00' }, [transfer({ reference: '370400440532013000' })], RULES, 1250)).toBeNull()
+  })
+
+  it('an IBAN whose account part is too short to hold a clearing never agrees', () => {
+    const short = invoice({ reference: null, bankgiro: null, iban: 'SE21 6000 0000 0001 2345 6789' })
+    expect(decideBankMatch(short, [transfer({ reference: '123456789' })], RULES, 1250)).toBeNull()
+  })
+})
+
+describe('decideBankMatch: another open item the late row could pay (rivals)', () => {
+  // The same amount to the same giro every month: September's and October's invoices.
+  const september = invoice({ reference: null, issueDate: '2026-09-01', dueDate: '2026-09-30' })
+  const october = invoice({ reference: null, issueDate: '2026-10-01', dueDate: '2026-10-31', arrivedOn: '2026-10-02' })
+  const rival = (facts: BankMatchFacts) => ({ facts, amountSek: facts.amount })
+  const giroRow = (overrides: Partial<ProposableBankRow> = {}) => row({ counterparty_account: '999-0003', ...overrides })
+
+  it('a row inside this month\'s window is never last month\'s, late', () => {
+    const onTime = [giroRow({ date: '2026-10-25' })]
+    expect(decideBankMatch(september, onTime, RULES, 1250, [rival(october)])).toBeNull()
+    expect(decideBankMatch(october, onTime, RULES, 1250, [rival(september)])).toEqual({
+      transactionId: 'tx-1',
+      basis: 'rule_counterparty',
+      evidenceLevel: 'stark',
+    })
+  })
+
+  it('without this month\'s item in the inbox, last month\'s late claim stands', () => {
+    expect(decideBankMatch(september, [giroRow({ date: '2026-10-25' })], RULES, 1250, [])?.evidenceLevel).toBe('stark')
+  })
+
+  it('each month keeps its own row when both are there', () => {
+    const rows = [giroRow({ id: 'sep-paid', date: '2026-09-24' }), giroRow({ id: 'oct-paid', date: '2026-10-26' })]
+    expect(decideBankMatch(september, rows, RULES, 1250, [rival(october)])?.transactionId).toBe('sep-paid')
+    expect(decideBankMatch(october, rows, RULES, 1250, [rival(september)])?.transactionId).toBe('oct-paid')
+  })
+
+  it('two open items, the same amount, one late row: the nearer item gets it', () => {
+    const first = invoice({ reference: null, issueDate: '2026-09-01', dueDate: '2026-09-30' })
+    const second = invoice({ reference: null, issueDate: '2026-09-08', dueDate: '2026-10-07' })
+    const late = [giroRow({ date: '2026-10-20' })]
+    expect(decideBankMatch(first, late, RULES, 1250, [rival(second)])).toBeNull()
+    expect(decideBankMatch(second, late, RULES, 1250, [rival(first)])?.transactionId).toBe('tx-1')
+  })
+
+  it('two open items as late as each other: neither gets the row, since the date cannot say whose it is', () => {
+    const twin = invoice({ reference: null, issueDate: '2026-09-02', dueDate: '2026-09-30' })
+    const late = [giroRow({ date: '2026-10-20' })]
+    expect(decideBankMatch(september, late, RULES, 1250, [rival(twin)])).toBeNull()
+    expect(decideBankMatch(twin, late, RULES, 1250, [rival(september)])).toBeNull()
+  })
+
+  it('a rival the row fits at a higher level takes it, however late', () => {
+    // This item knows only the name; the rival knows the giro too.
+    const byName = invoice({ reference: null, bankgiro: null, issueDate: '2026-09-08', dueDate: '2026-10-07' })
+    const late = [giroRow({ date: '2026-10-20', merchant_name: 'KONTORSBOLAGET' })]
+    expect(decideBankMatch(byName, late, RULES, 1250)?.evidenceLevel).toBe('trolig')
+    expect(decideBankMatch(byName, late, RULES, 1250, [rival(september)])).toBeNull()
+    expect(decideBankMatch(september, late, RULES, 1250, [rival(byName)])?.evidenceLevel).toBe('stark')
+  })
+
+  it('a rival holding the row inside its window takes it, whatever its level', () => {
+    const octoberByName = invoice({ reference: null, bankgiro: null, issueDate: '2026-10-01', dueDate: '2026-10-31' })
+    const rows = [giroRow({ date: '2026-10-25', merchant_name: 'KONTORSBOLAGET' })]
+    expect(decideBankMatch(september, rows, RULES, 1250, [rival(octoberByName)])).toBeNull()
+    expect(decideBankMatch(octoberByName, rows, RULES, 1250, [rival(september)])?.evidenceLevel).toBe('trolig')
+  })
+
+  it('a rival whose OCR names the row takes it', () => {
+    const named = invoice({ reference: '5550001', issueDate: '2026-09-15', dueDate: '2026-10-15' })
+    const rows = [giroRow({ date: '2026-10-25', reference: '5550001' })]
+    expect(decideBankMatch(september, rows, RULES, 1250, [rival(named)])).toBeNull()
+  })
+
+  it('a rival the row does not fit changes nothing', () => {
+    const other = invoice({ reference: null, bankgiro: '5050-1055', names: ['Annan Leverantör AB'], issueDate: '2026-10-01', dueDate: '2026-10-31' })
+    const pricier = invoice({ reference: null, amount: 1300, issueDate: '2026-10-01', dueDate: '2026-10-31' })
+    const late = [giroRow({ date: '2026-10-25' })]
+    expect(decideBankMatch(september, late, RULES, 1250, [rival(other), rival(pricier)])?.evidenceLevel).toBe('stark')
+  })
+
+  it('a claim inside the window is decided as it always was', () => {
+    // Two open invoices the same row pays inside both windows: neither is late, both propose it.
+    const sameWeek = invoice({ reference: null, issueDate: '2026-09-03', dueDate: '2026-10-02' })
+    const rows = [giroRow({ date: '2026-09-25' })]
+    expect(decideBankMatch(september, rows, RULES, 1250, [rival(sameWeek)])?.transactionId).toBe('tx-1')
+  })
+})
+
+describe('bankRowClaims', () => {
+  const noOcr = invoice({ reference: null })
+  const giroRow = (overrides: Partial<ProposableBankRow> = {}) => row({ counterparty_account: '999-0003', ...overrides })
+
+  it('every row the item could be paid by, and the late claims whose rivals must be read', () => {
+    const claims = bankRowClaims(noOcr, [giroRow({ id: 'late', date: '2026-10-20' }), row({ id: 'other', merchant_name: 'IKEA' })], RULES, 1250)
+    expect(claims.claimable.map((r) => r.id)).toEqual(['late'])
+    expect(claims.contested.map((r) => r.id)).toEqual(['late'])
+  })
+
+  it('no rival is needed when a claim inside the window outranks every late one', () => {
+    const claims = bankRowClaims(noOcr, [giroRow({ id: 'late', date: '2026-10-20' }), giroRow({ id: 'on-time', date: '2026-09-28' })], RULES, 1250)
+    expect(claims.claimable.map((r) => r.id).sort()).toEqual(['late', 'on-time'])
+    expect(claims.contested).toEqual([])
+  })
+
+  it('a late claim at a higher level than the one inside the window is contested', () => {
+    const rows = [giroRow({ id: 'late', date: '2026-10-20' }), row({ id: 'name', date: '2026-09-28', merchant_name: 'KONTORSBOLAGET' })]
+    expect(bankRowClaims(noOcr, rows, RULES, 1250).contested.map((r) => r.id)).toEqual(['late'])
   })
 })
 

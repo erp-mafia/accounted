@@ -12,6 +12,12 @@
  *     of the new rows could pay are looked at again
  *     (refreshInboxBankMatchesForTransactions).
  *
+ * A late payment (./decide.ts) is weighed against the other open items the
+ * row could pay, each read as it reads itself; and once an item's answer is
+ * written, the other items whose standing proposal names a row it could
+ * claim are looked at again, so a late claim of theirs that this item holds
+ * better (it arrived later, or reads differently now) is withdrawn.
+ *
  * The answer is rewritten only when it changes. A read failure throws: the
  * callers are best effort and log it, since a proposal is a hint and never
  * the item itself.
@@ -19,10 +25,11 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { calculateMerchantSimilarity, CONVERTED_AMOUNT_TOLERANCE_PERCENT } from '@/lib/documents/core-receipt-matcher'
 import {
-  bankMatchSourceKey,
+  bankMatchCheckKey,
   isOpenInboxItem,
   searchProposableBankRows,
   type BankMatchItemRow,
+  type ProposableBankRow,
 } from '@/lib/documents/inbox-bank-match'
 import { loadDocumentReading, type PeppolReader } from '@/lib/documents/reading/load'
 import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
@@ -35,8 +42,8 @@ import type { InvoiceExtractionResult } from '@/types'
 import { pairInboxItems } from '@/lib/inkorg/pairs'
 import { readDeliverySiblings, type PairableRow } from '@/lib/inkorg/pairs-read'
 import { normaliseCardLast4 } from './card-token'
-import { decideBankMatch, NAME_AGREEMENT, type BankMatchDecision, type BankMatchRules } from './decide'
-import { bankMatchFacts, searchRange, type SupplierCardForMatch } from './facts'
+import { bankRowClaims, decideBankMatch, NAME_AGREEMENT, type BankMatchDecision, type BankMatchRival, type BankMatchRules } from './decide'
+import { bankMatchFacts, searchRange, type BankMatchFacts, type SupplierCardForMatch } from './facts'
 
 /** The rules, plus the reading's Peppol reader (the invoicing block's, passed in like the rest). */
 export interface BankMatchRefreshRules extends BankMatchRules {
@@ -48,6 +55,15 @@ export interface BankMatchRefreshDeps {
   rateFor?: (currency: string, isoDate: string) => Promise<number | null>
   /** Today in Stockholm, YYYY-MM-DD. */
   today?: string
+  /**
+   * After the answer is written, look again at the other open items whose
+   * standing proposal names a row this item could claim (on unless false).
+   * Off for those looks themselves, which look no further, and for the
+   * bank-arrival scan, which looks at every item a new row could pay.
+   */
+  recheckOthers?: boolean
+  /** The open items already read (the bank-arrival scan), so a late claim's rivals are not read again. */
+  openItems?: readonly OpenInboxItemRow[]
 }
 
 export type BankMatchRefreshOutcome =
@@ -56,9 +72,15 @@ export type BankMatchRefreshOutcome =
   | { status: 'closed' }
   /** Still being read: the reading's own arrival will ask again. */
   | { status: 'pending' }
-  | { status: 'unchanged' | 'updated'; decision: BankMatchDecision | null }
+  | {
+      status: 'unchanged' | 'updated'
+      decision: BankMatchDecision | null
+      /** The other items looked at again after the write, and how many of those looks failed (absent when none was). */
+      others?: { checked: number; failed: number }
+    }
 
-interface ItemRow extends BankMatchItemRow, ReadingItemRow {
+/** An open inbox item as a check reads it: the reading's columns, the proposal's, and whether it is open. */
+export interface OpenInboxItemRow extends BankMatchItemRow, ReadingItemRow {
   status: string | null
   created_at: string
   bank_match_checked_at: string | null
@@ -93,7 +115,7 @@ function cardOf(extracted: unknown): string | null {
  * whose mail carried its receipt, lib/inkorg/pairs.ts). Best effort: a
  * pairing that cannot be read is no card.
  */
-async function paymentCard(supabase: SupabaseClient, companyId: string, item: ItemRow, kind: string): Promise<string | null> {
+async function paymentCard(supabase: SupabaseClient, companyId: string, item: OpenInboxItemRow, kind: string): Promise<string | null> {
   const own = cardOf(item.extracted_data)
   if (own || kind !== 'supplier_invoice') return own
   try {
@@ -114,10 +136,145 @@ function defaultRateFor(supabase: SupabaseClient) {
   }
 }
 
+interface ItemFacts {
+  facts: BankMatchFacts
+  /** Its kronor value: itself for a kronor document, through Riksbanken's rate on its date otherwise, null when no rate can be had. */
+  amountSek: number | null
+}
+
+/**
+ * What an item says about its payment (./facts.ts), from its one reading,
+ * its supplier card and the card it was paid with, and its kronor value; null
+ * for a document the bank does not pay. The same for the item checked and for
+ * every rival it is weighed against, so both sides read one item alike.
+ */
+async function itemFacts(
+  supabase: SupabaseClient,
+  companyId: string,
+  item: OpenInboxItemRow,
+  rules: BankMatchRefreshRules,
+  deps: BankMatchRefreshDeps,
+  today: string,
+): Promise<ItemFacts | null> {
+  const [reading, supplier] = await Promise.all([
+    loadDocumentReading(supabase, companyId, { item }, rules.peppolReader),
+    supplierCard(supabase, companyId, item.matched_supplier_id),
+  ])
+  const arrivedOn = item.created_at ? todayIsoStockholm(new Date(item.created_at)) : today
+  const read = bankMatchFacts(reading, supplier, arrivedOn)
+  if (!read) return null
+  const facts = { ...read, cardLast4: await paymentCard(supabase, companyId, item, read.kind) }
+  let amountSek = isKronorCurrency(facts.currency) ? facts.amount : null
+  if (amountSek === null) {
+    const rate = await (deps.rateFor ?? defaultRateFor(supabase))(facts.currency, facts.issueDate ?? arrivedOn)
+    amountSek = rate != null ? roundOre(facts.amount * rate) : null
+  }
+  return { facts, amountSek }
+}
+
+/** Open items read per bank arrival, and per late claim's rivals, newest first. */
+export const OPEN_ITEMS_SCANNED = 300
+/** Items looked at again per bank arrival: a first sync of 90 days must not hold the sync for minutes. */
+export const ITEMS_REFRESHED_PER_ARRIVAL = 20
+/**
+ * Rivals read for one item's late claims, at most. More than this many open
+ * items with the amount and no late claim is proposed: they cannot all be
+ * weighed, and a late claim is the one that must not take another's row.
+ */
+export const RIVALS_READ = 10
+/** Other items looked at again after one item's answer is written. */
+export const OTHERS_RECHECKED = 5
+
+/** The open queue: received, with a document, not yet converted, booked, paired or archived. */
+async function readOpenItems(supabase: SupabaseClient, companyId: string): Promise<OpenInboxItemRow[]> {
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id, status, source, document_id, extracted_data, extraction_skipped, kind_hint, channel_context, email_from, email_received_at, resend_email_id, matched_supplier_id, matched_transaction_id, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at, created_at, bank_match_transaction_id, bank_match_basis, bank_match_evidence_level, bank_match_checked_at, bank_match_source_key')
+    .eq('company_id', companyId)
+    .eq('status', 'received')
+    .not('document_id', 'is', null)
+    .is('created_supplier_invoice_id', null)
+    .is('created_journal_entry_id', null)
+    .is('matched_transaction_id', null)
+    .is('routed_to_arkiv_at', null)
+    .order('created_at', { ascending: false })
+    .limit(OPEN_ITEMS_SCANNED)
+  if (error) fail('open inbox item read', error)
+  return (data ?? []) as unknown as OpenInboxItemRow[]
+}
+
+/**
+ * The other open items the contested rows could pay, read as each reads
+ * itself; null when they cannot all be weighed (more than RIVALS_READ, or one
+ * that cannot be read), and then no late claim is proposed.
+ */
+async function rivalsFor(
+  supabase: SupabaseClient,
+  companyId: string,
+  item: OpenInboxItemRow,
+  contested: readonly ProposableBankRow[],
+  rules: BankMatchRefreshRules,
+  deps: BankMatchRefreshDeps,
+  today: string,
+): Promise<BankMatchRival[] | null> {
+  const open = deps.openItems ?? (await readOpenItems(supabase, companyId))
+  const candidates = open.filter((other) => other.id !== item.id && mayBePaidBy(other.extracted_data, contested))
+  if (candidates.length > RIVALS_READ) return null
+  const rivals: BankMatchRival[] = []
+  for (const other of candidates) {
+    let read: ItemFacts | null
+    try {
+      read = await itemFacts(supabase, companyId, other, rules, deps, today)
+    } catch {
+      return null
+    }
+    if (read) rivals.push(read)
+  }
+  return rivals
+}
+
+/**
+ * The other open items whose standing proposal names one of `rowIds`, looked
+ * at again once, without looking further. One that cannot be read keeps its
+ * answer and counts as failed; so does a failed read of who they are.
+ */
+async function lookAgainAtOthers(
+  supabase: SupabaseClient,
+  companyId: string,
+  itemId: string,
+  rowIds: readonly string[],
+  rules: BankMatchRefreshRules,
+  deps: BankMatchRefreshDeps,
+): Promise<{ checked: number; failed: number }> {
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id')
+    .eq('company_id', companyId)
+    .in('bank_match_transaction_id', rowIds.slice(0, 100))
+    .neq('id', itemId)
+    .is('created_supplier_invoice_id', null)
+    .is('created_journal_entry_id', null)
+    .is('matched_transaction_id', null)
+    .is('routed_to_arkiv_at', null)
+    .limit(OTHERS_RECHECKED)
+  if (error) return { checked: 0, failed: 1 }
+  const ids = ((data ?? []) as Array<{ id: string }>).map((row) => row.id)
+  let failed = 0
+  for (const id of ids) {
+    try {
+      await refreshInboxItemBankMatch(supabase, companyId, id, rules, { rateFor: deps.rateFor, today: deps.today, recheckOthers: false })
+    } catch {
+      failed++
+    }
+  }
+  return { checked: ids.length, failed }
+}
+
 /**
  * Look in the bank for this item's payment and record the answer. Reads the
  * item, its one reading and its supplier card, the bank rows nothing else
- * claims around its dates, and decides (./decide.ts).
+ * claims around its dates, and, for a late payment that could be proposed,
+ * the other open items the row could pay; then decides (./decide.ts).
  */
 export async function refreshInboxItemBankMatch(
   supabase: SupabaseClient,
@@ -133,45 +290,47 @@ export async function refreshInboxItemBankMatch(
     .eq('company_id', companyId)
     .maybeSingle()
   if (error) fail('inbox item read', error)
-  const item = data as ItemRow | null
+  const item = data as unknown as OpenInboxItemRow | null
   if (!item) return { status: 'not_found' }
   if (item.status === 'processing') return { status: 'pending' }
   if (!isOpenInboxItem(item)) return { status: 'closed' }
 
   const today = deps.today ?? todayIsoStockholm()
-  const [reading, supplier] = await Promise.all([
-    loadDocumentReading(supabase, companyId, { item }, rules.peppolReader),
-    supplierCard(supabase, companyId, item.matched_supplier_id),
-  ])
-  const arrivedOn = item.created_at ? todayIsoStockholm(new Date(item.created_at)) : today
-  const read = bankMatchFacts(reading, supplier, arrivedOn)
-  const facts = read ? { ...read, cardLast4: await paymentCard(supabase, companyId, item, read.kind) } : null
+  const own = await itemFacts(supabase, companyId, item, rules, deps, today)
 
   let decision: BankMatchDecision | null = null
-  if (facts) {
-    // Its kronor value: itself for a kronor document, through Riksbanken's
-    // rate on its date otherwise, none when no rate can be had.
-    let amountSek = isKronorCurrency(facts.currency) ? facts.amount : null
-    if (amountSek === null) {
-      const rate = await (deps.rateFor ?? defaultRateFor(supabase))(facts.currency, facts.issueDate ?? arrivedOn)
-      amountSek = rate != null ? roundOre(facts.amount * rate) : null
-    }
-    const range = searchRange(facts, today)
+  let claimable: string[] = []
+  if (own) {
+    const range = searchRange(own.facts, today)
     const rows = await searchProposableBankRows(supabase, companyId, {
       inboxItemId: item.id,
       documentId: item.document_id ?? null,
-      direction: facts.direction,
+      direction: own.facts.direction,
       from: range.from,
       to: range.to,
-      currency: facts.currency,
-      amount: facts.amount,
-      amountSek,
+      currency: own.facts.currency,
+      amount: own.facts.amount,
+      amountSek: own.amountSek,
       convertedTolerance: CONVERTED_AMOUNT_TOLERANCE_PERCENT,
     })
-    decision = decideBankMatch(facts, rows, rules, amountSek)
+    const claims = bankRowClaims(own.facts, rows, rules, own.amountSek)
+    claimable = claims.claimable.map((row) => row.id)
+    let candidates: readonly ProposableBankRow[] = rows
+    let rivals: BankMatchRival[] = []
+    if (claims.contested.length > 0) {
+      const read = await rivalsFor(supabase, companyId, item, claims.contested, rules, deps, today)
+      if (read) {
+        rivals = read
+      } else {
+        // The rivals cannot all be weighed: no late claim, the rest as always.
+        const contested = new Set(claims.contested.map((row) => row.id))
+        candidates = rows.filter((row) => !contested.has(row.id))
+      }
+    }
+    decision = decideBankMatch(own.facts, candidates, rules, own.amountSek, rivals)
   }
 
-  const sourceKey = bankMatchSourceKey(item)
+  const sourceKey = bankMatchCheckKey(item)
   const unchanged =
     item.bank_match_checked_at != null &&
     item.bank_match_source_key === sourceKey &&
@@ -198,7 +357,10 @@ export async function refreshInboxItemBankMatch(
     .is('matched_transaction_id', null)
     .is('routed_to_arkiv_at', null)
   if (updateError) fail('proposal write', updateError)
-  return { status: 'updated', decision }
+
+  if (deps.recheckOthers === false || claimable.length === 0) return { status: 'updated', decision }
+  const others = await lookAgainAtOthers(supabase, companyId, item.id, claimable, rules, deps)
+  return others.checked > 0 || others.failed > 0 ? { status: 'updated', decision, others } : { status: 'updated', decision }
 }
 
 /** A bank row as transaction.synced carries it, as far as the pre-check reads it. */
@@ -211,16 +373,6 @@ export interface ArrivedBankRow {
   is_ignored?: boolean | null
   merchant_name?: string | null
   description?: string | null
-}
-
-/** Open items read per bank arrival, newest first. */
-export const OPEN_ITEMS_SCANNED = 300
-/** Items looked at again per bank arrival: a first sync of 90 days must not hold the sync for minutes. */
-export const ITEMS_REFRESHED_PER_ARRIVAL = 20
-
-interface OpenItemRow {
-  id: string
-  extracted_data: unknown
 }
 
 /**
@@ -246,7 +398,9 @@ export function mayBePaidBy(extracted: unknown, rows: readonly ArrivedBankRow[])
 /**
  * Bank rows arrived: look again at the open items one of them could pay.
  * One item that cannot be read does not stop the others: it is counted in
- * `failed` and keeps the answer it had.
+ * `failed` and keeps the answer it had. The open queue read here is every
+ * check's rivals too, and no check looks further: every item a new row could
+ * pay is looked at here anyway.
  */
 export async function refreshInboxBankMatchesForTransactions(
   supabase: SupabaseClient,
@@ -260,25 +414,12 @@ export async function refreshInboxBankMatchesForTransactions(
   )
   if (rows.length === 0) return { items_checked: 0, failed: 0 }
 
-  const { data, error } = await supabase
-    .from('invoice_inbox_items')
-    .select('id, extracted_data')
-    .eq('company_id', companyId)
-    .eq('status', 'received')
-    .not('document_id', 'is', null)
-    .is('created_supplier_invoice_id', null)
-    .is('created_journal_entry_id', null)
-    .is('matched_transaction_id', null)
-    .is('routed_to_arkiv_at', null)
-    .order('created_at', { ascending: false })
-    .limit(OPEN_ITEMS_SCANNED)
-  if (error) fail('open inbox item read', error)
-
-  const candidates = ((data ?? []) as OpenItemRow[]).filter((item) => mayBePaidBy(item.extracted_data, rows)).slice(0, ITEMS_REFRESHED_PER_ARRIVAL)
+  const open = await readOpenItems(supabase, companyId)
+  const candidates = open.filter((item) => mayBePaidBy(item.extracted_data, rows)).slice(0, ITEMS_REFRESHED_PER_ARRIVAL)
   let failed = 0
   for (const item of candidates) {
     try {
-      await refreshInboxItemBankMatch(supabase, companyId, item.id, rules, deps)
+      await refreshInboxItemBankMatch(supabase, companyId, item.id, rules, { ...deps, recheckOthers: false, openItems: open })
     } catch {
       failed++
     }

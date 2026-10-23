@@ -1,0 +1,1 @@
+[2026-10-23] Bank match (supersedes 2026-10-16 'stark in the window'): amount and payee giro or IBAN account is stark however late, never before the window; the name alone trolig up to 30 days past due; a late claim yields to an open item holding the row as well or better: late payers got nothing.
