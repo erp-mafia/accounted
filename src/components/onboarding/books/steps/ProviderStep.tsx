@@ -10,6 +10,7 @@ import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
 import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
 import { previewCountsForSelection } from '@/lib/providers/preview-counts'
 import { missingTokenCredential, tokenCredentials } from '@/lib/providers/catalog'
+import { fiscalYearSelectionProblem, toggleFiscalYear } from '@/lib/providers/year-selection'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -202,6 +203,9 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const sourceYears = useMemo(() => preview?.sourceYears ?? [], [preview])
   const previewCounts = previewCountsForSelection(preview?.sieStats, years)
   const maxYears = preview?.maxSelectedYears ?? 6
+  // A tick always lands; over the run's limit the step says so and keeps the
+  // import closed (lib/providers/year-selection).
+  const tooManyYears = fiscalYearSelectionProblem(years, maxYears) === 'too_many'
   const companyName = preview?.companyInfo?.company_name || preview?.consent.companyName || ''
   const scopeParts = useMemo(() => {
     const parts: string[] = []
@@ -509,7 +513,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                       index={i}
                       toggle
                       on={on}
-                      onClick={() => setYears((prev) => (on ? prev.filter((v) => v !== y.year) : prev.length >= maxYears ? prev : [...prev, y.year].sort()))}
+                      onClick={() => setYears((prev) => toggleFiscalYear(prev, y.year))}
                       trailing={!y.inDefaultSelection ? <span className="old">{t('years_older')}</span> : undefined}
                     >
                       {y.year}
@@ -517,6 +521,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                   )
                 })}
               </Pills>
+              {tooManyYears ? <p className="jny-attn" role="status">{tx('ext_arcim_year_select_too_many', { max: maxYears })}</p> : null}
             </div>
           ) : null}
           <Sentence open={optsOpen} onToggle={() => setOptsOpen((v) => !v)} changeLabel={t('change')} closeLabel={t('close')}>
@@ -531,7 +536,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
             </OptRows>
           ) : null}
           <div className="jny-qactions">
-            <Button size="lg" disabled={years.length === 0 && preview.sieAvailable !== false} onClick={() => void runImport()}>
+            <Button size="lg" disabled={(years.length === 0 && preview.sieAvailable !== false) || tooManyYears} onClick={() => void runImport()}>
               {years.length === 0 && preview.sieAvailable !== false ? t('years_pick_one') : t('sie_import', { count: years.length })}
             </Button>
           </div>

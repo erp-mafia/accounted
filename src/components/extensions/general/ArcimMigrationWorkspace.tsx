@@ -46,6 +46,7 @@ import {
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { previewCountsForSelection, type ProviderPreviewCounts } from '@/lib/providers/preview-counts'
+import { fiscalYearSelectionProblem, toggleFiscalYear } from '@/lib/providers/year-selection'
 import {
   ARCIM_DOCUMENT_OAUTH_RESUME_KEY,
   INITIAL_ARCIM_DOCUMENT_IMPORT_STATE,
@@ -1307,16 +1308,11 @@ export function PreviewStep({
     : ''
   const sourceYears = preview?.sieAvailable ? preview.sourceYears ?? [] : []
   const showYearPicker = sourceYears.length > 0 && !isLoading
-  const noYearSelected = showYearPicker && selectedYears.length === 0
   const maxSelectable = preview?.maxSelectedYears ?? null
-  const tooManySelected = showYearPicker && maxSelectable != null && selectedYears.length > maxSelectable
-  const toggleYear = (year: number) => {
-    onSelectedYearsChange(
-      selectedYears.includes(year)
-        ? selectedYears.filter((y) => y !== year)
-        : [...selectedYears, year].sort((a, b) => a - b),
-    )
-  }
+  const selectionProblem = showYearPicker ? fiscalYearSelectionProblem(selectedYears, maxSelectable) : null
+  const noYearSelected = selectionProblem === 'none'
+  const tooManySelected = selectionProblem === 'too_many'
+  const toggleYear = (year: number) => onSelectedYearsChange(toggleFiscalYear(selectedYears, year))
 
   return (
     <div className="stagger-enter space-y-8">
