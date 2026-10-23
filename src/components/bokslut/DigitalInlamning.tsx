@@ -44,6 +44,7 @@ import {
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { CONNECTED_FILING_PUBLIC_RELEASED } from '@/lib/bokslut/arsredovisning/capabilities'
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
+import { certificateRole } from '@/lib/bokslut/ixbrl/certificate-role'
 
 /** Inlämningen till Bolagsverket väntar på avtal + organisationscertifikat
  *  (M0). Tills dess visas hela digital inlämning-sektionen blurrad med en
@@ -202,7 +203,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
     if (!signer) return
     setFornamn(signer.first_name)
     setEfternamn(signer.last_name)
-    setRoll(signer.role)
+    setRoll(certificateRole(signer.role))
   }, [selectedVersionId, versions])
 
   const loadSubmissions = useCallback(async () => {
@@ -474,7 +475,9 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             <div className="space-y-2">
               <div className="flex items-center gap-2">
                 {validation.ok ? (
-                  <span className="text-xs text-muted-foreground">Klar för inlämning</span>
+                  // Accounted's own checks only: Bolagsverket validates the
+                  // file again when it is submitted, so never claim more.
+                  <span className="text-xs text-muted-foreground">Inga fel i Accounteds kontroller</span>
                 ) : (
                   <Badge variant="destructive">{validation.error_count} fel</Badge>
                 )}
@@ -567,7 +570,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     if (signer) {
                       setFornamn(signer.first_name)
                       setEfternamn(signer.last_name)
-                      setRoll(signer.role)
+                      setRoll(certificateRole(signer.role))
                     }
                   }}
                 >
@@ -656,9 +659,10 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     <SelectTrigger id="di-roll">
                       <SelectValue />
                     </SelectTrigger>
+                    {/* The roles Bolagsverket accepts on the fastställelseintyg
+                        (a styrelseordförande signs as Styrelseledamot). */}
                     <SelectContent>
                       <SelectItem value="Styrelseledamot">Styrelseledamot</SelectItem>
-                      <SelectItem value="Styrelseordförande">Styrelseordförande</SelectItem>
                       <SelectItem value="Verkställande direktör">Verkställande direktör</SelectItem>
                     </SelectContent>
                   </Select>

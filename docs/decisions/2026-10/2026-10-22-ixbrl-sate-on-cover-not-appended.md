@@ -1,0 +1,1 @@
+[2026-10-22] The iXBRL file no longer appends "Bolaget har sitt säte i X." to Allmänt om verksamheten and tags ForetagetsSate on the cover, where the PDF prints "Säte: X": the intyg attests that the file matches the signed PDF, and the PDF never had that sentence.

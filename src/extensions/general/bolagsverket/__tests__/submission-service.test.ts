@@ -540,6 +540,7 @@ describe('submitArsredovisning', () => {
       { data: [] },                            // no active submission
       { data: { id: 'acc-1' } },               // avtal acceptance exists
       { data: [{ signer_name: 'Anna Svensson', role: 'VD', signed_at: '2026-03-01T10:00:00Z', status: 'signed', signing_method: 'paper_original', evidence_reference: 'Arkiv A-1' }] },
+      { data: null },                          // no AGM recorded after the lock
       {},                                      // local validation run
       {},                                      // Arelle validation run
       { data: null },                          // no exact request
@@ -583,6 +584,7 @@ describe('submitArsredovisning', () => {
       { data: [] },                            // no active submission
       { data: { id: 'acc-1' } },               // avtal acceptance exists
       { data: [{ signer_name: 'Anna Svensson', role: 'VD', signed_at: '2026-03-01T10:00:00Z', status: 'signed', signing_method: 'paper_original', evidence_reference: 'Arkiv A-1' }] },
+      { data: null },                          // no AGM recorded after the lock
       {},                                      // local validation run
       {},                                      // Arelle validation run
       { data: null },                          // no exact request
@@ -636,6 +638,7 @@ describe('submitArsredovisning', () => {
           },
         ],
       },
+      { data: null }, // no AGM recorded after the lock
       {},
       {},
       { data: { id: 'sub-1', status: 'kontrollerad' } },

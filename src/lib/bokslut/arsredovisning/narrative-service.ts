@@ -151,6 +151,35 @@ export async function getMedelantalOverride(
   return typeof value === 'number' && Number.isFinite(value) ? value : null
 }
 
+/** What the årsstämma decided, as recorded on the narrative. */
+export interface AgmDecision {
+  agm_date: string | null
+  agm_disposition_outcome: 'proposal_approved' | 'alternative_decision' | null
+  agm_disposition_decision: string | null
+}
+
+/**
+ * The AGM date and decision alone. A locked version froze the
+ * fastställelseintyg as it stood at lock time, but the AGM is recorded after
+ * the board has signed, so the filed intyg reads it from here. Null when no
+ * narrative row exists; a read error throws, because filing without the AGM
+ * the user did record would be wrong.
+ */
+export async function getAgmDecision(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<AgmDecision | null> {
+  const { data, error } = await supabase
+    .from(TABLE)
+    .select('agm_date, agm_disposition_outcome, agm_disposition_decision')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .maybeSingle()
+  if (error) throw new Error(`Failed to load the AGM decision: ${error.message}`)
+  return (data as AgmDecision | null) ?? null
+}
+
 /**
  * Load persisted narrative overrides for a fiscal period. Returns null when
  * the user hasn't customised anything yet: caller then falls back to the

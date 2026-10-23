@@ -38,6 +38,23 @@ describe('buildAnlaggningstillgangarNote: roll-forward', () => {
     ).toBeNull()
   })
 
+  it('writes a zero reduction as "0 kr", never "-0 kr"', () => {
+    const note = buildAnlaggningstillgangarNote({
+      noteNumber: 4,
+      assets: [
+        makeAsset({
+          acquisition_date: '2025-06-01',
+          figures: { ibAck: 0, aretsAvskrivning: 7_000, avgaendeAck: 0 },
+        }),
+      ],
+      periodStart: PERIOD_START,
+      periodEnd: PERIOD_END,
+    })
+    expect(note?.body).toContain('Ingående ackumulerade avskrivningar: 0 kr')
+    expect(note?.body).toContain('Årets avskrivningar: -7 000 kr')
+    expect(note?.body).not.toContain('-0 kr')
+  })
+
   it('skips assets disposed before the period', () => {
     const rows = _buildRollforwardForTests(
       [

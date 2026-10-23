@@ -1,0 +1,1 @@
+[2026-10-22] The iXBRL programvara meta is "Arcim Technology AB - Accounted", version "1.0" (founder OK): TA 4.3 asks for "<leverantör> - <produkt>", and Bolagsverket can refuse an unsupported version (4002), so the version follows the generator, bumped together with them.

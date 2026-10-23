@@ -597,6 +597,10 @@ exports[`annual report over a ledger: aktiebolag > builds the canonical model, i
       "registeredOffice": "Sundsvall",
     },
     "disclosures": {
+      "aktiekapitalNot": {
+        "aktiekapital": 25000,
+        "antalAktier": 250,
+      },
       "contingentLiabilities": "Inga.",
       "longTermDebtOverFiveYears": 0,
       "parentCompany": null,
@@ -613,9 +617,7 @@ exports[`annual report over a ledger: aktiebolag > builds the canonical model, i
       "signerRole": "Styrelseledamot",
     },
     "forvaltningsberattelse": {
-      "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.
-
-Bolaget har sitt säte i Sundsvall.",
+      "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
       "egetKapital": {
         "aktiekapital": {
           "ib": 25000,
@@ -677,6 +679,7 @@ Bolaget har sitt säte i Sundsvall.",
           "year": "2023",
         },
       ],
+      "kontrollbalansrakningUpprattad": false,
       "resultatdisposition": {
         "aretsResultat": 25876,
         "balanserasINyRakning": 47629,
@@ -734,8 +737,8 @@ Bolaget har sitt säte i Sundsvall.",
       "start": "2024-01-01",
     },
     "programvara": {
-      "namn": "Accounted - Accounted",
-      "version": "2026.1",
+      "namn": "Arcim Technology AB - Accounted",
+      "version": "1.0",
     },
     "rr": {
       "AktiveratArbeteEgenRakning": {
@@ -1774,6 +1777,10 @@ exports[`annual report over a ledger: aktiebolag > builds the iXBRL input on its
     "registeredOffice": "Sundsvall",
   },
   "disclosures": {
+    "aktiekapitalNot": {
+      "aktiekapital": 25000,
+      "antalAktier": 250,
+    },
     "contingentLiabilities": "Inga.",
     "longTermDebtOverFiveYears": 0,
     "parentCompany": null,
@@ -1790,9 +1797,7 @@ exports[`annual report over a ledger: aktiebolag > builds the iXBRL input on its
     "signerRole": "Styrelseledamot",
   },
   "forvaltningsberattelse": {
-    "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.
-
-Bolaget har sitt säte i Sundsvall.",
+    "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
     "egetKapital": {
       "aktiekapital": {
         "ib": 25000,
@@ -1854,6 +1859,7 @@ Bolaget har sitt säte i Sundsvall.",
         "year": "2023",
       },
     ],
+    "kontrollbalansrakningUpprattad": false,
     "resultatdisposition": {
       "aretsResultat": 25876,
       "balanserasINyRakning": 47629,
@@ -1911,8 +1917,8 @@ Bolaget har sitt säte i Sundsvall.",
     "start": "2024-01-01",
   },
   "programvara": {
-    "namn": "Accounted - Accounted",
-    "version": "2026.1",
+    "namn": "Arcim Technology AB - Accounted",
+    "version": "1.0",
   },
   "rr": {
     "AktiveratArbeteEgenRakning": {
@@ -2737,6 +2743,7 @@ exports[`annual report over a ledger: enskild_firma > builds the canonical model
       "registeredOffice": "Sundsvall",
     },
     "disclosures": {
+      "aktiekapitalNot": null,
       "contingentLiabilities": "Inga.",
       "longTermDebtOverFiveYears": 0,
       "parentCompany": null,
@@ -2753,9 +2760,7 @@ exports[`annual report over a ledger: enskild_firma > builds the canonical model
       "signerRole": "Styrelseledamot",
     },
     "forvaltningsberattelse": {
-      "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.
-
-Bolaget har sitt säte i Sundsvall.",
+      "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
       "egetKapital": {
         "aktiekapital": {
           "ib": 0,
@@ -2817,6 +2822,7 @@ Bolaget har sitt säte i Sundsvall.",
           "year": "2023",
         },
       ],
+      "kontrollbalansrakningUpprattad": false,
       "resultatdisposition": {
         "aretsResultat": 0,
         "balanserasINyRakning": 0,
@@ -2864,8 +2870,8 @@ Bolaget har sitt säte i Sundsvall.",
       "start": "2024-01-01",
     },
     "programvara": {
-      "namn": "Accounted - Accounted",
-      "version": "2026.1",
+      "namn": "Arcim Technology AB - Accounted",
+      "version": "1.0",
     },
     "rr": {
       "AktiveratArbeteEgenRakning": {
@@ -3979,6 +3985,7 @@ exports[`annual report over a ledger: enskild_firma > builds the iXBRL input on 
     "registeredOffice": "Sundsvall",
   },
   "disclosures": {
+    "aktiekapitalNot": null,
     "contingentLiabilities": "Inga.",
     "longTermDebtOverFiveYears": 0,
     "parentCompany": null,
@@ -3995,9 +4002,7 @@ exports[`annual report over a ledger: enskild_firma > builds the iXBRL input on 
     "signerRole": "Styrelseledamot",
   },
   "forvaltningsberattelse": {
-    "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.
-
-Bolaget har sitt säte i Sundsvall.",
+    "allmantOmVerksamheten": "Bokföringsexempel bedriver verksamhet enligt verksamhetsbeskrivningen i bolagsordningen.",
     "egetKapital": {
       "aktiekapital": {
         "ib": 0,
@@ -4059,6 +4064,7 @@ Bolaget har sitt säte i Sundsvall.",
         "year": "2023",
       },
     ],
+    "kontrollbalansrakningUpprattad": false,
     "resultatdisposition": {
       "aretsResultat": 0,
       "balanserasINyRakning": 0,
@@ -4106,8 +4112,8 @@ Bolaget har sitt säte i Sundsvall.",
     "start": "2024-01-01",
   },
   "programvara": {
-    "namn": "Accounted - Accounted",
-    "version": "2026.1",
+    "namn": "Arcim Technology AB - Accounted",
+    "version": "1.0",
   },
   "rr": {
     "AktiveratArbeteEgenRakning": {

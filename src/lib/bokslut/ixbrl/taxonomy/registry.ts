@@ -24,6 +24,9 @@ export interface TaxonomyConcept {
   periodType: 'duration' | 'instant' | null
   kind: 'item' | 'tuple'
   sections: string[]
+  /** Allowed values when the schema restricts the string to an enumeration
+   *  (fastställelseintyg sentences, företrädarroll). */
+  enumeration?: string[]
 }
 
 export interface TaxonomyTupleMember {

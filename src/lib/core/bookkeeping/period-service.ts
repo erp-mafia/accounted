@@ -3,6 +3,7 @@ import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { validatePeriodDuration } from '@/lib/bookkeeping/validate-period-duration'
+import { fiscalYearName } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import { assertNoUnfinishedSieImport, sieHoldRefusal } from './sie-import-hold'
@@ -768,10 +769,10 @@ export async function createNextPeriod(
     throw new Error('Next fiscal period already exists or overlaps with an existing period')
   }
 
-  // Generate name: e.g. "FY 2025" or "FY 2025/2026"
-  const startYear = nextStart.getUTCFullYear()
-  const endYear = nextEnd.getUTCFullYear()
-  const name = startYear === endYear ? `FY ${startYear}` : `FY ${startYear}/${endYear}`
+  // Same Swedish name as every other door that creates a year ("Räkenskapsår
+  // 2025", "Räkenskapsår 2024/2025"): the name prints in the årsredovisning's
+  // header and flerårsöversikt.
+  const name = fiscalYearName(nextStartStr, nextEndStr)
 
   const { data: newPeriod, error: insertError } = await supabase
     .from('fiscal_periods')

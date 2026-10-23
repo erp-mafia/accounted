@@ -16,23 +16,34 @@
  *     `sign="-"` is reserved for values deviating from the concept's nature
  */
 
+import { roundOre } from '@/lib/money'
+import { formatOrgNumber } from '@/lib/utils'
+import { certificateRole } from '../certificate-role'
 import { getEntryPoint } from '../taxonomy/entry-points'
 import { getRegistry, getConcept } from '../taxonomy/registry'
 import type { IxbrlArsredovisningInput, ConceptAmount } from '../types'
 import { FactWriter } from './ix'
 import { el, selfClosing, escapeText, escapeAttr, paragraphs, formatSekAbs } from './xml'
 
+// Print layout (Bolagsverket asks for a clean printout with page breaks):
+// every .ar-page starts on a new sheet, rows never split across sheets, and
+// no inline styles or flexbox (TA §3.7.4-3.7.5) so their PDF converter reads
+// the structure from plain block elements.
 const CSS = `
 body { font-family: 'Times New Roman', Times, serif; margin: 0 auto; max-width: 46em; color: #000; }
 .ar-page { padding: 2em 2.5em; margin: 1em 0; border: 1px solid #eee; page-break-after: always; }
-.ar-page-hdr { display: flex; justify-content: space-between; font-size: 80%; color: #333; border-bottom: 1px solid #999; margin-bottom: 1.5em; padding-bottom: 0.25em; }
+.ar-page-hdr { font-size: 80%; color: #333; border-bottom: 1px solid #999; margin-bottom: 1.5em; padding-bottom: 0.25em; overflow: hidden; }
+.ar-page-hdr .ar-page-id { float: left; }
+.ar-page-hdr .ar-page-no { float: right; }
 h1 { font-size: 160%; margin: 0 0 0.5em; }
 h2 { font-size: 125%; margin: 1.5em 0 0.5em; }
 h3 { font-size: 105%; margin: 1.2em 0 0.4em; }
 h4 { font-size: 100%; font-style: italic; font-weight: normal; margin: 1em 0 0.3em; }
 p { margin: 0 0 0.8em; line-height: 1.35; }
 table { width: 100%; border-collapse: collapse; margin: 0 0 1.2em; }
+tr { page-break-inside: avoid; }
 th, td { text-align: left; vertical-align: bottom; padding: 0.15em 0.4em 0.15em 0; font-size: 95%; }
+th.indent { padding-left: 1.2em; }
 th.num, td.num { text-align: right; white-space: nowrap; }
 tr.subtotal th, tr.subtotal td { border-top: 1px solid #000; font-weight: bold; }
 tr.total th, tr.total td { border-top: 1px solid #000; border-bottom: 3px double #000; font-weight: bold; }
@@ -68,7 +79,7 @@ function moneyRow(
   const previous = amount?.previous ?? null
   if (!opts.alwaysShow && current === 0 && (previous === null || previous === 0)) return ''
   const cells = [
-    el('th', { scope: 'row', style: opts.indent ? 'padding-left:1.2em' : null }, escapeText(label)),
+    el('th', { scope: 'row', class: opts.indent ? 'indent' : null }, escapeText(label)),
     el(
       'td',
       { class: 'num' },
@@ -89,20 +100,35 @@ function sectionRow(label: string, cls: 'section' | 'subsection' = 'section'): s
   return el('tr', { class: cls }, el('th', { colspan: '3' }, escapeText(label)))
 }
 
-function pageHeader(input: IxbrlArsredovisningInput, page: number, total: number): string {
+function pageHeader(
+  input: IxbrlArsredovisningInput,
+  orgNumber: string,
+  page: number,
+  total: number,
+): string {
   // el() treats its content argument as raw markup: build it exclusively
   // from escapeText() output joined with builder-emitted tags so no user
   // value can ever reach the string unescaped.
   const identity = [
     escapeText(input.company.name),
     selfClosing('br', {}),
-    escapeText(input.company.orgNumber),
+    escapeText(orgNumber),
   ].join('')
   return el(
     'div',
     { class: 'ar-page-hdr' },
-    el('span', {}, identity) + el('span', {}, `${page} (${total})`),
+    el('span', { class: 'ar-page-id' }, identity) +
+      el('span', { class: 'ar-page-no' }, `${page} (${total})`),
   )
+}
+
+/** "2025" for a calendar year, the full range for any other fiscal year. */
+function periodColumnLabel(period: { start: string; end: string }): string {
+  const calendarYear =
+    period.start.endsWith('-01-01') &&
+    period.end.endsWith('-12-31') &&
+    period.start.slice(0, 4) === period.end.slice(0, 4)
+  return calendarYear ? period.end.slice(0, 4) : fmtRange(period.start, period.end)
 }
 
 export interface GeneratedIxbrl {
@@ -113,7 +139,11 @@ export interface GeneratedIxbrl {
 export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): GeneratedIxbrl {
   const entryPoint = getEntryPoint(input.entryPointId)
   const registry = getRegistry(entryPoint.registryId)
-  const writer = new FactWriter(entryPoint, registry, input.company.orgNumber)
+  // One spelling of the org number wherever it appears (context identifier,
+  // Organisationsnummer fact, page headers, title): NNNNNN-NNNN as in
+  // Bolagsverket's examples, whichever format the company settings hold.
+  const orgNumber = formatOrgNumber(input.company.orgNumber)
+  const writer = new FactWriter(entryPoint, registry, orgNumber)
   const warnings: string[] = [...input.warnings]
 
   // ---- contexts -----------------------------------------------------------
@@ -163,10 +193,11 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
   // the official example filings), so nothing is emitted even though note
   // bodies beyond Not 1/medelantal are rendered untagged.
 
-  const totalPages = 6
+  // Page bodies in print order; each gets its header (with the final page
+  // count) when the document is assembled.
   const pages: string[] = []
 
-  // ====== Page 1: titel + innehåll + fastställelseintyg ======
+  // ====== Titel + innehåll + fastställelseintyg ======
   {
     const fb = input.faststallelseintyg
     // A missing AGM date renders as a visible placeholder: never today's
@@ -175,18 +206,25 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       fb.arsstammaDatum !== null
         ? writer.date('Arsstamma', 'balans0', fb.arsstammaDatum)
         : escapeText('[datum för årsstämma saknas]')
+    // The decision sentences are enumerations in the schema: the stämma
+    // decides on a "vinstdisposition" when the free equity at its disposal is
+    // positive and on the "behandling av ansamlad förlust" when it is negative.
+    const dispositionObject =
+      input.forvaltningsberattelse.resultatdisposition.summa < 0
+        ? 'behandling av ansamlad förlust'
+        : 'vinstdisposition'
     const dispositionFact =
       fb.resultatdispositionOutcome === 'proposal_approved'
         ? writer.textPlain(
             'ArsstammaResultatDispositionGodkannaStyrelsensForslag',
             'balans0',
-            'Årsstämman beslöt att godkänna styrelsens förslag till resultatdisposition.',
+            `Årsstämman beslöt att godkänna styrelsens förslag till ${dispositionObject}.`,
           )
         : fb.resultatdispositionOutcome === 'alternative_decision'
           ? writer.textPlain(
               'ArsstammaResultatDispositionInteGodkannaStyrelsensForslag',
               'balans0',
-              'Årsstämman beslöt att inte godkänna styrelsens förslag till resultatdisposition.',
+              `Årsstämman beslöt att inte godkänna styrelsens förslag till ${dispositionObject}.`,
             ) +
             '<br/>' +
             writer.textPlain(
@@ -213,7 +251,10 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
             ) +
               ' ' +
               arsstammaFact +
-              '.<br/>' +
+              // The space keeps the two sentences apart in the XBRL value,
+              // which drops the <br/> (the official example reads "… 2017-03-21.
+              // Årsstämman beslöt …").
+              '. <br/>' +
               dispositionFact,
             { continuedAt: 'intygande_forts' },
           ),
@@ -257,7 +298,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
             writer.textPlain(
               'UnderskriftFaststallelseintygForetradareForetradarroll',
               'period0',
-              fb.signerRole,
+              certificateRole(fb.signerRole),
             ) +
             '<br/>' +
             writer.date('UnderskriftFastallelseintygDatum', 'balans0', fb.genereratDatum, {
@@ -267,43 +308,40 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       ].join('\n'),
     )
 
+    // Säte as on the PDF's cover ("Säte: X"), tagged: all of Allmän
+    // information MUST be tagged (TA §2.9.2).
+    const sate = input.company.registeredOffice?.trim()
     pages.push(
-      el(
-        'div',
-        { class: 'ar-page', id: 'ar-page-1' },
-        [
-          pageHeader(input, 1, totalPages),
-          el(
-            'p',
-            {},
-            writer.textPlain('ForetagetsNamn', 'period0', input.company.name) +
-              '<br/><abbr>Org.nr</abbr> ' +
-              writer.textPlain('Organisationsnummer', 'period0', input.company.orgNumber),
-          ),
-          el('h1', {}, `Årsredovisning för räkenskapsåret ${escapeText(fmtRange(input.period.start, input.period.end))}`),
-          el(
-            'p',
-            {},
-            input.underskrifter.harVd
-              ? 'Styrelsen och verkställande direktören avger följande årsredovisning.'
-              : 'Styrelsen avger följande årsredovisning.',
-          ),
-          el(
-            'p',
-            {},
-            'Om inte annat särskilt anges, redovisas alla belopp i hela kronor (sek). Uppgifter inom parentes avser föregående år.',
-          ),
-          fi,
-        ].join('\n'),
-      ),
+      [
+        el(
+          'p',
+          {},
+          writer.textPlain('ForetagetsNamn', 'period0', input.company.name) +
+            '<br/><abbr>Org.nr</abbr> ' +
+            writer.textPlain('Organisationsnummer', 'period0', orgNumber) +
+            (sate ? '<br/>Säte: ' + writer.textPlain('ForetagetsSate', 'period0', sate) : ''),
+        ),
+        el('h1', {}, `Årsredovisning för räkenskapsåret ${escapeText(fmtRange(input.period.start, input.period.end))}`),
+        el(
+          'p',
+          {},
+          input.underskrifter.harVd
+            ? 'Styrelsen och verkställande direktören avger följande årsredovisning.'
+            : 'Styrelsen avger följande årsredovisning.',
+        ),
+        // Comparatives sit in their own column, never in parentheses, so
+        // the example's "Uppgifter inom parentes avser föregående år" would
+        // describe a layout this document does not have.
+        el('p', {}, 'Om inte annat särskilt anges, redovisas alla belopp i hela kronor (sek).'),
+        fi,
+      ].join('\n'),
     )
   }
 
-  // ====== Page 2: förvaltningsberättelse ======
+  // ====== Förvaltningsberättelse ======
   {
     const fb = input.forvaltningsberattelse
     const parts: string[] = [
-      pageHeader(input, 2, totalPages),
       el('h2', {}, 'Förvaltningsberättelse'),
       el('h3', {}, 'Verksamheten'),
       el('h4', {}, 'Allmänt om verksamheten'),
@@ -315,6 +353,14 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
         paragraphs(fb.vasentligaHandelser),
       ),
     ]
+    // Same statement the PDF prints (ABL 25 kap.); the K2 taxonomy has no
+    // concept for it, so it stays untagged text.
+    if (fb.kontrollbalansrakningUpprattad) {
+      parts.push(
+        el('h4', {}, 'Kontrollbalansräkning'),
+        el('p', {}, 'Kontrollbalansräkning har upprättats under räkenskapsåret enligt ABL 25 kap.'),
+      )
+    }
 
     // Flerårsöversikt: column per year; whole SEK everywhere keeps repeated
     // facts trivially consistent across scales (TA §2.7.3).
@@ -429,12 +475,16 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
                 ek.balanserasINyRakning,
               ),
             ) +
+            // "Ökning (minskning) av periodens resultat vid balansering i ny
+            // räkning": the column DECREASES by what is carried to balanserat
+            // resultat, so the fact is negative (sign="-"). The utdelning
+            // concepts below are defined as "Minskning …" instead and stay
+            // positive with a presentational minus.
             td(
               writer.money(
                 'ForandringEgetKapitalAretsResultatBalanserasNyRakning',
                 'period0',
-                ek.balanserasINyRakning,
-                { displayMinus: true },
+                -ek.balanserasINyRakning,
               ),
             ) +
             td(''),
@@ -645,10 +695,10 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       )
     }
 
-    pages.push(el('div', { class: 'ar-page', id: 'ar-page-2' }, parts.join('\n')))
+    pages.push(parts.join('\n'))
   }
 
-  // ====== Page 3: resultaträkning ======
+  // ====== Resultaträkning ======
   {
     const rr = input.rr
     const totals = input.totals
@@ -884,18 +934,10 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
         alwaysShow: true,
       }),
     )
-    pages.push(
-      el(
-        'div',
-        { class: 'ar-page', id: 'ar-page-3' },
-        pageHeader(input, 3, totalPages) +
-          el('h2', {}, 'Resultaträkning') +
-          el('table', {}, rows.filter(Boolean).join('')),
-      ),
-    )
+    pages.push(el('h2', {}, 'Resultaträkning') + el('table', {}, rows.filter(Boolean).join('')))
   }
 
-  // ====== Page 4: balansräkning ======
+  // ====== Balansräkning ======
   {
     const br = input.br
     const totals = input.totals
@@ -1071,21 +1113,17 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       }),
     )
 
+    // Assets and equity/liabilities each get their own sheet: together they
+    // overflow one A4 page and the tail would print without a page header.
     pages.push(
-      el(
-        'div',
-        { class: 'ar-page', id: 'ar-page-4' },
-        pageHeader(input, 4, totalPages) +
-          el('h2', {}, 'Balansräkning') +
-          el('table', {}, assetRows.filter(Boolean).join('')) +
-          el('table', {}, eqRows.filter(Boolean).join('')),
-      ),
+      el('h2', {}, 'Balansräkning') + el('table', {}, assetRows.filter(Boolean).join('')),
+      el('h2', {}, 'Balansräkning') + el('table', {}, eqRows.filter(Boolean).join('')),
     )
   }
 
-  // ====== Page 5: noter ======
+  // ====== Noter ======
   {
-    const parts: string[] = [pageHeader(input, 5, totalPages), el('h2', {}, 'Noter')]
+    const parts: string[] = [el('h2', {}, 'Noter')]
     for (const note of input.noter) {
       parts.push(
         el(
@@ -1100,7 +1138,37 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       const isSecurities = /ställda säkerheter/i.test(note.title)
       const isContingencies = /eventualförpliktelser/i.test(note.title)
       const isParentCompany = /koncernförhållanden/i.test(note.title)
-      if (isPrinciples) {
+      const isAktiekapital = /^aktiekapital$/i.test(note.title.trim())
+      const aktiekapitalNot = input.disclosures.aktiekapitalNot ?? null
+      if (isAktiekapital && aktiekapitalNot) {
+        // Same sentence as the PDF note (build-data.ts), with the registered
+        // amount tagged: it repeats the BR fact Aktiekapital@balans0, and
+        // repeated data MUST be tagged everywhere it appears (TA §2.7.2) with
+        // an identical value (TA §2.7.3). When the books disagree with the
+        // registered amount the note stays untagged and the user is told.
+        const { aktiekapital, antalAktier } = aktiekapitalNot
+        const brAktiekapital = input.br['Aktiekapital']?.current ?? null
+        const amount =
+          brAktiekapital === aktiekapital
+            ? writer.money('Aktiekapital', 'balans0', aktiekapital)
+            : escapeText(formatSekAbs(aktiekapital))
+        if (brAktiekapital !== aktiekapital) {
+          warnings.push(
+            `Aktiekapitalet i noten (${aktiekapital} kr) skiljer sig från aktiekapitalet i balansräkningen (${brAktiekapital ?? 0} kr): stäm av konto 2081 mot registrerat aktiekapital innan inlämning.`,
+          )
+        }
+        parts.push(
+          el(
+            'p',
+            {},
+            `Aktiekapital: ${amount} kr. Antal aktier: ${escapeText(
+              antalAktier.toLocaleString('sv-SE'),
+            )}. Kvotvärde per aktie: ${escapeText(
+              roundOre(aktiekapital / antalAktier).toLocaleString('sv-SE'),
+            )} kr.`,
+          ),
+        )
+      } else if (isPrinciples) {
         parts.push(
           writer.textHtml('RedovisningsVarderingsprinciper', 'period0', paragraphs(note.body)),
         )
@@ -1115,11 +1183,11 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
               'tr',
               {},
               el('th', {}, '') +
-                el('th', { class: 'num' }, escapeText(input.period.end.slice(0, 4))) +
+                el('th', { class: 'num' }, escapeText(periodColumnLabel(input.period))) +
                 el(
                   'th',
                   { class: 'num' },
-                  input.previousPeriod ? escapeText(input.previousPeriod.end.slice(0, 4)) : '',
+                  input.previousPeriod ? escapeText(periodColumnLabel(input.previousPeriod)) : '',
                 ),
             ) +
               el(
@@ -1180,13 +1248,13 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
         parts.push(paragraphs(note.body))
       }
     }
-    pages.push(el('div', { class: 'ar-page', id: 'ar-page-5' }, parts.join('\n')))
+    pages.push(parts.join('\n'))
   }
 
-  // ====== Page 6: underskrifter ======
+  // ====== Underskrifter ======
   {
     const u = input.underskrifter
-    const parts: string[] = [pageHeader(input, 6, totalPages), el('h2', {}, 'Underskrifter')]
+    const parts: string[] = [el('h2', {}, 'Underskrifter')]
     const ortFact = getConcept(registry, 'UndertecknandeArsredovisningOrt')
       ? writer.textPlain('UndertecknandeArsredovisningOrt', 'period0', u.ort)
       : escapeText(u.ort)
@@ -1251,14 +1319,21 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
       signerDivs.push(el('div', { class: 'ar-sign-name' }, inner.join('')))
     })
     parts.push(tupleDecls.join('\n'), signerDivs.join('\n'))
-    pages.push(el('div', { class: 'ar-page', id: 'ar-page-6' }, parts.join('\n')))
+    pages.push(parts.join('\n'))
   }
 
   // ---- assemble -------------------------------------------------------------
+  const pageDivs = pages.map((content, index) =>
+    el(
+      'div',
+      { class: 'ar-page', id: `ar-page-${index + 1}` },
+      pageHeader(input, orgNumber, index + 1, pages.length) + '\n' + content,
+    ),
+  )
   const xmlnsAttrs = Object.entries(entryPoint.namespaces)
     .map(([prefix, uri]) => `xmlns:${prefix}="${escapeAttr(uri)}"`)
     .join('\n      ')
-  const title = `Årsredovisning ${input.company.name} ${input.company.orgNumber} räkenskapsåret ${input.period.start}-${input.period.end}`
+  const title = `Årsredovisning ${input.company.name} ${orgNumber} räkenskapsåret ${input.period.start}-${input.period.end}`
 
   const head = el(
     'head',
@@ -1272,7 +1347,7 @@ export function generateK2IxbrlDocument(input: IxbrlArsredovisningInput): Genera
     ].join('\n'),
   )
 
-  const body = el('body', {}, [writer.renderHeader(), el('div', { id: 'wrapper' }, pages.join('\n'))].join('\n'))
+  const body = el('body', {}, [writer.renderHeader(), el('div', { id: 'wrapper' }, pageDivs.join('\n'))].join('\n'))
 
   const xhtml =
     '<?xml version="1.0" encoding="utf-8"?>\n' +

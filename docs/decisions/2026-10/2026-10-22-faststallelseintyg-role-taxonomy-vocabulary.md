@@ -1,0 +1,1 @@
+[2026-10-22] The fastställelseintyg role is written in the taxonomy's enumeration where the document is generated (Styrelseordförande as Styrelseledamot, VD as Verkställande direktör); who may sign is unchanged (2026-10-15 decision), and locked versions are covered without a data migration.

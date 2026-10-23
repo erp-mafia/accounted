@@ -79,9 +79,18 @@ export interface AnnualReportStatements {
   comparison: { id: string; period_start: string; period_end: string; loaded: boolean } | null
 }
 
+/** Registered share capital behind the Aktiekapital note (ÅRL 5 kap. 14 §). */
+export interface ShareCapital {
+  aktiekapital: number
+  antalAktier: number
+}
+
 export interface ArsredovisningBuild {
   data: ArsredovisningData
   statements: AnnualReportStatements
+  /** The figures the Aktiekapital note prints, so the iXBRL document can tag
+   *  its amount; null when there is no such note. */
+  shareCapital?: ShareCapital | null
 }
 
 /**
@@ -338,6 +347,7 @@ export async function buildArsredovisningReport(
   // noter warnings so the warnings array order is unchanged.
   let noter: NoteEntry[]
   let noterWarnings: string[]
+  let shareCapital: ShareCapital | null = null
   let kassaflodesanalys: KassaflodesAnalysisSummary | undefined
   let equity_changes_statement:
     | { rows: EgenKapitalRow[]; closing_total: number }
@@ -405,6 +415,7 @@ export async function buildArsredovisningReport(
     )
     noter = k2Noter.notes
     noterWarnings = k2Noter.warnings
+    shareCapital = k2Noter.shareCapital
   }
 
   const resultatrakning = buildRrRows(mapping)
@@ -582,6 +593,7 @@ export async function buildArsredovisningReport(
           }
         : null,
     },
+    shareCapital,
   }
 }
 
@@ -820,9 +832,10 @@ async function buildK2Noter(
   tbFullRows: TrialBalanceRow[],
   fiscalPeriodId: string,
   allPeriods: PeriodRow[],
-): Promise<{ notes: NoteEntry[]; warnings: string[] }> {
+): Promise<{ notes: NoteEntry[]; warnings: string[]; shareCapital: ShareCapital | null }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
+  let shareCapital: ShareCapital | null = null
   // Note 1: framework. Only claim K2 explicitly when we know the company is
   // an AB and using K2: otherwise emit a generic principles note so the
   // ÅR doesn't falsely assert a framework the company isn't on.
@@ -877,6 +890,7 @@ async function buildK2Noter(
     // shares, so a partial pair is treated as missing (warn, no note).
     if (aktiekapital && antalAktier) {
       const kvotvarde = roundOre(aktiekapital / antalAktier)
+      shareCapital = { aktiekapital, antalAktier }
       notes.push({
         number: notes.length + 1,
         title: 'Aktiekapital',
@@ -1042,7 +1056,7 @@ async function buildK2Noter(
     })
   }
 
-  return { notes, warnings }
+  return { notes, warnings, shareCapital }
 }
 
 interface LatentTaxMovement {

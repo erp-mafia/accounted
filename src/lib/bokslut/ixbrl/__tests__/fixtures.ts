@@ -242,7 +242,7 @@ export function makeInput(): IxbrlArsredovisningInput {
       signerRole: 'Styrelseledamot',
       genereratDatum: '2026-02-25',
     },
-    programvara: { namn: 'Accounted - Accounted', version: '2026.1' },
+    programvara: { namn: 'Arcim Technology AB - Accounted', version: '1.0' },
     entryPointId: 'k2-ab-risbs-2024-09-12',
     warnings: [],
   }
