@@ -122,11 +122,10 @@ const CHART = [
   { account_number: '5010', account_name: 'Lokalhyra', account_class: 5 },
 ]
 
-const PAID_INVOICES = Array.from({ length: 5 }, () => ({
-  invoice_date: '2026-01-01',
-  paid_at: '2026-01-11',
-}))
+/** get_paid_invoice_days: five invoices paid ten days after their date. */
+const PAID_INVOICE_DAYS = { invoice_count: 5, total_days: 50 }
 
+/** A row of get_kpi_supplier_invoices: the invoice with its supplier's name. */
 function supplierRow(
   overrides: Partial<{
     supplier_id: string
@@ -137,15 +136,15 @@ function supplierRow(
     supplier: { id: string; name: string }
   }> = {}
 ) {
-  const supplierId = overrides.supplier_id ?? 'sup-1'
+  const { supplier, ...fields } = overrides
   return {
-    supplier_id: supplierId,
+    supplier_id: overrides.supplier_id ?? 'sup-1',
+    supplier_name: supplier?.name ?? 'Leverantören AB',
     total: 100,
     total_sek: null,
     currency: 'SEK',
     exchange_rate: null,
-    supplier: { id: supplierId, name: 'Leverantören AB' },
-    ...overrides,
+    ...fields,
   }
 }
 
@@ -180,8 +179,8 @@ function enqueueHotPath(supplierRows: unknown[]) {
   enqueue({ data: [] }) // rpc compute_prior_opening_balances
   enqueue({ data: CHART }) // chart_of_accounts
   enqueue({ data: null }) // extension_data prefs
-  enqueue({ data: [] }) // invoices
-  enqueue({ data: supplierRows }) // supplier_invoices
+  enqueue({ data: { invoice_count: 0, total_days: 0 } }) // rpc get_paid_invoice_days
+  enqueue({ data: supplierRows }) // rpc get_kpi_supplier_invoices
 }
 
 function kpiRequest(searchParams: Record<string, string> = { period_id: 'period-1' }) {
@@ -231,8 +230,8 @@ describe('GET /api/reports/kpi', () => {
     enqueue({ data: [{ account_number: '1930', debit: 5000, credit: 0 }] }) // rpc compute_prior_opening_balances
     enqueue({ data: CHART }) // chart_of_accounts
     enqueue({ data: null }) // extension_data prefs (no row)
-    enqueue({ data: PAID_INVOICES }) // invoices
-    enqueue({ data: SUPPLIER_ROWS }) // supplier_invoices
+    enqueue({ data: PAID_INVOICE_DAYS }) // rpc get_paid_invoice_days
+    enqueue({ data: SUPPLIER_ROWS }) // rpc get_kpi_supplier_invoices
 
     const res = await GET(kpiRequest(), noParams)
     const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
@@ -302,8 +301,8 @@ describe('GET /api/reports/kpi', () => {
     mockIncomeStatement.mockResolvedValue({ net_result: 0, total_revenue: 0, total_expenses: 0 } as never)
     mockMonthlyBreakdown.mockResolvedValue({ months: [] } as never)
     enqueue({ data: null }) // extension_data prefs
-    enqueue({ data: [] }) // invoices
-    enqueue({ data: [] }) // supplier_invoices
+    enqueue({ data: { invoice_count: 0, total_days: 0 } }) // rpc get_paid_invoice_days
+    enqueue({ data: [] }) // rpc get_kpi_supplier_invoices
 
     await GET(kpiRequest({ period_id: 'period-1', dim_no: '6', dim_code: 'P001' }), noParams)
 
@@ -330,8 +329,8 @@ describe('GET /api/reports/kpi', () => {
     enqueue({ data: [] }) // rpc compute_prior_opening_balances
     enqueue({ data: CHART }) // chart_of_accounts
     enqueue({ data: { value: { accountOverrides: { cashPosition: ['1940'] } } } }) // prefs
-    enqueue({ data: PAID_INVOICES }) // invoices
-    enqueue({ data: [] }) // supplier_invoices
+    enqueue({ data: PAID_INVOICE_DAYS }) // rpc get_paid_invoice_days
+    enqueue({ data: [] }) // rpc get_kpi_supplier_invoices
 
     const res = await GET(kpiRequest(), noParams)
     const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
@@ -356,15 +355,15 @@ describe('GET /api/reports/kpi', () => {
     }) // rpc get_kpi_report_aggregates (no prior RPC follows)
     enqueue({ data: CHART }) // chart_of_accounts
     enqueue({ data: null }) // extension_data prefs
-    enqueue({ data: [] }) // invoices
-    enqueue({ data: [] }) // supplier_invoices
+    enqueue({ data: { invoice_count: 0, total_days: 0 } }) // rpc get_paid_invoice_days
+    enqueue({ data: [] }) // rpc get_kpi_supplier_invoices
 
     const res = await GET(kpiRequest(), noParams)
     const { status, body } = await parseJsonResponse<{ data: KPIReport }>(res)
 
     expect(status).toBe(200)
     expect(body.data.cashPosition).toBe(17500) // OB 5000 + period 12500 on 1930
-    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).not.toHaveBeenCalledWith('compute_prior_opening_balances', expect.anything())
     expect(supabase.rpc).toHaveBeenCalledWith('get_kpi_report_aggregates', {
       p_company_id: 'company-1',
       p_fiscal_period_id: 'period-1',
@@ -372,11 +371,11 @@ describe('GET /api/reports/kpi', () => {
     })
   })
 
-  it('dimension-filtered path still uses the legacy generators and never the RPC', async () => {
+  it('dimension-filtered path still uses the legacy generators and never the aggregates RPC', async () => {
     enqueue({ data: makePeriod() }) // fiscal_periods
     enqueue({ data: null }) // extension_data prefs
-    enqueue({ data: [] }) // invoices
-    enqueue({ data: [] }) // supplier_invoices
+    enqueue({ data: { invoice_count: 0, total_days: 0 } }) // rpc get_paid_invoice_days
+    enqueue({ data: [] }) // rpc get_kpi_supplier_invoices
 
     mockIncomeStatement.mockResolvedValue({
       revenue_sections: [],
@@ -419,7 +418,7 @@ describe('GET /api/reports/kpi', () => {
       closingEntry: 'include',
       dimensions,
     })
-    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalledWith('get_kpi_report_aggregates', expect.anything())
   })
 
   it('populates Största leverantörer for a SEK-only company whose total_sek is NULL', async () => {

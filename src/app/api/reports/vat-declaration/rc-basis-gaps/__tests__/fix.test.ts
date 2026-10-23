@@ -60,9 +60,12 @@ vi.mock('@/lib/core/bookkeeping/storno-service', () => ({
 // Only the gap scan reads through these; the route does not.
 const fetchEntryLinesMock = vi.fn()
 const fetchLinesByEntryIdsMock = vi.fn()
-vi.mock('@/lib/bookkeeping/entry-lines', () => ({
+vi.mock('@/lib/bookkeeping/entry-lines', async (orig) => ({
+  ...(await orig<typeof import('@/lib/bookkeeping/entry-lines')>()),
   fetchEntryLines: (...args: unknown[]) => fetchEntryLinesMock(...args),
   fetchLinesByEntryIds: (...args: unknown[]) => fetchLinesByEntryIdsMock(...args),
+  // No get_entries_with_account_lines here: the paged read above answers.
+  fetchEntriesWithAccountLines: async () => null,
 }))
 
 import { POST } from '../fix/route'

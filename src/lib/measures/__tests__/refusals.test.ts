@@ -93,7 +93,8 @@ describe('refusals', () => {
   })
 
   it('an unreadable reskontra refuses where the report shows an empty one', async () => {
-    const failures = { tables: { invoices: { message: 'permission denied for table invoices', code: '42501' } } }
+    // The kundreskontra reads its population in one call (get_ar_ledger_invoices).
+    const failures = { rpcs: { get_ar_ledger_invoices: { message: 'permission denied for table invoices', code: '42501' } } }
     const ctx = ctxFor({}, failures)
     const r = await refusal(getMeasure(ctx, 'unpaid_customer_invoices', {}))
     expect(r.code).toBe('MEASURE_SOURCE_FAILED')

@@ -1,32 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createReskontraClient, type ReskontraTables } from '@/tests/reskontra-rpc-port'
 
 // ============================================================
-// Mock: sequential result queue (the register side), and the booked
-// balance the balance sheet reads (closingBalanceOf, the ledger side)
+// The register side reads the live leverantörsreskontra population
+// (get_supplier_ledger_invoices) through rpc(), answered from `tables` by
+// its JS port (tests/reskontra-rpc-port.ts); the ledger side is the booked
+// balance the balance sheet reads (closingBalanceOf).
 // ============================================================
 
-let resultIdx: number
-let results: Array<{ data?: unknown; error?: unknown }>
-let calls: Array<{ method: string; args: unknown[] }>
+let tables: ReskontraTables
+const { supabase } = createReskontraClient(() => tables)
 
-function makeBuilder() {
-  const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'order', 'range']) {
-    b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
-      calls.push({ method: m, args })
-      return b
-    })
+/** The books; an invoice without an id or a status is an approved one. */
+function setBooks(books: ReskontraTables) {
+  tables = {
+    ...books,
+    supplier_invoices: (books.supplier_invoices ?? []).map((row, i) => ({ id: `si-${i + 1}`, status: 'approved', ...row })),
   }
-  b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
-  b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
-  return b
-}
-
-function makeClient() {
-  return {
-    from: vi.fn().mockImplementation(() => makeBuilder()),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any
 }
 
 vi.mock('../trial-balance', () => ({
@@ -42,29 +32,18 @@ function booked(credit: number, debit = 0) {
   vi.mocked(closingBalanceOf).mockResolvedValue(Math.round((debit - credit) * 100) / 100)
 }
 
-let supabase: ReturnType<typeof makeClient>
-
 beforeEach(() => {
   vi.clearAllMocks()
-  resultIdx = 0
-  results = []
-  calls = []
-  supabase = makeClient()
+  tables = {}
   booked(0)
 })
 
 describe('generateReconciliation', () => {
   it('returns reconciled when supplier total matches account 2440 balance', async () => {
-    results = [
-      // 0: supplier_invoices
-      {
-        data: [
-          { remaining_amount: 5000 },
-          { remaining_amount: 3000 },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({ supplier_invoices: [
+        { remaining_amount: 5000 },
+        { remaining_amount: 3000 },
+      ] })
     booked(10000, 2000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
@@ -78,7 +57,7 @@ describe('generateReconciliation', () => {
   })
 
   it('reads the booked side as the balance sheet does: 2440 of this fiscal year, IB included', async () => {
-    results = [{ data: [], error: null }]
+    setBooks({ supplier_invoices: [] })
 
     await generateReconciliation(supabase, 'company-1', 'period-1')
 
@@ -91,7 +70,7 @@ describe('generateReconciliation', () => {
     // year (2 000). 2440 opens at the 6 000 carried from last year's verifikat
     // and the year's own lines add 2 000: the booked side is the account's UB,
     // 8 000, not the year's 2 000.
-    results = [{ data: [{ remaining_amount: 6000 }, { remaining_amount: 2000 }], error: null }]
+    setBooks({ supplier_invoices: [{ remaining_amount: 6000 }, { remaining_amount: 2000 }] })
     booked(8000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
@@ -102,7 +81,7 @@ describe('generateReconciliation', () => {
   })
 
   it('a failed balance read fails the reconciliation instead of reading 0', async () => {
-    results = [{ data: [{ remaining_amount: 1000 }], error: null }]
+    setBooks({ supplier_invoices: [{ remaining_amount: 1000 }] })
     vi.mocked(closingBalanceOf).mockRejectedValue(new Error('get_trial_balance_aggregates failed'))
 
     await expect(generateReconciliation(supabase, 'company-1', 'period-1')).rejects.toThrow(
@@ -111,7 +90,7 @@ describe('generateReconciliation', () => {
   })
 
   it('detects mismatch when difference != 0', async () => {
-    results = [{ data: [{ remaining_amount: 5000 }], error: null }]
+    setBooks({ supplier_invoices: [{ remaining_amount: 5000 }] })
     booked(7000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
@@ -123,7 +102,7 @@ describe('generateReconciliation', () => {
   })
 
   it('returns reconciled when both are zero/empty', async () => {
-    results = [{ data: [], error: null }]
+    setBooks({ supplier_invoices: [] })
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
 
@@ -133,8 +112,8 @@ describe('generateReconciliation', () => {
     expect(result.is_reconciled).toBe(true)
   })
 
-  it('handles null invoice data gracefully', async () => {
-    results = [{ data: null, error: null }]
+  it('handles a company without supplier invoices gracefully', async () => {
+    setBooks({})
     booked(3000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
@@ -146,7 +125,7 @@ describe('generateReconciliation', () => {
   })
 
   it('computes credit-normal balance for account 2440 (liability)', async () => {
-    results = [{ data: [], error: null }]
+    setBooks({ supplier_invoices: [] })
     booked(15000, 8000)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')
@@ -158,16 +137,10 @@ describe('generateReconciliation', () => {
   it('converts foreign-currency remaining_amount to SEK before reconciliation', async () => {
     // Reproduces the production bug: 225 EUR + 1 000 SEK was reported as 1 225
     // against a 2440 balance of 3 475, flagging a false discrepancy.
-    results = [
-      // 0: supplier_invoices, 225 EUR at 11, plus 1 000 SEK
-      {
-        data: [
-          { remaining_amount: 225, currency: 'EUR', exchange_rate: 11 },
-          { remaining_amount: 1000, currency: 'SEK', exchange_rate: null },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({ supplier_invoices: [
+        { remaining_amount: 225, currency: 'EUR', exchange_rate: 11 },
+        { remaining_amount: 1000, currency: 'SEK', exchange_rate: null },
+      ] })
     // 2440 balance = 3 475 SEK (matches converted ledger total)
     booked(3475)
 
@@ -184,16 +157,10 @@ describe('generateReconciliation', () => {
     // An FX invoice without an exchange rate cannot be converted to SEK; the
     // sum must not silently add raw foreign currency. The row is excluded and
     // counted, so the UI can warn that the reconciliation may be unreliable.
-    results = [
-      // 0: supplier_invoices, 100 EUR with no rate (excluded), 1 000 SEK control
-      {
-        data: [
-          { remaining_amount: 100, currency: 'EUR', exchange_rate: null },
-          { remaining_amount: 1000, currency: 'SEK', exchange_rate: null },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({ supplier_invoices: [
+        { remaining_amount: 100, currency: 'EUR', exchange_rate: null },
+        { remaining_amount: 1000, currency: 'SEK', exchange_rate: null },
+      ] })
     // 2440 balance reflects only the SEK invoice
     booked(1000)
 
@@ -210,15 +177,10 @@ describe('generateReconciliation', () => {
   })
 
   it('uses Math.round for monetary precision', async () => {
-    results = [
-      {
-        data: [
-          { remaining_amount: 33.33 },
-          { remaining_amount: 33.34 },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({ supplier_invoices: [
+        { remaining_amount: 33.33 },
+        { remaining_amount: 33.34 },
+      ] })
     booked(66.67)
 
     const result = await generateReconciliation(supabase, 'company-1', 'period-1')

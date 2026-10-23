@@ -1,5 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import {
+  compareById,
+  fetchEntriesWithAccountLines,
   fetchEntryLines,
   fetchLinesByEntryIds,
   type EntryLinesQuery,
@@ -224,22 +226,54 @@ interface SiblingLineRow {
   credit_amount: number
 }
 
-export async function findRcBasisGaps(
+/**
+ * The posted verifikat of the period with a line on 2614/2624/2634: their
+ * fiktiv moms lines with the verifikat attached (rcLines) and every line of
+ * them (siblingLines), each sorted by line id.
+ *
+ * One get_entries_with_account_lines call, which reads only the days the
+ * output accounts moved. The two-step read below (every posted entry of the
+ * period, then its lines in chunks of 100 ids; see
+ * lib/bookkeeping/entry-lines.ts) gives the same lists for a database
+ * without the function yet.
+ */
+async function fetchRcVerifikat(
   supabase: SupabaseClient,
   companyId: string,
-  periodType: VatPeriodType,
-  year: number,
-  period: number,
-  options: { fiscalPeriodId?: string } = {},
-): Promise<RcBasisGap[]> {
-  // Same period resolution as the declaration itself: helårsmoms covers the
-  // räkenskapsår, not the calendar year, so a calendar span would hide gap
-  // vouchers from the tail of an extended/broken fiscal year while the
-  // declaration totals (and the aggregate check) still include them.
-  const { start, end } = await resolvePeriodDates(
-    supabase, companyId, periodType, year, period, options.fiscalPeriodId
-  )
-  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
+  start: string,
+  end: string,
+): Promise<{ rcLines: RcLineRow[]; siblingLines: SiblingLineRow[] }> {
+  const rows = await fetchEntriesWithAccountLines(supabase, companyId, {
+    start,
+    end,
+    accounts: RC_OUTPUT_ACCOUNTS,
+    statuses: ['posted'],
+    allLines: true,
+  })
+  if (rows) {
+    const entryById = new Map(rows.map((row) => [row.id, {
+      id: row.id,
+      voucher_number: row.voucher_number,
+      voucher_series: row.voucher_series as string,
+      entry_date: row.entry_date,
+      description: row.description,
+      status: row.status,
+      company_id: companyId,
+    }]))
+    const siblingLines = rows
+      .flatMap((row) => row.lines.map((line) => ({
+        id: line.id,
+        journal_entry_id: row.id,
+        account_number: line.account_number,
+        debit_amount: line.debit_amount as number,
+        credit_amount: line.credit_amount as number,
+      })))
+      .sort(compareById)
+    const rcLines = siblingLines
+      .filter((line) => (RC_OUTPUT_ACCOUNTS as readonly string[]).includes(line.account_number))
+      .map((line) => ({ ...line, journal_entries: entryById.get(line.journal_entry_id)! }))
+    return { rcLines, siblingLines }
+  }
 
   // Two-step entry-lines fetch (see lib/bookkeeping/entry-lines.ts).
   const rcLines = (await fetchEntryLines<unknown>({
@@ -256,6 +290,33 @@ export async function findRcBasisGaps(
     filterLines: (q: EntryLinesQuery) =>
       q.in('account_number', RC_OUTPUT_ACCOUNTS as unknown as string[]),
   })) as RcLineRow[]
+  if (rcLines.length === 0) return { rcLines, siblingLines: [] }
+
+  const siblingLines = await fetchLinesByEntryIds<SiblingLineRow>(
+    supabase,
+    [...new Set(rcLines.map((l) => l.journal_entry_id))],
+    'id, journal_entry_id, account_number, debit_amount, credit_amount',
+  )
+  return { rcLines, siblingLines }
+}
+
+export async function findRcBasisGaps(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodType: VatPeriodType,
+  year: number,
+  period: number,
+  options: { fiscalPeriodId?: string } = {},
+): Promise<RcBasisGap[]> {
+  // Same period resolution as the declaration itself: helårsmoms covers the
+  // räkenskapsår, not the calendar year, so a calendar span would hide gap
+  // vouchers from the tail of an extended/broken fiscal year while the
+  // declaration totals (and the aggregate check) still include them.
+  const { start, end } = await resolvePeriodDates(
+    supabase, companyId, periodType, year, period, options.fiscalPeriodId
+  )
+  const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
+  const { rcLines, siblingLines } = await fetchRcVerifikat(supabase, companyId, start, end)
 
   if (rcLines.length === 0) return []
 
@@ -267,11 +328,6 @@ export async function findRcBasisGaps(
     if (entry) entries.set(line.journal_entry_id, entry)
   }
 
-  const siblingLines = await fetchLinesByEntryIds<SiblingLineRow>(
-    supabase,
-    [...new Set(rcLines.map((l) => l.journal_entry_id))],
-    'id, journal_entry_id, account_number, debit_amount, credit_amount',
-  )
   const linesByEntry = new Map<string, SiblingLineRow[]>()
   for (const line of siblingLines) {
     const lines = linesByEntry.get(line.journal_entry_id)

@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchEntriesWithAccountLines } from '@/lib/bookkeeping/entry-lines'
 import { chunk, formatCurrency } from '@/lib/utils'
 import {
   INVOICE_SOURCED_ENTRY_TYPES,
@@ -217,8 +218,8 @@ async function fetchDeclaredEntryIds(
 
 interface RawEntryLine {
   account_number: string
-  debit_amount: number | string
-  credit_amount: number | string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
 }
 
 interface RawEntry {
@@ -397,23 +398,55 @@ interface PsLedger {
   invoiceIdsByEntry: Map<string, string[]>
 }
 
-async function loadPsLedger(
+/**
+ * The period's posted and reversed verifikat with a posting on a PS account,
+ * each with just those lines, ordered by id. No source_type filter: which
+ * register invoice a posting belongs to is resolved through every link the
+ * register keeps, not only the engine's own source columns.
+ *
+ * One get_entries_with_account_lines call, which reads only the days the PS
+ * accounts moved. The paged PostgREST read below gives the same rows for a
+ * database without the function yet; it ordered by id across every tenant's
+ * entries and took over a second for a busy company's month.
+ */
+async function fetchPsEntries(
   supabase: SupabaseClient,
   companyId: string,
   start: string,
   end: string,
-): Promise<PsLedger> {
-  const accountBuckets = await resolvePsAccountBuckets(supabase, companyId)
-  const psAccounts = Array.from(accountBuckets.keys())
+  psAccounts: string[],
+): Promise<RawEntry[]> {
+  const rows = await fetchEntriesWithAccountLines(supabase, companyId, {
+    start,
+    end,
+    accounts: psAccounts,
+    statuses: ['posted', 'reversed'],
+    allLines: false,
+  })
+  if (rows) {
+    return rows.map((row) => ({
+      id: row.id,
+      voucher_series: row.voucher_series,
+      voucher_number: row.voucher_number,
+      entry_date: row.entry_date,
+      status: row.status,
+      source_type: row.source_type,
+      source_id: row.source_id,
+      reverses_id: row.reverses_id,
+      correction_of_id: row.correction_of_id,
+      journal_entry_lines: row.lines.map((line) => ({
+        account_number: line.account_number,
+        debit_amount: line.debit_amount,
+        credit_amount: line.credit_amount,
+      })),
+    }))
+  }
 
   // Driven from journal_entries (company + date indexed) with the EU-revenue
-  // condition as an inner embed: the planner probes journal_entry_lines per
-  // entry, so only entries carrying a posting on a PS account come back, with
-  // just those lines. Never the inverse shape (lines with an entries embed):
-  // see lib/bookkeeping/entry-lines.ts. No source_type filter: which register
-  // invoice a posting belongs to is resolved below through every link the
-  // register keeps, not only the engine's own source columns.
-  const entries = await fetchAllRows<RawEntry>(({ from, to }) =>
+  // condition as an inner embed, so only entries carrying a posting on a PS
+  // account come back, with just those lines. Never the inverse shape (lines
+  // with an entries embed): see lib/bookkeeping/entry-lines.ts.
+  return fetchAllRows<RawEntry>(({ from, to }) =>
     supabase
       .from('journal_entries')
       .select('id, voucher_series, voucher_number, entry_date, status, source_type, source_id, reverses_id, correction_of_id, journal_entry_lines!inner(account_number, debit_amount, credit_amount)')
@@ -426,6 +459,17 @@ async function loadPsLedger(
       .order('id', { ascending: true })
       .range(from, to) as unknown as PromiseLike<{ data: RawEntry[] | null; error: { message: string } | null }>,
   )
+}
+
+async function loadPsLedger(
+  supabase: SupabaseClient,
+  companyId: string,
+  start: string,
+  end: string,
+): Promise<PsLedger> {
+  const accountBuckets = await resolvePsAccountBuckets(supabase, companyId)
+  const psAccounts = Array.from(accountBuckets.keys())
+  const entries = await fetchPsEntries(supabase, companyId, start, end, psAccounts)
 
   // Which register invoice does each posting belong to? Four links; only
   // the first lives on the entry itself:

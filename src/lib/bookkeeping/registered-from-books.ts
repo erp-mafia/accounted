@@ -11,8 +11,9 @@
  * that verifikat. Accounted's own render of it is a header with totals, so
  * every surface that shows "the invoice" reads this one predicate and points
  * to the verifikat instead of presenting the render as the invoice (crm#1131).
- * The register's coverage boundary (invoice-register-coverage.ts) reads it
- * too: a registration is one open item of an older history.
+ * The register's coverage boundary applies the same predicate in SQL
+ * (get_invoice_register_coverage, read by invoice-register-coverage.ts): a
+ * registration is one open item of an older history.
  *
  * Its own module with no imports: the invoice page is client code.
  */

@@ -58,3 +58,32 @@ export function vatTotalsRpcResult(
     error: null,
   }
 }
+
+/**
+ * Test double for get_entries_with_account_lines (the reverse-charge basis
+ * scan, the periodisk sammanställning): the fixture's entries with a line on
+ * p_accounts and a status in p_statuses, ordered by id, each with its lines on
+ * p_accounts or, with p_all_lines, every line, ordered by account and id. The
+ * period and the days it reads are the SQL's business, covered against real
+ * Postgres in tests/pg/entries-with-account-lines.pg.test.ts.
+ */
+export function entriesWithAccountLinesRpcResult(
+  entries: Array<{ id: string; status: string }>,
+  lines: Array<VatTotalsFixtureLine & { id: string }>,
+  params: { p_accounts?: string[]; p_statuses?: string[]; p_all_lines?: boolean } | undefined,
+): { data: unknown; error: null } {
+  const accounts = new Set(params?.p_accounts ?? [])
+  const statuses = new Set(params?.p_statuses ?? [])
+  const rows = entries
+    .filter((entry) => statuses.has(entry.status))
+    .filter((entry) => lines.some((l) => l.journal_entry_id === entry.id && accounts.has(l.account_number)))
+    .sort((a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
+    .map((entry) => ({
+      ...entry,
+      lines: lines
+        .filter((l) => l.journal_entry_id === entry.id && (params?.p_all_lines || accounts.has(l.account_number)))
+        .sort((a, b) => a.account_number.localeCompare(b.account_number) || (a.id < b.id ? -1 : 1))
+        .map(({ id, account_number, debit_amount, credit_amount }) => ({ id, account_number, debit_amount, credit_amount })),
+    }))
+  return { data: rows, error: null }
+}

@@ -18,13 +18,7 @@
  * rest on 1513 until a rot_rut_reclaim moves it onto the customer
  * (deduction_reclaimed_total).
  */
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { chunk } from '@/lib/utils'
-
-/** Invoice ids per `.in()` read (URL-length safety, as elsewhere). */
-const INVOICE_ID_CHUNK = 200
 
 /** The invoice header fields the Skatteverket-share arithmetic reads. */
 export interface SkatteverketShareInvoice {
@@ -104,71 +98,43 @@ export function liveReceivableOutstanding(
   return outstandingLessPayouts(outstanding, settled)
 }
 
-interface PayoutItemRow {
-  id: string
-  invoice_id: string
+/**
+ * One begäran item of a ROT/RUT invoice, on a begäran with a settlement
+ * voucher, as get_ar_ledger_invoices attaches them to the invoice
+ * (lib/reports/ar-ledger-invoices.ts), in id order.
+ */
+export interface PayoutItemFact {
+  request_status: string
   decided_amount: number | string | null
-  request: PayoutRequestEmbed | PayoutRequestEmbed[] | null
-}
-
-interface PayoutRequestEmbed {
-  status: string
-  settlement: { entry_date: string | null } | { entry_date: string | null }[] | null
-}
-
-function single<T>(embed: T | T[] | null | undefined): T | null {
-  return (Array.isArray(embed) ? embed[0] : embed) ?? null
+  /** The settlement voucher's date; null when it cannot be read. */
+  settlement_entry_date: string | null
 }
 
 /**
- * What Skatteverket has paid out per invoice, keyed by invoice id, for the
- * invoices of one company. Invoices without a deduction are ignored; with
- * none left no query is made. With an `asOfDate` only the payouts whose
- * voucher is dated on or before it count.
+ * What Skatteverket has paid out per invoice, keyed by invoice id, from the
+ * begäran items each invoice carries. Invoices without a deduction are
+ * ignored. With an `asOfDate` only the payouts whose voucher is dated on or
+ * before it count.
  */
-export async function fetchSkatteverketSettled(
-  supabase: SupabaseClient,
-  companyId: string,
-  invoices: readonly (SkatteverketShareInvoice & { id: string })[],
+export function skatteverketSettledByInvoice(
+  invoices: readonly (SkatteverketShareInvoice & {
+    id: string
+    payout_items?: readonly PayoutItemFact[] | null
+  })[],
   asOfDate?: string
-): Promise<Map<string, number>> {
-  const byId = new Map<string, SkatteverketShareInvoice>()
+): Map<string, number> {
+  const settled = new Map<string, number>()
   for (const invoice of invoices) {
-    if (hasDeduction(invoice)) byId.set(invoice.id, invoice)
-  }
-
-  const itemsByInvoice = new Map<string, SettledPayoutItem[]>()
-  for (const ids of chunk([...byId.keys()], INVOICE_ID_CHUNK)) {
-    const rows = await fetchAllRows<PayoutItemRow>(({ from, to }) =>
-      supabase
-        .from('rot_rut_payout_request_items')
-        .select(
-          'id, invoice_id, decided_amount, request:rot_rut_payout_requests!inner(status, company_id, settlement_journal_entry_id, settlement:journal_entries!settlement_journal_entry_id(entry_date))'
-        )
-        .in('invoice_id', ids)
-        .eq('request.company_id', companyId)
-        .not('request.settlement_journal_entry_id', 'is', null)
-        // Stable total order for correct paging (see fetch-all.ts).
-        .order('id', { ascending: true })
-        .range(from, to) as unknown as PromiseLike<{ data: PayoutItemRow[] | null; error: { message: string } | null }>
-    )
-    for (const row of rows) {
-      const request = single(row.request)
-      if (!request) continue
+    if (!hasDeduction(invoice)) continue
+    const items: SettledPayoutItem[] = []
+    for (const item of invoice.payout_items ?? []) {
       if (asOfDate) {
-        const entryDate = single(request.settlement)?.entry_date
+        const entryDate = item.settlement_entry_date
         if (!entryDate || entryDate > asOfDate) continue
       }
-      const items = itemsByInvoice.get(row.invoice_id) ?? []
-      items.push({ request_status: request.status, decided_amount: row.decided_amount })
-      itemsByInvoice.set(row.invoice_id, items)
+      items.push({ request_status: item.request_status, decided_amount: item.decided_amount })
     }
-  }
-
-  const settled = new Map<string, number>()
-  for (const [invoiceId, items] of itemsByInvoice) {
-    const invoice = byId.get(invoiceId)
-    if (invoice) settled.set(invoiceId, skatteverketSettled(invoice, items))
+    if (items.length > 0) settled.set(invoice.id, skatteverketSettled(invoice, items))
   }
   return settled
 }

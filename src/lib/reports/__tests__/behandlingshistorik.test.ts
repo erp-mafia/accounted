@@ -1,10 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import type { AuditLogEntry } from '@/types'
 import {
   AUDITED_TABLES,
-  AUDIT_ROW_FILTER,
   GLOBAL_ACTIONS,
   actorWithVerified,
   appReleaseEvent,
@@ -89,19 +88,73 @@ const baseEntry = {
 }
 
 // ============================================================
-// audit_log row filter: the literal in the query must track the constants
+// audit_log row selection: the SQL function must track the constants
 // ============================================================
 
-describe('AUDIT_ROW_FILTER', () => {
-  it('is built from AUDITED_TABLES and GLOBAL_ACTIONS', () => {
-    expect(AUDIT_ROW_FILTER).toBe(
-      `table_name.in.(${AUDITED_TABLES.join(',')}),action.in.(${GLOBAL_ACTIONS.join(',')})`,
-    )
+/** The newest migration that (re)defines behandlingshistorik_sources: the live definition. */
+function liveSourcesMigration(): string {
+  const dir = path.join(__dirname, '..', '..', '..', '..', 'supabase', 'migrations')
+  const files = readdirSync(dir)
+    .filter((f) => f.endsWith('.sql'))
+    .sort()
+    .filter((f) => readFileSync(path.join(dir, f), 'utf-8').includes('FUNCTION public.behandlingshistorik_sources('))
+  expect(files.length).toBeGreaterThan(0)
+  return readFileSync(path.join(dir, files[files.length - 1]), 'utf-8')
+}
+
+/** The string literals of the first `<column> = ANY (ARRAY[...])` in the SQL. */
+function arrayLiteral(sql: string, column: string): string[] {
+  const match = sql.match(new RegExp(`a\\.${column} = ANY \\(ARRAY\\[([^\\]]*)\\]\\)`))
+  expect(match).not.toBeNull()
+  return [...match![1].matchAll(/'([^']+)'/g)].map((m) => m[1])
+}
+
+describe('behandlingshistorik_sources: the rows it selects', () => {
+  it('reads exactly AUDITED_TABLES and GLOBAL_ACTIONS', () => {
+    const sql = liveSourcesMigration()
+    expect(arrayLiteral(sql, 'table_name')).toEqual([...AUDITED_TABLES])
+    expect(arrayLiteral(sql, 'action')).toEqual([...GLOBAL_ACTIONS])
   })
 
-  it('is the exact literal used in the audit_log query (schema guard needs a literal there)', () => {
-    const source = readFileSync(path.join(__dirname, '..', 'behandlingshistorik.ts'), 'utf-8')
-    expect(source.replace(/\r\n/g, '\n')).toContain(`.or(\n        '${AUDIT_ROW_FILTER}',\n      )`)
+  // The function leaves these rows in the database because no event can come
+  // from them; if a normaliser ever renders one, the SQL must stop excluding it.
+  it('leaves out only rows auditRowToEvent turns into nothing', () => {
+    const states = [
+      null,
+      { status: 'draft', voucher_series: 'A', voucher_number: 1, description: 'x', entry_date: '2026-03-01' },
+      { status: 'posted', voucher_series: 'A', voucher_number: 1, description: 'x', entry_date: '2026-03-01' },
+      { status: 'reversed', voucher_series: 'A', voucher_number: 1 },
+      { file_name: 'kvitto.pdf', journal_entry_id: 'entry-1' },
+    ]
+    for (const old_state of states) {
+      for (const new_state of states) {
+        for (const action of ['INSERT', 'COMMIT'] as const) {
+          expect(auditRowToEvent(auditRow({ table_name: 'journal_entries', action, old_state, new_state }))).toBeNull()
+        }
+        for (const action of ['INSERT', 'UPDATE'] as const) {
+          expect(auditRowToEvent(auditRow({ table_name: 'document_attachments', action, old_state, new_state }))).toBeNull()
+        }
+      }
+    }
+    // A draft being edited: neither state posted or reversed.
+    for (const status of [undefined, null, 'draft', 'cancelled', 5, true]) {
+      const draft = { status, voucher_series: 'A', voucher_number: 1, description: 'före', entry_date: '2026-03-01', notes: 'a' }
+      expect(auditRowToEvent(auditRow({
+        table_name: 'journal_entries', action: 'UPDATE', old_state: draft, new_state: { ...draft, description: 'efter', notes: 'b' },
+      }))).toBeNull()
+    }
+    // ...while an UPDATE of a posted verifikat still renders.
+    const posted = { status: 'posted', voucher_series: 'A', voucher_number: 1, description: 'före' }
+    expect(auditRowToEvent(auditRow({
+      table_name: 'journal_entries', action: 'UPDATE', old_state: posted, new_state: { ...posted, description: 'efter' },
+    }))).not.toBeNull()
+  })
+
+  it('excludes those classes, and only those, in the SQL', () => {
+    const sql = liveSourcesMigration()
+    expect(sql).toContain("(a.table_name = 'journal_entries' AND a.action IN ('INSERT', 'COMMIT'))")
+    expect(sql).toContain("(a.table_name = 'document_attachments' AND a.action IN ('INSERT', 'UPDATE'))")
+    expect(sql).toContain("coalesce(a.old_state->>'status', '') NOT IN ('posted', 'reversed')")
   })
 })
 
@@ -923,6 +976,13 @@ describe('formatStockholmTimestamp', () => {
 
 type MockResult = { data?: unknown; error?: unknown }
 let mockResults: Record<string, MockResult[]>
+/** RPC results by function name; an absent one answers one row of empty arrays. */
+let rpcResults: Record<string, MockResult>
+
+/** The row behandlingshistorik_sources() returns. */
+function ledger(rows: { entries?: unknown[]; audit?: unknown[]; rattelse?: unknown[] }): MockResult {
+  return { data: [{ entries: rows.entries ?? [], audit: rows.audit ?? [], rattelse: rows.rattelse ?? [] }], error: null }
+}
 
 function makeBuilder(table: string) {
   const b: Record<string, unknown> = {}
@@ -941,14 +1001,18 @@ function makeBuilder(table: string) {
 }
 
 function makeClient() {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return { from: vi.fn().mockImplementation((table: string) => makeBuilder(table)) } as any
+  return {
+    from: vi.fn().mockImplementation((table: string) => makeBuilder(table)),
+    rpc: vi.fn().mockImplementation(async (fn: string) => rpcResults[fn] ?? { data: [{}], error: null }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any
 }
 
 const period = { id: 'period-1', name: 'RÅ 2026', period_start: '2026-01-01', period_end: '2026-12-31' }
 
 beforeEach(() => {
   mockResults = {}
+  rpcResults = {}
 })
 
 describe('generateBehandlingshistorik', () => {
@@ -960,26 +1024,21 @@ describe('generateBehandlingshistorik', () => {
 
   it('assembles, sorts and labels events from every source in fiscal-year mode', async () => {
     const bokslut = { ...baseEntry, id: 'entry-2', voucher_number: 40, entry_date: '2026-12-31', committed_at: '2027-02-15T12:00:00.000Z', source_type: 'year_end', description: 'Bokslut' }
+    rpcResults = {
+      behandlingshistorik_sources: ledger({
+        entries: [baseEntry, bokslut, { ...baseEntry, id: 'draft', status: 'draft', committed_at: null, voucher_number: null }],
+        audit: [
+          // logged inside the window
+          auditRow({ id: 'a1', table_name: 'company_settings', action: 'UPDATE', created_at: '2026-02-01T08:00:00.000Z', old_state: { moms_period: 'quarterly' }, new_state: { moms_period: 'monthly' } }),
+          auditRow({ id: 'a2', table_name: 'chart_of_accounts', action: 'INSERT', created_at: '2026-02-02T08:00:00.000Z', new_state: { account_number: '6540', account_name: 'IT' } }),
+          // about one of the year's verifikat: the bokslut storno logged after period end
+          auditRow({ id: 'a3', record_id: 'entry-2', action: 'REVERSE', created_at: '2027-03-01T09:00:00.000Z', old_state: { voucher_series: 'A', voucher_number: 40, status: 'posted' }, new_state: { voucher_series: 'A', voucher_number: 40, status: 'reversed' }, actor_type: 'api_key', actor_label: 'Revisorn' }),
+        ],
+      }),
+    }
     mockResults = {
       fiscal_periods: [{ data: period }],
       company_settings: [{ data: { company_name: 'Testbolaget AB', org_number: '556000-0001' } }],
-      journal_entries: [{ data: [baseEntry, bokslut, { ...baseEntry, id: 'draft', status: 'draft', committed_at: null, voucher_number: null }] }],
-      audit_log: [
-        // windowed
-        {
-          data: [
-            auditRow({ id: 'a1', table_name: 'company_settings', action: 'UPDATE', created_at: '2026-02-01T08:00:00.000Z', old_state: { moms_period: 'quarterly' }, new_state: { moms_period: 'monthly' } }),
-            auditRow({ id: 'a2', table_name: 'chart_of_accounts', action: 'INSERT', created_at: '2026-02-02T08:00:00.000Z', new_state: { account_number: '6540', account_name: 'IT' } }),
-          ],
-        },
-        // record-id union (bokslut storno logged after period end)
-        {
-          data: [
-            auditRow({ id: 'a3', record_id: 'entry-2', action: 'REVERSE', created_at: '2027-03-01T09:00:00.000Z', old_state: { voucher_series: 'A', voucher_number: 40, status: 'posted' }, new_state: { voucher_series: 'A', voucher_number: 40, status: 'reversed' }, actor_type: 'api_key', actor_label: 'Revisorn' }),
-          ],
-        },
-      ],
-      journal_entry_rattelse_log: [{ data: [] }, { data: [] }],
       company_migration_resets: [{ data: [] }, { data: [] }],
       app_releases: [{ data: [] }],
       sie_imports: [
@@ -996,12 +1055,20 @@ describe('generateBehandlingshistorik', () => {
     }
     const resolve = vi.fn().mockResolvedValue(new Map([['user-1', 'anna@example.se'], ['user-3', 'kim@example.se']]))
 
-    const report = await generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' }, {
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' }, {
       resolveUserLabels: resolve,
       appVersion: 'abc1234',
       now: new Date('2026-08-21T12:00:00.000Z'),
     })
 
+    // One round trip each for the ledger history and the decisions, scoped to
+    // the company and period, with the record-id unions (fiscal-year mode).
+    const window = { p_company_id: 'company-1', p_period_id: 'period-1', p_from: '2026-01-01T00:00:00.000Z', p_to: '2026-12-31T23:59:59.999Z', p_fiscal_year: true }
+    expect(client.rpc.mock.calls).toEqual([['behandlingshistorik_sources', window], ['behandlingshistorik_decisions', window]])
+    for (const table of ['journal_entries', 'audit_log', 'journal_entry_rattelse_log', 'suggestion_log', 'pending_operations']) {
+      expect(client.from).not.toHaveBeenCalledWith(table)
+    }
     expect(report).not.toBeNull()
     expect(report!.mode).toBe('fiscal_year')
     expect(report!.company).toEqual({ name: 'Testbolaget AB', org_number: '556000-0001' })
@@ -1031,14 +1098,17 @@ describe('generateBehandlingshistorik', () => {
   })
 
   it('date-range mode keeps only what was registered inside the window and filters categories', async () => {
+    rpcResults = {
+      behandlingshistorik_sources: ledger({
+        // A verifikat the window's rows look up comes back too; only the one
+        // committed inside the window is a bokföringspost of the window.
+        entries: [baseEntry, { ...baseEntry, id: 'entry-2', voucher_number: 13, committed_at: '2026-05-02T10:00:00.000Z' }],
+        audit: [auditRow({ id: 'a1', table_name: 'chart_of_accounts', action: 'DELETE', created_at: '2026-03-15T08:00:00.000Z', old_state: { account_number: '6540', account_name: 'IT' } })],
+      }),
+    }
     mockResults = {
       fiscal_periods: [{ data: period }],
       company_settings: [{ data: { company_name: 'T', org_number: null } }],
-      journal_entries: [{ data: [baseEntry, { ...baseEntry, id: 'entry-2', voucher_number: 13, committed_at: '2026-05-02T10:00:00.000Z' }] }],
-      audit_log: [
-        { data: [auditRow({ id: 'a1', table_name: 'chart_of_accounts', action: 'DELETE', created_at: '2026-03-15T08:00:00.000Z', old_state: { account_number: '6540', account_name: 'IT' } })] },
-      ],
-      journal_entry_rattelse_log: [{ data: [] }],
       company_migration_resets: [{ data: [] }, { data: [] }],
       app_releases: [{ data: [] }],
       sie_imports: [{ data: [] }],
@@ -1054,8 +1124,9 @@ describe('generateBehandlingshistorik', () => {
     expect(report!.mode).toBe('date_range')
     expect(report!.events.map((e) => e.id)).toEqual(['entry:entry-1'])
     expect(report!.by_category.kontoplan).toBe(0)
-    // No record-id union in date-range mode: audit_log queried once.
-    expect(client.from.mock.calls.filter((c: string[]) => c[0] === 'audit_log')).toHaveLength(1)
+    // No record-id union in date-range mode.
+    const window = { p_company_id: 'company-1', p_period_id: 'period-1', p_from: '2026-03-01T00:00:00.000Z', p_to: '2026-03-31T23:59:59.999Z', p_fiscal_year: false }
+    expect(client.rpc.mock.calls).toEqual([['behandlingshistorik_sources', window], ['behandlingshistorik_decisions', window]])
   })
 
   it('shows the verified principal beside the asserted actor, resolving its user, and nothing on older verifikat', async () => {
@@ -1071,8 +1142,8 @@ describe('generateBehandlingshistorik', () => {
     mockResults = {
       fiscal_periods: [{ data: period }],
       company_settings: [{ data: { company_name: 'T', org_number: null } }],
-      journal_entries: [{ data: [baseEntry, verifiedEntry] }],
     }
+    rpcResults = { behandlingshistorik_sources: ledger({ entries: [baseEntry, verifiedEntry] }) }
     const resolve = vi.fn().mockResolvedValue(new Map([['user-1', 'anna@example.se'], ['user-2', 'bo@example.se']]))
 
     const report = await generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' }, {
@@ -1090,39 +1161,17 @@ describe('generateBehandlingshistorik', () => {
     })
   })
 
-  it('reads without the verified principal on a database the migration has not reached yet', async () => {
-    mockResults = {
-      fiscal_periods: [{ data: period }],
-      company_settings: [{ data: { company_name: 'T', org_number: null } }],
-      journal_entries: [
-        { data: null, error: { code: '42703', message: 'column journal_entries.committed_auth_role does not exist' } },
-        { data: [baseEntry] },
-      ],
+  it('fails with the SQLSTATE when a read fails', async () => {
+    for (const fn of ['behandlingshistorik_sources', 'behandlingshistorik_decisions']) {
+      mockResults = {
+        fiscal_periods: [{ data: period }],
+        company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      }
+      rpcResults = { [fn]: { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } } }
+      await expect(generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' })).rejects.toMatchObject({
+        code: '57014',
+      })
     }
-    const client = makeClient()
-
-    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })
-
-    expect(report!.events.map((e) => e.id)).toEqual(['entry:entry-1'])
-    expect(report!.events[0]).not.toHaveProperty('verified')
-    const entrySelects = client.from.mock.calls
-      .map((call: string[], i: number) => [call[0], client.from.mock.results[i].value.select.mock.calls[0]?.[0]])
-      .filter(([table]: string[]) => table === 'journal_entries')
-      .map(([, columns]: string[]) => columns)
-    expect(entrySelects).toHaveLength(2)
-    expect(entrySelects[0]).toContain('committed_auth_role')
-    expect(entrySelects[1]).not.toContain('committed_auth_role')
-  })
-
-  it('still fails on any other read error', async () => {
-    mockResults = {
-      fiscal_periods: [{ data: period }],
-      company_settings: [{ data: { company_name: 'T', org_number: null } }],
-      journal_entries: [{ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }],
-    }
-    await expect(generateBehandlingshistorik(makeClient(), 'company-1', { periodId: 'period-1' })).rejects.toMatchObject({
-      code: '57014',
-    })
   })
 })
 
@@ -1583,9 +1632,6 @@ describe('collection cases', () => {
     mockResults = {
       fiscal_periods: [{ data: period }],
       company_settings: [{ data: { company_name: 'T', org_number: null } }],
-      journal_entries: [{ data: [] }],
-      audit_log: [{ data: [] }],
-      journal_entry_rattelse_log: [{ data: [] }],
       company_migration_resets: [{ data: [] }],
       app_releases: [{ data: [] }],
       sie_imports: [{ data: [] }],
@@ -1895,15 +1941,25 @@ describe('generateBehandlingshistorik: Beslut och förslag', () => {
     mockResults = {
       fiscal_periods: [{ data: period }],
       company_settings: [{ data: { company_name: 'T', org_number: null } }],
-      journal_entries: [{ data: [baseEntry] }],
-      audit_log: [{ data: [] }, { data: [] }],
-      journal_entry_rattelse_log: [{ data: [] }, { data: [] }],
       company_migration_resets: [{ data: [] }],
       app_releases: [{ data: [] }],
       sie_imports: [{ data: [] }],
       bank_file_imports: [{ data: [] }],
-      suggestion_log: [{ data: [decision] }, { data: [decision, late] }],
-      pending_operations: [{ data: [] }, { data: [] }],
+    }
+    rpcResults = {
+      behandlingshistorik_sources: ledger({ entries: [baseEntry] }),
+      // Both rows (the window's and the one that booked one of the year's
+      // vouchers in January), with the voucher their receipts name.
+      behandlingshistorik_decisions: {
+        data: [{
+          rows: [decision, late],
+          entries: [{ id: 'entry-1', voucher_series: 'A', voucher_number: 12, status: 'posted', committed_actor_type: null, committed_actor_label: null, commit_method: 'user_accept' }],
+          operations: [],
+          legacy_by_entry: [],
+          legacy_by_registration: [],
+        }],
+        error: null,
+      },
     }
     const client = makeClient()
     const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' }, {
@@ -1913,16 +1969,16 @@ describe('generateBehandlingshistorik: Beslut och förslag', () => {
     expect(decisions.map((e) => e.id)).toEqual(['decision:sl-1', 'decision:sl-2'])
     expect(decisions[0]).toMatchObject({ object: 'A12', event: 'Bokfört utan förslag', actor: { type: 'user', label: 'anna@example.se' } })
     expect(report!.by_category.beslut).toBe(2)
-    // The voucher came from the year's entries: no second journal_entries read.
-    expect(client.from.mock.calls.filter((c: string[]) => c[0] === 'journal_entries')).toHaveLength(1)
-    expect(client.from).toHaveBeenCalledWith('pending_operations')
+    // The rows and what their receipts read arrive together: no table reads.
+    for (const table of ['journal_entries', 'suggestion_log', 'pending_operations']) {
+      expect(client.from).not.toHaveBeenCalledWith(table)
+    }
   })
 
-  it('reads no voucher or operation when the year has no decision', async () => {
+  it('lists no decision when the year has none', async () => {
     mockResults = {
       fiscal_periods: [{ data: period }],
       company_settings: [{ data: { company_name: 'T', org_number: null } }],
-      journal_entries: [{ data: [] }],
     }
     const client = makeClient()
     const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' })

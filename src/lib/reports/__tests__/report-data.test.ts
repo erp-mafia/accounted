@@ -5,6 +5,7 @@ import {
   reportRequestKey,
   startReportRequest,
   viewReportData,
+  viewReportPages,
   type SettledReport,
 } from '../report-data'
 
@@ -170,5 +171,45 @@ describe('report data', () => {
         error: null,
       })
     })
+  })
+})
+
+describe('viewReportPages', () => {
+  const ok = (data: string) => ({ data, error: null })
+
+  it('fetches nothing without a base URL', () => {
+    expect(viewReportPages(null, { base: null, urls: [] }, { base: null, results: {} })).toEqual({
+      pages: [], pending: null, error: null, loading: false,
+    })
+  })
+
+  it('asks for the first page of a new base URL, whatever another base kept', () => {
+    const view = viewReportPages(
+      '/p?a=1',
+      { base: '/p?a=0', urls: ['/p?a=0', '/p?a=0&after=x'] },
+      { base: '/p?a=0', results: { '/p?a=0': ok('old') } },
+    )
+    expect(view).toEqual({ pages: [], pending: '/p?a=1', error: null, loading: true })
+  })
+
+  it('renders the pages in the order they were asked for, and asks for the first unanswered one', () => {
+    const chain = { base: '/p', urls: ['/p', '/p?after=1', '/p?after=2'] }
+    // The third page answered before the second: it waits behind it.
+    const view = viewReportPages('/p', chain, { base: '/p', results: { '/p': ok('one'), '/p?after=2': ok('three') } })
+    expect(view).toEqual({ pages: ['one'], pending: '/p?after=1', error: null, loading: true })
+
+    const done = viewReportPages('/p', chain, {
+      base: '/p',
+      results: { '/p': ok('one'), '/p?after=1': ok('two'), '/p?after=2': ok('three') },
+    })
+    expect(done).toEqual({ pages: ['one', 'two', 'three'], pending: null, error: null, loading: false })
+  })
+
+  it('stops at a failed page and keeps the ones before it', () => {
+    const view = viewReportPages('/p', { base: '/p', urls: ['/p', '/p?after=1'] }, {
+      base: '/p',
+      results: { '/p': ok('one'), '/p?after=1': { data: null, error: 'Kunde inte hämta' } },
+    })
+    expect(view).toEqual({ pages: ['one'], pending: null, error: 'Kunde inte hämta', loading: false })
   })
 })

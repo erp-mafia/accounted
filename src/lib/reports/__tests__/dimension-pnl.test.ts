@@ -5,10 +5,11 @@ import type { TrialBalanceRow } from '@/types'
 // Resultat per projekt/kostnadsställe (dimensions PR4).
 //
 // generateTrialBalance is mocked (post-processor pattern, like
-// resultatrapport.test.ts); the rest of trial-balance.ts stays real, since
-// the tagged pass applies its shared year-end exclusion. The registry +
-// tagged-line queries use a table-keyed FIFO mock, and the window/exclusion
-// suite at the end a small filter-aware ledger mock.
+// resultatrapport.test.ts). The tagged pass is one SQL call,
+// get_dimension_pnl_buckets; both fakes below answer it the way the function
+// does (tests/pg/ledger-account-days.pg.test.ts pins the function itself on
+// real Postgres). The registry reads use a table-keyed FIFO mock, and the
+// window/exclusion suite at the end a small ledger mock.
 // ============================================================
 
 vi.mock('../trial-balance', async (importOriginal) => ({
@@ -29,28 +30,53 @@ function makeBuilder(tableName: string) {
   for (const m of ['select', 'eq', 'in', 'lt', 'lte', 'gte', 'neq', 'not', 'or', 'contains', 'order', 'range']) {
     b[m] = vi.fn().mockReturnValue(b)
   }
-  const consume = (): MockResult => {
-    const queue = mockResults[tableName]
-    if (!queue || queue.length === 0) {
-      // The two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts) reads
-      // journal_entries before journal_entry_lines. Tests queue line rows
-      // directly, so default the entries step to one generic entry.
-      if (tableName === 'journal_entries') {
-        return { data: [{ id: 'entry-1' }], error: null }
-      }
-      return { data: null, error: null }
-    }
-    return queue.shift()!
-  }
+  const consume = (): MockResult => consumeQueued(tableName)
   b.single = vi.fn().mockImplementation(async () => consume())
   b.maybeSingle = vi.fn().mockImplementation(async () => consume())
   b.then = (resolve: (v: unknown) => void) => resolve(consume())
   return b
 }
 
+function consumeQueued(tableName: string): MockResult {
+  const queue = mockResults[tableName]
+  if (!queue || queue.length === 0) return { data: null, error: null }
+  return queue.shift()!
+}
+
+interface BucketLine {
+  account_number: string
+  debit_amount: number
+  credit_amount: number
+  dimensions: Record<string, unknown>
+}
+
+/** What get_dimension_pnl_buckets returns for these lines: per account and
+ *  stored value of the dimension (string values only), debit and credit. */
+function bucketsFromLines(lines: BucketLine[], dimNo: string) {
+  const sums = new Map<string, { account_number: string; code: string; debit: number; credit: number }>()
+  for (const line of lines) {
+    const code = line.dimensions?.[dimNo]
+    if (typeof code !== 'string') continue
+    const key = `${line.account_number}\u0000${code}`
+    const agg = sums.get(key) ?? { account_number: line.account_number, code, debit: 0, credit: 0 }
+    agg.debit += line.debit_amount
+    agg.credit += line.credit_amount
+    sums.set(key, agg)
+  }
+  return [...sums.values()]
+}
+
 function makeClient() {
   return {
     from: vi.fn().mockImplementation((table: string) => makeBuilder(table)),
+    // The tagged lines a test queues under journal_entry_lines are the lines
+    // the function sums.
+    rpc: vi.fn().mockImplementation(async (fn: string, args: { p_dim_no: string }) => {
+      if (fn !== 'get_dimension_pnl_buckets') return { data: null, error: null }
+      const queued = consumeQueued('journal_entry_lines')
+      if (queued.error) return queued
+      return { data: bucketsFromLines((queued.data as BucketLine[] | null) ?? [], args.p_dim_no), error: null }
+    }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
 }
@@ -347,28 +373,45 @@ describe('generateDimensionPnl', () => {
     expect(report.net_per_column).toEqual([400, 300])
   })
 
-  it('never asks PostgREST for a dimensions->>N path (it reads a digits-only operand as an array index)', async () => {
+  it('reads the tagged pass as one SQL call, never line by line through PostgREST', async () => {
     mockResults = { fiscal_periods: [{ data: PERIOD, error: null }] }
     mockTrialBalance.mockResolvedValue(tb([tbRow({ account_number: '3001', account_class: 3, closing_credit: 100 })]))
 
-    await generateDimensionPnl(supabase, 'company-1', 'period-1', '6')
+    await generateDimensionPnl(supabase, 'company-1', 'period-1', '6', { fromDate: '2026-02-01', toDate: '2026-02-28' })
 
-    const lineQueries = supabase.from.mock.calls
-      .map(([table]: [string], i: number) => ({ table, builder: supabase.from.mock.results[i].value }))
-      .filter((q: { table: string }) => q.table === 'journal_entry_lines')
-    expect(lineQueries.length).toBeGreaterThan(0)
-    for (const { builder } of lineQueries) {
-      // The tagged pass narrows to lines with a non-empty bag.
-      expect(builder.neq).toHaveBeenCalledWith('dimensions', '{}')
-      // No filter names a JSON path: `dimensions->>6` is `dimensions ->> 6`
-      // (integer) to PostgREST, NULL on every object, so it matched no line
-      // and the whole result read as untagged.
-      for (const method of ['not', 'eq', 'neq', 'in', 'or', 'gte', 'lte', 'lt', 'contains']) {
-        for (const [column] of builder[method].mock.calls) {
-          expect(String(column), `${method}(${String(column)})`).not.toMatch(/->/)
-        }
-      }
+    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(supabase.rpc).toHaveBeenCalledWith('get_dimension_pnl_buckets', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+      p_dim_no: '6',
+      p_from_date: '2026-02-01',
+      p_to_date: '2026-02-28',
+    })
+    const tables = supabase.from.mock.calls.map(([table]: [string]) => table)
+    expect(tables).not.toContain('journal_entry_lines')
+    expect(tables).not.toContain('journal_entries')
+  })
+
+  it('trims and merges stored values the way normalizeLineDimensions does', async () => {
+    mockResults = {
+      fiscal_periods: [{ data: PERIOD, error: null }],
+      journal_entry_lines: [
+        {
+          data: [
+            { account_number: '3001', debit_amount: 0, credit_amount: 600, dimensions: { '6': 'P1' } },
+            { account_number: '3001', debit_amount: 0, credit_amount: 300, dimensions: { '6': ' P1\t' } },
+            { account_number: '3001', debit_amount: 0, credit_amount: 100, dimensions: { '6': '  ' } },
+          ],
+          error: null,
+        },
+      ],
     }
+    mockTrialBalance.mockResolvedValue(tb([tbRow({ account_number: '3001', account_class: 3, closing_credit: 1000 })]))
+
+    const report = await generateDimensionPnl(supabase, 'company-1', 'period-1', '6')
+
+    expect(report.columns.map((c) => c.code)).toEqual(['P1', null])
+    expect(report.groups[0].rows[0].values).toEqual([900, 100])
   })
 
   it('rejects a non-numeric dimension number', async () => {
@@ -386,14 +429,14 @@ describe('generateDimensionPnl', () => {
 })
 
 // ============================================================
-// Window and exclusions, against a filter-aware ledger mock.
+// Window and exclusions, against a small ledger mock.
 //
-// The FIFO mock above ignores filters, so it cannot show WHICH lines the
-// tagged pass reads. This one applies the filters the pass sends (eq, neq,
-// in, gte, lte and the or() chain filter on journal_entries; the entry-id
-// chunk and the dimension key on journal_entry_lines), so a missing filter
-// shows up as a wrong cell. generateTrialBalance stays mocked: its rows are
-// what get_trial_balance_aggregates returns for the same ledger.
+// The FIFO mock above has no entries, so it cannot show WHICH lines the
+// tagged pass sums. This one answers get_dimension_pnl_buckets from a ledger
+// with an IB entry, a retagged year-end entry and the storno of last year's
+// reversed one, so a matrix built from the wrong set shows up as a wrong
+// cell. generateTrialBalance stays mocked: its rows are what
+// get_trial_balance_aggregates returns for the same ledger.
 // ============================================================
 
 type Row = Record<string, unknown>
@@ -470,8 +513,29 @@ function ledgerClient(ledger: { period: Row; entries: LedgerEntry[]; lines: Ledg
     }
     return b
   }
+  // get_dimension_pnl_buckets on this ledger: the period's posted/reversed
+  // entries inside the window, without the opening-balance entry, year_end
+  // entries and the storno/rättelse of a reversed year_end entry.
+  const rpc = vi.fn(async (fn: string, args: Record<string, string | null>) => {
+    if (fn !== 'get_dimension_pnl_buckets') return { data: null, error: null }
+    const reversedYearEnd = new Set(
+      ledger.entries.filter((e) => e.source_type === 'year_end' && e.status === 'reversed').map((e) => e.id),
+    )
+    const included = new Set(
+      ledger.entries
+        .filter((e) => e.fiscal_period_id === args.p_fiscal_period_id)
+        .filter((e) => !args.p_from_date || e.entry_date >= args.p_from_date)
+        .filter((e) => !args.p_to_date || e.entry_date <= args.p_to_date)
+        .filter((e) => e.id !== ledger.period.opening_balance_entry_id)
+        .filter((e) => e.source_type !== 'year_end')
+        .filter((e) => !reversedYearEnd.has(String(e.reverses_id)) && !reversedYearEnd.has(String(e.correction_of_id)))
+        .map((e) => e.id),
+    )
+    const lines = ledger.lines.filter((l) => included.has(l.journal_entry_id))
+    return { data: bucketsFromLines(lines, String(args.p_dim_no)), error: null }
+  })
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return { from: vi.fn((table: string) => builder(table)) } as any
+  return { from: vi.fn((table: string) => builder(table)), rpc } as any
 }
 
 // One räkenskapsår tagged on dimension 1 (kostnadsställe KS01):

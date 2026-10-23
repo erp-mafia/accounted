@@ -112,6 +112,13 @@ export function assembleMonthlyBreakdown(
  * production as 28 companies affected, worst case a single month understated by
  * 10 347 472 kr. Mirrors tb_ex_ye_entries in get_kpi_report_aggregates, which
  * serves the same chart on the no-dimension hot path; the two must agree.
+ *
+ * Without a dimension filter the months come from that RPC itself (its
+ * `monthly`, with no IB entry left out, which is this function's entry set):
+ * it reads ledger_account_days, while summing the lines here paged every
+ * verifikat and line of the period through PostgREST (~550 round trips and
+ * ~2.5 s for a year of 50 000 verifikat). A dimension filter keeps the line
+ * path below, since the daily sums cannot be split by dimension.
  */
 export async function generateMonthlyBreakdown(
   supabase: SupabaseClient,
@@ -136,6 +143,31 @@ export async function generateMonthlyBreakdown(
   if (periodError) throw dbError(periodError, 'monthly breakdown: fiscal period read failed')
   if (!period) {
     return { months: [] }
+  }
+
+  if (!options?.dimensions || Object.keys(options.dimensions).length === 0) {
+    const { data, error } = await supabase.rpc('get_kpi_report_aggregates', {
+      p_company_id: companyId,
+      p_fiscal_period_id: fiscalPeriodId,
+      p_ob_entry_id: null,
+    })
+    if (error) throw dbError(error, 'monthly breakdown: get_kpi_report_aggregates failed')
+    const monthly = ((data as { monthly?: unknown } | null)?.monthly ?? []) as Array<{
+      year: number
+      month: number
+      income: number
+      expenses: number
+    }>
+    return assembleMonthlyBreakdown(
+      period.period_start,
+      period.period_end,
+      monthly.map((m) => ({
+        year: Number(m.year),
+        month0: Number(m.month) - 1,
+        income: Number(m.income) || 0,
+        expenses: Number(m.expenses) || 0,
+      })),
+    )
   }
 
   // Year-end exclusion, the trial balance's 'exclude-all-year-end' rule

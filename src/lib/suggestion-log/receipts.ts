@@ -2,7 +2,6 @@ import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { slateAccount } from '@/lib/bookkeeping/proposal'
 import { dbError } from '@/lib/errors/db-error'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { BankLineFinal, DecisionOutcome, LoggedSuggestion } from './classify'
 import type { InboxFinal, InboxSuggestion } from './inbox-classify'
 import { DECISION_CHECK_RESULTS } from './checks'
@@ -520,43 +519,66 @@ export async function fetchDecisionRows(
   return (data ?? []) as SuggestionLogRow[]
 }
 
+/** The row behandlingshistorik_decisions() returns: the decisions and what their receipts read. */
+interface PeriodDecisionRows {
+  rows: SuggestionLogRow[]
+  entries: ReceiptEntryRow[]
+  operations: ReceiptOperationRow[]
+  legacy_by_entry: ReceiptOperationRow[]
+  legacy_by_registration: ReceiptOperationRow[]
+}
+
 /**
- * The decisions registered inside a window, plus (in fiscal-year mode) every
- * decision that booked one of the year's vouchers whenever it was made: a
- * December bank line booked in January belongs to the year it was booked in.
+ * The decisions behandlingshistoriken lists for a fiscal period, with the
+ * context their receipts read, in one statement (behandlingshistorik_decisions,
+ * migration 20261023094050): those registered inside the window, plus in
+ * fiscal-year mode every decision that booked one of the period's vouchers
+ * whenever it was made (a December bank line booked in January belongs to the
+ * year it was booked in). The period's vouchers are joined in SQL: sent as
+ * .in() lists of 200 ids they crossed the gateway's 8 KB request line and the
+ * report answered 414 for every year with more than about 200 verifikat. The
+ * context is the one loadReceiptContext builds.
  */
-export async function fetchDecisionRowsInWindow(
+export async function fetchPeriodDecisions(
   supabase: SupabaseClient,
   companyId: string,
-  window: { fromTs: string; toTs: string },
-  entryIds: string[] = [],
-): Promise<SuggestionLogRow[]> {
-  const byId = new Map<string, SuggestionLogRow>()
-  const windowed = await fetchAllRows<SuggestionLogRow>(({ from, to }) =>
-    supabase
-      .from('suggestion_log')
-      .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id')
-      .eq('company_id', companyId)
-      .gte('created_at', window.fromTs)
-      .lte('created_at', window.toTs)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
-  for (const row of windowed) byId.set(row.id, row)
-  for (const ids of chunk(entryIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<SuggestionLogRow>(({ from, to }) =>
-      supabase
-        .from('suggestion_log')
-        .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id')
-        .eq('company_id', companyId)
-        .in('final->>journal_entry_id', ids)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-    for (const row of rows) byId.set(row.id, row)
+  args: { periodId: string; window: { fromTs: string; toTs: string }; fiscalYear: boolean },
+): Promise<{ rows: SuggestionLogRow[]; context: ReceiptContext }> {
+  const { data, error } = await supabase.rpc('behandlingshistorik_decisions', {
+    p_company_id: companyId,
+    p_period_id: args.periodId,
+    p_from: args.window.fromTs,
+    p_to: args.window.toTs,
+    p_fiscal_year: args.fiscalYear,
+  })
+  if (error) throw dbError(error)
+  const result = ((data as Partial<PeriodDecisionRows>[] | null) ?? [])[0] ?? {}
+  const operations = new Map<string, ReceiptOperationRow>()
+  keyLegacyOperations(operations, [...(result.legacy_by_entry ?? []), ...(result.legacy_by_registration ?? [])])
+  return {
+    rows: result.rows ?? [],
+    context: {
+      entries: new Map((result.entries ?? []).map((e) => [e.id, e])),
+      operations,
+      operationsById: new Map((result.operations ?? []).map((op) => [op.id, op])),
+    },
   }
-  return [...byId.values()]
+}
+
+/**
+ * Committed operations found by the voucher they booked (rows written before
+ * pending_operation_id was recorded), keyed by that voucher: a categorize or
+ * voucher op names it journal_entry_id, a supplier invoice registered from an
+ * underlag registration_journal_entry_id. The latest approval wins when a
+ * voucher was somehow carried twice.
+ */
+function keyLegacyOperations(into: Map<string, ReceiptOperationRow>, ops: ReceiptOperationRow[]): void {
+  for (const op of ops) {
+    const key = op.journal_entry_id ?? op.registration_journal_entry_id
+    if (!key) continue
+    const prev = into.get(key)
+    if (!prev || (op.resolved_at ?? '') > (prev.resolved_at ?? '')) into.set(key, op)
+  }
 }
 
 /**
@@ -631,13 +653,7 @@ export async function loadReceiptContext(
     ])
     if (byEntry.error) throw dbError(byEntry.error)
     if (byRegistration.error) throw dbError(byRegistration.error)
-    for (const op of [...(byEntry.data ?? []), ...(byRegistration.data ?? [])] as ReceiptOperationRow[]) {
-      const key = op.journal_entry_id ?? op.registration_journal_entry_id
-      if (!key) continue
-      // The latest approval wins when a voucher was somehow carried twice.
-      const prev = operations.get(key)
-      if (!prev || (op.resolved_at ?? '') > (prev.resolved_at ?? '')) operations.set(key, op)
-    }
+    keyLegacyOperations(operations, [...(byEntry.data ?? []), ...(byRegistration.data ?? [])] as ReceiptOperationRow[])
   }
   return { entries, operations, operationsById }
 }

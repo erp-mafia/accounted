@@ -1,32 +1,22 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createReskontraClient, type ReskontraTables } from '@/tests/reskontra-rpc-port'
 
 // ============================================================
-// Mock: sequential result queue (the register side), and the booked
-// balance the balance sheet reads (closingBalanceOf, the ledger side)
+// The register side reads the live kundreskontra population
+// (get_ar_ledger_invoices) and the coverage probe through rpc(), answered
+// from `tables` by their JS ports (tests/reskontra-rpc-port.ts); the ledger
+// side is the booked balance the balance sheet reads (closingBalanceOf).
 // ============================================================
 
-let resultIdx: number
-let results: Array<{ data?: unknown; error?: unknown }>
-let calls: Array<{ method: string; args: unknown[] }>
+let tables: ReskontraTables
+const { supabase, calls } = createReskontraClient(() => tables)
 
-function makeBuilder() {
-  const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'or', 'not', 'order', 'range']) {
-    b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
-      calls.push({ method: m, args })
-      return b
-    })
+/** The books; an invoice without an id or a status is an open ('sent') one. */
+function setBooks(books: ReskontraTables) {
+  tables = {
+    ...books,
+    invoices: (books.invoices ?? []).map((row, i) => ({ id: `inv-${i + 1}`, status: 'sent', ...row })),
   }
-  b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
-  b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
-  return b
-}
-
-function makeClient() {
-  return {
-    from: vi.fn().mockImplementation(() => makeBuilder()),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any
 }
 
 vi.mock('../trial-balance', () => ({
@@ -41,37 +31,41 @@ function booked(amount: number) {
   vi.mocked(closingBalanceOf).mockResolvedValue(amount)
 }
 
-let supabase: ReturnType<typeof makeClient>
-
 beforeEach(() => {
   vi.clearAllMocks()
-  resultIdx = 0
-  results = []
-  calls = []
-  supabase = makeClient()
+  calls.length = 0
+  tables = {}
   booked(0)
 })
 
 describe('generateARReconciliation', () => {
   it('only reads fakturor: proformas, delivery notes and quotes are not receivables', async () => {
-    results = [{ data: [], error: null }]
+    setBooks({
+      invoices: [
+        { total: 1000, paid_amount: 0 },
+        { total: 900, paid_amount: 0, document_type: 'proforma' },
+        { total: 800, paid_amount: 0, document_type: 'quote' },
+      ],
+    })
+    booked(1000)
 
-    await generateARReconciliation(supabase, 'company-1', 'period-1')
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
 
-    expect(calls).toContainEqual({ method: 'eq', args: ['document_type', 'invoice'] })
+    // The live population: no as-of date.
+    expect(calls.find((c) => c.name === 'get_ar_ledger_invoices')?.args).toEqual({
+      p_company_id: 'company-1',
+      p_as_of_date: null,
+      p_customer_id: null,
+    })
+    expect(result.ar_ledger_total).toBe(1000)
+    expect(result.is_reconciled).toBe(true)
   })
 
   it('returns reconciled when AR ledger matches account 1510', async () => {
-    results = [
-      // 0: invoices
-      {
-        data: [
-          { total: 5000, paid_amount: 2000 },
-          { total: 3000, paid_amount: 0 },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({ invoices: [
+        { total: 5000, paid_amount: 2000 },
+        { total: 3000, paid_amount: 0 },
+      ] })
     booked(6000)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -84,7 +78,7 @@ describe('generateARReconciliation', () => {
   })
 
   it('detects difference when AR ledger does not match account 1510', async () => {
-    results = [{ data: [{ total: 5000, paid_amount: 0 }], error: null }]
+    setBooks({ invoices: [{ total: 5000, paid_amount: 0 }] })
     // The invoice's 5 000 plus a manual 1 000 debit on 1510.
     booked(6000)
 
@@ -97,7 +91,7 @@ describe('generateARReconciliation', () => {
   })
 
   it('returns zero balances when no data exists', async () => {
-    results = [{ data: [], error: null }]
+    setBooks({ invoices: [] })
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
 
@@ -107,8 +101,8 @@ describe('generateARReconciliation', () => {
     expect(result.is_reconciled).toBe(true)
   })
 
-  it('handles null invoice data gracefully', async () => {
-    results = [{ data: null, error: null }]
+  it('handles a company without invoices gracefully', async () => {
+    setBooks({})
     booked(3000)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -123,7 +117,7 @@ describe('generateARReconciliation', () => {
     // A fakturamodellen invoice splits the AR receivable across 1510
     // (customer portion) and 1513 (Skatteverket claim): both are read, by
     // account role (accounts_receivable and rot_rut_receivable in the SE pack).
-    results = [{ data: [{ total: 1500, paid_amount: 0, currency: 'SEK', exchange_rate: null }], error: null }]
+    setBooks({ invoices: [{ total: 1500, paid_amount: 0, currency: 'SEK', exchange_rate: null }] })
     booked(1500)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -138,16 +132,11 @@ describe('generateARReconciliation', () => {
     // (1 000). 1510 opens at the 4 000 carried from last year's verifikat and
     // the year's own lines add 1 000: the booked side is the account's UB,
     // 5 000, not the year's 1 000.
-    results = [
-      {
-        data: [
-          { total: 2500, paid_amount: 0 },
-          { total: 1500, paid_amount: 0 },
-          { total: 1000, paid_amount: 0 },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({ invoices: [
+        { total: 2500, paid_amount: 0 },
+        { total: 1500, paid_amount: 0 },
+        { total: 1000, paid_amount: 0 },
+      ] })
     booked(5000)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -159,7 +148,7 @@ describe('generateARReconciliation', () => {
   })
 
   it('a failed balance read fails the reconciliation instead of reading 0', async () => {
-    results = [{ data: [{ total: 1000, paid_amount: 0 }], error: null }]
+    setBooks({ invoices: [{ total: 1000, paid_amount: 0 }] })
     vi.mocked(closingBalanceOf).mockRejectedValue(new Error('get_trial_balance_aggregates failed'))
 
     await expect(generateARReconciliation(supabase, 'company-1', 'period-1')).rejects.toThrow(
@@ -168,17 +157,10 @@ describe('generateARReconciliation', () => {
   })
 
   it('converts foreign-currency outstanding to SEK before reconciliation', async () => {
-    results = [
-      // 0: invoices: 225 EUR at 11 (with 25 EUR paid) → 200 EUR → 2 200 SEK,
-      //    plus 1 000 SEK invoice (no payment)
-      {
-        data: [
-          { total: 225, paid_amount: 25, currency: 'EUR', exchange_rate: 11 },
-          { total: 1000, paid_amount: 0, currency: 'SEK', exchange_rate: null },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({ invoices: [
+        { total: 225, paid_amount: 25, currency: 'EUR', exchange_rate: 11 },
+        { total: 1000, paid_amount: 0, currency: 'SEK', exchange_rate: null },
+      ] })
     booked(3200)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -191,16 +173,10 @@ describe('generateARReconciliation', () => {
   })
 
   it('excludes FX invoices without exchange_rate from the SEK total and counts them', async () => {
-    results = [
-      // 0: invoices: 100 EUR without rate (excluded), 500 SEK control
-      {
-        data: [
-          { total: 100, paid_amount: 0, currency: 'EUR', exchange_rate: null },
-          { total: 500, paid_amount: 0, currency: 'SEK', exchange_rate: null },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({ invoices: [
+        { total: 100, paid_amount: 0, currency: 'EUR', exchange_rate: null },
+        { total: 500, paid_amount: 0, currency: 'SEK', exchange_rate: null },
+      ] })
     // 1510 balance reflects only the SEK invoice
     booked(500)
 
@@ -217,21 +193,12 @@ describe('generateARReconciliation', () => {
   })
 
   it('includes partially paid invoices: their remainder is still on 1510 (feedback seq 817399)', async () => {
-    results = [
-      // 0: invoices: 15 625 invoiced, 15 000 paid, 625 open
-      {
-        data: [{ id: 'inv-pp', total: 15625, paid_amount: 15000, currency: 'SEK', exchange_rate: null }],
-        error: null,
-      },
-    ]
+    setBooks({ invoices: [{ id: 'inv-pp', total: 15625, paid_amount: 15000, currency: 'SEK', exchange_rate: null }] })
     // 1510: the invoice debit and the partial payment credit
     booked(625)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
 
-    // The open invoices query filters its population with .or().
-    const invoiceStatuses = calls.find((c) => c.method === 'or')?.args[0]
-    expect(invoiceStatuses).toContain('partially_paid')
     expect(result.ar_ledger_total).toBe(625)
     expect(result.account_1510_balance).toBe(625)
     expect(result.difference).toBe(0)
@@ -239,7 +206,7 @@ describe('generateARReconciliation', () => {
   })
 
   it('uses Math.round for monetary precision', async () => {
-    results = [{ data: [{ total: 100.1, paid_amount: 33.33 }], error: null }]
+    setBooks({ invoices: [{ total: 100.1, paid_amount: 33.33 }] })
     booked(66.77)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -256,33 +223,24 @@ describe('generateARReconciliation: a credit note set off against a new invoice 
   // then that credit linked as the payment of a new 50 000 invoice: the
   // credit note's own verifikat is the new invoice's payment row.
   it('counts the used credit once, so the kundreskontra ties out against 1510', async () => {
-    results = [
-      // 0: open invoices (the credited original is not in this population)
-      {
-        data: [
-          { id: 'cn', total: -40000, paid_amount: null, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-cn' },
-          { id: 'new', total: 50000, paid_amount: 40000, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-new' },
-        ],
-        error: null,
-      },
-      // 1: the payment row the link wrote on the new invoice
-      {
-        data: [
-          {
-            id: 'pay-setoff', invoice_id: 'new', journal_entry_id: 'je-cn', amount: 40000, currency: 'SEK',
-            payment_exchange_rate: null, payment_date: '2026-09-10', invoice: { invoice_date: '2026-09-20' },
-          },
-        ],
-        error: null,
-      },
-    ]
+    setBooks({
+      invoices: [
+        { id: 'cn', total: -40000, paid_amount: null, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-cn' },
+        { id: 'new', total: 50000, paid_amount: 40000, currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-new' },
+      ],
+      invoice_payments: [
+        {
+          id: 'pay-setoff', invoice_id: 'new', journal_entry_id: 'je-cn', amount: 40000, currency: 'SEK',
+          payment_exchange_rate: null, payment_date: '2026-09-10', invoice: { invoice_date: '2026-09-20' },
+        },
+      ],
+    })
     // 1510: original 40 000, its payment -40 000, the credit note -40 000,
     // the new invoice 50 000.
     booked(10000)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
 
-    expect(calls).toContainEqual({ method: 'in', args: ['journal_entry_id', ['je-cn']] })
     expect(result.ar_ledger_total).toBe(10000)
     expect(result.account_1510_balance).toBe(10000)
     expect(result.difference).toBe(0)
@@ -301,45 +259,49 @@ describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () 
     id: 'inv-plain', total: 1250, paid_amount: 0, deduction_total: 0, deduction_reclaimed_total: 0,
     currency: 'SEK', exchange_rate: null, journal_entry_id: 'je-plain', status: 'sent',
   }
-  const item = (status: string, decided: number | null) => ({
-    id: `item-${status}`, invoice_id: 'inv-rut', decided_amount: decided,
-    request: { status, settlement: { entry_date: '2026-05-10' } },
+  // One begäran item for the invoice, on a begäran settled by the payout
+  // voucher of 2026-05-10.
+  const item = (status: string, decided: number | null): ReskontraTables => ({
+    rot_rut_payout_request_items: [{ id: `item-${status}`, invoice_id: 'inv-rut', request_id: `req-${status}`, decided_amount: decided }],
+    rot_rut_payout_requests: [{ id: `req-${status}`, status, settlement_journal_entry_id: 'je-payout' }],
+    journal_entries: [{ id: 'je-payout', entry_date: '2026-05-10', status: 'posted' }],
   })
   // Invoice voucher (1510 7 000, 1513 3 000), the buyer's payment, the plain
   // invoice: 1510 closes at 1 250 and 1513 at what Skatteverket has not paid
   // out (`rest1513`).
   const ledger = (rest1513: number) => booked(1250 + rest1513)
 
-  it('reads paid invoices with a deduction into the population', async () => {
-    results = [{ data: [], error: null }]
-
-    await generateARReconciliation(supabase, 'company-1', 'period-1')
-
-    const filter = calls.find((c) => c.method === 'or')?.args[0]
-    expect(filter).toBe('status.in.(sent,overdue,partially_paid),and(status.eq.paid,deduction_total.gt.0)')
-  })
-
-  it('counts the deduction of a paid invoice whose begäran is not settled', async () => {
-    results = [
-      { data: [rut, plain], error: null },
-      // No settled begäran item.
-      { data: [], error: null },
-    ]
+  it('reads paid invoices with a deduction into the population, and no credited originals', async () => {
+    // A credited original is the kundreskontra's to net, never the 1510
+    // reconciliation's; a paid invoice without a deduction is settled.
+    setBooks({
+      invoices: [
+        rut,
+        { ...plain, id: 'inv-credited', status: 'credited' },
+        { ...plain, id: 'inv-paid', status: 'paid', paid_amount: 1250 },
+      ],
+    })
     ledger(3000)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
 
-    expect(calls).toContainEqual({ method: 'in', args: ['invoice_id', ['inv-rut']] })
+    expect(result.ar_ledger_total).toBe(3000)
+    expect(result.is_reconciled).toBe(false)
+  })
+
+  it('counts the deduction of a paid invoice whose begäran is not settled', async () => {
+    setBooks({ invoices: [rut, plain] })
+    ledger(3000)
+
+    const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
+
     expect(result.ar_ledger_total).toBe(4250)
     expect(result.account_1510_balance).toBe(4250)
     expect(result.is_reconciled).toBe(true)
   })
 
   it('counts nothing once the begäran is settled in full', async () => {
-    results = [
-      { data: [rut, plain], error: null },
-      { data: [item('paid', 3000)], error: null },
-    ]
+    setBooks({ invoices: [rut, plain], ...item('paid', 3000) })
     ledger(0)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -350,10 +312,7 @@ describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () 
   })
 
   it('counts the refused remainder of a partly paid begäran', async () => {
-    results = [
-      { data: [rut, plain], error: null },
-      { data: [item('partially_paid', 2000)], error: null },
-    ]
+    setBooks({ invoices: [rut, plain], ...item('partially_paid', 2000) })
     ledger(1000)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -368,10 +327,7 @@ describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () 
     // invoice is partially_paid again and owes it as total - paid - payout.
     // 1510: 7 000 - 7 000 + 1 000 + 1 250; 1513: 3 000 - 2 000 - 1 000.
     const reclaimed = { ...rut, deduction_reclaimed_total: 1000, status: 'partially_paid' }
-    results = [
-      { data: [reclaimed, plain], error: null },
-      { data: [item('partially_paid', 2000)], error: null },
-    ]
+    setBooks({ invoices: [reclaimed, plain], ...item('partially_paid', 2000) })
     booked(2250)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -384,10 +340,7 @@ describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () 
   it('counts nothing for a paid invoice whose reclaimed remainder the buyer has paid', async () => {
     // 1510: the reclaimed 1 000 paid as well, so only the plain invoice is left.
     const settled = { ...rut, paid_amount: 8000, deduction_reclaimed_total: 1000 }
-    results = [
-      { data: [settled, plain], error: null },
-      { data: [item('partially_paid', 2000)], error: null },
-    ]
+    setBooks({ invoices: [settled, plain], ...item('partially_paid', 2000) })
     booked(1250)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
@@ -398,12 +351,11 @@ describe('generateARReconciliation: ROT/RUT invoices awaiting Skatteverket', () 
   })
 
   it('reads no begäran items when no invoice has a deduction', async () => {
-    results = [{ data: [plain], error: null }]
+    setBooks({ invoices: [plain] })
     booked(1250)
 
     const result = await generateARReconciliation(supabase, 'company-1', 'period-1')
 
-    expect(supabase.from).not.toHaveBeenCalledWith('rot_rut_payout_request_items')
     expect(result.ar_ledger_total).toBe(1250)
     expect(result.is_reconciled).toBe(true)
   })

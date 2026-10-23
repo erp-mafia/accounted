@@ -177,6 +177,124 @@ function ledgerOnlyLines(db: Db, args: Row): Row[] {
   return out.sort((a, b) => String(a.entry_date).localeCompare(String(b.entry_date)))
 }
 
+/** The live verifikat's date when it has a line on the account, as ledger_account_entries holds it. */
+function bankEntryDate(db: Db, companyId: unknown, entryId: unknown, account: unknown): string | null {
+  const e = db.journal_entries.find((x) => x.id === entryId && x.company_id === companyId)
+  if (!e || (e.status !== 'posted' && e.status !== 'reversed')) return null
+  const onAccount = db.journal_entry_lines.some((l) => l.journal_entry_id === entryId && l.account_number === account)
+  return onAccount ? String(e.entry_date) : null
+}
+
+const within = (d: string, from: unknown, to: unknown) =>
+  (!from || d >= String(from)) && (!to || d <= String(to))
+
+/** The bank rows of the scope, read as get_bank_reconciliation_facts / _items read them. */
+function scopedRows(db: Db, args: Row) {
+  return db.transactions.filter(
+    (t) =>
+      t.company_id === args.p_company_id &&
+      t.currency === args.p_currency &&
+      (!args.p_cash_account_id ||
+        t.cash_account_id === args.p_cash_account_id ||
+        (args.p_include_unassigned === true && (t.cash_account_id ?? null) === null)),
+  )
+}
+
+const byLine = (a: Row, b: Row) =>
+  String(a.entry_date).localeCompare(String(b.entry_date)) ||
+  Number(a.voucher_number) - Number(b.voucher_number) ||
+  String(a.line_id).localeCompare(String(b.line_id))
+
+/**
+ * get_bank_reconciliation_facts over `db`, for the shapes of this file (one
+ * SEK account, pointer links): the floor, the ledger sums, the aligned bank
+ * side and the ledger-only lines the SQL answers.
+ */
+function factsAnswer(db: Db, args: Row): Row {
+  const account = args.p_account_number
+  const lineSum = (entryId: unknown) =>
+    db.journal_entry_lines
+      .filter((l) => l.journal_entry_id === entryId && l.account_number === account)
+      .reduce((sum, l) => sum + Number(l.debit_amount) - Number(l.credit_amount), 0)
+  const live = db.journal_entries.filter(
+    (e) => e.company_id === args.p_company_id && (e.status === 'posted' || e.status === 'reversed'),
+  )
+  const ibDates = live
+    .filter((e) => e.status === 'posted' && e.source_type === 'opening_balance')
+    .filter((e) => bankEntryDate(db, args.p_company_id, e.id, account) !== null)
+    .map((e) => String(e.entry_date))
+    .filter((d) => within(d, args.p_date_from, args.p_date_to))
+    .sort()
+  const ibFloor = ibDates.at(-1) ?? null
+  const from = args.p_date_from && ibFloor ? [String(args.p_date_from), ibFloor].sort()[1] : (args.p_date_from ?? ibFloor ?? null)
+  const counted = live.filter((e) => within(String(e.entry_date), from, args.p_date_to) && bankEntryDate(db, args.p_company_id, e.id, account) !== null)
+  const rows = scopedRows(db, args)
+  const members = rows.filter((t) => {
+    const anchor = t.journal_entry_id ? bankEntryDate(db, args.p_company_id, t.journal_entry_id, account) : null
+    return within(anchor ?? String(t.date), from, args.p_date_to)
+  })
+  const open = members.filter((t) => !t.is_ignored)
+  const sum = (xs: Row[]) => roundOre(xs.reduce((s, t) => s + Number(t.amount), 0))
+  return {
+    ib_floor: ibFloor,
+    effective_from: from,
+    gl: {
+      balance: roundOre(counted.reduce((s, e) => s + lineSum(e.id), 0)),
+      opening_balance: roundOre(
+        counted.filter((e) => e.status === 'posted' && e.source_type === 'opening_balance').reduce((s, e) => s + lineSum(e.id), 0),
+      ),
+      correction_adjustment: roundOre(
+        counted.filter((e) => e.source_type === 'storno' || e.source_type === 'correction').reduce((s, e) => s + lineSum(e.id), 0),
+      ),
+      unconvertible_line_count: 0,
+    },
+    bank: {
+      count: open.length,
+      total: sum(open),
+      inflow: sum(open.filter((t) => Number(t.amount) > 0)),
+      outflow: sum(open.filter((t) => Number(t.amount) < 0)),
+      ignored_count: members.length - open.length,
+      ignored_total: sum(members.filter((t) => t.is_ignored)),
+      matched_count: open.filter((t) => t.journal_entry_id).length,
+      unmatched_count: open.filter((t) => !t.journal_entry_id).length,
+      unmatched_total: sum(open.filter((t) => !t.journal_entry_id)),
+      history_start: rows.map((t) => String(t.date)).sort()[0] ?? null,
+    },
+    read_window_cash_accounts: null,
+    saldo: null,
+    candidates: ledgerOnlyLines(db, { ...args, p_date_from: from }).sort(byLine),
+    entry_amounts: null,
+  }
+}
+
+/** get_bank_reconciliation_items over `db`, for the same shapes. */
+function itemsAnswer(db: Db, args: Row): Row {
+  const account = args.p_account_number
+  const rows = scopedRows(db, args)
+  const out: Row = {
+    history_start: args.p_with_ledger ? (rows.map((t) => String(t.date)).sort()[0] ?? null) : null,
+    ledger_lines: args.p_with_ledger ? ledgerOnlyLines(db, args).sort(byLine) : [],
+    fiscal_year_starts: [],
+  }
+  if ((out.ledger_lines as Row[]).length > 0) {
+    out.fiscal_year_starts = db.fiscal_periods.filter((p) => p.company_id === args.p_company_id).map((p) => p.period_start)
+  }
+  if (!args.p_with_rows) return out
+  const members = rows
+    .filter((t) => {
+      const anchor = t.journal_entry_id ? bankEntryDate(db, args.p_company_id, t.journal_entry_id, account) : null
+      return within(anchor ?? String(t.date), args.p_date_from, args.p_date_to)
+    })
+    .map((t): Row => ({ ...t, linked: Boolean(t.journal_entry_id), linked_journal_entry_id: t.journal_entry_id ?? null }))
+    .sort((a, b) => String(b.date).localeCompare(String(a.date)) || String(a.id).localeCompare(String(b.id)))
+  const matched = members.filter((t) => !t.is_ignored && t.linked)
+  const offset = Number(args.p_matched_offset ?? 0)
+  out.open_rows = members.filter((t) => t.is_ignored || !t.linked)
+  out.matched_count = matched.length
+  out.matched_rows = matched.slice(offset, offset + Number(args.p_matched_limit ?? 0))
+  return out
+}
+
 /** A supabase-js shaped client over `db`: filters, ranges, inserts and updates really apply. */
 function fakeSupabase(db: Db, options: { failTable?: string } = {}) {
   const reads: string[] = []
@@ -263,11 +381,20 @@ function fakeSupabase(db: Db, options: { failTable?: string } = {}) {
   }
   const supabase = {
     from: (table: string) => new Query(table, (db as unknown as Record<string, Row[]>)[table] ?? []),
-    rpc: (name: string, args: Row) =>
-      new Query(
+    rpc: (name: string, args: Row) => {
+      // The scalar-answer RPCs resolve to their object, as supabase-js does.
+      if (name === 'get_bank_reconciliation_facts' || name === 'get_bank_reconciliation_items') {
+        reads.push(`rpc:${name}`)
+        return Promise.resolve({
+          data: name === 'get_bank_reconciliation_facts' ? factsAnswer(db, args) : itemsAnswer(db, args),
+          error: null,
+        })
+      }
+      return new Query(
         `rpc:${name}`,
         name === 'get_unlinked_gl_lines' || name === 'get_account_gl_lines_for_matching' ? ledgerOnlyLines(db, args) : [],
-      ),
+      )
+    },
   }
   return { supabase: supabase as never, reads }
 }
@@ -692,7 +819,8 @@ describe('listAccountItems with settled verifikat', () => {
     const { supabase, reads } = fakeSupabase(db)
     const result = await listAccountItems(supabase, COMPANY, KEY, { bucket: 'matched', windowFrom: BOTH.from, windowTo: BOTH.to })
     expect(result!.items.map((i) => i.item_id)).toEqual([BANK_ROW])
-    expect(reads.filter((r) => r.startsWith('rpc:'))).toEqual([])
+    // The bank rows come from the listing's own read; no ledger-only list is asked for.
+    expect(reads.filter((r) => r.startsWith('rpc:'))).toEqual(['rpc:get_bank_reconciliation_items'])
   })
 })
 

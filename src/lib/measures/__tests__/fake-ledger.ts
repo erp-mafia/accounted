@@ -2,7 +2,9 @@
  * An in-memory company for the measure parity tests: tables answered by a
  * small PostgREST-shaped query builder that really filters, and the ledger
  * RPCs the report generators call (trial balance and KPI aggregates, the VAT
- * totals and ruta lines) computed from the same journal entries.
+ * totals and ruta lines) computed from the same journal entries. The
+ * reskontra reads (get_ar_ledger_invoices and its kin) are the JS ports in
+ * tests/reskontra-rpc-port.ts over the same tables.
  *
  * The point is that a measure and the report it equals run against ONE
  * database: neither generator is mocked, so a measure that read the ledger
@@ -10,6 +12,7 @@
  * another account set) would answer a different number here.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { reskontraRpcPorts } from '@/tests/reskontra-rpc-port'
 
 type Row = Record<string, unknown>
 
@@ -283,6 +286,20 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
   }
 
   const rpcs: Record<string, (args: Record<string, unknown>) => unknown> = {
+    ...reskontraRpcPorts({
+      invoices: tables.invoices,
+      customers: tables.customers,
+      invoice_items: tables.invoice_items,
+      invoice_payments: tables.invoice_payments,
+      invoice_write_offs: tables.invoice_write_offs,
+      rot_rut_payout_requests: tables.rot_rut_payout_requests,
+      rot_rut_payout_request_items: tables.rot_rut_payout_request_items,
+      journal_entries: tables.journal_entries,
+      journal_entry_lines: tables.journal_entry_lines,
+      supplier_invoices: tables.supplier_invoices,
+      suppliers: tables.suppliers,
+      supplier_invoice_payments: tables.supplier_invoice_payments,
+    }),
     get_trial_balance_aggregates(args) {
       const period = periodOf(args.p_fiscal_period_id)!
       const from = (args.p_from_date as string | null) ?? null
@@ -305,6 +322,43 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
         const [bucket, account_number] = key.split('|')
         return { bucket, account_number, debit: t.debit, credit: t.credit }
       })
+    },
+    // The huvudbok's lines in report order: the period's posted and
+    // reversed lines in the window and account range, the IB entry left out,
+    // under the jsonb containment filter.
+    get_general_ledger_lines(args) {
+      const from = (args.p_from_date as string | null) ?? null
+      const to = (args.p_to_date as string | null) ?? null
+      const accountFrom = (args.p_account_from as string | null) ?? null
+      const accountTo = (args.p_account_to as string | null) ?? null
+      const dims = (args.p_dimensions as Record<string, unknown> | null) ?? null
+      return ledgerLines()
+        .filter(({ line, entry }) => {
+          if (entry.fiscal_period_id !== args.p_fiscal_period_id || entry.id === args.p_exclude_entry_id) return false
+          if ((from && entry.entry_date < from) || (to && entry.entry_date > to)) return false
+          const account = line.account_number as string
+          if ((accountFrom && account < accountFrom) || (accountTo && account > accountTo)) return false
+          const tags = (line.dimensions as Record<string, unknown> | null) ?? {}
+          return !dims || Object.entries(dims).every(([key, value]) => tags[key] === value)
+        })
+        .sort((a, b) =>
+          compare(a.line.account_number, b.line.account_number) ||
+          compare(a.entry.entry_date, b.entry.entry_date) ||
+          a.entry.voucher_number - b.entry.voucher_number ||
+          compare(a.line.id, b.line.id))
+        .map(({ line, entry }) => ({
+          line_id: line.id,
+          account_number: line.account_number,
+          debit_amount: line.debit_amount,
+          credit_amount: line.credit_amount,
+          dimensions: line.dimensions,
+          journal_entry_id: entry.id,
+          entry_date: entry.entry_date,
+          voucher_series: entry.voucher_series,
+          voucher_number: entry.voucher_number,
+          description: entry.description,
+          source_type: entry.source_type,
+        }))
     },
     // The continuation-import fallback, simplified: balance-sheet accounts
     // (class 1-2) summed over every ledger entry before the period. The real

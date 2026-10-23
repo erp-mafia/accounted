@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { fetchPaymentsAsOf, outstandingAsOf, todayIsoDate, type PaymentsAsOf } from './reskontra-payments'
+import { outstandingAsOf, paymentsAsOfFromFacts, todayIsoDate, type PaymentsAsOf } from './reskontra-payments'
+import { fetchSupplierLedgerInvoices, type SupplierLedgerInvoice } from './supplier-ledger-invoices'
 
 /**
  * One open supplier invoice behind a ledger entry. Only present when the
@@ -75,39 +75,18 @@ export async function generateSupplierLedger(
   // today/future the stored open-invoice state IS the as-of state.
   const isHistorical = !!asOfDate && asOfDate < todayIsoDate()
 
-  // Fetch the ledger population. Live view: open invoices only. Historical
-  // view: also invoices paid since the as-of date, restricted to invoice
-  // dates on or before it. Disputed/credited/reversed invoices stay excluded,
+  // Fetch the ledger population, in one read (supplier-ledger-invoices.ts).
+  // Live view: open invoices only. Historical view: also invoices paid since
+  // the as-of date, restricted to invoice dates on or before it, with the
+  // payment history. Disputed/credited/reversed invoices stay excluded,
   // matching the live view's semantics.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let invoices: any[]
+  let invoices: SupplierLedgerInvoice[]
   let payments: PaymentsAsOf | null = null
   try {
-    invoices = await fetchAllRows(({ from, to }) => {
-      let query = supabase
-        .from('supplier_invoices')
-        .select('*, supplier:suppliers(id, name)')
-        .eq('company_id', companyId)
-      query = isHistorical
-        ? query
-            .in('status', ['registered', 'approved', 'partially_paid', 'overdue', 'paid'])
-            .lte('invoice_date', asOfDate!)
-        : query.in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
-      return query
-        // Stable total order for correct paging (see fetch-all.ts).
-        .order('id', { ascending: true })
-        .range(from, to)
+    invoices = await fetchSupplierLedgerInvoices(supabase, companyId, {
+      asOfDate: isHistorical ? asOfDate : undefined,
     })
-
-    if (isHistorical) {
-      payments = await fetchPaymentsAsOf(
-        supabase,
-        'supplier_invoice_payments',
-        'supplier_invoice_id',
-        companyId,
-        asOfDate!
-      )
-    }
+    if (isHistorical) payments = paymentsAsOfFromFacts(invoices)
   } catch (err) {
     if (options?.strict) throw err
     return {
@@ -127,7 +106,7 @@ export async function generateSupplierLedger(
 
   for (const inv of invoices) {
     const supplierId = inv.supplier_id
-    const supplierName = inv.supplier?.name || 'Okänd leverantör'
+    const supplierName = inv.supplier_name || 'Okänd leverantör'
 
     // Foreign-currency invoice with no exchange_rate cannot be converted to
     // SEK; adding the raw foreign amount to a SEK total would be unsound, so

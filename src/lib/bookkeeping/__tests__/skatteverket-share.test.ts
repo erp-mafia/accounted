@@ -1,10 +1,11 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import {
-  fetchSkatteverketSettled,
   liveReceivableOutstanding,
   openSkatteverketShare,
   outstandingLessPayouts,
   skatteverketSettled,
+  skatteverketSettledByInvoice,
+  type PayoutItemFact,
 } from '../skatteverket-share'
 
 // RUT invoice: total 10 000, deduction 3 000 on 1513, customer share 7 000.
@@ -113,86 +114,42 @@ describe('liveReceivableOutstanding', () => {
   })
 })
 
-describe('fetchSkatteverketSettled', () => {
-  function client(pages: Array<{ data: unknown; error: unknown }>) {
-    const calls: Array<{ method: string; args: unknown[] }> = []
-    let page = 0
-    const builder: Record<string, unknown> = {}
-    for (const m of ['select', 'in', 'eq', 'not', 'order', 'range']) {
-      builder[m] = vi.fn((...args: unknown[]) => {
-        calls.push({ method: m, args })
-        return builder
-      })
-    }
-    builder.then = (resolve: (v: unknown) => void) => resolve(pages[page++] ?? { data: [], error: null })
-    const from = vi.fn(() => builder)
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return { supabase: { from } as any, calls, from }
-  }
-
-  const item = (invoiceId: string, status: string, decided: number | null, entryDate: string) => ({
-    id: `item-${invoiceId}-${status}`,
-    invoice_id: invoiceId,
+describe('skatteverketSettledByInvoice', () => {
+  // A begäran item as get_ar_ledger_invoices attaches it to the invoice.
+  const item = (status: string, decided: number | null, entryDate: string | null): PayoutItemFact => ({
+    request_status: status,
     decided_amount: decided,
-    request: { status, settlement: { entry_date: entryDate } },
+    settlement_entry_date: entryDate,
   })
 
-  it('makes no query when no invoice has a deduction', async () => {
-    const { supabase, from } = client([])
-    const settled = await fetchSkatteverketSettled(supabase, 'company-1', [
-      { id: 'plain', deduction_total: 0 },
+  it('reads nothing for invoices without a deduction', () => {
+    const settled = skatteverketSettledByInvoice([
+      { id: 'plain', deduction_total: 0, payout_items: [item('paid', 100, '2025-05-10')] },
       { id: 'null', deduction_total: null },
     ])
     expect(settled.size).toBe(0)
-    expect(from).not.toHaveBeenCalled()
   })
 
-  it('reads the settled items of the company and sums them per invoice', async () => {
-    const { supabase, calls, from } = client([
-      {
-        data: [
-          item('inv-paid', 'paid', 3000, '2025-05-10'),
-          item('inv-part', 'partially_paid', 2000, '2025-05-10'),
-        ],
-        error: null,
-      },
-    ])
-    const settled = await fetchSkatteverketSettled(supabase, 'company-1', [
-      { id: 'inv-paid', ...rut },
-      { id: 'inv-part', ...rut },
-      { id: 'inv-open', ...rut },
-      { id: 'plain', deduction_total: 0 },
+  it("sums each invoice's settled items", () => {
+    const settled = skatteverketSettledByInvoice([
+      { id: 'inv-paid', ...rut, payout_items: [item('paid', 3000, '2025-05-10')] },
+      { id: 'inv-part', ...rut, payout_items: [item('partially_paid', 2000, '2025-05-10')] },
+      { id: 'inv-open', ...rut, payout_items: [] },
+      { id: 'plain', deduction_total: 0, payout_items: null },
     ])
 
-    expect(from).toHaveBeenCalledWith('rot_rut_payout_request_items')
-    expect(calls).toContainEqual({ method: 'in', args: ['invoice_id', ['inv-paid', 'inv-part', 'inv-open']] })
-    expect(calls).toContainEqual({ method: 'eq', args: ['request.company_id', 'company-1'] })
-    expect(calls).toContainEqual({ method: 'not', args: ['request.settlement_journal_entry_id', 'is', null] })
     expect(settled.get('inv-paid')).toBe(3000)
     expect(settled.get('inv-part')).toBe(2000)
     expect(settled.has('inv-open')).toBe(false)
+    expect(settled.has('plain')).toBe(false)
   })
 
-  it('counts only payouts dated on or before the as-of date', async () => {
-    const rows = { data: [item('inv-1', 'paid', 3000, '2025-05-10')], error: null }
-
-    const before = client([rows])
-    expect((await fetchSkatteverketSettled(before.supabase, 'company-1', [{ id: 'inv-1', ...rut }], '2025-05-09')).has('inv-1')).toBe(false)
-
-    const on = client([rows])
-    expect((await fetchSkatteverketSettled(on.supabase, 'company-1', [{ id: 'inv-1', ...rut }], '2025-05-10')).get('inv-1')).toBe(3000)
-  })
-
-  it('reads the ids in chunks', async () => {
-    const { supabase, calls } = client([])
-    const invoices = Array.from({ length: 250 }, (_, i) => ({ id: `inv-${i}`, ...rut }))
-    await fetchSkatteverketSettled(supabase, 'company-1', invoices)
-    const idReads = calls.filter((c) => c.method === 'in' && c.args[0] === 'invoice_id')
-    expect(idReads.map((c) => (c.args[1] as string[]).length)).toEqual([200, 50])
-  })
-
-  it('throws when the items cannot be read', async () => {
-    const { supabase } = client([{ data: null, error: { message: 'boom' } }])
-    await expect(fetchSkatteverketSettled(supabase, 'company-1', [{ id: 'inv-1', ...rut }])).rejects.toThrow()
+  it('counts only payouts dated on or before the as-of date, and none it cannot date', () => {
+    const invoice = (entryDate: string | null) => [{ id: 'inv-1', ...rut, payout_items: [item('paid', 3000, entryDate)] }]
+    expect(skatteverketSettledByInvoice(invoice('2025-05-10'), '2025-05-09').has('inv-1')).toBe(false)
+    expect(skatteverketSettledByInvoice(invoice('2025-05-10'), '2025-05-10').get('inv-1')).toBe(3000)
+    expect(skatteverketSettledByInvoice(invoice(null), '2025-05-10').has('inv-1')).toBe(false)
+    // Live, every settled item counts.
+    expect(skatteverketSettledByInvoice(invoice(null)).get('inv-1')).toBe(3000)
   })
 })

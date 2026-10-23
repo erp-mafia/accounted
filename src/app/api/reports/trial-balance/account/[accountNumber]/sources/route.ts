@@ -1,7 +1,10 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { dbError } from '@/lib/errors/db-error'
+import { roundOre } from '@/lib/money'
 import { parseDimensionFilterParams } from '@/lib/reports/dimension-filter'
+import { isIsoDateShaped } from '@/lib/invariants'
+import { isUuid } from '@/lib/invariants/uuid'
 import { parseReportDateRange, type DateRange } from '@/lib/reports/date-range'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 
@@ -9,15 +12,30 @@ import type { ReportSourceLine } from '@/lib/reports/source-lines'
  * GET /api/reports/trial-balance/account/[accountNumber]/sources
  *
  * Returns the journal entry lines for one account in a fiscal period,
- * ordered by entry date then voucher number ASC. Used by the trial balance
- * drilldown UI to show the verifikat behind an aggregated row. Optional
- * from_date/to_date narrow it to the report's date range, validated against
- * the period exactly as the report validates them.
+ * ordered by entry date, voucher number and line, the huvudbok's order. Used
+ * by the trial balance drilldown UI to show the verifikat behind an
+ * aggregated row. Optional from_date/to_date narrow it to the report's date
+ * range, validated against the period exactly as the report validates them.
  *
- * Pagination uses an opaque cursor of `<entry_date>|<voucher_number>` for
- * the last seen row; pass it back as `cursor` to continue.
+ * Pagination uses an opaque cursor of `<entry_date>|<voucher_number>|<line
+ * id>` for the last seen row; pass it back as `cursor` to continue.
  */
 const PAGE_LIMIT = 500
+
+/** Sorts after every line id: a two-part cursor resumes after its whole date and voucher number. */
+const PAST_EVERY_LINE = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
+
+interface PageLineRow {
+  line_id: string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+  dimensions: Record<string, string> | null
+  journal_entry_id: string
+  entry_date: string
+  voucher_series: string | null
+  voucher_number: number
+  description: string | null
+}
 
 export const GET = withRouteContext<{ params: Promise<{ accountNumber: string }> }>(
   'report.trial_balance.account_sources',
@@ -78,105 +96,57 @@ export const GET = withRouteContext<{ params: Promise<{ accountNumber: string }>
     )
   }
 
-  // Parse the optional cursor up front (format: <iso-date>|<voucher_number>).
-  // Pagination is applied in JS after a full, deterministically-ordered fetch.
-  let cursorDate: string | null = null
-  let cursorVoucherNum = 0
+  // Parse the optional cursor up front: <iso-date>|<voucher_number>|<line id>.
+  // A cursor without the line id (handed out before it was added) resumes
+  // after that date and voucher number, as it always did.
+  let after: { date: string; voucher: number; line: string } | null = null
   if (cursor) {
-    const [cd, cv] = cursor.split('|')
-    cursorVoucherNum = parseInt(cv, 10)
-    // The cursor is applied in JS (string compare); structurally validating the
-    // date component here is defense-in-depth against malformed/injection cursors.
-    if (!cd || !/^\d{4}-\d{2}-\d{2}$/.test(cd) || isNaN(cursorVoucherNum)) {
+    const [cd, cv, cl] = cursor.split('|')
+    if (!isIsoDateShaped(cd) || !cv || !/^\d+$/.test(cv) || (cl !== undefined && !isUuid(cl))) {
       return NextResponse.json({ error: 'Invalid cursor' }, { status: 400 })
     }
-    cursorDate = cd
+    after = { date: cd, voucher: Number(cv), line: cl ?? PAST_EVERY_LINE }
   }
 
-  // Pull ALL lines on this account in this period, then sort + paginate in JS.
-  //
-  // Why not order/limit in SQL: `.order(col, { foreignTable })` in PostgREST
-  // sorts the *embedded* resource's rows, not the parent result set, so it
-  // cannot give us a chronological parent order. Without a stable parent order
-  // a raw `.limit()` returns an arbitrary subset that varies between identical
-  // requests, which surfaced as the trial-balance drill-down showing
-  // "different rows on every reload" for high-volume accounts. The two-step
-  // fetch pages both sides on their PK for a stable total order (see
-  // fetch-all.ts) and we do the chronological sort here, mirroring
-  // `generateGeneralLedger`.
-  //
-  // The scope filters used to live on a `journal_entries!inner` embed, which
-  // PostgREST compiles into a correlated LATERAL join that walks the ENTIRE
-  // journal_entry_lines table across all tenants (see
-  // lib/bookkeeping/entry-lines.ts); driving from the entry side keeps the
-  // work inside this company's period.
-  const rows = await fetchEntryLines<{
-    id: string
-    debit_amount: number
-    credit_amount: number
-    dimensions: Record<string, string> | null
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    journal_entries: any
-  }>({
-    supabase,
-    entryColumns: 'id, voucher_number, voucher_series, entry_date, description, status, company_id, fiscal_period_id',
-    lineColumns: 'id, debit_amount, credit_amount, dimensions, journal_entry_id',
-    filterEntries: (q: EntryLinesQuery) => {
-      let scoped = q
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', fiscalPeriodId)
-        .in('status', ['posted', 'reversed'])
-      if (range.fromDate) scoped = scoped.gte('entry_date', range.fromDate)
-      if (range.toDate) scoped = scoped.lte('entry_date', range.toDate)
-      return scoped
-    },
-    filterLines: (q: EntryLinesQuery) => {
-      const scoped = q.eq('account_number', accountNumber)
-      // jsonb containment (@>): served by idx_jel_dimensions_gin.
-      return dimFilter.dimensions ? scoped.contains('dimensions', dimFilter.dimensions) : scoped
-    },
+  // One page in SQL (get_general_ledger_account_page walks the account's
+  // verifikat through ledger_account_entries once the company is built), one
+  // line more than the page to know whether another follows.
+  const { data, error } = await supabase.rpc('get_general_ledger_account_page', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+    p_account_number: accountNumber,
+    p_from_date: range.fromDate ?? null,
+    p_to_date: range.toDate ?? null,
+    p_exclude_entry_id: null,
+    p_dimensions: dimFilter.dimensions ?? null,
+    p_after_date: after?.date ?? null,
+    p_after_voucher: after?.voucher ?? null,
+    p_after_line_id: after?.line ?? null,
+    p_limit: PAGE_LIMIT + 1,
   })
+  if (error) throw dbError(error, 'get_general_ledger_account_page failed')
+  const rows = ((data as { lines?: PageLineRow[] } | null)?.lines ?? []) as PageLineRow[]
+  const page = rows.slice(0, PAGE_LIMIT)
 
-  // Map then sort in JS (date ASC, voucher_number ASC, journal_entry_id ASC as
-  // a final deterministic tiebreak for lines sharing a date and voucher number
-  // across series).
-  const allMapped: ReportSourceLine[] = rows.map((row) => ({
-    journal_entry_id: row.journal_entries.id,
-    voucher_number: row.journal_entries.voucher_number,
-    voucher_series: row.journal_entries.voucher_series || 'A',
-    date: row.journal_entries.entry_date,
-    description: row.journal_entries.description || '',
-    debit: Math.round((Number(row.debit_amount) || 0) * 100) / 100,
-    credit: Math.round((Number(row.credit_amount) || 0) * 100) / 100,
+  const lines: ReportSourceLine[] = page.map((row) => ({
+    journal_entry_id: row.journal_entry_id,
+    voucher_number: row.voucher_number,
+    voucher_series: row.voucher_series || 'A',
+    date: row.entry_date,
+    description: row.description || '',
+    debit: roundOre(Number(row.debit_amount) || 0),
+    credit: roundOre(Number(row.credit_amount) || 0),
     ...(row.dimensions && Object.keys(row.dimensions).length > 0
       ? { dimensions: row.dimensions }
       : {}),
   }))
-  allMapped.sort((a, b) => {
-    const dateComp = a.date.localeCompare(b.date)
-    if (dateComp !== 0) return dateComp
-    if (a.voucher_number !== b.voucher_number) return a.voucher_number - b.voucher_number
-    return a.journal_entry_id.localeCompare(b.journal_entry_id)
-  })
-
-  // Apply the cursor in JS: keep rows strictly after (date, voucher_number).
-  const afterCursor = cursorDate
-    ? allMapped.filter(
-        (l) =>
-          l.date > cursorDate! ||
-          (l.date === cursorDate! && l.voucher_number > cursorVoucherNum)
-      )
-    : allMapped
-
-  const lines = afterCursor.slice(0, PAGE_LIMIT)
 
   // If more rows remain beyond this page, point the next cursor at the last
   // delivered row so the next call resumes from after it.
-  let next_cursor: string | null = null
-  if (afterCursor.length > PAGE_LIMIT && lines.length > 0) {
-    const last = lines[lines.length - 1]
-    next_cursor = `${last.date}|${last.voucher_number}`
-  }
+  const last = page[page.length - 1]
+  const next_cursor = rows.length > PAGE_LIMIT && last
+    ? `${last.entry_date}|${last.voucher_number}|${last.line_id}`
+    : null
 
   return NextResponse.json({
     data: {

@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { IncomeStatementReport, TrialBalanceRow } from '@/types'
 import { VAT_INPUT_ACCOUNTS, VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
@@ -122,39 +122,18 @@ export interface TopSuppliersAggregate {
 export const TOP_SUPPLIERS_LIMIT = 7
 
 /**
- * The supplier-invoice query behind "Största leverantörer", shared by the KPI
- * JSON route and the KPI xlsx export so the two can never select different
- * columns or filter different rows for the same company and period.
- */
-export function topSupplierInvoicesQuery(
-  supabase: SupabaseClient,
-  companyId: string,
-  periodStart: string,
-  periodEnd: string
-) {
-  return supabase
-    .from('supplier_invoices')
-    .select('supplier_id, total, total_sek, currency, exchange_rate, supplier:suppliers(id, name)')
-    .eq('company_id', companyId)
-    .gte('invoice_date', periodStart)
-    .lte('invoice_date', periodEnd)
-    .neq('status', 'credited')
-}
-
-/**
- * Fetch ALL supplier-invoice rows for the period, paginated past PostgREST's
- * silent 1000-row cap. Awaiting `topSupplierInvoicesQuery` bare truncated the
- * input to `aggregateTopSuppliers` for companies with more than 1000 supplier
- * invoices in a fiscal year, silently corrupting the "Största leverantörer"
- * totals in both the KPI JSON route and the xlsx export.
+ * The period's supplier invoices behind "Största leverantörer" (credited ones
+ * left out), in one read: get_kpi_supplier_invoices
+ * (supabase/migrations/20261023094020_kpi_invoice_reads.sql) returns them as
+ * one json array, so PostgREST's 1000-row cap cannot truncate them. Paging
+ * the rows used to take one round trip per 1000 invoices.
  *
- * Ordered on `id` (the PK) purely for paging stability: aggregation is
- * order-independent, but `.range()` paging without a stable total order can
- * duplicate or skip rows on page boundaries (see lib/supabase/fetch-all.ts).
+ * In id order: aggregateTopSuppliers' float sums and its first-seen order
+ * for ties depend on the order, and it has always been id order.
  *
- * Returns the `{ data, error }` shape the two route callers already consume,
- * so a query failure stays a reportable value rather than becoming a thrown
- * 500 (the KPI route deliberately renders the rest of the report and logs).
+ * Returns the `{ data, error }` shape the KPI report consumes, so a query
+ * failure stays a reportable value rather than becoming a thrown 500 (the KPI
+ * route deliberately renders the rest of the report and logs).
  */
 export async function fetchTopSupplierInvoices(
   supabase: SupabaseClient,
@@ -162,18 +141,30 @@ export async function fetchTopSupplierInvoices(
   periodStart: string,
   periodEnd: string
 ): Promise<{ data: KpiSupplierInvoiceRow[] | null; error: { message: string } | null }> {
-  try {
-    const rows = await fetchAllRows<KpiSupplierInvoiceRow>(({ from, to }) =>
-      topSupplierInvoicesQuery(supabase, companyId, periodStart, periodEnd)
-        .order('id', { ascending: true })
-        .range(from, to)
-    )
-    return { data: rows, error: null }
-  } catch (err) {
-    return {
-      data: null,
-      error: { message: err instanceof Error ? err.message : 'Unknown error' },
-    }
+  const { data, error } = await supabase.rpc('get_kpi_supplier_invoices', {
+    p_company_id: companyId,
+    p_from: periodStart,
+    p_to: periodEnd,
+  })
+  if (error) return { data: null, error: { message: error.message || 'Unknown error' } }
+  const rows = (Array.isArray(data) ? data : []) as {
+    supplier_id: string | null
+    supplier_name: string | null
+    total: number | null
+    total_sek: number | null
+    currency: string | null
+    exchange_rate: number | null
+  }[]
+  return {
+    data: rows.map((row) => ({
+      supplier_id: row.supplier_id,
+      total: row.total,
+      total_sek: row.total_sek,
+      currency: row.currency,
+      exchange_rate: row.exchange_rate,
+      supplier: row.supplier_id && row.supplier_name != null ? { id: row.supplier_id, name: row.supplier_name } : null,
+    })),
+    error: null,
   }
 }
 
@@ -229,24 +220,22 @@ export function aggregateTopSuppliers(
 }
 
 /**
- * Calculate average payment days from paid invoices.
- * Returns null if fewer than 5 invoices with paid_at data.
+ * Paid customer invoices whose payment landed inside a range, and the sum of
+ * their payment days: whole days from the invoice date to paid_at, floored,
+ * never negative. Counted and summed in SQL (get_paid_invoice_days).
  */
-export function calculateAvgPaymentDays(
-  paidInvoices: { invoice_date: string; paid_at: string }[]
-): number | null {
-  if (paidInvoices.length < 5) return null
+export interface PaymentDaysTotals {
+  invoiceCount: number
+  totalDays: number
+}
 
-  const totalDays = paidInvoices.reduce((sum, inv) => {
-    const invoiceDate = new Date(inv.invoice_date)
-    const paidDate = new Date(inv.paid_at)
-    const days = Math.floor(
-      (paidDate.getTime() - invoiceDate.getTime()) / (1000 * 60 * 60 * 24)
-    )
-    return sum + Math.max(0, days)
-  }, 0)
-
-  return Math.round(totalDays / paidInvoices.length)
+/**
+ * Average payment days: the total over the count, rounded. Null below five
+ * paid invoices, too few to say anything.
+ */
+export function averagePaymentDays(totals: PaymentDaysTotals): number | null {
+  if (totals.invoiceCount < 5) return null
+  return Math.round(totals.totalDays / totals.invoiceCount)
 }
 
 /**
@@ -287,26 +276,28 @@ function nextIsoDate(date: string): string {
 }
 
 /**
- * Paid customer invoices whose payment landed inside the range, for the
- * average payment days KPI. Scoped to the range so the figure describes the
- * reported period, not every invoice the company ever had paid. Paginated
- * past PostgREST's 1000-row cap.
+ * The payment days of the paid customer invoices whose payment landed inside
+ * the range, for the average payment days KPI. Scoped to the range so the
+ * figure describes the reported period, not every invoice the company ever
+ * had paid. One read: get_paid_invoice_days
+ * (supabase/migrations/20261023094020_kpi_invoice_reads.sql) counts and sums
+ * in SQL instead of paging every paid invoice. Throws on a failed read.
  */
-export async function fetchPaidInvoicesInRange(
+export async function fetchPaymentDaysInRange(
   supabase: SupabaseClient,
   companyId: string,
   fromDate: string,
   toDate: string
-): Promise<{ invoice_date: string; paid_at: string }[]> {
-  return fetchAllRows<{ invoice_date: string; paid_at: string }>(({ from, to }) =>
-    supabase
-      .from('invoices')
-      .select('invoice_date, paid_at')
-      .eq('company_id', companyId)
-      .eq('status', 'paid')
-      .gte('paid_at', fromDate)
-      .lt('paid_at', nextIsoDate(toDate))
-      .order('id', { ascending: true })
-      .range(from, to)
-  )
+): Promise<PaymentDaysTotals> {
+  const { data, error } = await supabase.rpc('get_paid_invoice_days', {
+    p_company_id: companyId,
+    p_from: fromDate,
+    p_paid_before: nextIsoDate(toDate),
+  })
+  if (error) throw dbError(error, 'get_paid_invoice_days failed')
+  const totals = (data ?? {}) as { invoice_count?: unknown; total_days?: unknown }
+  return {
+    invoiceCount: Number(totals.invoice_count) || 0,
+    totalDays: Number(totals.total_days) || 0,
+  }
 }

@@ -216,6 +216,10 @@ const READ_ONLY_RPCS = new Set([
   // The customer merge's dry run (crm#1299): STABLE, counts what would move
   // and answers the merge's refusals; merge_customers itself runs at approval.
   'customer_merge_preview',
+  // The verifikat behind a few accounts with their lines: the reverse-charge
+  // basis scan reads the fiktiv moms verifikat with it, so the VAT check
+  // review preview (gnubok_mark_vat_check_reviewed) reaches it.
+  'get_entries_with_account_lines',
 ])
 
 /**

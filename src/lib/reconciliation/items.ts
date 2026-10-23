@@ -1,14 +1,12 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import {
-  alignLinkedTransactionsToWindow,
-  fetchBankHistoryStart,
-  fetchJunctionLinkMap,
+  assertTransactionScope,
   fetchUnlinkedGLLines,
   isUnlinkableBankLink,
   openAmountByEntry,
-  scopeTransactionsToAccount,
+  type UnlinkedGLLine,
 } from './bank-reconciliation'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import { proposeCoveringSets } from './covering-set-candidate'
@@ -37,6 +35,12 @@ import {
 
 export const DEFAULT_ITEMS_LIMIT = 50
 export const MAX_ITEMS_LIMIT = 200
+/**
+ * Matched bank rows the first read returns ahead of the page's end, so a
+ * page that reaches into them needs no second read of the window. Deeper
+ * pages read their slice on their own.
+ */
+const MATCHED_PREFIX_MAX = 2 * MAX_ITEMS_LIMIT
 
 /**
  * Bucket order when no bucket is requested: what to do first, first.
@@ -87,7 +91,8 @@ interface CashAccountRow {
   is_primary: boolean | null
 }
 
-interface BankTxRow {
+/** A bank row as get_bank_reconciliation_items lists it. */
+interface BankItemRow {
   id: string
   date: string
   description: string | null
@@ -100,6 +105,73 @@ interface BankTxRow {
   potential_match_confidence: number | string | null
   is_ignored: boolean | null
   reconciliation_method: string | null
+  /** Linked by its pointer or by the transaction_voucher_links rows the listing reads for it. */
+  linked: boolean
+  /** The pointer, else the first of those links (bank_line anchors first). */
+  linked_journal_entry_id: string | null
+}
+
+interface BankItemRead {
+  /** Every row of the window that is not matched: ignored or open, newest first. */
+  open_rows: BankItemRow[]
+  matched_count: number
+  /** The requested slice of the matched rows, newest first. */
+  matched_rows: BankItemRow[]
+  history_start: string | null
+  ledger_lines: UnlinkedGLLine[]
+  fiscal_year_starts: string[]
+}
+
+/**
+ * The bank rows of one account's window, aligned to their verifikat, plus
+ * on request the ledger side: one call to get_bank_reconciliation_items
+ * (20261023094100), which applies the rules this listing used to page every
+ * row of the window through PostgREST for. A failed read throws: a partial
+ * answer would offer Bokför on a row that is booked.
+ */
+async function readBankItemRows(
+  supabase: SupabaseClient,
+  companyId: string,
+  account: CashAccountRow,
+  currency: string,
+  options: {
+    windowFrom: string | null
+    windowTo: string | null
+    withRows: boolean
+    withLedger: boolean
+    matchedOffset: number
+    matchedLimit: number
+    /** Shorten the matched slice by the open rows, which the listing shows first. */
+    matchedAfterOpen?: boolean
+  },
+): Promise<BankItemRead> {
+  assertTransactionScope(account.id, currency)
+  const { data, error } = await supabase.rpc('get_bank_reconciliation_items', {
+    p_company_id: companyId,
+    p_account_number: account.ledger_account,
+    p_currency: currency,
+    p_cash_account_id: account.id,
+    // Only the company's primary cash account claims rows with no cash
+    // account (scopeTransactionsToAccount).
+    p_include_unassigned: Boolean(account.is_primary),
+    p_date_from: options.windowFrom || null,
+    p_date_to: options.windowTo || null,
+    p_with_rows: options.withRows,
+    p_with_ledger: options.withLedger,
+    p_matched_offset: options.matchedOffset,
+    p_matched_limit: options.matchedLimit,
+    p_matched_after_open: options.matchedAfterOpen ?? false,
+  })
+  if (error) throw new Error(`Kunde inte hämta transaktioner: ${dbError(error, null).message}`)
+  const read = (data ?? {}) as Partial<BankItemRead>
+  return {
+    open_rows: read.open_rows ?? [],
+    matched_count: Number(read.matched_count ?? 0),
+    matched_rows: read.matched_rows ?? [],
+    history_start: read.history_start ?? null,
+    ledger_lines: read.ledger_lines ?? [],
+    fiscal_year_starts: read.fiscal_year_starts ?? [],
+  }
 }
 
 function clampLimit(limit?: number): number {
@@ -166,20 +238,6 @@ async function attachEntries(
     p.voucher_number = meta.voucher_number
     p.description = meta.description
   }
-}
-
-/**
- * The first day of every fiscal year of the company: the only date an opening
- * balance can carry. A failed read offers no "Märk som IB" at all rather than
- * offering it on a mid-year verifikat.
- */
-async function fetchFiscalYearStarts(supabase: SupabaseClient, companyId: string): Promise<Set<string>> {
-  const { data, error } = await supabase
-    .from('fiscal_periods')
-    .select('period_start')
-    .eq('company_id', companyId)
-  if (error) return new Set()
-  return new Set(((data ?? []) as Array<{ period_start: string }>).map((p) => p.period_start))
 }
 
 /**
@@ -370,63 +428,90 @@ export async function listAccountItems(
     const push = (item: ReconciliationItem) => {
       byBucket.set(item.bucket, [...(byBucket.get(item.bucket) ?? []), item])
     }
-    const persistedProposals: ReconciliationProposal[] = []
+    // The matcher's proposals on rows in `proposed`: attachEntries gives them
+    // their verifikat's label, date and text once the page is cut.
+    const persistedProposals = new Set<ReconciliationProposal>()
 
     const wantsExternal = buckets.some((b) =>
       ['proposed', 'unmatched_external', 'matched', 'ignored'].includes(b),
     )
+    // The bank's history (crm#1221): verifikat dated before the first day the
+    // bank side covers have no bank row to match. When that day falls inside
+    // the window they are listed in before_history, not as missing on the
+    // bank, the split getReconciliationStatus counts them by.
+    const wantsLedger = buckets.includes('unmatched_ledger') || buckets.includes('before_history')
+    const wantsMatched = buckets.includes('matched')
+    // Matched rows are the bulk of a busy account and come last in the
+    // listing, so only the page's slice of them is read. With `matched` the
+    // only bucket nothing precedes them, and the slice is known up front.
+    // Otherwise every open row comes before them, so the slice lies within
+    // the matched rows up to the page's end less the open rows: read those
+    // with it when they are few.
+    const matchedFirst = buckets.length === 1 && wantsMatched
+    const matchedPrefix = !matchedFirst && wantsMatched && offset + limit <= MATCHED_PREFIX_MAX
+    const read = await readBankItemRows(supabase, companyId, account, currency, {
+      windowFrom: options.windowFrom ?? null,
+      windowTo: options.windowTo ?? null,
+      withRows: wantsExternal,
+      withLedger: wantsLedger,
+      matchedOffset: matchedFirst ? offset : 0,
+      matchedLimit: matchedFirst ? limit : matchedPrefix ? offset + limit : 0,
+      matchedAfterOpen: matchedPrefix,
+    })
+
+    // One item per bank row of the window, in the listing's order (newest
+    // first, id as tiebreaker). A linked row belongs to the window of its
+    // verifikat, not its own date, the same rule getReconciliationStatus
+    // counts matched_count and the difference by.
+    const toItem = (
+      tx: BankItemRow,
+      bucket: ReconciliationItemBucket,
+      coveringSet: ReconciliationProposal | null,
+    ): ReconciliationItem => {
+      // The matcher persists only the verifikat id; attachEntries fills in
+      // its label, date and text once the page is cut. Live proposals
+      // only: a matched row can keep a stale pointer (a multi-row
+      // bulk_book links through the junction and never clears it), and a
+      // real voucher label there would read as the row's link.
+      const persisted: ReconciliationProposal | null = tx.potential_journal_entry_id
+        ? {
+            journal_entry_id: tx.potential_journal_entry_id,
+            voucher_number: null,
+            voucher_series: null,
+            entry_date: tx.date,
+            description: '',
+            entry_status: 'posted',
+            confidence: Number(tx.potential_match_confidence ?? 0.75),
+            reasons: [tx.potential_match_method ?? 'föreslagen av matcharen'],
+          }
+        : null
+      if (persisted && bucket === 'proposed') persistedProposals.add(persisted)
+      // A row booked from itself is undone by storno of its verifikat,
+      // never unlinked, so it offers no unmatch (PH 194).
+      const matchedActions: ReconciliationItem['actions'] = isUnlinkableBankLink(tx) ? ['unmatch'] : []
+      return {
+        item_id: tx.id,
+        item_type: 'transaction',
+        side: 'external',
+        bucket,
+        date: tx.date,
+        description: tx.merchant_name || tx.description || '',
+        amount: roundOre(Number(tx.amount)),
+        currency: tx.currency,
+        linked_journal_entry_id: tx.linked_journal_entry_id ?? null,
+        proposal: persisted ?? coveringSet,
+        actions:
+          bucket === 'matched'
+            ? matchedActions
+            : bucket === 'ignored'
+              ? ['unignore']
+              : bucket === 'proposed'
+                ? ['match', 'book', 'ignore']
+                : ['book', 'match', 'ignore'],
+      }
+    }
+
     if (wantsExternal) {
-      // Paged: an account with more than 1,000 rows lost the rest, so its
-      // buckets and total_count stopped at the first page.
-      const ownDateRows = await fetchAllRows<BankTxRow>(({ from, to }) => {
-        let query = supabase
-          .from('transactions')
-          .select(
-            'id, date, description, merchant_name, amount, currency, journal_entry_id, potential_journal_entry_id, potential_match_method, potential_match_confidence, is_ignored, reconciliation_method',
-          )
-          .eq('company_id', companyId)
-        query = scopeTransactionsToAccount(query, account.id, currency, Boolean(account.is_primary))
-        if (options.windowFrom) query = query.gte('date', options.windowFrom)
-        if (options.windowTo) query = query.lte('date', options.windowTo)
-        return query.order('date', { ascending: false }).order('id', { ascending: true }).range(from, to)
-      }).catch((txError: Error) => {
-        throw new Error(`Kunde inte hämta transaktioner: ${txError.message}`)
-      })
-      // Rows anchored only through transaction_voucher_links (bulk-book,
-      // residual bookings) are matched too; their pointer column is NULL.
-      // The map (not just the id set) so a junction-anchored row can report
-      // WHICH verifikat it is matched to: with only the pointer column read,
-      // linked_journal_entry_id came back null on a split row (crm#48).
-      const ownDateJunctionLinks = await fetchJunctionLinkMap(
-        supabase,
-        companyId,
-        ownDateRows.filter((tx) => !tx.journal_entry_id && !tx.is_ignored).map((tx) => tx.id),
-      )
-      // A linked row belongs to the window of its verifikat, not its own date,
-      // the same rule getReconciliationStatus counts matched_count and the
-      // difference by; without it the matched list and the headline disagree
-      // on a link that straddles the window edge.
-      const aligned = await alignLinkedTransactionsToWindow<BankTxRow>({
-        supabase,
-        companyId,
-        bankAccount: account.ledger_account,
-        rows: ownDateRows,
-        junctionLinks: ownDateJunctionLinks,
-        from: options.windowFrom ?? null,
-        to: options.windowTo ?? null,
-        readFrom: options.windowFrom ?? null,
-        readTo: options.windowTo ?? null,
-        columns: 'items',
-        cashAccountId: account.id,
-        currency,
-        includeUnassigned: Boolean(account.is_primary),
-      })
-      // Same order as the read: newest first, id as tiebreaker.
-      const rows = [...aligned.rows].sort((a, b) =>
-        a.date === b.date ? (a.id < b.id ? -1 : a.id > b.id ? 1 : 0) : a.date < b.date ? 1 : -1,
-      )
-      const junctionLinks = aligned.junctionLinks
-      const junctionLinked = new Set(junctionLinks.keys())
       // Rows nothing explains 1:1 are searched for a set of unlinked verifikat
       // summing exactly to them (#2293) before they are offered as unmatched:
       // "Bokför" is the door only when the ledger has nothing for the row.
@@ -435,78 +520,24 @@ export async function listAccountItems(
             supabase,
             companyId,
             account,
-            rows
-              .filter(
-                (tx) =>
-                  !tx.is_ignored && !tx.journal_entry_id && !junctionLinked.has(tx.id) && !tx.potential_journal_entry_id,
-              )
+            read.open_rows
+              .filter((tx) => !tx.is_ignored && !tx.linked && !tx.potential_journal_entry_id)
               .map((tx) => ({ id: tx.id, date: tx.date, amount: Number(tx.amount), currency: tx.currency })),
           )
         : new Map<string, ReconciliationProposal>()
-      {
-        for (const tx of rows) {
-          const coveringSet = coveringSets.get(tx.id) ?? null
-          const bucket: ReconciliationItemBucket = tx.is_ignored
-            ? 'ignored'
-            : tx.journal_entry_id || junctionLinked.has(tx.id)
-              ? 'matched'
-              : tx.potential_journal_entry_id || coveringSet
-                ? 'proposed'
-                : 'unmatched_external'
-          if (!buckets.includes(bucket)) continue
-          // The matcher persists only the verifikat id; attachEntries fills in
-          // its label, date and text once every item is built. Live proposals
-          // only: a matched row can keep a stale pointer (a multi-row
-          // bulk_book links through the junction and never clears it), and a
-          // real voucher label there would read as the row's link.
-          const persisted: ReconciliationProposal | null = tx.potential_journal_entry_id
-            ? {
-                journal_entry_id: tx.potential_journal_entry_id,
-                voucher_number: null,
-                voucher_series: null,
-                entry_date: tx.date,
-                description: '',
-                entry_status: 'posted',
-                confidence: Number(tx.potential_match_confidence ?? 0.75),
-                reasons: [tx.potential_match_method ?? 'föreslagen av matcharen'],
-              }
-            : null
-          if (persisted && bucket === 'proposed') persistedProposals.push(persisted)
-          // A row booked from itself is undone by storno of its verifikat,
-          // never unlinked, so it offers no unmatch (PH 194).
-          const matchedActions: ReconciliationItem['actions'] = isUnlinkableBankLink(tx) ? ['unmatch'] : []
-          push({
-            item_id: tx.id,
-            item_type: 'transaction',
-            side: 'external',
-            bucket,
-            date: tx.date,
-            description: tx.merchant_name || tx.description || '',
-            amount: roundOre(Number(tx.amount)),
-            currency: tx.currency,
-            linked_journal_entry_id: tx.journal_entry_id ?? junctionLinks.get(tx.id)?.[0] ?? null,
-            proposal: persisted ?? coveringSet,
-            actions:
-              bucket === 'matched'
-                ? matchedActions
-                : bucket === 'ignored'
-                  ? ['unignore']
-                  : bucket === 'proposed'
-                    ? ['match', 'book', 'ignore']
-                    : ['book', 'match', 'ignore'],
-          })
-        }
+      for (const tx of read.open_rows) {
+        const coveringSet = coveringSets.get(tx.id) ?? null
+        const bucket: ReconciliationItemBucket = tx.is_ignored
+          ? 'ignored'
+          : tx.potential_journal_entry_id || coveringSet
+            ? 'proposed'
+            : 'unmatched_external'
+        if (!buckets.includes(bucket)) continue
+        push(toItem(tx, bucket, coveringSet))
       }
     }
 
-    // The bank's history (crm#1221): verifikat dated before the first day the
-    // bank side covers have no bank row to match. When that day falls inside
-    // the window they are listed in before_history, not as missing on the
-    // bank, the split getReconciliationStatus counts them by.
-    const wantsLedger = buckets.includes('unmatched_ledger') || buckets.includes('before_history')
-    const historyStart = wantsLedger
-      ? await fetchBankHistoryStart(supabase, companyId, account.id, currency, Boolean(account.is_primary))
-      : null
+    const historyStart = wantsLedger ? read.history_start : null
     const splitAt =
       historyStart &&
       (!options.windowFrom || historyStart > options.windowFrom) &&
@@ -516,19 +547,13 @@ export async function listAccountItems(
 
     let ledgerItems: Map<string, ReconciliationItem> | null = null
     if (wantsLedger) {
-      const lines = await fetchUnlinkedGLLines(
-        supabase,
-        companyId,
-        account.ledger_account,
-        options.windowFrom ?? undefined,
-        options.windowTo ?? undefined,
-      )
+      const lines = read.ledger_lines
       // One item per entry: several 1930 lines of one voucher net, as a link
       // settles the voucher. A voucher 1:N slices settle in part shows only
       // what they leave open (agent feedback seq 854089). Amounts in SEK, as
       // the ledger side has always been listed here.
       const openByEntry = openAmountByEntry(lines, 'SEK')
-      const periodStarts = lines.length > 0 ? await fetchFiscalYearStarts(supabase, companyId) : new Set<string>()
+      const periodStarts = new Set(read.fiscal_year_starts)
       const byEntry = new Map<string, ReconciliationItem>()
       for (const l of lines) {
         if (byEntry.has(l.journal_entry_id)) continue
@@ -559,8 +584,7 @@ export async function listAccountItems(
       ledgerItems = byEntry
     }
 
-    await attachEntries(supabase, companyId, buckets.flatMap((b) => byBucket.get(b) ?? []), persistedProposals)
-    if (wantsLedger || buckets.includes('matched')) {
+    if (wantsLedger || wantsMatched) {
       await applyLedgerSettlements(
         supabase,
         companyId,
@@ -597,8 +621,59 @@ export async function listAccountItems(
         }
       }
     }
-    const all = buckets.flatMap((b) => byBucket.get(b) ?? [])
-    return { ...page(all, limit, offset), ...(beforeHistory ? { before_history: beforeHistory } : {}) }
+
+    // The listing in bucket order: the matched bucket is its bank rows, as
+    // counted by the read, then the verifikat a settlement explains. Only the
+    // page's part of the bank rows is materialised.
+    const head = buckets.filter((b) => b !== 'matched').flatMap((b) => byBucket.get(b) ?? [])
+    const settledItems = wantsMatched ? (byBucket.get('matched') ?? []) : []
+    const matchedCount = wantsMatched ? read.matched_count : 0
+    const total = head.length + matchedCount + settledItems.length
+    const end = Math.min(total, offset + limit)
+    const matchedFrom = Math.max(offset, head.length) - head.length
+    const matchedTo = Math.min(end, head.length + matchedCount) - head.length
+    let matchedRows: BankItemRow[] = []
+    if (matchedTo > matchedFrom) {
+      matchedRows =
+        matchedFirst && matchedFrom === offset
+          ? read.matched_rows.slice(0, matchedTo - matchedFrom)
+          : matchedPrefix
+            ? read.matched_rows.slice(matchedFrom, matchedTo)
+            : (
+                await readBankItemRows(supabase, companyId, account, currency, {
+                  windowFrom: options.windowFrom ?? null,
+                  windowTo: options.windowTo ?? null,
+                  withRows: true,
+                  withLedger: false,
+                  matchedOffset: matchedFrom,
+                  matchedLimit: matchedTo - matchedFrom,
+                })
+              ).matched_rows
+    }
+    const items = [
+      ...head.slice(offset, end),
+      ...matchedRows.map((tx) => toItem(tx, 'matched', null)),
+      ...settledItems.slice(
+        Math.max(offset, head.length + matchedCount) - head.length - matchedCount,
+        Math.max(0, end - head.length - matchedCount),
+      ),
+    ]
+    await attachEntries(
+      supabase,
+      companyId,
+      items,
+      items.flatMap((i) => (i.proposal && persistedProposals.has(i.proposal) ? [i.proposal] : [])),
+    )
+    const hasMore = offset + limit < total
+    return {
+      items,
+      count: items.length,
+      total_count: total,
+      has_more: hasMore,
+      ...(hasMore ? { next_offset: offset + limit } : {}),
+      older_unmatched_count: 0,
+      ...(beforeHistory ? { before_history: beforeHistory } : {}),
+    }
   }
 
   return null

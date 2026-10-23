@@ -39,7 +39,7 @@ import {
 } from '@/lib/reports/vat-close-check'
 import { vatCheckFingerprint } from '@/lib/vat/check-reviews'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
-import { vatTotalsRpcResult } from './vat-totals-rpc-double'
+import { entriesWithAccountLinesRpcResult, vatTotalsRpcResult } from './vat-totals-rpc-double'
 
 interface MockLine {
   entry?: string
@@ -136,12 +136,16 @@ function mockSupabase(
     //
     // The declaration totals come from get_vat_declaration_totals, the same
     // aggregate the web filing reads; its double sums the fixture lines.
-    rpc: (fn: string, params?: { p_accounts?: string[] }) => {
+    rpc: (fn: string, params?: { p_accounts?: string[]; p_statuses?: string[]; p_all_lines?: boolean }) => {
       if (fn === 'verifikat_without_documents') {
         return Promise.resolve({ data: { ok: true, total_count: 0, verifikat: [] }, error: null })
       }
       if (fn === 'get_vat_declaration_totals') {
         return Promise.resolve(vatTotalsRpcResult({ lines: bareLines }, params))
+      }
+      // The reverse-charge basis scan reads its verifikat in one call.
+      if (fn === 'get_entries_with_account_lines') {
+        return Promise.resolve(entriesWithAccountLinesRpcResult(entries, bareLines, params))
       }
       return makeChain([])
     },

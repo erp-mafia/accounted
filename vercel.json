@@ -213,6 +213,10 @@
     {
       "path": "/api/collections/ladder/cron",
       "schedule": "15 6 * * *"
+    },
+    {
+      "path": "/api/reports/ledger-account-days/build/cron",
+      "schedule": "*/10 * * * *"
     }
   ]
 }

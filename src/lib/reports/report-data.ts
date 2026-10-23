@@ -96,3 +96,52 @@ export function viewReportData<T>(
   if (settled === null || settled.key !== key) return { data: null, error: null, loading: true }
   return { data: settled.data, error: settled.error, loading: false }
 }
+
+/** The page URLs a paged view has asked for under one base URL, in order. */
+export interface ReportPageChain {
+  base: string | null
+  urls: string[]
+}
+
+/** The answered pages of one base URL, by page URL. */
+export interface SettledReportPages<T> {
+  base: string | null
+  results: Record<string, { data: T | null; error: string | null }>
+}
+
+/** What a paged view renders from. */
+export interface ReportPagesView<T> {
+  /** The answered pages, in order, up to the first one not answered yet. */
+  pages: T[]
+  /** The page URL to fetch now: the first one asked for and not answered. */
+  pending: string | null
+  error: string | null
+  loading: boolean
+}
+
+/**
+ * The pages of the current base URL. The base URL is the first page; the
+ * view asks for each further page by its own URL (loadMore), and the pages
+ * render in the order they were asked for. A chain or answers kept for
+ * another base URL are ignored: a new base starts over at its first page,
+ * so a page of earlier parameters can never be appended under new ones.
+ */
+export function viewReportPages<T>(
+  url: string | null,
+  chain: ReportPageChain,
+  settled: SettledReportPages<T>,
+): ReportPagesView<T> {
+  if (url === null) return { pages: [], pending: null, error: null, loading: false }
+  const urls = chain.base === url ? chain.urls : [url]
+  const results = settled.base === url ? settled.results : {}
+  const pages: T[] = []
+  for (const pageUrl of urls) {
+    const result = results[pageUrl]
+    if (!result) return { pages, pending: pageUrl, error: null, loading: true }
+    if (result.error !== null || result.data === null) {
+      return { pages, pending: null, error: result.error, loading: false }
+    }
+    pages.push(result.data)
+  }
+  return { pages, pending: null, error: null, loading: false }
+}

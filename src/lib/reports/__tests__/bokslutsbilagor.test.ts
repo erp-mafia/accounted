@@ -130,8 +130,15 @@ describe('generateBokslutsbilagor', () => {
     expect(report!.summary).toEqual({ accounts: 3, signed_on_balansdag: 1, signed_other_date: 1, unsigned: 1, attachments: 1 })
     expect(report!.checklist.items[0]).toMatchObject({ key: 'inventory_valued', state: 'done', done_by_label: 'u1@example.se' })
     expect(report!.app_version).toBe('1.2.3')
-    expect(checklistMock).toHaveBeenCalledWith(supabase, COMPANY, 'u1', 'fy-2026', {})
-    expect(listAccountsMock).toHaveBeenCalledWith(supabase, COMPANY, { today: '2026-12-31', windowFrom: '2026-01-01', windowTo: '2026-12-31' })
+    // The checklist gets the pärm's own account list instead of reading it again.
+    expect(checklistMock).toHaveBeenCalledWith(supabase, COMPANY, 'u1', 'fy-2026', { accounts: expect.any(Promise) })
+    expect(await checklistMock.mock.calls[0][4].accounts).toBe(await listAccountsMock.mock.results[0].value)
+    expect(listAccountsMock).toHaveBeenCalledWith(supabase, COMPANY, {
+      today: '2026-12-31',
+      windowFrom: '2026-01-01',
+      windowTo: '2026-12-31',
+      balanceSheet: expect.any(Promise),
+    })
   })
 
   it('reads the reconciliation for the year: each read once, with the balansdag and the provider accounts', async () => {
@@ -141,7 +148,14 @@ describe('generateBokslutsbilagor', () => {
     enqueue({ data: [] })
     await generateBokslutsbilagor(supabase as never, COMPANY, 'fy-2026', { userId: 'u1' })
 
-    expect(listAccountsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, { today: '2026-12-31', windowFrom: '2026-01-01', windowTo: '2026-12-31' })
+    expect(listAccountsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, {
+      today: '2026-12-31',
+      windowFrom: '2026-01-01',
+      windowTo: '2026-12-31',
+      balanceSheet: expect.any(Promise),
+    })
+    // The list's manual accounts are computed on the pärm's own snapshot.
+    expect(await listAccountsMock.mock.calls[0][2].balanceSheet).toBe(await snapshotMock.mock.results[0].value)
     expect(snapshotMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, '2026-12-31')
     expect(latestSignoffsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY)
     expect(attachmentsMock).toHaveBeenCalledExactlyOnceWith(supabase, COMPANY, '2026-01-01', '2026-12-31', { includeRemoved: true })
@@ -155,7 +169,7 @@ describe('generateBokslutsbilagor', () => {
     enqueue({ data: { name: 'X', org_number: null } })
     enqueue({ data: [] })
     await generateBokslutsbilagor(supabase as never, COMPANY, 'fy-2026')
-    expect(checklistMock).toHaveBeenCalledWith(supabase, COMPANY, '', 'fy-2026', { readiness: null })
+    expect(checklistMock).toHaveBeenCalledWith(supabase, COMPANY, '', 'fy-2026', { readiness: null, accounts: expect.any(Promise) })
 
     enqueue({ data: null })
     enqueue({ data: null })

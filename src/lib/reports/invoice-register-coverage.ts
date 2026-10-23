@@ -1,7 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
-import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 
 /**
  * Coverage of the invoice register (the `invoices` table) relative to the
@@ -27,10 +26,13 @@ import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
  * stays undetected; accepted, because widening to all class-3 revenue would
  * flag cash sales (webshop orders, kassa) that were never register material.
  *
- * The probe is driven from journal_entries (company-indexed) with the line
- * condition as an inner embed, never from journal_entry_lines with entry
- * filters on the embed: that inverted shape compiles to a lateral scan of
- * the whole lines table across tenants (see lib/bookkeeping/entry-lines.ts).
+ * One read answers it: get_invoice_register_coverage
+ * (supabase/migrations/20261023094000_invoice_register_coverage_rpc.sql). The
+ * boundary walk stops at the first complete invoice instead of embedding
+ * every invoice's lines, and the probe is driven from journal_entries
+ * (company-indexed) with the line condition as an EXISTS, never from
+ * journal_entry_lines with entry filters: that inverted shape scans the whole
+ * lines table across tenants (see lib/bookkeeping/entry-lines.ts).
  */
 export interface InvoiceRegisterCoverage {
   /**
@@ -81,89 +83,42 @@ export const INVOICE_ENGINE_SOURCE_TYPES = [
   'correction',
 ] as const
 
-/** PostgREST `in` literal for the NOT-IN filter. */
-const INVOICE_ENGINE_SOURCE_TYPES_FILTER =
-  '(' + INVOICE_ENGINE_SOURCE_TYPES.map((t) => `"${t}"`).join(',') + ')'
-
 /** The receivables an invoice verifikat debits (SE pack: 1510, and 1513 for a ROT/RUT invoice's Skatteverket share). */
 const AR_ACCOUNTS = [
   resolveAccountRole(PINNED_JURISDICTION, 'accounts_receivable'),
   resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable'),
 ]
 
+interface CoverageRpcResult {
+  covers_from: string | null
+  has_pre_register_invoices: boolean
+  pre_register_in_period: boolean
+}
+
 /**
- * True when a posted, non-engine verifikat with an AR debit line exists
- * before `coversFrom`. Optionally scoped to one fiscal period (used by the
- * 1510 reconciliation, which compares period-scoped balances: a settled
- * pre-boundary residual in an EARLIER period cannot explain this period's
- * difference and must not be offered as an explanation).
- * Returns null when the probe itself failed (unknown, not false).
+ * The coverage read. The boundary (covers_from) is the earliest invoice_date
+ * of a real, non-draft register invoice that is not registered from the
+ * books (isRegisteredFromBooks: unlinked, or with lines); a register holding
+ * only registrations is complete from no date yet, so the boundary is today.
+ * The probe asks whether a posted, non-engine verifikat with an AR debit line
+ * exists before the boundary, and, with a fiscal period, whether one exists
+ * inside it. Null when the read failed: unknown, never "complete".
  */
-async function probePreRegisterArDebits(
+async function readCoverage(
   supabase: SupabaseClient,
   companyId: string,
-  coversFrom: string,
+  today: string,
   fiscalPeriodId?: string,
-): Promise<boolean | null> {
-  let query = supabase
-    .from('journal_entries')
-    .select('id, journal_entry_lines!inner(id)')
-    .eq('company_id', companyId)
-    .eq('status', 'posted')
-    .lt('entry_date', coversFrom)
-    .not('source_type', 'in', INVOICE_ENGINE_SOURCE_TYPES_FILTER)
-    .in('journal_entry_lines.account_number', AR_ACCOUNTS)
-    .gt('journal_entry_lines.debit_amount', 0)
-  if (fiscalPeriodId) query = query.eq('fiscal_period_id', fiscalPeriodId)
-
-  const { data, error } = await query.limit(1).maybeSingle()
-  if (error) return null
-  return data != null
-}
-
-/** The real, non-draft invoices of the register, selecting `columns`. */
-function registerInvoices(supabase: SupabaseClient, companyId: string, columns: string) {
-  return supabase
-    .from('invoices')
-    .select(columns)
-    .eq('company_id', companyId)
-    .neq('status', 'draft')
-    // Proformas and delivery notes are not register invoices (no AR posting);
-    // an early one would move the boundary without covering anything.
-    .eq('document_type', 'invoice')
-}
-
-interface FirstInvoiceRow {
-  invoice_date?: string | null
-  journal_entry_id?: string | null
-  invoice_items?: unknown[] | null
-}
-
-/**
- * The earliest invoice_date among invoices NOT registered from the books:
- * unlinked (kontantmetoden, deferred booking, an unlinked migrated invoice)
- * or with lines. Null when there is none; undefined when a lookup failed.
- */
-async function earliestCompleteInvoiceDate(
-  supabase: SupabaseClient,
-  companyId: string,
-): Promise<string | null | undefined> {
-  const [unlinked, withLines] = await Promise.all([
-    registerInvoices(supabase, companyId, 'invoice_date')
-      .is('journal_entry_id', null)
-      .order('invoice_date', { ascending: true })
-      .limit(1)
-      .maybeSingle(),
-    registerInvoices(supabase, companyId, 'invoice_date, invoice_items!inner(id)')
-      .order('invoice_date', { ascending: true })
-      .limit(1)
-      .maybeSingle(),
-  ])
-  if (unlinked.error || withLines.error) return undefined
-  const dates = [unlinked.data, withLines.data]
-    .map((row) => (row as { invoice_date?: string | null } | null)?.invoice_date)
-    .filter((date): date is string => typeof date === 'string' && date !== '')
-  return dates.length > 0 ? dates.sort()[0] : null
+): Promise<CoverageRpcResult | null> {
+  const { data, error } = await supabase.rpc('get_invoice_register_coverage', {
+    p_company_id: companyId,
+    p_ar_accounts: AR_ACCOUNTS,
+    p_engine_source_types: [...INVOICE_ENGINE_SOURCE_TYPES],
+    p_today: today,
+    p_fiscal_period_id: fiscalPeriodId ?? null,
+  })
+  if (error || !data) return null
+  return data as CoverageRpcResult
 }
 
 export async function fetchInvoiceRegisterCoverage(
@@ -171,38 +126,14 @@ export async function fetchInvoiceRegisterCoverage(
   companyId: string,
   options: { today?: string } = {},
 ): Promise<InvoiceRegisterCoverage> {
-  const { data: firstInvoice, error: firstError } = await registerInvoices(
-    supabase,
-    companyId,
-    'invoice_date, journal_entry_id, invoice_items(id)',
-  )
-    .order('invoice_date', { ascending: true })
-    .limit(1)
-    .maybeSingle()
-  if (firstError) return NO_INVOICE_REGISTER_COVERAGE
-
-  const first = firstInvoice as FirstInvoiceRow | null
-  let coversFrom = first?.invoice_date ?? null
-  if (!first || !coversFrom) return NO_INVOICE_REGISTER_COVERAGE
-
-  // The earliest invoice is an open item registered from an older
-  // reskontra: completeness starts at the first invoice the register holds
-  // its whole history for, or nowhere yet. One the provider migration linked
-  // but could not give lines reads the same way, which only widens the
-  // disclosure.
-  if (isRegisteredFromBooks(first, first.invoice_items)) {
-    const complete = await earliestCompleteInvoiceDate(supabase, companyId)
-    if (complete === undefined) return NO_INVOICE_REGISTER_COVERAGE
-    coversFrom = complete ?? options.today ?? todayIsoStockholm()
-  }
-
-  const hasPreRegister = await probePreRegisterArDebits(supabase, companyId, coversFrom)
-  // Probe failure means UNKNOWN: never report a confident "complete".
-  if (hasPreRegister === null) return NO_INVOICE_REGISTER_COVERAGE
-
+  const coverage = await readCoverage(supabase, companyId, options.today ?? todayIsoStockholm())
+  // Null covers_from is the empty register (the empty state already routes
+  // the user to migration); a failed read is unknown. Neither asserts
+  // completeness.
+  if (!coverage?.covers_from) return NO_INVOICE_REGISTER_COVERAGE
   return {
-    covers_from: coversFrom,
-    has_pre_register_invoices: hasPreRegister,
+    covers_from: coverage.covers_from,
+    has_pre_register_invoices: coverage.has_pre_register_invoices === true,
   }
 }
 
@@ -218,13 +149,7 @@ export async function hasPreRegisterArInPeriod(
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<boolean> {
-  const coverage = await fetchInvoiceRegisterCoverage(supabase, companyId)
-  if (!coverage.has_pre_register_invoices || !coverage.covers_from) return false
-  const inPeriod = await probePreRegisterArDebits(
-    supabase,
-    companyId,
-    coverage.covers_from,
-    fiscalPeriodId,
-  )
-  return inPeriod === true
+  const coverage = await readCoverage(supabase, companyId, todayIsoStockholm(), fiscalPeriodId)
+  if (!coverage?.covers_from || coverage.has_pre_register_invoices !== true) return false
+  return coverage.pre_register_in_period === true
 }

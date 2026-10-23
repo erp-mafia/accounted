@@ -1,8 +1,7 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { createReskontraClient, type ReskontraTables } from '@/tests/reskontra-rpc-port'
 import {
   fetchInvoiceRegisterCoverage,
   hasPreRegisterArInPeriod,
@@ -10,94 +9,103 @@ import {
   NO_INVOICE_REGISTER_COVERAGE,
 } from '../invoice-register-coverage'
 
-const { supabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
-const client = supabase as unknown as SupabaseClient
+// One read, get_invoice_register_coverage, answered from `tables` by its JS
+// port (tests/reskontra-rpc-port.ts). The SQL itself is pinned in
+// tests/pg/reskontra-population-rpc.pg.test.ts.
+let tables: ReskontraTables
+let failures: Record<string, { message: string }>
+const { supabase: client, calls } = createReskontraClient(() => tables, () => failures)
+
+const coverageArgs = () => calls.find((c) => c.name === 'get_invoice_register_coverage')?.args
+
+/** An invoice of the register: sent, unlinked and without lines unless told. */
+function invoice(id: string, invoiceDate: string, fields: Record<string, unknown> = {}) {
+  return { id, invoice_date: invoiceDate, status: 'sent', journal_entry_id: null, ...fields }
+}
+
+/** A posted verifikat debiting `account` (1510 unless told) on `date`. */
+function verifikat(id: string, date: string, fields: { source_type?: string; account?: string; credit?: boolean; fiscal_period_id?: string } = {}) {
+  return {
+    journal_entries: [{ id, entry_date: date, status: 'posted', source_type: fields.source_type ?? 'manual', fiscal_period_id: fields.fiscal_period_id ?? 'period-1' }],
+    journal_entry_lines: [
+      { journal_entry_id: id, account_number: fields.account ?? '1510', debit_amount: fields.credit ? 0 : 1250, credit_amount: fields.credit ? 1250 : 0 },
+    ],
+  }
+}
+
+beforeEach(() => {
+  vi.clearAllMocks()
+  calls.length = 0
+  tables = {}
+  failures = {}
+})
 
 describe('fetchInvoiceRegisterCoverage', () => {
-  beforeEach(() => {
-    reset()
-  })
-
-  it('returns no coverage when the register is empty, without probing the journal', async () => {
-    enqueue({ data: null, error: null })
+  it('returns no coverage when the register is empty', async () => {
+    // Drafts and proformas are not the register: a backdated draft would
+    // suppress the disclosure for exactly the period it exists to cover.
+    tables = {
+      invoices: [
+        invoice('draft', '2026-01-01', { status: 'draft' }),
+        invoice('proforma', '2026-01-01', { document_type: 'proforma' }),
+      ],
+      ...verifikat('je-1', '2025-12-01'),
+    }
 
     const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1')
 
     expect(coverage).toEqual(NO_INVOICE_REGISTER_COVERAGE)
-    expect(findCall('journal_entries', 'select')).toBeUndefined()
-    // Drafts must not anchor the boundary: a backdated draft would suppress
-    // the disclosure for exactly the period it exists to cover.
-    expect(findCall('invoices', 'neq')).toEqual(['status', 'draft'])
-    expect(findCalls('invoices', 'eq')).toContainEqual(['document_type', 'invoice'])
   })
 
   it('flags pre-register invoices when a posted non-engine AR debit predates the first invoice', async () => {
-    enqueue({ data: { invoice_date: '2026-07-19' }, error: null })
-    enqueue({ data: { id: 'entry-1' }, error: null })
+    tables = { invoices: [invoice('inv-1', '2026-07-19')], ...verifikat('je-1', '2026-07-01') }
 
-    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1')
+    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
 
-    expect(coverage).toEqual({
-      covers_from: '2026-07-19',
-      has_pre_register_invoices: true,
-    })
-    // Driven from journal_entries (company-indexed), never from the lines
-    // table with entry filters on an embed (the lateral-scan shape
-    // lib/bookkeeping/entry-lines.ts exists to prevent).
-    const eqCalls = findCalls('journal_entries', 'eq')
-    expect(eqCalls).toContainEqual(['company_id', 'company-1'])
-    expect(eqCalls).toContainEqual(['status', 'posted'])
-    expect(findCall('journal_entries', 'lt')).toEqual(['entry_date', '2026-07-19'])
-    // Every invoice-engine source type is excluded, storno/correction
-    // included (a rättelse can be re-dated before the boundary).
-    expect(findCall('journal_entries', 'not')).toEqual([
-      'source_type',
-      'in',
-      '("invoice_created","invoice_paid","invoice_cash_payment","credit_note","reminder_fee","rot_rut_payout","rot_rut_reclaim","customer_loss","counterparty_setoff","rot_rut_reclassification","storno","correction")',
-    ])
-    // AR-scoped and DEBIT-only: an advance payment crediting 1510 before the
-    // first invoice is not evidence of register-external invoices.
-    expect(findCall('journal_entries', 'in')).toEqual([
-      'journal_entry_lines.account_number',
-      ['1510', '1513'],
-    ])
-    expect(findCall('journal_entries', 'gt')).toEqual([
-      'journal_entry_lines.debit_amount',
-      0,
-    ])
-  })
-
-  it('reports full coverage when no AR debit predates the first invoice', async () => {
-    enqueue({ data: { invoice_date: '2026-01-02' }, error: null })
-    enqueue({ data: null, error: null })
-
-    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1')
-
-    expect(coverage).toEqual({
-      covers_from: '2026-01-02',
-      has_pre_register_invoices: false,
+    expect(coverage).toEqual({ covers_from: '2026-07-19', has_pre_register_invoices: true })
+    // The receivable accounts by role, every invoice-engine source type
+    // (storno and correction included: a rättelse can be re-dated before the
+    // boundary), and the caller's today.
+    expect(coverageArgs()).toEqual({
+      p_company_id: 'company-1',
+      p_ar_accounts: ['1510', '1513'],
+      p_engine_source_types: [...INVOICE_ENGINE_SOURCE_TYPES],
+      p_today: '2026-10-09',
+      p_fiscal_period_id: null,
     })
   })
 
-  it('degrades to UNKNOWN when the AR probe errors, never to a confident "complete"', async () => {
-    enqueue({ data: { invoice_date: '2026-07-19' }, error: null })
-    enqueue({ data: null, error: { message: 'statement timeout' } })
+  it('reads an AR credit, an engine verifikat and an entry on the boundary as no evidence', async () => {
+    // An advance payment crediting 1510 before the first invoice says nothing
+    // about register-external invoices, nor does the engine's own booking.
+    tables = {
+      invoices: [invoice('inv-1', '2026-07-19')],
+      journal_entries: [
+        ...verifikat('je-credit', '2026-07-01', { credit: true }).journal_entries,
+        ...verifikat('je-engine', '2026-07-02', { source_type: 'storno' }).journal_entries,
+        ...verifikat('je-on-day', '2026-07-19').journal_entries,
+      ],
+      journal_entry_lines: [
+        ...verifikat('je-credit', '2026-07-01', { credit: true }).journal_entry_lines,
+        ...verifikat('je-engine', '2026-07-02', { source_type: 'storno' }).journal_entry_lines,
+        ...verifikat('je-on-day', '2026-07-19').journal_entry_lines,
+      ],
+    }
 
     const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1')
+
+    expect(coverage).toEqual({ covers_from: '2026-07-19', has_pre_register_invoices: false })
+  })
+
+  it('degrades to UNKNOWN when the read errors, never to a confident "complete"', async () => {
+    tables = { invoices: [invoice('inv-1', '2026-07-19')] }
+    failures = { get_invoice_register_coverage: { message: 'statement timeout' } }
 
     // { covers_from: '2026-07-19', has_pre_register_invoices: false } here
     // would tell an agent the register is complete on the strength of a
     // failed query: the exact double-invoicing incident this module exists
     // to prevent.
-    expect(coverage).toEqual(NO_INVOICE_REGISTER_COVERAGE)
-  })
-
-  it('degrades to UNKNOWN when the register lookup errors', async () => {
-    enqueue({ data: null, error: { message: 'connection reset' } })
-
-    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1')
-
-    expect(coverage).toEqual(NO_INVOICE_REGISTER_COVERAGE)
+    expect(await fetchInvoiceRegisterCoverage(client, 'company-1')).toEqual(NO_INVOICE_REGISTER_COVERAGE)
   })
 })
 
@@ -108,32 +116,29 @@ describe('fetchInvoiceRegisterCoverage', () => {
  * registrations must not pull the boundary back over that period.
  */
 describe('fetchInvoiceRegisterCoverage: invoices registered from the books', () => {
-  beforeEach(() => {
-    reset()
-  })
-
-  const registration = { invoice_date: '2025-11-15', journal_entry_id: 'je-sie-1', invoice_items: [] }
+  const registration = invoice('reg-1', '2025-11-15', { journal_entry_id: 'je-sie-1' })
 
   it('starts the boundary at the first invoice the register holds the whole history of', async () => {
-    enqueue({ data: registration, error: null })
-    // The earliest unlinked invoice, then the earliest with lines.
-    enqueue({ data: null, error: null })
-    enqueue({ data: { invoice_date: '2026-10-01', invoice_items: [{ id: 'item-1' }] }, error: null })
-    enqueue({ data: { id: 'entry-1' }, error: null })
+    tables = {
+      invoices: [registration, invoice('inv-lines', '2026-10-01', { journal_entry_id: 'je-2' })],
+      invoice_items: [{ id: 'item-1', invoice_id: 'inv-lines' }],
+      ...verifikat('je-sie-1', '2025-11-15', { source_type: 'import' }),
+    }
 
     const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
 
     expect(coverage).toEqual({ covers_from: '2026-10-01', has_pre_register_invoices: true })
-    expect(findCall('invoices', 'is')).toEqual(['journal_entry_id', null])
-    expect(findCalls('invoices', 'select')).toContainEqual(['invoice_date, invoice_items!inner(id)'])
-    expect(findCall('journal_entries', 'lt')).toEqual(['entry_date', '2026-10-01'])
   })
 
   it('takes an unlinked invoice (kontantmetoden, deferred booking) as complete history too', async () => {
-    enqueue({ data: registration, error: null })
-    enqueue({ data: { invoice_date: '2026-02-01' }, error: null })
-    enqueue({ data: { invoice_date: '2026-03-01', invoice_items: [{ id: 'item-1' }] }, error: null })
-    enqueue({ data: { id: 'entry-1' }, error: null })
+    tables = {
+      invoices: [
+        registration,
+        invoice('inv-unlinked', '2026-02-01'),
+        invoice('inv-lines', '2026-03-01', { journal_entry_id: 'je-2' }),
+      ],
+      invoice_items: [{ id: 'item-1', invoice_id: 'inv-lines' }],
+    }
 
     const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
 
@@ -141,66 +146,46 @@ describe('fetchInvoiceRegisterCoverage: invoices registered from the books', () 
   })
 
   it('discloses everything before today when the register holds only registrations', async () => {
-    enqueue({ data: registration, error: null })
-    enqueue({ data: null, error: null })
-    enqueue({ data: null, error: null })
-    enqueue({ data: { id: 'entry-1' }, error: null })
+    tables = { invoices: [registration], ...verifikat('je-sie-1', '2025-11-15', { source_type: 'import' }) }
 
     const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
 
     expect(coverage).toEqual({ covers_from: '2026-10-09', has_pre_register_invoices: true })
   })
 
-  it('degrades to UNKNOWN when the boundary lookup fails', async () => {
-    enqueue({ data: registration, error: null })
-    enqueue({ data: null, error: { message: 'statement timeout' } })
-    enqueue({ data: null, error: null })
-
-    const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
-
-    expect(coverage).toEqual(NO_INVOICE_REGISTER_COVERAGE)
-  })
-
   it('keeps a first invoice with lines as the boundary, linked or not', async () => {
-    enqueue({ data: { invoice_date: '2026-07-19', journal_entry_id: 'je-1', invoice_items: [{ id: 'item-1' }] }, error: null })
-    enqueue({ data: { id: 'entry-1' }, error: null })
+    tables = {
+      invoices: [invoice('inv-1', '2026-07-19', { journal_entry_id: 'je-1' })],
+      invoice_items: [{ id: 'item-1', invoice_id: 'inv-1' }],
+      ...verifikat('je-0', '2026-07-01'),
+    }
 
     const coverage = await fetchInvoiceRegisterCoverage(client, 'company-1', { today: '2026-10-09' })
 
     expect(coverage).toEqual({ covers_from: '2026-07-19', has_pre_register_invoices: true })
-    expect(findCall('invoices', 'is')).toBeUndefined()
   })
 })
 
 describe('hasPreRegisterArInPeriod', () => {
-  beforeEach(() => {
-    reset()
-  })
-
   it('requires pre-register AR activity inside the given period', async () => {
-    // Coverage lookups: first invoice + global probe (flagged) ...
-    enqueue({ data: { invoice_date: '2026-07-19' }, error: null })
-    enqueue({ data: { id: 'entry-1' }, error: null })
-    // ... then the period-scoped probe finds nothing in THIS period.
-    enqueue({ data: null, error: null })
+    tables = { invoices: [invoice('inv-1', '2026-07-19')], ...verifikat('je-1', '2026-07-01', { fiscal_period_id: 'period-0' }) }
 
     expect(await hasPreRegisterArInPeriod(client, 'company-1', 'period-1')).toBe(false)
-    const eqCalls = findCalls('journal_entries', 'eq')
-    expect(eqCalls).toContainEqual(['fiscal_period_id', 'period-1'])
+    expect(coverageArgs()).toMatchObject({ p_fiscal_period_id: 'period-1' })
   })
 
   it('is true when flagged activity exists inside the period', async () => {
-    enqueue({ data: { invoice_date: '2026-07-19' }, error: null })
-    enqueue({ data: { id: 'entry-1' }, error: null })
-    enqueue({ data: { id: 'entry-1' }, error: null })
+    tables = { invoices: [invoice('inv-1', '2026-07-19')], ...verifikat('je-1', '2026-07-01') }
 
     expect(await hasPreRegisterArInPeriod(client, 'company-1', 'period-1')).toBe(true)
   })
 
-  it('skips the period probe entirely when the company is not flagged', async () => {
-    enqueue({ data: { invoice_date: '2026-01-02' }, error: null })
-    enqueue({ data: null, error: null })
+  it('is false when the company is not flagged, or the read fails', async () => {
+    tables = { invoices: [invoice('inv-1', '2026-01-02')] }
+    expect(await hasPreRegisterArInPeriod(client, 'company-1', 'period-1')).toBe(false)
 
+    tables = { invoices: [invoice('inv-1', '2026-07-19')], ...verifikat('je-1', '2026-07-01') }
+    failures = { get_invoice_register_coverage: { message: 'statement timeout' } }
     expect(await hasPreRegisterArInPeriod(client, 'company-1', 'period-1')).toBe(false)
   })
 })

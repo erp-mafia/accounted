@@ -1,0 +1,1 @@
+[2026-10-23] Huvudbok opens as an account overview (IB, movements, UB, line count) with lines inline up to 2 000 and otherwise 500 per opened account; grundbok shows 200 verifikat at a time with the year's totals: a 50 000-verifikat year was 37 MB / 25 MB of JSON and 3-5 s.

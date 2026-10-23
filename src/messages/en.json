@@ -12391,6 +12391,20 @@
     "signed_other_date": "through {date} ({who}), not the balance sheet date",
     "unsigned": "Not signed off"
   },
+  "general_ledger": {
+    "paged_hint": "{count, number} lines in the period. Open an account to see its lines.",
+    "show_lines": "Show {count, plural, one {# line} other {# lines}}",
+    "no_lines": "No lines in the period",
+    "closing_balance": "Closing: {amount} SEK",
+    "load_more": "Show more ({shown, number} of {total, number})",
+    "loading_lines": "Loading lines…",
+    "lines_failed": "Could not load the lines"
+  },
+  "journal_register": {
+    "load_more": "Show more ({shown, number} of {total, number})",
+    "loading_more": "Loading entries…",
+    "page_failed": "Could not load more entries"
+  },
   "lonejournal": {
     "year_label": "Year",
     "month_from_label": "From month",

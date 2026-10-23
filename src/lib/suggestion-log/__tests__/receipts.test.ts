@@ -4,7 +4,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
   DecisionReceiptSchema,
   buildDecisionReceipt,
-  fetchDecisionRowsInWindow,
+  fetchPeriodDecisions,
   getDecisionReceipts,
   loadReceiptContext,
   toCompactDecision,
@@ -308,17 +308,62 @@ describe('getDecisionReceipts', () => {
   })
 })
 
-describe('fetchDecisionRowsInWindow', () => {
+describe('fetchPeriodDecisions', () => {
   const mock = createQueuedMockSupabase()
   const supabase = mock.supabase as unknown as SupabaseClient
+  const window = { fromTs: '2026-01-01T00:00:00.000Z', toTs: '2026-12-31T23:59:59.999Z' }
 
-  beforeEach(() => mock.reset())
+  beforeEach(() => {
+    mock.reset()
+    mock.supabase.rpc.mockClear()
+  })
 
-  it("unions the window with the decisions that booked the year's vouchers, once each", async () => {
-    mock.enqueue({ data: [bankRow()] }) // windowed
-    mock.enqueue({ data: [bankRow(), bankRow({ id: 'late', created_at: '2027-01-10T08:00:00.000Z' })] }) // by voucher
-    const rows = await fetchDecisionRowsInWindow(supabase, CO, { fromTs: '2026-01-01T00:00:00.000Z', toTs: '2026-12-31T23:59:59.999Z' }, [JE])
-    expect(rows.map((r) => r.id).sort()).toEqual(['late', ROW].sort())
-    expect(mock.findCalls('suggestion_log', 'in')).toEqual([['final->>journal_entry_id', [JE]]])
+  it("reads the period's decisions and what their receipts read in one call, scoped to the company and period", async () => {
+    const named = bankRow({ id: 'named', pending_operation_id: OP })
+    mock.enqueue({ data: [{ rows: [bankRow(), named], entries: [entry], operations: [op], legacy_by_entry: [op], legacy_by_registration: [] }] })
+    const { rows, context } = await fetchPeriodDecisions(supabase, CO, { periodId: 'period-1', window, fiscalYear: true })
+    expect(mock.supabase.rpc).toHaveBeenCalledWith('behandlingshistorik_decisions', {
+      p_company_id: CO,
+      p_period_id: 'period-1',
+      p_from: window.fromTs,
+      p_to: window.toTs,
+      p_fiscal_year: true,
+    })
+    // No id list leaves the process: no table read at all.
+    expect(mock.calls).toEqual([])
+    expect(rows.map((r) => r.id)).toEqual([ROW, 'named'])
+    expect(context.entries.get(JE)?.voucher_number).toBe(12)
+    expect(context.operationsById?.get(OP)?.operation_type).toBe('categorize_transaction')
+    expect(context.operations.get(JE)?.id).toBe(OP)
+  })
+
+  it('builds the context loadReceiptContext builds from the same rows', async () => {
+    const rows = [bankRow(), bankRow({ id: 'named', pending_operation_id: OP }), bankRow({ id: 'inbox', kind: 'inbox_item' })]
+    const registration = { ...op, id: 'op-reg', operation_type: 'create_supplier_invoice_from_inbox', journal_entry_id: null, registration_journal_entry_id: JE, resolved_at: '2026-10-02T08:00:00.000Z' }
+    // loadReceiptContext: ops by id, vouchers, then committed ops by voucher (by entry, by registration).
+    mock.enqueue({ data: [op] })
+    mock.enqueue({ data: [entry] })
+    mock.enqueue({ data: [op] })
+    mock.enqueue({ data: [registration] })
+    const expected = await loadReceiptContext(supabase, CO, rows)
+    mock.reset()
+    mock.enqueue({ data: [{ rows, entries: [entry], operations: [op], legacy_by_entry: [op], legacy_by_registration: [registration] }] })
+    const { context } = await fetchPeriodDecisions(supabase, CO, { periodId: 'period-1', window, fiscalYear: true })
+    expect(context).toEqual(expected)
+    // The later approval of the two that carried the voucher.
+    expect(context.operations.get(JE)?.id).toBe('op-reg')
+  })
+
+  it('answers no decisions for a period without any', async () => {
+    mock.enqueue({ data: [{ rows: [], entries: [], operations: [], legacy_by_entry: [], legacy_by_registration: [] }] })
+    const result = await fetchPeriodDecisions(supabase, CO, { periodId: 'period-1', window, fiscalYear: false })
+    expect(result.rows).toEqual([])
+    expect(result.context.entries.size).toBe(0)
+    expect(result.context.operations.size).toBe(0)
+  })
+
+  it('throws with the SQLSTATE instead of answering "no decision"', async () => {
+    mock.enqueue({ error: { message: 'canceling statement due to statement timeout', code: '57014' } })
+    await expect(fetchPeriodDecisions(supabase, CO, { periodId: 'period-1', window, fiscalYear: true })).rejects.toMatchObject({ code: '57014' })
   })
 })

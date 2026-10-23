@@ -1,7 +1,10 @@
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { NextResponse } from 'next/server'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import {
+  fetchSupplierLedgerInvoices,
+  type SupplierLedgerInvoice,
+} from '@/lib/reports/supplier-ledger-invoices'
 import type { ReportSourceLine } from '@/lib/reports/source-lines'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -26,80 +29,38 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
   async (request, { supabase, companyId }, { params }) => {
   const { supplierId } = await params
 
-  const { data: supplier } = await supabase
-    .from('suppliers')
-    .select('id, name')
-    .eq('id', supplierId)
-    .eq('company_id', companyId)
-    .maybeSingle()
+  // Verify the supplier belongs to the company, and read its open invoices
+  // beside it: the live leverantörsreskontra population of the supplier
+  // (supplier-ledger-invoices.ts, the same read generateSupplierLedger
+  // makes), each with its registration verifikat. Every open invoice is
+  // listed, so `unconverted_fx_count` covers the full row set and there is
+  // never a next page.
+  const [{ data: supplier }, read] = await Promise.all([
+    supabase
+      .from('suppliers')
+      .select('id, name')
+      .eq('id', supplierId)
+      .eq('company_id', companyId)
+      .maybeSingle(),
+    fetchSupplierLedgerInvoices(supabase, companyId, { supplierId }).then(
+      (rows) => ({ rows, error: null }),
+      (error: unknown) => ({ rows: [] as SupplierLedgerInvoice[], error }),
+    ),
+  ])
 
   if (!supplier) {
     return NextResponse.json({ error: 'Leverantör saknas' }, { status: 404 })
   }
 
-  // Mirror `generateSupplierLedger`'s filter: registered/approved/partially
-  // paid/overdue invoices that still have an outstanding balance.
-  //
-  // fetchAllRows: bounded by one supplier's OPEN invoices, so the volume is
-  // naturally small, but the previous hardcoded 500-row .limit() silently
-  // truncated the page for outliers while next_cursor: null claimed the list
-  // was complete, and `unconverted_fx_count` was computed over the truncated
-  // page (the honesty counter under-reported). The secondary .order('id')
-  // gives .range() paging the stable total order it needs (invoice_date is
-  // not unique).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let invoices: any[]
-  try {
-    invoices = await fetchAllRows(({ from, to }) =>
-      supabase
-        .from('supplier_invoices')
-        .select(`
-          id,
-          supplier_invoice_number,
-          invoice_date,
-          due_date,
-          total,
-          paid_amount,
-          remaining_amount,
-          currency,
-          exchange_rate,
-          registration_journal_entry_id
-        `)
-        .eq('company_id', companyId)
-        .eq('supplier_id', supplierId)
-        .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
-        .order('invoice_date', { ascending: true })
-        .order('id', { ascending: true })
-        .range(from, to)
-    )
-  } catch (err) {
-    return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+  if (read.error) {
+    return NextResponse.json({ error: getUserErrorMessage(read.error) }, { status: 500 })
   }
 
-  // Pull the registration entries in one batch to get voucher numbers.
-  const entryIds = invoices
-    .map((i) => i.registration_journal_entry_id)
-    .filter((id): id is string => !!id)
-  const entryMap = new Map<
-    string,
-    { voucher_number: number; voucher_series: string; description: string | null; entry_date: string }
-  >()
-  if (entryIds.length > 0) {
-    const { data: entries } = await supabase
-      .from('journal_entries')
-      .select('id, voucher_number, voucher_series, description, entry_date')
-      .eq('company_id', companyId)
-      .in('id', entryIds)
-      .in('status', ['posted', 'reversed'])
-    for (const e of entries || []) {
-      entryMap.set(e.id, {
-        voucher_number: e.voucher_number,
-        voucher_series: e.voucher_series || 'A',
-        description: e.description,
-        entry_date: e.entry_date,
-      })
-    }
-  }
+  // By invoice date, then id (the population comes in id order and the sort
+  // is stable).
+  const invoices = [...read.rows].sort((a, b) =>
+    a.invoice_date < b.invoice_date ? -1 : a.invoice_date > b.invoice_date ? 1 : 0
+  )
 
   const lines: (ReportSourceLine & {
     supplier_invoice_id: string
@@ -112,8 +73,9 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
     paid_amount: number
     due_date: string
   })[] = invoices.map((inv) => {
-    const entry = inv.registration_journal_entry_id
-      ? entryMap.get(inv.registration_journal_entry_id)
+    const registration = inv.registration_entry
+    const entry = registration
+      ? { ...registration, voucher_series: registration.voucher_series || 'A' }
       : undefined
 
     const remaining = Number(inv.remaining_amount) || 0
@@ -156,7 +118,7 @@ export const GET = withRouteContext<{ params: Promise<{ supplierId: string }> }>
       lines,
       // Same contract as the ledger report itself: the rows are listed, but
       // their SEK value is unknown and missing from every SEK total. Computed
-      // over the FULL row set now that the query paginates.
+      // over the full row set.
       unconverted_fx_count: lines.filter((l) => l.remaining_sek === null).length,
       // Kept for response-shape compatibility. Truthful now: every open
       // invoice for the supplier is in `lines`, so there is never a next page.

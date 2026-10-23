@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { fetchSupplierLedgerInvoices } from './supplier-ledger-invoices'
 import { closingBalanceOf } from './trial-balance'
 
 export interface ReconciliationResult {
@@ -37,22 +37,25 @@ export async function generateReconciliation(
 
   // remaining_amount is stored in invoice currency; account 2440 is in SEK
   // (booked at invoice-date rate), so convert each row before summing.
-  // Paginated: a company with >1000 open supplier invoices would otherwise be
-  // silently truncated, manufacturing a phantom reconciliation gap.
-  const invoices = await fetchAllRows<{
-    id: string
-    remaining_amount: number | null
-    currency: string | null
-    exchange_rate: number | null
-  }>(({ from, to }) =>
-    supabase
-      .from('supplier_invoices')
-      .select('id, remaining_amount, currency, exchange_rate')
-      .eq('company_id', companyId)
-      .in('status', ['registered', 'approved', 'partially_paid', 'overdue'])
-      .order('id', { ascending: true })
-      .range(from, to)
-  )
+  // The open invoices are the live leverantörsreskontra's population (one
+  // read, in id order: supplier-ledger-invoices.ts), and the 2440 balance is
+  // read beside it.
+  const [invoices, debitMinusCredit] = await Promise.all([
+    fetchSupplierLedgerInvoices(supabase, companyId),
+    // The booked 2440 balance, read as the balance sheet reads it
+    // (closingBalanceOf: the trial balance's UB, ingående balans included,
+    // posted and reversed entries both counted so a corrected registration
+    // nets against its storno). The open invoices are every open invoice of
+    // the register, whatever year it was booked in, so the ledger side must
+    // carry the opening balance too: summing only this fiscal year's
+    // verifikat left out an IB carried from earlier years' verifikat and
+    // showed that IB as a false difference (crm#1296). 2440 is a liability,
+    // credit-normal: balance = credits - debits (0 minus, so an empty account
+    // reads 0, not -0).
+    closingBalanceOf(supabase, companyId, periodId, [
+      resolveAccountRole(PINNED_JURISDICTION, 'accounts_payable'),
+    ]),
+  ])
 
   let unconvertedFxCount = 0
   const supplierLedgerTotal = (invoices || [])
@@ -74,18 +77,6 @@ export async function generateReconciliation(
       return Math.round((sum + sek) * 100) / 100
     }, 0)
 
-  // The booked 2440 balance, read as the balance sheet reads it
-  // (closingBalanceOf: the trial balance's UB, ingående balans included,
-  // posted and reversed entries both counted so a corrected registration nets
-  // against its storno). The open invoices above are every open invoice of
-  // the register, whatever year it was booked in, so the ledger side must
-  // carry the opening balance too: summing only this fiscal year's verifikat
-  // left out an IB carried from earlier years' verifikat and showed that IB
-  // as a false difference (crm#1296). 2440 is a liability, credit-normal:
-  // balance = credits - debits (0 minus, so an empty account reads 0, not -0).
-  const debitMinusCredit = await closingBalanceOf(supabase, companyId, periodId, [
-    resolveAccountRole(PINNED_JURISDICTION, 'accounts_payable'),
-  ])
   const account2440Balance = 0 - debitMinusCredit
 
   const difference = Math.round((supplierLedgerTotal - account2440Balance) * 100) / 100

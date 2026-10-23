@@ -1,9 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { dbError } from '@/lib/errors/db-error'
 import { resultatrapportRows, signedAmount } from './resultatrapport'
-import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
 import type {
   DimensionPnlColumn,
   DimensionPnlGroup,
@@ -34,9 +33,10 @@ const CLASS_LABELS: Record<number, string> = {
  * and signedAmount, imported rather than restated), and the untagged bucket
  * is the residual Totalt − tagged columns. The tagged pass reads the same
  * entries as the trial balance behind Totalt (same window, no opening-balance
- * entry, no year-end entries or their storno chain via the shared
- * excludeYearEndChain), so the columns sum exactly to the resultatrapport for
- * the same window.
+ * entry, no year-end entries or their storno chain), so the columns sum
+ * exactly to the resultatrapport for the same window. That pass is one SQL
+ * call, get_dimension_pnl_buckets, which reads ledger_dimension_days (paging
+ * the year's tagged lines through PostgREST took ~1.8 s for 50 000 verifikat).
  */
 export async function generateDimensionPnl(
   supabase: SupabaseClient,
@@ -71,14 +71,13 @@ export async function generateDimensionPnl(
   // Read from resultatrapport.ts, not restated here: window, year-end
   // exclusion, class 3-8 scope and sign are one definition, so the two
   // reports cannot drift apart again (they did once, when resultatrapport
-  // moved from closing to window amounts). The reversed year-end roots feed
-  // the tagged pass's matching exclusion below.
-  const [pnlRows, reversedYearEndIds] = await Promise.all([
+  // moved from closing to window amounts). The tagged pass runs alongside.
+  const [pnlRows, bucketRows] = await Promise.all([
     resultatrapportRows(supabase, companyId, fiscalPeriodId, {
       fromDate: options?.fromDate,
       toDate: options?.toDate,
     }),
-    fetchReversedYearEndEntryIds(supabase, companyId),
+    fetchTaggedBuckets(supabase, companyId, fiscalPeriodId, sieDimNo, options),
   ])
   const totalByAccount = new Map<string, TrialBalanceRow>()
   for (const r of pnlRows) totalByAccount.set(r.account_number, r)
@@ -105,67 +104,22 @@ export async function generateDimensionPnl(
     for (const v of values) valueNames.set(v.code, v.name)
   }
 
-  // ── Tagged lines: one pass over lines carrying this dimension ──
-  // The entries the trial balance behind Totalt sums, and no others: this
-  // period, posted or reversed, inside the window, without the
-  // opening-balance entry (IB, not activity) and without year-end entries
-  // and their storno chain. A set dropped on one side only would land in its
-  // value column with the opposite amount in "(Utan dimension)": a retagged
-  // year-end depreciation read KS01 −50 000 and untagged +50 000 against a
-  // Totalt of 0, disagreeing with the filtered resultatrapport.
-  const taggedLines = await fetchEntryLines<{
-    id: string
-    account_number: string
-    debit_amount: number
-    credit_amount: number
-    dimensions: Record<string, string>
-  }>({
-    supabase,
-    lineColumns: 'id, account_number, debit_amount, credit_amount, dimensions',
-    filterEntries: (q: EntryLinesQuery) => {
-      let query = q
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', fiscalPeriodId)
-        .in('status', ['posted', 'reversed'])
-
-      if (options?.fromDate) {
-        query = query.gte('entry_date', options.fromDate)
-      }
-      if (options?.toDate) {
-        query = query.lte('entry_date', options.toDate)
-      }
-      if (period.opening_balance_entry_id) {
-        query = query.neq('id', period.opening_balance_entry_id)
-      }
-
-      return excludeYearEndChain(query, reversedYearEndIds)
-    },
-    // Lines that carry any tag at all; which value a line has on THIS
-    // dimension is read from its bag in the loop below, the way the general
-    // ledger shows it. Deliberately not a `dimensions->>N` path: a SIE
-    // dimension number is all digits, and PostgREST reads a digits-only JSON
-    // path operand as an array index (`dimensions ->> 6`, an integer), which
-    // is NULL on every object. That filter matched no line, so every amount
-    // fell into "(Utan dimension)" (tests/tool-pg/dimension-pnl.tool.test.ts
-    // runs this against a real PostgREST).
-    filterLines: (q: EntryLinesQuery) => q.neq('dimensions', '{}'),
-  })
-
-  // Bucket raw amounts per (account, code). Only accounts present in the P&L
-  // trial-balance scope count: anything else (balance accounts) is out.
+  // ── Tagged buckets per (account, value) ─────────────────────────
+  // Only accounts present in the P&L trial-balance scope count: anything else
+  // (balance accounts) is out.
   const buckets = new Map<string, Map<string, { debit: number; credit: number }>>()
   const codesSeen = new Set<string>()
-  for (const line of taggedLines) {
-    if (!totalByAccount.has(line.account_number)) continue
-    const code = normalizeCode(line.dimensions?.[sieDimNo])
+  for (const row of bucketRows) {
+    if (!totalByAccount.has(row.account_number)) continue
+    const code = normalizeCode(row.code)
     if (!code) continue
     codesSeen.add(code)
-    const byCode = buckets.get(line.account_number) ?? new Map()
+    const byCode = buckets.get(row.account_number) ?? new Map()
     const agg = byCode.get(code) ?? { debit: 0, credit: 0 }
-    agg.debit += Number(line.debit_amount) || 0
-    agg.credit += Number(line.credit_amount) || 0
+    agg.debit += Number(row.debit) || 0
+    agg.credit += Number(row.credit) || 0
     byCode.set(code, agg)
-    buckets.set(line.account_number, byCode)
+    buckets.set(row.account_number, byCode)
   }
 
   const codes = [...codesSeen].sort((a, b) => a.localeCompare(b, 'sv'))
@@ -253,6 +207,38 @@ export async function generateDimensionPnl(
       end: options?.toDate ?? period.period_end,
     },
   }
+}
+
+/**
+ * The tagged pass: per account and value of the dimension, the debit and
+ * credit of the lines the trial balance behind Totalt sums (this period,
+ * posted or reversed, inside the window, without the opening-balance entry
+ * and without year-end entries and their storno chain, the set a retagged
+ * year-end depreciation once escaped: KS01 −50 000 and untagged +50 000
+ * against a Totalt of 0). One row per (account, value as stored); the caller
+ * trims and merges values (normalizeCode).
+ */
+async function fetchTaggedBuckets(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  sieDimNo: string,
+  options?: { fromDate?: string; toDate?: string },
+): Promise<Array<{ account_number: string; code: string; debit: number; credit: number }>> {
+  const { data, error } = await supabase.rpc('get_dimension_pnl_buckets', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+    p_dim_no: sieDimNo,
+    p_from_date: options?.fromDate ?? null,
+    p_to_date: options?.toDate ?? null,
+  })
+  if (error) throw dbError(error, 'get_dimension_pnl_buckets failed')
+  return (Array.isArray(data) ? data : []) as Array<{
+    account_number: string
+    code: string
+    debit: number
+    credit: number
+  }>
 }
 
 // Canonical form matching normalizeLineDimensions: trimmed, non-empty.

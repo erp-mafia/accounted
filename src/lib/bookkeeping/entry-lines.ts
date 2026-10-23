@@ -1,5 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+
+const log = createLogger('bookkeeping/entry-lines')
 
 /**
  * Two-step fetch for journal_entry_lines scoped by journal_entries filters.
@@ -90,7 +93,7 @@ function ensureColumns(select: string, required: string[]): string {
 }
 
 /** Sort by id ascending; rows without an id keep their relative order. */
-function compareById(a: { id?: unknown }, b: { id?: unknown }): number {
+export function compareById(a: { id?: unknown }, b: { id?: unknown }): number {
   const aId = a.id
   const bId = b.id
   if (typeof aId !== 'string' || typeof bId !== 'string') return 0
@@ -193,4 +196,67 @@ export async function fetchEntryLines<TLine>(
   }
 
   return lines as TLine[]
+}
+
+/** A verifikat as {@link fetchEntriesWithAccountLines} returns it. */
+export interface AccountLinesEntry {
+  id: string
+  voucher_series: string | null
+  voucher_number: number
+  entry_date: string
+  description: string
+  status: string
+  source_type: string | null
+  source_id: string | null
+  reverses_id: string | null
+  correction_of_id: string | null
+  /** Ordered by account_number, sort_order and id. */
+  lines: Array<{
+    id: string
+    account_number: string
+    debit_amount: number | string | null
+    credit_amount: number | string | null
+  }>
+}
+
+/** PostgREST's "no such function" and Postgres' undefined_function, and EXECUTE not granted. */
+const MISSING_FUNCTION_CODES: ReadonlySet<string> = new Set(['PGRST202', '42883', '42501'])
+
+/**
+ * The verifikat of a company dated in [start, end] with one of `statuses`
+ * that have a line on `accounts`, ordered by id, each with its lines on
+ * `accounts` (or, with `allLines`, every line it has): one
+ * get_entries_with_account_lines call (migration 20261023094040) instead of
+ * paging the period's entries and then their lines through PostgREST. For
+ * the verifikat behind a few accounts (EU sales, fiktiv moms).
+ *
+ * Returns null when the database has no such function yet (the deploy window
+ * before the migration applies, a self-hosted instance not migrated): the
+ * caller then reads the same rows the paged way. Any other error throws.
+ */
+export async function fetchEntriesWithAccountLines(
+  supabase: SupabaseClient,
+  companyId: string,
+  options: {
+    start: string
+    end: string
+    accounts: readonly string[]
+    statuses: ReadonlyArray<'posted' | 'reversed'>
+    allLines: boolean
+  },
+): Promise<AccountLinesEntry[] | null> {
+  const { data, error } = await supabase.rpc('get_entries_with_account_lines', {
+    p_company_id: companyId,
+    p_start: options.start,
+    p_end: options.end,
+    p_accounts: [...options.accounts],
+    p_statuses: [...options.statuses],
+    p_all_lines: options.allLines,
+  })
+  if (!error) return (data ?? []) as AccountLinesEntry[]
+  if (error.code && MISSING_FUNCTION_CODES.has(error.code)) {
+    log.warn('get_entries_with_account_lines unavailable, falling back to the paged read', { code: error.code })
+    return null
+  }
+  throw new Error(`get_entries_with_account_lines failed: ${error.message}`)
 }

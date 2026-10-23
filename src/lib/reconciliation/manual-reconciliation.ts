@@ -132,7 +132,35 @@ export type SpecificationAmounts = Map<string, { amount: number; unconverted_fx_
  * source is logged and left out: the account then reconciles like any manual
  * account (outside unknown) rather than against a wrong number.
  */
-export async function loadSpecificationAmounts(
+export function loadSpecificationAmounts(
+  supabase: SupabaseClient,
+  companyId: string,
+  snapshot: BalanceSheetSnapshot,
+  onlyAccounts?: ReadonlySet<string>,
+): Promise<SpecificationAmounts> {
+  // One read per snapshot and account set: a reader that hands the same
+  // snapshot to the account list (the bokslutsbilagor) asks for the same
+  // specifications the list already read. Keyed on the snapshot object, so
+  // nothing outlives the request that built it.
+  const key = onlyAccounts ? [...onlyAccounts].sort().join(',') : '*'
+  let bySet = specificationReads.get(snapshot)
+  if (!bySet) {
+    bySet = new Map()
+    specificationReads.set(snapshot, bySet)
+  }
+  const cached = bySet.get(key)
+  if (cached && cached.companyId === companyId && cached.supabase === supabase) return cached.read
+  const read = readSpecificationAmounts(supabase, companyId, snapshot, onlyAccounts)
+  bySet.set(key, { companyId, supabase, read })
+  return read
+}
+
+const specificationReads = new WeakMap<
+  BalanceSheetSnapshot,
+  Map<string, { companyId: string; supabase: SupabaseClient; read: Promise<SpecificationAmounts> }>
+>()
+
+async function readSpecificationAmounts(
   supabase: SupabaseClient,
   companyId: string,
   snapshot: BalanceSheetSnapshot,
@@ -330,6 +358,8 @@ export async function getManualReconciliationStatus(
 export interface ListManualAccountsOptions {
   /** The balansdag the list is computed through. */
   asOf: string
+  /** The balances through asOf when the caller reads them anyway (loadBalanceSheetSnapshot(asOf)). */
+  balanceSheet?: Promise<BalanceSheetSnapshot | null>
   /** Account numbers other adapters already own (cash accounts' ledger accounts, 1630 when the skattekonto is present). */
   exclude: ReadonlySet<string>
   /** Latest active sign-off per account key, as the service already loaded them. */
@@ -366,7 +396,7 @@ export async function listManualAccounts(
   companyId: string,
   options: ListManualAccountsOptions,
 ): Promise<ReconciliationAccount[]> {
-  const snapshot = await loadBalanceSheetSnapshot(supabase, companyId, options.asOf)
+  const snapshot = await (options.balanceSheet ?? loadBalanceSheetSnapshot(supabase, companyId, options.asOf))
   if (!snapshot) return []
   const withStatus = options.withStatus ?? true
 

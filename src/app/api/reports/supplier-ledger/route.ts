@@ -8,12 +8,11 @@ export const GET = withRouteContext('report.supplier_ledger', async (request, { 
   const asOfDate = searchParams.get('as_of_date') || undefined
   const periodId = searchParams.get('period_id') || undefined
 
-  const ledger = await generateSupplierLedger(supabase, companyId, asOfDate)
-
-  let reconciliation = null
-  if (periodId) {
-    reconciliation = await generateReconciliation(supabase, companyId, periodId)
-  }
+  // Independent reads: run them side by side.
+  const [ledger, reconciliation] = await Promise.all([
+    generateSupplierLedger(supabase, companyId, asOfDate),
+    periodId ? generateReconciliation(supabase, companyId, periodId) : null,
+  ])
 
   return NextResponse.json({
     data: {
