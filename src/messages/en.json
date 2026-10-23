@@ -12933,6 +12933,7 @@
     "v_vat_all": "Every revenue account has a VAT code",
     "vat_set_now": "Set them now",
     "vat_or_later": "or later in the chart of accounts.",
+    "vat_pick_failed": "The VAT code for {account} was not saved. Try again.",
     "v_overdue": "{count, plural, one {# customer invoice is overdue} other {# customer invoices are overdue}}",
     "v_vat_owed": "VAT to pay right now: {amount} on 26xx",
     "v_vat_receivable": "VAT to reclaim right now: {amount} on 26xx",

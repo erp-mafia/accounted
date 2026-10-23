@@ -1,0 +1,1 @@
+[2026-10-23] The import's momskod picker keeps a picked revenue account in its row, showing the code, until it is opened again: removing the row at once slid the next account under the pointer, and quick clicks set Momsfri on accounts that were later corrected.
