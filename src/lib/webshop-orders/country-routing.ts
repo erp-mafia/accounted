@@ -115,13 +115,33 @@ export interface RoutableOrder {
  * The destination country the rules key on, or null when they do not apply:
  * a Shopify row (whose column is the shipping country) going to a known
  * country outside Sweden. Orders to Sweden, without a country, or from
- * another platform keep the Swedish booking.
+ * another platform keep the Swedish booking (an order without a country in
+ * a store with rules is flagged: isDestinationUnknown).
  */
 export function routedCountryOf(order: RoutableOrder): string | null {
   if (order.platform !== 'shopify') return null
   const country = order.customer_country?.trim().toUpperCase()
   if (!country || country === 'SE') return null
   return country
+}
+
+/**
+ * Whether a Shopify order has no destination country although its store has
+ * saved country rules. The country is missing when the store withholds
+ * addresses from the app (Shopify Basic, or protected customer data not
+ * granted), for a local pickup of goods, and on rows synced before the
+ * country was stored. A store with rules has told us it sells abroad, so for
+ * it a missing country means unknown, not Sweden: the bulk sweep refuses the
+ * order and the single dialog warns. A store without rules keeps the Swedish
+ * booking.
+ */
+export function isDestinationUnknown(
+  order: RoutableOrder,
+  rules: readonly WebshopCountryAccountRule[] | null | undefined,
+): boolean {
+  if (order.platform !== 'shopify') return false
+  if (order.customer_country?.trim()) return false
+  return (rules?.length ?? 0) > 0
 }
 
 /**
@@ -167,6 +187,12 @@ export interface OrderRouting {
    * buckets on the Swedish accounts for the user to change.
    */
   unroutedRates: number[]
+  /**
+   * isDestinationUnknown(): no country on an order whose store has rules.
+   * Every bucket stays on the Swedish accounts, which the bulk sweep must
+   * not book and the single dialog shows only as an editable prefill.
+   */
+  destinationUnknown: boolean
 }
 
 /**
@@ -182,7 +208,12 @@ export function routeOrderBuckets(
 ): OrderRouting {
   const country = routedCountryOf(order)
   if (!country) {
-    return { country: null, buckets: breakdown.map((bucket) => ({ bucket, rule: null })), unroutedRates: [] }
+    return {
+      country: null,
+      buckets: breakdown.map((bucket) => ({ bucket, rule: null })),
+      unroutedRates: [],
+      destinationUnknown: isDestinationUnknown(order, rules),
+    }
   }
   const unrouted = new Set<number>()
   const buckets = breakdown.map((bucket) => {
@@ -191,7 +222,12 @@ export function routeOrderBuckets(
     if (!rule) unrouted.add(bucket.rate)
     return { bucket, rule }
   })
-  return { country, buckets, unroutedRates: Array.from(unrouted).sort((a, b) => a - b) }
+  return {
+    country,
+    buckets,
+    unroutedRates: Array.from(unrouted).sort((a, b) => a - b),
+    destinationUnknown: false,
+  }
 }
 
 /** Whether a routed bucket books on the Swedish accounts (and the bulk revenue template). */

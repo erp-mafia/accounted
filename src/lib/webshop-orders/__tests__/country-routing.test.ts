@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   NO_OSS_PRESET_RULES,
   OSS_PRESET_RULES,
+  isDestinationUnknown,
   resolveCountryRule,
   routeOrderBuckets,
   routedCountryOf,
@@ -37,6 +38,27 @@ describe('routedCountryOf', () => {
     expect(routedCountryOf(shopify('  '))).toBeNull()
     // WooCommerce stores the billing country, not where the goods went.
     expect(routedCountryOf({ platform: 'woocommerce', customer_country: 'DK' })).toBeNull()
+  })
+})
+
+describe('isDestinationUnknown', () => {
+  it('is unknown when a store with country rules sends a Shopify order without a country', () => {
+    // Withheld addresses, a local pickup, or a row synced before the country
+    // was stored: the store sells abroad, so this is not "Sweden".
+    expect(isDestinationUnknown(shopify(null), OSS_PRESET_RULES)).toBe(true)
+    expect(isDestinationUnknown(shopify('  '), NO_OSS_PRESET_RULES)).toBe(true)
+  })
+
+  it('keeps today\'s Swedish booking for a store without rules', () => {
+    expect(isDestinationUnknown(shopify(null), [])).toBe(false)
+    expect(isDestinationUnknown(shopify(null), null)).toBe(false)
+    expect(isDestinationUnknown(shopify(null), undefined)).toBe(false)
+  })
+
+  it('is never unknown for an order with a country or from another platform', () => {
+    expect(isDestinationUnknown(shopify('SE'), OSS_PRESET_RULES)).toBe(false)
+    expect(isDestinationUnknown(shopify('DK'), OSS_PRESET_RULES)).toBe(false)
+    expect(isDestinationUnknown({ platform: 'woocommerce', customer_country: null }, OSS_PRESET_RULES)).toBe(false)
   })
 })
 
@@ -117,7 +139,21 @@ describe('routeOrderBuckets', () => {
     const routing = routeOrderBuckets(shopify('SE'), [{ rate: 25, net: 100, tax: 25 }], OSS_PRESET_RULES)
     expect(routing.country).toBeNull()
     expect(routing.unroutedRates).toEqual([])
+    expect(routing.destinationUnknown).toBe(false)
     expect(routing.buckets.every(usesSwedishAccounts)).toBe(true)
+  })
+
+  it('reports an order without a country as unknown only when the store has rules', () => {
+    const breakdown = [{ rate: 25, net: 100, tax: 25 }]
+    const withRules = routeOrderBuckets(shopify(null), breakdown, OSS_PRESET_RULES)
+    expect(withRules.country).toBeNull()
+    expect(withRules.unroutedRates).toEqual([])
+    expect(withRules.destinationUnknown).toBe(true)
+    // The prefill still shows the Swedish accounts for the user to change.
+    expect(withRules.buckets.every(usesSwedishAccounts)).toBe(true)
+
+    expect(routeOrderBuckets(shopify(null), breakdown, []).destinationUnknown).toBe(false)
+    expect(routeOrderBuckets(shopify('DE'), breakdown, OSS_PRESET_RULES).destinationUnknown).toBe(false)
   })
 
   it('treats a "Swedish VAT" rule as the Swedish accounts', () => {

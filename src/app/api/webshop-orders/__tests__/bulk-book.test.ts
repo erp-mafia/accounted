@@ -1389,6 +1389,61 @@ describe('POST /api/webshop-orders/bulk-book', () => {
       ])
     })
 
+    it('refuses a Shopify order without a destination country when the store has country rules', async () => {
+      // The store sells abroad, so a missing country (withheld addresses, a
+      // local pickup, an old row) is unknown, not Sweden: never 3001/2611
+      // without a reviewing user.
+      const { status, body } = await runRouted(shopifyOrder({ customer_country: null }), OSS_RULES, false)
+      expect(status).toBe(200)
+      expect(body.data.failed_count).toBe(1)
+      expect(body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_COUNTRY_UNKNOWN')
+      expect(body.data.results[0].error?.message).toContain('Inställningar > Kopplingar > Shopify')
+      expect(body.data.results[0].error?.message_en).toContain('Settings > Connections > Shopify')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses the unknown country under a Swedish-VAT rule set too, and books the rest of the batch', async () => {
+      const rules = [{ country: 'EU', vat_rate: null, mode: 'swedish' }]
+      enqueue({
+        data: [
+          shopifyOrder({ customer_country: null }),
+          shopifyOrder({ id: ORDER_2, order_number: '#1043', customer_country: 'SE' }),
+        ],
+      })
+      enqueue({ data: [storeSettings(rules)] })
+      enqueue({ data: [{ id: ORDER_2 }] })
+      const { body } = await parseJsonResponse<BulkResponse>(
+        await postBulk({ order_ids: [ORDER_1, ORDER_2] }),
+      )
+      expect(body.data.results.map((r) => [r.order_id, r.success, r.error?.code])).toEqual([
+        [ORDER_1, false, 'WEBSHOP_ORDER_COUNTRY_UNKNOWN'],
+        [ORDER_2, true, undefined],
+      ])
+      expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+    })
+
+    it('books a Shopify order without a country on the Swedish accounts when the store has no rules', async () => {
+      // A domestic-only store keeps today's booking: nothing regresses.
+      enqueue({ data: [shopifyOrder({ customer_country: null })] })
+      enqueue({ data: [storeSettings([])] })
+      enqueue({ data: [{ id: ORDER_1 }] })
+      const { body } = await parseJsonResponse<BulkResponse>(
+        await postBulk({ order_ids: [ORDER_1] }),
+      )
+      expect(body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 500, 0],
+        ['3001', 0, 400],
+        ['2611', 0, 100],
+      ])
+
+      // No settings row at all: the same.
+      reset()
+      mockCreateDraftEntry.mockClear()
+      const noRow = await runRouted(shopifyOrder({ customer_country: null }), [], true)
+      expect(noRow.body.data.booked_count).toBe(1)
+    })
+
     it('leaves a WooCommerce order with a foreign billing country on today\'s booking', async () => {
       // WooCommerce stores the billing country, which does not say where the
       // goods went; the rules and their guard are Shopify only.

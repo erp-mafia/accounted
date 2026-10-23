@@ -116,7 +116,8 @@ function failureFromError(err: unknown): BulkBookFailure {
  * scale are refused per order and pointed at the single-order dialog. So is
  * a Shopify order shipped outside Sweden that the store's country rules do
  * not fully cover (lib/webshop-orders/country-routing.ts): its buckets would
- * otherwise book as Swedish sales and Swedish output VAT.
+ * otherwise book as Swedish sales and Swedish output VAT. So is a Shopify
+ * order without a destination country in a store that has country rules.
  *
  * Partial failure is expected and reported per order: one refused row (period
  * locked, raced booking, unresolved FX, review-needed) never aborts the rest
@@ -397,6 +398,20 @@ export const POST = withRouteContext(
             customer_country: routing.country,
             rates: routing.unroutedRates,
           }),
+        })
+        continue
+      }
+
+      // No destination country on a Shopify order whose store has country
+      // rules (withheld addresses, local pickup, rows synced before the
+      // country was stored). The store sells abroad, so the missing country
+      // is unknown, not Sweden: booking it on 3001/2611 would be a guess.
+      if (routing.destinationUnknown) {
+        results.push({
+          order_id: id,
+          order_number: order.order_number,
+          success: false,
+          error: failureFromCode('WEBSHOP_ORDER_COUNTRY_UNKNOWN'),
         })
         continue
       }

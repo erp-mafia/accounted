@@ -62,6 +62,10 @@ const WARNING_TEXT: Record<string, { sv: string; en: string }> = {
     en: 'The order has a country outside Sweden that the store has not chosen accounts for. Choose accounts by how the sale is taxed (OSS, export or VOEC); the suggested accounts are for Swedish sales.',
   },
   // The booking dialog's own texts (messages webshop_orders.warning_*).
+  country_unknown: {
+    sv: 'Ordern saknar leveransland, och butiken har valt konton för försäljning utanför Sverige. Förslaget använder de svenska kontona; kontrollera vart ordern gick innan den bokförs.',
+    en: 'The order has no destination country, and the store has chosen accounts for sales outside Sweden. The suggestion uses the Swedish accounts; check where the order went before booking it.',
+  },
   zero_rate_foreign: {
     sv: 'Ordern har momsfri försäljning till kund utanför Sverige. Förslaget använder 3004 (övrig momsfri); export- eller EU-försäljning ska normalt bokas på 31xx/33xx-konton. Justera raderna vid behov.',
     en: 'The order has VAT-free sales to a customer outside Sweden. The suggestion uses 3004 (other VAT-free); export or EU sales normally belong on 31xx/33xx accounts. Adjust the lines if needed.',
