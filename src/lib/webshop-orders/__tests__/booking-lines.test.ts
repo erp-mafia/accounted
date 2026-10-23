@@ -429,6 +429,74 @@ describe('buildOrderBookingLines with country rules (crm#1032)', () => {
     // this the dialog would show Swedish accounts in silence.
     expect(resolveBookingWarnings(toCountry('NO'), shopifySettings)).toEqual(['country_not_routed'])
   })
+
+  it('warns about an order without a VAT breakdown the same as the prefill books it', () => {
+    // No breakdown from the store: the prefill books the ratio-inferred 25 %
+    // bucket on 3001/2611, so the warning must route that bucket too.
+    const noSplit = toCountry('NO', { vat_breakdown: [] })
+    const lines = buildOrderBookingLines({ order: noSplit, settings: shopifySettings })
+    expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+    expect(lineFor(lines, '2611')?.credit_amount).toBe(100)
+    expect(resolveBookingWarnings(noSplit, shopifySettings)).toEqual(['country_not_routed'])
+    expect(resolveBookingWarnings(noSplit)).toEqual(['country_not_routed'])
+
+    // The inferred bucket a rule covers books on the rule's accounts: no hint.
+    const dkNoSplit = toCountry('DK', { vat_breakdown: [] })
+    expect(lineFor(buildOrderBookingLines({ order: dkNoSplit, settings: shopifySettings }), '3106')?.credit_amount).toBe(400)
+    expect(resolveBookingWarnings(dkNoSplit, shopifySettings)).toEqual([])
+  })
+
+  it('flags a 0 % prefill on an order without a breakdown shipped abroad', () => {
+    const usNoSplit = toCountry('US', { total_tax: 0, vat_breakdown: [] })
+    // Prefilled on 3004 without rules: both hints apply.
+    expect(lineFor(buildOrderBookingLines({ order: usNoSplit }), '3004')?.credit_amount).toBe(500)
+    expect(resolveBookingWarnings(usNoSplit)).toEqual(['country_not_routed', 'zero_rate_foreign'])
+    // The export rule books it on 3105: neither applies.
+    expect(resolveBookingWarnings(usNoSplit, shopifySettings)).toEqual([])
+  })
+
+  it('keeps foreign_vat on a non-SEK order without a breakdown even when a rule routes it', () => {
+    // The rate is inferred, so the user must check it whatever account it lands on.
+    const eurDkNoSplit = toCountry('DK', { currency: 'EUR', vat_breakdown: [] })
+    expect(resolveBookingWarnings(eurDkNoSplit, shopifySettings)).toEqual(['foreign_vat'])
+  })
+
+  describe('order without a destination country', () => {
+    const noCountry = (overrides: Record<string, unknown> = {}) => ({
+      ...makeOrder({ payment_method: 'shopify_payments', ...overrides }),
+      platform: 'shopify',
+      customer_country: null,
+    })
+
+    it('warns when the store has country rules, and still prefills the Swedish accounts', () => {
+      const order = noCountry()
+      expect(resolveBookingWarnings(order, shopifySettings)).toEqual(['country_unknown'])
+      const lines = buildOrderBookingLines({ order, settings: shopifySettings })
+      expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+      expect(lineFor(lines, '2611')?.credit_amount).toBe(100)
+    })
+
+    it('ranks the unknown country before the currency hint', () => {
+      expect(resolveBookingWarnings(noCountry({ currency: 'EUR' }), shopifySettings)).toEqual([
+        'country_unknown',
+        'foreign_vat',
+      ])
+    })
+
+    it('also warns for an order without a breakdown', () => {
+      expect(resolveBookingWarnings(noCountry({ vat_breakdown: [] }), shopifySettings)).toEqual([
+        'country_unknown',
+      ])
+    })
+
+    it('stays quiet for a store without rules or another platform', () => {
+      expect(resolveBookingWarnings(noCountry())).toEqual([])
+      expect(resolveBookingWarnings(noCountry(), { country_account_rules: [] })).toEqual([])
+      expect(
+        resolveBookingWarnings({ ...noCountry(), platform: 'woocommerce' }, shopifySettings),
+      ).toEqual([])
+    })
+  })
 })
 
 describe('resolveBookingWarnings', () => {
@@ -436,6 +504,7 @@ describe('resolveBookingWarnings', () => {
     expect(
       resolveBookingWarnings({
         currency: 'SEK',
+        total: 2000,
         total_tax: 0,
         vat_breakdown: [{ rate: 0, net: 2000, tax: 0 }],
         customer_country: 'NO',
@@ -447,6 +516,7 @@ describe('resolveBookingWarnings', () => {
     expect(
       resolveBookingWarnings({
         currency: 'SEK',
+        total: 2000,
         total_tax: 0,
         vat_breakdown: [{ rate: 0, net: 2000, tax: 0 }],
         customer_country: 'SE',
@@ -455,6 +525,7 @@ describe('resolveBookingWarnings', () => {
     expect(
       resolveBookingWarnings({
         currency: 'SEK',
+        total: 2000,
         total_tax: 0,
         vat_breakdown: [{ rate: 0, net: 2000, tax: 0 }],
         customer_country: null,
@@ -466,6 +537,7 @@ describe('resolveBookingWarnings', () => {
     expect(
       resolveBookingWarnings({
         currency: 'EUR',
+        total: 100,
         total_tax: 20,
         vat_breakdown: [{ rate: 25, net: 80, tax: 20 }],
         customer_country: 'DK',

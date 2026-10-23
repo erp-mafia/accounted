@@ -1,0 +1,1 @@
+[2026-10-23] crm#1032 bulk refuses a Shopify order with no destination country only when its store has country rules (unknown, not Sweden); stores without rules keep the Swedish booking, so domestic-only stores and withheld-address stores do not regress. The dialog warns instead.

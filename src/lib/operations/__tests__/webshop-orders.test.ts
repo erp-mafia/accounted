@@ -185,6 +185,21 @@ describe('webshopOrderWarnings', () => {
     expect(codes(order({ customer_country: 'NO' }), settings)).toEqual(['country_outside_sweden'])
   })
 
+  it('flags an order without a country when the store has country rules, like the dialog', () => {
+    const settings = {
+      payment_method_account_map: {},
+      country_account_rules: [
+        { country: 'EU', vat_rate: null, mode: 'accounts', revenue_account: '3106', vat_account: '2670' },
+      ],
+    } as unknown as WebshopStoreSettings
+    expect(codes(order({ customer_country: null }), settings)).toEqual(['country_unknown'])
+    expect(webshopOrderWarnings(order({ customer_country: null }), settings)[0].message_sv).toContain(
+      'saknar leveransland',
+    )
+    // No rules: the store has not said it sells abroad.
+    expect(codes(order({ customer_country: null }))).toEqual([])
+  })
+
   it('flags a payment method the store routes to the invoice flow', () => {
     const settings = {
       payment_method_account_map: { shopify_payments: { mode: 'invoice' } },

@@ -85,6 +85,8 @@ export default function BulkOrderBookingDialog({
   //   only the single dialog's editable form may show;
   // - a destination outside Sweden that the store's country rules do not
   //   cover: the Swedish accounts would book a sale taxed abroad;
+  // - no destination country in a store with country rules: unknown, not
+  //   Sweden, so the Swedish accounts would be a guess;
   // - a non-Swedish VAT rate on the Swedish accounts (foreign OSS bucket no
   //   rule books): the account map would silently fall back to 25%;
   // - invoice-mode mapping: the store routes this method through the invoice
@@ -94,11 +96,13 @@ export default function BulkOrderBookingDialog({
     bookableOrders,
     skippedMissingBreakdown,
     skippedCountryNotRouted,
+    skippedCountryUnknown,
     skippedUnsupportedRate,
     skippedInvoiceMode,
   } = useMemo(() => {
     const missing: WebshopOrder[] = []
     const notRouted: WebshopOrder[] = []
+    const countryUnknown: WebshopOrder[] = []
     const badRate: WebshopOrder[] = []
     const invoiceMode: WebshopOrder[] = []
     const bookable: WebshopOrder[] = []
@@ -107,6 +111,7 @@ export default function BulkOrderBookingDialog({
       const routing = routeOrder(order, settings)
       if (order.vat_breakdown.length === 0) missing.push(order)
       else if (routing.unroutedRates.length > 0) notRouted.push(order)
+      else if (routing.destinationUnknown) countryUnknown.push(order)
       else if (unsupportedSwedishRates(routing).length > 0) badRate.push(order)
       else if (resolvePaymentAccount(order, settings).invoiceMode) invoiceMode.push(order)
       else bookable.push(order)
@@ -115,6 +120,7 @@ export default function BulkOrderBookingDialog({
       bookableOrders: bookable,
       skippedMissingBreakdown: missing,
       skippedCountryNotRouted: notRouted,
+      skippedCountryUnknown: countryUnknown,
       skippedUnsupportedRate: badRate,
       skippedInvoiceMode: invoiceMode,
     }
@@ -541,6 +547,13 @@ export default function BulkOrderBookingDialog({
               <p className="attn text-[12.5px]" data-ph-mask="">
                 {t('bulk_skipped_country_not_routed', {
                   numbers: skippedCountryNotRouted.map((o) => o.order_number).join(', '),
+                })}
+              </p>
+            )}
+            {skippedCountryUnknown.length > 0 && (
+              <p className="attn text-[12.5px]" data-ph-mask="">
+                {t('bulk_skipped_country_unknown', {
+                  numbers: skippedCountryUnknown.map((o) => o.order_number).join(', '),
                 })}
               </p>
             )}

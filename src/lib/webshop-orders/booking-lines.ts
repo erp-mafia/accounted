@@ -27,8 +27,9 @@ import {
  *
  * A Shopify order shipped outside Sweden books each VAT bucket on the store's
  * country rules (country-routing.ts) instead, e.g. 3106/2670 for an OSS sale;
- * a bucket no rule covers keeps the Swedish accounts here, which only the
- * single dialog may show (as an editable prefill).
+ * a bucket no rule covers, or an order without a destination country in a
+ * store with rules, keeps the Swedish accounts here, which only the single
+ * dialog may show (as an editable prefill).
  *
  * Non-SEK orders book in SEK via the row's stored exchange_rate (rate date =
  * paid date, captured at sync); every line carries the currency metadata trio
@@ -185,7 +186,11 @@ export function unsupportedSwedishRates(routing: OrderRouting): number[] {
   )
 }
 
-export type BookingWarning = 'country_not_routed' | 'zero_rate_foreign' | 'foreign_vat'
+export type BookingWarning =
+  | 'country_not_routed'
+  | 'country_unknown'
+  | 'zero_rate_foreign'
+  | 'foreign_vat'
 
 /**
  * Advisory (never blocking, per the soft-guard rule) compliance hints for
@@ -193,24 +198,31 @@ export type BookingWarning = 'country_not_routed' | 'zero_rate_foreign' | 'forei
  * - country_not_routed: a Shopify order shipped outside Sweden with a VAT
  *   bucket the store's country rules do not cover, so the prefill books it
  *   on the Swedish accounts (crm#1032). First, since it outranks the rest.
+ * - country_unknown: a Shopify order without a destination country in a
+ *   store that has country rules (isDestinationUnknown), so the prefill uses
+ *   the Swedish accounts without knowing where the goods went. The bulk
+ *   sweep refuses the same order.
  * - zero_rate_foreign: a 0%-rate amount on an order with a known non-SE
  *   billing country. The prefill's 3004 (ruta 42) is only right for
  *   domestic momsfri sales; export/EU sales belong on 31xx/33xx accounts.
  * - foreign_vat: VAT charged on a non-SEK order. Swedish 2611-series output
  *   VAT may be wrong if the merchant is over the EU distance-selling
- *   threshold (OSS) — the store's tax setup decides, the user must check.
+ *   threshold (OSS): the store's tax setup decides, the user must check.
  */
 export function resolveBookingWarnings(
   order: RoutableOrder &
-    Pick<WebshopOrder, 'currency' | 'total_tax' | 'vat_breakdown' | 'customer_country'>,
+    Pick<WebshopOrder, 'currency' | 'total' | 'total_tax' | 'vat_breakdown' | 'customer_country'>,
   settings?: Pick<WebshopStoreSettings, 'country_account_rules'> | null,
 ): BookingWarning[] {
-  // Buckets a country rule books on its own accounts are not the Swedish
-  // prefill these hints are about.
-  const routing = routeOrderBuckets(order, order.vat_breakdown, settings?.country_account_rules)
+  // The same routing the prefill books from (routeOrder: the store's split,
+  // or the ratio-inferred bucket when it sent none), so a hint never misses
+  // a bucket the prefill shows. Buckets a country rule books on its own
+  // accounts are not the Swedish prefill these hints are about.
+  const routing = routeOrder(order, settings)
   const swedishBuckets = routing.buckets.filter(usesSwedishAccounts).map((route) => route.bucket)
   const warnings: BookingWarning[] = []
   if (routing.unroutedRates.length > 0) warnings.push('country_not_routed')
+  if (routing.destinationUnknown) warnings.push('country_unknown')
   const hasZeroRateAmount = swedishBuckets.some(
     (b) => b.rate === 0 && b.net !== 0,
   )
@@ -221,6 +233,8 @@ export function resolveBookingWarnings(
   ) {
     warnings.push('zero_rate_foreign')
   }
+  // An order without the store's own split warns whatever its inferred
+  // bucket routes to: the rate itself is a guess the user must check.
   if (
     order.currency.toUpperCase() !== 'SEK' &&
     order.total_tax !== 0 &&

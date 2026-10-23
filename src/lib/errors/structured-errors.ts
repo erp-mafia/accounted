@@ -8823,6 +8823,13 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order has a VAT rate that is not a Swedish rate (25/12/6/0 %), for example foreign OSS VAT. Book the order individually and review the lines.',
   },
+  WEBSHOP_ORDER_COUNTRY_UNKNOWN: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern saknar leveransland, och butiken har valt konton för försäljning utanför Sverige, så massbokföringen kan inte avgöra vilka konton som gäller. Bokför ordern enskilt och granska raderna. Saknar alla ordrar land delar butiken inte adresser med appen: kontrollera Shopify-panelen under Inställningar > Kopplingar > Shopify.',
+    message_en:
+      'The order has no destination country and the store has chosen accounts for sales outside Sweden, so bulk booking cannot tell which accounts apply. Book the order individually and review the lines. If every order lacks a country, the store does not share addresses with the app: check the Shopify panel under Settings > Connections > Shopify.',
+  },
   WEBSHOP_ORDER_COUNTRY_NOT_ROUTED: {
     httpStatus: 422,
     message_sv:
