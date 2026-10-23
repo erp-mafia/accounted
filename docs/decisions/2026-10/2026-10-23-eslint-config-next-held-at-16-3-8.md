@@ -1,0 +1,1 @@
+[2026-10-23] eslint-config-next stays on 16.3.8 while next moves to 16.4.2 for the CASA advisories: 16.4.2 brings eslint-plugin-react-hooks 7.1.1, whose react-hooks/immutability rule fails 22 existing call sites, and a lint config ships nothing to users, so it gets its own change.
