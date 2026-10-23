@@ -38,6 +38,7 @@ import {
 import { ENTITY_TYPES, resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { formatCurrency } from '@/lib/utils'
 import { overDisposedAmount, resultAccountLeftover, resultAccountResidual } from './prior-result-guard'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { priorResultCarry } from './prior-result-carry'
 import { buildOpeningBalanceLines, fetchObjectClosingBalances } from './opening-balance-split'
 import { listVoucherGaps } from './voucher-gaps'
@@ -763,14 +764,14 @@ export async function previewYearEndClosing(
   // bolagsskatt (Dr 8910 / Cr 2512) in the dispositions step. If no 89xx tax
   // account is among the accounts being closed, the profit is untaxed. This
   // is a warning, not a blocker: zero tax is legitimate when underskotts-
-  // avdrag zeroes the taxable result. 8999 is excluded: it is the manual
-  // result-closing account, not a tax account.
+  // avdrag zeroes the taxable result. Årets resultat (8990-8999) is
+  // excluded: it holds manual result closings, not tax.
   // Scanning resultAccountSummary is equivalent to a full 89xx trial-balance
   // scan: it is built from every class 3-8 account with a non-zero closing
   // balance, regardless of voucher series, so a booked tax entry cannot be
   // missed by this check.
   const hasTaxAccount = resultAccountSummary.some(
-    (a) => a.account_number.startsWith('89') && a.account_number !== '8999'
+    (a) => a.account_number.startsWith('89') && !isAretsResultatAccount(a.account_number)
   )
   const bolagsskattMissing =
     closingAccount === '2099' && netResult > ORE_TOLERANCE && !hasTaxAccount

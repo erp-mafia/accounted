@@ -267,3 +267,17 @@ export const BOX_LABELS: Record<MomsBox, string> = {
 export function getBoxForAccount(accountNumber: string): MomsBox | undefined {
   return ACCOUNT_TO_BOX[accountNumber]
 }
+
+/**
+ * The BAS moms accounts proper, the range a momsdeklaration ruta reads:
+ * utgående moms 2610-2639 and ingående moms 2640-2649. The rest of 26xx is
+ * the redovisningskonto (2650-2659), punktskatter (2660-2669) and OSS
+ * (2670-2679), which no ruta of the Swedish declaration reads. An account in
+ * this range that is neither in VAT_ACCOUNT_TABLE nor given a momsruta of the
+ * company's own carries moms the declaration leaves out
+ * (VAT_ACCOUNT_WITHOUT_RUTA): typically 2617/2627/2637 or 2643/2644 from a
+ * chart that predates BAS 2026.
+ */
+export function isDeclarationVatAccount(accountNumber: string): boolean {
+  return /^26[1-4]\d$/.test(accountNumber)
+}

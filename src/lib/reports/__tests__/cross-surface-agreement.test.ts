@@ -191,6 +191,30 @@ describe('operational surfaces agree with each other', () => {
     expect(is.net_result - rr.net_result_current).toBe(omforing)
   })
 
+  it('read an omföring through 8990 exactly like one through 8999 (årets resultat is 8990-8999)', async () => {
+    const omforing = EXPECTED.resultAfterFinancial
+    vi.mocked(generateTrialBalance).mockImplementation(async (_s, _c, _p, opts) => ({
+      rows:
+        opts.closingEntry === 'exclude-all-year-end'
+          ? [
+              ...rowsForMode(opts.closingEntry),
+              tbRow('8990', 'Resultat', omforing),
+              tbRow('2099', 'Årets resultat', -omforing),
+            ]
+          : rowsForMode(opts.closingEntry),
+      totalDebit: 0,
+      totalCredit: 0,
+      isBalanced: true,
+    }))
+
+    const is = await generateIncomeStatement(makeSupabase(), COMPANY_ID, PERIOD_ID)
+    const rr = await generateResultatrapport(makeSupabase(), COMPANY_ID, PERIOD_ID)
+
+    expect(is.net_result).toBe(EXPECTED.resultAfterFinancial)
+    expect(rr.net_result_current).toBe(0)
+    expect(is.net_result - rr.net_result_current).toBe(omforing)
+  })
+
   it('and the same revenue as the statutory family', async () => {
     const is = await generateIncomeStatement(makeSupabase(), COMPANY_ID, PERIOD_ID)
     const ink2 = await generateINK2Declaration(makeSupabase(), COMPANY_ID, PERIOD_ID)

@@ -15,6 +15,7 @@ vi.mock('@/lib/reports/vat-revenue-accounts', async (importOriginal) => ({
     accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
     rateByAccount: new Map(), staticRateByAccount: new Map(),
     rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+    unconfiguredVatAccounts: new Map(),
   })),
 }))
 

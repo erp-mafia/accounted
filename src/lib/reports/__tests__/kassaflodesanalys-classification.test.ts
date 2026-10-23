@@ -200,6 +200,19 @@ describe('kassaflödesanalys classifies every account', () => {
     expect(report.unclassified_accounts).toEqual([])
   })
 
+  it('reads a resultatavslut through 8990 as equity, like one through 8999', async () => {
+    const report = await run([
+      pair('1930', '3001', 100_000),
+      pair('8990', '2099', 100_000), // the previous system's omföring, imported with the year
+    ])
+
+    expectSectionsAddUp(report)
+    expect(report.lopande.resultat_efter_finansiella_poster).toBe(100_000)
+    expect(report.lopande.skatt_betald).toBe(0)
+    expect(report.finansierings.utdelningar).toBe(0)
+    expect(report.unclassified_accounts).toEqual([])
+  })
+
   it('keeps a loan receivable, pension tax, the owner account and a recovered write-down in their sections', async () => {
     const opening = lines(
       ['1310', 10_000, 0], ['1380', 30_000, 0], ['1389', 0, 30_000], ['1710', 6_000, 0],

@@ -2770,7 +2770,14 @@ export interface BalansrapportReport {
   groups: BalansrapportGroup[]
   total_assets_ub: number
   total_equity_liabilities_ub: number
+  /** The running-year result from the result accounts (0 after year-end close). */
   beraknat_resultat: number
+  /**
+   * total_assets_ub + total_equity_liabilities_ub - beraknat_resultat: 0 when
+   * the saldobalans balances, otherwise the opening balance's imbalance
+   * (usually an earlier year's result never moved to equity).
+   */
+  differens: number
   is_balanced: boolean
   period: { start: string; end: string }
   /** Present only when the underlying trial balance does not balance. */
@@ -3533,6 +3540,17 @@ export interface VatRevenueAccountWithoutRuta {
   amount: number
 }
 
+/**
+ * A moms account (BAS 2610-2649) whose period balance reaches no ruta on the
+ * momsdeklaration. `amount` is the balance on the account's own side, rounded
+ * to öre: credit for utgående moms (2610-2639), debit for ingående (2640-2649).
+ */
+export interface VatAccountWithoutRuta {
+  account_number: string
+  account_name: string
+  amount: number
+}
+
 // VAT declaration response
 export interface VatDeclaration {
   period: {
@@ -3590,6 +3608,18 @@ export interface VatDeclaration {
    * older deploy, and then the check stays silent rather than guessing.
    */
   revenueAccountsWithoutRuta?: VatRevenueAccountWithoutRuta[]
+  /**
+   * Moms accounts (BAS 2610-2649) with a balance in the period that the
+   * declaration puts in no ruta: not in the fixed BAS map and no momsruta of
+   * the company's own. Carried so a caller that reads the declaration over
+   * HTTP can hand `runVatDeclarationChecks` the input for
+   * VAT_ACCOUNT_WITHOUT_RUTA. Produced by `vatAccountsWithoutRuta()`
+   * (lib/reports/vat-declaration.ts), never by hand.
+   *
+   * Optional because it crosses a JSON boundary: absent on a response from an
+   * older deploy, and then the check stays silent rather than guessing.
+   */
+  vatAccountsWithoutRuta?: VatAccountWithoutRuta[]
   /**
    * The kontantmetoden year-end cut-off facts for this VAT period (#3440):
    * fiscal years of a cash company ending inside it whose cut-off is not

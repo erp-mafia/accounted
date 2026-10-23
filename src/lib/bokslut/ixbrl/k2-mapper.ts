@@ -18,6 +18,7 @@ import type { ConceptAmount, ConceptAmounts } from './types'
 import type { EntityType } from '@/types'
 import { equalOre, isZeroOre, roundOre, sumOre } from '@/lib/money'
 import { isEntityType, supportsMemberCapital } from '@/lib/company/entity-type'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import {
   SIGN_RECLASSIFICATION_RULES,
   type SignReclassificationId,
@@ -762,15 +763,6 @@ function inRanges(account: string, ranges: Range[]): boolean {
   return ranges.some((range) => account >= range.start && account <= range.end)
 }
 
-/**
- * Årets resultat (BAS 8990-8999). Deliberately mapped to no K2 concept: the
- * RR ranges stop at 8989 and årets resultat is derived from the RR sum
- * (computeTotals), so a balance here is never "missing" from the ÅR.
- */
-function isAretsResultatAccount(account: string): boolean {
-  return account >= '8990' && account <= '8999'
-}
-
 /** BAS class 3-8: the result accounts, 8990-8999 included. */
 function isResultAccount(account: string): boolean {
   return account >= '3' && account < '9'
@@ -1060,7 +1052,9 @@ export function mapTrialBalancesToK2(
       // A year imported already closed by another system carries the result
       // on 8999. The sweep used to report it as "beloppet saknas i
       // årsredovisningen" although the amount is exactly what the RR sum
-      // derives (feedback seq 345150): say so, and ask for nothing.
+      // derives (feedback seq 345150): say so, and ask for nothing. Årets
+      // resultat (8990-8999) is deliberately mapped to no K2 concept: the RR
+      // ranges stop at 8989 and computeTotals derives it from the RR sum.
       if (isAretsResultatAccount(row.account_number)) {
         if (!seenAretsResultat.has(row.account_number)) {
           seenAretsResultat.add(row.account_number)

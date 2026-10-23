@@ -34,6 +34,7 @@ import {
   RC_BASIS_MISSING_HINT,
   RC_BASIS_NEGATIVE_HINT,
   REVENUE_ACCOUNT_WITHOUT_RUTA_HINT,
+  VAT_ACCOUNT_WITHOUT_RUTA_HINT,
   vatFilingVerdict,
 } from '@/lib/reports/vat-close-check'
 import { vatCheckFingerprint } from '@/lib/vat/check-reviews'
@@ -661,6 +662,39 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     const blocker = result.blockers.find((b) => b.check_code === 'REVENUE_ACCOUNT_WITHOUT_RUTA')!
     expect(blocker.severity).toBe('medium')
     expect(blocker.hint).toBe(REVENUE_ACCOUNT_WITHOUT_RUTA_HINT)
+    expect(result.ready_to_close).toBe(true)
+  })
+
+  // Moms on a moms account from a chart before BAS 2026 (2644, no momsruta)
+  // reaches no ruta at all. The close check names it from the same core
+  // helper the declaration uses, without blocking the close.
+  it('warns about moms on an account no ruta reads, naming it, without blocking', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase(
+        [
+          { entry: 'e1', account_number: '5010', debit_amount: 10000 },
+          { entry: 'e1', account_number: '2644', debit_amount: 2500 },
+          { entry: 'e1', account_number: '2440', credit_amount: 12500 },
+        ],
+        [{
+          account_number: '2644',
+          account_name: 'Ingående moms omvänd skattskyldighet',
+          account_class: 2,
+          default_vat_rate: null,
+          default_vat_treatment: null,
+        }],
+      ),
+    )
+
+    expect(result.rutor.ruta48).toBe(0)
+    const finding = result.declaration_checks.find((f) => f.code === 'VAT_ACCOUNT_WITHOUT_RUTA')!
+    expect(finding.status).toBe('WARNING')
+    expect(finding.message).toMatch(/2644 Ingående moms omvänd skattskyldighet/)
+    const blocker = result.blockers.find((b) => b.check_code === 'VAT_ACCOUNT_WITHOUT_RUTA')!
+    expect(blocker.severity).toBe('medium')
+    expect(blocker.hint).toBe(VAT_ACCOUNT_WITHOUT_RUTA_HINT)
     expect(result.ready_to_close).toBe(true)
   })
 

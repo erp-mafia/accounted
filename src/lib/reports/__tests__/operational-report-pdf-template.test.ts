@@ -56,6 +56,7 @@ function balansrapport(overrides: Partial<BalansrapportReport> = {}): Balansrapp
     total_assets_ub: 75000,
     total_equity_liabilities_ub: -75000,
     beraknat_resultat: 0,
+    differens: 0,
     is_balanced: true,
     period: { start: '2026-01-01', end: '2026-12-31' },
     ...overrides,
@@ -146,6 +147,31 @@ describe('operational report PDFs', () => {
       ].map((label) => text.indexOf(label))
       expect(order.every((index) => index >= 0)).toBe(true)
       expect([...order].sort((a, b) => a - b)).toEqual(order)
+    },
+    RENDER_TIMEOUT
+  )
+
+  it(
+    'prints the differens on its own line only when the balansrapport does not balance',
+    async () => {
+      const render = async (overrides: Parameters<typeof balansrapport>[0]) =>
+        pdfTextStrings(await renderToBuffer(
+          BalansrapportPDF({
+            report: balansrapport(overrides),
+            company: fakeCompany(),
+            generatedAt: '2026-07-28T10:00:00.000Z',
+          })
+        )).join('\n')
+
+      expect(await render({})).not.toContain('Differens')
+      const unbalanced = await render({
+        total_equity_liabilities_ub: -45_000,
+        beraknat_resultat: 0,
+        differens: 30_000,
+        is_balanced: false,
+      })
+      expect(unbalanced).toContain('Differens')
+      expect(unbalanced).toContain('Balanserar ej')
     },
     RENDER_TIMEOUT
   )

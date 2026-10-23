@@ -52,7 +52,7 @@ export interface VatCheckGapInput {
  */
 export interface VatCheckReviewInputs {
   declaration: Pick<VatDeclaration, 'rutor'> &
-    Partial<Pick<VatDeclaration, 'rcInputAccountTotals' | 'rcBasisByRate' | 'revenueAccountsWithoutRuta'>>
+    Partial<Pick<VatDeclaration, 'rcInputAccountTotals' | 'rcBasisByRate' | 'revenueAccountsWithoutRuta' | 'vatAccountsWithoutRuta'>>
   gaps: ReadonlyArray<VatCheckGapInput> | null
 }
 
@@ -104,9 +104,12 @@ function fingerprintPayload(check: VatDeclarationCheck, inputs: VatCheckReviewIn
         .map((account) => [account, ore(totals[account]?.debit), ore(totals[account]?.credit)]),
     )
   }
-  if (check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA') {
+  if (check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA' || check.code === 'VAT_ACCOUNT_WITHOUT_RUTA') {
+    const accounts = check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA'
+      ? declaration.revenueAccountsWithoutRuta
+      : declaration.vatAccountsWithoutRuta
     payload.push(
-      (declaration.revenueAccountsWithoutRuta ?? [])
+      (accounts ?? [])
         .map((account) => [account.account_number, ore(account.amount)] as const)
         .sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0)),
     )

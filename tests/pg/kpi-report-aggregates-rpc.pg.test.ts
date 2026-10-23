@@ -18,7 +18,8 @@
  *   - monthly shares tb_ex_year_end's entry set VERBATIM (posted AND
  *     reversed, minus the undone year-end chain; since 20260903160000, issue
  *     #2201: a reversed original and its storno cancel within the year so
- *     sum(months) = Nettoresultat), classes 3-8, 8999 excluded, class 8
+ *     sum(months) = Nettoresultat), classes 3-8, årets resultat (8990-8999,
+ *     since 20261023081500) excluded, class 8
  *     split per line by the sign of credit - debit, and (since
  *     20260730090000) year-end entries stay out so the resultatavslut cannot
  *     chart the whole year's revenue as negative income in the
@@ -350,6 +351,52 @@ describe('get_kpi_report_aggregates RPC', () => {
     expect(monthOf(payload, 2026, 12)).toBeUndefined()
     // No phantom months, and no bokslut-only months.
     expect(payload.monthly.map((m) => m.month).sort((a, b) => a - b)).toEqual([1, 2, 3])
+  })
+
+  it('monthly leaves out an omföring through 8990 like one through 8999 (årets resultat is 8990-8999)', async () => {
+    const ctx = await seedCompany()
+    // A year's activity: revenue 10 000 in March, costs 4 000 in June.
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 1, entryDate: '2026-03-10',
+      lines: [
+        { account: '1930', debit: 10000, credit: 0 },
+        { account: '3041', debit: 0, credit: 10000 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 2, entryDate: '2026-06-10',
+      lines: [
+        { account: '5410', debit: 4000, credit: 0 },
+        { account: '1930', debit: 0, credit: 4000 },
+      ],
+    })
+    // An omföring of the 6 000 profit through 8990 booked by hand (no
+    // year_end tag, like the previous system's imported ones), and a 0,50 kr
+    // one through 8999.
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 3, entryDate: '2026-12-31', sourceType: 'manual',
+      lines: [
+        { account: '8990', debit: 6000, credit: 0 },
+        { account: '2099', debit: 0, credit: 6000 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 4, entryDate: '2026-12-31', sourceType: 'manual',
+      lines: [
+        { account: '8999', debit: 0.5, credit: 0 },
+        { account: '2099', debit: 0, credit: 0.5 },
+      ],
+    })
+    const payload = await callRpc(ctx.companyId, ctx.fiscalPeriodId)
+
+    // December holds only the omföringar: a month with nothing in it. Before
+    // 20261023081500 the 8990 debit charted the year's profit as a December
+    // expense and the months summed to 0.
+    expect(monthOf(payload, 2026, 12)).toMatchObject({ income: 0, expenses: 0 })
+    const net = payload.monthly.reduce((sum, m) => sum + m.income - m.expenses, 0)
+    expect(net).toBeCloseTo(6000, 2)
+    // The account rows still carry 8990: the report builders drop it.
+    expect(byAccount(payload.tb_ex_year_end).get('8990')).toMatchObject({ debit: 6000, credit: 0 })
   })
 
   it('a same-year storno cancels within the year: sum(months) equals the tb_ex_year_end net result', async () => {

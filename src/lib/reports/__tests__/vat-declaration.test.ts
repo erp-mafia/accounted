@@ -106,6 +106,7 @@ import {
   rcInputTotalsFromDeclaration,
   revenueAccountsWithoutRuta,
   rutorFromTotals,
+  vatAccountsWithoutRuta,
 } from '../vat-declaration'
 import { runVatDeclarationChecks } from '../vat-declaration-checks'
 import { fetchDynamicVatAccounts } from '../vat-revenue-accounts'
@@ -1737,6 +1738,90 @@ describe('calculateVatDeclaration: revenue accounts without a ruta (#3387)', () 
     const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
 
     expect(result.revenueAccountsWithoutRuta).toEqual([])
+  })
+})
+
+// ============================================================
+// VAT_ACCOUNT_WITHOUT_RUTA: a moms account (2610-2649) outside the BAS 2026
+// map and without a momsruta of the company's own reaches no ruta, so its
+// moms is missing from the declaration. The declaration names such accounts
+// and changes no figure.
+// ============================================================
+
+describe('calculateVatDeclaration: moms accounts without a ruta', () => {
+  it('names a pre-2026 moms account with activity and leaves the figures alone', async () => {
+    chartAccounts = [
+      { account_number: '2617', account_name: 'Utg moms omvänd skattskyldighet, 25 %', account_class: 2, default_vat_rate: null },
+      { account_number: '2644', account_name: 'Ing moms omvänd skattskyldighet', account_class: 2, default_vat_rate: null },
+      // A BAS 2026 account: read by its ruta, never listed.
+      { account_number: '2641', account_name: 'Debiterad ingående moms', account_class: 2, default_vat_rate: null },
+    ]
+    seedLedger([
+      { account_number: '2617', debit_amount: 0, credit_amount: 2500 },
+      { account_number: '2644', debit_amount: 2000, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 500, credit_amount: 0 },
+    ])
+
+    const result = await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    expect(result.vatAccountsWithoutRuta).toEqual([
+      { account_number: '2617', account_name: 'Utg moms omvänd skattskyldighet, 25 %', amount: 2500 },
+      { account_number: '2644', account_name: 'Ing moms omvänd skattskyldighet', amount: 2000 },
+    ])
+    // No figure moves: 2617 stays out of ruta 30, 2644 out of ruta 48.
+    expect(result.rutor.ruta30).toBe(0)
+    expect(result.rutor.ruta48).toBe(500)
+    expect(result.rutor.ruta49).toBe(-500)
+
+    // The rutor alone look consistent; only the account list surfaces it.
+    expect(runVatDeclarationChecks(result.rutor).map((f) => f.code)).toEqual([])
+    const findings = runVatDeclarationChecks(result.rutor, undefined, {
+      vatAccountsWithoutRuta: result.vatAccountsWithoutRuta,
+    })
+    expect(findings.map((f) => [f.code, f.status])).toEqual([['VAT_ACCOUNT_WITHOUT_RUTA', 'WARNING']])
+  })
+
+  it('measures the account in p_accounts but never in p_ruta_accounts', async () => {
+    // p_ruta_accounts is the settlement SHAPE detector; widening it would
+    // change which verifikat count as a momsredovisning.
+    chartAccounts = [
+      { account_number: '2617', account_name: 'Utg moms omvänd skattskyldighet', account_class: 2, default_vat_rate: null },
+    ]
+    seedLedger([{ account_number: '2617', debit_amount: 0, credit_amount: 2500 }])
+
+    await calculateVatDeclaration(supabase, 'company-1', 'monthly', 2024, 1)
+
+    const [, args] = supabase.rpc.mock.calls[0]
+    expect(args.p_accounts).toContain('2617')
+    expect(args.p_ruta_accounts).not.toContain('2617')
+  })
+})
+
+describe('vatAccountsWithoutRuta', () => {
+  it('reads utgående moms on the credit side and ingående on the debit side, and drops BAS-mapped and zero accounts', () => {
+    const dynamic = {
+      unconfiguredVatAccounts: new Map([
+        ['2644', 'Ing moms omvänd'],
+        ['2617', 'Utg moms omvänd'],
+        ['2611', 'Utg moms 25 %'],
+        ['2643', 'Ing moms blandad'],
+      ]),
+    }
+    const totals = new Map([
+      ['2617', { debit: 100, credit: 2600 }],
+      ['2644', { debit: 2000, credit: 0 }],
+      ['2611', { debit: 0, credit: 999 }],
+      ['2643', { debit: 50, credit: 50 }],
+    ])
+
+    expect(vatAccountsWithoutRuta(totals, dynamic)).toEqual([
+      { account_number: '2617', account_name: 'Utg moms omvänd', amount: 2500 },
+      { account_number: '2644', account_name: 'Ing moms omvänd', amount: 2000 },
+    ])
+  })
+
+  it('tolerates a resolution without the field (older mocks and callers)', () => {
+    expect(vatAccountsWithoutRuta(new Map([['2617', { debit: 0, credit: 1 }]]), {})).toEqual([])
   })
 })
 

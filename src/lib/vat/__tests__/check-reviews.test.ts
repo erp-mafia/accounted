@@ -144,6 +144,27 @@ describe('vatCheckFingerprint', () => {
   })
 })
 
+describe('VAT_ACCOUNT_WITHOUT_RUTA review', () => {
+  // OSS moms on a 2619 from an older chart belongs on no ruta: reviewing the
+  // warning is the way out, and the review lapses when the amount moves.
+  const decl = {
+    ...declaration(),
+    vatAccountsWithoutRuta: [{ account_number: '2619', account_name: 'Utgående moms OSS', amount: 812.5 }],
+  }
+  const check = runVatDeclarationChecks(decl.rutor, undefined, { vatAccountsWithoutRuta: decl.vatAccountsWithoutRuta })
+    .find((c) => c.code === 'VAT_ACCOUNT_WITHOUT_RUTA')!
+  const inputs: VatCheckReviewInputs = { declaration: decl, gaps: [] }
+
+  it('is reviewable, keyed to the accounts and their amounts only', () => {
+    expect(isReviewableVatCheck(check, inputs)).toBe(true)
+    const base = vatCheckFingerprint(check, inputs)
+    const moved = { ...decl, vatAccountsWithoutRuta: [{ ...decl.vatAccountsWithoutRuta[0], amount: 900 }] }
+    expect(vatCheckFingerprint(check, { declaration: moved, gaps: [] })).not.toBe(base)
+    const otherList = { ...decl, revenueAccountsWithoutRuta: [{ account_number: '3543', account_name: 'X', amount: 1 }] }
+    expect(vatCheckFingerprint(check, { declaration: otherList, gaps: [] })).toBe(base)
+  })
+})
+
 describe('applyVatCheckReviews', () => {
   it('quiets the reviewed advisory for the period and keeps every other finding as it was', () => {
     const decl = declaration({}, 100)

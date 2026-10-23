@@ -1,4 +1,9 @@
-import type { KontantmetodCutoffVatFacts, VatDeclarationRutor, VatRevenueAccountWithoutRuta } from '@/types'
+import type {
+  KontantmetodCutoffVatFacts,
+  VatAccountWithoutRuta,
+  VatDeclarationRutor,
+  VatRevenueAccountWithoutRuta,
+} from '@/types'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { legacyKontantmetodVandningWarning } from '@/lib/core/bookkeeping/kontantmetod-cutoff-texts'
 
@@ -59,6 +64,7 @@ export interface VatDeclarationCheck {
     | 'OUTPUT_VAT_WITHOUT_SALES_BASE'
     | 'SALES_OUTPUT_VAT_SHORTFALL'
     | 'REVENUE_ACCOUNT_WITHOUT_RUTA'
+    | 'VAT_ACCOUNT_WITHOUT_RUTA'
     | 'KONTANTMETOD_CUTOFF_INCOMPLETE'
     | 'LEGACY_KONTANTMETOD_VANDNING'
   status: VatDeclarationCheckStatus
@@ -88,6 +94,7 @@ export const VAT_DECLARATION_CHECK_CODES = [
   'OUTPUT_VAT_WITHOUT_SALES_BASE',
   'SALES_OUTPUT_VAT_SHORTFALL',
   'REVENUE_ACCOUNT_WITHOUT_RUTA',
+  'VAT_ACCOUNT_WITHOUT_RUTA',
 ] as const satisfies ReadonlyArray<VatDeclarationCheck['code']>
 
 /** Who accepted a WARNING for the period, when, and why. */
@@ -138,6 +145,12 @@ export interface VatDeclarationCheckContext {
    */
   revenueAccountsWithoutRuta?: readonly VatRevenueAccountWithoutRuta[]
   /**
+   * Moms accounts (2610-2649) with a balance that reach no ruta, exactly as
+   * `vatAccountsWithoutRuta()` (lib/reports/vat-declaration.ts) derives them,
+   * or as `VatDeclaration.vatAccountsWithoutRuta` carries them over HTTP.
+   */
+  vatAccountsWithoutRuta?: readonly VatAccountWithoutRuta[]
+  /**
    * The kontantmetoden year-end cut-off facts of the period
    * (`fetchKontantmetodCutoffVatFacts()`, or `VatDeclaration.kontantmetodCutoff`
    * over HTTP). Feeds KONTANTMETOD_CUTOFF_INCOMPLETE and
@@ -146,14 +159,14 @@ export interface VatDeclarationCheckContext {
   kontantmetodCutoff?: KontantmetodCutoffVatFacts
 }
 
-/** How many accounts REVENUE_ACCOUNT_WITHOUT_RUTA names before summarising the rest. */
-const REVENUE_ACCOUNTS_NAMED_MAX = 5
+/** How many accounts REVENUE_ACCOUNT_WITHOUT_RUTA and VAT_ACCOUNT_WITHOUT_RUTA name before summarising the rest. */
+const ACCOUNTS_NAMED_MAX = 5
 
 function formatOre(amount: number): string {
   return amount.toLocaleString('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 }
 
-function describeRevenueAccount(account: VatRevenueAccountWithoutRuta): string {
+function describeAccount(account: VatRevenueAccountWithoutRuta | VatAccountWithoutRuta): string {
   const label = account.account_name
     ? `${account.account_number} ${account.account_name}`
     : account.account_number
@@ -227,9 +240,7 @@ export function kontantmetodCutoffFindings(facts: KontantmetodCutoffVatFacts | u
 export function revenueAccountWithoutRutaFinding(
   accounts: readonly VatRevenueAccountWithoutRuta[],
 ): VatDeclarationCheck {
-  const named = accounts.slice(0, REVENUE_ACCOUNTS_NAMED_MAX).map(describeRevenueAccount)
-  const rest = accounts.length - named.length
-  const list = rest > 0 ? `${named.join(', ')} och ${rest} till` : named.join(', ')
+  const list = namedAccounts(accounts)
   const lead =
     accounts.length === 1
       ? `Intäktskontot ${list} saknar momskod och momssats, så beloppet kommer inte med i någon ruta.`
@@ -252,6 +263,53 @@ export function revenueAccountWithoutRutaFinding(
       'till ruta 10-12), så moms att betala (ruta 49) påverkas inte, bara ' +
       'försäljningsunderlaget. Varningen hindrar inte inlämning.',
     rutor: ['ruta05', 'ruta42'],
+  }
+}
+
+/** The first ACCOUNTS_NAMED_MAX accounts with their amounts, then how many more. */
+function namedAccounts(accounts: readonly (VatRevenueAccountWithoutRuta | VatAccountWithoutRuta)[]): string {
+  const named = accounts.slice(0, ACCOUNTS_NAMED_MAX).map(describeAccount)
+  const rest = accounts.length - named.length
+  return rest > 0 ? `${named.join(', ')} och ${rest} till` : named.join(', ')
+}
+
+/**
+ * VAT_ACCOUNT_WITHOUT_RUTA: moms booked on a moms account (2610-2649) that no
+ * ruta reads, because the account is not in the BAS 2026 map and the company
+ * gave it no momsruta of its own. The moms then misses the rutor, the
+ * momsredovisning and, unless another such account offsets it, ruta 49. No
+ * rutor-level check can see it. Typically 2617/2627/2637 (utgående moms,
+ * omvänd skattskyldighet) or 2643/2644 (ingående moms) from a chart that
+ * predates BAS 2026, brought in by an import.
+ *
+ * WARNING, never ERROR: the right ruta depends on what the account is used
+ * for (names vary between charts), and moms that is declared elsewhere (OSS)
+ * belongs on no ruta at all. The user is told which accounts and how much,
+ * and where to fix it: the momsruta on the account in Kontoplan.
+ */
+export function vatAccountWithoutRutaFinding(
+  accounts: readonly VatAccountWithoutRuta[],
+): VatDeclarationCheck {
+  const list = namedAccounts(accounts)
+  const lead =
+    accounts.length === 1
+      ? `Momskontot ${list} hör inte till någon ruta, så momsen på kontot kommer inte med i deklarationen.`
+      : `${accounts.length} momskonton hör inte till någon ruta, så momsen på dem kommer inte med i ` +
+        `deklarationen: ${list}.`
+  return {
+    code: 'VAT_ACCOUNT_WITHOUT_RUTA',
+    status: 'WARNING',
+    message:
+      `${lead} Ange momsruta på kontot i Kontoplanen, till exempel ruta 30 för utgående moms vid ` +
+      'omvänd betalningsskyldighet 25 % eller ruta 48 för ingående moms. Ska momsen på kontot ' +
+      'inte redovisas i momsdeklarationen, till exempel OSS, markera varningen som granskad.',
+    detail:
+      'Deklarationen läser momskontona i BAS 2026 (till exempel 2611, 2614 och 2641) och de ' +
+      'momskonton som har en egen momsruta. De här kontona finns i äldre kontoplaner, ofta med ' +
+      'från en import, och har ingetdera. Momsen på dem kommer därför varken med i rutorna eller ' +
+      'i momsredovisningen, och moms att betala (ruta 49) blir fel med beloppet om det inte tar ' +
+      'ut sig mot ett annat sådant konto. Varningen hindrar inte inlämning.',
+    rutor: ['ruta49'],
   }
 }
 
@@ -389,8 +447,9 @@ function reverseChargeInputVat(accountTotals: VatCheckAccountTotals): number {
  * the check compares the reverse-charge output against the reverse-charge INPUT
  * accounts, without it against the ruta 48 aggregate (see there).
  *
- * `context` is optional and only feeds `REVENUE_ACCOUNT_WITHOUT_RUTA` and the
- * kontantmetoden cut-off findings, which need facts the rutor cannot carry.
+ * `context` is optional and only feeds `REVENUE_ACCOUNT_WITHOUT_RUTA`,
+ * `VAT_ACCOUNT_WITHOUT_RUTA` and the kontantmetoden cut-off findings, which
+ * need facts the rutor cannot carry.
  * Every other check reads the rutor alone.
  *
  * Returns an empty array when the declaration looks consistent. Order
@@ -699,6 +758,13 @@ export function runVatDeclarationChecks(
   const revenueWithoutRuta = context.revenueAccountsWithoutRuta ?? []
   if (revenueWithoutRuta.length > 0) {
     findings.push(revenueAccountWithoutRutaFinding(revenueWithoutRuta))
+  }
+
+  // Moms on an account no ruta reads is missing from the rutor and ruta 49
+  // alike, so no rutor-level check above can see it either.
+  const vatWithoutRuta = context.vatAccountsWithoutRuta ?? []
+  if (vatWithoutRuta.length > 0) {
+    findings.push(vatAccountWithoutRutaFinding(vatWithoutRuta))
   }
 
   findings.push(...kontantmetodCutoffFindings(context.kontantmetodCutoff))

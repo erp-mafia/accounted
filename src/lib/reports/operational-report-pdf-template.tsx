@@ -474,6 +474,12 @@ export function BalansrapportPDF({ report, company, generatedAt }: Balansrapport
             <Text style={styles.summaryLabel}>Beräknat resultat (ej bokslutsjusterat)</Text>
             <Text style={styles.summaryAmount}>{formatAmount(report.beraknat_resultat)}</Text>
           </View>
+          {report.differens !== 0 && (
+            <View style={styles.summaryRow}>
+              <Text style={styles.summaryLabel}>Differens</Text>
+              <Text style={styles.summaryAmount}>{formatAmount(report.differens)}</Text>
+            </View>
+          )}
           <View
             style={[
               styles.balanceVerdict,

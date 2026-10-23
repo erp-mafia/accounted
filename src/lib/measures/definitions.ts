@@ -576,9 +576,9 @@ const resultToDate: MeasureDefinition<IncomeSource> = {
   name_sv: 'Resultat hittills i år',
   name_en: 'Result year to date',
   definition:
-    'Result of the fiscal year from its first day to the end of as_of_date: operating income minus operating expenses plus finansiella poster (BAS 3000-8998), before bokslut entries (skatt, bokslutsdispositioner and year-end depreciation are not deducted), so it is not årets resultat once bokslut is booked. as_of_date defaults to today.',
+    'Result of the fiscal year from its first day to the end of as_of_date: operating income minus operating expenses plus finansiella poster (BAS 3000-8989), before bokslut entries (skatt, bokslutsdispositioner and year-end depreciation are not deducted), so it is not årets resultat once bokslut is booked. as_of_date defaults to today.',
   definition_sv:
-    'Räkenskapsårets resultat från första dagen till och med as_of_date: rörelseintäkter minus rörelsekostnader plus finansiella poster (BAS 3000-8998), före bokslutstransaktioner (skatt och bokslutsdispositioner är inte avdragna). Standard: dagens datum.',
+    'Räkenskapsårets resultat från första dagen till och med as_of_date: rörelseintäkter minus rörelsekostnader plus finansiella poster (BAS 3000-8989), före bokslutstransaktioner (skatt och bokslutsdispositioner är inte avdragna). Standard: dagens datum.',
   unit: 'SEK',
   dimension: 'as_of',
   equals: INCOME_STATEMENT_EQUALS('net_result with period_id = the fiscal year containing as_of and to_date = as_of'),
@@ -702,6 +702,15 @@ const vatPayable: MeasureDefinition<ComputedVatDeclaration> = {
         code: 'VAT_REVENUE_ACCOUNTS_WITHOUT_RUTA',
         message_sv: `Intäktskonton med saldo i perioden saknar momskod och ingår inte i någon ruta (${accounts}). Om försäljningen där var momspliktig utan bokförd moms är ruta 49 för låg.`,
         message_en: `Revenue accounts with a balance in the period have no VAT code and reach no ruta (${accounts}). If those sales carried VAT that was not booked, ruta 49 is too low.`,
+      })
+    }
+    const vatUnmapped = declaration.vatAccountsWithoutRuta ?? []
+    if (vatUnmapped.length > 0) {
+      const accounts = vatUnmapped.map((a) => a.account_number).join(', ')
+      caveats.push({
+        code: 'VAT_ACCOUNTS_WITHOUT_RUTA',
+        message_sv: `Momskonton med saldo i perioden hör inte till någon ruta (${accounts}), så momsen på dem ingår inte i ruta 49. Ange momsruta på kontona, eller bekräfta att momsen redovisas på annat sätt (till exempel OSS).`,
+        message_en: `VAT accounts with a balance in the period reach no ruta (${accounts}), so their VAT is not in ruta 49. Set a VAT box on the accounts, or confirm the VAT is reported elsewhere (OSS, for example).`,
       })
     }
     const fiscalPeriod = await fiscalPeriodContaining(ctx, declaration.period.end)

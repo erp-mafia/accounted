@@ -875,6 +875,58 @@ describe('REVENUE_ACCOUNT_WITHOUT_RUTA', () => {
   })
 })
 
+// Moms on a moms account no ruta reads (2617/2644 from a chart before BAS
+// 2026, no momsruta set) is missing from the rutor and ruta 49 alike, so no
+// rutor-level check can see it: the finding needs the account list.
+describe('VAT_ACCOUNT_WITHOUT_RUTA', () => {
+  const rutor: VatDeclarationRutor = { ...emptyRutor, ruta48: 500, ruta49: -500 }
+
+  it('is silent without the account list', () => {
+    expect(runVatDeclarationChecks(rutor)).toEqual([])
+    expect(runVatDeclarationChecks(rutor, undefined, { vatAccountsWithoutRuta: [] })).toEqual([])
+  })
+
+  it('warns, naming the account and its amount, and does not block filing', () => {
+    const findings = runVatDeclarationChecks(rutor, undefined, {
+      vatAccountsWithoutRuta: [
+        { account_number: '2617', account_name: 'Utg moms omvänd skattskyldighet', amount: 2500 },
+      ],
+    })
+
+    expect(findings).toHaveLength(1)
+    const [finding] = findings
+    expect(finding.code).toBe('VAT_ACCOUNT_WITHOUT_RUTA')
+    expect(finding.status).toBe('WARNING')
+    expect(finding.message).toMatch(/Momskontot 2617 Utg moms omvänd skattskyldighet \(2\s500,00 kr\)/)
+    expect(finding.message).toMatch(/momsruta/)
+    expect(finding.message).toMatch(/OSS/)
+    expect(finding.detail).toMatch(/hindrar inte inlämning/)
+    expect(finding.rutor).toEqual(['ruta49'])
+    expect(isFilingBlocked(findings)).toBe(false)
+  })
+
+  it('names several accounts in one finding', () => {
+    const [finding] = runVatDeclarationChecks(rutor, undefined, {
+      vatAccountsWithoutRuta: [
+        { account_number: '2617', account_name: 'A', amount: 2500 },
+        { account_number: '2644', account_name: 'B', amount: 2000 },
+      ],
+    })
+
+    expect(finding.message).toMatch(/^2 momskonton/)
+    expect(finding.message).toContain('2644 B')
+  })
+
+  it('follows REVENUE_ACCOUNT_WITHOUT_RUTA', () => {
+    const codes = runVatDeclarationChecks(rutor, undefined, {
+      revenueAccountsWithoutRuta: [{ account_number: '3543', account_name: 'X', amount: 1 }],
+      vatAccountsWithoutRuta: [{ account_number: '2617', account_name: 'Y', amount: 1 }],
+    }).map((f) => f.code)
+
+    expect(codes).toEqual(['REVENUE_ACCOUNT_WITHOUT_RUTA', 'VAT_ACCOUNT_WITHOUT_RUTA'])
+  })
+})
+
 // #3440: under kontantmetoden the moms on invoices unpaid at the fiscal year
 // end belongs to the VAT period containing the year end. A WARNING while the
 // cut-off is incomplete, never a gate (founder decision 2026-10-03).

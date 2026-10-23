@@ -4,6 +4,7 @@ import type {
   VatDeclarationRutor,
   VatPeriodType,
   VatRevenueAccountWithoutRuta,
+  VatAccountWithoutRuta,
 } from '@/types'
 import { ORE_ROUNDING_ACCOUNT } from '@/lib/money'
 import { VAT_ACCOUNT_TABLE } from '@/lib/vat/moms-box-mapping'
@@ -540,13 +541,19 @@ export async function loadVatDeclarationLedger(
   // konto is user-added and would otherwise never be fetched at all (#1261).
   const dynamicVatAccounts = await fetchDynamicVatAccounts(supabase, companyId)
 
-  // The unconfigured class 3 accounts ride along so the declaration can name
-  // the ones with a balance (revenueAccountsWithoutRuta). They join p_accounts
-  // only, which measures; rutorFromTotals never sums them, so no filed figure
-  // moves.
+  // The unconfigured class 3 accounts and moms accounts ride along so the
+  // declaration can name the ones with a balance (revenueAccountsWithoutRuta,
+  // vatAccountsWithoutRuta). They join p_accounts only, which measures:
+  // rutorFromTotals never sums them, and the settlement shapes read only the
+  // ruta and net lists (a 26xx line is never an "other" line), so no filed
+  // figure moves.
   const ledger = await fetchVatAccountTotals(
     supabase, companyId, start, end,
-    [...dynamicVatAccounts.accounts, ...dynamicVatAccounts.unconfiguredRevenueAccounts.keys()],
+    [
+      ...dynamicVatAccounts.accounts,
+      ...dynamicVatAccounts.unconfiguredRevenueAccounts.keys(),
+      ...dynamicVatAccounts.unconfiguredVatAccounts.keys(),
+    ],
   )
 
   return { ...ledger, dynamicVatAccounts, rutor: rutorFromTotals(ledger.totals, dynamicVatAccounts) }
@@ -810,6 +817,38 @@ export function revenueAccountsWithoutRuta(
 }
 
 /**
+ * The moms accounts (BAS 2610-2649) with a balance in the period that this
+ * declaration puts in no ruta: not in ACCOUNT_RUTA and without a momsruta of
+ * the company's own (DynamicVatAccounts.unconfiguredVatAccounts). Feeds the
+ * VAT_ACCOUNT_WITHOUT_RUTA warning. Typically a chart that predates BAS 2026
+ * (2617/2627/2637 utgående moms omvänd skattskyldighet, 2643/2644 ingående
+ * moms) brought in by an import, which never sets a momsruta.
+ *
+ * Read-only: no filed figure moves. Which ruta the account belongs in is the
+ * user's to say (the account name varies between charts), so the declaration
+ * names it and the user sets the momsruta on the account.
+ *
+ * `amount` is the balance on the account's own side, rounded to öre: credit
+ * for utgående moms (2610-2639), debit for ingående moms (2640-2649). Zero
+ * balances are dropped. Sorted by account number so the message is stable.
+ */
+export function vatAccountsWithoutRuta(
+  totals: VatCheckAccountTotals,
+  dynamicVatAccounts: Partial<Pick<DynamicVatAccounts, 'unconfiguredVatAccounts'>>,
+): VatAccountWithoutRuta[] {
+  const result: VatAccountWithoutRuta[] = []
+  for (const [account, name] of dynamicVatAccounts.unconfiguredVatAccounts ?? []) {
+    if (ACCOUNT_RUTA[account]) continue
+    const t = totals.get(account)
+    if (!t) continue
+    const amount = round(account < '2640' ? t.credit - t.debit : t.debit - t.credit)
+    if (amount === 0) continue
+    result.push({ account_number: account, account_name: name, amount })
+  }
+  return result.sort((a, b) => a.account_number.localeCompare(b.account_number))
+}
+
+/**
  * The declaration plus what a reader of it needs and the declaration itself
  * does not carry: which branch of resolvePeriodDates produced the range, and
  * the untagged verifikat the totals left out as momsredovisning. The agent VAT
@@ -933,6 +972,9 @@ export async function computeVatDeclaration(
     // Class 3 balances that reach no ruta, for REVENUE_ACCOUNT_WITHOUT_RUTA:
     // see VatDeclaration.revenueAccountsWithoutRuta.
     revenueAccountsWithoutRuta: revenueAccountsWithoutRuta(totals, dynamicVatAccounts, customerLoss),
+    // Moms accounts whose balance reaches no ruta, for VAT_ACCOUNT_WITHOUT_RUTA:
+    // see VatDeclaration.vatAccountsWithoutRuta.
+    vatAccountsWithoutRuta: vatAccountsWithoutRuta(totals, dynamicVatAccounts),
     invoiceCount,
     transactionCount,
     breakdown: {

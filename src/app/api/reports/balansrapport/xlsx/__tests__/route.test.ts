@@ -87,6 +87,7 @@ function report(): BalansrapportReport {
     total_assets_ub: 60_500,
     total_equity_liabilities_ub: 0,
     beraknat_resultat: 60_500,
+    differens: 0,
     is_balanced: true,
     period: { start: '2026-01-01', end: '2026-12-31' },
   }
@@ -155,6 +156,24 @@ describe('GET /api/reports/balansrapport/xlsx', () => {
       ['Ej klassificerade konton', '', 'Summa ej klassificerade konton', 500],
       ['', '', 'Summa 1 Tillgångar', 60_500],
       ['', '', 'Beräknat resultat', 60_500],
+    ])
+  })
+
+  it('adds a Differens row when the balansrapport does not balance, so the rows add up', async () => {
+    enqueue({ data: { company_name: 'Test AB' } }) // company_settings
+    enqueue({ data: PERIOD }) // fiscal_periods
+    mockGenerate.mockResolvedValue({ ...report(), beraknat_resultat: 50_000, differens: 10_500, is_balanced: false })
+
+    const res = await GET(
+      createMockRequest('/api/reports/balansrapport/xlsx', { searchParams: { period_id: 'period-1' } }),
+      noParams,
+    )
+    expect(res.status).toBe(200)
+
+    const rows = await sheetRows(res)
+    expect(rows.slice(-2).map((r) => [r[3], r[6]])).toEqual([
+      ['Beräknat resultat', 50_000],
+      ['Differens (balanserar ej)', 10_500],
     ])
   })
 })
