@@ -6,6 +6,7 @@ import { useTranslations } from 'next-intl'
 import type { BooksFindings } from '@/lib/onboarding/findings'
 import { singleFlight } from '@/lib/onboarding/single-flight'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
+import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import { reconcileBooksDraft } from '@/lib/onboarding-books/resume'
 import { booksSkip } from '@/lib/onboarding-books/skip'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -132,6 +133,14 @@ export default function BooksJourney(props: BooksJourneyProps) {
   useEffect(() => {
     if (navigation.ready && state.step !== 'sie' && state.step !== 'provider') void loadFindings()
   }, [navigation.ready, state.step, loadFindings])
+
+  useOnboardingStepEvent({
+    journey: 'books',
+    step: state.step === 'bank' && state.bankPhase === 'authed' ? 'bank-accounts' : state.step,
+    ready: navigation.ready,
+    path: state.path,
+    provider: state.provider,
+  })
 
   /* ── leaving the act ─────────────────────────────────────────────── */
   const leave = useCallback(

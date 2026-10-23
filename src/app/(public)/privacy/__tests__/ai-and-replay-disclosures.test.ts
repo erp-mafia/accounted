@@ -273,6 +273,8 @@ describe('consent and data choices match the code', () => {
     expect(IDENTIFY).toContain('if (!analyticsConsent) return')
     expect(IDENTIFY).toContain('initAnalytics()')
     expect(code(read('app/(dashboard)/layout.tsx'))).toContain('analyticsConsent={acceptance.analyticsConsent !== false}')
+    // The signed-in screens before the dashboard (the company journey) follow the same rule.
+    expect(code(read('app/(onboarding)/layout.tsx'))).toContain('analyticsConsent={acceptance.analyticsConsent !== false}')
     const page = flat(PRIVACY)
     expect(page).toContain('påslagna när du är inloggad, och du kan när som helst stänga av dem')
     expect(page).not.toContain('startar först när du har godkänt dem')

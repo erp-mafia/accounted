@@ -26,6 +26,7 @@ import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-exten
 import { useBranding } from '@/lib/branding/brand-context'
 import { BOOKS_PATH } from '@/lib/onboarding/books-gate'
 import { useOnboardingNavigation } from '@/lib/hooks/use-onboarding-navigation'
+import { useOnboardingStepEvent } from '@/lib/hooks/use-onboarding-step-event'
 import {
   initJourney,
   journeyReducer,
@@ -235,6 +236,7 @@ export default function OnboardingJourney({
 
   const station = stationOfStep(state.step)
   const entity = state.settings.entity_type
+  useOnboardingStepEvent({ journey: 'company', step: state.step, ready: navigation.ready, mode, entityType: entity })
   // Two capabilities drive every wording difference between the forms.
   // personOwned: the org number is the owner's personnummer (enskild
   // firma), so the company IS the person and the questions say "du" and
