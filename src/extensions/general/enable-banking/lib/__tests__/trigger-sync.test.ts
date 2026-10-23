@@ -141,10 +141,15 @@ describe('triggerConnectionSync', () => {
       updates: [],
       leaseUntil: EPOCH,
     }
-    mocks.syncAccountTransactions.mockResolvedValue({ imported: 2, duplicates: 5, errors: 0 })
+    mocks.syncAccountTransactions.mockResolvedValue({ imported: 2, duplicates: 5, errors: 0, transactionIds: ['tx-1', 'tx-2'] })
     mocks.rpc.mockImplementation(async (name: string) => ({ data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }))
     mocks.emit.mockResolvedValue(undefined)
   })
+
+  const syncedEvents = () =>
+    mocks.emit.mock.calls
+      .map((c) => c[0] as { type: string; payload: Record<string, unknown> })
+      .filter((e) => e.type === 'transaction.synced')
 
   it.each(['active', 'error'])('leaves %s connection state and cursor intact on a routing conflict', async status => {
     state.connection = connection({ status, error_message: 'existing message' })
@@ -178,7 +183,27 @@ describe('triggerConnectionSync', () => {
       p_accounts: [{ uid: 'acc-1', balance: 100 }],
     }))
     expect(state.updates.some(update => 'accounts_data' in update)).toBe(false)
-    expect(mocks.emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
+  })
+
+  // The runner announces the rows it inserted (run-connection-sync.ts); the
+  // trigger used to announce them again from a created_at re-read.
+  it('announces the inserted rows exactly once, through the runner', async () => {
+    expect((await run()).ok).toBe(true)
+    const events = syncedEvents()
+    expect(events).toHaveLength(1)
+    expect(events[0].payload).toEqual({ transactions: [{ id: 'tx-1' }], userId: 'user-1', companyId: COMPANY_ID })
+  })
+
+  it('announces nothing when the sync inserted no row', async () => {
+    mocks.syncAccountTransactions.mockResolvedValue({ imported: 0, duplicates: 7, errors: 0, transactionIds: [] })
+    expect((await run()).ok).toBe(true)
+    expect(syncedEvents()).toHaveLength(0)
+  })
+
+  it('announces nothing for a viewer, whose sync stores the rows raw', async () => {
+    state.membershipRole = 'viewer'
+    expect((await run()).ok).toBe(true)
+    expect(syncedEvents()).toHaveLength(0)
   })
 
   it('widens the window to cover a longer gap and asks for the deepest history past a month', async () => {
@@ -194,7 +219,7 @@ describe('triggerConnectionSync', () => {
     mocks.rpc.mockResolvedValue({ data: { applied: false, reason: 'session_changed' }, error: null })
     expect(await run()).toMatchObject({ ok: false, code: 'BANK_SYNC_FAILED' })
     expect(state.updates.some(update => 'last_synced_at' in update || 'accounts_data' in update)).toBe(false)
-    expect(mocks.emit).not.toHaveBeenCalledWith(expect.objectContaining({ type: 'transaction.synced' }))
+    expect(syncedEvents()).toHaveLength(0)
   })
 
   it('surfaces a database persistence error after bank rows have been fetched', async () => {

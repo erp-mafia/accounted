@@ -17,6 +17,8 @@ interface ClientState {
   leaseWrites: { ids: unknown[]; until: string }[]
   /** Connections whose claim loses the race although the plan saw the lease free. */
   claimLosers: Set<string>
+  /** transactions as the database holds them: what a read by id answers. */
+  transactions: Record<string, unknown>[]
 }
 
 const mocks = vi.hoisted(() => ({
@@ -69,6 +71,8 @@ import {
 import { BANK_ROUTE_NEEDS_CONFIGURATION_MESSAGE } from '@/lib/bank-sync/ingest-route'
 import { GET } from '../route'
 import { createCronRequest } from '@/tests/helpers'
+import { eventBus } from '@/lib/events/bus'
+import type { EventPayload } from '@/lib/events/types'
 
 function makeClient(state: ClientState) {
   return {
@@ -82,13 +86,18 @@ function makeClient(state: ClientState) {
       state.updates.push({ ids: [row.id], payload })
       return { data: name === 'persist_bank_sync_result' ? { applied: true } : true, error: null }
     }),
-    from: () => {
+    from: (table: string) => {
       const filters: Record<string, unknown> = {}
+      let idIn: unknown[] | null = null
       let isDelete = false
       let updatePayload: Record<string, unknown> | null = null
       let leaseBound: { op: 'lte' | 'lt'; value: string } | null = null
 
       function result() {
+        if (table === 'transactions') {
+          const rows = state.transactions.filter(row => row.company_id === filters.company_id && idIn?.includes(row.id))
+          return { data: rows, error: null }
+        }
         if (isDelete) return { data: [], error: null }
         if (updatePayload) {
           const targets = state.active.filter(row =>
@@ -122,8 +131,12 @@ function makeClient(state: ClientState) {
       }
 
       const chain: Record<string, unknown> = {}
-      const passthrough = ['select', 'not', 'gte', 'order', 'limit', 'range', 'in', 'is']
+      const passthrough = ['select', 'not', 'gte', 'order', 'limit', 'range', 'is']
       for (const method of passthrough) chain[method] = vi.fn(() => chain)
+      chain.in = vi.fn((col: string, values: unknown[]) => {
+        if (col === 'id') idIn = values
+        return chain
+      })
       chain.eq = vi.fn((col: string, value: unknown) => {
         filters[col] = value
         return chain
@@ -181,7 +194,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://example.supabase.co'
   process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
-  state = { active: [], updates: [], leaseWrites: [], claimLosers: new Set() }
+  eventBus.clear()
+  state = { active: [], updates: [], leaseWrites: [], claimLosers: new Set(), transactions: [] }
   mocks.createClient.mockImplementation(() => makeClient(state))
   mocks.getCompanyIdsWithCapability.mockImplementation(
     async (_supabase: unknown, companyIds: string[]) => new Set(companyIds),
@@ -650,6 +664,77 @@ describe('GET /api/extensions/enable-banking/sync/cron: transient failures leave
     expect(errorLines.some(line => line.includes('sync failed for connection'))).toBe(false)
     consoleError.mockRestore()
     consoleWarn.mockRestore()
+  })
+})
+
+// event_log and the inbox bank match react to transaction.synced. The cron is
+// how most Enable Banking rows arrive, and it used to announce none of them.
+describe('GET /api/extensions/enable-banking/sync/cron: transaction.synced', () => {
+  function listen() {
+    const received: EventPayload<'transaction.synced'>[] = []
+    eventBus.on('transaction.synced', payload => {
+      received.push(payload)
+    })
+    return received
+  }
+
+  it('announces the rows an import stored, once, with the connection owner and its company', async () => {
+    state.active = [connection()]
+    state.transactions = [
+      { id: 'tx-1', company_id: 'company-1', amount: -125 },
+      { id: 'tx-2', company_id: 'company-1', amount: 900 },
+      { id: 'tx-older', company_id: 'company-1', amount: -40 },
+    ]
+    mocks.syncAccountTransactions.mockResolvedValue({ imported: 2, duplicates: 1, errors: 0, transactionIds: ['tx-1', 'tx-2'] })
+    const received = listen()
+
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
+
+    await expect(response.json()).resolves.toMatchObject({ completed: 1, totalImported: 2 })
+    expect(received).toEqual([{
+      transactions: [
+        { id: 'tx-1', company_id: 'company-1', amount: -125 },
+        { id: 'tx-2', company_id: 'company-1', amount: 900 },
+      ],
+      userId: 'user-1',
+      companyId: 'company-1',
+    }])
+  })
+
+  it('announces nothing for a sync that stored no new row', async () => {
+    state.active = [connection()]
+    state.transactions = [{ id: 'tx-older', company_id: 'company-1', amount: -40 }]
+    mocks.syncAccountTransactions.mockResolvedValue({ imported: 0, duplicates: 3, errors: 0, transactionIds: [] })
+    const received = listen()
+
+    const response = await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
+
+    await expect(response.json()).resolves.toMatchObject({ completed: 1, totalImported: 0 })
+    expect(received).toEqual([])
+  })
+
+  it('announces each company its own rows', async () => {
+    state.active = [
+      connection({ id: 'conn-a', company_id: companyId(1), user_id: 'user-a' }),
+      connection({ id: 'conn-b', company_id: companyId(2), user_id: 'user-b' }),
+    ]
+    state.transactions = [
+      { id: 'tx-a', company_id: companyId(1) },
+      { id: 'tx-b', company_id: companyId(2) },
+    ]
+    mocks.syncAccountTransactions.mockImplementation(async (...args: unknown[]) => {
+      const transactionIds = args[3] === 'conn-a' ? ['tx-a'] : ['tx-b']
+      return { imported: 1, duplicates: 0, errors: 0, transactionIds }
+    })
+    const received = listen()
+
+    await GET(createCronRequest('/api/extensions/enable-banking/sync/cron'))
+
+    expect(received).toHaveLength(2)
+    expect(received).toEqual(expect.arrayContaining([
+      { transactions: [{ id: 'tx-a', company_id: companyId(1) }], userId: 'user-a', companyId: companyId(1) },
+      { transactions: [{ id: 'tx-b', company_id: companyId(2) }], userId: 'user-b', companyId: companyId(2) },
+    ]))
   })
 })
 
