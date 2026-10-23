@@ -9070,6 +9070,7 @@
     "country_rules_saved": "Konton per land sparade",
     "country_rules_save_failed": "Kunde inte spara konton per land",
     "country_rules_save_invalid": "Några rader behöver ändras innan de kan sparas",
+    "country_rules_load_failed": "Kunde inte läsa konton per land.",
     "country_rules_problem_platform_unsupported": "Konton per land finns bara för Shopify.",
     "country_rules_problem_country_invalid": "Okänt land.",
     "country_rules_problem_country_sweden": "Ordrar till Sverige bokförs alltid på de svenska kontona.",
@@ -9078,12 +9079,12 @@
     "country_rules_problem_swedish_rate": "Svenska konton kräver en svensk momssats (25, 12, 6 eller 0 %).",
     "country_rules_problem_account_unknown": "Konto {account} finns inte i kontoplanen eller är inaktivt.",
     "country_rules_problem_revenue_account_class": "Försäljningskontot måste vara ett intäktskonto i klass 3 (inte 3740).",
-    "country_rules_problem_revenue_counts_as_swedish": "Konto {account} räknas som svensk försäljning i momsdeklarationen (ruta {box}). Välj ett annat konto, till exempel 3106 för OSS.",
-    "country_rules_problem_revenue_in_declaration": "Försäljning via OSS ska inte med i momsdeklarationen, men konto {account} hamnar i ruta {box}. Välj ett annat konto, till exempel 3106.",
+    "country_rules_problem_revenue_counts_as_swedish": "Momskoden på konto {account} lägger försäljningen i ruta {box}, som svensk försäljning. Välj ett annat konto{alternative, select, none {} other {, till exempel {alternative}}}, eller byt kontots momskod under Bokföring → Kontoplan om kontot bara används för den här försäljningen.",
+    "country_rules_problem_revenue_in_declaration": "Försäljning via OSS ska inte med i momsdeklarationen, men momskoden på konto {account} lägger den i ruta {box}. Är all försäljning på kontot OSS, ändra kontots momskod till ”OSS-försäljning till EU-konsumenter” under Bokföring → Kontoplan. Annars väljer du ett annat konto{alternative, select, none {.} other {, till exempel {alternative}.}}",
     "country_rules_problem_revenue_box_wrong_region": "Konto {account} hamnar i ruta {box}, som inte gäller försäljning till det här landet.",
     "country_rules_problem_vat_account_required": "Välj ett momskonto: ordrar till landet har moms.",
     "country_rules_problem_vat_account_class": "Momskontot måste vara ett skuldkonto i klass 2.",
-    "country_rules_problem_vat_account_in_declaration": "Konto {account} räknas med i den svenska momsdeklarationen. Moms till ett annat land ska ligga på ett eget konto, till exempel 2670 för OSS."
+    "country_rules_problem_vat_account_in_declaration": "Konto {account} räknas med i den svenska momsdeklarationen. Moms till ett annat land ska ligga på ett eget konto{alternative, select, none {.} other {, till exempel {alternative} för OSS.}}"
   },
   "self_billing": {
     "title": "Registrera självfaktura",

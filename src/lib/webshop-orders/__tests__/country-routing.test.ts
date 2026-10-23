@@ -2,10 +2,14 @@ import { describe, it, expect } from 'vitest'
 import {
   NO_OSS_PRESET_RULES,
   OSS_PRESET_RULES,
+  alternativeAccountFor,
   isDestinationUnknown,
+  isOssRule,
+  presetAccountsFor,
   resolveCountryRule,
   routeOrderBuckets,
   routedCountryOf,
+  sameCountryRules,
   usesSwedishAccounts,
 } from '../country-routing'
 import type { WebshopCountryAccountRule } from '@/types'
@@ -160,5 +164,88 @@ describe('routeOrderBuckets', () => {
     const routing = routeOrderBuckets(shopify('DK'), [{ rate: 25, net: 100, tax: 25 }], NO_OSS_PRESET_RULES)
     expect(routing.unroutedRates).toEqual([])
     expect(usesSwedishAccounts(routing.buckets[0])).toBe(true)
+  })
+})
+
+describe('sameCountryRules', () => {
+  // What Postgres jsonb hands back for the OSS preset plus a Swedish row:
+  // keys sorted by length (mode, country, vat_rate, vat_account,
+  // revenue_account), not the order the form writes them in.
+  const FROM_JSONB = JSON.parse(
+    '[{"mode": "accounts", "country": "EU", "vat_rate": null, "vat_account": "2670", "revenue_account": "3106"}, ' +
+      '{"mode": "accounts", "country": "NON_EU", "vat_rate": 0, "vat_account": null, "revenue_account": "3105"}, ' +
+      '{"mode": "swedish", "country": "FI", "vat_rate": 25.5}]',
+  ) as WebshopCountryAccountRule[]
+  const FROM_FORM: WebshopCountryAccountRule[] = [
+    ...OSS_PRESET_RULES,
+    { country: 'FI', vat_rate: 25.5, mode: 'swedish' },
+  ]
+
+  it('treats the stored rules and the form\'s copy of them as equal whatever the key order', () => {
+    // The bug: the form compared with JSON.stringify and never saw these as equal.
+    expect(JSON.stringify(FROM_JSONB)).not.toBe(JSON.stringify(FROM_FORM))
+    expect(sameCountryRules(FROM_FORM, FROM_JSONB)).toBe(true)
+    expect(sameCountryRules(FROM_JSONB, FROM_FORM)).toBe(true)
+    expect(sameCountryRules([], [])).toBe(true)
+  })
+
+  it('reads a missing VAT account as none', () => {
+    const withoutKey = JSON.parse(
+      '[{"mode": "accounts", "country": "NON_EU", "vat_rate": 0, "revenue_account": "3105"}]',
+    ) as WebshopCountryAccountRule[]
+    expect(sameCountryRules([OSS_PRESET_RULES[1]], withoutKey)).toBe(true)
+  })
+
+  it('tells apart any change to a field, a mode, the count or the order', () => {
+    const edited = (patch: Partial<Extract<WebshopCountryAccountRule, { mode: 'accounts' }>>) => [
+      { ...(FROM_FORM[0] as Extract<WebshopCountryAccountRule, { mode: 'accounts' }>), ...patch },
+      ...FROM_FORM.slice(1),
+    ]
+    expect(sameCountryRules(edited({ revenue_account: '3013' }), FROM_JSONB)).toBe(false)
+    expect(sameCountryRules(edited({ vat_account: '2674' }), FROM_JSONB)).toBe(false)
+    expect(sameCountryRules(edited({ vat_rate: 25 }), FROM_JSONB)).toBe(false)
+    expect(sameCountryRules(edited({ country: 'DE' }), FROM_JSONB)).toBe(false)
+    expect(
+      sameCountryRules([{ country: 'EU', vat_rate: null, mode: 'swedish' }, ...FROM_FORM.slice(1)], FROM_JSONB),
+    ).toBe(false)
+    expect(sameCountryRules(FROM_FORM.slice(1), FROM_JSONB)).toBe(false)
+    expect(sameCountryRules([...FROM_FORM].reverse(), FROM_JSONB)).toBe(false)
+  })
+})
+
+describe('presetAccountsFor and alternativeAccountFor', () => {
+  it('gives the OSS pair for the EU with VAT, export outside the EU, nothing for a 0 % EU sale', () => {
+    expect(presetAccountsFor('EU', null)).toEqual({ revenue: '3106', vat: '2670' })
+    expect(presetAccountsFor('DE', 19)).toEqual({ revenue: '3106', vat: '2670' })
+    expect(presetAccountsFor('NON_EU', 0)).toEqual({ revenue: '3105', vat: null })
+    expect(presetAccountsFor('NO', 25)).toEqual({ revenue: '3105', vat: null })
+    expect(presetAccountsFor('EU', 0)).toEqual({ revenue: null, vat: null })
+  })
+
+  it('names the preset account instead of the refused one', () => {
+    expect(alternativeAccountFor({ country: 'EU', vat_rate: null }, 'revenue_account', '3001')).toBe('3106')
+    expect(alternativeAccountFor({ country: 'EU', vat_rate: null }, 'vat_account', '2611')).toBe('2670')
+    expect(alternativeAccountFor({ country: 'NON_EU', vat_rate: 0 }, 'revenue_account', '3001')).toBe('3105')
+  })
+
+  it('never names the account that was refused', () => {
+    expect(alternativeAccountFor({ country: 'EU', vat_rate: null }, 'revenue_account', '3106')).toBeNull()
+    expect(alternativeAccountFor({ country: 'DK', vat_rate: 25 }, 'vat_account', '2670')).toBeNull()
+    expect(alternativeAccountFor({ country: 'NON_EU', vat_rate: 0 }, 'revenue_account', '3105')).toBeNull()
+  })
+
+  it('names nothing where the presets have no account', () => {
+    expect(alternativeAccountFor({ country: 'EU', vat_rate: 0 }, 'revenue_account', '3001')).toBeNull()
+    expect(alternativeAccountFor({ country: 'NO', vat_rate: 25 }, 'vat_account', '2611')).toBeNull()
+  })
+})
+
+describe('isOssRule', () => {
+  it('is an EU country or the EU catch-all, with VAT', () => {
+    expect(isOssRule({ country: 'EU', vat_rate: null })).toBe(true)
+    expect(isOssRule({ country: 'FI', vat_rate: 25.5 })).toBe(true)
+    expect(isOssRule({ country: 'EU', vat_rate: 0 })).toBe(false)
+    expect(isOssRule({ country: 'NO', vat_rate: 25 })).toBe(false)
+    expect(isOssRule({ country: 'NON_EU', vat_rate: null })).toBe(false)
   })
 })

@@ -394,11 +394,136 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
       expect(status).toBe(400)
       expect(body.error.code).toBe('WEBSHOP_COUNTRY_RULES_INVALID')
       expect(body.error.details.problems.map((p) => p.code)).toEqual([
-        'revenue_counts_as_swedish',
+        'revenue_in_declaration',
         'vat_account_in_declaration',
       ])
       expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
       expect(mockEnsurePresetAccounts).not.toHaveBeenCalled()
+      // 3001 is not the preset OSS account: no usage lookup, no VAT code change.
+      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+      expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+    })
+
+    describe('a preset 3106 whose VAT code puts it in a ruta', () => {
+      const presetChart = (treatment: string, rate: number) => [
+        chartRow('3106', 'Försäljning varor till annat EU-land, momspliktig', {
+          default_vat_treatment: treatment,
+          default_vat_rate: rate,
+        }),
+        chartRow('2670', 'Utgående moms på försäljning inom EU, OSS'),
+        chartRow('3105', 'Försäljning varor till land utanför EU'),
+      ]
+
+      it.each([
+        ['reverse_charge_eu_goods', 0],
+        ['standard_25', 0.25],
+        ['exempt', 0],
+      ])('stores the OSS preset and gives an unused 3106 (%s) VAT code OSS', async (treatment, rate) => {
+        enqueue({ data: presetChart(treatment, rate) })
+        enqueue({ data: [] }) // usage counts filtered to 3106: no lines
+        enqueue({ data: null }) // 3106 VAT code update
+        enqueue({ data: { platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES } })
+        const { status } = await parseJsonResponse(
+          await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES }),
+        )
+        expect(status).toBe(200)
+        expect(mockSupabase.rpc).toHaveBeenCalledWith('get_account_usage_counts', { p_company_id: 'company-1' })
+        // Filtered by PostgREST, so the 1,000-row cap cannot drop 3106.
+        expect(findCalls('rpc:get_account_usage_counts', 'eq')).toEqual([['account_number', '3106']])
+        const updates = findCalls('chart_of_accounts', 'update')
+        expect(updates).toEqual([[{ default_vat_treatment: 'oss', default_vat_rate: null }]])
+        const eqs = findCalls('chart_of_accounts', 'eq')
+        expect(eqs).toContainEqual(['company_id', 'company-1'])
+        expect(eqs).toContainEqual(['account_number', '3106'])
+        const upsert = findCall('webshop_store_settings', 'upsert')![0] as Record<string, unknown>
+        expect(upsert.country_account_rules).toEqual(OSS_RULES)
+      })
+
+      it('refuses the rules and leaves the VAT code alone once 3106 has been booked on', async () => {
+        enqueue({ data: presetChart('reverse_charge_eu_goods', 0) })
+        enqueue({ data: [{ account_number: '3106', usage_count: 1 }] })
+        const { status, body } = await parseJsonResponse<{
+          error: { code: string; details: { problems: unknown[] } }
+        }>(await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES }))
+        expect(status).toBe(400)
+        expect(body.error.code).toBe('WEBSHOP_COUNTRY_RULES_INVALID')
+        expect(body.error.details.problems).toEqual([
+          { index: 0, field: 'revenue_account', code: 'revenue_in_declaration', account: '3106', box: '35' },
+        ])
+        expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+        expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
+        expect(mockEnsurePresetAccounts).not.toHaveBeenCalled()
+      })
+
+      it('fails closed on a usage answer that cannot vouch for 3106', async () => {
+        // A full, unfiltered page: 1,000 other accounts, 3106 cut off by the
+        // row cap. It must read as "used", never as "unused".
+        const capped = Array.from({ length: 1000 }, (_, i) => ({
+          account_number: String(1000 + i),
+          usage_count: 1,
+        }))
+        enqueue({ data: presetChart('reverse_charge_eu_goods', 0) })
+        enqueue({ data: capped })
+        const { status, body } = await parseJsonResponse<{
+          error: { details: { problems: Array<{ code: string; account?: string }> } }
+        }>(await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES }))
+        expect(status).toBe(400)
+        expect(body.error.details.problems.map((p) => [p.code, p.account])).toEqual([
+          ['revenue_in_declaration', '3106'],
+        ])
+        expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+        expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
+      })
+
+      it('does not look up usage when 3106 already has VAT code OSS', async () => {
+        enqueue({ data: presetChart('oss', 0).map((r) => ({ ...r, default_vat_rate: null })) })
+        enqueue({ data: { platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES } })
+        const { status } = await parseJsonResponse(
+          await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES }),
+        )
+        expect(status).toBe(200)
+        expect(mockSupabase.rpc).not.toHaveBeenCalled()
+        expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+      })
+
+      it('never changes an account the user typed, even an unused one', async () => {
+        const rules = [
+          { country: 'DE', vat_rate: null, mode: 'accounts', revenue_account: '3013', vat_account: '2674' },
+        ]
+        enqueue({
+          data: [
+            chartRow('3013', 'Försäljning Tyskland', { default_vat_treatment: 'reverse_charge_eu_goods' }),
+            chartRow('2674', 'Utgående moms OSS Tyskland'),
+          ],
+        })
+        const { status, body } = await parseJsonResponse<{
+          error: { details: { problems: Array<{ code: string; account?: string }> } }
+        }>(await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }))
+        expect(status).toBe(400)
+        expect(body.error.details.problems.map((p) => [p.code, p.account])).toEqual([
+          ['revenue_in_declaration', '3013'],
+        ])
+        expect(mockSupabase.rpc).not.toHaveBeenCalled()
+        expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+      })
+
+      it('stores nothing when the usage lookup fails', async () => {
+        enqueue({ data: presetChart('reverse_charge_eu_goods', 0) })
+        enqueue({ error: { message: 'statement timeout', code: '57014' } })
+        const res = await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES })
+        expect(res.status).toBeGreaterThanOrEqual(500)
+        expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+        expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
+      })
+
+      it('stores nothing when 3106 cannot get VAT code OSS', async () => {
+        enqueue({ data: presetChart('standard_25', 0.25) })
+        enqueue({ data: [] })
+        enqueue({ error: { message: 'connection reset' } }) // 3106 VAT code update
+        const res = await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES })
+        expect(res.status).toBeGreaterThanOrEqual(500)
+        expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
+      })
     })
 
     it('names an account that is not in the chart', async () => {

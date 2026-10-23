@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
+import { RefreshCw } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -12,19 +13,19 @@ import {
   SettingsRowNote,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
+import { panelRequest } from '@/lib/browser/panel-request'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { parseDecimalInput } from '@/lib/money'
 import { getCountryName, getCountryOptions } from '@/lib/vat/country-codes'
 import {
   COUNTRY_SCOPE_EU,
   COUNTRY_SCOPE_NON_EU,
-  EXPORT_REVENUE_ACCOUNT,
   NO_OSS_PRESET_RULES,
   OSS_PRESET_RULES,
-  OSS_REVENUE_ACCOUNT,
-  OSS_VAT_ACCOUNT,
-  isEuRuleCountry,
+  alternativeAccountFor,
+  presetAccountsFor,
   ruleCoversVat,
+  sameCountryRules,
   sameVatRate,
 } from '@/lib/webshop-orders/country-routing'
 import type { CountryRuleProblem } from '@/lib/webshop-orders/country-rule-checks'
@@ -64,21 +65,14 @@ function toRule(draft: DraftRule): WebshopCountryAccountRule {
       }
 }
 
-/**
- * The accounts a new row starts from: the OSS pair for an EU destination
- * with VAT, export (3105) outside the EU. Norway's VOEC VAT account has no
- * default (the company picks it), and a 0 % EU sale is left blank: it is a
- * different treatment (EU B2B) the user must name.
- */
-function prefillFor(country: string, rate: number | null): { revenue: string; vat: string } {
-  const withVat = ruleCoversVat({ vat_rate: rate })
-  if (isEuRuleCountry(country)) {
-    return withVat ? { revenue: OSS_REVENUE_ACCOUNT, vat: OSS_VAT_ACCOUNT } : { revenue: '', vat: '' }
-  }
-  return { revenue: EXPORT_REVENUE_ACCOUNT, vat: '' }
-}
-
 type RateChoice = 'any' | 'zero' | 'other'
+
+/**
+ * Where the stored rules stand. Only 'ready' renders rules, presets or save:
+ * a failed read (401, 500, an MFA step-up, offline) is not "no rules", and an
+ * empty form offered on top of it would let a save replace the real ones.
+ */
+type LoadState = 'loading' | 'failed' | 'ready'
 
 /**
  * Accounts per destination country for a Shopify store (country_account_rules).
@@ -90,11 +84,13 @@ type RateChoice = 'any' | 'zero' | 'other'
  */
 export function CountryAccountRulesForm({ platform, storeScope }: CountryAccountRulesFormProps) {
   const t = useTranslations('webshop_orders')
+  const tCommon = useTranslations('common')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const { toast } = useToast()
   const [saved, setSaved] = useState<WebshopCountryAccountRule[]>([])
   const [draft, setDraft] = useState<DraftRule[]>([])
-  const [loading, setLoading] = useState(true)
+  const [loadState, setLoadState] = useState<LoadState>('loading')
+  const [loadAttempt, setLoadAttempt] = useState(0)
   const [saving, setSaving] = useState(false)
   const [problems, setProblems] = useState<CountryRuleProblem[]>([])
   const [newCountry, setNewCountry] = useState(COUNTRY_SCOPE_EU)
@@ -103,27 +99,33 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
 
   useEffect(() => {
     let cancelled = false
-    fetch(
-      `/api/webshop-orders/settings?platform=${platform}&store_scope=${encodeURIComponent(storeScope)}`,
-    )
-      .then((r) => (r.ok ? r.json() : { data: [] }))
-      .then((json: { data: WebshopStoreSettings[] }) => {
-        if (cancelled) return
-        const rules = json.data[0]?.country_account_rules ?? []
-        setSaved(rules)
-        setDraft(rules.map(toDraft))
-      })
-      .catch(() => undefined)
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    void panelRequest<{ data?: WebshopStoreSettings[] }>({
+      url: `/api/webshop-orders/settings?platform=${platform}&store_scope=${encodeURIComponent(storeScope)}`,
+      method: 'GET',
+    }).then((result) => {
+      if (cancelled) return
+      const rows = result.ok ? result.data?.data : undefined
+      if (!Array.isArray(rows)) {
+        setLoadState('failed')
+        return
+      }
+      const stored = rows[0]?.country_account_rules ?? []
+      setSaved(stored)
+      setDraft(stored.map(toDraft))
+      setLoadState('ready')
+    })
     return () => {
       cancelled = true
     }
-  }, [platform, storeScope])
+  }, [platform, storeScope, loadAttempt])
+
+  const retryLoad = () => {
+    setLoadState('loading')
+    setLoadAttempt((n) => n + 1)
+  }
 
   const rules = useMemo(() => draft.map(toRule), [draft])
-  const dirty = JSON.stringify(rules) !== JSON.stringify(saved)
+  const dirty = !sameCountryRules(rules, saved)
 
   const countryLabel = (country: string) =>
     country === COUNTRY_SCOPE_EU
@@ -167,8 +169,17 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
 
   const addRule = () => {
     if (newRate === undefined || newIsDuplicate) return
-    const { revenue, vat } = prefillFor(newCountry, newRate)
-    editDraft([...draft, { country: newCountry, vat_rate: newRate, mode: 'accounts', revenue, vat }])
+    const preset = presetAccountsFor(newCountry, newRate)
+    editDraft([
+      ...draft,
+      {
+        country: newCountry,
+        vat_rate: newRate,
+        mode: 'accounts',
+        revenue: preset.revenue ?? '',
+        vat: preset.vat ?? '',
+      },
+    ])
   }
 
   const setAccount = (index: number, field: 'revenue' | 'vat', value: string) => {
@@ -219,13 +230,38 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
     }
   }
 
-  const problemText = (problem: CountryRuleProblem) =>
-    t(`country_rules_problem_${problem.code}`, {
+  const problemText = (problem: CountryRuleProblem) => {
+    // A problem's index is the row's place in the rules the last save sent,
+    // which is the draft until it is edited (an edit clears the problems).
+    const rule = draft[problem.index]
+    const alternative =
+      rule && (problem.field === 'revenue_account' || problem.field === 'vat_account')
+        ? alternativeAccountFor(rule, problem.field, problem.account)
+        : null
+    return t(`country_rules_problem_${problem.code}`, {
       account: problem.account ?? '',
       box: problem.box ?? '',
+      alternative: alternative ?? 'none',
     })
+  }
 
-  if (loading) return null
+  if (loadState === 'loading') return null
+
+  // Same shape as the feed panel's failed status read: the sentence and a
+  // retry, nothing else. No presets, rows or save until a read succeeds.
+  if (loadState === 'failed') {
+    return (
+      <SettingsGroup label={t('country_rules_title')}>
+        <div className="flex items-center justify-between gap-4 px-1 py-3" role="alert">
+          <p className="text-sm text-destructive">{t('country_rules_load_failed')}</p>
+          <Button size="sm" variant="outline" onClick={retryLoad}>
+            <RefreshCw className="mr-2 h-4 w-4" />
+            {tCommon('retry')}
+          </Button>
+        </div>
+      </SettingsGroup>
+    )
+  }
 
   return (
     <SettingsGroup label={t('country_rules_title')} help={t('country_rules_help')}>
