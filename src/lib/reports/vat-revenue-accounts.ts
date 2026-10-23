@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { ACCOUNT_TO_BOX, BOX_LABELS, type MomsBox } from '@/lib/vat/moms-box-mapping'
+import { ACCOUNT_TO_BOX, BOX_LABELS, isDeclarationVatAccount, type MomsBox } from '@/lib/vat/moms-box-mapping'
 import { isAccountVatBox, isVatBoxAccount, vatBoxRutaMapping } from '@/lib/vat/account-vat-box'
 import {
   defaultRateForVatTreatment,
@@ -129,12 +129,22 @@ export interface DynamicVatAccounts {
    * in vat-declaration.ts, which is where revenueAccountsWithoutRuta drops it.
    */
   unconfiguredRevenueAccounts: Map<string, string>
+  /**
+   * VAT accounts (BAS 2610-2649, isDeclarationVatAccount) without a momsruta
+   * of the company's own, keyed by account number to the account name. Not
+   * summed into any ruta here; the declaration reads them only to name the
+   * ones with a balance no ruta reads (VAT_ACCOUNT_WITHOUT_RUTA). An account
+   * in the fixed BAS ruta map is listed too: vatAccountsWithoutRuta in
+   * vat-declaration.ts drops it, as revenueAccountsWithoutRuta does.
+   */
+  unconfiguredVatAccounts: Map<string, string>
 }
 
 const emptyDynamicVatAccounts = (): DynamicVatAccounts => ({
   accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
   rateByAccount: new Map(), staticRateByAccount: new Map(),
   rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+  unconfiguredVatAccounts: new Map(),
 })
 
 /** Explicit account treatments win; accounts without one keep BAS fallback. */
@@ -167,8 +177,13 @@ export async function fetchDynamicVatAccounts(
     if (row.account_class === 2) {
       // A VAT account with an explicit momsruta leaves its BAS box (explicit)
       // and feeds the chosen one. A class-2 row without an override is not a
-      // VAT classification at all.
-      if (!isVatBoxAccount(account) || !isAccountVatBox(row.vat_box)) continue
+      // VAT classification at all; a moms account among them is listed, so
+      // the declaration can name a balance on it that no ruta reads.
+      if (!isVatBoxAccount(account)) continue
+      if (!isAccountVatBox(row.vat_box)) {
+        if (isDeclarationVatAccount(account)) result.unconfiguredVatAccounts.set(account, row.account_name)
+        continue
+      }
       result.explicitAccounts.add(account)
       result.mappingByAccount.set(account, vatBoxRutaMapping(row.vat_box))
       result.accounts.push(account)

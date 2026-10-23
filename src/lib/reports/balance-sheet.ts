@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
 import { findUntransferredResults, buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import { roundOre } from '@/lib/money'
 import type {
   BalanceImbalanceDiagnosis,
   BalanceSheetReport,
@@ -85,24 +86,9 @@ export async function balanceSheetFromTrialBalance(
     'credit' // Equity/liabilities have credit normal balance
   )
 
-  // Calculate the period result from every row OUTSIDE the balance-sheet
-  // classes (1-2), not just class 3-8. Invariant: synthetic result =
-  // everything outside the balance-sheet classes, so a resultatavslut that
-  // was posted to 2099 but whose counter-line landed on a class 0/9 or
-  // class-less account self-cancels here instead of double-counting the
-  // result (2099 already carries it inside the class 2 sections). The
-  // negated range is deliberate: it keeps null/undefined account_class rows
-  // in the result. A genuinely untransferred prior-year result still yields
-  // a real differens and the imbalance diagnosis below.
-  const incomeExpenseRows = rows.filter(
-    (r) => !(r.account_class >= 1 && r.account_class <= 2)
-  )
-  const periodResult = Math.round(
-    incomeExpenseRows.reduce(
-      (sum, r) => sum + (r.closing_credit - r.closing_debit),
-      0
-    ) * 100
-  ) / 100
+  // A genuinely untransferred prior-year result still yields a real
+  // differens and the imbalance diagnosis below.
+  const periodResult = computedResult(rows)
 
   // Add period result as a synthetic section under equity if non-zero
   if (Math.abs(periodResult) > 0.005) {
@@ -155,6 +141,25 @@ export async function balanceSheetFromTrialBalance(
     period: { start: '', end: '' },
     ...(imbalanceDiagnosis ? { imbalance_diagnosis: imbalanceDiagnosis } : {}),
   }
+}
+
+/**
+ * Årets resultat as the balance side reads it before bokslut: the closing
+ * balance of every trial balance row OUTSIDE the balance-sheet classes (1-2),
+ * credit-positive, not just class 3-8. Invariant: the result = everything
+ * outside the balance-sheet classes, so a resultatavslut that was posted to
+ * 2099 but whose counter-line landed on a class 0/9 or class-less account
+ * self-cancels here instead of double-counting the result (2099 already
+ * carries it among the class 2 rows). The negated range is deliberate: it
+ * keeps null/undefined account_class rows in the result. Balansräkning and
+ * Balansrapport both read it here, so the two cannot show different results.
+ */
+export function computedResult(rows: readonly TrialBalanceRow[]): number {
+  return roundOre(
+    rows
+      .filter((r) => !(r.account_class >= 1 && r.account_class <= 2))
+      .reduce((sum, r) => sum + (r.closing_credit - r.closing_debit), 0),
+  )
 }
 
 function buildBalanceSections(

@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
 import { findUntransferredResults, buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import { computedResult } from './balance-sheet'
 import { getLatestPostedVouchers } from './latest-vouchers'
 import { roundOre, sumOre } from '@/lib/money'
 import { preparesArsredovisning, resolveCompanyEntityType } from '@/lib/company/entity-type'
@@ -73,7 +74,9 @@ interface LayoutNode {
  * accounts (debit balance) render positive; class 2 accounts (credit balance)
  * render negative. This matches Fortnox/Visma/Bokio and lets the user verify
  * the balance by adding rows: total_assets_ub + total_equity_liabilities_ub
- * = beraknat_resultat (the running-year P&L residual, 0 after year-end close).
+ * = beraknat_resultat + differens. Beräknat resultat is the running-year
+ * result (0 after year-end close); differens is 0 whenever the saldobalans
+ * balances.
  */
 export async function generateBalansrapport(
   supabase: SupabaseClient,
@@ -142,12 +145,15 @@ export async function generateBalansrapport(
   const totalAssetsUb = groups.find((g) => g.class === 1)?.subtotal_ub ?? 0
   const totalEquityLiabilitiesUb = groups.find((g) => g.class === 2)?.subtotal_ub ?? 0
 
-  // Beräknat resultat: the residual on the balance side. With both classes in
-  // debit-positive sign, assets are positive and eq_liab is negative; their sum
-  // equals the running-year P&L residual. Trial balance guarantees
-  // sum_all(debit - credit) = 0, so sum_balance = -sum_pl = revenues - costs.
-  // After year-end close posts the result into 2099, the residual is 0.
-  const beraknatResultat = roundOre(totalAssetsUb + totalEquityLiabilitiesUb)
+  // Beräknat resultat: the running-year result, read from the result accounts
+  // as the Balansräkning reads its Årets resultat (computedResult). With both
+  // classes debit-positive, assets + eq_liab equal it only while the
+  // saldobalans balances. When the opening balance does not (usually an
+  // earlier year's result never moved to equity), the gap is the differens,
+  // reported apart: the residual used to be shown as this year's result.
+  // After year-end close posts the result into 2099, both read 0.
+  const beraknatResultat = computedResult(trialBalance.rows)
+  const differens = roundOre(totalAssetsUb + totalEquityLiabilitiesUb - beraknatResultat)
 
   // An unbalanced trial balance here means the opening balance itself is
   // broken — double-entry guarantees period activity balances. Explain why
@@ -184,6 +190,7 @@ export async function generateBalansrapport(
     total_assets_ub: totalAssetsUb,
     total_equity_liabilities_ub: totalEquityLiabilitiesUb,
     beraknat_resultat: beraknatResultat,
+    differens,
     is_balanced: trialBalance.isBalanced,
     period: { start: effectiveFromDate, end: effectiveToDate },
     ...(imbalanceDiagnosis ? { imbalance_diagnosis: imbalanceDiagnosis } : {}),

@@ -1,0 +1,1 @@
+[2026-10-23] VAT_ACCOUNT_WITHOUT_RUTA warns when a moms account (2610-2649) outside the BAS 2026 map and without a momsruta has a balance, e.g. 2617/2644 from older charts: its moms silently missed the declaration. Warn, not map: mapping by number changes filed figures and names vary.

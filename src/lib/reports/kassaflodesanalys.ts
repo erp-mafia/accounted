@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
 import { calculateCashFlowTax, isCashFlowTaxBridgeAccount } from './cash-flow-tax'
 import type { TrialBalanceRow } from '@/types'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 
 /**
  * Kassaflödesanalys (Cash Flow Statement): indirect method per BFNAR 2012:1 ch 7.
@@ -152,7 +153,7 @@ function classify(account: string): Bucket {
   // Bokslutsdispositioner against obeskattade reserver (21xx), avsättningar
   // against their expense, and deferred tax against 2240/1370.
   if (startsWithAny(account, ['88', '894', '21', '22', '137'])) return 'ej_kassaflode'
-  if (account === '8999') return 'eget_kapital'
+  if (isAretsResultatAccount(account)) return 'eget_kapital'
   if (/^[3-8]/.test(account)) return 'resultat'
   if (startsWithAny(account, ['10', '11', '12', '13'])) return 'anlaggningar'
   if (account.startsWith('14')) return 'varulager'

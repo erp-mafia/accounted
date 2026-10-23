@@ -184,6 +184,42 @@ describe('generateMonthlyBreakdown', () => {
     // Class 8 credit (8300 interest income) → income
     expect(jan.income).toBe(200)
   })
+
+  it('leaves årets resultat (8990-8999) out of the month, whichever account the omföring used', async () => {
+    let callCount = 0
+    supabase.from.mockImplementation(() => {
+      callCount++
+      if (callCount === 1) {
+        return chain({ data: { period_start: '2024-01-01', period_end: '2024-01-31' }, error: null })
+      }
+      if (callCount === 2) return chain({ data: [], error: null })
+      if (callCount === 3) {
+        return chain({
+          data: [
+            { id: 'e1', entry_date: '2024-01-15', status: 'posted', company_id: 'company-1', fiscal_period_id: 'period-1' },
+            { id: 'e2', entry_date: '2024-01-31', status: 'posted', company_id: 'company-1', fiscal_period_id: 'period-1' },
+          ],
+          error: null,
+        })
+      }
+      return chain({
+        data: [
+          { account_number: '1930', debit_amount: 10000, credit_amount: 0, journal_entry_id: 'e1' },
+          { account_number: '3041', debit_amount: 0, credit_amount: 10000, journal_entry_id: 'e1' },
+          // The previous system's omföring through 8990, and a rest through 8999.
+          { account_number: '8990', debit_amount: 9999.5, credit_amount: 0, journal_entry_id: 'e2' },
+          { account_number: '8999', debit_amount: 0.5, credit_amount: 0, journal_entry_id: 'e2' },
+          { account_number: '2099', debit_amount: 0, credit_amount: 10000, journal_entry_id: 'e2' },
+        ],
+        error: null,
+      })
+    })
+
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    const jan = result.months.find((m) => m.label === 'Jan')!
+    expect(jan.income).toBe(10000)
+    expect(jan.expenses).toBe(0)
+  })
 })
 
 describe('generateMonthlyBreakdown: year-end exclusion', () => {

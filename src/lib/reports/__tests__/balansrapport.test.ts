@@ -188,6 +188,7 @@ describe('generateBalansrapport', () => {
     expect(report.total_assets_ub).toBe(80000)
     expect(report.total_equity_liabilities_ub).toBe(-30000)
     expect(report.beraknat_resultat).toBe(50000)
+    expect(report.differens).toBe(0)
     // Trial balance still balances: double-entry guarantees this.
     expect(report.is_balanced).toBe(true)
   })
@@ -236,10 +237,42 @@ describe('generateBalansrapport', () => {
     expect(equity.subtotal_ib).toBeLessThan(0)
     expect(equity.subtotal_ub).toBeLessThan(0)
     expect(report.total_equity_liabilities_ub).toBeLessThan(0)
-    // Sum of both sides equals beräknat resultat (here: profit residual)
+    // Sum of both sides equals beräknat resultat plus the differens. This
+    // fixture holds no result accounts and does not balance (120 000 against
+    // 75 000): the whole 45 000 is differens, not a result.
     expect(report.total_assets_ub + report.total_equity_liabilities_ub).toBe(
-      report.beraknat_resultat
+      report.beraknat_resultat + report.differens
     )
+    expect(report.beraknat_resultat).toBe(0)
+    expect(report.differens).toBe(45000)
+  })
+
+  it('reads beräknat resultat from the result accounts and reports an unbalanced IB as differens', async () => {
+    // An earlier year's 20 000 profit was never moved to equity, so the IB is
+    // unbalanced by it. This year's result is 50 000. The differens used to
+    // be shown as part of the result (70 000).
+    const q = createQueuedMockSupabase()
+    enqueuePeriod(q)
+    mockTrialBalance.mockResolvedValueOnce({
+      ...tb([
+        makeRow({ account_number: '1930', account_name: 'Bank', account_class: 1, opening_debit: 20000, closing_debit: 100000 }),
+        makeRow({ account_number: '2440', account_name: 'Lev.skuld', account_class: 2, closing_credit: 30000 }),
+        makeRow({ account_number: '3001', account_name: 'Revenue', account_class: 3, closing_credit: 70000 }),
+        makeRow({ account_number: '5010', account_name: 'Rent', account_class: 5, closing_debit: 20000 }),
+      ]),
+      totalDebit: 120000,
+      totalCredit: 100000,
+      isBalanced: false,
+    })
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
+
+    expect(report.total_assets_ub).toBe(100000)
+    expect(report.total_equity_liabilities_ub).toBe(-30000)
+    expect(report.beraknat_resultat).toBe(50000)
+    expect(report.differens).toBe(20000)
+    expect(report.is_balanced).toBe(false)
   })
 
   it('is_balanced reflects trial balance balance state', async () => {

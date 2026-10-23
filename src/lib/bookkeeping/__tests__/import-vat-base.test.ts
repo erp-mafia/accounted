@@ -36,6 +36,7 @@ function dynamicWith(
     staticRateByAccount: new Map(),
     rcBasisRateByAccount: new Map(),
     unconfiguredRevenueAccounts: new Map(),
+    unconfiguredVatAccounts: new Map(),
   }
 }
 

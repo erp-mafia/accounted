@@ -302,6 +302,13 @@ describe('tax allocation evidence and boundaries', () => {
     }])).rejects.toBeInstanceOf(CashFlowTaxAllocationError)
   })
 
+  it('leaves an omföring through 8990 out of the tax bridge, like one through 8999', async () => {
+    // Årets resultat is 8990-8999: an imported resultatavslut through 8990
+    // used to land in the tax bridge as unallocatable tax and fail the report.
+    const report = await run([entry('8990', '2099', 1000, 'import')])
+    expect(report.lopande.skatt_betald).toBe(0)
+  })
+
   it('does not assume unspecified 8980 tax is income tax', async () => {
     await expect(run([entry('8980', '2510')])).rejects.toBeInstanceOf(CashFlowTaxAllocationError)
   })

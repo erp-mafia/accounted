@@ -23,7 +23,7 @@ import { getReconciliationStatus } from '@/lib/reconciliation/bank-reconciliatio
 import { DEFAULT_SETTLEMENT_ACCOUNT, resolveCashAccountScope } from '@/lib/reconciliation/cash-account-scope'
 import { findRcBasisGaps, type RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import { computeVatDeclaration, type MomsredovisningDetection, rcInputTotalsFromDeclaration, VAT_SETTLEMENT_NET_ACCOUNTS, type VatPeriodSource, type VatSettlementShapedEntry } from '@/lib/reports/vat-declaration'
-import { revenueAccountWithoutRutaFinding, runVatDeclarationChecks, selfAssessedVatWithoutAnyInputVat, type VatCheckReviewMark, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
+import { revenueAccountWithoutRutaFinding, vatAccountWithoutRutaFinding, runVatDeclarationChecks, selfAssessedVatWithoutAnyInputVat, type VatCheckReviewMark, type VatDeclarationCheck, type VatDeclarationCheckStatus } from '@/lib/reports/vat-declaration-checks'
 import { listVatCheckReviews } from '@/lib/vat/check-review-store'
 import { fetchKontantmetodCutoffVatFacts } from '@/lib/vat/kontantmetod-cutoff-vat-facts'
 import { applyVatCheckReviews, isReviewableVatCheck, type VatCheckReview, type VatCheckReviewInputs } from '@/lib/vat/check-reviews'
@@ -306,6 +306,11 @@ async function computeVatReportWithRutor(
   if (revenueWithoutRuta.length > 0) {
     warnings.push(revenueAccountWithoutRutaFinding(revenueWithoutRuta).message)
   }
+  // Moms accounts no ruta reads: the same finding, in the same words.
+  const vatWithoutRuta = declaration.vatAccountsWithoutRuta ?? []
+  if (vatWithoutRuta.length > 0) {
+    warnings.push(vatAccountWithoutRutaFinding(vatWithoutRuta).message)
+  }
 
   const report: VatReportResult = {
     period: { type: periodType, year, period, start: startDate, end: endDate },
@@ -396,6 +401,7 @@ export async function vatFilingVerdict(
   const checks = withRcBasisGapFindings(
     runVatDeclarationChecks(declaration.rutor, rcInputTotalsFromDeclaration(declaration), {
       revenueAccountsWithoutRuta: declaration.revenueAccountsWithoutRuta,
+      vatAccountsWithoutRuta: declaration.vatAccountsWithoutRuta,
       kontantmetodCutoff: options.kontantmetodCutoff ?? declaration.kontantmetodCutoff,
     }),
     scan,
@@ -625,6 +631,19 @@ export const REVENUE_ACCOUNT_WITHOUT_RUTA_HINT =
   'Fråga användaren vad kontot avser och sätt sedan default_vat_treatment på kontot med ' +
   'gnubok_update_account (standard_25/reduced_12/reduced_6 för ruta 05, exempt för ruta 42). ' +
   'Avser kontot inte försäljning, sätt default_vat_rate 0. Inga verifikat ändras.'
+
+/**
+ * Hint for the VAT_ACCOUNT_WITHOUT_RUTA finding: the fix is the momsruta on
+ * the account, and which ruta is the user's call. Moms declared elsewhere
+ * (OSS) belongs on no ruta, and then the review is the way out, so the hint
+ * names it itself. Exported so the test can pin the contract.
+ */
+export const VAT_ACCOUNT_WITHOUT_RUTA_HINT =
+  'Fråga användaren vad momsen på kontot avser och sätt sedan vat_box på kontot med ' +
+  'gnubok_update_account (till exempel 30/31/32 för utgående moms vid omvänd betalningsskyldighet ' +
+  '25/12/6 %, 48 för ingående moms). Redovisas momsen inte i momsdeklarationen (till exempel OSS), ' +
+  'markera varningen som granskad med gnubok_mark_vat_check_reviewed när användaren bekräftat det. ' +
+  'Inga verifikat ändras.'
 
 /**
  * Hint for the unattributed_eu_sale blocker (crm#1362): the sale is already
@@ -1272,7 +1291,9 @@ export async function computeVatCloseCheck(
           ? RC_BASIS_ADVISORY_HINT
           : check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA'
             ? REVENUE_ACCOUNT_WITHOUT_RUTA_HINT
-            : check.code === 'KONTANTMETOD_CUTOFF_INCOMPLETE'
+            : check.code === 'VAT_ACCOUNT_WITHOUT_RUTA'
+              ? VAT_ACCOUNT_WITHOUT_RUTA_HINT
+              : check.code === 'KONTANTMETOD_CUTOFF_INCOMPLETE'
               ? KONTANTMETOD_CUTOFF_HINT
               : check.rutor?.length
                 ? `Granska ${check.rutor.join(', ')} i huvudboken innan inlämning (gnubok_get_general_ledger).`
@@ -1290,7 +1311,8 @@ export async function computeVatCloseCheck(
       hint: !escalated &&
         isReviewableVatCheck(check, reviewInputs) &&
         check.code !== 'RC_BASIS_MISSING' &&
-        check.code !== 'REVENUE_ACCOUNT_WITHOUT_RUTA'
+        check.code !== 'REVENUE_ACCOUNT_WITHOUT_RUTA' &&
+        check.code !== 'VAT_ACCOUNT_WITHOUT_RUTA'
         ? `${baseHint} ${VAT_CHECK_REVIEW_HINT}`
         : baseHint,
       check_code: check.code,

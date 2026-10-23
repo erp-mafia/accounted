@@ -103,6 +103,19 @@ export const GET = withRouteContext('report.balansrapport.xlsx', async (request,
       period_change: report.beraknat_resultat,
       ub: report.beraknat_resultat,
     })
+    // The rows add up only with it: assets + eq_liab = beräknat resultat +
+    // differens. Blank IB and change, as the differens is no movement.
+    if (report.differens !== 0) {
+      rows.push({
+        group: 'Differens',
+        section: '',
+        account_number: '',
+        account_name: 'Differens (balanserar ej)',
+        ib: null as unknown as number,
+        period_change: null as unknown as number,
+        ub: report.differens,
+      })
+    }
 
     // Reconciliation aid (#1267). reportToWorkbook has no preamble concept, so
     // this rides as a first body row, the same way the dimension disclosure

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TrialBalanceRow } from '@/types'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
 import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 
 // BAS current income tax, including prior-year adjustments and refunds.
 // Deferred tax (894x) has no payment effect. Other 89xx accounts need an
@@ -20,12 +21,13 @@ const r2 = (value: number) => Math.round(value * 100) / 100 || 0
 /**
  * The accounts whose whole movement calculateCashFlowTax accounts for: the
  * income-tax and other-tax balances, and every 89xx account except deferred
- * tax (894x) and 8999, which the bridge either counts as current tax or
- * refuses. The cash-flow statement must not place these anywhere else.
+ * tax (894x) and årets resultat (8990-8999), which the bridge either counts as
+ * current tax or refuses. The cash-flow statement must not place these
+ * anywhere else.
  */
 export function isCashFlowTaxBridgeAccount(account: string): boolean {
   return CURRENT_TAX_BALANCE.has(account) || OTHER_TAX_BALANCE.has(account)
-    || (account.startsWith('89') && !account.startsWith('894') && account !== '8999')
+    || (account.startsWith('89') && !account.startsWith('894') && !isAretsResultatAccount(account))
 }
 
 export class CashFlowTaxAllocationError extends Error {
@@ -144,7 +146,7 @@ export async function calculateCashFlowTax(
     const account = row.account_number
     const movement = row.period_debit - row.period_credit
     if (isCurrentTaxExpense(account)) expense -= movement
-    else if (account.startsWith('89') && !account.startsWith('894') && account !== '8999' && r2(movement) !== 0) {
+    else if (account.startsWith('89') && !account.startsWith('894') && !isAretsResultatAccount(account) && r2(movement) !== 0) {
       throw new CashFlowTaxAllocationError()
     }
     if (OPERATING_INCOME_TAX_EXPENSE.has(account)) expenseInOperatingProfit += movement

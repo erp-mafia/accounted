@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { dbError } from '@/lib/errors/db-error'
 import { roundOre } from '@/lib/money'
+import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
 
 export interface MonthlyBreakdownMonth {
@@ -196,11 +197,11 @@ export async function generateMonthlyBreakdown(
     } else if (accountClass >= 4 && accountClass <= 7) {
       // Expense accounts: debit side represents expenses
       bucket.expenses += line.debit_amount - line.credit_amount
-    } else if (accountClass === 8 && line.account_number !== '8999') {
+    } else if (accountClass === 8 && !isAretsResultatAccount(line.account_number)) {
       // Financial items (class 8): interest, exchange gains/losses, etc.
-      // 8999 "Årets resultat" is a year-end closing account: its debit/credit
-      // mirrors the computed profit, so including it here would cancel the
-      // period's income-vs-expense signal on the month of closing.
+      // Årets resultat (8990-8999) holds year-end closing omföringar: their
+      // debit/credit mirrors the computed profit, so including them here would
+      // cancel the period's income-vs-expense signal on the month of closing.
       const amount = line.credit_amount - line.debit_amount
       if (amount >= 0) {
         bucket.income += amount

@@ -97,6 +97,7 @@ const noCompanyVatClassification = () => ({
   accounts: [], mappingByAccount: new Map(), explicitAccounts: new Set(),
   rateByAccount: new Map(), staticRateByAccount: new Map(),
   rcBasisRateByAccount: new Map(), unconfiguredRevenueAccounts: new Map(),
+  unconfiguredVatAccounts: new Map(),
 })
 
 import { POST } from '../route'
