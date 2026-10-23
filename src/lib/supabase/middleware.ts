@@ -17,6 +17,7 @@ import { claimsPinned } from '@/lib/auth/claims'
 import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
 import { MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
+import { MFA_ASSURANCE_HEADER, signNoVerifiedFactor } from '@/lib/auth/mfa-assurance'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
@@ -111,6 +112,10 @@ async function updateSessionInner(
   request: NextRequest,
   timing: ProxyTimings,
 ): Promise<NextResponse> {
+  // Only this proxy may hand a route an MFA verdict, and only below, for the
+  // request it checked: a client-sent one never travels on.
+  request.headers.delete(MFA_ASSURANCE_HEADER)
+
   let supabaseResponse = NextResponse.next({
     request,
   })
@@ -295,6 +300,24 @@ async function updateSessionInner(
         )
         copyResponseCookies(supabaseResponse, response)
         return response
+      }
+    }
+    // A user without a verified factor: requireAuth would ask the auth
+    // server that once more for an AAL1 session (listFactors(), a second
+    // GoTrue round trip per request). getUser() above just answered it, so
+    // the route gets the answer, signed for this user and session
+    // (lib/auth/mfa-assurance.ts).
+    if (!skipMfaGate && user && mfaStepUpApplies(user) && !userHasVerifiedFactor(user)) {
+      const sessionId = await timed(timing, 'mfaMs', () => getSupabaseSessionId(supabase))
+      const verdict = sessionId
+        ? await timed(timing, 'mfaMs', () => signNoVerifiedFactor({ userId: user.id, sessionId }))
+        : null
+      if (verdict) {
+        request.headers.set(MFA_ASSURANCE_HEADER, verdict)
+        // The forwarded request headers are fixed when the response is made.
+        const forwarded = NextResponse.next({ request })
+        copyResponseCookies(supabaseResponse, forwarded)
+        return forwarded
       }
     }
     return supabaseResponse

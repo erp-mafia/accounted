@@ -209,6 +209,7 @@ import {
   verifySessionTimeoutState,
 } from '@/lib/auth/session-timeout'
 import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
+import { MFA_ASSURANCE_HEADER, verifyNoVerifiedFactor } from '@/lib/auth/mfa-assurance'
 import { ACCOUNT_DELETION_PATH } from '@/lib/company/no-company-routes'
 
 const ORIGIN = 'http://localhost:3000'
@@ -971,6 +972,52 @@ describe('updateSession redirect destinations', () => {
 
       expect(response.status).toBe(403)
       expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
+    })
+
+    // The route's requireAuth takes this verdict instead of a listFactors()
+    // round trip of its own (lib/auth/mfa-assurance.ts).
+    describe('the no-verified-factor verdict for the route', () => {
+      const forwarded = (response: Response) => response.headers.get(`x-middleware-request-${MFA_ASSURANCE_HEADER}`)
+
+      it('signs it for this user and session when the user has no verified factor', async () => {
+        state.user = SIGNED_IN
+        state.cookieWrites = [{ name: 'sb-test-auth-token', value: 'rotated', options: { path: '/' } }]
+
+        const response = await run('/api/invoices')
+
+        expect(response.status).toBe(200)
+        const verdict = forwarded(response)
+        await expect(verifyNoVerifiedFactor(verdict, { userId: 'user-1', sessionId: 'session-1' })).resolves.toBe(true)
+        await expect(verifyNoVerifiedFactor(verdict, { userId: 'user-1', sessionId: 'session-2' })).resolves.toBe(false)
+        // The forwarded request is rebuilt, the rotated cookie with it.
+        expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
+      })
+
+      it('signs none for a user with a verified factor, an escape hatch or a page', async () => {
+        state.jwtAal = 'aal2'
+        expect(forwarded(await run('/api/invoices'))).toBeNull()
+
+        state.user = SIGNED_IN
+        expect(forwarded(await run('/api/account/delete'))).toBeNull()
+        expect(forwarded(await run('/api/v1/companies/c1/invoices', { headers: { authorization: 'Bearer key' } }))).toBeNull()
+        expect(forwarded(await run('/'))).toBeNull()
+      })
+
+      it('signs none without a session id to bind it to', async () => {
+        state.user = SIGNED_IN
+        state.sessionId = null
+        expect(forwarded(await run('/api/invoices'))).toBeNull()
+      })
+
+      it('never forwards a client-sent verdict', async () => {
+        const headers = { [MFA_ASSURANCE_HEADER]: 'forged.verdict' }
+        state.jwtAal = 'aal2'
+        for (const path of ['/api/invoices', '/api/account/delete', '/']) {
+          const response = await run(path, { headers })
+          expect(forwarded(response), path).toBeNull()
+          expect(response.headers.get('x-middleware-override-headers') ?? '', path).not.toContain(MFA_ASSURANCE_HEADER)
+        }
+      })
     })
   })
 
