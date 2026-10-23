@@ -21,6 +21,9 @@
  *     resolution on the result; it is filed with the årsredovisning
  *     (references/bolagsverket-filing.md § 1, ÅRL 8 kap. 3 §).
  */
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { ISO_DATE_RE } from '@/lib/invariants'
+
 export type ArsredovisningPdfMode = 'draft' | 'signing'
 
 const SIGNING_STATUSES = new Set(['ready_for_signature', 'signed', 'filed', 'registered'])
@@ -33,9 +36,18 @@ export function pdfModeForVersionStatus(status: string | null | undefined): Arsr
   return status && SIGNING_STATUSES.has(status) ? 'signing' : 'draft'
 }
 
-/** A signature date as printed (YYYY-MM-DD), null while unsigned. */
+/**
+ * The day a signature was given (YYYY-MM-DD), null while unsigned. signed_at
+ * is an instant: a signature recorded at 00:30 in Stockholm is still the day
+ * before in UTC, so the Swedish calendar day is read from it, never the first
+ * ten characters of the UTC string. One definition for the PDF and every
+ * iXBRL path; a plain YYYY-MM-DD passes through unchanged.
+ */
 export function signatureDate(signedAt: string | null | undefined): string | null {
-  return signedAt ? signedAt.slice(0, 10) : null
+  if (!signedAt) return null
+  if (ISO_DATE_RE.test(signedAt)) return signedAt
+  const instant = new Date(signedAt)
+  return Number.isNaN(instant.getTime()) ? signedAt.slice(0, 10) : todayIsoStockholm(instant)
 }
 
 export const DRAFT_SIGNATURES_NOTE =

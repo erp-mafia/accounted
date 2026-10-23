@@ -101,6 +101,10 @@ interface ConceptOut {
   kind: 'item' | 'tuple'
   /** Which delrapporter (sheets) list the concept. */
   sections: string[]
+  /** The only values the schema accepts, when the datatype restricts the
+   *  string to an enumeration (the fastställelseintyg sentences and the
+   *  företrädarroll). Absent for free values. */
+  enumeration?: string[]
 }
 
 interface TupleMemberOut {
@@ -284,13 +288,25 @@ function parseTupleModel(
 /**
  * The fastställelseintyg concepts (se-bol-base) come from Bolagsverket's
  * comp-base schema inside the taxonomy package: they are not in any element
- * list. Parse the XSD element declarations directly.
+ * list. Parse the XSD element declarations directly, plus the enumerated
+ * string types several of them use: a value outside such a list is a schema
+ * error at Bolagsverket, so the allowed values travel with the concept and
+ * the FactWriter refuses anything else at generation time.
  */
 async function parseCompBase(concepts: Record<string, ConceptOut>): Promise<void> {
   const zip = await JSZip.loadAsync(readFileSync(PACKAGE_ZIP))
   const file = zip.file(COMP_BASE_XSD_ENTRY)
   if (!file) throw new Error(`${COMP_BASE_XSD_ENTRY} missing from taxonomy package`)
   const xsd = await file.async('string')
+  const enumerations = new Map<string, string[]>()
+  for (const [, typeName, body] of xsd.matchAll(
+    /<xsd:complexType name="([^"]+)">([\s\S]*?)<\/xsd:complexType>/g,
+  )) {
+    const values = [...body.matchAll(/<xsd:enumeration value="([^"]*)"\s*\/>/g)].map(
+      ([, value]) => value,
+    )
+    if (values.length > 0) enumerations.set(`se-comp-base:${typeName}`, values)
+  }
   const decls = xsd.matchAll(/<xsd:element ([^>]*)\/>/g)
   for (const [, attrText] of decls) {
     const attr = (n: string): string | null => {
@@ -301,16 +317,19 @@ async function parseCompBase(concepts: Record<string, ConceptOut>): Promise<void
     if (!name) continue
     const subst = attr('substitutionGroup')
     const periodType = attr('xbrli:periodType')
+    const dataType = attr('type')
+    const enumeration = dataType ? enumerations.get(dataType) : undefined
     concepts[name] = {
       ns: 'se-bol-base',
       label: name,
       abstract: attr('abstract') === 'true',
-      dataType: attr('type'),
+      dataType,
       balance: null,
       periodType:
         periodType === 'duration' || periodType === 'instant' ? periodType : null,
       kind: subst === 'xbrli:tuple' ? 'tuple' : 'item',
       sections: ['faststallelseintyg'],
+      ...(enumeration ? { enumeration } : {}),
     }
   }
 }

@@ -20,6 +20,11 @@ import { generateK2IxbrlDocument, embedKontrollsumma } from '@/lib/bokslut/ixbrl
 import { runPreflightChecks } from '@/lib/bokslut/ixbrl/validate/rules'
 import { validateIxbrlWithArelle } from '@/lib/bokslut/ixbrl/validate/arelle-client'
 import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
+import { certificateRole } from '@/lib/bokslut/ixbrl/certificate-role'
+import {
+  overlayFaststallelseintyg,
+  overlayVersionSignatures,
+} from '@/lib/bokslut/arsredovisning/version-ixbrl'
 import { BolagsverketClient } from './client'
 import type { ExtensionLogger } from '@/lib/extensions/types'
 import type {
@@ -299,31 +304,19 @@ export async function submitArsredovisning(
       { annual_report_version_id: params.annualReportVersionId },
     )
   }
-  input.underskrifter.signers = signatures.map((signature) => {
-    const parts = signature.signer_name.trim().split(/\s+/)
-    return {
-      firstName: parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0],
-      lastName: parts.length > 1 ? parts.at(-1) ?? parts[0] : parts[0],
-      role: signature.role,
-      signedDate: signature.signed_at?.slice(0, 10) ?? null,
-    }
-  })
-  input.underskrifter.harVd = input.underskrifter.signers.some((signer) =>
-    /verkställande direktör|^vd$/i.test(signer.role ?? ''),
-  )
-  input.underskrifter.dateringsdatum = input.underskrifter.signers
-    .map((signer) => signer.signedDate)
-    .filter((date): date is string => date !== null)
-    .sort()
-    .at(-1) ?? null
+  // Every signature was checked above: the version is fully signed.
+  overlayVersionSignatures(input, signatures, { complete: true })
   const normalizeSignerText = (value: string) => value.trim().replace(/\s+/g, ' ').toLocaleLowerCase('sv')
+  // Roles compare in the taxonomy's vocabulary: the filing form offers the
+  // roles Bolagsverket accepts, while the locked roster may say
+  // "Styrelseordförande" or "VD" for the same capacity.
   if (
     normalizeSignerText(input.faststallelseintyg.signerFirstName) !==
       normalizeSignerText(params.undertecknare.fornamn) ||
     normalizeSignerText(input.faststallelseintyg.signerLastName) !==
       normalizeSignerText(params.undertecknare.efternamn) ||
-    normalizeSignerText(input.faststallelseintyg.signerRole) !==
-      normalizeSignerText(params.undertecknare.roll)
+    normalizeSignerText(certificateRole(input.faststallelseintyg.signerRole)) !==
+      normalizeSignerText(certificateRole(params.undertecknare.roll))
   ) {
     throw new BolagsverketSubmissionError(
       'BOLAGSVERKET_CERTIFICATE_SIGNER_MISMATCH',
@@ -331,7 +324,13 @@ export async function submitArsredovisning(
       { annual_report_version_id: params.annualReportVersionId },
     )
   }
-  input.faststallelseintyg.genereratDatum = todayIsoStockholm()
+  await overlayFaststallelseintyg(
+    supabase,
+    params.companyId,
+    params.fiscalPeriodId,
+    input,
+    todayIsoStockholm(),
+  )
   const preflight = runPreflightChecks(input)
   if (!preflight.ok) {
     return { outcome: 'preflight_failed', issues: preflight.issues }

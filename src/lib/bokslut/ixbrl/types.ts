@@ -79,10 +79,11 @@ export interface IxbrlSigner {
 export interface IxbrlArsredovisningInput {
   company: {
     name: string
-    /** Formatted with dash, e.g. "556999-9999". */
+    /** As stored in the company settings ("5569999997" or "556999-9997"):
+     *  the generator writes it as NNNNNN-NNNN everywhere. */
     orgNumber: string
     /** Säte (company_settings.registered_office, never the postal town):
-     *  used in underskrifter and allmänt om verksamheten. */
+     *  tagged ForetagetsSate on the cover and used as ort in underskrifter. */
     registeredOffice: string | null
   }
   period: { start: string; end: string }
@@ -107,6 +108,9 @@ export interface IxbrlArsredovisningInput {
     flerarsPerioder: Array<{ start: string; end: string }>
     egetKapital: EgetKapitalForandring
     resultatdisposition: Resultatdisposition
+    /** The PDF's "Kontrollbalansräkning har upprättats …" statement (ABL 25
+     *  kap.). Optional: versions locked before it existed lack the key. */
+    kontrollbalansrakningUpprattad?: boolean
   }
 
   noter: IxbrlNote[]
@@ -115,15 +119,20 @@ export interface IxbrlArsredovisningInput {
     securitiesPledged: string
     contingentLiabilities: string
     parentCompany: string | null
+    /** Registered share capital behind the Aktiekapital note (ÅRL 5 kap.
+     *  14 §), so its amount can be tagged. Present when that note is;
+     *  optional for versions locked before it existed. */
+    aktiekapitalNot?: { aktiekapital: number; antalAktier: number } | null
   }
   /** Medelantal anställda (FTE) for current + previous year. */
   medelantalAnstallda: { current: number; previous: number | null }
 
   underskrifter: {
     ort: string
-    /** Datering av årsredovisning (the day the board fixed the content).
-     *  Tagged only for fiscal years beginning 2024-07-01 or later (element
-     *  list note on UndertecknandeArsredovisningDatum). */
+    /** Datering av årsredovisning (the day the board fixed the content):
+     *  the earliest signature date, see arsredovisningDatering(). Tagged
+     *  only for fiscal years beginning 2024-07-01 or later (element list
+     *  note on UndertecknandeArsredovisningDatum). */
     dateringsdatum: string | null
     signers: IxbrlSigner[]
     /** True when a VD is among the signers: drives FinansiellRapportList. */
@@ -141,6 +150,8 @@ export interface IxbrlArsredovisningInput {
     /** The företrädare who will sign at Bolagsverket. */
     signerFirstName: string
     signerLastName: string
+    /** Roster role ("Styrelseordförande", "VD", …); written into the
+     *  document in the taxonomy's vocabulary by certificateRole(). */
     signerRole: string
     /** Document generation date: Bolagsverket overwrites at actual signing
      *  (TA §4.4: set today's date). */

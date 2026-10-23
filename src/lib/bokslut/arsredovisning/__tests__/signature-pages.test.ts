@@ -128,6 +128,17 @@ describe('signatureDate', () => {
     expect(signatureDate('2026-03-02T11:00:00.000Z')).toBe('2026-03-02')
     expect(signatureDate(null)).toBeNull()
   })
+
+  it('reads the Swedish day from the instant, not the UTC string', () => {
+    // 00:02 in Stockholm on 23 October (summer time) is 22:02 UTC on the 22nd.
+    expect(signatureDate('2026-10-22T22:02:16.001+00:00')).toBe('2026-10-23')
+    // 00:30 in Stockholm on 2 March (winter time) is 23:30 UTC on the 1st.
+    expect(signatureDate('2026-03-01T23:30:00Z')).toBe('2026-03-02')
+  })
+
+  it('passes a plain date through', () => {
+    expect(signatureDate('2026-03-02')).toBe('2026-03-02')
+  })
 })
 
 describe('årsredovisning PDF, draft render', () => {

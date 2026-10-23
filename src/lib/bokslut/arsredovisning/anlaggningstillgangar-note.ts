@@ -180,6 +180,9 @@ export function buildAnlaggningstillgangarNote(params: {
   const rows = buildRollforward(assets, periodStart, periodEnd)
   if (rows.length === 0) return null
 
+  // A reduction is written with a leading minus, except a zero one: "-0 kr"
+  // reads as a typo in the filed document.
+  const minus = (n: number) => (fmt(n) === fmt(0) ? fmt(0) : `-${fmt(n)}`)
   const lines: string[] = []
   for (const row of rows) {
     const label = CATEGORY_LABELS[row.category] ?? row.category
@@ -188,14 +191,14 @@ export function buildAnlaggningstillgangarNote(params: {
     if (row.tillkommande !== 0)
       lines.push(`  Årets inköp: ${fmt(row.tillkommande)} kr`)
     if (row.avgaende !== 0)
-      lines.push(`  Årets försäljningar/utrangeringar: -${fmt(row.avgaende)} kr`)
+      lines.push(`  Årets försäljningar/utrangeringar: ${minus(row.avgaende)} kr`)
     lines.push(`  Utgående anskaffningsvärde: ${fmt(row.ubAnskaffning)} kr`)
-    lines.push(`  Ingående ackumulerade avskrivningar: -${fmt(row.ibAck)} kr`)
+    lines.push(`  Ingående ackumulerade avskrivningar: ${minus(row.ibAck)} kr`)
     if (row.aretsAvskrivning !== 0)
-      lines.push(`  Årets avskrivningar: -${fmt(row.aretsAvskrivning)} kr`)
+      lines.push(`  Årets avskrivningar: ${minus(row.aretsAvskrivning)} kr`)
     if (row.avgaendeAck !== 0)
       lines.push(`  Återförda avskrivningar på avgående: ${fmt(row.avgaendeAck)} kr`)
-    lines.push(`  Utgående ackumulerade avskrivningar: -${fmt(row.ubAck)} kr`)
+    lines.push(`  Utgående ackumulerade avskrivningar: ${minus(row.ubAck)} kr`)
     lines.push(`  Utgående redovisat värde: ${fmt(row.ubRedovisat)} kr`)
     lines.push('')
   }

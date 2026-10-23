@@ -26,10 +26,24 @@ import type {
   Resultatdisposition,
 } from './types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { arsredovisningDatering } from '@/lib/bokslut/arsredovisning/datering'
+import { signatureDate } from '@/lib/bokslut/arsredovisning/signature-pages'
+import {
+  AGM_DATE_MISSING_WARNING,
+  AGM_DECISION_MISSING_WARNING,
+  NO_SIGNERS_WARNING,
+  NOT_ALL_SIGNED_WARNING,
+} from './input-warnings'
 
-/** TA §4.3.4-4.3.5: "<leverantör> - <produkt>", version "<huvud>.<revision>". */
-export const PROGRAMVARA_NAMN = 'Accounted - Accounted'
-export const PROGRAMVARA_VERSION = '2026.1'
+/**
+ * TA §4.3.4-4.3.5: "<leverantör> - <produkt>", version "<huvud>.<revision>".
+ * The leverantör is the legal entity behind the product (the party that signs
+ * Bolagsverket's agreement); the version is the generator's, registered with
+ * Bolagsverket, which can refuse filings from a version it no longer supports
+ * (felkod 4002), so bump it together with them, not per deploy.
+ */
+export const PROGRAMVARA_NAMN = 'Arcim Technology AB - Accounted'
+export const PROGRAMVARA_VERSION = '1.0'
 
 export interface BuildIxbrlOptions {
   /** Undertecknare of the fastställelseintyg (chosen in the wizard). When
@@ -227,7 +241,9 @@ export async function buildIxbrlInput(
   const dispOverkursfond = dispositionAmounts.share_premium_reserve
   const dispArets = dispositionAmounts.current_year_result
   const dispSumma = dispositionAmounts.total
-  if (proposedDividend > dispSumma) {
+  // Only a dividend that is actually proposed can exceed the free equity: with
+  // none proposed and a negative free equity there is nothing to warn about.
+  if (proposedDividend > 0 && proposedDividend > dispSumma) {
     warnings.push(
       `Föreslagen utdelning (${proposedDividend} kr) överstiger fritt eget kapital (${dispSumma} kr).`,
     )
@@ -259,25 +275,17 @@ export async function buildIxbrlInput(
       firstName,
       lastName,
       role: request.role || null,
-      signedDate: request.signed_at ? request.signed_at.slice(0, 10) : null,
+      signedDate: signatureDate(request.signed_at),
     }
   })
   if (signers.length === 0) {
-    warnings.push(
-      'Inga underskrifter är registrerade: årsredovisningen måste skrivas under av styrelsen (och ev. VD) innan inlämning (kontrollera-kod 1107/1201).',
-    )
+    warnings.push(NO_SIGNERS_WARNING)
   }
   if (signedRequests.length !== activeSignatureRequests.length) {
-    warnings.push('Alla underskriftsförfrågningar är inte signerade ännu.')
+    warnings.push(NOT_ALL_SIGNED_WARNING)
   }
   const harVd = signers.some((signer) => /verkställande direktör|^vd$/i.test(signer.role ?? ''))
-  const latestSignatureDate = signers.reduce<string | null>(
-    (latest, signer) =>
-      signer.signedDate !== null && (latest === null || signer.signedDate > latest)
-        ? signer.signedDate
-        : latest,
-    null,
-  )
+  const dateringsdatum = arsredovisningDatering(signers.map((signer) => signer.signedDate))
 
   // ---- fastställelseintyg ----------------------------------------------------
   // A missing AGM date is NEVER replaced with today's date: it stays null,
@@ -285,14 +293,12 @@ export async function buildIxbrlInput(
   // (mirrors Bolagsverket kontrollera 1103).
   const agmDate = pdfData.forvaltningsberattelse.agm_date
   if (!agmDate) {
-    warnings.push(
-      'Datum för årsstämma saknas: fastställelseintyget kan inte fyllas i (kontrollera-kod 1103).',
-    )
+    warnings.push(AGM_DATE_MISSING_WARNING)
   }
   const agmDispositionOutcome = pdfData.forvaltningsberattelse.agm_disposition_outcome
   const agmDispositionDecision = pdfData.forvaltningsberattelse.agm_disposition_decision
   if (!agmDispositionOutcome) {
-    warnings.push('Årsstämmans beslut om resultatdisposition saknas i fastställelseintyget.')
+    warnings.push(AGM_DECISION_MISSING_WARNING)
   }
   const fallbackSigner = signers[0] ?? { firstName: '', lastName: '', role: null }
   const undertecknare = options.undertecknare ?? {
@@ -304,11 +310,11 @@ export async function buildIxbrlInput(
     warnings.push('Undertecknare av fastställelseintyget saknas (kontrollera-kod 1169).')
   }
 
-  // ---- allmänt om verksamheten: ensure säte is mentioned ---------------------
-  let allmant = pdfData.forvaltningsberattelse.description
-  if (pdfData.company.registered_office && !/säte/i.test(allmant)) {
-    allmant = `${allmant}\n\nBolaget har sitt säte i ${pdfData.company.registered_office}.`
-  }
+  // Allmänt om verksamheten is the PDF's text, word for word: the
+  // fastställelseintyg attests that the electronic document matches the
+  // signed original. Säte is tagged on the cover instead, where the PDF
+  // prints it too.
+  const allmant = pdfData.forvaltningsberattelse.description
 
   // ---- medelantal anställda ---------------------------------------------------
   // Compute BOTH years with the same resolver the PDF note uses: a manual
@@ -371,6 +377,7 @@ export async function buildIxbrlInput(
       flerarsPerioder,
       egetKapital,
       resultatdisposition,
+      kontrollbalansrakningUpprattad: pdfData.forvaltningsberattelse.kontrollbalans_required === true,
     },
     noter: pdfData.noter.map((note) => ({ number: note.number, title: note.title, body: note.body })),
     disclosures: {
@@ -392,11 +399,12 @@ export async function buildIxbrlInput(
             .filter(Boolean)
             .join(' ')
         : null,
+      aktiekapitalNot: built.shareCapital ?? null,
     },
     medelantalAnstallda,
     underskrifter: {
       ort: pdfData.company.registered_office ?? '',
-      dateringsdatum: latestSignatureDate,
+      dateringsdatum,
       signers,
       harVd,
     },

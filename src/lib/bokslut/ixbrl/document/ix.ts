@@ -172,13 +172,23 @@ export class FactWriter {
 
   // ---- non-numeric facts --------------------------------------------------
 
-  /** Plain-text fact; content is escaped. */
+  /**
+   * Plain-text fact; content is escaped. A concept whose schema type is an
+   * enumeration only accepts its listed values (Bolagsverket rejects anything
+   * else as a schema error), so any other value fails generation here.
+   */
   textPlain(
     name: string,
     contextRef: string,
     content: string,
     opts: { id?: string; tupleRef?: string; order?: string; continuedAt?: string } = {},
   ): string {
+    const allowed = mustGetConcept(this.registry, name).enumeration
+    if (allowed && !allowed.includes(content)) {
+      throw new Error(
+        `Fact ${name}: "${content}" is not an allowed value (${allowed.map((value) => `"${value}"`).join(', ')})`,
+      )
+    }
     return this.nonNumeric(name, contextRef, escapeText(content), opts)
   }
 
@@ -189,6 +199,9 @@ export class FactWriter {
     innerXhtml: string,
     opts: { id?: string; continuedAt?: string } = {},
   ): string {
+    if (mustGetConcept(this.registry, name).enumeration) {
+      throw new Error(`Fact ${name}: enumerated concept, emit it with textPlain() so its value is checked`)
+    }
     return this.nonNumeric(name, contextRef, innerXhtml, opts)
   }
 

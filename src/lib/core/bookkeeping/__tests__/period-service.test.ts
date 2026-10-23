@@ -1056,6 +1056,11 @@ describe('createNextPeriod', () => {
     expect(result.period_start).toBe('2025-01-01')
     expect(result.period_end).toBe('2025-12-31')
     expect(result.previous_period_id).toBe('fp-2024')
+    // Swedish like every other door: the name prints in the årsredovisning.
+    const insertCall = supabase.from.mock.results
+      .map((entry) => entry.value as Record<string, ReturnType<typeof vi.fn>>)
+      .find((builder) => builder.insert.mock.calls.length > 0)
+    expect(insertCall!.insert.mock.calls[0][0]).toMatchObject({ name: 'Räkenskapsår 2025' })
   })
 
   it('calculates correct dates for broken (Jul-Jun) fiscal year', async () => {
