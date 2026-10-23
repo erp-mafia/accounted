@@ -297,6 +297,54 @@ describe('gnubok_book_skattekonto_row: staging behaviour', () => {
     expect(mockBokforBatch).not.toHaveBeenCalled()
   })
 
+  it('a rot/rut set-off under kontantmetoden previews its begäran\'s payout lines, the executor\'s own (issue #93)', async () => {
+    const setOff = {
+      ...ROW,
+      transaktionstext: 'Kvittning av utbetalning för rot- och rutarbeten',
+      belopp_skatteverket: 3750,
+    }
+    const leg = {
+      requestId: 'req-1',
+      requestName: 'ROT 2026-03',
+      deductionType: 'rot',
+      amount: 3750,
+      oreRounding: 0,
+      invoiceCount: 0,
+      recognition: {
+        amount: 3750,
+        lines: [
+          { account_number: '3001', debit_amount: 0, credit_amount: 3000, line_description: 'Försäljning faktura 1042, ROT-avdrag' },
+          { account_number: '2611', debit_amount: 0, credit_amount: 750, line_description: 'Utgående moms faktura 1042, ROT-avdrag' },
+        ],
+      },
+    }
+    mockAttach.mockImplementation(async (_supabase, _companyId, rows: (typeof ROW)[]) =>
+      rows.map((r) => ({
+        ...r,
+        booking_suggestion: {
+          account: '1513',
+          label: 'Rot/rut-utbetalning kvittad på skattekontot',
+          rot_rut_payout: { request_id: 'req-1', request_name: 'ROT 2026-03', leg },
+        },
+      })),
+    )
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: setOff })
+    const result = (await single.execute(
+      { skattekonto_transaction_id: ROW.id, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as { preview: { journal_entry: { lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }>; balanced: boolean } } }
+
+    expect(result.preview.journal_entry.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1630', 3750, 0],
+      ['3001', 0, 3000],
+      ['2611', 0, 750],
+    ])
+    expect(result.preview.journal_entry.balanced).toBe(true)
+    // No single counter line to probe: the open begäran is the duplicate guard.
+    expect(mockDirect).not.toHaveBeenCalled()
+  })
+
   it('stages a pending op that requires approval; booking never runs at stage time', async () => {
     const { supabase, enqueue, findCall, calls } = createQueuedMockSupabase()
     enqueue({ data: { ...ROW } })          // row fetch

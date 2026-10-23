@@ -52,6 +52,7 @@ describe('swedishMobileNumbersIn', () => {
     ['0701740605'],
     ['070-174 06 05'],
     ['070-1740605'],
+    ['46701740605'],
   ])('reads %s as the same number', (written) => {
     expect(swedishMobileNumbersIn(`Swish från ${written} tack`)).toEqual([PAYER])
   })
@@ -60,10 +61,20 @@ describe('swedishMobileNumbersIn', () => {
     expect(swedishMobileNumbersIn(`${PAYER}    ${SWISH_ID} Swish ${PAYER}`)).toEqual([PAYER, PAYER])
   })
 
+  // crm#1399: SEB's whole bank text for an incoming Swish, over Enable
+  // Banking and Open Payments alike, is the payer's number with the country
+  // code and no plus.
+  it("reads SEB's Swish text, the number with a bare country code", () => {
+    expect(swedishMobileNumbersIn('46701740605')).toEqual([PAYER])
+  })
+
   it.each([
     ['a Swish id holding the digits', 'Swish 9070174060512345'],
     ['a Swish id starting with the digits', 'Swish 0701740605123456'],
     ['a Swish id starting with 0046 and the digits', '0046701740605123'],
+    ['a Swish id starting with 46 and the digits', '4670174060512345'],
+    ['a Swish id holding 46 and the digits', '1246701740605345'],
+    ['a bare country code with separators', '46 70 174 06 05'],
     ['a longer digit run', '120701740605'],
     ['too few digits', '070 174 06 0'],
     ['a landline', '08-123 456 78'],
@@ -84,6 +95,7 @@ describe('normalizeSwedishMobile', () => {
     ['+46 70 174 06 05'],
     ['+46 (0)70 174 06 05'],
     ['0046 70 174 06 05'],
+    ['46701740605'],
   ])('normalises %s', (stored) => {
     expect(normalizeSwedishMobile(stored)).toBe(PAYER)
   })
@@ -112,6 +124,15 @@ describe('customerPhoneMatches', () => {
 describe('calculateMatchScore with a Swish phone', () => {
   it('lifts an exact amount to the customer tier when the phone matches', () => {
     const { confidence, matchReason } = calculateMatchScore(swishRow(PAYER), openInvoice('a', 'F-2026101', 'Anna Exempel', '070-174 06 05'))
+    expect(confidence).toBe(0.95)
+    expect(matchReason).toBe('Exakt belopp (500 SEK) och kundens telefonnummer matchar')
+  })
+
+  it("lifts an exact amount to the customer tier on SEB's Swish text (crm#1399)", () => {
+    const { confidence, matchReason } = calculateMatchScore(
+      swishRow(PAYER, { description: '46701740605' }),
+      openInvoice('a', 'F-2026101', 'Anna Exempel', '070-174 06 05'),
+    )
     expect(confidence).toBe(0.95)
     expect(matchReason).toBe('Exakt belopp (500 SEK) och kundens telefonnummer matchar')
   })

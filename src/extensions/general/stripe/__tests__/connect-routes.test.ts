@@ -343,4 +343,39 @@ describe('stripe POST /backfill', () => {
       '2025-12-31T23:00:00.000Z',
     )
   })
+
+  it('starts after a hand-entered samlingsverifikat on 1686, at Swedish midnight (crm#1386)', async () => {
+    // The company booked 1-17 October by hand in one voucher dated the 17th,
+    // then fetched from the 17th to catch a payment made at 01:00 on the 18th.
+    // The 17th's rows are in that voucher already: the fetch starts on the 18th.
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+    const service = serviceReturning(
+      { data: [ACTIVE] }, // the connection
+      { data: null }, // no SIE migration
+      { data: [{ id: 'je-13', entry_date: '2026-10-17' }] }, // hand-entered vouchers from the 17th
+      { data: [{ id: 'line-1', journal_entry_id: 'je-13', account_number: '1686' }] }, // its 1686 leg
+    )
+    enqueue({ data: [] }) // cursor update (session client)
+    vi.mocked(syncStripeBalanceTransactions).mockResolvedValue({
+      fetched: 1,
+      imported: 2,
+      duplicates: 0,
+      errors: 0,
+    })
+    const res = await findRoute('POST', '/backfill').handler(
+      makeRequest('POST', { from: '2026-10-17' }),
+      makeContext(supabase),
+    )
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.booked_through).toBe('2026-10-17')
+    expect(body.from).toBe('2026-10-17T22:00:00.000Z')
+    expect(findCalls('stripe_connections', 'update')[0][0]).toEqual({
+      last_balance_txn_synced_at: '2026-10-17T22:00:00.000Z',
+      error_message: null,
+    })
+    expect(service.findCall('journal_entries', 'eq')).toEqual(['company_id', 'company-1'])
+    expect(service.findCalls('journal_entry_lines', 'in')).toContainEqual(['account_number', ['1686']])
+  })
 })

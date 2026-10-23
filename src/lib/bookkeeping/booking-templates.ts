@@ -73,7 +73,18 @@ export interface BookingTemplate {
   deductibility_note_sv?: string
   special_rules_sv?: string
   mcc_codes: number[]
+  /**
+   * Words in the bank text that point at this template. A keyword of more
+   * than three letters may sit inside a word; a shorter one, or one written
+   * with a leading '=', matches a whole word only (keywordMatches).
+   */
   keywords: string[]
+  /**
+   * Words that say the text is something this template is not, matched like
+   * keywords: any one of them keeps the template out, whatever its keywords
+   * or MCC say.
+   */
+  excluded_keywords?: readonly string[]
   risk_level: RiskLevel
   requires_review: boolean
   impact_score: number
@@ -115,6 +126,17 @@ export interface TemplateMatch {
 // ============================================================
 // Template Data
 // ============================================================
+
+/**
+ * Words that make a text a gift. A gift books by who gets it and why (6071
+ * within 300 kr exkl. moms to a customer, 5960 as a reklamgåva, 7690/7699 to
+ * staff, 6993 to a charity: swedish-daily-bookkeeping, B9), never as a meal,
+ * so these keep the meal templates out (accounted#86, #92). 'present' is a
+ * whole word: it sits inside "representation".
+ */
+const GIFT_WORDS: readonly string[] = [
+  'gåva', 'gåvor', 'julklapp', 'presentkort', '=present', '=presenter', '=gift', '=gifts', 'gift card',
+]
 
 export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
   // --- PREMISES (3) ---
@@ -626,7 +648,12 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     // Meal words only. A gift is not a meal: within 300 kr excl. moms it is
     // deductible (6071) and usually carries 25 % moms, so proposing this
     // template (6072, 12 %) for one was wrong twice (accounted#86).
-    keywords: ['representation', 'lunch', 'middag', 'restaurang', 'restaurant', 'kund', 'kundmöte'],
+    // 'representation' counts as a whole word only: a compound is what its
+    // last part names, so "representationsgåva" is a gift and
+    // "representationsmiddag" a meal through 'middag'. 'kund' is gone: it
+    // named no meal, only "kundreskontra" and "gåva till kund" (accounted#92).
+    keywords: ['=representation', 'lunch', 'middag', 'restaurang', 'restaurant', 'kundmöte'],
+    excluded_keywords: GIFT_WORDS,
     risk_level: 'HIGH',
     requires_review: true,
     impact_score: 7,
@@ -656,6 +683,8 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     special_rules_sv: 'Personalfest, teamlunch, fika. Momsen är avdragsgill på ett underlag om högst 300 kr exkl. moms per person och tillfälle (högst 36 kr per person för enbart mat på restaurang, schablon 46 kr vid mat och alkohol).',
     mcc_codes: [5812, 5813, 5814],
     keywords: ['personalfest', 'intern representation', 'teamlunch', 'personallunch', 'fika', 'julfest', 'after work', 'intern lunch'],
+    // A julgåva to staff is a personalkostnad (7690/7699), not a meal.
+    excluded_keywords: GIFT_WORDS,
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 5,
@@ -2490,18 +2519,38 @@ export function stripBankNoise(lowerText: string): string {
   return out.replace(/\s+/g, ' ').trim()
 }
 
+/** Keywords up to this length are matched as whole words; longer ones may sit inside a word ("fjärruppvärmning"). */
+const WHOLE_WORD_KEYWORD_MAX = 3
+
+const NON_WORD = /[^\p{L}\p{N}]+/u
+
+/** The text's words, single-spaced, with a space at each end: a whole word is ` word `. */
+function paddedWordsOf(text: string): string {
+  return ` ${text.split(NON_WORD).filter(Boolean).join(' ')} `
+}
+
+/**
+ * Whether one keyword is in the text. A keyword longer than three letters may
+ * sit inside a word: a Swedish compound puts the thing it names last
+ * ("kundlunch", "fjärruppvärmning") and a card descriptor glues words
+ * together ("SKATTEVERKET", "CLOUDFLARE"), so a word boundary on every
+ * keyword would lose more right matches than wrong ones. A short keyword, or
+ * one written with a leading '=' (the convention of the Inkorg's line
+ * matcher, lib/categories/purchase-category-keywords.ts), matches whole words
+ * only: '=' is for a word that mostly opens a compound naming something else
+ * ("representationsgåva" is a gift, accounted#92).
+ */
+function keywordMatches(searchText: string, paddedWords: string, keyword: string): boolean {
+  const wholeWord = keyword.startsWith('=')
+  const text = wholeWord ? keyword.slice(1) : keyword
+  if (wholeWord || text.length <= WHOLE_WORD_KEYWORD_MAX) return paddedWords.includes(paddedWordsOf(text))
+  return searchText.includes(text)
+}
+
 /**
  * Multi-signal matching against a transaction.
  * Returns top matches sorted by confidence descending.
  */
-/** Keywords up to this length are matched as whole words; longer ones may sit inside a word ("fjärruppvärmning"). */
-const WHOLE_WORD_KEYWORD_MAX = 3
-
-function keywordMatches(searchText: string, searchWords: ReadonlySet<string>, keyword: string): boolean {
-  if (keyword.length <= WHOLE_WORD_KEYWORD_MAX) return searchWords.has(keyword)
-  return searchText.includes(keyword)
-}
-
 export function findMatchingTemplates(
   transaction: Transaction,
   entityType?: EntityType
@@ -2516,7 +2565,8 @@ export function findMatchingTemplates(
   // Strip bank-method noise so e.g. "Överföring via internet" doesn't make
   // the matcher believe the merchant is "Internet" (→ 6230 telecom).
   const searchText = stripBankNoise(rawSearchText)
-  const searchWords = new Set(searchText.split(/[^\p{L}\p{N}]+/u).filter(Boolean))
+  const paddedWords = paddedWordsOf(searchText)
+  const inText = (kw: string) => keywordMatches(searchText, paddedWords, kw.toLowerCase())
 
   for (const t of BOOKING_TEMPLATES) {
     // Filter entity applicability
@@ -2528,6 +2578,10 @@ export function findMatchingTemplates(
     if (t.direction === 'expense' && !isExpense) continue
     if (t.direction === 'income' && !isIncome) continue
     // 'transfer' templates match both directions
+
+    // A text that says it is something else (a gift is not a meal) keeps
+    // the template out, a restaurant MCC included.
+    if (t.excluded_keywords?.some(inText)) continue
 
     let score = 0
 
@@ -2542,7 +2596,7 @@ export function findMatchingTemplates(
     if (t.keywords.length > 0) {
       let matchedKeywords = 0
       for (const kw of t.keywords) {
-        if (keywordMatches(searchText, searchWords, kw.toLowerCase())) {
+        if (inText(kw)) {
           matchedKeywords++
         }
       }

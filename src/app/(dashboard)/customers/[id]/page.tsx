@@ -10,12 +10,15 @@ import { Badge } from '@/components/ui/badge'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction } from '@/components/ui/toast'
 import {
   UNDECRYPTABLE_PERSONAL_NUMBER_MASK,
   maskCustomerPersonalNumber,
 } from '@/lib/customers/mask-personal-number'
 import { AttnLine } from '@/components/ui/attn-line'
 import CustomerForm from '@/components/customers/CustomerForm'
+import { CustomerMergeDialog } from '@/components/customers/CustomerMergeDialog'
+import type { CustomerMergeResult } from '@/lib/customers/merge-customers'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { Lock, Eye, EyeOff } from 'lucide-react'
 import { useLocale } from 'next-intl'
@@ -81,6 +84,7 @@ export default function CustomerDetailPage({
   const t = useTranslations('customer_detail')
   const tParties = useTranslations('parties')
   const tInvoices = useTranslations('invoices')
+  const tCommon = useTranslations('common')
   // The Swedish calendar day the invoices' overdue line reads (lib/invoices/overdue.ts).
   const today = todayIsoStockholm()
   const errorLocale = useLocale() as ErrorLocale
@@ -101,6 +105,7 @@ export default function CustomerDetailPage({
   ) : null
   const [isLoading, setIsLoading] = useState(true)
   const [isEditOpen, setIsEditOpen] = useState(false)
+  const [isMergeOpen, setIsMergeOpen] = useState(false)
   const [isUpdating, setIsUpdating] = useState(false)
   // Full personnummer, fetched on demand and held only for this view. Cleared
   // whenever the customer is refetched so it can never outlive the row it
@@ -199,6 +204,45 @@ export default function CustomerDetailPage({
     }
   }
 
+  async function undoMerge(result: CustomerMergeResult) {
+    for (const card of result.merged) {
+      if (!card.merge_id) continue
+      const response = await fetch('/api/customers/merge/undo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ merge_id: card.merge_id }),
+      })
+      if (!response.ok) {
+        toast({
+          title: t('merge_undo_failed_title'),
+          description: await getResponseErrorMessage(response, 'customer', errorLocale),
+          variant: 'destructive',
+        })
+        return
+      }
+    }
+    void invalidateReferenceData('ref:customers')
+    if (result.survivor.customer_id !== id) router.push(`/customers/${id}`)
+    else fetchCustomer()
+  }
+
+  function handleMerged(result: CustomerMergeResult) {
+    setIsMergeOpen(false)
+    void invalidateReferenceData('ref:customers')
+    toast({
+      title: t('merged_title'),
+      description: t('merged_description', { count: result.totals.invoices, survivor: result.survivor.name }),
+      action: (
+        <ToastAction altText={tCommon('undo')} onClick={() => void undoMerge(result)}>
+          {tCommon('undo')}
+        </ToastAction>
+      ),
+    })
+    // This card was folded into the other one: show the one that stays.
+    if (result.survivor.customer_id !== id) router.push(`/customers/${result.survivor.customer_id}`)
+    else fetchCustomer()
+  }
+
   async function handleDelete() {
     if (!customer) return
     const ok = await confirmAction({
@@ -269,6 +313,17 @@ export default function CustomerDetailPage({
             >
               {!canWrite && <Lock className="h-4 w-4 mr-1" />}
               {t('edit')}
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => setIsMergeOpen(true)}
+              className="text-muted-foreground hover:text-foreground"
+              disabled={!canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : t('merge_tooltip')}
+            >
+              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {t('merge')}
             </Button>
             <Button
               variant="ghost"
@@ -474,6 +529,15 @@ export default function CustomerDetailPage({
       </div>
 
       <DestructiveConfirmDialog {...confirmDialogProps} />
+
+      {isMergeOpen ? (
+        <CustomerMergeDialog
+          open
+          onOpenChange={setIsMergeOpen}
+          subject={{ id: customer.id, name: customer.name, customer_number: customer.customer_number }}
+          onMerged={handleMerged}
+        />
+      ) : null}
 
       {/* Edit dialog */}
       <Dialog open={isEditOpen} onOpenChange={setIsEditOpen}>

@@ -7,7 +7,7 @@
  * declaration's account map, so the box is pinned end to end.
  */
 import { describe, it, expect } from 'vitest'
-import { purchaseSellerRegion, reverseChargeBoxFor } from '../reverse-charge-box'
+import { purchaseSellerRegion, reverseChargeBoxAsk, reverseChargeBoxFor, sellerChargedVat } from '../reverse-charge-box'
 import { generateReverseChargePurchaseLines, reverseChargeKindRuta, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { ACCOUNT_TO_BOX } from '../moms-box-mapping'
 
@@ -85,5 +85,29 @@ describe('purchaseSellerRegion', () => {
   it("does not take a card's default swedish_business as evidence", () => {
     expect(purchaseSellerRegion({ vatNumber: null }, 'swedish_business')).toBeNull()
     expect(purchaseSellerRegion(null, null)).toBeNull()
+  })
+})
+
+// #94: the single agent/API door asks for the box in its own parameter.
+describe('reverseChargeBoxAsk', () => {
+  it('names the reason and the values of the door\'s parameter, in both languages', () => {
+    const v1 = reverseChargeBoxAsk('seller_country_unknown', 'reverse_charge_kind')
+    expect(v1.sv).toMatch(/säljarens land/)
+    expect(v1.sv).toMatch(/reverse_charge_kind "eu_services" .*ruta 21.*"non_eu_services" .*ruta 22.*"eu_goods" .*ruta 20/)
+    expect(v1.en).toMatch(/seller's country/)
+    const mcp = reverseChargeBoxAsk('purchase_kind_unknown', 'vat_treatment')
+    expect(mcp.sv).toMatch(/vat_treatment "reverse_charge_eu_services" \(ruta 21\)/)
+    expect(mcp.sv).not.toMatch(/reverse_charge_kind/)
+  })
+})
+
+// #94: the seller's charge, as the reading states it (breakdown first).
+describe('sellerChargedVat', () => {
+  it('sums the charged breakdown groups, else takes the total VAT, else 0', () => {
+    expect(sellerChargedVat({ vatBreakdown: [{ amount: 10 }, { amount: 2.5 }, { amount: 0 }], totals: { vatAmount: 99 } })).toBe(12.5)
+    expect(sellerChargedVat({ vatBreakdown: [], totals: { vatAmount: 25 } })).toBe(25)
+    expect(sellerChargedVat({ totals: { vatAmount: 0 } })).toBe(0)
+    expect(sellerChargedVat({ totals: { vatAmount: -5 } })).toBe(0)
+    expect(sellerChargedVat(null)).toBe(0)
   })
 })

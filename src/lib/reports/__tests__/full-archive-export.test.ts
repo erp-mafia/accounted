@@ -150,6 +150,7 @@ describe('generateFullArchive', () => {
   let supabase: ReturnType<typeof createQueuedMockSupabase>['supabase']
   let enqueueMany: ReturnType<typeof createQueuedMockSupabase>['enqueueMany']
   let findCall: ReturnType<typeof createQueuedMockSupabase>['findCall']
+  let findCalls: ReturnType<typeof createQueuedMockSupabase>['findCalls']
 
   beforeEach(() => {
     vi.clearAllMocks()
@@ -159,6 +160,7 @@ describe('generateFullArchive', () => {
     installArchiveReadLease(supabase)
     enqueueMany = mock.enqueueMany
     findCall = mock.findCall
+    findCalls = mock.findCalls
   })
 
   it('refuses an archive before reading anything while an import hold exists', async () => {
@@ -864,6 +866,12 @@ describe('generateFullArchive', () => {
       const imports = JSON.parse(await zip.file('sie/imports.json')!.async('text'))
       expect(imports[0].filename).toBe('original.se')
       expect(zip.file('sie/account_mappings.json')).not.toBeNull()
+      // Paged on a unique order, so no page boundary repeats or skips a
+      // mapping past the first 1000 (the #58 class, #96).
+      expect(findCalls('sie_account_mappings', 'order')).toEqual([
+        ['source_account', { ascending: true }],
+        ['id', { ascending: true }],
+      ])
 
       // Every table in the dump contract gets a file, even when empty.
       for (const t of MASTER_DATA_DUMP_TABLES) {

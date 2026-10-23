@@ -19,13 +19,16 @@
  * same-(date,amount) payments do occur (e.g. several identical Swish transfers
  * in one day). The user confirms with force=true after reviewing the candidate.
  *
- * Identity beats content: when both rows come from a feed whose external_id
- * is the provider's own per-booking reference (Stripe's balance-transaction
- * id), two different ids are two different movements however alike they look,
- * so such a pair is never a twin (idsProveDistinctBookings in
- * lib/transactions/external-id.ts). Rows whose ids cannot speak (bank feeds
- * with content-derived ids, file imports, hand-entered rows, a voucher with no
- * transaction behind it) are judged on content exactly as before.
+ * Identity beats content: two rows of ONE feed that its ids prove to be two
+ * entries are never twins, however alike they look (idsProveDistinctBookings
+ * in lib/transactions/external-id.ts): two Stripe balance-transaction ids,
+ * two bank-feed rows booked on different days or carrying two bank ids
+ * (crm#1312: a second Swish batch of the same ticket price), two rows of one
+ * uploaded bank file. The guard is for one movement stored twice, which is a
+ * cross-channel pair (a bank file on top of the feed, a hand-entered row, a
+ * reconnected bank) or a same-feed copy the ids cannot tell apart (a repeated
+ * bank id, an old id format, a second upload); those, and a voucher with no
+ * transaction behind it, are judged on content exactly as before.
  *
  * Mirrors the invoice-side `detectDuplicatePaymentVoucher`
  * (lib/invoices/duplicate-payment-detection.ts), but keyed on an already-booked
@@ -42,6 +45,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { getPrimaryJournalEntryId } from '@/lib/transactions/is-booked'
 import { idsProveDistinctBookings, type TransactionIdentity } from '@/lib/transactions/external-id'
 import { isAccountNumber } from '@/lib/invariants/account-number'
+import { chunk } from '@/lib/utils'
 
 /** Integer öre: representation-agnostic amount key (mirrors the ingest dedup). */
 function toOre(amount: number | string): number {
@@ -288,11 +292,12 @@ const SIBLING_DUPLICATE_DATE_WINDOW_DAYS = 3
  * cash_account_id they must match; a null on either side is treated as
  * compatible (single-account companies and un-backfilled rows behave as before).
  *
- * Identity guard mirrors the ingest identity guard: a sibling from the same
- * provider feed under a different per-booking id is another movement and is
- * skipped (idsProveDistinctBookings). Only feeds whose stored ids are the
- * provider's own references take part; a re-imported bank file or a bank feed
- * with content-derived ids still dedups on content.
+ * Identity guard mirrors the ingest identity guard: a sibling the same feed's
+ * ids prove to be another entry is another movement and is skipped
+ * (idsProveDistinctBookings: another Stripe balance transaction, a bank-feed
+ * row of another booking day or another bank id, another row of the same
+ * uploaded file). A second upload of a bank file, a bank-feed copy the ids
+ * cannot separate, and every cross-channel pair still dedup on content.
  *
  * Currency guard: both sides are `transactions.amount`, each denominated in its
  * own row's `transactions.currency` (which, unlike journal_entry_lines.currency,
@@ -344,7 +349,7 @@ export async function detectBookedDuplicateTransaction(
   // deterministic even at the limit.
   const { data, error } = await supabase
     .from('transactions')
-    .select('id, date, amount, currency, amount_sek, exchange_rate, description, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id')
+    .select('id, date, amount, currency, amount_sek, exchange_rate, description, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
     .eq('company_id', companyId)
     .gte('date', siblingLowDate)
     .lte('date', siblingHighDate)
@@ -367,13 +372,16 @@ export async function detectBookedDuplicateTransaction(
     external_id: string | null
     import_source: string | null
     bank_connection_id: string | null
+    provider_transaction_id: string | null
+    bank_file_import_id: string | null
   }
   const targetAccount = target.cash_account_id ?? null
   const matches = (data as unknown as Row[]).filter((r) => {
     if (excludeTransactionIds.has(r.id)) return false
-    // Identity guard: two rows of the same provider feed under different
-    // per-booking ids are two movements (two Stripe fees of the same öre, two
-    // customers paying the same price), never a copy of one another.
+    // Identity guard: two rows the same feed's ids prove to be two entries are
+    // two movements (two Stripe fees of the same öre, two customers paying the
+    // same price, two Swish payments of one ticket price), never a copy of
+    // one another.
     if (idsProveDistinctBookings(target, r)) return false
     // Currency guard first: `amount` is only comparable to `amount` when both
     // rows are denominated in the same currency. Null normalises to SEK (the
@@ -570,8 +578,9 @@ export function isBankRangeAccount(account: string): boolean {
  * must be on that account's ledger account; otherwise any 19xx leg matches
  * (single-account companies, legacy rows with no cash_account_id).
  *
- * Excludes vouchers already linked to a transaction or an invoice_payment
- * (those are reconciled, not orphans) and storno/correction entries (valid
+ * Excludes vouchers already linked to a transaction (its journal_entry_id, or
+ * a bulk link in transaction_voucher_links) or an invoice_payment (those are
+ * reconciled, not orphans) and storno/correction entries (valid
  * second vouchers, not duplicates): EXCEPT a voucher whose linking transaction
  * itself matches the target (same öre in the same currency, compatible
  * account, date in the window, and not proven another booking by its provider
@@ -725,15 +734,24 @@ export async function detectLedgerDuplicateVoucher(
   // Such a voucher is returned as the twin WITH transaction_id set so the UI
   // can offer match/ignore instead of a blind second booking.
   const entryIds = candidates.map((l) => l.journal_entry.id)
-  const [{ data: txLinks }, { data: payLinks }] = await Promise.all([
+  const [{ data: txLinks }, { data: payLinks }, { data: voucherLinks }] = await Promise.all([
     supabase
       .from('transactions')
-      .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id')
+      .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
       .eq('company_id', companyId)
       .in('journal_entry_id', entryIds),
     supabase
       .from('invoice_payments')
       .select('journal_entry_id, transaction_id')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', entryIds),
+    // Rows bulk-booked onto a voucher, or linked to an existing one, are
+    // anchored here and not in transactions.journal_entry_id. Unseen, such a
+    // voucher read as an orphan, and every same-amount row of the week was
+    // called its duplicate (crm#1312).
+    supabase
+      .from('transaction_voucher_links')
+      .select('transaction_id, journal_entry_id')
       .eq('company_id', companyId)
       .in('journal_entry_id', entryIds),
   ])
@@ -748,6 +766,22 @@ export async function detectLedgerDuplicateVoucher(
     external_id?: string | null
     import_source?: string | null
     bank_connection_id?: string | null
+    provider_transaction_id?: string | null
+    bank_file_import_id?: string | null
+  }
+  // The bulk-linked rows themselves, for the twin test below (a samlingsverifikat
+  // links up to 200 rows, so the id list is fetched in chunks).
+  const bulkLinks = ((voucherLinks ?? []) as { transaction_id: string | null; journal_entry_id: string | null }[])
+    .filter((l): l is { transaction_id: string; journal_entry_id: string } => !!l.transaction_id && !!l.journal_entry_id)
+  const bulkLinkedIds = [...new Set(bulkLinks.map((l) => l.transaction_id))]
+  const bulkLinkedRows = new Map<string, LinkedTxRow>()
+  for (const ids of chunk(bulkLinkedIds, 100)) {
+    const { data: rows } = await supabase
+      .from('transactions')
+      .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
+      .eq('company_id', companyId)
+      .in('id', ids)
+    for (const r of (rows ?? []) as LinkedTxRow[]) bulkLinkedRows.set(r.id, r)
   }
   const linkedTxMatchesTarget = (r: LinkedTxRow): boolean => {
     if (r.id === target.id) return false
@@ -766,11 +800,20 @@ export async function detectLedgerDuplicateVoucher(
   }
 
   const linkedTxByEntry = new Map<string, LinkedTxRow[]>()
+  const addLinked = (entryId: string, r: LinkedTxRow) => {
+    const arr = linkedTxByEntry.get(entryId) ?? []
+    if (!arr.some((x) => x.id === r.id)) arr.push(r)
+    linkedTxByEntry.set(entryId, arr)
+  }
   for (const r of (txLinks ?? []) as LinkedTxRow[]) {
-    if (!r.journal_entry_id) continue
-    const arr = linkedTxByEntry.get(r.journal_entry_id) ?? []
-    arr.push(r)
-    linkedTxByEntry.set(r.journal_entry_id, arr)
+    if (r.journal_entry_id) addLinked(r.journal_entry_id, r)
+  }
+  // A bulk link counts as a link even when its row could not be read: the
+  // voucher is then reconciled to something, never an orphan.
+  for (const l of bulkLinks) {
+    addLinked(l.journal_entry_id, bulkLinkedRows.get(l.transaction_id) ?? {
+      id: l.transaction_id, date: '', amount: 0, currency: null, cash_account_id: null, journal_entry_id: l.journal_entry_id,
+    })
   }
   // Only a payment row that carries a bank transaction means "reconciled to
   // a bank line". A row with transaction_id NULL is a manual / Stripe

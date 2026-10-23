@@ -9,6 +9,7 @@
  * If skatteverket is disabled, the API returns 503 and the UI just sees
  * an empty list: the types remain valid descriptors of the schema.
  */
+import type { RotRutPayoutLeg } from '@/lib/bookkeeping/rot-rut-entries'
 
 /** Row shape for the `skattekonto_transactions` table (DB → app). */
 export interface StoredSkattekontoTransaction {
@@ -73,6 +74,14 @@ export interface SkattekontoBookingSuggestion {
    * counter account then takes the receivable. Absent otherwise.
    */
   ore_rounding?: number
+  /**
+   * Kontantmetodens two steps (#93): the set-off is the payout of this
+   * begäran, received on the skattekonto. Booking it posts the payout's own
+   * lines (buildRotRutPayoutLines: Skatteverket's share as försäljning and
+   * utgående moms, 1513 for any part already on it) and marks the begäran
+   * paid. Absent otherwise.
+   */
+  rot_rut_payout?: { request_id: string; request_name: string; leg: RotRutPayoutLeg }
 }
 
 /**

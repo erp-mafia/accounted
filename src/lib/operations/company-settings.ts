@@ -489,7 +489,7 @@ export const settingsUpdateTaxProfile = defineOperation({
       'aktiekapital and antal_aktier are set or cleared together.',
       'accounting_method=cash turns defer_invoice_booking off (deferred booking is accrual only).',
       'defer_invoice_booking=true: sent customer invoices and registered supplier invoices get no verifikat until they are booked with POST /invoices/{id}/book (or /invoices/bulk-book) and POST /supplier-invoices/{id}/book.',
-      'accounting_method changes freely only while the current fiscal year has no posted verifikat. Later it is a correction of a wrong setting: send accounting_method_correction_reason (else 409 ACCOUNTING_METHOD_CHANGE_MID_YEAR); refused with 409 ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES while an open invoice has no verifikat of its own. The method governs the whole year (BFL 5 kap 2 §); a real move to bokslutsmetoden needs Skatteverket first (ML 7 kap 17 §).',
+      'accounting_method never changes while an open invoice has no verifikat of its own (409 ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES). Otherwise it changes freely only while the current fiscal year has no posted verifikat; later it is a correction of a wrong setting: send accounting_method_correction_reason (else 409 ACCOUNTING_METHOD_CHANGE_MID_YEAR). The method governs the whole year (BFL 5 kap 2 §); a real move to bokslutsmetoden needs Skatteverket first (ML 7 kap 17 §).',
     ],
     example: {
       request: { vat_registered: true, vat_number: 'SE556677889901', moms_period: 'quarterly' },

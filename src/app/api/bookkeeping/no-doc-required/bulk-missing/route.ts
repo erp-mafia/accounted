@@ -5,7 +5,9 @@ import { validateBody } from '@/lib/api/validate'
 import { markEntriesNoDocRequired } from '@/lib/bookkeeping/no-doc-required'
 import {
   MissingUnderlagQueryError,
-  resolveMissingUnderlagEntries,
+  listAllMissingUnderlagIds,
+  listMissingUnderlagPage,
+  type MissingUnderlagFilters,
 } from '@/lib/bookkeeping/missing-underlag'
 
 // A real calendar date in YYYY-MM-DD form. Rejects shaped-but-invalid values
@@ -45,11 +47,13 @@ const BulkMissingSchema = z.object({
  * scalable remedy for the "thousands of saknade underlag after a migration"
  * problem; the per-entry batch route handles selective marking.
  *
- * The missing-doc predicate lives in resolveMissingUnderlagEntries (shared
- * with the journal list's missing_underlag filter) and mirrors
- * countVerifikatMissingDocument: posted + NEEDS_DOC source type, no
- * current-version document_attachment, no anchored supplier-invoice reference,
- * not already exempt.
+ * The missing-doc predicate is the list_verifikat_missing_underlag RPC's
+ * (shared with the journal list's missing_underlag filter), the
+ * verifikat_without_documents predicate behind countVerifikatMissingDocument:
+ * posted + NEEDS_DOC source type, no current-version document_attachment, no
+ * anchored supplier-invoice or issued customer-invoice reference, not already
+ * exempt. A dry run reads only the total; marking reads the ids a page of
+ * 1,000 at a time (crm#1390).
  */
 export const POST = withRouteContext(
   'journal_entry.bulk_missing_no_document_required',
@@ -61,22 +65,20 @@ export const POST = withRouteContext(
     // (or null). No re-validation needed before they reach the query layer.
     const { period_id, reason, dry_run } = validation.data
 
-    let missing
+    const filters: MissingUnderlagFilters = {
+      periodId: period_id ?? null,
+      series: validation.data.series ?? null,
+      dateFrom: validation.data.date_from ?? null,
+      dateTo: validation.data.date_to ?? null,
+      search: validation.data.search ?? null,
+    }
+    let missingIds: string[]
     try {
-      missing = await resolveMissingUnderlagEntries(
-        supabase,
-        companyId,
-        {
-          periodId: period_id ?? null,
-          series: validation.data.series ?? null,
-          dateFrom: validation.data.date_from ?? null,
-          dateTo: validation.data.date_to ?? null,
-          search: validation.data.search ?? null,
-        },
-        // No sorting here, so skip the per-row display_amount computed column
-        // on what can be a full post-import candidate scan.
-        { idOnly: true },
-      )
+      if (dry_run) {
+        const { total } = await listMissingUnderlagPage(supabase, companyId, filters, { limit: 1 })
+        return NextResponse.json({ data: { count: total } })
+      }
+      missingIds = await listAllMissingUnderlagIds(supabase, companyId, filters)
     } catch (err) {
       if (err instanceof MissingUnderlagQueryError) {
         // userMessage is already mapped through getErrorMessage() in the
@@ -86,11 +88,6 @@ export const POST = withRouteContext(
         return NextResponse.json({ error: err.userMessage }, { status: 400 })
       }
       throw err
-    }
-    const missingIds = missing.map((e) => e.id)
-
-    if (dry_run) {
-      return NextResponse.json({ data: { count: missingIds.length } })
     }
 
     if (missingIds.length === 0) {

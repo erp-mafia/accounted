@@ -409,6 +409,7 @@ describe('categoryOfLine', () => {
     ['Julbord 12 pers', 'expense.representation.staff'],
     ['Personalrepresentation', 'expense.representation.staff'],
     ['Representation kundmöte', 'expense.representation.client'],
+    ['Representation', 'expense.representation.client'],
     ['Platsannons Blocket', 'expense.personnel.recruitment'],
     ['Returfrakt', 'expense.goods.freight'],
     ['Trängselskatt september', 'expense.vehicle.congestion_tax'],
@@ -419,6 +420,8 @@ describe('categoryOfLine', () => {
 
   it.each([
     ['Serveringsavgift', 'a whole-word keyword does not fire inside another word'],
+    // accounted#92: a compound is what its last part names; a gift is no client meal.
+    ['Representationsgåva', '"representation" opens the compound, it does not name it'],
     ['Price tag', 'diacritics are kept: "tag" is not "tåg"'],
     ['Advokat och revisor', 'two categories tie on equally specific words'],
     ['', 'an empty line'],

@@ -27,7 +27,14 @@ const ts = require('typescript')
 /* eslint-enable @typescript-eslint/no-require-imports */
 
 /** The module's value exports. A new one fails the build here, never silently in the browser. */
-const KNOWN_EXPORTS = ['conflictCode', 'getErrorEntry', 'hasErrorEntry', 'listErrorCodes']
+const KNOWN_EXPORTS = [
+  'conflictCode',
+  'getErrorEntry',
+  'hasErrorEntry',
+  'listErrorCodes',
+  'SI_CREATE_INVALID_INPUT_REASONS',
+  'siCreateInvalidInputMessages',
+]
 
 /** Fields the browser copy leaves out: read only by server code. */
 const SERVER_ONLY_FIELDS = new Set(['remediation'])
@@ -83,6 +90,7 @@ function browserCatalogSource(source, fileName = 'structured-errors.ts') {
 // scripts/build/structured-errors-browser-loader.js: every entry field but remediation.
 const ROWS = JSON.parse(${JSON.stringify(JSON.stringify(rows))})
 const DB_CONFLICTS = new Set(${JSON.stringify(conflicts)})
+export const SI_CREATE_INVALID_INPUT_REASONS = JSON.parse(${JSON.stringify(JSON.stringify(catalog.SI_CREATE_INVALID_INPUT_REASONS ?? {}))})
 const REGISTRY = {}
 for (const code of Object.keys(ROWS)) {
   const [httpStatus, message_sv, message_en, rest] = ROWS[code]
@@ -99,6 +107,11 @@ export function hasErrorEntry(code) {
 }
 export function listErrorCodes() {
   return Object.keys(REGISTRY)
+}
+export function siCreateInvalidInputMessages(details) {
+  const reason = details == null ? undefined : details.reason
+  if (typeof reason !== 'string' || !Object.hasOwn(SI_CREATE_INVALID_INPUT_REASONS, reason)) return null
+  return SI_CREATE_INVALID_INPUT_REASONS[reason]
 }
 `
 }

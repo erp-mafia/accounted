@@ -213,6 +213,9 @@ const READ_ONLY_RPCS = new Set([
   // The company's skattekonto account (1630, or 2012 for an enskild firma,
   // PH 175): STABLE SQL, the skattekonto booking and sign-off previews read it.
   'company_skattekonto_account',
+  // The customer merge's dry run (crm#1299): STABLE, counts what would move
+  // and answers the merge's refusals; merge_customers itself runs at approval.
+  'customer_merge_preview',
 ])
 
 /**
@@ -855,6 +858,24 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_update_asset: { args: { name: 'Bandsåg' } },
   gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
   gnubok_update_supplier: { args: { city: 'Göteborg' }, rows: { suppliers: { name: 'Leverantören AB', city: null, archived_at: null } } },
+  // Two distinct cards (the synthesized ids would be one and the same, which
+  // the merge refuses); the preview answers what would move.
+  gnubok_merge_customers: {
+    args: { survivor_customer_id: SOME_UUID, merged_customer_ids: ['00000000-0000-4000-8000-000000000002'] },
+    rows: {
+      customers: { personal_number: null },
+      'rpc:customer_merge_preview': {
+        ok: true,
+        dry_run: true,
+        survivor: { customer_id: SOME_UUID, name: 'Kunden AB', customer_number: '120' },
+        merged: [{
+          customer_id: '00000000-0000-4000-8000-000000000002', name: 'Kunden AB', customer_number: '120', merge_id: null,
+          was_archived: false, invoices: 3, sales_orders: 0, recurring_invoice_schedules: 0, deadlines: 0, source_records: 1,
+        }],
+        totals: { invoices: 3, sales_orders: 0, recurring_invoice_schedules: 0, deadlines: 0 },
+      },
+    },
+  },
   // Account dimension rules: the account has no rule for the dimension yet;
   // the update pauses a required rule, which carries no value.
   gnubok_create_dimension_rule: { empty: ['account_dimension_rules'] },

@@ -84,4 +84,50 @@ describe('staged previews that read account roles', () => {
       rounding: 0.25,
     })
   })
+
+  it('a kontantmetod two-step payout shows its revenue and moms as the share (issue #93)', async () => {
+    setTable('journal_entries', {
+      data: {
+        id: 'je-2',
+        entry_date: '2026-09-05',
+        voucher_series: 'A',
+        voucher_number: 180,
+        description: 'ROT utbetalning',
+        status: 'posted',
+        lines: [
+          { account_number: '1930', debit_amount: 3750, credit_amount: 0 },
+          { account_number: '3001', debit_amount: 0, credit_amount: 3000 },
+          { account_number: '2611', debit_amount: 0, credit_amount: 750 },
+        ],
+      },
+    })
+    setTable('rot_rut_payout_requests', {
+      data: [
+        {
+          id: 'req-2',
+          name: 'ROT 2026-09',
+          deduction_type: 'rot',
+          status: 'submitted',
+          requested_total: 3750,
+          decided_total: null,
+          settlement_journal_entry_id: null,
+        },
+      ],
+    })
+
+    await linkVoucher.execute(
+      { journal_entry_id: 'je-2', request_ids: ['req-2'] },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' } as never,
+    )
+    expect(stagedPreview()).toMatchObject({
+      bank_amount: 3750,
+      voucher_1513_credit: 0,
+      share_credit: 3750,
+      expected_total: 3750,
+      rounding: 0,
+    })
+  })
 })

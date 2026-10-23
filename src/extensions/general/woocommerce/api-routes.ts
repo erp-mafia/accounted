@@ -13,6 +13,7 @@ import {
   feedTransactionSyncRoute,
   type FeedConnectorSpec,
 } from '@/lib/feed-sync/connector-routes'
+import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
 import { isWooCommerceConfigured, encryptCredential } from './lib/credentials'
 import { normalizeStoreUrl, testConnectionAndFetchStoreInfo } from './lib/api-client'
 import { buildAuthorizeUrl } from './lib/connect'
@@ -60,6 +61,8 @@ export const woocommerceFeed: FeedConnectorSpec<WooCommerceConnection, WooCommer
   capability: CAPABILITY.woocommerce_sync,
   cursorColumn: 'last_order_synced_at',
   maxBackfillYears: MAX_BACKFILL_YEARS,
+  // Orders book against the payment account, 1686 unless the store maps another.
+  settlementAccounts: [DEFAULT_PAYMENT_ACCOUNT],
   notConnectedMessage: 'Ingen ansluten WooCommerce-butik.',
   statusColumns: STATUS_COLUMNS,
   isConfigured: isWooCommerceConfigured,

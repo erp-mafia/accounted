@@ -21,16 +21,22 @@
  * resolution, vatRutaContributions): a 2615 a company routed to another ruta
  * (vat_box, a chart from a system that used 2615 for reverse charge) is no
  * importmoms here, and an account with momskod import_goods is a base.
+ *
+ * The rättelse doors judge the verifikat a correction leaves (#94): the
+ * corrected lines of a storno + rättelse (correctEntry) and the kept plus the
+ * added lines of an inline rättelse (strikeJournalEntryLines), never the
+ * replacement lines alone. A rättelse that takes importmoms out passes.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { VatDeclarationRutor } from '@/types'
 import { ACCOUNT_RUTA, isMomsAccount } from '@/lib/reports/vat-declaration'
 import { fetchDynamicVatAccounts, type DynamicVatAccounts } from '@/lib/reports/vat-revenue-accounts'
 import { createLogger } from '@/lib/logger'
+import { IMPORT_VAT_WITHOUT_BASE, ImportVatWithoutBaseError } from './errors'
 
 const log = createLogger('bookkeeping/import-vat-base')
 
-export const IMPORT_VAT_WITHOUT_BASE_CODE = 'IMPORT_VAT_WITHOUT_BASE'
+export const IMPORT_VAT_WITHOUT_BASE_CODE = IMPORT_VAT_WITHOUT_BASE
 
 const IMPORT_VAT_RUTOR: ReadonlySet<keyof VatDeclarationRutor> = new Set(['ruta60', 'ruta61', 'ruta62'])
 
@@ -104,9 +110,30 @@ export interface ImportVatWithoutBaseRefusal {
   messageEn: string
 }
 
-/** The refusal's sentence, naming the accounts. */
-export function importVatWithoutBaseMessages(accounts: readonly string[]): { messageSv: string; messageEn: string } {
+/**
+ * The refusal's sentence, naming the accounts. `door` 'correction' words it
+ * for a rättelse, whose lines come from the person, not from a mall.
+ */
+export function importVatWithoutBaseMessages(
+  accounts: readonly string[],
+  door: 'booking' | 'correction' = 'booking',
+): { messageSv: string; messageEn: string } {
   const list = accounts.join(', ')
+  if (door === 'correction') {
+    return {
+      messageSv:
+        `Efter rättelsen skulle verifikationen ha importmoms på ${list} (ruta 60-62) men inget ` +
+        'beskattningsunderlag i ruta 50, och då tar Skatteverket inte emot momsdeklarationen. Är köpet ' +
+        'en import av varor från ett land utanför EU: ta med underlaget på 4545, 4546 eller 4547 i ' +
+        'rättelsen. Är det ett köp av varor från ett annat EU-land eller av tjänster från utlandet är ' +
+        'det omvänd skattskyldighet: rätta den utgående momsen till 2614, 2624 eller 2634.',
+      messageEn:
+        `After the correction the voucher would carry import VAT on ${list} (boxes 60-62) but no taxable ` +
+        'amount in box 50, and Skatteverket refuses such a VAT return. For an import of goods from outside ' +
+        'the EU, include the taxable amount on 4545, 4546 or 4547 in the correction. For goods from another ' +
+        'EU country or services from abroad it is reverse charge: correct the output VAT to 2614, 2624 or 2634.',
+    }
+  }
   return {
     messageSv:
       `Verifikationen har importmoms på ${list} (ruta 60-62) men inget beskattningsunderlag i ruta 50, ` +
@@ -150,4 +177,39 @@ export async function refuseImportVatWithoutBase(
     details: { import_vat_accounts: accounts },
     ...importVatWithoutBaseMessages(accounts),
   }
+}
+
+/**
+ * Verifikat whose 26xx lines are balances moved, not an affärshändelse's moms:
+ * an opening balance's ingående saldon and a momsredovisning's clearing. A
+ * credit on 2615 there needs no ruta 50 line beside it.
+ */
+const BALANCE_SOURCE_TYPES: ReadonlySet<string> = new Set(['opening_balance', 'vat_settlement'])
+
+/**
+ * The rättelse doors' guard (#94): refuses the lines a correction leaves in
+ * the verifikat when they book importmoms without its base, worded for a
+ * rättelse. `sourceType` is the corrected verifikat's own.
+ */
+export async function refuseCorrectedImportVatWithoutBase(
+  supabase: SupabaseClient,
+  companyId: string,
+  sourceType: string | null | undefined,
+  correctedLines: readonly ImportVatShapeLine[],
+): Promise<ImportVatWithoutBaseRefusal | null> {
+  if (sourceType && BALANCE_SOURCE_TYPES.has(sourceType)) return null
+  const refusal = await refuseImportVatWithoutBase(supabase, companyId, correctedLines)
+  if (!refusal) return null
+  return { ...refusal, ...importVatWithoutBaseMessages(refusal.details.import_vat_accounts, 'correction') }
+}
+
+/** The same guard for a door that throws: ImportVatWithoutBaseError, a typed bookkeeping error. */
+export async function assertCorrectedImportVatBase(
+  supabase: SupabaseClient,
+  companyId: string,
+  sourceType: string | null | undefined,
+  correctedLines: readonly ImportVatShapeLine[],
+): Promise<void> {
+  const refusal = await refuseCorrectedImportVatWithoutBase(supabase, companyId, sourceType, correctedLines)
+  if (refusal) throw new ImportVatWithoutBaseError(refusal.details.import_vat_accounts, refusal.messageSv)
 }

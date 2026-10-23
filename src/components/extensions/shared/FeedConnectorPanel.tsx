@@ -25,6 +25,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
+import { ToastAction, type ToastActionElement } from '@/components/ui/toast'
 import { useFormat } from '@/lib/hooks/use-format'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { PanelRequestOptions, PanelRequestResult } from '@/lib/browser/panel-request'
@@ -188,26 +189,34 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
   /**
    * Same counts, two entry points: "Synka nu" and the backfill. Exactly one
    * toast per outcome: TOAST_LIMIT is 1, so a second toast in the same tick
-   * would evict the first.
+   * would evict the first. `booked` is the backfill's sentence about the days
+   * the books already held, with the action that fetches them anyway.
    */
-  function showSyncOutcome(payload: P | null | undefined, doneTitle: string, failedTitle: string) {
+  function showSyncOutcome(
+    payload: P | null | undefined,
+    doneTitle: string,
+    failedTitle: string,
+    booked?: { note: string; action: ToastActionElement },
+  ) {
     onSyncPayload?.(payload ?? null)
     const outcome = summarize(payload ?? null)
     const note = syncNote?.(outcome)
     const withNote = (text: string) => (note ? `${text} ${note}` : text)
+    const withBooked = (text?: string) => (booked ? (text ? `${text} ${booked.note}` : booked.note) : text)
+    const action = booked?.action
     if (outcome.reason === 'revoked') {
       toast({ title: failedTitle, description: t('sync_revoked'), variant: 'destructive' })
     } else if (outcome.reason === 'partial') {
-      toast({ title: t('sync_partial_title'), description: withNote(t('sync_partial', outcome.values)) })
+      toast({ title: t('sync_partial_title'), description: withBooked(withNote(t('sync_partial', outcome.values))), action })
     } else if (outcome.reason === 'empty') {
-      toast({ title: doneTitle, description: t('sync_done_empty') })
+      toast({ title: doneTitle, description: withBooked(t('sync_done_empty')), action })
     } else if (outcome.reason === 'errors') {
-      toast({ title: doneTitle, description: withNote(t('sync_done_feed_errors', outcome.values)) })
+      toast({ title: doneTitle, description: withBooked(withNote(t('sync_done_feed_errors', outcome.values))), action })
     } else if (outcome.reason === 'feed') {
-      toast({ title: doneTitle, description: withNote(t('sync_done_feed', outcome.values)) })
+      toast({ title: doneTitle, description: withBooked(withNote(t('sync_done_feed', outcome.values))), action })
     } else {
       // The sync ran, but the answer never said what it did. Claim only that.
-      toast({ title: doneTitle })
+      toast({ title: doneTitle, description: withBooked(), action })
     }
   }
 
@@ -236,7 +245,11 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
     }
   }
 
-  async function handleBackfill(connectionId: string) {
+  /**
+   * includeBooked fetches the days the books already hold too (crm#1386):
+   * only from the toast that named them, never by default.
+   */
+  async function handleBackfill(connectionId: string, includeBooked = false) {
     if (busyId) return
     const from = backfillFrom[connectionId] ?? ''
     if (!from) {
@@ -250,9 +263,9 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
     setBusyId(connectionId)
     setBackfillingId(connectionId)
     try {
-      const result = await request<P>({
+      const result = await request<P & { booked_through?: string | null }>({
         url: `${base}/backfill`,
-        body: { from, connection_id: connectionId },
+        body: { from, connection_id: connectionId, ...(includeBooked ? { include_booked: true } : {}) },
         locale,
         timeoutMs: props.syncTimeoutMs,
       })
@@ -264,7 +277,25 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
         })
         return
       }
-      showSyncOutcome(result.data, t('backfill_done_title'), tf('backfill_failed_title'))
+      const bookedThrough = result.data?.booked_through
+      showSyncOutcome(
+        result.data,
+        t('backfill_done_title'),
+        tf('backfill_failed_title'),
+        bookedThrough
+          ? {
+              note: tf('backfill_booked_through', { date: formatDateLong(bookedThrough) }),
+              action: (
+                <ToastAction
+                  altText={tf('backfill_include_booked')}
+                  onClick={() => void handleBackfill(connectionId, true)}
+                >
+                  {tf('backfill_include_booked')}
+                </ToastAction>
+              ),
+            }
+          : undefined,
+      )
       await loadStatus()
     } finally {
       setBackfillingId(null)
@@ -503,7 +534,10 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                 <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2 border-t border-border pt-4">
                   <p className="flex items-center gap-2 text-sm font-medium">
                     {t('backfill_title')}
-                    <HelpPopover className="shrink-0">{t('backfill_description')}</HelpPopover>
+                    <HelpPopover className="shrink-0">
+                      <p>{t('backfill_description')}</p>
+                      <p className="mt-2">{tf('backfill_booked_note')}</p>
+                    </HelpPopover>
                   </p>
                   <div className="flex flex-wrap items-center gap-3">
                     <Input

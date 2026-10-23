@@ -18,8 +18,10 @@ import {
 import { backfillStandardBASAccounts } from '@/lib/bookkeeping/account-backfill'
 import { resolvePeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
+import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import { findKontantmetodCarry } from '@/lib/bookkeeping/kontantmetod-carry-guard'
+import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import {
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
@@ -166,6 +168,31 @@ async function linkCorrectionDraft(
 type OriginalWithLines = JournalEntry & { lines?: JournalEntryLine[] | null }
 
 /**
+ * The fiscal period a corrected verifikat dated `date` lands in, classified
+ * with the same two layers the DB triggers enforce (company lock date, then
+ * the covering period's is_closed/locked_at), so a closed, locked or
+ * uncovered date answers with a typed Swedish refusal before anything is
+ * written instead of a raw trigger rejection. Periods are never created here.
+ */
+async function resolveCorrectionPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  date: string,
+): Promise<string> {
+  const target = await resolvePeriodStatusForDate(supabase, companyId, date)
+  if (target.status === 'closed') {
+    throw new TargetPeriodClosedError(date)
+  }
+  if (target.status === 'locked') {
+    throw new TargetPeriodLockedError(date, target.lock_date)
+  }
+  if (!target.period_id) {
+    throw new NoOpenPeriodForDateError(date)
+  }
+  return target.period_id
+}
+
+/**
  * Correct an existing posted journal entry using the storno method.
  *
  * The storno (reversal) is always created in the original entry's period and
@@ -174,7 +201,15 @@ type OriginalWithLines = JournalEntry & { lines?: JournalEntryLine[] | null }
  * `options.newFiscalPeriodId` let a caller re-book it elsewhere: used to move
  * a verifikation booked on the wrong year to its correct period (see
  * recordateEntry). When the date/period is the correction, identical lines are
- * allowed (the move itself is the meaningful change).
+ * allowed (the move itself is the meaningful change). A `newEntryDate` without
+ * `newFiscalPeriodId` resolves its period here, refused when it is closed,
+ * locked or uncovered (the ändringsverifikation dialog's date field).
+ *
+ * Lines that are the original with debit and credit swapped are refused
+ * (MeaninglessCorrectionError 'negates_original') unless `sidesSwapped` says
+ * the original itself was booked the wrong way round: the storno already
+ * reverses the original, so the same reversal again as the rättelse leaves
+ * every account at minus the original (crm#1397).
  *
  * Returns: { reversal, corrected } - the two new entries created
  */
@@ -209,6 +244,12 @@ export async function correctEntry(
      * layer of storno+rättelse.
      */
     allowDeepChain?: boolean
+    /**
+     * The original was booked with debit and credit swapped, and the
+     * corrected lines book it the right way round. Without it, lines that
+     * negate the original are refused: to only cancel a verifikat, reverse it.
+     */
+    sidesSwapped?: boolean
     /** Posting port: the events of the two new verifikat (CorrectionBusinessEvents). */
     businessEvents?: CorrectionBusinessEvents
   }
@@ -286,11 +327,23 @@ export async function correctEntry(
 
   const originalLines = (original.lines as JournalEntryLine[]) || []
 
+  // A second reversal is never a rättelse, whatever date it carries: the
+  // storno below already takes the original out. Checked before the date's
+  // period is resolved, so the refusal names the lines, not the date.
+  if (!options?.sidesSwapped && negatesOriginal(correctedLines, originalLines)) {
+    throw new MeaninglessCorrectionError('negates_original')
+  }
+
   // Resolve where the corrected entry lands. Defaults to the original's own
   // date/period (a plain line-correction). A caller may override either to
-  // re-book the entry in another period (recordate / wrong-year fix).
+  // re-book the entry in another period (recordate / wrong-year fix); a date
+  // alone finds its own period.
   const correctedDate = options?.newEntryDate ?? original.entry_date
-  const correctedPeriodId = options?.newFiscalPeriodId ?? original.fiscal_period_id
+  const correctedPeriodId =
+    options?.newFiscalPeriodId ??
+    (correctedDate !== original.entry_date
+      ? await resolveCorrectionPeriod(supabase, companyId, correctedDate)
+      : original.fiscal_period_id)
   const dateOrPeriodChanged =
     correctedDate !== original.entry_date || correctedPeriodId !== original.fiscal_period_id
 
@@ -299,6 +352,13 @@ export async function correctEntry(
   // the change (moving a verifikation to the right year keeps the same lines).
   if (!dateOrPeriodChanged && isIdenticalToOriginal(correctedLines, originalLines)) {
     throw new MeaninglessCorrectionError('identical_to_original')
+  }
+
+  // Importmoms keeps its ruta 50 base in the corrected verifikat (#94), as at
+  // the booking doors. A pure move (recordate: the same lines on another date)
+  // writes no new line and is not judged. Refused before anything is written.
+  if (!(dateOrPeriodChanged && isIdenticalToOriginal(correctedLines, originalLines))) {
+    await assertCorrectedImportVatBase(supabase, companyId, original.source_type, correctedLines)
   }
 
   // When re-booking elsewhere, validate the corrected date falls within the
@@ -701,20 +761,8 @@ export async function recordateEntry(
     throw new MeaninglessCorrectionError('no_date_change')
   }
 
-  // Classify the target date using the same two-layer logic the DB triggers
-  // enforce (company lock date + period is_closed/locked_at), so we surface a
-  // clear Swedish message instead of a raw trigger rejection.
-  const target = await resolvePeriodStatusForDate(supabase, companyId, newDate)
-  if (target.status === 'closed') {
-    throw new TargetPeriodClosedError(newDate)
-  }
-  if (target.status === 'locked') {
-    throw new TargetPeriodLockedError(newDate, target.lock_date)
-  }
-  if (!target.period_id) {
-    // 'open' but no covering period: we do not auto-create periods on a fix.
-    throw new NoOpenPeriodForDateError(newDate)
-  }
+  // Classify the target date before anything is written (resolveCorrectionPeriod).
+  const targetPeriodId = await resolveCorrectionPeriod(supabase, companyId, newDate)
 
   // Copy the original lines verbatim: they were correct; only the date was
   // wrong. correctEntry rebuilds the storno from the original anyway.
@@ -732,7 +780,7 @@ export async function recordateEntry(
     copiedLines,
     {
       newEntryDate: newDate,
-      newFiscalPeriodId: target.period_id,
+      newFiscalPeriodId: targetPeriodId,
       // Hand the entry we already fetched (with lines) to correctEntry so it
       // doesn't re-read the same row.
       preloadedOriginal: original as OriginalWithLines,

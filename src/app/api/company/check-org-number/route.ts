@@ -2,9 +2,15 @@ import { NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { validateBody } from '@/lib/api/validate'
+import { CheckOrgNumberBodySchema } from '@/lib/api/schemas'
 
 /**
- * GET /api/company/check-org-number?org_number=XXXXXXXXXX
+ * POST /api/company/check-org-number  body: { org_number }
+ *
+ * A read sent as POST: a sole trader's org number is the owner's personnummer,
+ * and a query string is copied into request logs and error telemetry. The GET
+ * form it replaced had no caller outside the onboarding journey.
  *
  * Returns `{ data: { exists, companies } }`: matches among the CURRENT USER's
  * own companies (`{ id, name }[]`), scoped by RLS. Nothing about other
@@ -23,20 +29,17 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
  * still matches a stored 10-digit canonical. Returns no matches for malformed
  * input: the create action rejects that separately as `org_number_invalid`.
  */
-export async function GET(request: Request) {
+export async function POST(request: Request) {
   // requireAuth() (not a raw getUser()) so MFA AAL2 is enforced on hosted before
   // we run the account-scoped lookup. The returned client carries the caller's
   // RLS context, which is what scopes the companies SELECT below.
   const { supabase, error: authError } = await requireAuth()
   if (authError) return authError
 
-  const url = new URL(request.url)
-  const raw = url.searchParams.get('org_number') ?? ''
-  if (!raw) {
-    return NextResponse.json({ error: 'org_number is required' }, { status: 400 })
-  }
+  const validation = await validateBody(request, CheckOrgNumberBodySchema)
+  if (!validation.success) return validation.response
 
-  const canonical = normalizeOrgNumber(raw)
+  const canonical = normalizeOrgNumber(validation.data.org_number)
   if (!canonical) {
     // Malformed input is not a duplicate of anything by definition.
     return NextResponse.json({ data: { exists: false, companies: [] } })

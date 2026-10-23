@@ -1097,6 +1097,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             underlagHref={
               preview.booked ? `/api/salary/runs/${id}/underlag/pdf` : undefined
             }
+            benefitValues={roundOre(employees.reduce((sum, sre) => sum + (sre.benefit_values ?? 0), 0))}
           />
         )}
       </div>

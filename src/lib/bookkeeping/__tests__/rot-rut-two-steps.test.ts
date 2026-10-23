@@ -230,7 +230,7 @@ describe('a kreditfaktura of a kontantmetod ROT/RUT invoice', () => {
     })
 
   it("reverses only the customer's share, back onto 1510, while Skatteverket's share is unbooked", () => {
-    const lines = buildCreditNoteLines(creditNote(), 'aktiebolag', 'A-42', { deductionUnbooked: true })
+    const lines = buildCreditNoteLines(creditNote(), 'aktiebolag', 'A-42', { deductionBookedSek: 0 })
     expect(balanced(lines)).toBe(true)
     expect(netByAccount(lines)).toEqual({ '3001': -15400, '2611': -3850, '1510': 19250 })
     // Together with the payment entry nothing is left on any account but the refund owed.
@@ -241,5 +241,29 @@ describe('a kreditfaktura of a kontantmetod ROT/RUT invoice', () => {
   it('reverses it all, 1513 included, once the payout booked the share (and without the flag)', () => {
     const lines = buildCreditNoteLines(creditNote(), 'aktiebolag', 'A-42')
     expect(netByAccount(lines)).toEqual({ '3001': -18400, '2611': -4600, '1510': 19250, '1513': 3750 })
+    // The whole share booked by the payout is exactly the full reversal.
+    expect(buildCreditNoteLines(creditNote(), 'aktiebolag', 'A-42', { deductionBookedSek: 3750 })).toEqual(lines)
+    expect(buildCreditNoteLines(creditNote(), 'aktiebolag', 'A-42', { deductionBookedSek: null })).toEqual(lines)
+  })
+
+  it('after a partial payout reverses only what the payout booked of the share, 1513 for what is owed back (issue #93)', () => {
+    // Beslut: 3 000 of the 3 750 requested; the payout booked 2 400 revenue and 600 moms.
+    const lines = buildCreditNoteLines(creditNote(), 'aktiebolag', 'A-42', { deductionBookedSek: 3000 })
+    expect(balanced(lines)).toBe(true)
+    expect(netByAccount(lines)).toEqual({ '3001': -17800, '2611': -4450, '1510': 19250, '1513': 3000 })
+    // Payment, payout and credit: no revenue or moms left, the refund owed to
+    // the customer on 1510 and what Skatteverket paid owed back on 1513.
+    const payout = buildDeductionRecognitionLines(invoice(), 'aktiebolag', 3000)!.lines
+    const net = netByAccount([
+      ...cash(invoice()),
+      { account_number: '1930', debit_amount: 3000, credit_amount: 0 },
+      ...payout,
+      ...lines,
+    ])
+    expect(net).toEqual({ '1930': -22250, '3001': 0, '2611': 0, '1510': 19250, '1513': 3000 })
+    // The old rule reversed the whole share: the refused 750 kr, 600 revenue and 150 moms, too much.
+    const whole = netByAccount([...cash(invoice()), ...payout, ...buildCreditNoteLines(creditNote(), 'aktiebolag', 'A-42')])
+    expect(whole['2611']).toBe(-150)
+    expect(whole['3001']).toBe(-600)
   })
 })

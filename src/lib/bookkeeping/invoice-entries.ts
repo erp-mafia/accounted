@@ -40,6 +40,7 @@ import {
   buildInvoiceCashLines,
   buildInvoiceDescription,
   buildInvoiceRegistrationLines,
+  creditNoteDeductionSplit,
   headerToSekOrThrow,
   installmentOutputVat,
   invoiceCashBankSek,
@@ -398,8 +399,8 @@ export async function createCreditNoteJournalEntry(
   originalVoucherRef?: string,
   /** What the door saw, read by the posting port only while POSTING_EVENTS is on. */
   posting?: () => InvoicePostingContext,
-  /** See buildCreditNoteLines' options.deductionUnbooked. */
-  options: { deductionUnbooked?: boolean } = {},
+  /** See buildCreditNoteLines' options.deductionBookedSek. */
+  options: { deductionBookedSek?: number | null } = {},
 ): Promise<JournalEntry | null> {
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, creditNote.invoice_date)
   if (!fiscalPeriodId) {
@@ -408,9 +409,9 @@ export async function createCreditNoteJournalEntry(
   }
 
   const lines = buildCreditNoteLines(creditNote, entityType, originalVoucherRef, options)
-  // A credit of the customer's share alone takes back only that moms.
-  const customerShareOnly =
-    !!options.deductionUnbooked && splitDeductionShare(creditNote.items, creditNote.currency) !== null
+  // A credit of part of the share (the customer's, and what a payout booked)
+  // takes back only that moms.
+  const partOfShare = creditNoteDeductionSplit(creditNote, options.deductionBookedSek) !== null
 
   const baseDescription = buildInvoiceDescription('Kreditfaktura', creditNote.invoice_number, customerName, creditNote.id)
   const input: CreateJournalEntryInput = {
@@ -433,7 +434,7 @@ export async function createCreditNoteJournalEntry(
     event: () => {
       const vat = Math.abs(installmentOutputVat(input.lines))
       return creditNoteBusinessEvent(
-        customerShareOnly ? { ...creditNote, vat_amount: vat, vat_amount_sek: vat } : creditNote,
+        partOfShare ? { ...creditNote, vat_amount: vat, vat_amount_sek: vat } : creditNote,
         posting?.(),
       )
     },

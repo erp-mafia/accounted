@@ -266,6 +266,11 @@ export function menuTrail(route: string, input: UiMapInput): string[] | null {
   return placeForRoute(route, visibleMenu(input).places, input.labels)
 }
 
+/** Sidebar pages whose contents the settings search describes (settings_nav keywords_*). */
+const SIDEBAR_PAGE_KEYWORDS: ReadonlyArray<{ href: string; keywordsKey: string }> = [
+  { href: '/import', keywordsKey: 'keywords_import' },
+]
+
 export interface RenderUiGroundingInput extends UiMapInput {
   /** The pathname the user asked from, as AskConsole sends it. */
   route?: string | null
@@ -293,6 +298,14 @@ export function renderUiGrounding(input: RenderUiGroundingInput): string {
     const head = `${labels.nav(section.labelKey)} (${section.href})`
     const subs = (section.sub ?? []).map((s) => `${labels.nav(s.labelKey)} (${s.href})`)
     lines.push(subs.length > 0 ? `- ${head}: ${subs.join(', ')}` : `- ${head}`)
+  }
+  // The menu names a page, not what it takes: told only "Importera/Exportera",
+  // the assistant said there was no customer CSV import (PH 204, #96). These
+  // are the pages the settings search links to (useSettingsNavItems), with
+  // the same keywords it searches.
+  for (const { href, keywordsKey } of SIDEBAR_PAGE_KEYWORDS) {
+    const place = places.find((p) => p.href === href)
+    if (place) lines.push(`Sidan ${place.trail.join(' → ')} (${href}) innehåller: ${labels.settings(keywordsKey)}.`)
   }
   lines.push(
     `${labels.nav('settings')} öppnas från användarmenyn längst ned i sidomenyn. Sektionerna (grupp → sektion) och vad de innehåller:`,

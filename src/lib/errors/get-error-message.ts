@@ -25,7 +25,7 @@ import {
   describeMissingInvoicePaymentAccount,
   isInvoicePaymentAccountCurrency,
 } from '@/lib/cash-accounts/invoice-payment-accounts'
-import { conflictCode, getErrorEntry, hasErrorEntry } from './structured-errors'
+import { conflictCode, getErrorEntry, hasErrorEntry, siCreateInvalidInputMessages } from './structured-errors'
 import { FOREIGN_KEY_REFUSAL_CODES, foreignKeyRefusal } from './foreign-key-refusal'
 import { ACCOUNT_NUMBER_MESSAGE } from '@/lib/invariants/account-number'
 
@@ -689,6 +689,14 @@ export function getErrorMessage(
         }
       }
 
+      // Say which rule refused the supplier invoice: the registry's one
+      // sentence for every reason left a customer unable to tell what to
+      // change (crm#1377, #96). Both locales, before the English shortcut.
+      if (structured.code === 'SI_CREATE_INVALID_INPUT') {
+        const reason = siCreateInvalidInputMessages(structured.details)
+        if (reason) return locale === 'en' ? reason.message_en : reason.message_sv
+      }
+
       // A refused re-date names each blocker (a verifikat, a lock date, a
       // filed declaration) in Swedish domain copy, and the blockers are what
       // the user can act on: an English UI gets the English lead with them,
@@ -870,6 +878,9 @@ export function getErrorMessage(
         }
         if (details?.reason === 'identical_to_original') {
           return 'Rättelsen är identisk med originalverifikationen: inget har ändrats.'
+        }
+        if (details?.reason === 'negates_original') {
+          return 'Rättelsen är originalet med debet och kredit omkastade. Stornon nollställer redan originalet, så rättelsen skulle vända beloppen en gång till. Vill du bara ta bort verifikationen: använd Återför (storno). En rättelse innehåller de rader som borde ha bokförts, och omkastade sidor är bara rätt om originalet hade debet och kredit omkastade.'
         }
         return 'Rättelsen saknar ekonomisk innebörd: varje konto netto till noll. En rättelse måste beskriva en faktisk affärshändelse (BFL 5 kap. 5 §).'
       }

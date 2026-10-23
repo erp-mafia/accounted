@@ -221,6 +221,8 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_stage_across_companies:          'companies:read',
   gnubok_connect_bank:                    'companies:read',
   gnubok_sync_bank:                       'transactions:write',
+  gnubok_list_feed_connections:           'transactions:read',
+  gnubok_backfill_feed:                   'transactions:write',
   gnubok_connect_skatteverket:            'companies:read',
   gnubok_connect_migration:               'companies:read',
   gnubok_get_company_settings:            'companies:read',
@@ -270,6 +272,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_get_customer:                    'customers:read',
   gnubok_create_customer:                 'customers:write',
   gnubok_update_customer:                 'customers:write',
+  gnubok_merge_customers:                 'customers:write',
   // Articles (artikelregister)
   gnubok_list_articles:                   'articles:read',
   gnubok_create_article:                  'articles:write',

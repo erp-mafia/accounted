@@ -9,6 +9,7 @@ import {
   reconcileStableExternalIds,
   FALLBACK_DESCRIPTION,
   idsProveDistinctBookings,
+  BOOKING_DATE_ID_SOURCES,
   PROVIDER_BOOKING_ID_SOURCES,
 } from '../external-id'
 
@@ -410,5 +411,88 @@ describe('idsProveDistinctBookings (crm#1271)', () => {
       { external_id: 'generic_csv_aaaa', import_source: 'csv_generic_csv' },
       { external_id: 'generic_csv_bbbb', import_source: 'csv_generic_csv' },
     )).toBe(false)
+  })
+})
+
+describe('idsProveDistinctBookings: bank feeds and bank files (crm#1312)', () => {
+  const feed = (external_id: string | null, over: Record<string, unknown> = {}) => ({
+    external_id,
+    import_source: 'enable_banking',
+    bank_connection_id: 'bc-1',
+    provider_transaction_id: null as string | null,
+    ...over,
+  })
+
+  it('lists the feeds whose ids carry the booking date', () => {
+    expect([...BOOKING_DATE_ID_SOURCES].sort()).toEqual(['enable_banking', 'open_payments'])
+  })
+
+  it('proves two rows of one feed booked on different days distinct (a second Swish batch of the same price)', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_3'),
+      feed('eb_SE00_2026-10-14_39500_3'),
+    )).toBe(true)
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0', { import_source: 'open_payments' }),
+      feed('eb_SE00_2026-10-16_39500_0', { import_source: 'open_payments' }),
+    )).toBe(true)
+  })
+
+  it('proves two same-day rows of one amount distinct when both carry a bank id and the ids differ', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-14_39500_140', { provider_transaction_id: 'ref-b' }),
+      feed('eb_SE00_2026-10-14_39500_2', { provider_transaction_id: 'ref-a' }),
+    )).toBe(true)
+  })
+
+  it('still calls a page the bank served twice a copy: same day, same bank id (crm#1295)', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-14_39500_7', { provider_transaction_id: 'ref-a' }),
+      feed('eb_SE00_2026-10-14_39500_2', { provider_transaction_id: ' ref-a ' }),
+    )).toBe(false)
+  })
+
+  it('proves nothing for same-day rows of one amount without two bank ids', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-14_39500_1', { provider_transaction_id: 'ref-a' }),
+      feed('eb_SE00_2026-10-14_39500_0'),
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-14_39500_1', { provider_transaction_id: '' }),
+      feed('eb_SE00_2026-10-14_39500_0', { provider_transaction_id: 'ref-a' }),
+    )).toBe(false)
+  })
+
+  it('proves nothing across a reconnect, another account scope, another feed or an old id format', () => {
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0'),
+      feed('eb_SE00_2026-10-14_39500_0', { bank_connection_id: 'bc-2' }),
+    )).toBe(false)
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0'),
+      feed('eb_SE99_2026-10-14_39500_0'),
+    )).toBe(false)
+    // Enable Banking and Open Payments share the 'eb' namespace: an account
+    // that moved between them is one account seen through two feeds.
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0'),
+      feed('eb_SE00_2026-10-14_39500_0', { import_source: 'open_payments' }),
+    )).toBe(false)
+    // The pre-June-2026 scheme keyed on the bank's id: a re-sync under the
+    // new scheme stored the same movement again.
+    expect(idsProveDistinctBookings(
+      feed('eb_SE00_2026-10-15_39500_0'),
+      feed('eb_acct-uid_8c2f0d'),
+    )).toBe(false)
+  })
+
+  it('proves two rows of one uploaded bank file distinct, never two uploads', () => {
+    const file = (external_id: string, bank_file_import_id: string | null) => ({
+      external_id, import_source: 'csv_nordea_business', bank_connection_id: null, bank_file_import_id,
+    })
+    expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_bbbb', 'bfi-1'))).toBe(true)
+    expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_bbbb', 'bfi-2'))).toBe(false)
+    expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_bbbb', null))).toBe(false)
+    expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_aaaa', 'bfi-1'))).toBe(false)
   })
 })

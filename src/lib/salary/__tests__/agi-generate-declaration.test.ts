@@ -494,9 +494,11 @@ describe('generateAgiDeclaration: avgifter overrides on an F-skatt row are ignor
   // already 0 for f_skatt rows, but advanced-mode overrides used to coalesce
   // past that (override ?? computed) at three aggregation points, restoring
   // social charges for pay whose IU simultaneously declares it in FK125.
+  // A regular row's amount override (FoU-style). A partial basis override
+  // is refused since #91, so the regular row carries none; the F-skatt row
+  // keeps one to prove it is ignored there too.
   const REGULAR_OVERRIDE_ROW = {
     ...REGULAR_ROW,
-    avgifter_basis_override: 30000,
     avgifter_amount_override: 9426,
   }
   const F_SKATT_OVERRIDE_ROW = {
@@ -516,10 +518,10 @@ describe('generateAgiDeclaration: avgifter overrides on an F-skatt row are ignor
 
     // The regular employee's override flows through (the override mechanism
     // itself must keep working); the F-skatt row's override is ignored.
-    expect(result.totals.totalAvgifterBasis).toBe(30000)
+    expect(result.totals.totalAvgifterBasis).toBe(40000)
     expect(result.totals.totalAvgifterAmount).toBe(9426)
     expect(result.totals.avgifterByCategory).toEqual({
-      standard: { basis: 30000, amount: 9426 },
+      standard: { basis: 40000, amount: 9426 },
     })
     expect(result.xml).toContain(
       '<gem:SummaArbAvgSlf faltkod="487">9426</gem:SummaArbAvgSlf>',
@@ -815,33 +817,28 @@ describe('generateAgiDeclaration: whole-krona amounts (öretal bortfaller)', () 
     expect(catSum).toBe(result.totals.totalAvgifterAmount)
   })
 
-  it('a basis-only override is inert on FK487 and the stored totals (filed underlag rules)', async () => {
-    // An avgifter_basis_override never reaches the filed IU fields: FK011
-    // stays the un-overridden gross, and Skatteverket computes IK587 from
-    // that. Letting the override steer FK487 would file 12 568 against IUs
-    // that prove 16 073 and underpay the skattekonto by 3 505 kr.
-    const { supabase, enqueueMany } = createQueuedMockSupabase()
-    enqueueHappyPath(enqueueMany, [
-      {
-        ...ORE_ROW_1,
-        avgifter_basis_override: 40000,
-        avgifter_amount_override: null,
-      },
-    ])
+  it('refuses a partial basis override instead of filing an IU that contradicts the booking (#91)', async () => {
+    // An underlag above 0 but below the pay has no IU field: FK011 would keep
+    // the full 51 158 while an avgift override (the reason to set the basis)
+    // books and files less. The save refuses it; a row stored before that
+    // is refused here, with or without an avgift override, and nothing is
+    // written.
+    for (const avgifter_amount_override of [null, 12568]) {
+      const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+      enqueueHappyPath(enqueueMany, [
+        { ...ORE_ROW_1, avgifter_basis_override: 40000, avgifter_amount_override },
+      ])
 
-    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+      const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
 
-    expect(result.ok).toBe(true)
-    if (!result.ok) return
-
-    expect(iuBlockFor(result.xml, '199001011234')).toContain(
-      '<gem:KontantErsattningUlagAG faltkod="011">51158</gem:KontantErsattningUlagAG>',
-    )
-    expect(result.totals.totalAvgifterBasis).toBe(51158)
-    expect(result.totals.totalAvgifterAmount).toBe(16073)
-    expect(result.xml).toContain(
-      '<gem:SummaArbAvgSlf faltkod="487">16073</gem:SummaArbAvgSlf>',
-    )
+      expect(result.ok).toBe(false)
+      if (result.ok) return
+      expect(result.code).toBe('AGI_INCOMPLETE_DATA')
+      expect(result.details).toMatchObject({ missing_fields: ['avgifter_basis_override'] })
+      expect(JSON.stringify(result.details)).toContain('delvis belopp')
+      expect(findCalls('agi_declarations', 'insert')).toHaveLength(0)
+      expect(findCalls('agi_declarations', 'update')).toHaveLength(0)
+    }
   })
 })
 
@@ -881,21 +878,22 @@ describe('generateAgiDeclaration: the declared figure the run page shows is the 
     expect(result.xml).toContain('<gem:SummaArbAvgSlf faltkod="487">1085</gem:SummaArbAvgSlf>')
   })
 
-  it('agrees on a mixed roster: öre wages, an amount override, a basis override, F-skatt and a borttag', async () => {
+  it('agrees on a mixed roster: öre wages, an amount override, a no-underlag row, F-skatt and a borttag', async () => {
     const roster = [
       ORE_ROW,
       { ...REGULAR_ROW, employee_id: '33333333-3333-4333-8333-333333333333', gross_salary: 30000.99, avgifter_basis: 30000.99, avgifter_amount: 9426.51, employee: { ...REGULAR_ROW.employee, personnummer: 'emp3_encrypted', specification_number: 3 } },
       { ...REGULAR_ROW, employee_id: '44444444-4444-4444-8444-444444444444', avgifter_amount_override: 7855.4, employee: { ...REGULAR_ROW.employee, personnummer: 'emp4_encrypted', specification_number: 4 } },
-      { ...REGULAR_ROW, employee_id: '55555555-5555-4555-8555-555555555555', gross_salary: 51158, avgifter_basis: 51158, avgifter_amount: 16073.84, avgifter_basis_override: 40000, employee: { ...REGULAR_ROW.employee, personnummer: 'emp5_encrypted', specification_number: 5 } },
+      { ...REGULAR_ROW, employee_id: '55555555-5555-4555-8555-555555555555', gross_salary: 51158, avgifter_basis: 51158, avgifter_amount: 16073.84, avgifter_basis_override: 0, avgifter_amount_override: 0, employee: { ...REGULAR_ROW.employee, personnummer: 'emp5_encrypted', specification_number: 5 } },
       { ...F_SKATT_ROW, avgifter_basis_override: 15000, avgifter_amount_override: 4713 },
       { ...REGULAR_ROW, employee_id: '66666666-6666-4666-8666-666666666666', removed_from_agi: true, employee: { ...REGULAR_ROW.employee, personnummer: 'emp6_encrypted', specification_number: 6 } },
     ]
     const result = await filedAvgifter(roster)
 
     const shown = declaredAvgifterForRun(roster, RUN.calculation_params)
-    // trunc((3 456 + 30 000 + 51 158) × 31,42 %) = 26 585 for the computing
-    // rows, plus the override's trunc(7 855,40) = 7 855.
-    expect(shown.totalAmount).toBe(26585 + 7855)
+    // trunc((3 456 + 30 000) × 31,42 %) = 10 511 for the computing rows,
+    // plus the overrides' trunc(7 855,40 + 0) = 7 855: the no-underlag row
+    // (underlag 0, avgift 0) is declared in FK131 and adds nothing.
+    expect(shown.totalAmount).toBe(10511 + 7855)
     expect(result.totals.totalAvgifterAmount).toBe(shown.totalAmount)
     expect(result.totals.totalAvgifterBasis).toBe(shown.totalUnderlag)
     expect(result.xml).toContain(

@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 367 endpoints.
+  pagination, scopes), and all 369 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -218,7 +218,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 367 operations. Paths are shown without
+API version `2026-05-12`, 369 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (22)
@@ -365,7 +365,7 @@ POST /companies/{companyId}/setoffs : Set off (kvitta) an open customer invoice 
 GET /companies/{companyId}/setoffs/counterparty : A counterparty that is both customer and supplier, as one relation: its open customer and supplier invoices, the net per currency and its set-offs [scope:reports:read risk:low idempotent]
 ```
 
-### Customers and articles (7)
+### Customers and articles (9)
 
 Full detail: [references/customers.md](references/customers.md)
 
@@ -377,6 +377,8 @@ GET /companies/{companyId}/customers/{id} : Retrieve a single customer by id [sc
 PATCH /companies/{companyId}/customers/{id} : Partially update a customer [scope:customers:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/customers/{id} : Archive a customer (soft-delete) [scope:customers:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/customers/bulk-create : Create up to 50 customers in one call (partial-success) [scope:customers:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/customers/merge : Merge duplicate customers into one [scope:customers:write risk:medium idempotent dry-run reversible]
+POST /companies/{companyId}/customers/merges/{mergeId}/undo : Undo a customer merge [scope:customers:write risk:medium idempotent dry-run reversible]
 ```
 
 ### Suppliers (AP) (48)

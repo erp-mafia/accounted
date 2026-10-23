@@ -139,6 +139,40 @@ describe('GET /api/supplier-invoices/lifecycle', () => {
     expect(findCalls('payment_orders', 'in')).toContainEqual(['status', OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES])
   })
 
+  // #93: the kontantmetod ladder has no attest step (stagesFor('cash')).
+  it('an attested invoice of a kontantmetod company stays registered, its ladder has no attest step', async () => {
+    enqueue({
+      data: [
+        { id: A, status: 'approved', approved_at: '2026-09-05T08:00:00Z', is_credit_note: false },
+        { id: B, status: 'overdue', approved_at: '2026-09-05T08:00:00Z', is_credit_note: false },
+      ],
+    })
+    // in no file, no order, nothing paid
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    // the company's method, read because an invoice carries an attest
+    enqueue({ data: { accounting_method: 'cash' } })
+
+    const { body } = await parseJsonResponse<{
+      data: { stages: Record<string, { stage: string; approved_at: string | null }>; counts: Record<string, number> }
+    }>(await GET(createMockRequest('/api/supplier-invoices/lifecycle'), { params: Promise.resolve({}) }))
+
+    expect(body.data.stages[A].stage).toBe('registered')
+    expect(body.data.stages[B].stage).toBe('registered')
+    // The attest itself is still reported.
+    expect(body.data.stages[A].approved_at).toBe('2026-09-05T08:00:00Z')
+    expect(body.data.counts).toMatchObject({ registered: 2, approved: 0 })
+    expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', 'company-1'])
+  })
+
+  it('reads no settings when no invoice carries an attest', async () => {
+    enqueue({ data: [{ id: A, status: 'registered', approved_at: null, is_credit_note: false }] })
+    enqueue({ data: [] })
+    enqueue({ data: [] })
+    await GET(createMockRequest('/api/supplier-invoices/lifecycle'), { params: Promise.resolve({}) })
+    expect(findCalls('company_settings', 'select')).toEqual([])
+  })
+
   it('a paid invoice whose bank row is after the sign-off is paid, not reconciled', async () => {
     enqueue({ data: [{ id: C, status: 'paid', approved_at: null, is_credit_note: false }] })
     // in no file, no order

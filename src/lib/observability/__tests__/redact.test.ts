@@ -8,7 +8,7 @@
  * production, and a stackless event is useless to group on.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { redact, redactString, REDACTED } from '../redact'
+import { redact, redactRequestPath, redactString, redactedError, REDACTED } from '../redact'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -99,5 +99,60 @@ describe('redact() on Error instances', () => {
     expect(outKey.stack).toContain('[REDACTED_API_KEY]')
     expect(outKey.stack).not.toContain('gnubok_sk_live_abc')
     expect(outKey.stack).toContain('at ')
+  })
+})
+
+describe('redactRequestPath', () => {
+  it('replaces an org number in the query string, and only its value (#95)', () => {
+    // A sole trader's org number is the owner's personnummer.
+    expect(redactRequestPath('/api/company/check-org-number?org_number=8001011234')).toBe(
+      `/api/company/check-org-number?org_number=${REDACTED}`,
+    )
+    expect(redactRequestPath('/api/extensions/ext/tic/lookup?org_number=556012-5790&x=1')).toBe(
+      `/api/extensions/ext/tic/lookup?org_number=${REDACTED}&x=1`,
+    )
+  })
+
+  it('replaces an identity key whatever the value looks like', () => {
+    // '+' (the over-100 separator) decodes to a space, which the regex misses.
+    expect(redactRequestPath('/x?personnummer=121212%2B1212&pnr=121212+1212')).toBe(
+      `/x?personnummer=${REDACTED}&pnr=${REDACTED}`,
+    )
+    expect(redactRequestPath('/x?token=abc')).toBe(`/x?token=${REDACTED}`)
+  })
+
+  it('redacts a personnummer under any other key, and emails in place', () => {
+    expect(redactRequestPath('/x?q=19800101-1234&page=2')).toBe(`/x?q=${REDACTED}&page=2`)
+    expect(redactRequestPath('/x?email=anna%40example.com')).toBe('/x?email=[REDACTED_EMAIL]')
+  })
+
+  it('leaves a path without personal data as it was', () => {
+    expect(redactRequestPath('/api/invoices/57484518-3409-4b29-9d23-5d22f08bda63')).toBe(
+      '/api/invoices/57484518-3409-4b29-9d23-5d22f08bda63',
+    )
+    expect(redactRequestPath('/api/reports/vat?period=2026-09&page=2')).toBe('/api/reports/vat?period=2026-09&page=2')
+    expect(redactRequestPath('/x?')).toBe('/x')
+    expect(redactRequestPath('/x?flag')).toBe('/x?flag')
+  })
+
+  it('redacts a personnummer in the pathname itself', () => {
+    expect(redactRequestPath('/api/thing/800101-1234')).toBe(REDACTED)
+  })
+})
+
+describe('redactedError', () => {
+  it('is an Error instance with the message and stack redacted', () => {
+    const out = redactedError(new TypeError('no company for 8001011234'))
+    expect(out).toBeInstanceOf(Error)
+    expect(out.name).toBe('TypeError')
+    expect(out.message).toBe(REDACTED)
+    expect(out.stack).toBe(REDACTED)
+  })
+
+  it('keeps a clean error readable, and wraps a thrown non-Error', () => {
+    const out = redactedError(new Error('clean failure'))
+    expect(out.message).toBe('clean failure')
+    expect(out.stack).toContain('at ')
+    expect(redactedError('boom').message).toBe('boom')
   })
 })

@@ -231,6 +231,32 @@ describe('GET /api/v1/companies/:companyId/customers', () => {
     expect(legalEntityRow.org_number).toBe('TEST-0000-0001')
   })
 
+  // #95: rows filed as a foreign business before the write paths refused a
+  // personnummer there still hold one; the list masks it whatever the type.
+  it('masks a personnummer-shaped org_number on a legacy foreign-business row', async () => {
+    const legacy = {
+      ...SAMPLE_CUSTOMER,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      customer_type: 'non_eu_business',
+      org_number: '195512319876', // synthetic personnummer-shaped value
+    }
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        customers: { data: [legacy], error: null },
+      }),
+    )
+
+    const res = await listCustomers(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/customers`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data[0].org_number).toBeNull()
+  })
+
   it('accepts include_archived=true', async () => {
     const archived = { ...SAMPLE_CUSTOMER, archived_at: '2026-01-01T00:00:00Z' }
     mockServiceClient.mockReturnValue(

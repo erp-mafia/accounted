@@ -31,6 +31,38 @@ describe('supplier invoice stages', () => {
     expect(stagesFor(null)).toEqual([...SUPPLIER_INVOICE_STAGES])
   })
 
+  // #93: an attest on a kontantmetod invoice (from before a switch of method,
+  // or given through the API) pointed at a step the cash ladder skips, so the
+  // flow strip showed no current step.
+  it('keeps an attested kontantmetod invoice on its own ladder', () => {
+    const cash = { ...base, accounting_method: 'cash' }
+    for (const attested of [{ approved_at: '2026-09-06T10:00:00Z' }, { status: 'approved' }, { status: 'overdue', approved_at: 'x' }]) {
+      const stage = deriveStage({ ...cash, ...attested })
+      expect(stage).toBe('registered')
+      expect(stagesFor('cash')).toContain(stage)
+    }
+    // The later steps are the same on both ladders.
+    expect(deriveStage({ ...cash, status: 'approved', in_open_batch: true })).toBe('in_file')
+    expect(deriveStage({ ...cash, status: 'paid', approved_at: 'x', reconciled: true })).toBe('reconciled')
+    // Faktureringsmetoden, and a caller that does not say, still attest.
+    expect(deriveStage({ ...base, accounting_method: 'accrual', status: 'approved' })).toBe('approved')
+    expect(deriveStage({ ...base, accounting_method: null, status: 'approved' })).toBe('approved')
+  })
+
+  it('always answers a step on the company ladder (or credited)', () => {
+    const statuses = ['registered', 'approved', 'overdue', 'partially_paid', 'disputed', 'paid']
+    for (const accounting_method of ['cash', 'accrual'] as const) {
+      for (const status of statuses) {
+        for (const approved_at of [null, '2026-09-06T10:00:00Z']) {
+          for (const in_open_batch of [false, true]) {
+            const stage = deriveStage({ ...base, accounting_method, status, approved_at, in_open_batch })
+            expect(stagesFor(accounting_method)).toContain(stage)
+          }
+        }
+      }
+    }
+  })
+
   it('counts invoices per stage', () => {
     const counts = countByStage([
       { stage: 'registered', approved_at: null, batch: null, payment_order: null, paid: null, reconciled_through: null },

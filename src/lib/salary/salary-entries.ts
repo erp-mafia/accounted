@@ -33,6 +33,7 @@ import {
   type SalaryAccountContext,
 } from './account-mapping'
 import { isTextRow } from './text-rows'
+import { isBenefitItemType } from './benefit-payments'
 import {
   computeDeclaredAvgifterWithOverrides,
   isFSkattStatus,
@@ -672,9 +673,14 @@ function buildSalaryLines(
     const dimensions = coerceDimensionsBag(emp.default_dimensions)
 
     // Add salary line items that are cash expenses
-    // Förmånsvärden (benefits) are excluded: they affect the tax base but
-    // have no cash flow and should not appear as expense lines in the journal.
-    const BENEFIT_TYPES = ['benefit_car', 'benefit_housing', 'benefit_meals', 'benefit_wellness', 'benefit_bike', 'benefit_other']
+    // Förmånsvärden (benefits) are excluded: they affect the tax base and the
+    // avgiftsunderlag (so they reach 2710 and the avgifter entry) but are no
+    // cost or payment, so they get no line of their own; the employer's real
+    // cost of the benefit (leasing, the meals) is booked from its invoice
+    // (swedish-payroll: förmånsvärde to the AGI, avgifter on it; crm#1354,
+    // docs/decisions/2026-10). Every benefit type, from the one list
+    // (benefit-payments.ts BENEFIT_ITEM_TYPES), whether the row was derived
+    // from the employee or entered on the payslip.
     let lineItemTotal = 0
     for (const li of emp.line_items) {
       // A text row is words on the payslip, no money: nothing to book.
@@ -711,7 +717,7 @@ function buildSalaryLines(
         continue
       }
       if (li.is_gross_deduction) continue
-      if (BENEFIT_TYPES.includes(li.item_type)) continue // No cash flow for förmånsvärden
+      if (isBenefitItemType(li.item_type)) continue // No cash flow for förmånsvärden
       const account = li.account_number || lineItemAccount(li.item_type as MoneyLineItemType, ctx)
       addExpense(account, dimensions, li.amount)
       lineItemTotal += li.amount

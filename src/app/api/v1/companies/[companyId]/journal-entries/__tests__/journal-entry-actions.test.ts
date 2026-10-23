@@ -53,6 +53,7 @@ import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-key
 import { TargetPeriodLockedError } from '@/lib/bookkeeping/errors'
 import { POST as correctMetadata } from '../[id]/correct-metadata/route'
 import { POST as strikeLines } from '../[id]/strike-lines/route'
+import { POST as correctLines } from '../[id]/correct/route'
 import { POST as redate } from '../[id]/redate/route'
 import { PATCH as updateDraft } from '../[id]/route'
 import { PATCH as setNote } from '../[id]/notes/route'
@@ -521,6 +522,127 @@ describe('POST /journal-entries/:id/strike-lines', () => {
     )
     expect(bank.status).toBe(200)
     expect((await bank.json()).data.preview.bank_anchor_check.accounts).toEqual(['1930'])
+  })
+})
+
+// Importmoms keeps its ruta 50 base through an inline rättelse (#94), judged
+// on the kept and the added lines together: the RPC knows no momsrutor.
+describe('POST /journal-entries/:id/strike-lines: importmoms without its base', () => {
+  const post = (body: unknown, query = '') =>
+    strikeLines(
+      request(`${BASE}/${ENTRY_ID}/strike-lines${query}`, { method: 'POST', body: JSON.stringify(body) }),
+      entryParams,
+    )
+  const line = (id: string, account_number: string, debit_amount: number, credit_amount: number, sort_order: number) => ({
+    id, account_number, debit_amount, credit_amount, line_description: null, currency: 'SEK', dimensions: {}, sort_order,
+  })
+  const LINE_D = '55555555-5555-4555-8555-555555555555'
+  /** An EU purchase whose fiktiv moms sits on the pre-2015 2615 (ruta 60, no ruta 50). */
+  const EU_ON_2615 = [
+    line(LINE_A, '4515', 1000, 0, 0),
+    line(LINE_B, '2645', 250, 0, 1),
+    line(LINE_C, '2615', 0, 250, 2),
+    line(LINE_D, '1930', 0, 1000, 3),
+  ]
+  const committed = {
+    data: { log_id: LINE_C, struck_count: 1, added_count: 1, total_debit: 1250, total_credit: 1250 },
+    error: null,
+  }
+
+  it('400 IMPORT_VAT_WITHOUT_BASE when the rättelse keeps 2615 without a base, before the RPC', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      journal_entries: { data: { source_type: 'bank_transaction', lines: EU_ON_2615 }, error: null },
+      chart_of_accounts: { data: [], error: null },
+      'rpc:correct_entry_lines_inline': committed,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ strike_line_ids: [LINE_A], lines: [{ account_number: '5460', debit_amount: 1000 }] })
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details).toMatchObject({ import_vat_accounts: ['2615'] })
+    expect(client.rpc).not.toHaveBeenCalledWith('correct_entry_lines_inline', expect.anything())
+    expect(backfillMock).not.toHaveBeenCalled()
+  })
+
+  it('commits a rättelse that moves the fiktiv moms from 2615 to 2614', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      journal_entries: { data: { source_type: 'bank_transaction', lines: EU_ON_2615 }, error: null },
+      'rpc:correct_entry_lines_inline': committed,
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ strike_line_ids: [LINE_C], lines: [{ account_number: '2614', credit_amount: 250 }] })
+    expect(res.status).toBe(200)
+    expect(client.rpc).toHaveBeenCalledWith('correct_entry_lines_inline', expect.anything())
+  })
+
+  it('dry run: striking the base of a correct import leaves its importmoms without one, and is refused', async () => {
+    const IMPORT = [
+      line(LINE_A, '4545', 1000, 0, 0),
+      line(LINE_B, '4549', 0, 1000, 1),
+      line(LINE_C, '2645', 250, 0, 2),
+      line(LINE_D, '2615', 0, 250, 3),
+    ]
+    const client = makeClient(
+      strikePreviewTables({
+        journal_entry_lines: { data: IMPORT, error: null },
+        chart_of_accounts: [{ data: [{ account_number: '4010' }, { account_number: '2440' }], error: null }, { data: [], error: null }],
+      }),
+    )
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(
+      { strike_line_ids: [LINE_A, LINE_B], lines: [{ account_number: '4010', debit_amount: 1000 }, { account_number: '2440', credit_amount: 1000 }] },
+      '?dry_run=true',
+    )
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(wrote(client)).toBe(false)
+  })
+})
+
+// The storno + rättelse door gives the dry run the verdict correctEntry gives
+// at commit (#94): importmoms needs its ruta 50 base in the corrected lines.
+describe('POST /journal-entries/:id/correct: importmoms without its base', () => {
+  const post = (body: unknown, query = '') =>
+    correctLines(
+      request(`${BASE}/${ENTRY_ID}/correct${query}`, { method: 'POST', body: JSON.stringify(body) }),
+      entryParams,
+    )
+  const tables = () =>
+    makeClient({
+      company_members: OWNER,
+      journal_entries: { data: { ...POSTED, source_type: 'bank_transaction', correction_of_id: null, reverses_id: null }, error: null },
+      fiscal_periods: OPEN_PERIOD,
+      company_settings: NO_LOCK,
+      chart_of_accounts: { data: [], error: null },
+    })
+  const withVatOn = (account: string) => ({
+    lines: [
+      { account_number: '5460', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { account_number: account, debit_amount: 0, credit_amount: 250 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ],
+  })
+
+  it('dry run: 400 IMPORT_VAT_WITHOUT_BASE for 2615 credited with no 4545-4547 line', async () => {
+    const client = tables()
+    mockServiceClient.mockReturnValue(client)
+    const res = await post(withVatOn('2615'), '?dry_run=true')
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('IMPORT_VAT_WITHOUT_BASE')
+    expect(body.error.details).toMatchObject({ import_vat_accounts: ['2615'] })
+    expect(wrote(client)).toBe(false)
+  })
+
+  it('dry run: the same purchase with its fiktiv moms on 2614 passes', async () => {
+    mockServiceClient.mockReturnValue(tables())
+    const res = await post(withVatOn('2614'), '?dry_run=true')
+    expect(res.status).toBe(200)
   })
 })
 

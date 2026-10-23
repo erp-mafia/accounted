@@ -149,18 +149,20 @@ export function customerNameMatches(
 /**
  * A Swedish mobile number standing in free text as a whole token: +46 7x,
  * 0046 7x or 07x, then eight more digits, single spaces or hyphens allowed
- * between digits. The token may not touch a digit on either side, so the
- * digits inside a 16-digit Swish id or any longer run never read as a number.
- * Group 1 is the subscriber part from the 7.
+ * between digits; or the country code with no plus, 467 and eight digits
+ * written together, which is how SEB writes a Swish payer's number as the
+ * whole bank text (crm#1399). The token may not touch a digit on either
+ * side, so the digits inside a 16-digit Swish id or any longer run never
+ * read as a number. Group 1 or group 2 is the subscriber part from the 7.
  */
-const SWEDISH_MOBILE_IN_TEXT = /(?<![\d+])(?:(?:\+|00)46[ -]?|0)(7(?:[ -]?\d){8})(?!\d)/g
+const SWEDISH_MOBILE_IN_TEXT = /(?<![\d+])(?:(?:(?:\+|00)46[ -]?|0)(7(?:[ -]?\d){8})|46(7\d{8}))(?!\d)/g
 
 /**
  * The Swedish mobile numbers in a bank text, normalised to `+467XXXXXXXX`.
  */
 export function swedishMobileNumbersIn(text: string | null | undefined): string[] {
   if (!text) return []
-  return Array.from(text.matchAll(SWEDISH_MOBILE_IN_TEXT), (m) => `+46${m[1].replace(/\D/g, '')}`)
+  return Array.from(text.matchAll(SWEDISH_MOBILE_IN_TEXT), (m) => `+46${(m[1] ?? m[2]).replace(/\D/g, '')}`)
 }
 
 /**
@@ -172,6 +174,7 @@ export function normalizeSwedishMobile(phone: string | null | undefined): string
   let digits = phone.replace(/[^\d+]/g, '')
   if (digits.startsWith('+46')) digits = digits.slice(3)
   else if (digits.startsWith('0046')) digits = digits.slice(4)
+  else if (/^467\d{8}$/.test(digits)) digits = digits.slice(2)
   if (digits.startsWith('0')) digits = digits.slice(1)
   return /^7\d{8}$/.test(digits) ? `+46${digits}` : null
 }

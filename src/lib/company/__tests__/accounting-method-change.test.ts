@@ -1,8 +1,8 @@
 /**
  * When accounting_method may change (lib/company/accounting-method-change.ts):
- * free while the current fiscal year has no posted verifikat, afterwards only
- * as a stated correction and not while an open invoice lacks its own
- * verifikat (PH 187, crm#1303).
+ * never while an open invoice lacks its own verifikat (#93: on every switch),
+ * else free while the current fiscal year has no posted verifikat, afterwards
+ * only as a stated correction (PH 187, crm#1303).
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -39,17 +39,60 @@ describe('checkAccountingMethodChange', () => {
     expect(client.from).not.toHaveBeenCalled()
   })
 
+  const NO_OPEN = { invoices: { data: null, count: 0 }, supplier_invoices: { data: null, count: 0 } }
+
   it('is free while the current fiscal year has no posted verifikat (the onboarding fix)', async () => {
-    const client = makeClient({ fiscal_periods: PERIOD, journal_entries: { data: null, count: 0 } })
+    const client = makeClient({ fiscal_periods: PERIOD, journal_entries: { data: null, count: 0 }, ...NO_OPEN })
     const check = await checkAccountingMethodChange(ctxFor(client), { stored: 'accrual', requested: 'cash', reason: undefined })
     expect(check).toEqual({ kind: 'free' })
-    expect(client.from).not.toHaveBeenCalledWith('invoices')
   })
 
   it('is free when no fiscal year covers today', async () => {
-    const client = makeClient({ fiscal_periods: { data: null } })
+    const client = makeClient({ fiscal_periods: { data: null }, ...NO_OPEN })
     expect(await checkAccountingMethodChange(ctxFor(client), { stored: 'accrual', requested: 'cash', reason: undefined }))
       .toEqual({ kind: 'free' })
+    expect(client.from).not.toHaveBeenCalledWith('journal_entries')
+  })
+
+  // #93: !763 asked only before a correction, so a year with nothing posted
+  // let an open invoice without a verifikat through: booked twice after a
+  // switch to kontantmetoden, never after one to faktureringsmetoden.
+  it.each([
+    ['accrual', 'cash'],
+    ['cash', 'accrual'],
+  ])('refuses a switch from %s to %s with nothing posted while an open invoice has no verifikat', async (stored, requested) => {
+    const client = makeClient({
+      fiscal_periods: PERIOD,
+      journal_entries: { data: null, count: 0 },
+      invoices: { data: null, count: 1 },
+      supplier_invoices: { data: null, count: 0 },
+    })
+    const check = await checkAccountingMethodChange(ctxFor(client), { stored, requested, reason: undefined })
+    expect(check.kind).toBe('refused')
+    if (check.kind !== 'refused') return
+    expect(check.outcome).toMatchObject({
+      code: 'ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES',
+      details: { fiscal_period_id: 'fp-2026', open_invoices_without_verifikat: 1, open_supplier_invoices_without_verifikat: 0 },
+    })
+    expect(check.outcome.messageSv).toContain('kan inte bytas nu')
+    // Refused before the year's verifikat are even counted.
+    expect(client.from).not.toHaveBeenCalledWith('journal_entries')
+  })
+
+  it('refuses a switch with no fiscal year at all while an open supplier invoice has no verifikat', async () => {
+    const client = makeClient({
+      fiscal_periods: { data: null },
+      invoices: { data: null, count: 0 },
+      supplier_invoices: { data: null, count: 2 },
+    })
+    const check = await checkAccountingMethodChange(ctxFor(client), { stored: 'cash', requested: 'accrual', reason: undefined })
+    expect(check).toMatchObject({
+      kind: 'refused',
+      outcome: {
+        code: 'ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES',
+        details: { fiscal_period_id: null, fiscal_year: null, open_supplier_invoices_without_verifikat: 2 },
+      },
+    })
   })
 
   it('refuses a mid-year change without a reason, and says how to correct', async () => {

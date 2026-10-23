@@ -984,6 +984,56 @@ describe('gnubok_correct_entry: the corrected entry\'s text', () => {
   })
 })
 
+// Importmoms keeps its ruta 50 base through a rättelse (#94): refused at
+// staging, the rule correctEntry runs again at approval.
+describe('gnubok_correct_entry: importmoms without its ruta 50 base', () => {
+  const blank = { line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null }
+  const original = {
+    id: '11111111-1111-4111-8111-111111111111',
+    status: 'posted',
+    entry_date: '2026-05-12',
+    description: 'EU-köp',
+    voucher_number: 12,
+    voucher_series: 'A',
+    fiscal_period_id: 'fp-1',
+    correction_of_id: null,
+    reverses_id: null,
+    source_type: 'bank_transaction',
+    fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+    lines: [
+      { ...blank, account_number: '4515', debit_amount: 1000, credit_amount: 0 },
+      { ...blank, account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { ...blank, account_number: '2615', debit_amount: 0, credit_amount: 250 },
+      { ...blank, account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ],
+  }
+
+  it('refuses corrected lines that keep 2615 credited with no 4545-4547 line, and stages nothing', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueue({ data: original, error: null })
+    mock.enqueueMany(OPEN_STORNO_TARGET)
+    // The company's chart (momsruta per account): nothing of its own.
+    mock.enqueue({ data: [], error: null })
+    await expect(
+      correctEntry.execute(
+        {
+          entry_id: original.id,
+          lines: [
+            { account_number: '5460', debit_amount: 1000, credit_amount: 0 },
+            { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+            { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+            { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+          ],
+        },
+        'company-1',
+        'user-1',
+        mock.supabase as never,
+      ),
+    ).rejects.toMatchObject({ code: 'IMPORT_VAT_WITHOUT_BASE', importVatAccounts: ['2615'] })
+    expect(mock.findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+})
+
 describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard', () => {
   // Base row for a posted correction that already sits 3 links deep:
   // c3 → c2 → c1 → orig-0 (root, voucher A7).
@@ -1543,5 +1593,58 @@ describe('agent memory tools: agent:write scope gate', () => {
     const withWrite = ['agent:read', 'agent:write'] as never[]
     const isAllowed = !required || hasScope(withWrite, required)
     expect(isAllowed).toBe(true)
+  })
+})
+
+describe('gnubok_correct_entry: a second reversal (crm#1397)', () => {
+  const fee = {
+    id: '33333333-3333-4333-8333-333333333333',
+    status: 'posted',
+    entry_date: '2026-05-12',
+    description: 'Bankavgift',
+    voucher_number: 46,
+    voucher_series: 'A',
+    fiscal_period_id: 'fp-1',
+    correction_of_id: null,
+    reverses_id: null,
+    fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+    lines: [
+      { account_number: '6570', debit_amount: 100, credit_amount: 0, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+      { account_number: '1930', debit_amount: 0, credit_amount: 100, line_description: null, currency: null, amount_in_currency: null, exchange_rate: null, tax_code: null, dimensions: null, cost_center: null, project: null },
+    ],
+  }
+  const swapped = [
+    { account_number: '6570', debit_amount: 0, credit_amount: 100 },
+    { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+  ]
+
+  it('refuses to stage the original with debit and credit swapped', async () => {
+    const { supabase, enqueue, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueue({ data: fee, error: null })
+    enqueueMany(OPEN_STORNO_TARGET)
+
+    await expect(
+      correctEntry.execute({ entry_id: fee.id, lines: swapped }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'MEANINGLESS_CORRECTION', reason: 'negates_original' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('stages it with sides_swapped=true and forwards the flag to the executor params', async () => {
+    const { supabase, enqueue, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueue({ data: fee, error: null })
+    enqueueMany(OPEN_STORNO_TARGET)
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    enqueue({ data: { id: 'op-sides-swapped' }, error: null })
+
+    await correctEntry.execute(
+      { entry_id: fee.id, lines: swapped, sides_swapped: true },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    const payload = (findCall('pending_operations', 'insert') as unknown[])[0] as { params?: { sides_swapped?: boolean } }
+    expect(payload.params?.sides_swapped).toBe(true)
   })
 })

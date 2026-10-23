@@ -289,6 +289,50 @@ describe('PATCH /api/salary/runs/[id]/employees/[employeeId]: tax/avgifter overr
     }
   })
 
+  it('refuses a partial avgiftsunderlag above 0 (#91) and writes nothing', async () => {
+    // The IU has no field for a bare reduced underlag: FK011 kept the full
+    // pay while the booking and FK487 followed the override. With and without
+    // a matching avgift override, the save is refused before any read.
+    for (const avgifter_amount_override of [undefined, null, 9426]) {
+      const { findCalls } = authed()
+      const response = await PATCH(
+        createMockRequest('/api/salary/runs/run-1/employees/emp-1', {
+          method: 'PATCH',
+          body: { avgifter_basis_override: 30000, avgifter_amount_override, reason: 'Delvis underlag' },
+        }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+      expect(status).toBe(400)
+      expect(JSON.stringify(body)).toContain('Ett delvis underlag går inte att redovisa i arbetsgivardeklarationen')
+      expect(findCalls('salary_runs', 'select')).toHaveLength(0)
+      expect(findCalls('salary_run_employees', 'update')).toHaveLength(0)
+    }
+  })
+
+  it('accepts the no-underlag switch (underlag 0, avgift 0) and clearing it (null)', async () => {
+    for (const body of [
+      { avgifter_basis_override: 0, avgifter_amount_override: 0, reason: 'Under 1 000 kr i år' },
+      { avgifter_basis_override: null, avgifter_amount_override: null, reason: null },
+    ]) {
+      const { enqueueMany, findCalls } = authed()
+      enqueueMany([
+        { data: { id: 'run-1', status: 'review' } },
+        { data: { ...SRE_AFTER, avgifter_basis_override: body.avgifter_basis_override } },
+        { data: [] },
+        { data: [{ id: 'run-1' }] },
+      ])
+      const response = await PATCH(
+        createMockRequest('/api/salary/runs/run-1/employees/emp-1', { method: 'PATCH', body }),
+        createMockRouteParams({ id: 'run-1', employeeId: 'emp-1' }),
+      )
+      expect(response.status).toBe(200)
+      const updates = findCalls('salary_run_employees', 'update')
+      expect(updates).toHaveLength(1)
+      expect(updates[0][0]).toMatchObject({ avgifter_basis_override: body.avgifter_basis_override })
+    }
+  })
+
   it('refreshes the stored run totals from the effective per-employee figures', async () => {
     const { enqueueMany, findCalls } = authed()
     enqueueMany([

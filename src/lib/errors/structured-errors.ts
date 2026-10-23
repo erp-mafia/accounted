@@ -920,9 +920,10 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
       'The bank ledger is on the wrong side of the voucher: a withdrawal must credit the bank ledger, a deposit must debit it.',
     thrown_message_sv: true,
   },
-  // Importmoms (rutor 60-62) on a bank-row, inbox or bulk booking with no
-  // line in ruta 50 (#83, lib/bookkeeping/import-vat-base.ts). The door
-  // names the accounts; this is the fallback for an envelope without them.
+  // Importmoms (rutor 60-62) on a bank-row, inbox or bulk booking, or left in
+  // the verifikat by a rättelse (#94), with no line in ruta 50 (#83,
+  // lib/bookkeeping/import-vat-base.ts). The door names the accounts; this is
+  // the fallback for an envelope without them.
   IMPORT_VAT_WITHOUT_BASE: {
     httpStatus: 400,
     message_sv:
@@ -1026,6 +1027,22 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   // The pinned underlag shows the seller already charged moms, so the
   // purchase is not reverse charge: the foreign VAT is part of the cost. The
   // service composes the message with the document and the amount.
+  // A reverse charge sent without its box at an agent or API door, whose
+  // underlag does not tell the seller's country or the category does not
+  // say goods or service (#94, lib/vat/reverse-charge-box.ts). The service
+  // names the reason and the door's parameter; this is the fallback.
+  TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN: {
+    httpStatus: 400,
+    message_sv:
+      'Rutan för omvänd skattskyldighet (20, 21 eller 22) kan inte avgöras ur underlaget. Ange den: tjänst från ett annat EU-land ruta 21, tjänst från ett land utanför EU ruta 22, varor från ett annat EU-land ruta 20.',
+    message_en:
+      'The reverse-charge box (20, 21 or 22) cannot be told from the underlag. Name it: a service from another EU country box 21, a service from outside the EU box 22, goods from another EU country box 20.',
+    thrown_message_sv: true,
+    remediation: {
+      description:
+        'Resend with reverse_charge_kind eu_services, non_eu_services or eu_goods (MCP: vat_treatment reverse_charge_eu_services, reverse_charge_non_eu_services or reverse_charge_eu_goods), read off the seller country on the invoice. details.reason says why the box could not be read.',
+    },
+  },
   TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT: {
     httpStatus: 400,
     message_sv:
@@ -5715,6 +5732,50 @@ const CUSTOMER: Record<string, StructuredErrorEntry> = {
       description: 'A recurring invoice schedule points at this customer. Delete the schedule first, then retry.',
     },
   },
+  // Customer merge (lib/customers/merge-customers.ts, merge_customers RPC).
+  CUSTOMER_MERGE_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Du har inte behörighet att slå ihop kunder i det här bolaget.',
+    message_en: 'You do not have permission to merge customers in this company.',
+  },
+  CUSTOMER_MERGE_IDENTITY_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'Kunderna har olika organisationsnummer, momsregistreringsnummer eller personnummer och är alltså olika kunder. Rätta numret på den kund som har fel först, om det är samma kund.',
+    message_en:
+      'The customers have different org numbers, VAT numbers or personal numbers, so they are different customers. If they are the same customer, correct the wrong number first.',
+    remediation: {
+      description:
+        'details.customer_id is the merged card whose details.field (org_number, vat_number or personal_number) differs from the survivor\'s. Two cards that state different identity numbers are never merged; correct the wrong number with gnubok_update_customer first if they are one customer.',
+      tool: 'gnubok_update_customer',
+    },
+  },
+  CUSTOMER_MERGE_SURVIVOR_ARCHIVED: {
+    httpStatus: 409,
+    message_sv: 'Kunden som ska behållas är arkiverad. Välj en aktiv kund att behålla.',
+    message_en: 'The customer to keep is archived. Choose an active customer to keep.',
+  },
+  CUSTOMER_MERGE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Sammanslagningen kunde inte hittas.',
+    message_en: 'Customer merge not found.',
+  },
+  CUSTOMER_MERGE_ALREADY_UNDONE: {
+    httpStatus: 409,
+    message_sv: 'Sammanslagningen är redan ångrad.',
+    message_en: 'The customer merge has already been undone.',
+  },
+  CUSTOMER_MERGE_UNDO_EXPIRED: {
+    httpStatus: 409,
+    message_sv: 'En sammanslagning kan bara ångras inom 30 dagar.',
+    message_en: 'A customer merge can only be undone within 30 days.',
+  },
+  CUSTOMER_MERGE_UNDO_BLOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Kunden som behölls har sedan slagits ihop med en annan kund. Ångra den sammanslagningen först.',
+    message_en: 'The kept customer has since been merged into another customer. Undo that merge first.',
+  },
   CUSTOMER_NO_PERSONAL_NUMBER: {
     httpStatus: 404,
     message_sv: 'Kunden har inget sparat personnummer.',
@@ -5859,6 +5920,101 @@ const SUPPLIER: Record<string, StructuredErrorEntry> = {
   },
 }
 
+/**
+ * Why a supplier invoice was refused as SI_CREATE_INVALID_INPUT: the stable
+ * details.reason every door sends, and the sentence each language shows for
+ * it. The entry's one sentence was the answer to every refusal, so a customer
+ * could not tell what to change (crm#1377, #96). A refusal without a listed
+ * reason (a column constraint, an older client) keeps the entry's sentence.
+ */
+export const SI_CREATE_INVALID_INPUT_REASONS = {
+  reverse_charge_kind_without_reverse_charge: {
+    message_sv:
+      'Varor eller tjänster väljs bara för en faktura med omvänd skattskyldighet. Slå på omvänd skattskyldighet, eller ta bort valet under Köpet avser.',
+    message_en: 'reverse_charge_kind is only accepted with reverse charge: set reverse_charge, or omit reverse_charge_kind.',
+  },
+  reverse_charge_kind_not_eu_supplier: {
+    message_sv:
+      'Varor eller tjänster väljs bara för en leverantör i ett annat EU-land. Ändra leverantörens typ till EU-företag om den är det, annars ta bort valet under Köpet avser.',
+    message_en:
+      'reverse_charge_kind is only accepted for a supplier in another EU country (supplier_type eu_business): correct the supplier type, or omit reverse_charge_kind.',
+  },
+  inbox_item_requires_private_payment: {
+    message_sv:
+      'Ett underlag från inkorgen registreras här bara som ett utlägg. Välj vem som betalade privat, eller registrera fakturan från inkorgen.',
+    message_en:
+      'inbox_item_id is only accepted with paid_with_private_funds; register a company-paid inbox item with POST /inbox-items/{id}/convert.',
+  },
+  inbox_item_not_found: {
+    message_sv: 'Underlaget i inkorgen hittades inte. Ladda om sidan och försök igen.',
+    message_en: 'inbox_item_id is missing or belongs to another company.',
+  },
+  inbox_item_already_booked: {
+    message_sv: 'Underlaget i inkorgen är redan bokfört. Ladda om sidan för att se fakturan eller verifikationen.',
+    message_en: 'The inbox item is already booked: it has a supplier invoice or a verifikat.',
+  },
+  document_unavailable: {
+    message_sv: 'Underlaget hittades inte eller sitter redan på en verifikation. Ladda upp fakturan igen och försök på nytt.',
+    message_en: 'document_id is missing, belongs to another company, or is already linked to a verifikat.',
+  },
+  document_already_used: {
+    message_sv: 'Underlaget hör redan till en annan leverantörsfaktura. Ladda upp rätt faktura som underlag.',
+    message_en: 'document_id is already the underlag of another supplier invoice.',
+  },
+  accrual_with_private_payment: {
+    message_sv:
+      'Ett utlägg kan inte periodiseras, eftersom det bokförs i en enda verifikation när det registreras. Ta bort periodiseringen, eller välj Företaget som betalare.',
+    message_en:
+      'Periodisering (accrual_period_start/end) is not supported with paid_with_private_funds: an utlägg is booked in one verifikat at registration.',
+  },
+  accrual_requires_accrual_method: {
+    message_sv:
+      'Periodisering används bara med faktureringsmetoden, och företaget bokför med kontantmetoden. Ta bort periodiseringen från raderna.',
+    message_en:
+      'Periodisering (accrual_period_start/end) requires faktureringsmetoden (accounting_method accrual); this company uses kontantmetoden.',
+  },
+  vat_on_non_vat_registered: {
+    message_sv: 'Företaget är inte momsregistrerat och kan inte dra av moms. Ange momssats 0 % och radernas belopp inklusive moms.',
+    message_en:
+      'The company is not VAT-registered, so supplier invoice lines cannot carry moms: send vat_rate 0 and the amount including VAT.',
+  },
+  expense_claim_lines_invalid: {
+    message_sv: 'Utläggets rader kunde inte bokföras. Kontrollera konto och belopp på varje rad och försök igen.',
+    message_en: 'The expense claim lines are invalid: details.detail names the rule.',
+  },
+  // The MCP inbox staging (gnubok_create_supplier_invoice_from_inbox): the
+  // agent reads the thrown English, the Swedish is for the person it relays to.
+  due_date_underivable: {
+    message_sv:
+      'Underlaget saknar förfallodatum och fakturadatumet kan inte läsas som ett datum. Ange fakturadatum och förfallodatum och försök igen.',
+    message_en:
+      'The underlag has no due date and its invoice date is not an ISO date, so no due date can be derived: pass invoice_date_override or due_date_override.',
+  },
+  total_missing: {
+    message_sv: 'Underlaget saknar ett totalbelopp. Ange fakturans totalbelopp från underlaget och försök igen.',
+    message_en: 'The underlag has no usable total: set totals.total from the underlag, then retry.',
+  },
+  lines_missing: {
+    message_sv: 'Underlaget saknar fakturarader. Lägg in raderna från underlaget och försök igen.',
+    message_en: 'No line items were read from the underlag: set lineItems from the underlag, then retry.',
+  },
+  vat_treatment_unstated: {
+    message_sv:
+      'Underlaget visar ingen moms och leverantören är inte ett utländskt företag, så momsbehandlingen kan inte läsas från det. Ange om köpet är momsfritt eller har omvänd betalningsskyldighet.',
+    message_en:
+      'The underlag shows no VAT and the supplier is not typed EU or non-EU: state the VAT treatment (exempt or reverse_charge) from the underlag.',
+  },
+} as const satisfies Record<string, { message_sv: string; message_en: string }>
+
+export type SiCreateInvalidInputReason = keyof typeof SI_CREATE_INVALID_INPUT_REASONS
+
+/** The sentences for a SI_CREATE_INVALID_INPUT refusal's details.reason, or null when it names none listed. */
+export function siCreateInvalidInputMessages(details: unknown): { message_sv: string; message_en: string } | null {
+  const reason = (details as { reason?: unknown } | null | undefined)?.reason
+  if (typeof reason !== 'string' || !Object.hasOwn(SI_CREATE_INVALID_INPUT_REASONS, reason)) return null
+  return SI_CREATE_INVALID_INPUT_REASONS[reason as SiCreateInvalidInputReason]
+}
+
 const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_CREATE_DUPLICATE_INVOICE_NUMBER: {
     httpStatus: 409,
@@ -5873,7 +6029,7 @@ const SUPPLIER_INVOICE_WAVE4: Record<string, StructuredErrorEntry> = {
   SI_CREATE_INVALID_INPUT: {
     httpStatus: 400,
     message_sv: 'Ogiltig kombination av fakturafält. Kontrollera formuläret och försök igen.',
-    message_en: 'Invalid combination of supplier invoice fields.',
+    message_en: 'Invalid combination of supplier invoice fields. details.reason names the rule.',
   },
   SI_CREATE_ITEM_ACCOUNT_MISSING: {
     httpStatus: 400,
@@ -8474,8 +8630,8 @@ const DIMENSION: Record<string, StructuredErrorEntry> = {
   },
   ACCOUNTING_METHOD_CHANGE_OPEN_INVOICES: {
     httpStatus: 409,
-    message_sv: 'Bokföringsmetoden kan inte rättas medan obetalda fakturor saknar egen verifikation.',
-    message_en: 'The accounting method cannot be corrected while open customer or supplier invoices have no verifikat of their own: after the switch their payment would book the sale or purchase twice, or never. Book them, or link them to the verifikat that booked them, first.',
+    message_sv: 'Bokföringsmetoden kan inte bytas medan obetalda fakturor saknar egen verifikation.',
+    message_en: 'The accounting method cannot change while open customer or supplier invoices have no verifikat of their own: after the switch their payment would book the sale or purchase twice, or never. Book them, or link them to the verifikat that booked them, first.',
   },
   BOOKKEEPING_LOCK_REOPENS_FILED_VAT: {
     httpStatus: 409,

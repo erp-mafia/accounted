@@ -428,196 +428,107 @@ describe('GET /api/bookkeeping/journal-entries', () => {
   })
 
   describe('missing_underlag=true (the dashboard deep-link filter)', () => {
-    // UUID-shaped candidate ids, as journal_entries.id produces them.
+    // UUID-shaped ids, as journal_entries.id produces them.
     const E1 = '11111111-1111-4111-8111-111111111111'
     const E2 = '22222222-2222-4222-8222-222222222222'
     const E3 = '33333333-3333-4333-8333-333333333333'
-    const candidate = (id: string, voucherNumber: number) => ({
-      id,
-      entry_date: '2026-06-08',
-      voucher_series: 'A',
-      voucher_number: voucherNumber,
-      description: 'test',
-      display_amount: 100,
-    })
+    const RPC = 'list_verifikat_missing_underlag'
+    const rpcArgs = () =>
+      (mockSupabase.rpc.mock.calls.find(([name]) => name === RPC) as unknown[] | undefined)?.[1] as
+        | Record<string, unknown>
+        | undefined
 
-    it('returns only entries without documents, exemption-aware, with the full-set count', async () => {
-      enqueue({ data: [candidate(E1, 1), candidate(E2, 2), candidate(E3, 3)], error: null }) // candidates
-      enqueue({ data: [{ journal_entry_id: E1 }], error: null }) // E1 has a document
-      enqueue({ data: [], error: null }) // no SI references (registration FK)
-      enqueue({ data: [], error: null }) // no SI references (payment FK)
-      enqueue({ data: [], error: null }) // no SI payment-row references
-      enqueue({ data: [{ journal_entry_id: E3 }], error: null }) // E3 exempt
-      enqueue({ data: [], error: null }) // no invoices pointing at the entries
-      enqueue({ data: [], error: null }) // no invoice payment rows
-      const fullRow = makeJournalEntry({ id: E2 })
-      enqueue({ data: [fullRow], error: null }) // page rows
+    it('returns the page the RPC resolved, in its order, with the full-set count', async () => {
+      enqueue({ data: { ok: true, total_count: 3, ids: [E3, E1] }, error: null }) // the RPC
+      enqueue({ data: [makeJournalEntry({ id: E1 }), makeJournalEntry({ id: E3 })], error: null }) // page rows
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
-        searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true', limit: '2' },
       })
       const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
         await GET(request)
       )
 
       expect(status).toBe(200)
-      expect(body.data.map((e) => e.id)).toEqual([E2])
-      expect(body.count).toBe(1)
+      // Reassembled in the RPC's order (the .in() row fetch has none).
+      expect(body.data.map((e) => e.id)).toEqual([E3, E1])
+      expect(body.count).toBe(3)
     })
 
-    it('takes this path instead of the include_related RPC when a period is selected', async () => {
-      enqueue({ data: [], error: null }) // candidates: none
+    it('costs one RPC call and one page-row read, however long the ledger (crm#1390)', async () => {
+      enqueue({ data: { ok: true, total_count: 4600, ids: [E1, E2] }, error: null })
+      enqueue({ data: [makeJournalEntry({ id: E1 }), makeJournalEntry({ id: E2 })], error: null })
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
-        searchParams: { missing_underlag: 'true', period_id: 'period-1', exclude_draft: 'true' },
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true', limit: '20' },
       })
-      const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(
-        await GET(request)
-      )
+      const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(await GET(request))
 
       expect(status).toBe(200)
-      expect(body.data).toEqual([])
-      expect(body.count).toBe(0)
-      expect(mockSupabase.rpc).not.toHaveBeenCalled()
+      expect(body.count).toBe(4600)
+      // Before: every candidate read into the server, then 7 lookups per
+      // 150 ids, chunk after chunk; a 4,600-verifikat ledger paid ~100
+      // sequential round trips before this page could render.
+      expect(mockSupabase.rpc.mock.calls.filter(([name]) => name === RPC)).toHaveLength(1)
+      expect(mockSupabase.from).toHaveBeenCalledTimes(1)
+      expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
+      expect(mockSupabase.from).not.toHaveBeenCalledWith('journal_entry_no_doc_required')
     })
 
-    it('paginates over the missing set with count spanning all pages', async () => {
-      // Out of voucher order on purpose: default sort is series+number asc.
-      enqueue({ data: [candidate(E3, 3), candidate(E1, 1), candidate(E2, 2)], error: null })
-      enqueue({ data: [], error: null }) // no documents
-      enqueue({ data: [], error: null }) // no SI references (registration FK)
-      enqueue({ data: [], error: null }) // no SI references (payment FK)
-      enqueue({ data: [], error: null }) // no SI payment-row references
-      enqueue({ data: [], error: null }) // no exemptions
-      enqueue({ data: [], error: null }) // no invoices pointing at the entries
-      enqueue({ data: [], error: null }) // no invoice payment rows
-      enqueue({ data: [makeJournalEntry({ id: E2 })], error: null }) // page rows
+    it('passes the scope, page and the list sort through to the RPC', async () => {
+      enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
         searchParams: {
           missing_underlag: 'true',
+          period_id: 'period-1',
+          series: 'B',
+          date_from: '2026-01-01',
+          date_to: '2026-06-30',
           exclude_draft: 'true',
-          limit: '1',
-          offset: '1',
+          sort_by: 'total_desc',
+          limit: '50',
+          offset: '100',
         },
       })
-      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
-        await GET(request)
-      )
+      const { status, body } = await parseJsonResponse<{ data: unknown[]; count: number }>(await GET(request))
 
       expect(status).toBe(200)
-      // Page 2 of size 1 under voucher-asc = A2.
-      expect(body.data.map((e) => e.id)).toEqual([E2])
-      expect(body.count).toBe(3)
+      expect(body).toEqual({ data: [], count: 0 })
+      expect(rpcArgs()).toMatchObject({
+        p_company_id: 'company-1',
+        p_period_id: 'period-1',
+        p_series: 'B',
+        p_date_from: '2026-01-01',
+        p_date_to: '2026-06-30',
+        // Amount sorts order by the amount the list shows (crm#1280).
+        p_order: ['display_amount.desc', 'voucher_series.desc', 'voucher_number.desc', 'id.desc'],
+        p_limit: 50,
+        p_offset: 100,
+      })
+      // No page rows to read for an empty page.
+      expect(mockSupabase.from).not.toHaveBeenCalled()
     })
 
-    it('sorts by the amount the list shows (display_amount) on amount sort (crm#1280)', async () => {
-      // E1 has the largest omslutning but shows the smallest amount (a
-      // reverse-charge bank payment): the order follows display_amount.
-      enqueue({
-        data: [
-          { ...candidate(E1, 1), display_amount: 200 },
-          { ...candidate(E2, 2), display_amount: 900 },
-          { ...candidate(E3, 3), display_amount: 300 },
-        ],
-        error: null,
-      })
-      enqueue({ data: [], error: null }) // no documents
-      enqueue({ data: [], error: null }) // no SI references (registration FK)
-      enqueue({ data: [], error: null }) // no SI references (payment FK)
-      enqueue({ data: [], error: null }) // no SI payment-row references
-      enqueue({ data: [], error: null }) // no exemptions
-      enqueue({ data: [], error: null }) // no invoices pointing at the entries
-      enqueue({ data: [], error: null }) // no invoice payment rows
-      enqueue({
-        data: [makeJournalEntry({ id: E1 }), makeJournalEntry({ id: E2 }), makeJournalEntry({ id: E3 })],
-        error: null,
-      }) // page rows
+    it('takes this path instead of the include_related RPC when a period is selected', async () => {
+      enqueue({ data: { ok: true, total_count: 0, ids: [] }, error: null })
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
-        searchParams: { missing_underlag: 'true', exclude_draft: 'true', sort_by: 'total_desc' },
+        searchParams: { missing_underlag: 'true', period_id: 'period-1', exclude_draft: 'true' },
       })
-      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
-        await GET(request)
-      )
+      const { status } = await parseJsonResponse(await GET(request))
 
       expect(status).toBe(200)
-      expect(body.data.map((e) => e.id)).toEqual([E2, E3, E1])
-      const candidateSelect = findCalls('journal_entries', 'select')[0]
-      expect(candidateSelect[0]).toContain('display_amount')
-    })
-
-    it('treats an anchored supplier-invoice reference as underlag (BFL 5 kap 7 §)', async () => {
-      enqueue({ data: [candidate(E1, 1), candidate(E2, 2)], error: null })
-      enqueue({ data: [], error: null }) // no direct documents
-      enqueue({
-        data: [
-          {
-            registration_journal_entry_id: E1,
-            payment_journal_entry_id: null,
-            document: { journal_entry_id: E1 }, // anchored → counts as underlag
-          },
-        ],
-        error: null,
-      })
-      enqueue({ data: [], error: null }) // no SI references via payment FK
-      enqueue({ data: [], error: null }) // no SI payment-row references
-      enqueue({ data: [], error: null }) // no exemptions
-      enqueue({ data: [], error: null }) // no invoices pointing at the entries
-      enqueue({ data: [], error: null }) // no invoice payment rows
-      enqueue({ data: [makeJournalEntry({ id: E2 })], error: null }) // page rows
-
-      const request = createMockRequest('/api/bookkeeping/journal-entries', {
-        searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
-      })
-      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
-        await GET(request)
+      expect(mockSupabase.rpc).not.toHaveBeenCalledWith(
+        'list_fiscal_period_entries_with_related',
+        expect.anything(),
       )
-
-      expect(status).toBe(200)
-      expect(body.data.map((e) => e.id)).toEqual([E2])
-      expect(body.count).toBe(1)
-    })
-
-    it('treats a customer invoice pointing at the entry as underlag (#2298)', async () => {
-      // E1: a SIE-imported voucher the user matched to an invoice created in
-      // Accounted (invoice_payments row). E2: nothing points at it.
-      enqueue({ data: [candidate(E1, 1), candidate(E2, 2)], error: null })
-      enqueue({ data: [], error: null }) // no direct documents
-      enqueue({ data: [], error: null }) // no SI references (registration FK)
-      enqueue({ data: [], error: null }) // no SI references (payment FK)
-      enqueue({ data: [], error: null }) // no SI payment-row references
-      enqueue({ data: [], error: null }) // no exemptions
-      enqueue({ data: [], error: null }) // no direct invoice links
-      enqueue({ data: [{ id: 'pay-1', invoice_id: 'inv-1', journal_entry_id: E1 }], error: null })
-      enqueue({ data: [makeJournalEntry({ id: E2 })], error: null }) // page rows
-
-      const request = createMockRequest('/api/bookkeeping/journal-entries', {
-        searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
-      })
-      const { status, body } = await parseJsonResponse<{ data: { id: string }[]; count: number }>(
-        await GET(request, { params: Promise.resolve({}) })
-      )
-
-      expect(status).toBe(200)
-      expect(body.data.map((e) => e.id)).toEqual([E2])
-      expect(body.count).toBe(1)
     })
 
     it('matches a voucher-label search against series+number, like the direct path', async () => {
-      // A voucher-shaped needle fans out to TWO candidate queries (description
-      // ilike, then series+number), unioned by id: a runtime-built .or()
-      // would count against the phantom-column scanner's ceiling.
-      enqueue({ data: [], error: null }) // candidates by description: none
-      enqueue({ data: [candidate(E1, 209)], error: null }) // candidates by voucher label
-      enqueue({ data: [], error: null }) // no documents
-      enqueue({ data: [], error: null }) // no SI references (registration FK)
-      enqueue({ data: [], error: null }) // no SI references (payment FK)
-      enqueue({ data: [], error: null }) // no SI payment-row references
-      enqueue({ data: [], error: null }) // no exemptions
-      enqueue({ data: [], error: null }) // no invoices pointing at the entries
-      enqueue({ data: [], error: null }) // no invoice payment rows
-      enqueue({ data: [makeJournalEntry({ id: E1 })], error: null }) // page rows
+      enqueue({ data: { ok: true, total_count: 1, ids: [E1] }, error: null })
+      enqueue({ data: [makeJournalEntry({ id: E1 })], error: null })
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
         searchParams: { missing_underlag: 'true', exclude_draft: 'true', search: 'A209' },
@@ -627,20 +538,17 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       )
 
       expect(status).toBe(200)
-      // Searching "A209" with the filter on must find verifikat A209 even
-      // when its description never mentions it.
       expect(body.data.map((e) => e.id)).toEqual([E1])
-      expect(body.count).toBe(1)
-      const eqCalls = findCalls('journal_entries', 'eq')
-      expect(eqCalls).toContainEqual(['voucher_series', 'A'])
-      expect(eqCalls).toContainEqual(['voucher_number', 209])
+      expect(rpcArgs()).toMatchObject({
+        p_search_pattern: '%A209%',
+        p_search_voucher_series: 'A',
+        p_search_voucher_number: 209,
+      })
     })
 
-    it('logs the driver error and answers with the Swedish text when a lookup fails (#2395)', async () => {
-      enqueue({ data: [candidate(E1, 1)], error: null }) // candidates
-      enqueue({ data: [], error: null }) // no documents
-      const driverError = { message: 'Request-URI Too Large', code: '414', details: null, hint: null }
-      enqueue({ data: null, error: driverError }) // SI by registration FK: gateway refused the URL
+    it('logs the driver error and answers with the Swedish text when the RPC fails (#2395)', async () => {
+      const driverError = { message: 'canceling statement due to statement timeout', code: '57014', details: null, hint: null }
+      enqueue({ data: null, error: driverError })
 
       const request = createMockRequest('/api/bookkeeping/journal-entries', {
         searchParams: { missing_underlag: 'true', exclude_draft: 'true' },
@@ -649,8 +557,6 @@ describe('GET /api/bookkeeping/journal-entries', () => {
 
       expect(status).toBe(500)
       expect(body.error).toBe('Verifikationerna kunde inte hämtas. Försök igen.')
-      // The operator gets the driver error; before this the log only carried
-      // the user text ("Något gick fel") and the 414 was invisible.
       const call = mockLogError.mock.calls.find(([msg]) => msg === 'failed to resolve missing-underlag entries')
       expect(call).toBeDefined()
       expect(call![2]).toEqual({ cause: driverError })
@@ -665,11 +571,9 @@ describe('GET /api/bookkeeping/journal-entries', () => {
       const { status } = await parseJsonResponse(await GET(request))
 
       expect(status).toBe(200)
-      // The drafts view goes through the normal direct query, not the
-      // resolver: no lookup-table queries.
+      // The drafts view goes through the normal direct query, not the RPC.
       expect(mockSupabase.from).toHaveBeenCalledWith('journal_entries')
-      expect(mockSupabase.from).not.toHaveBeenCalledWith('document_attachments')
-      expect(mockSupabase.from).not.toHaveBeenCalledWith('journal_entry_no_doc_required')
+      expect(mockSupabase.rpc).not.toHaveBeenCalledWith(RPC, expect.anything())
     })
   })
 })

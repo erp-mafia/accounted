@@ -30,7 +30,6 @@ import {
 import { shrinkImageForUpload } from '@/lib/documents/shrink-image'
 import { isShrinkableImage } from '@/lib/documents/upload-size'
 import {
-  conversationsAvailable,
   currentTicketId,
   displayStatus,
   isResolved,
@@ -45,6 +44,7 @@ import {
   type Thread,
   type TicketStatus,
   type TicketSummary,
+  whenConversationsReady,
 } from '@/lib/support/conversations'
 
 interface SupportLinkProps {
@@ -144,7 +144,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const bootstrap = useCallback(async (openId?: string | null) => {
     setView('loading')
     setThread(null)
-    if (!conversationsAvailable()) {
+    // Waits for an SDK that is still loading: asked once at open, a page that
+    // had just loaded (the reply mail's ?support=1 link) got the empty mail
+    // form instead of the answer (crm#1393).
+    if (!(await whenConversationsReady())) {
       setView('email')
       return
     }
@@ -164,11 +167,14 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     setView(start.view)
   }, [showTicket])
 
-  // Unread dot on the trigger: one cheap call when the trigger mounts.
+  // Unread dot on the trigger: one cheap call when the trigger mounts, once
+  // the SDK is ready (a trigger mounted with the page would otherwise never ask).
   useEffect(() => {
-    if (variant === 'hidden' || !conversationsAvailable()) return
+    if (variant === 'hidden') return
     let cancelled = false
-    listTickets().then((list) => {
+    void whenConversationsReady().then(async (ready) => {
+      if (!ready || cancelled) return
+      const list = await listTickets()
       if (!cancelled) setUnread(totalUnread(list))
     })
     return () => {

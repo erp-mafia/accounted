@@ -481,6 +481,22 @@ async function registryHintFromScb(
   }
 }
 
+/**
+ * The org number /lookup and /profile were asked about, from the JSON body
+ * (`{ org_number }`), or null when it is missing. Never a query parameter: a
+ * sole trader's org number is the owner's personnummer, and a URL is copied
+ * into request logs and error telemetry.
+ */
+async function orgNumberFromBody(request: Request): Promise<string | null> {
+  try {
+    const body = (await request.json()) as { org_number?: unknown } | null
+    const value = body && typeof body === 'object' ? body.org_number : null
+    return typeof value === 'string' && value.trim() !== '' ? value : null
+  } catch {
+    return null
+  }
+}
+
 export const ticExtension: Extension = {
   id: 'tic',
   name: 'Bolagsuppgifter',
@@ -497,20 +513,21 @@ export const ticExtension: Extension = {
 
   apiRoutes: [
     {
-      method: 'GET',
+      // A read sent as POST so the org number rides in the body
+      // (orgNumberFromBody); its one caller is fetchCompanyLookup.
+      method: 'POST',
       path: '/lookup',
-      // Used during onboarding (Step2CompanyDetails debounced lookup + the
-      // BankID picker): user is authenticated but does not yet have a
-      // company. Must not require a company context.
+      // Used during onboarding (the journey's orgnr step): user is
+      // authenticated but does not yet have a company. Must not require a
+      // company context.
       skipCompanyContext: true,
       handler: async (request: Request) => {
         const log = console
-        const url = new URL(request.url)
-        const orgNumber = url.searchParams.get('org_number')
+        const orgNumber = await orgNumberFromBody(request)
 
         if (!orgNumber) {
           return NextResponse.json(
-            { error: 'org_number query parameter is required' },
+            { error: 'org_number is required in the request body' },
             { status: 400 }
           )
         }
@@ -550,19 +567,20 @@ export const ticExtension: Extension = {
       },
     },
     {
-      method: 'GET',
+      // A POST for the same reason as /lookup; its one caller is the
+      // Bolagsuppgifter workspace (TicWorkspace).
+      method: 'POST',
       path: '/profile',
-      // Used during onboarding to render richer company profile details:
-      // user is authenticated but may not yet have a company. See /lookup.
+      // Renders richer company profile details: user is authenticated but
+      // may not yet have a company. See /lookup.
       skipCompanyContext: true,
       handler: async (request: Request) => {
         const log = console
-        const url = new URL(request.url)
-        const orgNumber = url.searchParams.get('org_number')
+        const orgNumber = await orgNumberFromBody(request)
 
         if (!orgNumber) {
           return NextResponse.json(
-            { error: 'org_number query parameter is required' },
+            { error: 'org_number is required in the request body' },
             { status: 400 }
           )
         }

@@ -19,8 +19,8 @@ export interface RegistrationEntryPreview {
 /**
  * The first of the two verifikat a payment of a still unbooked supplier
  * invoice posts (defer_invoice_booking): the invoice's own registration, booked
- * by the Bokför step on its invoice date, read-only. The payment's own rows
- * follow in the "Bokföring" card below it.
+ * by the Bokför step on its registration date (supplierInvoiceRegistrationDate),
+ * read-only. The payment's own rows follow in the "Bokföring" card below it.
  */
 export function RegistrationFirstCard({ entry }: { entry: RegistrationEntryPreview }) {
   const t = useTranslations('tx_invoice_match')

@@ -14,7 +14,9 @@
  * Under kontantmetoden no JE is posted at registration; recognition is
  * deferred to :mark-paid. An EU goods acquisition (reverse_charge_kind
  * eu_goods) is the exception: ML 7 kap. 26 § puts its moms in the invoice's
- * period, so it is registered as under faktureringsmetoden.
+ * period, at the latest the period holding the 15th of the month after
+ * delivery, so it is registered as under faktureringsmetoden, dated by
+ * supplierInvoiceRegistrationDate (both methods).
  *
  * `arrival_number` (ankomstnummer) is an internal counter; it does NOT carry
  * the BFL/ML 17 kap löpnummer obligation that customer invoices do. The
@@ -375,7 +377,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/supplier-invoices',
   summary: 'Register a new supplier invoice.',
   description:
-    'Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage, except for an EU goods acquisition (reverse_charge_kind eu_goods): ML 2023:200 7 kap. 26 § puts its reverse-charge moms in the period the invoice is issued whatever the accounting method, so it is booked on the invoice date like under faktureringsmetoden and its payment clears 2440. Under defer_invoice_booking (faktureringsmetoden, Registrera men bokför inte) no JE is posted either: book it afterwards with POST /supplier-invoices/{id}/book. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
+    'Creates a supplier invoice in `registered` status and posts the registration journal entry under faktureringsmetoden (Debit expense + Debit 2641 Ingående moms / Credit 2440 Leverantörsskulder). Under kontantmetoden no JE is posted at this stage, except for an EU goods acquisition (reverse_charge_kind eu_goods): ML 2023:200 7 kap. 26 § puts its reverse-charge moms in the period the invoice is issued whatever the accounting method, so it is booked like under faktureringsmetoden and its payment clears 2440. Under both methods an EU goods registration is dated on the invoice date, or on the 15th of the month after delivery_date when that is earlier (7 kap. 26 §: the moms belongs at the latest to the period holding that day); send delivery_date to apply it. Under defer_invoice_booking (faktureringsmetoden, Registrera men bokför inte) no JE is posted either: book it afterwards with POST /supplier-invoices/{id}/book. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
   useWhen:
     'You\'re registering an incoming leverantörsfaktura. Use dry-run first to validate VAT calculations + period-lock state before committing.',
   doNotUseFor:

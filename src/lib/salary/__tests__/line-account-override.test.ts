@@ -34,11 +34,12 @@ describe('lineAccountOverride', () => {
     }
   })
 
-  it('gives every manual payslip type except the gross deduction, kostförmån and the text row a picker', () => {
+  it('gives every manual payslip type except the gross deduction, the benefits and the text row a picker', () => {
     const withPicker = MANUAL_PAYSLIP_LINE_TYPES.filter((type) => lineAccountOverride(type) !== 'none')
     expect(withPicker).toEqual(
       MANUAL_PAYSLIP_LINE_TYPES.filter(
-        (type) => type !== 'gross_deduction_other' && type !== 'benefit_meals' && type !== 'text',
+        (type) =>
+          type !== 'gross_deduction_other' && type !== 'benefit_meals' && type !== 'benefit_other' && type !== 'text',
       ),
     )
   })

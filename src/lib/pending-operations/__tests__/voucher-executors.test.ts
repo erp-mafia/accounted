@@ -1176,6 +1176,41 @@ describe('commitPendingOperation: correct_entry', () => {
     })
   })
 
+  it('passes a staged sides_swapped through to correctEntry (crm#1397)', async () => {
+    vi.mocked(correctEntry).mockResolvedValueOnce({
+      reversal: makeJournalEntry({ id: 'je-storno', voucher_number: 50 }),
+      corrected: makeJournalEntry({ id: 'je-corrected', voucher_number: 51 }),
+    })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({
+      data: { id: 'je-original', status: 'posted', fiscal_period_id: 'fp-1', fiscal_periods: { is_closed: false } },
+      error: null,
+    })
+    enqueue({ data: null, error: null }) // dispatcher's commit update
+
+    const op = makePendingOp({
+      operation_type: 'correct_entry',
+      params: {
+        entry_id: 'je-original',
+        lines: [
+          { account_number: '6570', debit_amount: 0, credit_amount: 100 },
+          { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+        ],
+        sides_swapped: true,
+      },
+    })
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(vi.mocked(correctEntry).mock.calls[0][5]).toEqual({
+      allowDeepChain: false,
+      description: undefined,
+      sidesSwapped: true,
+    })
+  })
+
   it('returns 404 when the original entry does not exist', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

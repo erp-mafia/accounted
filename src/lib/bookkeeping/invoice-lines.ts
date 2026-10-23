@@ -715,6 +715,24 @@ export function buildInvoiceRegistrationLines(
 }
 
 /**
+ * The two-step split of a kreditfaktura (buildCreditNoteLines'
+ * options.deductionBookedSek): the customer's rows, and of Skatteverket's
+ * share the rows its payout booked. Null when the credit reverses the whole
+ * invoice: no two steps, or the payout booked the whole share.
+ */
+export function creditNoteDeductionSplit(
+  creditNote: Pick<InvoiceRegistrationLinesSource, 'items' | 'currency'>,
+  deductionBookedSek: number | null | undefined,
+): { customerItems: InvoiceItem[]; bookedItems: InvoiceItem[] } | null {
+  if (deductionBookedSek == null) return null
+  const split = splitDeductionShare(creditNote.items, creditNote.currency)
+  if (!split) return null
+  const booked = roundOre(Math.max(0, deductionBookedSek))
+  if (booked >= split.deductionSek) return null
+  return { customerItems: split.customerItems, bookedItems: scaleDeductionItems(split.deductionItems, booked) }
+}
+
+/**
  * The credit-note verifikat (reversed version of the original invoice entry),
  * pure: createCreditNoteJournalEntry books exactly these lines, and the send
  * dialog previews them. Supports per-item VAT rates and revenue accounts with
@@ -740,17 +758,21 @@ export function buildInvoiceRegistrationLines(
  * options.deferAccruals: as on buildInvoiceRegistrationLines (default true;
  * the kontantmetoden year-end carry passes false).
  *
- * options.deductionUnbooked: the original is a kontantmetod ROT/RUT invoice
- * whose payment booked only the customer's share and whose payout has not
- * booked Skatteverket's (isDeductionShareUnbooked). The credit then reverses
- * what the ledger holds, the customer's share, back onto 1510 with no 1513
- * leg: the share's revenue, moms and fordran were never booked.
+ * options.deductionBookedSek: the original is a kontantmetod ROT/RUT invoice
+ * on the two steps (getDeductionShareBookedByPayout): its payment booked the
+ * customer's share and its payout this many kronor of Skatteverket's share,
+ * 0 while no payout has. The credit reverses what the ledger holds: the
+ * customer's share back onto 1510, and of Skatteverket's share exactly what
+ * the payout booked (scaleDeductionItems, the payout's own scaling), with a
+ * 1513 credit of it: what Skatteverket paid and is owed back. A share still
+ * pending or refused was never booked and is not reversed. Undefined, null
+ * or the whole share: the full reversal.
  */
 export function buildCreditNoteLines(
   creditNote: InvoiceRegistrationLinesSource,
   entityType: EntityType,
   originalVoucherRef?: string,
-  options: { deferAccruals?: boolean; deductionUnbooked?: boolean } = {},
+  options: { deferAccruals?: boolean; deductionBookedSek?: number | null } = {},
 ): CreateJournalEntryLineInput[] {
   const lines: CreateJournalEntryLineInput[] = []
   const tag = invoiceTag(creditNote)
@@ -758,8 +780,8 @@ export function buildCreditNoteLines(
   // Dimensions PR7: the credit note's bag (copied from the original at credit
   // time) so the reversal nets against the same dimension cells in reports.
   const defaultDimensions = coerceDimensionsBag(creditNote.default_dimensions)
-  const split = options.deductionUnbooked ? splitDeductionShare(creditNote.items, creditNote.currency) : null
-  const creditItems = split ? split.customerItems : creditNote.items
+  const split = creditNoteDeductionSplit(creditNote, options.deductionBookedSek)
+  const creditItems = split ? [...split.customerItems, ...split.bookedItems] : creditNote.items
 
   // Revenue + VAT lines per rate group, each on its natural side for the
   // credit note's signed amounts: the other side of the original's.
@@ -816,9 +838,16 @@ export function buildCreditNoteLines(
 
   // ROT/RUT reverses the exact receivable split used by the original invoice:
   // 1510 for the customer portion and 1513 for the Skatteverket portion
-  // (none when the share was never booked).
+  // (under the two steps only what its payout booked, none before it).
   const rotRut = split
-    ? { lines: [] as CreateJournalEntryLineInput[], totalSek: 0 }
+    ? generateRotRutLines(
+        split.bookedItems,
+        tag,
+        creditNote.currency,
+        creditNote.exchange_rate,
+        defaultDimensions,
+        'credit',
+      )
     : creditNote.items && creditNote.items.length > 0
     ? generateRotRutLines(
         creditNote.items,

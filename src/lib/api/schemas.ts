@@ -2345,6 +2345,22 @@ export const CorrectJournalEntrySchema = z.object({
   // confirm in the UI). Without it, correcting an entry 3+ links deep in a
   // rättelse chain returns CORRECTION_CHAIN_TOO_DEEP.
   allow_deep_chain: z.boolean().optional(),
+  // The original was booked with debit and credit swapped and these lines
+  // book it the right way round. Without it, lines that negate the original
+  // answer MEANINGLESS_CORRECTION (reason negates_original): the storno
+  // already reverses the original, so the same reversal again is a second
+  // reversal, not a rättelse (crm#1397).
+  sides_swapped: z.boolean().optional(),
+})
+
+/**
+ * POST /api/bookkeeping/journal-entries/[id]/correct (the ändringsverifikation
+ * dialog): the v1 body plus the corrected entry's date. The storno stays on
+ * the original's date; the rättelse is dated `entry_date` in the period that
+ * covers it (crm#1368: a verifikat booked on the wrong day).
+ */
+export const CorrectJournalEntryAppSchema = CorrectJournalEntrySchema.extend({
+  entry_date: isoDate.optional(),
 })
 
 // ============================================================
@@ -2559,7 +2575,9 @@ export const CategorizeTransactionSchema = z
     vat_treatment: VatTreatmentSchema.optional(),
     // Basis box of a reverse-charge purchase booked by category or account:
     // eu_goods ruta 20, eu_services ruta 21, non_eu_services ruta 22. Only
-    // with vat_treatment 'reverse_charge'; omitted books an EU service.
+    // with vat_treatment 'reverse_charge'. Omitted, the v1 door reads the box
+    // off the row's underlag (or refuses, #94); the dashboard books an EU
+    // service, the box its review shows.
     reverse_charge_kind: z.enum(['eu_goods', 'eu_services', 'non_eu_services']).optional(),
     // The underlag's actual moms, in the transaction's currency. Replaces the
     // rate-based VAT line of a category or template booking (see
@@ -5329,6 +5347,21 @@ export const SalaryEmployeeOverrideSchema = z
       path: ['avgifter_amount_override'],
     },
   )
+  // The avgiftsunderlag override is a switch, not an amount: 0 (no underlag)
+  // or nothing. A partial underlag above 0 has no field of its own in the
+  // individuppgift (Bilaga Fältlista 1.1.18.1): the part left out would have
+  // to go to FK131 (pay that is no underlag at all) or FK019 (utgifter i
+  // arbetet by beslut or schablon), and a bare number says neither, so the
+  // IU kept declaring the full pay while the booking and FK487 moved (#91).
+  .refine(
+    (data) => data.avgifter_basis_override == null || data.avgifter_basis_override === 0,
+    {
+      message:
+        'Avgiftsunderlaget kan bara justeras till 0 kr, när ersättningen inte är underlag för arbetsgivaravgifter. ' +
+        'Ett delvis underlag går inte att redovisa i arbetsgivardeklarationen.',
+      path: ['avgifter_basis_override'],
+    },
+  )
 
 
 // ============================================================
@@ -5888,6 +5921,16 @@ export const PartySearchRegistryQuerySchema = z.object({
 /** GET /api/company/search: the onboarding picker's free-text query. */
 export const CompanySearchQuerySchema = z.object({
   q: z.string().trim().min(3).max(120),
+})
+
+/**
+ * POST /api/company/check-org-number: in the body, never the URL, because a
+ * sole trader's org number is the owner's personnummer and a URL is copied
+ * into request logs and error telemetry. Malformed numbers are answered by
+ * the route (no match), so only presence is checked here.
+ */
+export const CheckOrgNumberBodySchema = z.object({
+  org_number: z.string().trim().min(1).max(20),
 })
 
 /**

@@ -184,11 +184,28 @@ function isFSkattRow(sre: SalaryRunEmployeeRow): boolean {
  * beskrivning 1.1.18.2 avsnitt 5.4), crm#1372: the override used to reach
  * the booking only, while the IU still declared the pay in FK011/FK012 and
  * Skatteverket charged avgifter on it. A partial override (above 0) has no
- * field it could be declared in and keeps the filed underlag (see
- * declaredAvgifterForRun).
+ * field it could be declared in: the save refuses it, and a row stored
+ * before that is refused here (hasPartialAvgiftUnderlag, #91).
  */
 function declaresNoAvgiftUnderlag(sre: SalaryRunEmployeeRow): boolean {
   return !isFSkattRow(sre) && sre.avgifter_basis_override === 0
+}
+
+/**
+ * An avgiftsunderlag override above 0 on a payslip that is not an F-skatt
+ * payee's (#91). The IU can only leave pay out of the underlag through a
+ * field that says why (FK131 for pay that is no underlag for socialavgifter,
+ * FK019 for utgifter i arbetet by beslut or schablon; Bilaga Fältlista
+ * 1.1.18.1), and a bare number says neither, so the IU would declare the
+ * full pay in FK011 while the booking and FK487 carry the reduced one.
+ * F-skatt rows ignore every avgifter override (isFSkattRow invariant).
+ */
+function hasPartialAvgiftUnderlag(sre: SalaryRunEmployeeRow): boolean {
+  return (
+    !isFSkattRow(sre) &&
+    sre.avgifter_basis_override != null &&
+    sre.avgifter_basis_override !== 0
+  )
 }
 
 /**
@@ -468,6 +485,21 @@ export async function generateAgiDeclaration(
         },
       }
     }
+    // A partial underlag cannot be declared (hasPartialAvgiftUnderlag): the
+    // save refuses it since #91, and a row stored before that is refused
+    // here rather than filed with an IU that contradicts the booking.
+    if (hasPartialAvgiftUnderlag(sre)) {
+      return {
+        ok: false,
+        code: 'AGI_INCOMPLETE_DATA',
+        details: {
+          missing_fields: ['avgifter_basis_override'],
+          message:
+            `${who}: avgiftsunderlaget är justerat till ett delvis belopp, som inte går att redovisa i arbetsgivardeklarationen. ` +
+            'Rensa justeringen i avancerat läge, eller markera att ersättningen inte är underlag för arbetsgivaravgifter.',
+        },
+      }
+    }
     rowBenefits.push(resolution.benefits)
   }
 
@@ -603,10 +635,9 @@ export async function generateAgiDeclaration(
   // computeDeclaredAvgifterWithOverrides). It drops the borttag tombstones
   // and zeroes F-skatt rows (overrides included) itself. Rows WITHOUT an
   // avgifter_amount_override run Skatteverket's underlag computation on the
-  // FILED basis (never a partial basis override: it doesn't reach the IU
-  // fields, so Skatteverket computes from the filed underlag regardless, and
-  // letting it steer FK487 or the payment would file an FK487 contradicting
-  // the declaration's own IUs and underpay the skattekonto). A basis
+  // FILED basis (a partial basis override is refused above, #91: it cannot
+  // reach the IU fields, and letting it steer FK487 or the payment would
+  // file an FK487 contradicting the declaration's own IUs). A basis
   // override of 0 does reach the IU (declaresNoAvgiftUnderlag) and always
   // comes with an amount override of 0, refused above otherwise. Rows WITH an amount
   // override (FoU-avdrag and other manual adjustments) contribute their

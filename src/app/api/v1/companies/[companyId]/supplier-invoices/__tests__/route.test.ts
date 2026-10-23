@@ -1402,6 +1402,10 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices: behaviour shared 
     expect(res.status).toBe(400)
     const body = await res.json()
     expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    // A client reads which rule refused it, in both languages (#96).
+    expect(body.error.details.reason).toBe('vat_on_non_vat_registered')
+    expect(body.error.message).toContain('inte momsregistrerat')
+    expect(body.error.message_en).toMatch(/not VAT-registered/)
     expect(siInsert()).toBeUndefined()
     expect(mockedReg).not.toHaveBeenCalled()
   })

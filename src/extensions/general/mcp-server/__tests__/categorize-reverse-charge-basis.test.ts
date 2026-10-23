@@ -7,8 +7,9 @@
  *   - the named variants (reverse_charge_eu_services / _non_eu_services /
  *     _eu_goods) resolve to vat_treatment 'reverse_charge' + a kind, and the
  *     kind rides along in the staged params for the commit executor;
- *   - plain reverse_charge keeps working and books the EU-services default,
- *     which the preview states;
+ *   - plain reverse_charge takes the box the pinned underlag's seller and
+ *     the category give, and is refused when they cannot tell it: never ruta
+ *     21 by default (#94);
  *   - an override onto a basis account gets no second basis pair;
  *   - nor does a cost account whose momskod reports ruta 20-24 (crm#1096).
  * Companion suites: lib/bookkeeping/__tests__/category-mapping.test.ts (the
@@ -65,10 +66,12 @@ async function stage(
   args: Record<string, unknown>,
   overrideRow?: Record<string, unknown>,
   momskoder: Array<Record<string, unknown>> = [],
+  document?: Record<string, unknown>,
 ) {
   const { supabase, enqueue, findCall } = createQueuedMockSupabase()
-  enqueue({ data: coreTxRow }) // core: transactions
+  enqueue({ data: document ? { ...coreTxRow, document_id: 'doc-1' } : coreTxRow }) // core: transactions
   enqueue({ data: settingsRow }) // core: company_settings
+  if (document) enqueue({ data: { id: 'doc-1', extracted_data: document } }) // core: the pinned underlag
   enqueue({ data: [] }) // resolveSettlementAccount: no enabled cash accounts -> 1930
   if (overrideRow) enqueue({ data: overrideRow }) // applyAccountOverride: chart row
   // reconcileRcBasisWithChart reads the momskoder once the mapping carries a basis pair.
@@ -140,16 +143,42 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     })
   })
 
-  it('books plain reverse_charge on EU services and says it defaulted', async () => {
-    const { params, lines, result } = await stage({ vat_treatment: 'reverse_charge' })
+  it('refuses plain reverse_charge when no underlag tells the seller country, and stages nothing (#94)', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: coreTxRow })
+    enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount
+    enqueue({ data: [] }) // momskoder
+    await expect(
+      categorize.execute(
+        { transaction_id: TX_ID, category: 'expense_software', vat_treatment: 'reverse_charge' },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      ),
+    ).rejects.toMatchObject({
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN',
+      message: expect.stringContaining('reverse_charge_non_eu_services'),
+    })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
 
-    expect(params.vat_treatment).toBe('reverse_charge')
-    expect(params).not.toHaveProperty('reverse_charge_kind')
-    expect(lines.map((l) => l.account_number)).toEqual(expect.arrayContaining(['2645', '2614', '4535', '4598']))
-    expect(balanced(lines)).toBe(true)
-    const summary = result.preview.reverse_charge as Record<string, unknown>
-    expect(summary).toMatchObject({ kind: 'eu_services', kind_source: 'default', basis_account: '4535', ruta: 'ruta21' })
-    expect(summary.note).toMatch(/reverse_charge_non_eu_services/)
+  it('books a US seller on the pinned underlag in ruta 22 and stages that box (#94)', async () => {
+    const usSeller = { supplier: { address: '548 Market St, San Francisco, California 94104, United States' }, totals: { vatAmount: 0 } }
+    const { params, lines, result } = await stage({ vat_treatment: 'reverse_charge' }, undefined, [], usSeller)
+
+    expect(params.reverse_charge_kind).toBe('non_eu_services')
+    expect(lines.find((l) => l.account_number === '4531')?.debit_amount).toBe(250)
+    expect(lines.map((l) => l.account_number)).not.toContain('4535')
+    expect(result.preview.reverse_charge).toMatchObject({ kind: 'non_eu_services', kind_source: 'underlag', ruta: 'ruta22' })
+  })
+
+  it('books an EU seller on the pinned underlag in ruta 21', async () => {
+    const ieSeller = { supplier: { vatNumber: 'IE3668997OH' }, totals: { vatAmount: 0 } }
+    const { params, result } = await stage({ vat_treatment: 'reverse_charge' }, undefined, [], ieSeller)
+    expect(params.reverse_charge_kind).toBe('eu_services')
+    expect(result.preview.reverse_charge).toMatchObject({ basis_account: '4535', ruta: 'ruta21', kind_source: 'underlag' })
   })
 
   it('books EU goods on 4515 (ruta 20)', async () => {
@@ -187,7 +216,7 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
 
   it('keeps the basis pair on the issue override account (6540)', async () => {
     const { lines } = await stage(
-      { vat_treatment: 'reverse_charge', account_override: '6540' },
+      { vat_treatment: 'reverse_charge_eu_services', account_override: '6540' },
       { account_number: '6540', account_class: 6, is_active: true },
     )
     expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual(expect.arrayContaining([

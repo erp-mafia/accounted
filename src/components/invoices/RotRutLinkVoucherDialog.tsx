@@ -19,6 +19,7 @@ import {
   type ErrorLocale,
 } from '@/lib/errors/get-error-message'
 import type { RotRutPayoutVoucherCandidate } from '@/lib/invoices/rot-rut-link-voucher'
+import { roundOre } from '@/lib/money'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 
 interface RotRutLinkVoucherDialogProps {
@@ -74,7 +75,11 @@ export default function RotRutLinkVoucherDialog({
   }, [locale, request.id, t, toast])
 
   const selected = candidates?.find((c) => c.journal_entry_id === selectedId) ?? null
-  const rounding = selected ? Math.round((selected.receivable_credit - request.expected) * 100) / 100 : 0
+  // What the voucher books as Skatteverket's share: 1513, and under
+  // kontantmetodens two steps the share's revenue and moms (share_credit).
+  const covered = (candidate: RotRutPayoutVoucherCandidate) =>
+    roundOre((candidate.receivable_credit ?? 0) + (candidate.share_credit ?? 0))
+  const rounding = selected ? roundOre(covered(selected) - request.expected) : 0
 
   async function link() {
     if (!selected || linking) return
@@ -148,7 +153,7 @@ export default function RotRutLinkVoucherDialog({
                       {candidate.description ?? '-'}
                     </span>
                   </span>
-                  <span className="shrink-0 tabular-nums">{formatCurrency(candidate.receivable_credit)}</span>
+                  <span className="shrink-0 tabular-nums">{formatCurrency(covered(candidate))}</span>
                 </button>
               )
             })}
@@ -161,6 +166,12 @@ export default function RotRutLinkVoucherDialog({
             <dd className="text-right tabular-nums">{formatCurrency(selected.bank_amount)}</dd>
             <dt className="text-muted-foreground">{t('link_voucher_receivable')}</dt>
             <dd className="text-right tabular-nums">{formatCurrency(selected.receivable_credit)}</dd>
+            {selected.share_credit > 0 && (
+              <>
+                <dt className="text-muted-foreground">{t('link_voucher_share')}</dt>
+                <dd className="text-right tabular-nums">{formatCurrency(selected.share_credit)}</dd>
+              </>
+            )}
             <dt className="text-muted-foreground">{t('link_voucher_rounding')}</dt>
             <dd className="text-right tabular-nums">{formatCurrency(rounding)}</dd>
             <dd className="col-span-2 mt-2 text-xs text-muted-foreground">

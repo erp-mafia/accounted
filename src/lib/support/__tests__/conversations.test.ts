@@ -1,5 +1,5 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { displayStatus, listTickets, loadThread, replyInThread, splitByStatus, startThread, startView, toSummary, toThreadMessage, totalUnread } from '@/lib/support/conversations'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { displayStatus, listTickets, loadThread, replyInThread, splitByStatus, startThread, startView, toSummary, toThreadMessage, totalUnread, whenConversationsReady } from '@/lib/support/conversations'
 
 const getTicketsMock = vi.fn()
 const getMessagesMock = vi.fn()
@@ -7,10 +7,17 @@ const sendMessageMock = vi.fn()
 // Like the SDK: getMessages(id) makes id the current ticket before it fetches,
 // and sendMessage continues whatever is current when it is called.
 let sdkCurrent: string | null = 'cur'
+// isAvailable() is false until PostHog's remote config and the conversations
+// bundle have loaded; analytics may be off for the deployment or this browser.
+let sdkAvailable = true
+let analyticsEnabled = true
+let analyticsStarted = true
+vi.mock('@/lib/analytics/enabled', () => ({ isAnalyticsEnabled: () => analyticsEnabled }))
+vi.mock('@/lib/analytics/client', () => ({ isAnalyticsActive: () => analyticsEnabled && analyticsStarted }))
 vi.mock('posthog-js', () => ({
   default: {
     conversations: {
-      isAvailable: () => true,
+      isAvailable: () => sdkAvailable,
       getCurrentTicketId: () => sdkCurrent,
       getTickets: (...a: unknown[]) => getTicketsMock(...a),
       getMessages: (...a: unknown[]) => {
@@ -163,5 +170,81 @@ describe('SDK wrappers', () => {
       expect(await replyInThread('on-screen', 'hej')).toBeNull()
       expect(sendMessageMock).not.toHaveBeenCalled()
     })
+  })
+})
+
+describe('whenConversationsReady (crm#1393)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    sdkAvailable = true
+    analyticsEnabled = true
+    analyticsStarted = true
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+    sdkAvailable = true
+    analyticsEnabled = true
+    analyticsStarted = true
+  })
+
+  it('answers true at once when the SDK is ready', async () => {
+    await expect(whenConversationsReady()).resolves.toBe(true)
+  })
+
+  it('waits for an SDK that is still loading instead of reading it as no conversations', async () => {
+    // The page just loaded (the reply mail's ?support=1 link): Support comes
+    // up some hundred milliseconds later. Asked once, this was the mail form.
+    sdkAvailable = false
+    let answer: boolean | undefined
+    void whenConversationsReady().then((ready) => {
+      answer = ready
+    })
+    await vi.advanceTimersByTimeAsync(300)
+    expect(answer).toBeUndefined()
+    sdkAvailable = true
+    await vi.advanceTimersByTimeAsync(100)
+    expect(answer).toBe(true)
+  })
+
+  it('waits for PostHog to start in this browser within the grace period', async () => {
+    sdkAvailable = false
+    analyticsStarted = false
+    const ready = whenConversationsReady()
+    await vi.advanceTimersByTimeAsync(200)
+    analyticsStarted = true
+    sdkAvailable = true
+    await vi.advanceTimersByTimeAsync(100)
+    await expect(ready).resolves.toBe(true)
+  })
+
+  it('answers false at once on an install without PostHog', async () => {
+    sdkAvailable = false
+    analyticsEnabled = false
+    await expect(whenConversationsReady()).resolves.toBe(false)
+  })
+
+  it('answers false after the grace period when analytics is off in this browser', async () => {
+    sdkAvailable = false
+    analyticsStarted = false
+    let answer: boolean | undefined
+    void whenConversationsReady().then((ready) => {
+      answer = ready
+    })
+    await vi.advanceTimersByTimeAsync(900)
+    expect(answer).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(200)
+    expect(answer).toBe(false)
+  })
+
+  it('gives up after the timeout when Support never comes up', async () => {
+    sdkAvailable = false
+    let answer: boolean | undefined
+    void whenConversationsReady().then((ready) => {
+      answer = ready
+    })
+    await vi.advanceTimersByTimeAsync(4_800)
+    expect(answer).toBeUndefined()
+    await vi.advanceTimersByTimeAsync(300)
+    expect(answer).toBe(false)
   })
 })

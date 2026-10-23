@@ -23,6 +23,7 @@ import { fieldValidationError, zodErrorFieldIssues } from './refusal'
 import {
   conflictCode,
   getErrorEntry,
+  siCreateInvalidInputMessages,
   type StructuredErrorEntry,
   type StructuredErrorRemediation,
 } from './structured-errors'
@@ -43,6 +44,7 @@ import {
   DimensionValidationError,
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
+  ImportVatWithoutBaseError,
   MigratedDeductionHeldByRequestError,
   ReversalHookMissingError,
   FiscalPeriodNotFoundError,
@@ -699,6 +701,9 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   if (err instanceof DimensionValidationError) {
     return { code: err.code, details: { issues: err.issues } }
   }
+  if (err instanceof ImportVatWithoutBaseError) {
+    return { code: err.code, details: { import_vat_accounts: err.importVatAccounts } }
+  }
   // Without this arm a required-dimension refusal (account_dimension_rules)
   // fell through to the INTERNAL_ERROR default: a 500 that never said which
   // account needs which dimension, so the user could not fix the tag.
@@ -765,6 +770,14 @@ function buildResponse(
   if (!authoredMessage && code === 'VALIDATION_ERROR' && Array.isArray((details as { issues?: unknown } | undefined)?.issues)) {
     body.error.message = getErrorMessage(body, { locale: 'sv' })
     body.error.message_en = getErrorMessage(body, { locale: 'en' })
+  }
+  // The same for a refused supplier invoice: the sentence for its
+  // details.reason, so a v1 client and the dashboard read which rule refused
+  // it, not one sentence for all of them (#96).
+  const invalidInput = !authoredMessage && code === 'SI_CREATE_INVALID_INPUT' ? siCreateInvalidInputMessages(details) : null
+  if (invalidInput) {
+    body.error.message = invalidInput.message_sv
+    body.error.message_en = invalidInput.message_en
   }
   const res = NextResponse.json(body, { status: entry.httpStatus })
   if (requestId) res.headers.set('X-Request-Id', requestId)

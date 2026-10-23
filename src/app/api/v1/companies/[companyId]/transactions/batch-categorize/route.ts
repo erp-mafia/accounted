@@ -78,6 +78,7 @@ registerEndpoint({
     'Idempotency-Key covers the WHOLE batch: replays return the cached full response.',
     'all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.',
     'Per item, the same double-booking guards as `:categorize`: TRANSACTION_BOOK_POSSIBLE_DUPLICATE (the ledger already books that bank line; override per item with `force: true` plus the echoed `expected_duplicate_journal_entry_id` / `expected_duplicate_transaction_id`) and TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH (an open invoice covers a plain 244x / 151x categorization; override with `confirm_no_match: true`). An item never dedupes against a verifikat booked earlier in the same batch.',
+    'Per item as on `:categorize`: reverse_charge without reverse_charge_kind takes the box from the seller country on that row\'s underlag, else the item fails with TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN.',
   ],
   example: {
     request: {
@@ -214,6 +215,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
             dryRun: ctx.dryRun,
             onBooked: 'update_flags',
             forceVia: 'api_force',
+            reverseChargeBoxParam: 'reverse_charge_kind',
             exclude: {
               excludeTransactionIds: [...bookedTransactionIds],
               excludeJournalEntryIds: [...bookedJournalEntryIds],

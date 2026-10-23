@@ -5,7 +5,9 @@ import type { CreateJournalEntryLineInput } from '@/types'
 import {
   BookkeepingDatabaseError,
   CorrectionChainTooDeepError,
+  ImportVatWithoutBaseError,
   MeaninglessCorrectionError,
+  TargetPeriodClosedError,
   TargetPeriodLockedError,
 } from '@/lib/bookkeeping/errors'
 
@@ -59,6 +61,21 @@ vi.mock('@/lib/core/bookkeeping/storno-target', () => ({
   assertStornoTarget: (...args: Parameters<typeof mockAssertStornoTarget>) => mockAssertStornoTarget(...args),
 }))
 
+// Where a dated rättelse lands (crm#1368): only called when a caller gives
+// a new date without its period; every other test never reaches it.
+const mockResolvePeriod = vi.fn()
+vi.mock('@/lib/core/bookkeeping/period-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/core/bookkeeping/period-service')>()),
+  resolvePeriodStatusForDate: (...args: unknown[]) => mockResolvePeriod(...args),
+}))
+
+// The company's momsruta per account for the importmoms rule (#94): the BAS
+// map only, no account of its own (import-vat-base.test.ts covers the rest).
+const mockFetchDynamic = vi.fn()
+vi.mock('@/lib/reports/vat-revenue-accounts', () => ({
+  fetchDynamicVatAccounts: (...args: unknown[]) => mockFetchDynamic(...args),
+}))
+
 // On-demand BAS backfill, default: nothing seedable. Tests override.
 const mockBackfill = vi.fn()
 vi.mock('@/lib/bookkeeping/account-backfill', () => ({
@@ -84,6 +101,7 @@ beforeEach(() => {
   })
   vi.mocked(cancelOrphanedEntry).mockResolvedValue({ error: null })
   mockBackfill.mockResolvedValue([])
+  mockFetchDynamic.mockResolvedValue({ mappingByAccount: new Map(), explicitAccounts: new Set() })
 })
 
 describe('correctEntry', () => {
@@ -1159,5 +1177,269 @@ describe('correctEntry: dimension-only corrections', () => {
       reason: 'identical_to_original',
     })
     expect(inserts.filter((i) => i.table === 'journal_entries')).toHaveLength(0)
+  })
+})
+
+/**
+ * crm#1397: "Skapa ändringsverifikation" on a bank fee, with the original's
+ * lines swapped to debit/credit as the rättelse. The storno already reverses
+ * the original, so the rättelse reversed it a second time and the fee ended
+ * at minus 100 kr. crm#1368: the user only wanted the right date.
+ */
+describe('correctEntry: a rättelse that reverses the original again (crm#1397)', () => {
+  const fee = makeJournalEntry({
+    id: 'orig-1',
+    status: 'posted',
+    description: 'Bankavgift',
+    entry_date: '2026-10-27',
+    fiscal_period_id: 'fp-2026',
+    voucher_series: 'A',
+    lines: [
+      makeJournalEntryLine({ account_number: '6570', debit_amount: 100, credit_amount: 0 }),
+      makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 100 }),
+    ],
+  })
+  const swapped = [
+    { account_number: '6570', debit_amount: 0, credit_amount: 100 },
+    { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+  ]
+  const asBooked = [
+    { account_number: '6570', debit_amount: 100, credit_amount: 0 },
+    { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+  ]
+
+  function fullRunResults(extraBeforeAccounts: Array<{ data?: unknown; error?: unknown }> = []) {
+    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
+    const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
+    return [
+      { data: fee, error: null }, // fetch original
+      ...extraBeforeAccounts,
+      { data: [{ id: 'acc-6570', account_number: '6570' }, { id: 'acc-1930', account_number: '1930' }], error: null },
+      { data: reversalEntry, error: null }, // insert reversal
+      { data: null, error: null }, // reversal lines
+      { data: null, error: null }, // post reversal
+      { data: correctedEntry, error: null }, // insert corrected
+      { data: null, error: null }, // corrected lines
+      { data: null, error: null }, // post corrected
+      { data: [{ id: 'orig-1' }], error: null }, // CAS original to reversed
+      { data: null, error: null }, // relink transactions
+      { data: null, error: null }, // relink voucher links
+      { data: null, error: null }, // relink documents
+      { data: { ...reversalEntry, lines: [] }, error: null },
+      { data: { ...correctedEntry, lines: [] }, error: null },
+    ]
+  }
+
+  function journalEntryInserts() {
+    return inserts
+      .filter((i) => i.table === 'journal_entries')
+      .map((i) => i.payload as { source_type: string; entry_date: string; fiscal_period_id: string })
+  }
+
+  it('refuses the original with debit and credit swapped before anything is written', async () => {
+    results = [{ data: fee, error: null }]
+    const supabase = makeClient()
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', swapped)
+    ).rejects.toMatchObject({ code: 'MEANINGLESS_CORRECTION', reason: 'negates_original' })
+
+    expect(journalEntryInserts()).toHaveLength(0)
+    expect(commitStornoOrCorrectionDraft).not.toHaveBeenCalled()
+  })
+
+  it('refuses it however the swapped amounts are split or tagged', async () => {
+    results = [{ data: fee, error: null }]
+    const supabase = makeClient()
+    const splitAndTagged = [
+      { account_number: '6570', debit_amount: 0, credit_amount: 60, dimensions: { '6': 'P001' } },
+      { account_number: '6570', debit_amount: 0, credit_amount: 40 },
+      { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+    ]
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', splitAndTagged)
+    ).rejects.toMatchObject({ reason: 'negates_original' })
+    expect(journalEntryInserts()).toHaveLength(0)
+  })
+
+  it('refuses it on another date too: a second reversal is not made right by its date', async () => {
+    results = [{ data: fee, error: null }]
+    const supabase = makeClient()
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', swapped, { newEntryDate: '2026-07-27' })
+    ).rejects.toMatchObject({ reason: 'negates_original' })
+    expect(mockResolvePeriod).not.toHaveBeenCalled()
+    expect(journalEntryInserts()).toHaveLength(0)
+  })
+
+  it('posts the swapped lines when the caller says the original had the sides swapped', async () => {
+    results = fullRunResults()
+    const supabase = makeClient()
+
+    const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', swapped, {
+      sidesSwapped: true,
+    })
+
+    expect(result.corrected).toBeDefined()
+    const correctedLines = inserts
+      .filter((i) => i.table === 'journal_entry_lines')
+      .map((i) => i.payload as Array<{ account_number: string; debit_amount: number; credit_amount: number }>)[1]
+    expect(correctedLines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['6570', 0, 100],
+      ['1930', 100, 0],
+    ])
+  })
+
+  it('moves the rättelse to the date the user gives, in the period that covers it; the storno keeps the original date', async () => {
+    mockResolvePeriod.mockResolvedValue({ period_id: 'fp-2026', status: 'open', lock_date: null })
+    // fp-2026 still covers the new date: the bounds read after the period is found.
+    results = fullRunResults([
+      { data: { name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }, error: null },
+    ])
+    const supabase = makeClient()
+
+    const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', asBooked, {
+      newEntryDate: '2026-07-27',
+    })
+
+    expect(result.corrected).toBeDefined()
+    expect(mockResolvePeriod).toHaveBeenCalledWith(supabase, 'company-1', '2026-07-27')
+    expect(journalEntryInserts()).toEqual([
+      expect.objectContaining({ source_type: 'storno', entry_date: '2026-10-27', fiscal_period_id: 'fp-2026' }),
+      expect.objectContaining({ source_type: 'correction', entry_date: '2026-07-27', fiscal_period_id: 'fp-2026' }),
+    ])
+  })
+
+  it('refuses a rättelse date in a locked period before anything is written', async () => {
+    mockResolvePeriod.mockResolvedValue({ period_id: 'fp-2026', status: 'locked', lock_date: '2026-09-30' })
+    results = [{ data: fee, error: null }]
+    const supabase = makeClient()
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', asBooked, { newEntryDate: '2026-07-27' })
+    ).rejects.toBeInstanceOf(TargetPeriodLockedError)
+    expect(journalEntryInserts()).toHaveLength(0)
+  })
+
+  it('refuses a rättelse date in a closed year', async () => {
+    mockResolvePeriod.mockResolvedValue({ period_id: 'fp-2025', status: 'closed', lock_date: null })
+    results = [{ data: fee, error: null }]
+    const supabase = makeClient()
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', asBooked, { newEntryDate: '2025-12-27' })
+    ).rejects.toBeInstanceOf(TargetPeriodClosedError)
+    expect(journalEntryInserts()).toHaveLength(0)
+  })
+
+  it('treats the original date as no date change: identical lines are still nothing to correct', async () => {
+    results = [{ data: fee, error: null }]
+    const supabase = makeClient()
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', asBooked, { newEntryDate: '2026-10-27' })
+    ).rejects.toMatchObject({ reason: 'identical_to_original' })
+    expect(mockResolvePeriod).not.toHaveBeenCalled()
+  })
+})
+
+/**
+ * Importmoms keeps its ruta 50 base through a rättelse (#94). The booking
+ * doors refuse 2615/2625/2635 credited with no 4545-4547 line (#83); a
+ * correction that kept or introduced the shape posted it anyway (28 rättelser
+ * in production, mostly a cost account changed beside a pre-2015 2615).
+ */
+describe('correctEntry: importmoms without its ruta 50 base', () => {
+  const euPurchaseOn2615 = makeJournalEntry({
+    id: 'orig-1',
+    status: 'posted',
+    description: 'EU-köp',
+    entry_date: '2026-03-17',
+    fiscal_period_id: 'fp-1',
+    voucher_series: 'A',
+    source_type: 'bank_transaction',
+    lines: [
+      makeJournalEntryLine({ account_number: '4515', debit_amount: 1000, credit_amount: 0 }),
+      makeJournalEntryLine({ account_number: '2645', debit_amount: 250, credit_amount: 0 }),
+      makeJournalEntryLine({ account_number: '2615', debit_amount: 0, credit_amount: 250 }),
+      makeJournalEntryLine({ account_number: '1930', debit_amount: 0, credit_amount: 1000 }),
+    ],
+  })
+
+  it('refuses corrected lines that keep 2615 without a base, before the storno is written', async () => {
+    results = [{ data: euPurchaseOn2615, error: null }]
+    const supabase = makeClient()
+    const kept2615 = [
+      { account_number: '5460', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ]
+
+    const refusal = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', kept2615).catch((e) => e)
+
+    expect(refusal).toBeInstanceOf(ImportVatWithoutBaseError)
+    expect(refusal).toMatchObject({ code: 'IMPORT_VAT_WITHOUT_BASE', importVatAccounts: ['2615'] })
+    expect(refusal.message).toContain('rättelsen')
+    expect(inserts).toHaveLength(0)
+    expect(commitStornoOrCorrectionDraft).not.toHaveBeenCalled()
+  })
+
+  it('passes a rättelse that moves the fiktiv moms to 2614 (the importmoms comes out)', async () => {
+    const reversalEntry = makeJournalEntry({ id: 'reversal-1', reverses_id: 'orig-1' })
+    const correctedEntry = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'orig-1' })
+    const to2614 = [
+      { account_number: '4515', debit_amount: 1000, credit_amount: 0 },
+      { account_number: '2645', debit_amount: 250, credit_amount: 0 },
+      { account_number: '2614', debit_amount: 0, credit_amount: 250 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 1000 },
+    ]
+    results = [
+      { data: euPurchaseOn2615, error: null },
+      { data: to2614.map((l) => ({ id: `acc-${l.account_number}`, account_number: l.account_number })), error: null },
+      { data: reversalEntry, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: correctedEntry, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: [{ id: 'orig-1' }], error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: null, error: null },
+      { data: { ...reversalEntry, lines: [] }, error: null },
+      { data: { ...correctedEntry, lines: to2614 }, error: null },
+    ]
+    const supabase = makeClient()
+
+    const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', to2614)
+
+    expect(result.corrected).toBeDefined()
+    // No line credits importmoms: the chart is never read.
+    expect(mockFetchDynamic).not.toHaveBeenCalled()
+  })
+
+  it('does not judge a pure move: the same lines on another date (recordate)', async () => {
+    results = [
+      { data: euPurchaseOn2615, error: null },
+      // The target period is read next, so the guard let the move through.
+      { data: { name: '2025', period_start: '2025-01-01', period_end: '2025-05-31' }, error: null },
+    ]
+    const supabase = makeClient()
+    const sameLines = euPurchaseOn2615.lines!.map((l) => ({
+      account_number: l.account_number,
+      debit_amount: Number(l.debit_amount),
+      credit_amount: Number(l.credit_amount),
+    }))
+
+    await expect(
+      correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', sameLines, {
+        newEntryDate: '2025-06-15',
+        newFiscalPeriodId: 'fp-2',
+      }),
+    ).rejects.toMatchObject({ code: 'ENTRY_DATE_OUTSIDE_FISCAL_PERIOD' })
+    expect(mockFetchDynamic).not.toHaveBeenCalled()
   })
 })

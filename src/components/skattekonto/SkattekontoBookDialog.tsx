@@ -16,9 +16,11 @@ import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-ac
 import { SkattekontoLinkProposalsDialog } from './SkattekontoLinkProposalsDialog'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import type {
   SkattekontoBatchResult,
   SkattekontoBatchRowResult,
+  SkattekontoBookingSuggestion,
   SkattekontoLedgerCoverInfo,
   SkattekontoLedgerTwin,
   SkattekontoTransactionWithSuggestion,
@@ -75,6 +77,24 @@ const TWIN_PROBE_TIMEOUT_MS = 8000
  * The server refusal stays the guard; the probe only stops the dialog from
  * offering a booking it would refuse.
  */
+
+/** The receivable a rot/rut payout clears (1513 in the SE pack). */
+const ROT_RUT_RECEIVABLE = resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable')
+
+/**
+ * The accounts a rot/rut set-off booked as its begäran's payout credits
+ * (buildRotRutPayoutLines): 1513 for any part already on it, then the
+ * share's revenue and moms.
+ */
+function payoutCreditAccounts(leg: NonNullable<SkattekontoBookingSuggestion['rot_rut_payout']>['leg']): string[] {
+  const recognised = leg.recognition?.amount ?? 0
+  const accounts = roundOre(leg.amount - recognised) > 0 ? [ROT_RUT_RECEIVABLE] : []
+  for (const line of leg.recognition?.lines ?? []) {
+    if (!accounts.includes(line.account_number)) accounts.push(line.account_number)
+  }
+  return accounts
+}
+
 export default function SkattekontoBookDialog({
   row,
   open,
@@ -768,10 +788,17 @@ export default function SkattekontoBookDialog({
             <dd className="text-right tabular-nums">
               {t('posting_value', {
                 skattekonto: skattekontoAccount,
-                account: suggestion.account_name
-                  ? `${suggestion.account} ${suggestion.account_name}`
-                  : suggestion.account,
+                account: suggestion.rot_rut_payout
+                  ? payoutCreditAccounts(suggestion.rot_rut_payout.leg).join(', ')
+                  : suggestion.account_name
+                    ? `${suggestion.account} ${suggestion.account_name}`
+                    : suggestion.account,
               })}
+              {suggestion.rot_rut_payout ? (
+                <span className="block text-xs text-muted-foreground">
+                  {t('posting_rot_rut_payout', { name: suggestion.rot_rut_payout.request_name })}
+                </span>
+              ) : null}
               {suggestion.ore_rounding ? (
                 <span className="block text-xs text-muted-foreground">
                   {t('posting_rounding', {

@@ -695,6 +695,8 @@ Per Bokföringslagen 5 kap 5 §, posted entries cannot be modified. This endpoin
 - The original's entry_date and fiscal_period_id are inherited. If the original's period has been locked since posting, the call returns PERIOD_LOCKED.
 - Three voucher numbers are advanced in this call: the original (already burned), the reversal, and the corrected. The series stays unbroken.
 - A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.
+- Lines that are the original with debit and credit swapped return MEANINGLESS_CORRECTION (400, details.reason negates_original): the storno already reverses the original. To only cancel an entry use /reverse; pass sides_swapped=true only when the original itself was booked with the sides swapped.
+- Lines crediting import VAT (2615/2625/2635, boxes 60-62) need the taxable amount in box 50 (4545-4547) in the same lines, else 400 IMPORT_VAT_WITHOUT_BASE; reverse charge books its output VAT on 2614/2624/2634.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -707,7 +709,8 @@ Request body:
 {
   description?: string,
   lines: { account_number: string, debit_amount?: number, credit_amount?: number, line_description?: string, currency?: string, amount_in_currency?: number, exchange_rate?: number, tax_code?: string, dimensions?: Record<string, string>, cost_center?: string, project?: string }[],
-  allow_deep_chain?: boolean
+  allow_deep_chain?: boolean,
+  sides_swapped?: boolean
 }
 ```
 

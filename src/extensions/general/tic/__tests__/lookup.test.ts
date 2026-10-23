@@ -34,10 +34,11 @@ const mockSearch = vi.mocked(searchCompanyByOrgNumber)
 const mockFiscalYears = vi.mocked(getFiscalYears)
 
 function makeRequest(orgNumber?: string): Request {
-  const url = orgNumber
-    ? `http://localhost/api/extensions/ext/tic/lookup?org_number=${encodeURIComponent(orgNumber)}`
-    : 'http://localhost/api/extensions/ext/tic/lookup'
-  return new Request(url)
+  return new Request('http://localhost/api/extensions/ext/tic/lookup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(orgNumber === undefined ? {} : { org_number: orgNumber }),
+  })
 }
 
 const lookupHandler = testRoutes(ticExtension)[0].handler
@@ -86,6 +87,26 @@ describe('TIC lookup route', () => {
 
   it('returns 400 when org_number is missing', async () => {
     const res = await lookupHandler(makeRequest())
+    expect(res.status).toBe(400)
+  })
+
+  it('is a POST that reads the body, so the org number stays out of the URL (#95)', async () => {
+    const routes = ticExtension.apiRoutes ?? []
+    for (const path of ['/lookup', '/profile']) {
+      expect(routes.filter((r) => r.path === path).map((r) => r.method)).toEqual(['POST'])
+    }
+    // A query parameter is no longer read.
+    const res = await lookupHandler(
+      new Request('http://localhost/api/extensions/ext/tic/lookup?org_number=5560360793', { method: 'POST' }),
+    )
+    expect(res.status).toBe(400)
+    expect(mockSearch).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for a body that is not JSON', async () => {
+    const res = await lookupHandler(
+      new Request('http://localhost/api/extensions/ext/tic/lookup', { method: 'POST', body: 'org_number=5560360793' }),
+    )
     expect(res.status).toBe(400)
   })
 

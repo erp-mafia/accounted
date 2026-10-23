@@ -78,6 +78,8 @@ function makeMock(opts: {
   vatRegistered?: boolean
   /** When set, company_settings also serves these columns (booking mode). */
   companySettings?: Record<string, unknown>
+  /** When set, the company_settings read answers exactly this (a failed or empty read). */
+  settingsRead?: { data: unknown; error: unknown }
 }) {
   const inboxResult = { data: opts.inbox ?? null, error: opts.inbox ? null : { message: 'not found' } }
   const supplierByOrgResult = { data: opts.supplierByOrg ?? null, error: null }
@@ -183,18 +185,18 @@ function makeMock(opts: {
       if (table === 'invoice_inbox_items') return inboxChain()
       if (table === 'suppliers') return supplierChain()
       if (table === 'pending_operations') return pendingChain()
-      if (table === 'company_settings' && (opts.vatRegistered !== undefined || opts.companySettings)) {
-        return staticChain({
+      // The settings row every company has (accounting_method is NOT NULL):
+      // faktureringsmetoden, VAT-registered, unless the test says otherwise.
+      if (table === 'company_settings') {
+        return staticChain(opts.settingsRead ?? {
           data: {
+            accounting_method: 'accrual',
             vat_registered: opts.vatRegistered ?? true,
             dimensions_enabled: opts.dimensions?.enabled ?? false,
             ...opts.companySettings,
           },
           error: null,
         })
-      }
-      if (table === 'company_settings' && opts.dimensions) {
-        return staticChain({ data: { dimensions_enabled: opts.dimensions.enabled }, error: null })
       }
       if (table === 'dimensions' && opts.dimensions) {
         return staticChain({ data: opts.dimensions.registry ?? [], error: null })
@@ -1186,6 +1188,10 @@ describe('gnubok_create_supplier_invoice_from_inbox: due date default and total 
     expect(structured.error.code).toBe('SI_CREATE_INVALID_INPUT')
     expect(structured.error.remediation?.tool).toBe('gnubok_set_inbox_extracted_data')
     expect(structured.error.retryable).toBe(false)
+    // The Swedish names the gap for the person the agent relays to, not
+    // "Ogiltig kombination av fakturafält" (#96); the English stays the throw's.
+    expect(structured.error.message_sv).toMatch(/saknar ett totalbelopp/)
+    expect(structured.error.message_en).toMatch(/no usable total/)
   })
 
   it('rejects a zero total the same way instead of staging a zero-value invoice', async () => {
@@ -2262,5 +2268,36 @@ describe('gnubok_create_supplier_invoice_from_inbox: the preview says whether a 
     expect(cash.next?.description).not.toMatch(/gnubok_approve_supplier_invoice/)
     const accrual = await stageDry({ accounting_method: 'accrual', defer_invoice_booking: false })
     expect(accrual.next?.description).toMatch(/attest via gnubok_approve_supplier_invoice/)
+  })
+
+  // #96: the preview read the method fail-open. A failed read staged from a
+  // null row, which the booking-moment rule reads as faktureringsmetoden, so a
+  // kontantmetod company was promised a registration verifikat.
+  it.each([
+    ['a failed read', { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }, 'SETTINGS_ACCOUNTING_METHOD_UNREADABLE'],
+    ['no settings row', { data: null, error: null }, 'SETTINGS_ACCOUNTING_METHOD_MISSING'],
+  ] as const)('refuses on %s instead of previewing faktureringsmetoden, and stages nothing', async (_label, settingsRead, code) => {
+    const inserts: Array<Record<string, unknown>> = []
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-will',
+        status: 'received',
+        extracted_data: baseExtracted,
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-will',
+      },
+      settingsRead,
+      inserts,
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    for (const dryRun of [true, false]) {
+      const err = await tool
+        .execute({ inbox_item_id: 'inbox-will', dry_run: dryRun }, 'company-1', 'user-1', supabase)
+        .then(() => null, (e: unknown) => e as Error & { code?: string })
+      expect(err?.code).toBe(code)
+      expect(toToolError(err).error.code).toBe(code)
+    }
+    expect(inserts).toHaveLength(0)
   })
 })

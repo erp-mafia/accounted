@@ -5,6 +5,7 @@ import {
   invoiceBookingMoment,
   supplierInvoiceBookingMoment,
   supplierInvoiceBooksOnRegistration,
+  supplierInvoiceRegistrationDate,
   cashPartialBlockReason,
   cashProRataUnsupportedReason,
   creditNoteNeedsJournalEntry,
@@ -109,6 +110,59 @@ describe('supplierInvoiceBookingMoment (#73)', () => {
       supplierInvoiceBooksOnRegistration({ accounting_method: 'accrual', defer_invoice_booking: true }, euGoods, 'eu_business'),
     ).toBe(false)
     expect(supplierInvoiceBooksOnRegistration(null, euGoods, 'eu_business')).toBe(true)
+  })
+})
+
+// ML 2023:200 7 kap. 26 §: the output moms of an EU goods acquisition is
+// reported for the invoice's period, but at the latest for the period holding
+// the 15th of the month after the month of the acquisition (7 kap. 12 §);
+// 7 kap. 40 § deducts the input moms in the same period.
+describe('supplierInvoiceRegistrationDate (#93)', () => {
+  const euGoods = { reverse_charge: true, reverse_charge_kind: 'eu_goods' }
+
+  it('dates a late EU goods invoice on the 15th of the month after delivery', () => {
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-03-05', delivery_date: '2026-01-10' }, 'eu_business'),
+    ).toBe('2026-02-15')
+    // December delivery: the cap is in January of the next year.
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2027-01-20', delivery_date: '2026-12-31' }, 'eu_business'),
+    ).toBe('2027-01-15')
+  })
+
+  it('keeps the invoice date when the invoice came on time or before the delivery', () => {
+    // Issued on the 15th itself, before it, and before the goods arrived.
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-02-15', delivery_date: '2026-01-10' }, 'eu_business'),
+    ).toBe('2026-02-15')
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-01-31', delivery_date: '2026-01-10' }, 'eu_business'),
+    ).toBe('2026-01-31')
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-01-05', delivery_date: '2026-02-20' }, 'eu_business'),
+    ).toBe('2026-01-05')
+  })
+
+  it('keeps the invoice date without a delivery date, or for anything but an EU goods acquisition', () => {
+    expect(supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-03-05' }, 'eu_business')).toBe('2026-03-05')
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-03-05', delivery_date: null }, 'eu_business'),
+    ).toBe('2026-03-05')
+    const late = { invoice_date: '2026-03-05', delivery_date: '2026-01-10' }
+    // EU services, services from outside the EU, domestic purchases.
+    expect(
+      supplierInvoiceRegistrationDate({ ...late, reverse_charge: true, reverse_charge_kind: 'eu_services' }, 'eu_business'),
+    ).toBe('2026-03-05')
+    expect(supplierInvoiceRegistrationDate({ ...late, reverse_charge: true }, 'eu_business')).toBe('2026-03-05')
+    expect(supplierInvoiceRegistrationDate({ ...late, ...euGoods }, 'non_eu_business')).toBe('2026-03-05')
+    expect(supplierInvoiceRegistrationDate({ ...late, reverse_charge: false }, 'swedish_business')).toBe('2026-03-05')
+    expect(supplierInvoiceRegistrationDate({ ...late, ...euGoods, reverse_charge: false }, 'eu_business')).toBe('2026-03-05')
+  })
+
+  it('ignores a delivery date it cannot read', () => {
+    expect(
+      supplierInvoiceRegistrationDate({ ...euGoods, invoice_date: '2026-03-05', delivery_date: 'januari' }, 'eu_business'),
+    ).toBe('2026-03-05')
   })
 })
 

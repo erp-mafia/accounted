@@ -163,6 +163,18 @@ const namesShareAWord: Predicate = (card, facts) => {
 }
 
 /**
+ * An org number and the VAT number made from it name a legal person, not a
+ * customer card: the departments of one public authority are separate
+ * customers at the source under one org number (crm#1398). A card whose
+ * customer number and name both differ from the source's is another of them,
+ * even when it is the only card with that org number. Folding it in would
+ * put two customers' invoices on one card, which a merge cannot undo; a card
+ * too many can be merged later. The same name keeps the match (the user
+ * numbered the cards their own way, crm#1294).
+ */
+const anotherCustomerOfTheSamePerson: Predicate = (card, facts) => numberConflict(card, facts) && !sameName(card, facts)
+
+/**
  * Strongest key first. A tier answers only with cards that contradict none of
  * the facts a stronger key would have compared, so two customers who share a
  * name but not an org number, personnummer, VAT number or customer number
@@ -175,8 +187,12 @@ const namesShareAWord: Predicate = (card, facts) => {
  * source customers that only share a name stay two customers.
  */
 const TIERS: { matches: Predicate; admissible: Predicate; shared: boolean }[] = [
-  { matches: sameIdentity, admissible: () => true, shared: true },
-  { matches: sameVat, admissible: (c, f) => !identityConflict(c, f), shared: true },
+  { matches: sameIdentity, admissible: (c, f) => !anotherCustomerOfTheSamePerson(c, f), shared: true },
+  {
+    matches: sameVat,
+    admissible: (c, f) => !identityConflict(c, f) && !anotherCustomerOfTheSamePerson(c, f),
+    shared: true,
+  },
   {
     matches: (c, f) => sameNumber(c, f) && namesShareAWord(c, f),
     admissible: (c, f) => !identityConflict(c, f) && !vatConflict(c, f),

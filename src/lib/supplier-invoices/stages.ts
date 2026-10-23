@@ -39,13 +39,22 @@ export interface StageInput {
   in_open_batch: boolean
   /** Every paying bank row is signed off in a reconciliation through its date. */
   reconciled: boolean
+  /**
+   * The company's method, which picks its ladder (stagesFor): kontantmetoden
+   * has no attest step. Omitted reads as faktureringsmetoden.
+   */
+  accounting_method?: string | null
 }
 
+/** The invoice's step, always one on the company's own ladder (stagesFor). */
 export function deriveStage(i: StageInput): SupplierInvoiceStage {
   if (i.is_credit_note || i.status === 'credited' || i.status === 'reversed') return 'credited'
   if (i.status === 'paid') return i.reconciled ? 'reconciled' : 'paid'
   if (i.in_open_batch) return 'in_file'
-  if (i.approved_at || i.status === 'approved') return 'approved'
+  // An attest on a kontantmetod company's invoice (given before a switch of
+  // method, or through the API) has no step on its ladder: the invoice is
+  // still registered and waiting for its payment (#93).
+  if ((i.approved_at || i.status === 'approved') && companyAttestsSupplierInvoices(i.accounting_method)) return 'approved'
   // registered, overdue, partially_paid, disputed: still a debt awaiting attest.
   return 'registered'
 }

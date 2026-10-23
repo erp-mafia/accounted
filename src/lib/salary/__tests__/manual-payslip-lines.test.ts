@@ -7,6 +7,9 @@ import {
   buildManualPayslipLine,
   isManualPayslipLineType,
   manualLineCapsFromRunParams,
+  mealBenefitSchablonFromRunParams,
+  mealBenefitUnit,
+  MEAL_BENEFIT_KINDS,
   type ManualLineBody,
 } from '@/lib/salary/manual-payslip-lines'
 import { SalaryLineItemTypeSchema } from '@/lib/api/schemas'
@@ -69,15 +72,24 @@ describe('manual payslip line catalogue', () => {
     }
   })
 
-  it('kostförmån carries the flags of the benefit row the employee derives: taxed, avgift basis, not semestergrundande', () => {
-    expect(isBenefitItemType('benefit_meals')).toBe(true)
-    expect(MANUAL_PAYSLIP_LINE_SPECS.benefit_meals.flags).toEqual({
-      is_taxable: true,
-      is_avgift_basis: true,
-      is_vacation_basis: false,
-      is_gross_deduction: false,
-      is_net_deduction: false,
-    })
+  it('kostförmån and övrig förmån carry the flags of the benefit row the employee derives: taxed, avgift basis, not semestergrundande (crm#1349)', () => {
+    for (const type of ['benefit_meals', 'benefit_other'] as const) {
+      expect(isBenefitItemType(type), type).toBe(true)
+      expect(MANUAL_PAYSLIP_LINE_SPECS[type].flags, type).toEqual({
+        is_taxable: true,
+        is_avgift_basis: true,
+        is_vacation_basis: false,
+        is_gross_deduction: false,
+        is_net_deduction: false,
+      })
+      expect(MANUAL_PAYSLIP_LINE_SPECS[type].sign, type).toBe('addition')
+    }
+  })
+
+  it('keeps the standing benefits on the employee: bilförmån, bostad, cykel and friskvård are not offered', () => {
+    for (const type of ['benefit_car', 'benefit_housing', 'benefit_bike', 'benefit_wellness']) {
+      expect(isManualPayslipLineType(type), type).toBe(false)
+    }
   })
 
   it('deductions are flagged the way the recurring lines are', () => {
@@ -123,6 +135,25 @@ describe('buildManualPayslipLine', () => {
     expect(b.description).toBe('Kostförmån')
     expect(b.amount).toBe(1116)
     expect(b.is_taxable).toBe(true)
+  })
+
+  it('kostförmån per meal: the meal names the default description, a typed one wins (crm#1349)', () => {
+    expect(body(buildManualPayslipLine({ item_type: 'benefit_meals', quantity: 9, unit_price: 124, meal_kind: 'lunch_middag' })).description)
+      .toBe('Kostförmån, lunch eller middag')
+    expect(body(buildManualPayslipLine({ item_type: 'benefit_meals', quantity: 4, unit_price: 62, meal_kind: 'frukost' })).description)
+      .toBe('Kostförmån, frukost')
+    expect(body(buildManualPayslipLine({ item_type: 'benefit_meals', quantity: 2, unit_price: 310, meal_kind: 'heldag' })).description)
+      .toBe('Kostförmån, helt fri kost')
+    expect(
+      body(buildManualPayslipLine({ item_type: 'benefit_meals', quantity: 3, unit_price: 124, meal_kind: 'lunch_middag', description: 'Sena middagar v. 42' })).description,
+    ).toBe('Sena middagar v. 42')
+    // A meal on another type is ignored.
+    expect(body(buildManualPayslipLine({ item_type: 'bonus', amount: 1, meal_kind: 'frukost' })).description).toBe('Bonus')
+  })
+
+  it('övrig förmån: a one-off amount, added to the tax base and not paid out', () => {
+    const b = body(buildManualPayslipLine({ item_type: 'benefit_other', amount: 1500 }))
+    expect(b).toMatchObject({ item_type: 'benefit_other', description: 'Övrig förmån', amount: 1500, is_taxable: true, is_avgift_basis: true })
   })
 
   it('quantity x unit price wins over a typed amount, and rounds to öre', () => {
@@ -217,6 +248,32 @@ describe('manualLineCapsFromRunParams', () => {
     for (const type of MANUAL_PAYSLIP_LINE_TYPES) {
       expect(isCalculatedLineType(type), type).toBe(false)
     }
+  })
+})
+
+describe('mealBenefitSchablonFromRunParams (crm#1349)', () => {
+  it('reads the kostförmån the calculation froze on the run, in either casing, with its year', () => {
+    expect(mealBenefitSchablonFromRunParams({ configYear: 2026, kostformanLunch: 124, kostformanFrukost: 62, kostformanHeldag: 310 })).toEqual({
+      year: 2026,
+      perKind: { lunch_middag: 124, frukost: 62, heldag: 310 },
+    })
+    expect(mealBenefitSchablonFromRunParams({ config_year: 2025, kostforman_lunch: 122, kostforman_frukost: 61, kostforman_heldag: 305 })).toEqual({
+      year: 2025,
+      perKind: { lunch_middag: 122, frukost: 61, heldag: 305 },
+    })
+  })
+
+  it('is empty before the first calculation and ignores junk', () => {
+    expect(mealBenefitSchablonFromRunParams(null)).toEqual({ perKind: {} })
+    expect(mealBenefitSchablonFromRunParams(undefined)).toEqual({ perKind: {} })
+    expect(mealBenefitSchablonFromRunParams({ kostformanLunch: '124', kostformanFrukost: -1 })).toEqual({ perKind: {} })
+  })
+
+  it('counts meals, and days of helt fri kost', () => {
+    expect(MEAL_BENEFIT_KINDS[0]).toBe('lunch_middag')
+    expect(mealBenefitUnit('lunch_middag')).toBe('maltider')
+    expect(mealBenefitUnit('frukost')).toBe('maltider')
+    expect(mealBenefitUnit('heldag')).toBe('dagar')
   })
 })
 

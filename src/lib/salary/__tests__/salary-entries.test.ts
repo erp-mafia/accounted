@@ -59,6 +59,8 @@ import {
   SalaryRunPartiallyBookedError,
   salaryRunDataFromRows,
 } from '../salary-entries'
+import { BENEFIT_ITEM_TYPES } from '../benefit-payments'
+import { roundOre } from '@/lib/money'
 
 const mockedCreateEntry = vi.mocked(createDraftEntry)
 const mockedCommit = vi.mocked(commitEntry)
@@ -995,6 +997,43 @@ describe('salary entries: one line builder for booking and preview (feedback seq
     const debit = salaryLines.reduce((s, l) => s + l.debit_amount, 0)
     const credit = salaryLines.reduce((s, l) => s + l.credit_amount, 0)
     expect(Math.round((debit - credit) * 100) / 100).toBe(0)
+  })
+
+  // crm#1354: a förmånsvärde is no cost and no payment, so the verifikat gets
+  // no 73xx line for it, for every benefit type and whether the row was
+  // derived from the employee or entered on the payslip. It reaches the
+  // books through the tax withheld (2710) and the avgifter, which the
+  // calculation already took on cash pay plus the benefit (avgifter_basis).
+  it.each(BENEFIT_ITEM_TYPES)('%s books no line of its own; the voucher balances and the avgifter carry the benefit', (itemType) => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 30000,
+        tax_withheld: 7300,
+        net_salary: 22700,
+        // 31 116 = 30 000 + a 1 116 benefit; 31 116 x 31,42 % = 9 776,65
+        avgifter_basis: 31116,
+        avgifter_amount: 9776.65,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 30000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          // An old account on the row changes nothing: the benefit still books no line.
+          { item_type: itemType, amount: 1116, account_number: '7385', is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    const { salaryLines, avgifterLines } = buildSalaryRunEntryLines(run, 'Lön 2026-06', '1930')
+
+    expect(salaryLines.filter((l) => l.account_number.startsWith('73'))).toEqual([])
+    expect(salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(30000)
+    expect(salaryLines.find((l) => l.account_number === '2710')?.credit_amount).toBe(7300)
+    expect(salaryLines.find((l) => l.account_number === '1930')?.credit_amount).toBe(22700)
+    const salaryDebit = salaryLines.reduce((s, l) => s + l.debit_amount, 0)
+    const salaryCredit = salaryLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(roundOre(salaryDebit - salaryCredit)).toBe(0)
+
+    expect(avgifterLines.find((l) => l.account_number === '7510')?.debit_amount).toBe(9776.65)
+    const avgifterDebit = avgifterLines.reduce((s, l) => s + l.debit_amount, 0)
+    const avgifterCredit = avgifterLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(roundOre(avgifterDebit - avgifterCredit)).toBe(0)
   })
 
   it('books exactly the lines the builder returns, so a preview built from it cannot diverge', async () => {

@@ -35,6 +35,7 @@ import {
   CASH_PARTIAL_PAYMENT_RULE,
   CORRECTION_AND_LOCK_RULES,
   COUNTERPARTY_SETOFF_RULE,
+  EU_GOODS_REGISTRATION_DATE_RULE,
   INVOICE_NUMBER_RULES,
   KONTANTMETOD_CUTOFF_RULES,
   KONTANTMETOD_EU_GOODS_RULE,
@@ -317,6 +318,7 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     { rubrik: 'Maskinell och automatisk bokföring', text: 'Förslag från maskinella hjälpmedel (kategorisering av banktransaktioner, avläsning av underlag) bokförs först när en användare har godkänt dem. Utan godkännande per verifikation bokför: schemalagda periodiseringsposter, återkommande fakturor med automatiskt utskick och API-nycklar med skrivbehörighet. Varje verifikation registreras i behandlingshistoriken med tidpunkt, sätt och utförare.' },
     { rubrik: 'Valutor', text: 'Belopp i utländsk valuta räknas om med Riksbankens kurs; valutaomvärdering bokförs som egen verifikation.' },
     { rubrik: 'SIE-import', text: SIE_IMPORT_RULES },
+    { rubrik: 'Varor från annat EU-land, registreringsdatum', text: EU_GOODS_REGISTRATION_DATE_RULE },
   ]
   const collections = facts.collections ?? null
   if (collections) behandlingsregler.push({ rubrik: 'Påminnelser och inkasso', text: collectionsRuleText(collections) })

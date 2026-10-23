@@ -96,6 +96,15 @@ describe('structured-errors browser loader', () => {
     }
   })
 
+  it('answers SI_CREATE_INVALID_INPUT reasons like the real module', () => {
+    expect(browser.SI_CREATE_INVALID_INPUT_REASONS).toEqual(real.SI_CREATE_INVALID_INPUT_REASONS)
+    const inputs: unknown[] = [null, undefined, {}, { reason: 'toString' }, { reason: 42 }, { reason: 'nope' }]
+    for (const reason of Object.keys(real.SI_CREATE_INVALID_INPUT_REASONS)) inputs.push({ reason })
+    for (const input of inputs) {
+      expect(browser.siCreateInvalidInputMessages(input), JSON.stringify(input)).toEqual(real.siCreateInvalidInputMessages(input))
+    }
+  })
+
   it('refuses a registry that gains an export or an import', () => {
     expect(() => browserCatalogSource(`export const EXTRA = 1\nexport function listErrorCodes() { return [] }`)).toThrow(/EXTRA/)
     expect(() => browserCatalogSource(`import x from 'somewhere'\nexport const y = x`)).toThrow(/somewhere/)

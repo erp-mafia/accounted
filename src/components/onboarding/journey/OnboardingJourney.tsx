@@ -276,7 +276,12 @@ export default function OnboardingJourney({
     setDupMatch(null)
     const canonical = normalizeOrgNumber(orgNumber)
     dupCheckedOrg.current = canonical
-    fetch(`/api/company/check-org-number?org_number=${encodeURIComponent(orgNumber)}`)
+    // In the body, never the URL: a sole trader's org number is a personnummer.
+    fetch('/api/company/check-org-number', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ org_number: orgNumber }),
+    })
       .then(async (res) => {
         if (!res.ok) return
         const { data } = await res.json()

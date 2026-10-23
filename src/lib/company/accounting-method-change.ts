@@ -16,13 +16,15 @@
  * under faktureringsmetoden its payment only clears 1510 / 2440 (so the sale
  * or purchase is never booked).
  *
- *  - The current fiscal year has no posted verifikat: the change is free (the
- *    onboarding fix of a wrong choice).
+ *  - Any change is refused while an open customer or supplier invoice lacks
+ *    its own verifikat (#93: also in a year with nothing posted yet, and
+ *    with no fiscal year at all; !763 checked it only before a correction).
+ *  - Otherwise, while the current fiscal year has no posted verifikat, the
+ *    change is free (the onboarding fix of a wrong choice).
  *  - It has posted verifikat: the change is allowed only as a correction of a
  *    setting that never matched how the company keeps its books. The caller
- *    states the reason (accounting_method_correction_reason), and it is
- *    refused while any open customer or supplier invoice lacks its own
- *    verifikat. The method governs the year (BFL 5 kap. 2 § 3 st: the unpaid
+ *    states the reason (accounting_method_correction_reason). The method
+ *    governs the year (BFL 5 kap. 2 § 3 st: the unpaid
  *    fordringar and skulder are booked at its end), and for VAT a move from
  *    faktureringsmetoden to bokslutsmetoden needs an application to
  *    Skatteverket first (ML 7 kap. 17 §): the reason says that the setting,
@@ -111,19 +113,11 @@ export async function checkAccountingMethodChange(
     .gte('period_end', today)
     .maybeSingle()
   if (periodError) return failed(periodError)
-  if (!period) return { kind: 'free' }
-  const fiscalPeriodId = period.id as string
-  const fiscalYear = (period.name as string | null) ?? null
+  const fiscalPeriodId = (period?.id as string | undefined) ?? null
+  const fiscalYear = (period?.name as string | null | undefined) ?? null
 
-  const { count: posted, error: postedError } = await supabase
-    .from('journal_entries')
-    .select('id', { count: 'exact', head: true })
-    .eq('company_id', companyId)
-    .eq('fiscal_period_id', fiscalPeriodId)
-    .eq('status', 'posted')
-  if (postedError) return failed(postedError)
-  if (!posted) return { kind: 'free' }
-
+  // Every switch, free or corrected: an open invoice without a verifikat of
+  // its own is the one row the method books differently at payment.
   const [invoicesRes, supplierRes] = await Promise.all([
     supabase
       .from('invoices')
@@ -158,11 +152,21 @@ export async function checkAccountingMethodChange(
           open_supplier_invoices_without_verifikat: openSupplierInvoices,
         },
         messageSv:
-          `Bokföringsmetoden kan inte rättas nu: ${openInvoices} kundfakturor och ${openSupplierInvoices} leverantörsfakturor är obetalda utan egen verifikation, ` +
+          `Bokföringsmetoden kan inte bytas nu: ${openInvoices} kundfakturor och ${openSupplierInvoices} leverantörsfakturor är obetalda utan egen verifikation, ` +
           'och bytet skulle bokföra dem två gånger eller inte alls när de betalas. Bokför dem eller koppla dem till sin verifikation först.',
       },
     }
   }
+
+  if (!fiscalPeriodId) return { kind: 'free' }
+  const { count: posted, error: postedError } = await supabase
+    .from('journal_entries')
+    .select('id', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .eq('status', 'posted')
+  if (postedError) return failed(postedError)
+  if (!posted) return { kind: 'free' }
 
   const reason = input.reason?.trim() ?? ''
   if (!reason) {

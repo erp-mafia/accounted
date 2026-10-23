@@ -7,7 +7,7 @@
  * half lives in lib/customers/protect-personal-number.ts, which is server-only.
  */
 
-import { orgNumberIsPersonalIdentifier } from '@/lib/invariants/personal-number-shape'
+import { orgNumberIsPersonalIdentifier, vatNumberHoldsPersonalNumber } from '@/lib/invariants/personal-number-shape'
 
 /**
  * Placeholder used when a stored personal_number cannot be decrypted
@@ -85,8 +85,9 @@ export function maskCustomerPersonalNumber(value: string | null | undefined): st
  * org_number has personnummer shape is that owner's personnummer and is masked
  * like one. Individual rows show the masked personal_number; a legacy
  * individual row that still carries its personnummer in org_number (written
- * before the write paths started moving it) is masked the same way. Both cases
- * are orgNumberIsPersonalIdentifier in lib/invariants/personal-number-shape.ts.
+ * before the write paths started moving it) is masked the same way, as is a
+ * legacy foreign-business row holding one. All of these are
+ * orgNumberIsPersonalIdentifier in lib/invariants/personal-number-shape.ts.
  *
  * Callers pass rows whose personal_number is already the API's masked form or
  * a plaintext value; ciphertext must be masked server-side first
@@ -101,9 +102,35 @@ export function customerListIdentifier(row: {
     return maskCustomerPersonalNumber(row.personal_number) ?? ''
   }
   const orgNumber = row.org_number || ''
-  if (orgNumberIsPersonalIdentifier(row.customer_type, orgNumber)) {
+  if (orgNumberIsPersonalIdentifier(orgNumber)) {
     return maskCustomerPersonalNumber(orgNumber) ?? ''
   }
   if (row.customer_type !== 'individual') return orgNumber || row.personal_number || ''
   return orgNumber
+}
+
+/**
+ * A customer's identifier fields as an agent reads them over MCP. Every MCP
+ * read, the list and the drill-in alike, goes into a model's context, so no
+ * natural person's identity number leaves in full: an org_number that is a
+ * personnummer (an enskild firma, or a legacy row filed under another type)
+ * is nulled and shown masked as personal_number_masked, and a Swedish VAT
+ * number built on one is nulled. A company's org and VAT numbers stay as
+ * they are. Null rather than a mask in org_number, so an agent that echoes
+ * the record back into an update cannot write a mask over the real number.
+ *
+ * `maskedPersonalNumber` is the row's personal_number already in display form
+ * (maskStoredCustomerPersonalNumber, or a record read through maskCustomerRow).
+ */
+export function agentCustomerIdentifiers(
+  row: { org_number: string | null; vat_number: string | null },
+  maskedPersonalNumber: string | null,
+): { org_number: string | null; vat_number: string | null; personal_number_masked: string | null } {
+  const orgNumberIsPersonal = orgNumberIsPersonalIdentifier(row.org_number)
+  return {
+    org_number: orgNumberIsPersonal ? null : row.org_number,
+    vat_number: vatNumberHoldsPersonalNumber(row.vat_number) ? null : row.vat_number,
+    personal_number_masked:
+      maskedPersonalNumber ?? (orgNumberIsPersonal ? maskCustomerPersonalNumber(row.org_number) : null),
+  }
 }

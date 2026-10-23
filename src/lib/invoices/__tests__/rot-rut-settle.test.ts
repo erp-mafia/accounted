@@ -40,7 +40,7 @@ vi.mock('@/lib/invoices/rot-rut-payout-recognition', () => ({
   getPayoutRecognition: (...args: unknown[]) => mockGetPayoutRecognition(...args),
 }))
 
-import { settleRotRutPayoutRequest, settleRotRutPayoutRequestSet } from '../rot-rut-settle'
+import { attachRotRutPayoutVoucher, settleRotRutPayoutRequest, settleRotRutPayoutRequestSet } from '../rot-rut-settle'
 
 const { supabase: mockSupabase, enqueue, reset, findCall, findCalls } = createQueuedMockSupabase()
 const supabase = mockSupabase as unknown as SupabaseClient
@@ -727,5 +727,53 @@ describe('settleRotRutPayoutRequestSet', () => {
     const outcome = await settleRotRutPayoutRequestSet(supabase, 'user-1', 'company-1', setParams)
     expect(outcome).toMatchObject({ ok: false, kind: 'error', stage: 'book' })
     expect(findCalls('rot_rut_payout_requests', 'update')).toEqual([])
+  })
+})
+
+// Issue #93: a set-off on the skattekonto is the payout, booked by the
+// skattekonto booking with the payout's lines; this points the begäran at it
+// with the settle's own writes.
+describe('attachRotRutPayoutVoucher', () => {
+  it('settles the begäran on the verifikat with the CAS, mirrors a full payout and clears hints', async () => {
+    enqueue({ data: makeRequestRow() }) // request read
+    enqueue({ data: makeRequestRow({ status: 'paid', settlement_journal_entry_id: 'je-skv' }) }) // CAS update
+    enqueue({ data: [{ id: 'item-1', requested_amount: 3000 }] }) // mirror read
+    enqueue({ data: null }) // mirror write
+
+    const outcome = await attachRotRutPayoutVoucher(supabase, 'company-1', {
+      requestId: REQUEST_ID,
+      journalEntryId: 'je-skv',
+      amount: 3000,
+    })
+
+    expect(outcome).toMatchObject({ ok: true, fullyPaid: true, request: { status: 'paid' } })
+    expect(findCall('rot_rut_payout_requests', 'update')?.[0]).toMatchObject({
+      settlement_journal_entry_id: 'je-skv',
+      status: 'paid',
+      decided_total: 3000,
+    })
+    expect(findCalls('rot_rut_payout_requests', 'is')).toContainEqual(['settlement_journal_entry_id', null])
+    expect(mockClearSuggestions).toHaveBeenCalledWith(supabase, 'company-1', 'rot_rut_payout_request', REQUEST_ID, {
+      exceptTransactionId: null,
+    })
+  })
+
+  it('refuses a begäran that is already settled or lost the CAS, and one not found', async () => {
+    enqueue({ data: makeRequestRow({ settlement_journal_entry_id: 'je-bank' }) })
+    expect(
+      await attachRotRutPayoutVoucher(supabase, 'company-1', { requestId: REQUEST_ID, journalEntryId: 'je-skv', amount: 3000 }),
+    ).toEqual({ ok: false, kind: 'code', code: 'ROT_RUT_SETTLE_INVALID_STATE' })
+
+    enqueue({ data: makeRequestRow() })
+    enqueue({ data: null }) // CAS lost
+    expect(
+      await attachRotRutPayoutVoucher(supabase, 'company-1', { requestId: REQUEST_ID, journalEntryId: 'je-skv', amount: 3000 }),
+    ).toEqual({ ok: false, kind: 'code', code: 'ROT_RUT_SETTLE_RACE' })
+
+    enqueue({ data: null })
+    expect(
+      await attachRotRutPayoutVoucher(supabase, 'company-1', { requestId: REQUEST_ID, journalEntryId: 'je-skv', amount: 3000 }),
+    ).toEqual({ ok: false, kind: 'code', code: 'ROT_RUT_REQUEST_NOT_FOUND' })
+    expect(mockCreatePayoutEntry).not.toHaveBeenCalled()
   })
 })

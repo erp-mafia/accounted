@@ -226,4 +226,15 @@ describe('customer-invoice hänvisning silences "Underlag saknas" (#2298)', () =
       [jeImportLoose, jeImportForeignLink, jeManualCancelledLink, jeImportCancelledPayment].sort(),
     )
   })
+
+  it('the verifikat list filter (list_verifikat_missing_underlag) reaches the same verdict (crm#1390)', async () => {
+    const { rows } = await getPool().query<{ r: { ok: boolean; total_count: number; ids: string[] } }>(
+      `SELECT public.list_verifikat_missing_underlag($1, p_limit => 1000) AS r`,
+      [companyId],
+    )
+    expect(rows[0].r.ok).toBe(true)
+    const badge = await verifikatSurface(companyId)
+    expect([...rows[0].r.ids].sort()).toEqual([...badge].sort())
+    expect(rows[0].r.total_count).toBe(badge.length)
+  })
 })

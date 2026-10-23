@@ -1,5 +1,6 @@
 import posthog from 'posthog-js'
 import { isAnalyticsActive } from '@/lib/analytics/client'
+import { isAnalyticsEnabled } from '@/lib/analytics/enabled'
 
 /**
  * PostHog Support (Conversations) as the in-app support channel.
@@ -144,6 +145,40 @@ export function conversationsAvailable(): boolean {
     return Boolean(posthog.conversations?.isAvailable?.())
   } catch {
     return false
+  }
+}
+
+const READY_TIMEOUT_MS = 5_000
+const START_GRACE_MS = 1_000
+const READY_POLL_MS = 100
+
+/**
+ * Whether the Conversations API can be used, waiting for it while it loads.
+ *
+ * isAvailable() turns true only after PostHog's remote config and the
+ * conversations bundle have loaded, some 50 to 1000 ms after the page. A
+ * dialog that asked once, at open, read a still-loading SDK as "no
+ * conversations" and showed the empty mail form instead of the thread: the
+ * customer who followed "we have answered" to the app found no answer
+ * (crm#1393). So this waits, bounded. It answers false at once on an install
+ * without PostHog, after START_GRACE_MS when PostHog has not started in this
+ * browser (analytics switched off), and after READY_TIMEOUT_MS when Support
+ * never comes up; the dialog then falls back to the mail form as before.
+ */
+export async function whenConversationsReady({
+  timeoutMs = READY_TIMEOUT_MS,
+  startGraceMs = START_GRACE_MS,
+  pollMs = READY_POLL_MS,
+}: { timeoutMs?: number; startGraceMs?: number; pollMs?: number } = {}): Promise<boolean> {
+  if (conversationsAvailable()) return true
+  if (!isAnalyticsEnabled()) return false
+  const startedAt = Date.now()
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, pollMs))
+    if (conversationsAvailable()) return true
+    const waited = Date.now() - startedAt
+    if (waited >= timeoutMs) return false
+    if (!isAnalyticsActive() && waited >= startGraceMs) return false
   }
 }
 

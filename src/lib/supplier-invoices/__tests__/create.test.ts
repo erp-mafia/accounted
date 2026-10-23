@@ -204,6 +204,47 @@ describe('createSupplierInvoice dry run', () => {
       expect(result).toMatchObject({ ok: false, code: 'PERIOD_LOCKED' })
       expectNothingWritten()
     })
+
+    // #93: 7 kap. 26 § caps the moms period at the one holding the 15th of
+    // the month after delivery, so the lock is checked on that date.
+    it.each(['cash', 'accrual'])(
+      'checks the lock on the 15th of the month after delivery when the invoice is later (%s)',
+      async (accountingMethod) => {
+        setTable('company_settings', {
+          data: { accounting_method: accountingMethod, vat_registered: true, bookkeeping_locked_through: '2024-05-31' },
+        })
+        // Delivered in April, invoiced in June: the verifikat is dated 15 May, inside the lock.
+        const late = await createSupplierInvoice(
+          ctx(),
+          euGoods({ invoice_date: '2024-06-20', due_date: '2024-07-20', delivery_date: '2024-04-10' }),
+          { dryRun: true },
+        )
+        expect(late).toMatchObject({ ok: false, code: 'PERIOD_LOCKED' })
+
+        // Without a delivery date the invoice date is all there is, and it is open.
+        const undated = await createSupplierInvoice(
+          ctx(),
+          euGoods({ invoice_date: '2024-06-20', due_date: '2024-07-20' }),
+          { dryRun: true },
+        )
+        if (!undated.ok || !undated.dryRun) throw new Error('expected a dry-run preview')
+        expect(undated.preview.would_create_registration_journal_entry).toBe(true)
+        expectNothingWritten()
+      },
+    )
+
+    it('leaves an EU service on its invoice date whatever the delivery date', async () => {
+      setTable('company_settings', {
+        data: { accounting_method: 'accrual', vat_registered: true, bookkeeping_locked_through: '2024-05-31' },
+      })
+      const result = await createSupplierInvoice(
+        ctx(),
+        euGoods({ reverse_charge_kind: 'eu_services', invoice_date: '2024-06-20', due_date: '2024-07-20', delivery_date: '2024-04-10' }),
+        { dryRun: true },
+      )
+      expect(result.ok).toBe(true)
+      expectNothingWritten()
+    })
   })
 
   it('surfaces the same PERIOD_LOCKED refusal a live commit would', async () => {

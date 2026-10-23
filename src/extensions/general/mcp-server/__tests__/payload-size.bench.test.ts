@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 61_400
+const SIMPLE_CATALOG_CEILING = 61_600
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -745,6 +745,14 @@ describe('tools/list payload size guard', () => {
     //     reading.note, notice) and is declared in no outputSchema. The tool's
     //     projection is 6 characters shorter than before. Measured 66 081
     //     (single-company 61 072). Ceiling unchanged.
+    //   * Connector feeds for agents (crm#1385, 2026-10-23): gnubok_backfill_feed
+    //     (Stripe, Shopify, WooCommerce, Zettle: the panel's "Hämta äldre") joins
+    //     the default catalog because it writes directly and no bridge carries a
+    //     direct write; its status read gnubok_list_feed_connections is
+    //     search-only. One-sentence description, bare property types and a bare
+    //     outputSchema (the answer's instructions say what it holds), about +175.
+    //     Measured 66 062. Ceiling unchanged. With the rest of run t1022
+    //     (landing branch): measured 66 055.
     expect(approxTokens).toBeLessThan(66_100)
   })
 
@@ -840,6 +848,23 @@ describe('tools/list payload size guard', () => {
     // component together 61 406): the "the XML holds personnummer" clause
     // the same run added to gnubok_generate_rot_rut_file (#58) was dropped
     // to pay for it. Measured 61 399 (full catalog 65 868). Ceiling unchanged.
+    // 61 400 to 61 600 on 2026-10-23 (crm#1385): gnubok_backfill_feed, a
+    // direct WRITE, so it must ride the default catalog (see the case above),
+    // with one token of headroom left. Same deliberate skip of the
+    // read-demotion rule as the ROT/RUT payout write: the 60-day
+    // mcp.tool_called counts leave no zero-call read outside the seasonal
+    // bokslut/NE tools and the pinned list_sales_orders, so the demotion is
+    // its own change. FOUNDER CALL: keep this bump, or demote
+    // gnubok_preview_ef_declaration (about 410 tokens, 8 calls in 60 days,
+    // NE-bilaga season is spring) and ratchet back to 61 400. Measured 61 572.
+    // 2026-10-23 (crm#1397): gnubok_correct_entry gains sides_swapped, bare
+    // (the negates_original refusal says when to send it), paid for by
+    // shortening its lines description to what the lines are (the verifikat
+    // as it should be): one character less in all. Ceiling unchanged.
+    // Run t1022 landing (every component together): measured 61 565 (full
+    // catalog 66 055). The 61 600 bump stays the founder call above: the
+    // run's own additions hold no 166 tokens to trim back under 61 400
+    // (gnubok_backfill_feed alone projects to about 173).
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 
