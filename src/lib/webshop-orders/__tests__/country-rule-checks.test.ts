@@ -51,18 +51,44 @@ describe('countryRuleProblems', () => {
     expect(countryRuleProblems([accounts('NO', 25, '3105', '2890')], BAS_CHART)).toEqual([])
   })
 
-  it('refuses a foreign sale on an account the declaration counts as Swedish sales', () => {
-    expect(countryRuleProblems([accounts('DK', null, '3001', '2670')], BAS_CHART)).toEqual([
+  it('refuses a foreign sale OSS does not cover on an account the declaration counts as Swedish sales', () => {
+    expect(countryRuleProblems([accounts('NON_EU', 0, '3001', null)], BAS_CHART)).toEqual([
+      { index: 0, field: 'revenue_account', code: 'revenue_counts_as_swedish', account: '3001', box: '05' },
+    ])
+    expect(countryRuleProblems([accounts('DE', 0, '3001', null)], BAS_CHART)).toEqual([
       { index: 0, field: 'revenue_account', code: 'revenue_counts_as_swedish', account: '3001', box: '05' },
     ])
   })
 
-  it('refuses an OSS sale on an account that lands in any ruta', () => {
+  it('refuses an OSS sale on an account that lands in any ruta, ruta 05 included', () => {
     // 3108 is ruta 35 (EU B2B, VAT-free): right for 0 %, wrong for OSS.
     expect(countryRuleProblems([accounts('EU', null, '3108', '2670')], BAS_CHART)).toEqual([
       { index: 0, field: 'revenue_account', code: 'revenue_in_declaration', account: '3108', box: '35' },
     ])
     expect(countryRuleProblems([accounts('EU', 0, '3108', null)], BAS_CHART)).toEqual([])
+    // An OSS rule gets the OSS code even for ruta 05: its copy is the one
+    // that can point at VAT code OSS.
+    expect(countryRuleProblems([accounts('DK', null, '3001', '2670')], BAS_CHART)).toEqual([
+      { index: 0, field: 'revenue_account', code: 'revenue_in_declaration', account: '3001', box: '05' },
+    ])
+  })
+
+  it('refuses the preset 3106 when its VAT code puts it in a ruta', () => {
+    // The VAT codes 3106 carries in production charts besides OSS.
+    const cases: Array<[string, string]> = [
+      ['reverse_charge_eu_goods', '35'],
+      ['standard_25', '05'],
+      ['exempt', '42'],
+    ]
+    for (const [treatment, box] of cases) {
+      const chart = chartOf(
+        ...BAS_CHART.values(),
+        row('3106', 'Försäljning varor till annat EU-land, momspliktig', { default_vat_treatment: treatment }),
+      )
+      expect(countryRuleProblems(OSS_PRESET_RULES, chart)).toEqual([
+        { index: 0, field: 'revenue_account', code: 'revenue_in_declaration', account: '3106', box },
+      ])
+    }
   })
 
   it('refuses a box for the wrong side of the EU border', () => {

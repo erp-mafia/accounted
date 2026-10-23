@@ -102,6 +102,70 @@ export function isEuRuleCountry(country: string): boolean {
   return country === COUNTRY_SCOPE_EU || (country !== COUNTRY_SCOPE_NON_EU && isEuMemberCountry(country))
 }
 
+/** Whether a rule books OSS sales: an EU country or the EU catch-all, on buckets with VAT. */
+export function isOssRule(rule: Pick<WebshopCountryAccountRule, 'country' | 'vat_rate'>): boolean {
+  return isEuRuleCountry(rule.country) && ruleCoversVat(rule)
+}
+
+/**
+ * The accounts the presets give a destination and rate: the OSS pair for an
+ * EU destination with VAT, export (3105) outside the EU. Norway's VOEC VAT
+ * account has no default (the company picks it), and a 0 % EU sale has none:
+ * it is a different treatment (EU B2B) the user must name. The settings form
+ * starts a new row from these, and a refused row's copy names one of them as
+ * the account to use instead.
+ */
+export function presetAccountsFor(
+  country: string,
+  rate: number | null,
+): { revenue: string | null; vat: string | null } {
+  if (isEuRuleCountry(country)) {
+    return ruleCoversVat({ vat_rate: rate })
+      ? { revenue: OSS_REVENUE_ACCOUNT, vat: OSS_VAT_ACCOUNT }
+      : { revenue: null, vat: null }
+  }
+  return { revenue: EXPORT_REVENUE_ACCOUNT, vat: null }
+}
+
+/**
+ * The account a refused rule's copy may name instead: the preset account for
+ * the same field, and never the refused account itself. A 3106 whose VAT code
+ * puts it in a ruta must not be told to use 3106. Null when there is no
+ * account to name.
+ */
+export function alternativeAccountFor(
+  rule: Pick<WebshopCountryAccountRule, 'country' | 'vat_rate'>,
+  field: 'revenue_account' | 'vat_account',
+  refused: string | undefined,
+): string | null {
+  const preset = presetAccountsFor(rule.country, rule.vat_rate)
+  const account = field === 'revenue_account' ? preset.revenue : preset.vat
+  return account && account !== refused ? account : null
+}
+
+/** One rule as a fixed tuple, so equal rules compare equal whatever their key order. */
+function canonicalRule(rule: WebshopCountryAccountRule): string {
+  return JSON.stringify(
+    rule.mode === 'swedish'
+      ? [rule.country, rule.vat_rate, rule.mode]
+      : [rule.country, rule.vat_rate, rule.mode, rule.revenue_account, rule.vat_account ?? null],
+  )
+}
+
+/**
+ * Whether two rule sets say the same thing, rule by rule in order. Not
+ * JSON.stringify on the rules themselves: Postgres jsonb hands object keys
+ * back sorted by length (mode, country, vat_rate, vat_account,
+ * revenue_account), not in the order the form wrote them, so a stored set
+ * never equalled the form's copy of it and the form always looked unsaved.
+ */
+export function sameCountryRules(
+  a: readonly WebshopCountryAccountRule[],
+  b: readonly WebshopCountryAccountRule[],
+): boolean {
+  return a.length === b.length && a.every((rule, i) => canonicalRule(rule) === canonicalRule(b[i]))
+}
+
 /**
  * The order fields the rules read. Both optional: an order without them is
  * simply never routed.

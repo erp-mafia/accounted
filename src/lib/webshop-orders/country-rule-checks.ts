@@ -9,6 +9,7 @@ import {
   COUNTRY_SCOPE_NON_EU,
   SWEDISH_RULE_RATES,
   isEuRuleCountry,
+  isOssRule,
   ruleCoversVat,
   sameVatRate,
 } from './country-routing'
@@ -133,11 +134,14 @@ export function countryRuleProblems(
       problems.push({ index, field: 'revenue_account', code: 'revenue_account_class', account: rule.revenue_account })
     } else {
       const box = resolveRevenueDeclarationBox(revenue)
-      if (box && DOMESTIC_SALES_BOXES.includes(box)) {
-        problems.push({ index, field: 'revenue_account', code: 'revenue_counts_as_swedish', account: rule.revenue_account, box })
-      } else if (eu && ruleCoversVat(rule) && box) {
-        // OSS: the sale is declared in the OSS return, never in a ruta.
+      if (box && isOssRule(rule)) {
+        // OSS: the sale is declared in the OSS return, never in a ruta. Every
+        // box is wrong here, ruta 05 included, so an OSS rule gets this one
+        // code, whose copy can point at VAT code OSS. The codes below are for
+        // rules OSS does not cover, where that advice would be wrong.
         problems.push({ index, field: 'revenue_account', code: 'revenue_in_declaration', account: rule.revenue_account, box })
+      } else if (box && DOMESTIC_SALES_BOXES.includes(box)) {
+        problems.push({ index, field: 'revenue_account', code: 'revenue_counts_as_swedish', account: rule.revenue_account, box })
       } else if (box && (eu ? NON_EU_SALES_BOXES : EU_SALES_BOXES).includes(box)) {
         problems.push({ index, field: 'revenue_account', code: 'revenue_box_wrong_region', account: rule.revenue_account, box })
       }
@@ -168,7 +172,7 @@ export function countryRuleProblems(
 export function ossRevenueAccounts(rules: readonly WebshopCountryAccountRule[]): string[] {
   const accounts = new Set<string>()
   for (const rule of rules) {
-    if (rule.mode === 'accounts' && isEuRuleCountry(rule.country) && ruleCoversVat(rule)) {
+    if (rule.mode === 'accounts' && isOssRule(rule)) {
       accounts.add(rule.revenue_account)
     }
   }

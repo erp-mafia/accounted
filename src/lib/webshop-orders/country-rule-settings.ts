@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
+import { resolveRevenueDeclarationBox } from '@/lib/reports/vat-revenue-accounts'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
 import type { WebshopCountryAccountRule, WebshopPlatform } from '@/types'
 import { COUNTRY_PRESET_ACCOUNTS, OSS_REVENUE_ACCOUNT } from './country-routing'
@@ -28,7 +29,10 @@ export type PrepareCountryRulesOutcome =
  *   missing;
  * - an OSS revenue account without a VAT code gets 'oss', so the
  *   momsdeklaration keeps it out of every ruta on purpose instead of listing
- *   it as revenue without one.
+ *   it as revenue without one;
+ * - the preset OSS account (3106) whose VAT code puts it in a ruta gets 'oss'
+ *   too, but only when the company has never booked on it
+ *   (unusedPresetOssAccount).
  *
  * Shopify only: WooCommerce rows store the billing country.
  */
@@ -90,12 +94,32 @@ export async function prepareCountryRules(
     })
   }
 
+  const ossAccounts = ossRevenueAccounts(rules)
+  const preset = await unusedPresetOssAccount(supabase, companyId, ossAccounts, chart)
+  if (!preset.ok) return { ok: false, kind: 'db_error', error: preset.error }
+  const presetToOss = preset.row
+  if (presetToOss) chart.set(presetToOss.account_number, presetToOss)
+
   const problems = countryRuleProblems(rules, chart)
   if (problems.length > 0) return { ok: false, kind: 'invalid', problems }
 
   await ensureCountryPresetAccounts(supabase, companyId, userId, toCreate, log)
 
-  const untreated = ossRevenueAccounts(rules).filter((account) => {
+  if (presetToOss) {
+    // The same row ensureCountryPresetAccounts creates: VAT code OSS and no
+    // Swedish momssats (an OSS sale carries the destination country's rate).
+    const { error } = await supabase
+      .from('chart_of_accounts')
+      .update({ default_vat_treatment: 'oss', default_vat_rate: null })
+      .eq('company_id', companyId)
+      .eq('account_number', presetToOss.account_number)
+    // Fatal, unlike the update below: the rules passed only as if the account
+    // had VAT code OSS. Stored without it, they would book OSS sales into the
+    // ruta its old code names.
+    if (error) return { ok: false, kind: 'db_error', error }
+  }
+
+  const untreated = ossAccounts.filter((account) => {
     const row = chart.get(account)
     return !!row && !row.default_vat_treatment && !ACCOUNT_TO_BOX[account]
   })
@@ -112,4 +136,51 @@ export async function prepareCountryRules(
   }
 
   return { ok: true }
+}
+
+/**
+ * The preset OSS account (3106) as it will be once it gets VAT code OSS, when
+ * that change is safe to make on the user's behalf; null otherwise.
+ *
+ * Safe means all of: an OSS rule names it (the user chose OSS for it); its
+ * current VAT code puts it in a ruta, so the rule would otherwise be refused;
+ * and the company has no journal line on it at all, in any entry status,
+ * drafts included (get_account_usage_counts, the count the kontoplan's
+ * Verifikat column shows). With no line on the account, no momsdeklaration
+ * has ever read its VAT code, so changing it moves nothing that was declared.
+ * An account with history is never changed here: the refusal stands, and the
+ * user decides in Kontoplanen.
+ *
+ * Only the preset account, never one the user typed: its VAT code may carry
+ * a meaning this flow cannot see. A line booked between this read and the
+ * update can only be a new, undeclared one.
+ */
+async function unusedPresetOssAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  ossAccounts: readonly string[],
+  chart: ReadonlyMap<string, CountryRuleChartRow>,
+): Promise<{ ok: true; row: CountryRuleChartRow | null } | { ok: false; error: unknown }> {
+  const none = { ok: true, row: null } as const
+  if (!ossAccounts.includes(OSS_REVENUE_ACCOUNT)) return none
+  const row = chart.get(OSS_REVENUE_ACCOUNT)
+  if (!row || row.default_vat_treatment === 'oss' || resolveRevenueDeclarationBox(row) === null) {
+    return none
+  }
+
+  // Filtered to 3106 by PostgREST, not in JS. The RPC returns one row per
+  // used account, and an unfiltered read stops at PostgREST's 1,000-row cap,
+  // so on a large chart 3106 could fall outside the page and read as unused.
+  const { data, error } = await supabase
+    .rpc('get_account_usage_counts', { p_company_id: companyId })
+    .eq('account_number', OSS_REVENUE_ACCOUNT)
+  if (error) return { ok: false, error }
+  // Fails closed: only an empty answer, or 3106 with a count of zero, means
+  // unused. A row for any other account says the filter did not hold, so the
+  // answer cannot vouch for 3106 and the refusal stands.
+  const unused = ((data ?? []) as { account_number: string; usage_count: number | string }[]).every(
+    (usage) => usage.account_number === OSS_REVENUE_ACCOUNT && Number(usage.usage_count) === 0,
+  )
+  if (!unused) return none
+  return { ok: true, row: { ...row, default_vat_treatment: 'oss', default_vat_rate: null } }
 }

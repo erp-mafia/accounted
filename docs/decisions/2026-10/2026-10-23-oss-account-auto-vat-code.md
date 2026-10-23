@@ -1,0 +1,1 @@
+[2026-10-23] crm#1032 Saving the OSS preset gives 3106 VAT code OSS (rate cleared) when the company has no journal line on it in any status, as no declaration has read that code; a used 3106 or a typed account is refused with Kontoplan copy instead.
