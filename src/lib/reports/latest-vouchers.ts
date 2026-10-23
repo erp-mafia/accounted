@@ -1,21 +1,10 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import type { LatestVoucherPerSeries } from '@/types'
 
-/**
- * Statuses that count as "bokförd" for the purposes of this line.
- *
- * `reversed` is included deliberately: a stornerad verifikat keeps its number
- * and still occupies its slot in the series, so leaving it out would report a
- * gap that does not exist. Drafts and cancelled entries carry
- * `voucher_number = 0` and are excluded by the `> 0` filter instead.
- */
-const POSTED_STATUSES = ['posted', 'reversed'] as const
-
-interface VoucherRow {
-  id: string
-  voucher_series: string | null
-  voucher_number: number
+interface LatestVoucherRow {
+  voucher_series: string
+  last_number: number
 }
 
 /**
@@ -31,6 +20,13 @@ interface VoucherRow {
  *
  * The window is bounded below by `fiscalPeriodId` alone when `fromDate` is
  * omitted, which is what an accumulating report (balansrapport) wants.
+ *
+ * The latest_posted_vouchers SQL function answers it with a few index probes:
+ * posted and reversed entries count (a stornerad verifikat keeps its number
+ * and its slot in the series, so leaving it out would report a gap that does
+ * not exist), drafts and cancelled entries carry voucher_number 0 and do not,
+ * and an empty series counts as A. Paging every verifikat of the period here
+ * cost one round trip per 1 000 verifikat.
  */
 export async function getLatestPostedVouchers(
   supabase: SupabaseClient,
@@ -38,38 +34,16 @@ export async function getLatestPostedVouchers(
   fiscalPeriodId: string,
   window: { fromDate?: string; toDate: string }
 ): Promise<LatestVoucherPerSeries[]> {
-  const rows = await fetchAllRows<VoucherRow>(
-    ({ from, to }) => {
-      let query = supabase
-        .from('journal_entries')
-        .select('id, voucher_series, voucher_number')
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', fiscalPeriodId)
-        .in('status', POSTED_STATUSES)
-        .gt('voucher_number', 0)
-        .lte('entry_date', window.toDate)
+  const { data, error } = await supabase.rpc('latest_posted_vouchers', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+    p_from_date: window.fromDate ?? null,
+    p_to_date: window.toDate,
+  })
+  if (error) throw dbError(error, 'latest_posted_vouchers failed')
 
-      if (window.fromDate) {
-        query = query.gte('entry_date', window.fromDate)
-      }
-
-      // Order on the PK: paging is only stable with a unique total order.
-      return query.order('id', { ascending: true }).range(from, to)
-    },
-    { dedupeBy: (r) => r.id }
-  )
-
-  const maxBySeries = new Map<string, number>()
-  for (const row of rows) {
-    const series = row.voucher_series || 'A'
-    const current = maxBySeries.get(series) ?? 0
-    if (row.voucher_number > current) {
-      maxBySeries.set(series, row.voucher_number)
-    }
-  }
-
-  return [...maxBySeries.entries()]
-    .map(([series, last_number]) => ({ series, last_number }))
+  return ((data ?? []) as LatestVoucherRow[])
+    .map((row) => ({ series: row.voucher_series, last_number: Number(row.last_number) }))
     .sort((a, b) => a.series.localeCompare(b.series, 'sv'))
 }
 

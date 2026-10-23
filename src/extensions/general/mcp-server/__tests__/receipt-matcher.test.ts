@@ -71,7 +71,7 @@ vi.mock('@/lib/reports/kpi', () => ({
   calculateGrossMargin: vi.fn(),
   calculateCashPosition: vi.fn(),
   calculateExpenseRatio: vi.fn(),
-  calculateAvgPaymentDays: vi.fn(),
+  averagePaymentDays: vi.fn(),
 }))
 
 vi.mock('@/lib/reports/trial-balance', () => ({

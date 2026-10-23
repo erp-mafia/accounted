@@ -60,9 +60,21 @@ export async function generateBokslutsbilagor(
   const company = (companyData as { name: string | null; org_number: string | null } | null) ?? { name: null, org_number: null }
   const balansdag = period.period_end
 
+  // One balance snapshot and one account list serve the pärm, the list's
+  // manual accounts (which share the specification reads below through the
+  // snapshot) and the checklist's auto states: the same reads, made once.
+  const snapshotRead = CLOSING_RECONCILIATION.balanceSheetSnapshot(supabase, companyId, balansdag)
+  const accountsRead = CLOSING_RECONCILIATION.listAccounts(supabase, companyId, {
+    today: balansdag,
+    windowFrom: period.period_start,
+    windowTo: balansdag,
+    balanceSheet: snapshotRead.catch((): BalanceSheetSnapshot | null => null),
+  })
+  // The checklist degrades on a failed list; the pärm itself fails below.
+  accountsRead.catch(() => undefined)
   const [accounts, snapshot, balansdagSignoffs, latestSignoffs, attachmentRows, checklist] = await Promise.all([
-    CLOSING_RECONCILIATION.listAccounts(supabase, companyId, { today: balansdag, windowFrom: period.period_start, windowTo: balansdag }),
-    CLOSING_RECONCILIATION.balanceSheetSnapshot(supabase, companyId, balansdag).catch((err): BalanceSheetSnapshot | null => {
+    accountsRead,
+    snapshotRead.catch((err): BalanceSheetSnapshot | null => {
       log.warn('balance snapshot failed', { companyId, periodId, error: String(err) })
       return null
     }),
@@ -72,7 +84,10 @@ export async function generateBokslutsbilagor(
       log.warn('attachment read failed', { companyId, periodId, error: String(err) })
       return []
     }),
-    buildBokslutChecklist(supabase, companyId, options.userId ?? '', periodId, options.userId ? {} : { readiness: null }),
+    buildBokslutChecklist(supabase, companyId, options.userId ?? '', periodId, {
+      ...(options.userId ? {} : { readiness: null }),
+      accounts: accountsRead,
+    }),
   ])
 
   const specifications = snapshot

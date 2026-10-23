@@ -195,10 +195,10 @@ import {
   calculateGrossMargin,
   calculateCashPosition,
   calculateExpenseRatio,
-  calculateAvgPaymentDays,
+  averagePaymentDays,
   calculateVatLiability,
   fetchKpiAccountOverrides,
-  fetchPaidInvoicesInRange,
+  fetchPaymentDaysInRange,
   kpiReceivablesAsOf,
 } from '@/lib/reports/kpi'
 import { KPI_REPORT_OUTPUT_SCHEMA, parseKpiMetrics, pickKpiMetrics } from './kpi-report'
@@ -10503,14 +10503,14 @@ export const tools: McpTool[] = [
       // company's account overrides, receivables as of the range end and
       // payment days over payments inside the range. data_status covers the
       // same range as the figures.
-      const [accountOverrides, incomeStatement, trialBalance, arLedger, monthlyBreakdown, paidInvoices, dataStatus] =
+      const [accountOverrides, incomeStatement, trialBalance, arLedger, monthlyBreakdown, paymentDays, dataStatus] =
         await Promise.all([
           fetchKpiAccountOverrides(supabase, companyId),
           generateIncomeStatement(supabase, companyId, period.id, range),
           generateTrialBalance(supabase, companyId, period.id, { closingEntry: 'include', ...range }),
           generateARLedger(supabase, companyId, receivablesAsOf),
           generateMonthlyBreakdown(supabase, companyId, period.id),
-          fetchPaidInvoicesInRange(supabase, companyId, rangeStart, rangeEnd),
+          fetchPaymentDaysInRange(supabase, companyId, rangeStart, rangeEnd),
           buildReportDataStatus(supabase, companyId, { periodId: period.id, ...range }),
         ])
 
@@ -10529,8 +10529,8 @@ export const tools: McpTool[] = [
         outstanding_receivables: Math.round(arLedger.total_outstanding * 100) / 100,
         overdue_receivables: Math.round(arLedger.total_overdue * 100) / 100,
         expense_ratio: calculateExpenseRatio(incomeStatement),
-        avg_payment_days: calculateAvgPaymentDays(paidInvoices),
-        paid_invoice_count: paidInvoices.length,
+        avg_payment_days: averagePaymentDays(paymentDays),
+        paid_invoice_count: paymentDays.invoiceCount,
         vat_liability: calculateVatLiability(
           trialBalance.rows,
           accountOverrides['vatLiability'],

@@ -4,7 +4,7 @@ import type { Transaction, ReconciliationMethod } from '@/types'
 import { eventBus } from '@/lib/events/bus'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
+import { dbError } from '@/lib/errors/db-error'
 import {
   hasLiveJournalEntryLink,
   prepareBankLink,
@@ -420,13 +420,8 @@ export function scopeTransactionsToAccount<Q extends {
   // are DB-derived in every caller (cash_accounts.id / .currency, or the 'SEK'
   // default), never raw user input, but assert their shape anyway so a future
   // caller cannot thread an unsanitized value through into the filter.
-  if (!/^[A-Z]{3}$/.test(currency)) {
-    throw new Error(`scopeTransactionsToAccount: invalid currency ${JSON.stringify(currency)}`)
-  }
+  assertTransactionScope(cashAccountId, currency)
   if (cashAccountId) {
-    if (!/^[0-9a-fA-F-]{36}$/.test(cashAccountId)) {
-      throw new Error('scopeTransactionsToAccount: invalid cashAccountId (expected UUID)')
-    }
     if (includeUnassigned) {
       return query
         .eq('currency', currency)
@@ -436,6 +431,20 @@ export function scopeTransactionsToAccount<Q extends {
     return query.eq('currency', currency).eq('cash_account_id', cashAccountId)
   }
   return query.eq('currency', currency)
+}
+
+/**
+ * The shape check scopeTransactionsToAccount makes before it builds a filter,
+ * shared with the reads that pass the same scope to an RPC: an ISO currency
+ * code and, when given, a UUID cash account id.
+ */
+export function assertTransactionScope(cashAccountId: string | undefined, currency: string): void {
+  if (!/^[A-Z]{3}$/.test(currency)) {
+    throw new Error(`scopeTransactionsToAccount: invalid currency ${JSON.stringify(currency)}`)
+  }
+  if (cashAccountId && !/^[0-9a-fA-F-]{36}$/.test(cashAccountId)) {
+    throw new Error('scopeTransactionsToAccount: invalid cashAccountId (expected UUID)')
+  }
 }
 
 /**
@@ -469,7 +478,22 @@ function warnIfUnscopedAcrossCashAccounts(
   const distinct = new Set(
     rows.map((r) => r.cash_account_id).filter((id): id is string => Boolean(id)),
   )
-  if (distinct.size <= 1) return
+  logIfUnscopedAcrossCashAccounts(operation, distinct.size, ctx)
+}
+
+/** The warning above, from a count of distinct cash accounts the read already made. */
+function logIfUnscopedAcrossCashAccounts(
+  operation: string,
+  distinctCashAccounts: number,
+  ctx: {
+    cashAccountId: string | undefined
+    companyId: string
+    accountNumber: string
+    currency: string
+  },
+): void {
+  if (ctx.cashAccountId) return
+  if (distinctCashAccounts <= 1) return
   log.warn(`${operation} ran unscoped across several cash accounts`, {
     companyId: ctx.companyId,
     operation,
@@ -477,7 +501,7 @@ function warnIfUnscopedAcrossCashAccounts(
     details: {
       accountNumber: ctx.accountNumber,
       currency: ctx.currency,
-      distinctCashAccounts: distinct.size,
+      distinctCashAccounts,
     },
   })
 }
@@ -827,233 +851,73 @@ export async function getReconciliationStatus(
   cashAccountId?: string,
   includeUnassigned: boolean = true,
 ): Promise<ReconciliationStatus> {
-  // Get all transactions in range, scoped to the selected cash account. Ignored
-  // rows are pulled too, but only to be COUNTED AND SUMMED separately: they are
-  // excluded from the bank total, the difference and the matched/unmatched
-  // counts below, because the user has explicitly said they are not something
-  // to reconcile (duplicates, non-business noise). Scoping by cash account
-  // (not just currency) is what stops a
-  // second same-currency account from inflating bankTotal here.
-  // Paginated (fetchAllRows): PostgREST silently caps un-ranged selects at 1000
-  // rows, which would undercount bank_transaction_total for a busy company and
-  // manufacture a phantom, unexplainable difference. Ordered on id (unique) so
-  // pages never duplicate or skip rows across boundaries.
-  type StatusTxRow = {
-    id?: string | null
-    date: string | null
-    amount: number | string | null
-    journal_entry_id: string | null
-    reconciliation_method: string | null
-    is_ignored: boolean | null
-    cash_account_id: string | null
-  }
-  const transactions = await fetchAllRows<StatusTxRow>(({ from, to }) => {
-    let txQuery = supabase
-      .from('transactions')
-      .select('id, date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
-      .eq('company_id', companyId)
-    txQuery = scopeTransactionsToAccount(txQuery, cashAccountId, currency, includeUnassigned)
-    if (dateFrom) txQuery = txQuery.gte('date', dateFrom)
-    if (dateTo) txQuery = txQuery.lte('date', dateTo)
-    return txQuery.order('id').range(from, to)
+  // One read answers every set the status is built from (the bank rows of
+  // the window aligned to their verifikat, the ledger sums, the opening
+  // balance floor, the bank's history and the ledger-only verifikat): see
+  // get_bank_reconciliation_facts (20261023094100). It used to page every
+  // bank row and every ledger line of the window through PostgREST, which
+  // took seconds for a busy year; the rules below are the same ones, and the
+  // comments on each figure say what it counts.
+  assertTransactionScope(cashAccountId, currency)
+  const facts = await fetchBankReconciliationFacts(supabase, {
+    companyId,
+    bankAccount,
+    currency,
+    cashAccountId,
+    includeUnassigned,
+    dateFrom: dateFrom ?? null,
+    dateTo: dateTo ?? null,
   })
 
-  warnIfUnscopedAcrossCashAccounts('getReconciliationStatus', transactions, {
+  logIfUnscopedAcrossCashAccounts('getReconciliationStatus', facts.read_window_cash_accounts ?? 0, {
     cashAccountId,
     companyId,
     accountNumber: bankAccount,
     currency,
   })
 
-  // Transactions anchored through transaction_voucher_links (bulk-booked
-  // samlingsverifikat, residual bookings) carry journal_entry_id = NULL on the
-  // row itself. They are settled all the same, so the matched/unmatched split
-  // below must see them; is_transaction_booked() is the SQL twin of this.
-  // The map, not just the id set: the window alignment below needs to know
-  // WHICH verifikat a junction-anchored row is linked to. A failed read keeps
-  // the legacy posture of fetchJunctionLinkedTxIds (treated as no links).
-  let junctionLinks = new Map<string, string[]>()
-  try {
-    junctionLinks = await fetchJunctionLinkMap(
-      supabase,
-      companyId,
-      transactions.map((tx) => tx.id).filter((id): id is string => typeof id === 'string'),
-    )
-  } catch (err) {
-    log.warn('junction link read failed', {
-      companyId,
-      error: err instanceof Error ? err.message : String(err),
-    })
-  }
-
-  // Get GL bank-account lines. We fetch posted AND reversed entries and count
-  // them TOGETHER: the exact inclusion rule the trial balance and balance sheet
-  // use (see lib/reports/trial-balance.ts, which sums `['posted','reversed']`).
-  // A reversed original stays in the ledger and is cancelled by its storno, so
+  // The ledger side counts posted AND reversed entries TOGETHER: the exact
+  // inclusion rule the trial balance and balance sheet use (see
+  // lib/reports/trial-balance.ts, which sums `['posted','reversed']`). A
+  // reversed original stays in the ledger and is cancelled by its storno, so
   // both legs must be summed; counting only the storno would leave a dangling
   // half-correction. Using the identical rule here is what guarantees
-  // gl_1930_balance can never disagree with the balansräkning for this account:
-  // the headline bug this widget had (a corrected bank receipt showed one figure
-  // here and a different one on the balance sheet). source_type is still pulled
-  // so we can split out the opening balance and surface correction activity.
-  type GlEntry = {
-    id?: string | null
-    status?: string | null
-    source_type?: string | null
-    entry_date?: string | null
-  }
-  type GlLineRow = LedgerLineAmount & {
-    journal_entries: GlEntry | GlEntry[] | null
-  }
-  // Supabase typings sometimes widen embedded relations to arrays even when the
-  // join is one-to-one. Handle both shapes defensively.
-  function entryOf(line: GlLineRow): GlEntry | null {
-    const je = line.journal_entries
-    if (!je) return null
-    return Array.isArray(je) ? je[0] ?? null : je
-  }
-  // Every ledger figure below is resolved in the ACCOUNT's own currency, the
-  // same unit the bank side is already in (transactions are scoped by
-  // `.eq('currency', currency)`, so tx.amount is always in `currency`). On SEK
-  // this is debit - credit, exactly as before. On a foreign account it is the
-  // line's amount_in_currency: summing SEK ledger legs against a EUR bank
-  // statement produced a difference roughly the size of the exchange rate, so a
-  // foreign cash account could never show is_reconciled.
-  // Lines with no amount in `currency` resolve to null; they are counted (and
-  // block reconciliation) rather than silently contributing zero.
-  function lineAmount(line: GlLineRow): number {
-    return ledgerLineAmountIn(line, currency) ?? 0
-  }
-
-  // posted + reversed = the ledger balance, exactly as the trial balance counts
-  // it. The .in() filter on the query already excludes draft/cancelled.
-  // Fetched via the two-step entry-lines helper (entries first, then lines
-  // chunked by entry id, both paginated): a silently truncated GL side would
-  // corrupt gl_1930_balance and the difference. See lib/bookkeeping/entry-lines.ts.
-  const fetchedLines = await fetchEntryLines<GlLineRow>({
-    supabase,
-    entryColumns: 'id, company_id, entry_date, status, source_type',
-    // currency + amount_in_currency: the foreign amount lives on the very lines
-    // being summed, so a foreign account is reconciled in its own currency
-    // instead of against an unconvertible SEK figure. See ledgerLineAmountIn.
-    lineColumns: 'debit_amount, credit_amount, currency, amount_in_currency',
-    filterEntries: (q: EntryLinesQuery) => {
-      let glQuery = q.eq('company_id', companyId).in('status', ['posted', 'reversed'])
-      if (dateFrom) glQuery = glQuery.gte('entry_date', dateFrom)
-      if (dateTo) glQuery = glQuery.lte('entry_date', dateTo)
-      return glQuery
-    },
-    filterLines: (q: EntryLinesQuery) => q.eq('account_number', bankAccount),
-  })
-
-  // Floor the window at the most recent opening-balance date on this account
-  // (issue #751). Everything dated before that IB is prior history the IB entry
-  // already summarises; if the window has no lower bound (the "full history"
-  // default) it spans the fiscal-year boundary and pulls the prior period's real
-  // movements (which net to exactly the IB) into the period movement, while the
-  // bank feed only covers the current period. The IB *summary* is excluded below,
-  // but the prior-period *detail* would otherwise remain, manufacturing a phantom
-  // difference equal to the IB. effectiveFrom is the later of the caller's
-  // dateFrom and that IB date; it only ever RAISES the lower bound, so the
-  // dateFrom SQL pre-filter on both queries above stays valid. In normal use the
-  // UI passes dateFrom = period_start = the IB date, so this is a no-op there.
+  // gl_1930_balance can never disagree with the balansräkning for this
+  // account. Every ledger figure is resolved in the ACCOUNT's own currency,
+  // the same unit the bank side is in (ledgerLineAmountIn): on SEK it is
+  // debit - credit; on a foreign account the line's amount_in_currency, and a
+  // line with no amount in that currency is counted in
+  // unconvertible_line_count instead of contributing zero.
   //
-  // Only a POSTED opening balance is an IB. A stornerad IB (status 'reversed')
-  // has been economically nulled by its storno: both lines still sit in
-  // countedLines and cancel inside glBalance, exactly as on the balansräkning,
-  // but neither may be treated as the period's IB. Counting the reversed one
-  // here (and in glOpeningBalance below) re-added the cancelled amount once
-  // more and manufactured a phantom difference equal to the IB after a
-  // perfectly correct rättelse. Same rule the canonical opening-balance RPC
-  // applies (compute_prior_opening_balances, 20260421180000).
-  const isLiveOpeningBalanceLine = (l: GlLineRow): boolean => {
-    const entry = entryOf(l)
-    return entry?.source_type === 'opening_balance' && entry?.status === 'posted'
-  }
-  const ibDates = fetchedLines
-    .filter(isLiveOpeningBalanceLine)
-    .map((l) => entryOf(l)?.entry_date)
-    .filter((d): d is string => typeof d === 'string' && d.length > 0)
-  // Take the LATEST IB date. The invariant is one opening_balance entry per
-  // fiscal period (set_opening_balances / SIE import / year-end rollover all
-  // create exactly one, dated period_start), so within a single-period window
-  // there is only one. Across a multi-year window the most recent IB is the
-  // correct floor: an earlier year's IB and the movements it summarises are
-  // prior history we deliberately drop. Same-date duplicates are harmless: they
-  // land in both countedLines and glOpeningBalance and cancel.
-  const ibFloor = ibDates.length ? ibDates.reduce((a, b) => (a > b ? a : b)) : null
-  const effectiveFrom =
-    dateFrom && ibFloor ? (dateFrom > ibFloor ? dateFrom : ibFloor) : dateFrom || ibFloor || null
-  // ISO yyyy-mm-dd compares lexically; undated rows (e.g. test fixtures) pass.
-  const onOrAfterFloor = (d: string | null | undefined): boolean =>
-    !effectiveFrom || typeof d !== 'string' ? true : d >= effectiveFrom
+  // The window is floored at the most recent POSTED opening balance on this
+  // account (issue #751): everything dated before that IB is prior history
+  // the IB entry already summarises. effectiveFrom is the later of the
+  // caller's dateFrom and that IB date; it only ever RAISES the lower bound.
+  // A stornerad IB (status 'reversed') is no floor: both of its lines stay in
+  // the balance and cancel there, as on the balansräkning (same rule as
+  // compute_prior_opening_balances, 20260421180000).
+  const ibFloor = facts.ib_floor
+  const effectiveFrom = facts.effective_from
 
-  // Clamp BOTH sides to the floor identically so they stay comparable. Lines and
-  // transactions before the IB belong to a prior period's reconciliation.
-  const countedLines = fetchedLines.filter((l) => onOrAfterFloor(entryOf(l)?.entry_date))
-
-  // Unmatched GL lines count (RPC excludes opening_balance and storno; posted
-  // correction vouchers are candidates again since 20260923150000, a linked one
-  // drops out through its link like any other voucher).
-  // Account-scoped since 20260723160000: a voucher whose links all sit on another
-  // cash account (a transfer's other leg) counts as unmatched HERE, keeping this
-  // number in agreement with the "Omatchade verifikationer" table the
-  // reconciliation view derives from the same RPC. Direction-aware since
-  // 20260828220000: on a NON-primary account, an own-account-transfer voucher
-  // whose only link is a NULL-cash_account transaction with a contradicting
-  // sign counts as unmatched here too (that row is the transfer's OTHER leg),
-  // so both legs of a transfer land in this list symmetrically instead of one
-  // leg polluting unexplained_difference.
-  // effectiveFrom, NOT the caller's dateFrom: countedLines and countedTx are both
-  // clamped to the IB floor above, and this list has to describe the SAME window
-  // or the card contradicts itself. With the raw dateFrom, a window that opens
-  // before the account's opening balance (the v1 endpoint's "company history"
-  // default, or any multi-year range) counted vouchers from a period whose
-  // movements the reconciliation deliberately drops: unmatched_gl_line_count was
-  // inflated by prior-period history, and the bridge below could never close.
-  const unlinkedLines = await fetchGLLinesForMatching(
-    supabase,
-    companyId,
-    bankAccount,
-    effectiveFrom ?? undefined,
-    dateTo
-  )
-
-  // Bank side, same window: an unlinked row counts on its own date, a linked
-  // row on the date of the verifikat it is linked to (see
-  // alignLinkedTransactionsToWindow). Windowing each half of a linked pair on
-  // its own date split a deposit dated before the first fiscal year from the
-  // verifikat that books it inside the year: the verifikat counted, the deposit
-  // did not, and a fully linked account showed its amount as unexplained. The
-  // unmatched lists are unaffected: only linked rows move, and the RPC above
-  // drops a linked voucher whatever the date of the row linked to it.
-  const knownEntryDates = new Map<string, string>()
-  for (const line of fetchedLines) {
-    const entry = entryOf(line)
-    if (entry?.id && typeof entry.entry_date === 'string') knownEntryDates.set(entry.id, entry.entry_date)
-  }
-  const aligned = await alignLinkedTransactionsToWindow<StatusTxRow>({
-    supabase,
-    companyId,
-    bankAccount,
-    rows: transactions || [],
-    junctionLinks,
-    from: effectiveFrom,
-    to: dateTo ?? null,
-    readFrom: dateFrom ?? null,
-    readTo: dateTo ?? null,
-    knownEntryDates,
-    columns: 'status',
-    cashAccountId,
-    currency,
-    includeUnassigned,
-  })
-  const countedTx = aligned.rows
-  junctionLinks = aligned.junctionLinks
+  // The ledger-only verifikat on the account over the floored window, from
+  // get_account_gl_lines_for_matching (RPC excludes opening_balance and
+  // storno; posted correction vouchers are candidates since 20260923150000,
+  // a linked one drops out through its link like any other voucher).
+  // Account-scoped since 20260723160000: a voucher whose links all sit on
+  // another cash account (a transfer's other leg) counts as unmatched HERE,
+  // keeping this number in agreement with the "Omatchade verifikationer"
+  // table. Direction-aware since 20260828220000 for the NULL-cash_account
+  // shape of an own-account transfer. effectiveFrom, NOT the caller's
+  // dateFrom: the counted lines and rows are clamped to the IB floor, and
+  // this list has to describe the SAME window or the card contradicts itself.
+  const unlinkedLines: GLLineForMatching[] = facts.candidates.map((line) => ({
+    ...line,
+    // count(*) can arrive as a bigint string over the wire: coerce defensively.
+    linked_transaction_count: Number(line.linked_transaction_count) || 0,
+  }))
 
   // Verifikat settled against each other (a wrong verifikat and the rättelse
-  // booked by hand, crm#1074) are explained, not open work. Read after every
-  // query of this function except the bank's history below. A settlement is
+  // booked by hand, crm#1074) are explained, not open work. A settlement is
   // honoured only while it still holds (see ledger-settlement-store.ts), and
   // its verifikat move from one explained term of the bridge to another,
   // never out of it.
@@ -1067,15 +931,13 @@ export async function getReconciliationStatus(
       openAmountByEntry(await fetchGLLinesForMatching(supabase, companyId, bankAccount, from, to), currency),
   )
 
-  // The bank's history (crm#1221). A company that imported its books and
-  // then connected the bank has verifikat on the account from before the
-  // first day the bank side covers: the bank has no row for them, so they
-  // sat in the unmatched list and in `difference` for good, with nothing to
-  // match and "oförklarat" at 0. Those verifikat move out of the comparison,
+  // The bank's history (crm#1221): the first day the bank side covers on this
+  // account, ignored rows included. A company that imported its books and
+  // then connected the bank has verifikat on the account from before that
+  // day: the bank has no row for them, so they move out of the comparison,
   // which then starts at history_start, the model the skattekonto has
-  // (skattekonto-reconciliation.ts). Read last: a failed read keeps the
-  // whole window in the comparison, as before.
-  const historyStart = await fetchBankHistoryStart(supabase, companyId, cashAccountId, currency, includeUnassigned)
+  // (skattekonto-reconciliation.ts).
+  const historyStart = facts.bank.history_start
   const beforeHistory = splitBeforeBankHistory({
     historyStart,
     windowFrom: effectiveFrom,
@@ -1084,11 +946,16 @@ export async function getReconciliationStatus(
     openByEntry,
     settledEntryIds: new Set(settlements.settled.keys()),
     // A foreign account's candidate lines carry no amount in its currency:
-    // the counted lines do (see ledgerLineAmountIn).
+    // the read answers each candidate verifikat's own amount on the account.
+    // On SEK the candidate lines are all of the verifikat's lines on it.
     entryAmount: (entryId) => {
+      if (facts.entry_amounts) {
+        const amount = facts.entry_amounts[entryId]
+        return amount === null ? null : roundOre(Number(amount ?? 0))
+      }
       let sum = 0
-      for (const line of countedLines) {
-        if (entryOf(line)?.id !== entryId) continue
+      for (const line of unlinkedLines) {
+        if (line.journal_entry_id !== entryId) continue
         const amount = ledgerLineAmountIn(line, currency)
         if (amount === null) return null
         sum += amount
@@ -1101,82 +968,43 @@ export async function getReconciliationStatus(
     (line) => !settlements.settled.has(line.journal_entry_id) && !beforeHistory.entryIds.has(line.journal_entry_id),
   )
 
-  // Bank side: every NON-IGNORED feed transaction in the (floored) window. We
-  // deliberately do NOT special-case rows linked to a reversed entry any more.
-  // Because the GL side now counts the reversed original, its storno AND the
-  // correction together (just like the balance sheet), a corrected bank line nets
-  // to its true amount on both sides and reconciles on its own: whether
-  // correctEntry re-pointed the transaction to the live corrected entry or a
-  // legacy row still points at the reversed original, the result is identical.
-  // transactions.amount is denominated in transactions.currency, and
-  // scopeTransactionsToAccount pinned that to `currency`, so this total is
-  // already in the account's own currency: the unit lineAmount() resolves to.
-  //
-  // Ignored rows are EXCLUDED from the total, exactly as they are excluded from
-  // the unmatched count: ignoring is the sanctioned handling for feed
-  // duplicates (a reconnect re-importing history) and non-business noise, and
-  // by definition an ignored row will never get a ledger counterpart. Counting
-  // it in the bank total manufactured a permanent difference the user could
-  // never book away: after a correct duplicate cleanup the card showed a
-  // six-figure differens over a fully booked account, and is_reconciled was
-  // unreachable forever. They are surfaced separately (count + sum) instead,
-  // the same pattern as the opening balance, so nothing is silently hidden.
-  const reconcilableTx = countedTx.filter((tx) => tx.is_ignored !== true)
-  const ignoredTx = countedTx.filter((tx) => tx.is_ignored === true)
-  const bankTotal = reconcilableTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
-  const ignoredTotal = ignoredTx.reduce((sum, tx) => sum + (Number(tx.amount) || 0), 0)
-
-  // Ledger lines the account's currency cannot express: a foreign account whose
-  // lines hold only SEK figures with no per-row rate (SIE imports, pre-FX
-  // bookings, an opening balance set in SEK). There is nothing honest to
-  // convert with, so the window is reported as not-reconcilable-yet with a
-  // reason instead of inventing a rate or pretending the SEK figure is EUR.
-  // Always empty on a SEK account: ledgerLineAmountIn never returns null there.
-  const unconvertibleLines = countedLines.filter((l) => ledgerLineAmountIn(l, currency) === null)
+  // Bank side: every NON-IGNORED bank row of the (floored) window. An
+  // unlinked row counts on its own date, a linked row on the date of the
+  // latest live verifikat with a line on the account that it is linked to,
+  // through its pointer or transaction_voucher_links (so each row lands in
+  // exactly one window): windowing each half of a linked pair on its own
+  // date split a deposit dated before the first fiscal year from the
+  // verifikat that books it inside the year. Rows linked to a reversed entry are not special-cased:
+  // the ledger side counts the reversed original, its storno AND the
+  // correction together, so a corrected bank line nets to its true amount on
+  // both sides. Ignored rows (feed duplicates, non-business noise) are
+  // EXCLUDED from the total, exactly as from the unmatched count, and
+  // surfaced separately (count + sum), like the opening balance.
+  // Matched/unmatched partition the reconcilable rows: a row is matched by
+  // its pointer or through transaction_voucher_links (bulk-booked
+  // samlingsverifikat, residual bookings), is_transaction_booked()'s rule.
+  const bankTotal = Number(facts.bank.total)
+  const ignoredTotal = Number(facts.bank.ignored_total)
+  const bankInflow = Number(facts.bank.inflow)
+  const bankOutflow = Number(facts.bank.outflow)
+  const matchedCount = Number(facts.bank.matched_count)
+  const unmatchedTransactionCount = Number(facts.bank.unmatched_count)
+  const unmatchedTransactionTotal = Number(facts.bank.unmatched_total)
 
   // gl_1930_balance: the real ledger balance on this account incl. IB,
-  // byte-for-byte the figure the balansräkning / saldobalans report.
-  const glBalance = countedLines.reduce((sum, line) => sum + lineAmount(line), 0)
-  // IB is last year's closing position, not a movement with a bank-feed
-  // counterpart, surfaced separately and excluded from the period movement.
-  // Posted IB lines only (see isLiveOpeningBalanceLine): a reversed IB and its
-  // storno stay in glBalance where they net to zero.
-  const glOpeningBalance = countedLines
-    .filter(isLiveOpeningBalanceLine)
-    .reduce((sum, line) => sum + lineAmount(line), 0)
-  // Net storno/correction activity on the account this period. Surfaced for
-  // transparency ONLY: it is part of the ledger balance and is INCLUDED in the
-  // movement, never subtracted. (Subtracting it while still counting the
-  // re-pointed bank transaction is exactly what produced the old phantom diff.)
-  const glCorrectionAdjustment = countedLines
-    .filter((l) => {
-      const st = entryOf(l)?.source_type
-      return st === 'storno' || st === 'correction'
-    })
-    .reduce((sum, line) => sum + lineAmount(line), 0)
+  // byte-for-byte the figure the balansräkning / saldobalans report. The IB
+  // (posted IB lines only) is surfaced separately and excluded from the
+  // period movement. Storno/correction activity is surfaced for transparency
+  // ONLY: it is part of the ledger balance and is INCLUDED in the movement,
+  // never subtracted.
+  const glBalance = Number(facts.gl.balance)
+  const glOpeningBalance = Number(facts.gl.opening_balance)
+  const glCorrectionAdjustment = Number(facts.gl.correction_adjustment)
+  const unconvertibleLineCount = Number(facts.gl.unconvertible_line_count)
   // Period movement = the ledger balance minus the opening balance, less the
   // verifikat before the bank's history (beforeHistoryTotal, 0 without a
-  // split). Everything else (real bookings, stornos and corrections alike)
-  // has (or should have) a bank-feed counterpart, so it stays in.
+  // split).
   const glPeriodMovement = glBalance - glOpeningBalance - beforeHistoryTotal
-
-  // Matched/unmatched partition the RECONCILABLE (non-ignored) set, so
-  // matched_count + unmatched_transaction_count always equals the number of
-  // rows behind bank_transaction_total.
-  const isLinked = (tx: StatusTxRow): boolean =>
-    tx.journal_entry_id !== null || (typeof tx.id === 'string' && junctionLinks.has(tx.id))
-  const matchedCount = reconcilableTx.filter(isLinked).length
-  // The gross split behind the net: what the user actually recognises as
-  // "what moved on the bank", so the page never has to explain "netto".
-  const bankInflow = reconcilableTx.reduce((sum, tx) => sum + Math.max(Number(tx.amount) || 0, 0), 0)
-  const bankOutflow = reconcilableTx.reduce((sum, tx) => sum + Math.min(Number(tx.amount) || 0, 0), 0)
-
-  const unmatchedTx = reconcilableTx.filter((tx) => !isLinked(tx))
-  const unmatchedTransactionCount = unmatchedTx.length
-  const unmatchedTransactionTotal = unmatchedTx.reduce(
-    (sum, tx) => sum + (Number(tx.amount) || 0),
-    0
-  )
 
   const difference = Math.round((bankTotal - glPeriodMovement) * 100) / 100
 
@@ -1221,28 +1049,26 @@ export async function getReconciliationStatus(
         bankAccount,
         currency,
         cashAccountId,
-        includeUnassigned,
         historyStart: beforeHistory.splitAt,
         windowFrom: effectiveFrom,
-        windowTo: dateTo ?? null,
         ibFloor,
         openingBalanceInWindow: roundOre(glOpeningBalance),
         beforeHistoryTotal,
-        windowRows: transactions,
+        saldo: facts.saldo,
       })
     : { ledger_balance_before_start: null, saldo_at_start: null, opening_difference: null }
 
   const notReconcilableReason =
-    unconvertibleLines.length > 0 ? 'gl_lines_missing_currency_amount' : null
+    unconvertibleLineCount > 0 ? 'gl_lines_missing_currency_amount' : null
 
   return {
     currency,
     bank_transaction_total: Math.round(bankTotal * 100) / 100,
     bank_transaction_inflow: roundOre(bankInflow),
     bank_transaction_outflow: roundOre(bankOutflow),
-    bank_transaction_count: reconcilableTx.length,
+    bank_transaction_count: Number(facts.bank.count),
     ignored_transaction_total: roundOre(ignoredTotal),
-    ignored_transaction_count: ignoredTx.length,
+    ignored_transaction_count: Number(facts.bank.ignored_count),
     gl_1930_balance: Math.round(glBalance * 100) / 100,
     gl_1930_period_movement: Math.round(glPeriodMovement * 100) / 100,
     gl_1930_opening_balance: Math.round(glOpeningBalance * 100) / 100,
@@ -1269,7 +1095,7 @@ export async function getReconciliationStatus(
     settled_gl_entry_count: settledOutside.length,
     settled_gl_line_total: settledGlLineTotal,
     unexplained_difference: unexplainedDifference,
-    unconvertible_gl_line_count: unconvertibleLines.length,
+    unconvertible_gl_line_count: unconvertibleLineCount,
     not_reconcilable_reason: notReconcilableReason,
     history_start: historyStart,
     before_history_count: beforeHistory.entryIds.size,
@@ -1278,45 +1104,79 @@ export async function getReconciliationStatus(
   }
 }
 
+/** The saldo inputs get_bank_reconciliation_facts reads off the cash account. */
+interface BankSaldoFacts {
+  balance: number | string | null
+  balance_updated_at: string | null
+  /** balance_updated_at as a Stockholm calendar date. */
+  balance_date: string | null
+  /** Non-ignored bank rows from the window's start through balance_date. */
+  rows_total: number | string | null
+}
+
+/** What get_bank_reconciliation_facts answers for one account and window. */
+interface BankReconciliationFacts {
+  ib_floor: string | null
+  effective_from: string | null
+  gl: {
+    balance: number | string
+    opening_balance: number | string
+    correction_adjustment: number | string
+    unconvertible_line_count: number | string
+  }
+  bank: {
+    count: number | string
+    total: number | string
+    inflow: number | string
+    outflow: number | string
+    ignored_count: number | string
+    ignored_total: number | string
+    matched_count: number | string
+    unmatched_count: number | string
+    unmatched_total: number | string
+    history_start: string | null
+  }
+  /** Distinct cash accounts among the rows read on their own date; set only on an unscoped call. */
+  read_window_cash_accounts: number | null
+  saldo: BankSaldoFacts | null
+  candidates: GLLineForMatching[]
+  /** Per candidate verifikat, its amount in the account's currency (null: not expressible). Foreign accounts only. */
+  entry_amounts: Record<string, number | string | null> | null
+}
+
+async function fetchBankReconciliationFacts(
+  supabase: SupabaseClient,
+  input: {
+    companyId: string
+    bankAccount: string
+    currency: string
+    cashAccountId: string | undefined
+    includeUnassigned: boolean
+    dateFrom: string | null
+    dateTo: string | null
+  },
+): Promise<BankReconciliationFacts> {
+  const { data, error } = await supabase.rpc('get_bank_reconciliation_facts', {
+    p_company_id: input.companyId,
+    p_account_number: input.bankAccount,
+    p_currency: input.currency,
+    p_cash_account_id: input.cashAccountId ?? null,
+    // Only an account-scoped read can claim or refuse unassigned rows.
+    p_include_unassigned: input.includeUnassigned,
+    p_date_from: input.dateFrom || null,
+    p_date_to: input.dateTo || null,
+  })
+  if (error) throw dbError(error, null)
+  const facts = data as BankReconciliationFacts | null
+  if (!facts || !facts.gl || !facts.bank) {
+    throw new Error('get_bank_reconciliation_facts returned no answer')
+  }
+  return { ...facts, candidates: facts.candidates ?? [] }
+}
+
 // ============================================================
 // The bank's history (crm#1221)
 // ============================================================
-
-/**
- * The first day the bank side covers on one cash account: the date of its
- * earliest bank row, scoped exactly as the reconciliation's own read
- * (scopeTransactionsToAccount), ignored rows included (an ignored row is
- * still a day the bank reported). Every source counts: the feed, an imported
- * bank file, a row created through the API, so importing older history moves
- * it earlier with nothing stored. Null when the account has no rows, or the
- * read fails: the caller then compares the whole window, as before.
- */
-export async function fetchBankHistoryStart(
-  supabase: SupabaseClient,
-  companyId: string,
-  cashAccountId: string | undefined,
-  currency: string,
-  includeUnassigned: boolean,
-): Promise<string | null> {
-  try {
-    let query = supabase.from('transactions').select('date').eq('company_id', companyId)
-    query = scopeTransactionsToAccount(query, cashAccountId, currency, includeUnassigned)
-    const { data, error } = await query.order('date', { ascending: true }).limit(1).maybeSingle()
-    if (error) {
-      log.warn('bank history start read failed', { companyId, cashAccountId, error: error.message })
-      return null
-    }
-    const date = (data as { date?: unknown } | null)?.date
-    return typeof date === 'string' && /^\d{4}-\d{2}-\d{2}/.test(date) ? date.slice(0, 10) : null
-  } catch (err) {
-    log.warn('bank history start read failed', {
-      companyId,
-      cashAccountId,
-      error: err instanceof Error ? err.message : String(err),
-    })
-    return null
-  }
-}
 
 export interface BankHistorySplit {
   /** history_start when it lies inside the window: the comparison starts there. Null otherwise. */
@@ -1376,8 +1236,6 @@ type OpeningComparison = Pick<
   'ledger_balance_before_start' | 'saldo_at_start' | 'opening_difference'
 >
 
-type BalanceRow = { date: string | null; amount: number | string | null; is_ignored: boolean | null }
-
 /**
  * The ledger balance on the account before the window starts. 0 when the
  * window has no lower bound (the counted lines are all history) or starts at
@@ -1407,56 +1265,29 @@ async function ledgerBalanceBeforeWindow(input: {
 /**
  * The bank's saldo when its history starts: the balance it last reported
  * (cash_accounts.balance, dated by balance_updated_at) less every non-ignored
- * bank row dated up to that day. Every row is on or after history_start, so
- * what remains is the saldo before the first one. The rows inside the window
- * are already read; only those between the window's end and the balance day
- * need a read. Null when the account reports no balance or the balance is
- * older than the history itself.
+ * bank row from the window's start through that day. Every row is on or
+ * after history_start, so what remains is the saldo before the first one.
+ * The status read already summed those rows (saldo.rows_total, through the
+ * Stockholm date of balance_updated_at). Null when the account reports no
+ * balance or the balance is older than the history itself.
  */
-async function bankSaldoAtStart(input: {
-  supabase: SupabaseClient
-  companyId: string
-  currency: string
+function bankSaldoAtStart(input: {
   cashAccountId: string | undefined
-  includeUnassigned: boolean
   historyStart: string
-  windowTo: string | null
-  windowRows: BalanceRow[]
-}): Promise<number | null> {
-  const { supabase, companyId, cashAccountId, historyStart, windowTo } = input
-  if (!cashAccountId) return null
-  const { data, error } = await supabase
-    .from('cash_accounts')
-    .select('balance, balance_updated_at')
-    .eq('company_id', companyId)
-    .eq('id', cashAccountId)
-    .maybeSingle()
-  if (error || !data) return null
-  const row = data as { balance: number | string | null; balance_updated_at: string | null }
-  const balance = row.balance == null ? Number.NaN : Number(row.balance)
-  const at = row.balance_updated_at ? new Date(row.balance_updated_at) : null
+  saldo: BankSaldoFacts | null
+}): number | null {
+  const { cashAccountId, historyStart, saldo } = input
+  if (!cashAccountId || !saldo) return null
+  const balance = saldo.balance == null ? Number.NaN : Number(saldo.balance)
+  const at = saldo.balance_updated_at ? new Date(saldo.balance_updated_at) : null
   if (!Number.isFinite(balance) || !at || Number.isNaN(at.getTime())) return null
   const balanceDate = todayIsoStockholm(at)
   if (balanceDate < historyStart) return null
-
-  let sum = 0
-  for (const tx of input.windowRows) {
-    if (tx.is_ignored === true || typeof tx.date !== 'string' || tx.date > balanceDate) continue
-    sum += Number(tx.amount) || 0
-  }
-  if (windowTo && windowTo < balanceDate) {
-    const later = await fetchAllRows<{ id: string; amount: number | string | null; is_ignored: boolean | null }>(
-      ({ from, to }) => {
-        let query = supabase.from('transactions').select('id, amount, is_ignored').eq('company_id', companyId)
-        query = scopeTransactionsToAccount(query, cashAccountId, input.currency, input.includeUnassigned)
-        return query.gt('date', windowTo).lte('date', balanceDate).order('id').range(from, to)
-      },
-    )
-    for (const tx of later) {
-      if (tx.is_ignored !== true) sum += Number(tx.amount) || 0
-    }
-  }
-  return roundOre(balance - sum)
+  // The rows were summed through the database's own Stockholm date of the
+  // same timestamp; both read the IANA zone, so a mismatch means a broken
+  // read rather than a rule: no saldo then, never a guess.
+  if (saldo.balance_date !== balanceDate || saldo.rows_total == null) return null
+  return roundOre(balance - Number(saldo.rows_total))
 }
 
 /**
@@ -1472,30 +1303,26 @@ async function bankOpeningComparison(input: {
   bankAccount: string
   currency: string
   cashAccountId: string | undefined
-  includeUnassigned: boolean
   historyStart: string
   windowFrom: string | null
-  windowTo: string | null
   ibFloor: string | null
   openingBalanceInWindow: number
   beforeHistoryTotal: number
-  windowRows: BalanceRow[]
+  saldo: BankSaldoFacts | null
 }): Promise<OpeningComparison> {
-  const settle = async <T>(what: string, read: () => Promise<T | null>): Promise<T | null> => {
-    try {
-      return await read()
-    } catch (err) {
-      log.warn(`bank opening comparison: ${what} read failed`, {
-        companyId: input.companyId,
-        error: err instanceof Error ? err.message : String(err),
-      })
-      return null
-    }
+  let before: number | null
+  try {
+    before = await ledgerBalanceBeforeWindow(input)
+  } catch (err) {
+    log.warn('bank opening comparison: ledger balance read failed', {
+      companyId: input.companyId,
+      error: err instanceof Error ? err.message : String(err),
+    })
+    before = null
   }
-  const before = await settle('ledger balance', () => ledgerBalanceBeforeWindow(input))
   const ledgerBalanceBeforeStart =
     before === null ? null : roundOre(before + input.openingBalanceInWindow + input.beforeHistoryTotal)
-  const saldoAtStart = await settle('bank saldo', () => bankSaldoAtStart(input))
+  const saldoAtStart = bankSaldoAtStart(input)
   return {
     ledger_balance_before_start: ledgerBalanceBeforeStart,
     saldo_at_start: saldoAtStart,
@@ -2440,288 +2267,6 @@ export async function fetchJunctionLinkedTxIds(
     for (const row of (data ?? []) as Array<{ transaction_id: string }>) out.add(row.transaction_id)
   }
   return out
-}
-
-/**
- * The verifikat each of the given transactions is anchored to through
- * transaction_voucher_links, bank_line rows first: what a reader needs to
- * report a linked verifikat for a row whose pointer column is NULL (a row
- * split over several verifikat, #1553, or bulk-booked). Same chunking as
- * fetchJunctionLinkedTxIds, but a failed chunk THROWS: a partial or empty
- * answer would let the reader offer Bokför on a row that is booked, and a
- * failed load must not look like nothing to do (listAccountItems already
- * throws when its own transaction read fails).
- */
-export async function fetchJunctionLinkMap(
-  supabase: SupabaseClient,
-  companyId: string,
-  transactionIds: string[],
-): Promise<Map<string, string[]>> {
-  const out = new Map<string, string[]>()
-  const CHUNK = 150
-  for (let i = 0; i < transactionIds.length; i += CHUNK) {
-    const chunk = transactionIds.slice(i, i + CHUNK)
-    const { data, error } = await supabase
-      .from('transaction_voucher_links')
-      .select('transaction_id, journal_entry_id, role')
-      .eq('company_id', companyId)
-      .in('transaction_id', chunk)
-    if (error) throw new Error(`Kunde inte hämta verifikatkopplingar: ${error.message}`)
-    const rows = (data ?? []) as Array<{ transaction_id: string; journal_entry_id: string; role?: string | null }>
-    // bank_line anchors before supplementary ones so [0] is the booking of
-    // the bank line itself, never a residual.
-    const ordered = [...rows].sort((a, b) => {
-      const ar = (a.role ?? 'bank_line') === 'bank_line' ? 0 : 1
-      const br = (b.role ?? 'bank_line') === 'bank_line' ? 0 : 1
-      return ar - br
-    })
-    for (const row of ordered) {
-      const list = out.get(row.transaction_id) ?? []
-      if (!list.includes(row.journal_entry_id)) list.push(row.journal_entry_id)
-      out.set(row.transaction_id, list)
-    }
-  }
-  return out
-}
-
-/** The columns {@link alignLinkedTransactionsToWindow} reads off a bank row. */
-export interface WindowedTxRow {
-  id?: string | null
-  date: string | null
-  journal_entry_id: string | null
-}
-
-export interface AlignLinkedTransactionsOptions<T extends WindowedTxRow> {
-  supabase: SupabaseClient
-  companyId: string
-  /** BAS code of the ledger account being reconciled, e.g. '1930'. */
-  bankAccount: string
-  /** Rows read on their OWN date within [readFrom, readTo], already scoped. */
-  rows: T[]
-  /** Junction anchors of `rows` (transaction id to entry ids). Rows missing
-   *  from the map are treated as having none. */
-  junctionLinks: Map<string, string[]>
-  /** The comparison window. Can be narrower than the read window (the IB floor). */
-  from: string | null
-  to: string | null
-  /** The own-date bounds `rows` were read with. Linked rows outside them are
-   *  only found by the extra read this helper makes. */
-  readFrom: string | null
-  readTo: string | null
-  /** Live (posted or reversed) entries with a line on `bankAccount`, id to
-   *  entry_date, covering at least [from, to]. When omitted the helper reads
-   *  them itself. */
-  knownEntryDates?: Map<string, string>
-  /** Which caller's row shape to select when pulling a row in: 'status' is
-   *  getReconciliationStatus' row, 'items' is listAccountItems'. A closed
-   *  choice, not a column string, so each select stays a literal the typed
-   *  client and the phantom-column guard can resolve. */
-  columns: 'status' | 'items'
-  cashAccountId?: string
-  currency: string
-  includeUnassigned: boolean
-}
-
-const LINK_WINDOW_CHUNK = 150
-
-/** The builder calls alignLinkedTransactionsToWindow makes on a transactions
- *  read, as one structural type over its two literal selects. */
-type TxReadQuery<T> = {
-  eq(column: string, value: string): TxReadQuery<T>
-  or(filters: string): TxReadQuery<T>
-  in(column: string, values: readonly string[]): TxReadQuery<T>
-  lt(column: string, value: string): TxReadQuery<T>
-  gt(column: string, value: string): TxReadQuery<T>
-  order(column: string): TxReadQuery<T>
-  range(from: number, to: number): PromiseLike<{ data: T[] | null; error: { message: string } | null }>
-}
-
-function chunkIds(ids: string[]): string[][] {
-  const out: string[][] = []
-  for (let i = 0; i < ids.length; i += LINK_WINDOW_CHUNK) out.push(ids.slice(i, i + LINK_WINDOW_CHUNK))
-  return out
-}
-
-function isInWindow(date: string | null | undefined, from: string | null, to: string | null): boolean {
-  // ISO yyyy-mm-dd compares lexically; undated rows (e.g. test fixtures) pass.
-  if (typeof date !== 'string') return true
-  if (from && date < from) return false
-  if (to && date > to) return false
-  return true
-}
-
-/**
- * Live (posted or reversed) entries among `entryIds` that carry a line on
- * `bankAccount`, id to entry_date. An entry without such a line has no ledger
- * leg on this account, so it cannot anchor a bank row here.
- */
-async function fetchBankEntryDates(
-  supabase: SupabaseClient,
-  companyId: string,
-  bankAccount: string,
-  filter: { ids: string[] } | { from: string | null; to: string | null },
-): Promise<Map<string, string>> {
-  type Row = { journal_entries?: { id?: string | null; entry_date?: string | null } | null }
-  const out = new Map<string, string>()
-  const parts = 'ids' in filter ? chunkIds(filter.ids) : [null]
-  for (const part of parts) {
-    const lines = await fetchEntryLines<Row>({
-      supabase,
-      entryColumns: 'id, entry_date',
-      lineColumns: 'journal_entry_id',
-      filterEntries: (q: EntryLinesQuery) => {
-        let query = q.eq('company_id', companyId).in('status', ['posted', 'reversed'])
-        if (part) return query.in('id', part)
-        if ('from' in filter && filter.from) query = query.gte('entry_date', filter.from)
-        if ('to' in filter && filter.to) query = query.lte('entry_date', filter.to)
-        return query
-      },
-      filterLines: (q: EntryLinesQuery) => q.eq('account_number', bankAccount),
-    })
-    for (const line of lines) {
-      const entry = line.journal_entries
-      if (entry?.id && typeof entry.entry_date === 'string') out.set(entry.id, entry.entry_date)
-    }
-  }
-  return out
-}
-
-/**
- * Put every linked bank row in the window of the verifikat it is linked to.
- *
- * The ledger side of a reconciliation is windowed on entry_date and the bank
- * side on the transaction date. A link may pair a bank row with a verifikat
- * dated on the other side of a window boundary (a deposit two weeks before
- * the first fiscal year starts, booked in that year; a payment booked on the
- * last day of a year that clears the bank on the first day of the next). Each
- * side windowed on its own date splits that pair: the verifikat counts, the
- * bank row does not, and a fully linked account shows the amount as
- * unexplained.
- *
- * The rule: an UNLINKED row is windowed on its own date, as before. A LINKED
- * row is windowed on the date of the verifikat it is linked to, through the
- * pointer column or transaction_voucher_links (the latest date when it is
- * linked to several, so each row lands in exactly one window). Only live
- * (posted or reversed) entries with a line on this account anchor a row; a
- * link to anything else leaves the row on its own date. The ledger side is
- * never moved: it stays byte-for-byte the balance the balansräkning reports.
- *
- * Returns the rows that belong to [from, to] (pulled-in rows appended) and
- * the junction map extended with the pulled-in rows.
- */
-export async function alignLinkedTransactionsToWindow<T extends WindowedTxRow>(
-  options: AlignLinkedTransactionsOptions<T>,
-): Promise<{ rows: T[]; junctionLinks: Map<string, string[]> }> {
-  const { supabase, companyId, bankAccount, rows, from, to, readFrom, readTo } = options
-  const junctionLinks = new Map(options.junctionLinks)
-  if (!from && !to && !readFrom && !readTo) return { rows, junctionLinks }
-
-  const entryDates = options.knownEntryDates
-    ? new Map(options.knownEntryDates)
-    : await fetchBankEntryDates(supabase, companyId, bankAccount, { from, to })
-
-  // Pull in: rows read out by their own date that are linked to a verifikat
-  // inside the window. Only needed when the read itself had a bound.
-  const pulled: T[] = []
-  const windowEntryIds = [...entryDates].filter(([, d]) => isInWindow(d, from, to)).map(([id]) => id)
-  if ((readFrom || readTo) && windowEntryIds.length > 0) {
-    const seen = new Set(rows.map((r) => r.id).filter((id): id is string => typeof id === 'string'))
-    const addRows = (found: T[]) => {
-      for (const row of found) {
-        if (typeof row.id !== 'string' || seen.has(row.id)) continue
-        seen.add(row.id)
-        pulled.push(row)
-      }
-    }
-    type Narrow = { entryIds: string[]; before?: string; after?: string } | { ids: string[] }
-    // One read per open side, so the date bound never shares an .or() with
-    // the cash-account scope.
-    const readTx = (n: Narrow): Promise<T[]> =>
-      fetchAllRows<T>(({ from: f, to: t }) => {
-        // Two literal selects (typed client, phantom-column guard), then one
-        // structural view of the builder for the shared filters.
-        const selected = (
-          options.columns === 'items'
-            ? supabase
-                .from('transactions')
-                .select(
-                  'id, date, description, merchant_name, amount, currency, journal_entry_id, potential_journal_entry_id, potential_match_method, potential_match_confidence, is_ignored, reconciliation_method',
-                )
-            : supabase
-                .from('transactions')
-                .select('id, date, amount, journal_entry_id, reconciliation_method, is_ignored, cash_account_id')
-        ) as unknown as TxReadQuery<T>
-        let q = scopeTransactionsToAccount(
-          selected.eq('company_id', companyId),
-          options.cashAccountId,
-          options.currency,
-          options.includeUnassigned,
-        )
-        if ('ids' in n) {
-          q = q.in('id', n.ids)
-        } else {
-          q = q.in('journal_entry_id', n.entryIds)
-          if (n.before) q = q.lt('date', n.before)
-          if (n.after) q = q.gt('date', n.after)
-        }
-        return q.order('id').range(f, t)
-      })
-    const junctionTxIds = new Set<string>()
-    for (const part of chunkIds(windowEntryIds)) {
-      if (readFrom) addRows(await readTx({ entryIds: part, before: readFrom }))
-      if (readTo) addRows(await readTx({ entryIds: part, after: readTo }))
-      const links = await fetchAllRows<{ transaction_id: string }>(({ from: f, to: t }) =>
-        supabase
-          .from('transaction_voucher_links')
-          .select('transaction_id')
-          .eq('company_id', companyId)
-          .in('journal_entry_id', part)
-          .order('transaction_id')
-          .range(f, t),
-      )
-      for (const link of links) {
-        if (link?.transaction_id && !seen.has(link.transaction_id)) junctionTxIds.add(link.transaction_id)
-      }
-    }
-    for (const part of chunkIds([...junctionTxIds])) {
-      addRows(await readTx({ ids: part }))
-    }
-    const pulledIds = pulled.map((r) => r.id).filter((id): id is string => typeof id === 'string')
-    if (pulledIds.length > 0) {
-      for (const [txId, entryIds] of await fetchJunctionLinkMap(supabase, companyId, pulledIds)) {
-        junctionLinks.set(txId, entryIds)
-      }
-    }
-  }
-
-  const all = [...rows, ...pulled]
-  const linkedEntryIds = (row: T): string[] => {
-    const ids = [...(typeof row.id === 'string' ? junctionLinks.get(row.id) ?? [] : [])]
-    if (row.journal_entry_id) ids.push(row.journal_entry_id)
-    return ids.filter((id): id is string => typeof id === 'string' && id.length > 0)
-  }
-
-  // Push out needs the date of every linked entry not read yet: a verifikat
-  // outside the window, or one without a line on this account.
-  const unknown = new Set<string>()
-  for (const row of all) for (const id of linkedEntryIds(row)) if (!entryDates.has(id)) unknown.add(id)
-  if (unknown.size > 0) {
-    const found = await fetchBankEntryDates(supabase, companyId, bankAccount, { ids: [...unknown] })
-    for (const [id, d] of found) entryDates.set(id, d)
-  }
-
-  const anchorDate = (row: T): string | null => {
-    let latest: string | null = null
-    for (const id of linkedEntryIds(row)) {
-      const d = entryDates.get(id)
-      if (d && (!latest || d > latest)) latest = d
-    }
-    return latest
-  }
-  return {
-    rows: all.filter((row) => isInWindow(anchorDate(row) ?? row.date, from, to)),
-    junctionLinks,
-  }
 }
 
 /** A match candidate that carries how many transactions already point at it. */

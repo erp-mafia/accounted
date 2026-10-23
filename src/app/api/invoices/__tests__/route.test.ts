@@ -136,12 +136,14 @@ describe('GET /api/invoices', () => {
   })
 
   it('reports invoice-register coverage alongside the list', async () => {
-    // List, then the coverage helper's two lookups: earliest register
-    // invoice + a posted AR verifikat predating it (migrated/backfilled
-    // invoice history living only as journal entries).
+    // List, then the coverage read (get_invoice_register_coverage): the
+    // register starts 2026-07-19 and a posted AR verifikat predates it
+    // (migrated/backfilled invoice history living only as journal entries).
     enqueue({ data: [makeInvoice()], error: null, count: 1 })
-    enqueue({ data: { invoice_date: '2026-07-19' }, error: null })
-    enqueue({ data: { id: 'line-1' }, error: null })
+    enqueue({
+      data: { covers_from: '2026-07-19', has_pre_register_invoices: true, pre_register_in_period: false },
+      error: null,
+    })
 
     const request = createMockRequest('/api/invoices')
     const response = await GET(request, { params: Promise.resolve({}) })

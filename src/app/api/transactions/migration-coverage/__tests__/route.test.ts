@@ -10,7 +10,7 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
 import { createMockRequest, createTableMockSupabase, parseJsonResponse } from '@/tests/helpers'
 
-const { supabase: mockSupabase, setTable, reset, tables, findCalls } = createTableMockSupabase()
+const { supabase: mockSupabase, setTable, reset, tables, findCall } = createTableMockSupabase()
 vi.mock('@/lib/supabase/server', () => ({
   createClient: () => Promise.resolve(mockSupabase),
 }))
@@ -57,25 +57,36 @@ const LEDGER = {
   ],
 }
 
-/** journal_entries is read twice in two shapes: the coverage end (maybeSingle) and the ledger scan (a list). */
+/**
+ * The ledger scan is one read, get_unexplained_bank_legs: the legs nothing
+ * explains yet (A95 is linked to an earlier bank row, so it is not among
+ * them; the read's rules are tested against Postgres in
+ * tests/pg/bank-reconciliation-facts.pg.test.ts).
+ */
 function seedMigratedCompany(rows: ReturnType<typeof openRow>[], ledger = LEDGER) {
   setTable('sie_imports', { data: { id: 'import-1' } })
-  setTable('journal_entries', (chain) =>
-    chain.some((c) => c.method === 'maybeSingle')
-      ? { data: { entry_date: COVERAGE_END } }
-      : { data: ledger.entries },
-  )
-  setTable('journal_entry_lines', { data: ledger.lines })
+  setTable('journal_entries', { data: { entry_date: COVERAGE_END } })
+  setTable('rpc:get_unexplained_bank_legs', {
+    data: ledger.lines
+      .filter((l) => l.journal_entry_id !== 'A95')
+      .map((l) => {
+        const e = ledger.entries.find((x) => x.id === l.journal_entry_id)!
+        return {
+          journal_entry_id: e.id,
+          entry_date: e.entry_date,
+          description: e.description,
+          voucher_series: e.voucher_series,
+          voucher_number: e.voucher_number,
+          status: e.status,
+          source_type: e.source_type,
+          account_number: l.account_number,
+          debit_amount: l.debit_amount,
+          credit_amount: l.credit_amount,
+        }
+      }),
+  })
   setTable('cash_accounts', { data: [{ id: 'ca-1', ledger_account: '1930' }] })
-  // The open rows, and the link anchors (A95 is linked to an earlier bank row).
-  setTable('transactions', (chain) =>
-    chain.some((c) => c.method === 'in')
-      ? { data: [{ id: 'tx-linked-earlier', journal_entry_id: 'A95' }] }
-      : { data: rows },
-  )
-  setTable('invoice_payments', { data: [] })
-  setTable('supplier_invoice_payments', { data: [] })
-  setTable('transaction_voucher_links', { data: [] })
+  setTable('transactions', { data: rows })
 }
 
 describe('GET /api/transactions/migration-coverage', () => {
@@ -124,17 +135,12 @@ describe('GET /api/transactions/migration-coverage', () => {
     expect(status).toBe(200)
     expect(body.data).toEqual({ coverage_end: COVERAGE_END, explained_ids: ['tx-batch'] })
     // A 1930 row is searched across the whole bank range, not on 1930 alone.
-    expect(findCalls('journal_entry_lines', 'gte')).toContainEqual(['account_number', '1910'])
-    expect(findCalls('journal_entry_lines', 'lte')).toContainEqual(['account_number', '1949'])
+    expect(findCall('rpc:get_unexplained_bank_legs', 'rpc')?.[0]).toMatchObject({ p_account_number: null })
   })
 
   it('marks nothing when the ledger scan fails: the marker is advisory and fails open', async () => {
     seedMigratedCompany([openRow('tx-batch', '2026-09-30', -7874)])
-    setTable('journal_entries', (chain) =>
-      chain.some((c) => c.method === 'maybeSingle')
-        ? { data: { entry_date: COVERAGE_END } }
-        : { data: null, error: { message: 'statement timeout' } },
-    )
+    setTable('rpc:get_unexplained_bank_legs', { data: null, error: { message: 'statement timeout' } })
 
     const response = await GET(createMockRequest('/api/transactions/migration-coverage'), {
       params: Promise.resolve({}),
@@ -155,6 +161,6 @@ describe('GET /api/transactions/migration-coverage', () => {
 
     expect(status).toBe(200)
     expect(body.data).toEqual({ coverage_end: COVERAGE_END, explained_ids: [] })
-    expect(tables()).not.toContain('journal_entry_lines')
+    expect(tables()).not.toContain('rpc:get_unexplained_bank_legs')
   })
 })

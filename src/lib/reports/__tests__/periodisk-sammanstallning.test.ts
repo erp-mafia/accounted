@@ -22,12 +22,43 @@ function makeBuilder() {
 // none of the unattributed verifikat.
 let rpcResults: Array<{ data?: unknown; error?: unknown }>
 
+// get_entries_with_account_lines (the period's verifikat on the PS accounts):
+// 'missing' answers as a database without the function (PGRST202), so the
+// generator reads the paged way and the queue above starts with that
+// journal_entries page; 'queue' serves the same page through the function.
+let entriesRpc: 'missing' | 'queue'
+
+/** An entry fixture as get_entries_with_account_lines returns it. */
+function asRpcRow(entry: { id: string; journal_entry_lines?: unknown[] | null }) {
+  const { journal_entry_lines: lines, ...rest } = entry
+  return {
+    description: '',
+    ...rest,
+    lines: (lines ?? []).map((line, i) => ({ id: `${entry.id}-line-${i}`, ...(line as object) })),
+  }
+}
+
 function makeClient() {
   return {
     from: vi.fn().mockImplementation(() => makeBuilder()),
-    rpc: vi.fn().mockImplementation(async () => rpcResults.shift() ?? { data: [], error: null }),
+    rpc: vi.fn().mockImplementation(async (fn: string) => {
+      if (fn === 'get_entries_with_account_lines') {
+        if (entriesRpc === 'missing') {
+          return { data: null, error: { code: 'PGRST202', message: 'Could not find the function' } }
+        }
+        const page = results[resultIdx++] ?? { data: [], error: null }
+        const rows = (page.data ?? []) as Array<{ id: string; journal_entry_lines?: unknown[] | null }>
+        return { data: page.error ? null : rows.map(asRpcRow), error: page.error ?? null }
+      }
+      return rpcResults.shift() ?? { data: [], error: null }
+    }),
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   } as any
+}
+
+/** The get_vat_ruta_source_lines calls, in order (the declaration's drill-down). */
+function sourceLineCalls(): unknown[][] {
+  return (supabase.rpc as ReturnType<typeof vi.fn>).mock.calls.filter((c: unknown[]) => c[0] === 'get_vat_ruta_source_lines')
 }
 
 // The company's own momskoder on its accounts. Empty: the fixed BAS map
@@ -64,6 +95,7 @@ beforeEach(() => {
   resultIdx = 0
   results = []
   rpcResults = []
+  entriesRpc = 'missing'
   dynamicAccounts.mappingByAccount.clear()
   dynamicAccounts.explicitAccounts.clear()
   supabase = makeClient()
@@ -885,7 +917,7 @@ describe('storno and rättelse chains (#2351)', () => {
     // The original is in the batch and unexplained: no parent fetch, no
     // invoice load; the chain nets to zero, so the declaration is not asked.
     expect(fromTables()).toEqual(['journal_entries', 'invoices', 'invoice_payments'])
-    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(sourceLineCalls()).toHaveLength(0)
   })
 
   it('a rättelse chain of a manual EU sale is one UNATTRIBUTED_EU_SALE at the corrected amount, on the correction (crm#1336)', async () => {
@@ -1014,7 +1046,7 @@ describe('EU sales the declaration counts but no invoice names a buyer for (crm#
     expect(warning.message).toContain('Om köparen har ett VAT-nummer och tjänsten beskattas i köparens land')
     // The declaration was asked for the period, on the PS accounts, with
     // the settlement-shape parameters the figure uses.
-    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(sourceLineCalls()).toHaveLength(1)
     expect(supabase.rpc).toHaveBeenCalledWith('get_vat_ruta_source_lines', expect.objectContaining({
       p_company_id: 'c1',
       p_start: '2025-07-01',
@@ -1037,7 +1069,7 @@ describe('EU sales the declaration counts but no invoice names a buyer for (crm#
 
     expect(report.rows).toEqual([])
     expect(report.warnings).toEqual([])
-    expect(supabase.rpc).toHaveBeenCalledTimes(1)
+    expect(sourceLineCalls()).toHaveLength(1)
   })
 
   it('an invoiced EU service sale is filed next to an unattributed one, and the file is still allowed', async () => {
@@ -1114,8 +1146,8 @@ describe('EU sales the declaration counts but no invoice names a buyer for (crm#
     const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'quarterly', 2025, 3)
 
     expect(report.warnings.map((w) => w.code)).toEqual(['UNATTRIBUTED_EU_SALE'])
-    expect(supabase.rpc).toHaveBeenCalledTimes(2)
-    expect(supabase.rpc.mock.calls[1][1]).toMatchObject({
+    expect(sourceLineCalls()).toHaveLength(2)
+    expect(sourceLineCalls()[1][1]).toMatchObject({
       p_cursor_date: '2025-07-01',
       p_cursor_voucher_number: 500,
       p_cursor_entry_id: 'je-other-499',
@@ -1225,7 +1257,7 @@ describe('findUnattributedEuSales: the PS finding for any date range (crm#1362)'
 
     expect(warnings).toEqual([])
     expect(supabase.from).toHaveBeenCalledTimes(1)
-    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(sourceLineCalls()).toHaveLength(0)
   })
 
   it('an unattributed goods sale is an error, as it is in the report', async () => {
@@ -1239,5 +1271,139 @@ describe('findUnattributedEuSales: the PS finding for any date range (crm#1362)'
     const warnings = await findUnattributedEuSales(supabase, 'c1', '2025-05-01', '2025-05-31')
 
     expect(warnings).toEqual([expect.objectContaining({ level: 'error', journalEntryId: 'je-man', amount: 2500 })])
+  })
+})
+
+describe('the period\'s verifikat through get_entries_with_account_lines', () => {
+  /**
+   * Runs `run` against the same fixtures twice: once with the database
+   * answering get_entries_with_account_lines, once without the function (the
+   * paged journal_entries read), and pins the two results equal.
+   */
+  async function bothWays<T>(setup: () => void, run: () => Promise<T>): Promise<T> {
+    const read = async (mode: 'missing' | 'queue') => {
+      vi.clearAllMocks()
+      resultIdx = 0
+      results = []
+      rpcResults = []
+      setup()
+      entriesRpc = mode
+      supabase = makeClient()
+      return run()
+    }
+    const paged = await read('missing')
+    const viaRpc = await read('queue')
+    expect(viaRpc).toEqual(paged)
+    // The function answered: no paged journal_entries read ran first.
+    const tables = (supabase.from as ReturnType<typeof vi.fn>).mock.calls.map((c: unknown[]) => c[0])
+    expect(tables[0]).not.toBe('journal_entries')
+    return viaRpc
+  }
+
+  const invFR = (): InvoiceFx => ({
+    id: 'inv-fr',
+    customer: {
+      id: 'cust-fr',
+      name: 'FR Customer',
+      country: 'FR',
+      vat_number: 'FR12345678901',
+      vat_number_validated: true,
+      vat_number_validated_at: RECENT,
+    },
+  })
+
+  it('asks for the period\'s posted and reversed verifikat with just their PS-account lines', async () => {
+    entriesRpc = 'queue'
+    results = [{ data: [], error: null }]
+
+    await generatePeriodiskSammanstallning(supabase, 'c1', 'quarterly', 2025, 2)
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_entries_with_account_lines', {
+      p_company_id: 'c1',
+      p_start: '2025-04-01',
+      p_end: '2025-06-30',
+      p_accounts: expect.arrayContaining(['3308', '3108', '3107']),
+      p_statuses: ['posted', 'reversed'],
+      p_all_lines: false,
+    })
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
+  it('files engine invoices, a split verifikat and a credit note the same way', async () => {
+    const report = await bothWays(() => {
+      results = [
+        {
+          data: [
+            entryEU('inv-de', [lineEU('3308', 10000)]),
+            entryEU('inv-fr', [lineEU('3108', 2500), lineEU('3308', 500)]),
+            entryCredit('inv-de-credit', [lineCredit('3308', 1000)]),
+          ],
+          error: null,
+        },
+        { data: [invDE(), invFR(), invDE('inv-de-credit')], error: null },
+      ]
+    }, () => generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5))
+    expect(report.rows.map((r) => [r.country, r.services, r.goods])).toEqual([['DE', 9000, 0], ['FR', 500, 2500]])
+  })
+
+  it('reports an unattributed sale next to an invoiced one the same way', async () => {
+    const report = await bothWays(() => {
+      results = [
+        {
+          data: [
+            { ...entryOther('je-man', 'manual', [lineEU('3308', 1234.56)]), voucher_series: 'A', voucher_number: 7 },
+            entryEU('inv-de', [lineEU('3308', 5000)]),
+          ],
+          error: null,
+        },
+        { data: [], error: null }, // invoices by journal_entry_id
+        { data: [], error: null }, // invoice_payments
+        { data: [invDE()], error: null }, // invoices by id
+      ]
+      rpcResults = [{ data: [sourceLine('je-man')], error: null }]
+    }, () => generatePeriodiskSammanstallning(supabase, 'c1', 'quarterly', 2025, 2))
+    expect(report.warnings.map((w) => w.code)).toEqual(['UNATTRIBUTED_EU_SALE'])
+    expect(report.rows).toHaveLength(1)
+  })
+
+  it('nets a reversed sale and its storno the same way', async () => {
+    const report = await bothWays(() => {
+      results = [
+        {
+          data: [
+            { ...entryEU('inv-de', [lineEU('3308', 10000)]), status: 'reversed' },
+            { ...entryOther('je-storno', 'storno', [lineCredit('3308', 10000)]), source_id: 'inv-de', reverses_id: je('inv-de') },
+          ],
+          error: null,
+        },
+        { data: [], error: null },
+        { data: [], error: null },
+        { data: [invDE()], error: null },
+      ]
+    }, () => generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5))
+    expect(report.warnings.map((w) => w.code)).toEqual(['ZERO_NET_EXCLUDED'])
+  })
+
+  it('reads the company\'s own EU goods account and the close check\'s findings the same way', async () => {
+    dynamicAccounts.explicitAccounts.add('3058')
+    dynamicAccounts.mappingByAccount.set('3058', { box: 'ruta35', side: 'credit' })
+    const warnings = await bothWays(() => {
+      results = [
+        { data: [{ ...entryOther('je-goods', 'manual', [lineEU('3058', 2500)]), voucher_series: 'A', voucher_number: 9 }], error: null },
+        { data: [], error: null },
+        { data: [], error: null },
+      ]
+      rpcResults = [{ data: [sourceLine('je-goods')], error: null }]
+    }, () => findUnattributedEuSales(supabase, 'c1', '2025-05-01', '2025-05-31'))
+    expect(warnings).toEqual([expect.objectContaining({ level: 'error', journalEntryId: 'je-goods', amount: 2500 })])
+  })
+
+  it('a failed read fails the report instead of falling back', async () => {
+    entriesRpc = 'queue'
+    results = [{ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }]
+
+    await expect(generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5))
+      .rejects.toThrow('get_entries_with_account_lines failed: canceling statement due to statement timeout')
+    expect(supabase.from).not.toHaveBeenCalled()
   })
 })

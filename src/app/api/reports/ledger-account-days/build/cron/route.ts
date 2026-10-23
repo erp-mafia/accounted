@@ -1,0 +1,91 @@
+import { NextResponse } from 'next/server'
+import { withCronContext } from '@/lib/api/with-cron-context'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
+
+export const maxDuration = 60
+
+/** Stop starting new builds after this long, well inside maxDuration. */
+const TIME_BUDGET_MS = 40_000
+/** Companies read per pass; the loop asks again until the budget is spent. */
+const BATCH = 200
+/**
+ * Above this many verifikat a build takes over a second (about 2.5 s for
+ * 60 000), and the company's postings wait for it: such companies are built
+ * between midnight and 05:00 Stockholm time only.
+ */
+const LARGE_COMPANY_ENTRIES = 20_000
+const NIGHT_END_HOUR = 5
+
+/** The hour in Stockholm, 0-23. */
+function stockholmHour(now: Date): number {
+  return Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'Europe/Stockholm', hour: 'numeric', hourCycle: 'h23' }).format(now))
+}
+
+// Keeps ledger_account_days (migration 20261023093900) compact and complete.
+//
+// Builds the companies that existed before it: until a company is built its
+// reports keep the line-level path, so this only makes them fast, never
+// right. One company per build_ledger_account_days call, each its own
+// transaction, smallest first. A company's postings wait for its build, so a
+// large one is built at night only. New companies are built from the start.
+//
+// Then folds the slot rows writers left (each backend adds to its own row so
+// postings never queue on each other) into one row per key, so reports read
+// one row per account and day. A company busy with an import gives up its
+// lock wait after 2 s and is retried on the next run.
+export const GET = withCronContext('cron.ledger_account_days_build', async (_request, ctx) => {
+  const supabase = createServiceClientNoCookies()
+  const started = Date.now()
+  let built = 0
+  let skipped = 0
+  let deferred = 0
+  const failed = new Set<string>()
+  const night = stockholmHour(new Date()) < NIGHT_END_HOUR
+
+  building: while (Date.now() - started < TIME_BUDGET_MS) {
+    const { data: pending, error } = await supabase.rpc('ledger_account_days_pending', { p_limit: BATCH + failed.size })
+    if (error) throw error
+    const rows = ((pending ?? []) as Array<{ company_id: string; entry_count: number }>).filter((row) => !failed.has(row.company_id))
+    if (rows.length === 0) break
+
+    for (const { company_id: companyId, entry_count: entryCount } of rows) {
+      if (Date.now() - started >= TIME_BUDGET_MS) break
+      if (!night && Number(entryCount) > LARGE_COMPANY_ENTRIES) {
+        // Smallest first: every company after this one is large too.
+        deferred = rows.length - rows.findIndex((row) => row.company_id === companyId)
+        break building
+      }
+      const { error: buildError } = await supabase.rpc('build_ledger_account_days', { p_company_id: companyId })
+      if (buildError) {
+        failed.add(companyId)
+        skipped++
+        ctx.log.warn('ledger_account_days build skipped', { companyId, code: buildError.code })
+        continue
+      }
+      built++
+    }
+  }
+
+  let compacted = 0
+  while (Date.now() - started < TIME_BUDGET_MS) {
+    const { data: unfolded, error } = await supabase.rpc('ledger_account_days_unfolded', { p_limit: BATCH + failed.size })
+    if (error) throw error
+    const ids = ((unfolded ?? []) as string[]).filter((id) => !failed.has(id))
+    if (ids.length === 0) break
+
+    for (const companyId of ids) {
+      if (Date.now() - started >= TIME_BUDGET_MS) break
+      const { error: compactError } = await supabase.rpc('compact_ledger_account_days', { p_company_id: companyId })
+      if (compactError) {
+        failed.add(companyId)
+        skipped++
+        ctx.log.warn('ledger_account_days compaction skipped', { companyId, code: compactError.code })
+        continue
+      }
+      compacted++
+    }
+  }
+
+  ctx.log.info('ledger_account_days build run', { built, compacted, skipped, deferred, durationMs: Date.now() - started })
+  return NextResponse.json({ data: { built, compacted, skipped, deferred } })
+})

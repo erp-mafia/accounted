@@ -1,8 +1,5 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
 import { documentCurrency } from '@/lib/bookkeeping/ledger-line-amount'
 import { roundOre } from '@/lib/money'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { chunk } from '@/lib/utils'
 
 /**
  * A kreditfaktura's credit used to pay another invoice (crm#1059).
@@ -22,18 +19,12 @@ import { chunk } from '@/lib/utils'
  * verifikat whose credit exceeds the invoice's remaining amount.
  */
 
-/** Verifikat ids per `.in()` read (URL-length safety, as elsewhere). */
-const ENTRY_ID_CHUNK = 100
-
-export interface CreditNoteSettlementRow {
-  id: string
-  total?: unknown
-  currency?: string | null
-  exchange_rate?: unknown
-  journal_entry_id?: string | null
-}
-
-interface LinkRow {
+/**
+ * One payment row naming a credit note's verifikat, with the date of the
+ * invoice it pays. get_ar_ledger_invoices attaches them to the credit note
+ * (lib/reports/ar-ledger-invoices.ts), in id order.
+ */
+export interface CreditNoteLink {
   invoice_id: string
   journal_entry_id: string
   amount: number | string | null
@@ -43,13 +34,23 @@ interface LinkRow {
   invoice: { invoice_date: string | null } | null
 }
 
+export interface CreditNoteSettlementRow {
+  id: string
+  total?: unknown
+  currency?: string | null
+  exchange_rate?: unknown
+  journal_entry_id?: string | null
+  /** The payment rows naming this row's verifikat; read only for credit notes. */
+  credit_links?: readonly CreditNoteLink[] | null
+}
+
 /**
  * The date the credit counts as used on an as-of date: the payment row
  * carries the verifikat's date, the credit note's own, but the set-off cannot
  * come before the invoice it pays exists. Until then 1510 still held the
  * credit.
  */
-function usedOn(link: LinkRow): string {
+function usedOn(link: CreditNoteLink): string {
   const invoiceDate = link.invoice?.invoice_date ?? ''
   return invoiceDate > link.payment_date ? invoiceDate : link.payment_date
 }
@@ -66,7 +67,7 @@ function usedOn(link: LinkRow): string {
  * Any other pair cannot be read and uses nothing (null). One link never uses
  * more than the credit note's credit: anything above it is conversion noise.
  */
-function creditUsedBy(link: LinkRow, note: CreditNoteSettlementRow): number | null {
+function creditUsedBy(link: CreditNoteLink, note: CreditNoteSettlementRow): number | null {
   const credit = Math.abs(Number(note.total) || 0)
   if (link.payment_exchange_rate != null) return credit
   const amount = Number(link.amount) || 0
@@ -79,40 +80,30 @@ function creditUsedBy(link: LinkRow, note: CreditNoteSettlementRow): number | nu
 /**
  * The credit each credit note in `rows` has used to pay other invoices, in
  * its own currency, keyed by credit note id. Rows that are not credit notes
- * with a verifikat are ignored; with none left no query is made. With an
- * `asOfDate` only the set-offs made by then count (see usedOn).
+ * with a verifikat are ignored. With an `asOfDate` only the set-offs made by
+ * then count (see usedOn).
  *
  * A verifikat that books more than one credit note cannot say whose credit a
  * link used, so those keep their whole credit, as before. The issuer posts
  * one verifikat per credit note; only imported data could share one.
  */
-export async function fetchCreditNoteCreditUsed(
-  supabase: SupabaseClient,
-  companyId: string,
+export function creditNoteCreditUsed(
   rows: readonly CreditNoteSettlementRow[],
   asOfDate?: string
-): Promise<Map<string, number>> {
+): Map<string, number> {
   const noteByEntry = new Map<string, CreditNoteSettlementRow | null>()
+  const linksByEntry = new Map<string, readonly CreditNoteLink[]>()
   for (const row of rows) {
     if (!row.journal_entry_id || !((Number(row.total) || 0) < 0)) continue
     noteByEntry.set(row.journal_entry_id, noteByEntry.has(row.journal_entry_id) ? null : row)
+    if (!linksByEntry.has(row.journal_entry_id)) linksByEntry.set(row.journal_entry_id, row.credit_links ?? [])
   }
 
   const used = new Map<string, number>()
-  for (const entryIds of chunk([...noteByEntry.keys()], ENTRY_ID_CHUNK)) {
-    const links = await fetchAllRows<LinkRow>(({ from, to }) =>
-      supabase
-        .from('invoice_payments')
-        .select('id, invoice_id, journal_entry_id, amount, currency, payment_exchange_rate, payment_date, invoice:invoices(invoice_date)')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', entryIds)
-        // Stable total order for correct paging (see fetch-all.ts).
-        .order('id', { ascending: true })
-        .range(from, to) as unknown as PromiseLike<{ data: LinkRow[] | null; error: { message: string } | null }>,
-    )
-    for (const link of links) {
-      const note = noteByEntry.get(link.journal_entry_id)
-      if (!note || note.id === link.invoice_id) continue
+  for (const [entryId, note] of noteByEntry) {
+    if (!note) continue
+    for (const link of linksByEntry.get(entryId) ?? []) {
+      if (note.id === link.invoice_id) continue
       if (asOfDate && usedOn(link) > asOfDate) continue
       const credit = creditUsedBy(link, note)
       if (credit === null) continue

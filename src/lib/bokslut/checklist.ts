@@ -161,6 +161,12 @@ export function assembleChecklist(
 export interface BuildChecklistOptions {
   /** Pass the wizard's validation to avoid recomputing it; computed when absent. */
   readiness?: ChecklistReadinessInput | null
+  /**
+   * The period's reconciliation list (listReconciliationAccounts over the
+   * period, today = period_end) when the caller reads it anyway; read here
+   * when absent. A failed read degrades the auto states either way.
+   */
+  accounts?: Promise<ReconciliationAccount[]>
 }
 
 /** The checklist for one period, or null when the period is not this company's. */
@@ -181,6 +187,29 @@ export async function buildBokslutChecklist(
   const period = periodData as PeriodRow | null
   if (!period) return null
 
+  // The live inputs are advisory: a failed read leaves the auto items without
+  // a computed state rather than hiding the checklist. They read alongside
+  // the checklist's own rows.
+  const accountsRead =
+    options.accounts ??
+    listReconciliationAccounts(supabase, companyId, {
+      today: period.period_end,
+      windowFrom: period.period_start,
+      windowTo: period.period_end,
+    })
+  // Awaited below; this only keeps a failure that lands earlier from counting as unhandled.
+  accountsRead.catch(() => undefined)
+  const readinessRead: Promise<ChecklistReadinessInput | null> =
+    options.readiness !== undefined
+      ? Promise.resolve(options.readiness)
+      : validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId).then(
+          (v) => ({ draftCount: v.draftCount, unexplainedGaps: v.unexplainedGaps.length, trialBalanceBalanced: v.trialBalanceBalanced }),
+          (err) => {
+            log.warn('readiness unavailable for checklist', { companyId, fiscalPeriodId, error: String(err) })
+            return null
+          },
+        )
+
   const { data: rowData, error: rowError } = await supabase
     .from('bokslut_checklist_items')
     .select('item_key, state, note, done_by, done_at, updated_by, updated_at')
@@ -189,29 +218,13 @@ export async function buildBokslutChecklist(
   if (rowError) throw new Error(`Kunde inte hämta bokslutschecklistan: ${rowError.message}`)
   const rows = (rowData ?? []) as ChecklistRow[]
 
-  // The live inputs are advisory: a failed read leaves the auto items without
-  // a computed state rather than hiding the checklist.
   let accounts: ReconciliationAccount[] | null = null
   try {
-    accounts = await listReconciliationAccounts(supabase, companyId, {
-      today: period.period_end,
-      windowFrom: period.period_start,
-      windowTo: period.period_end,
-    })
+    accounts = await accountsRead
   } catch (err) {
     log.warn('reconciliation accounts unavailable for checklist', { companyId, fiscalPeriodId, error: String(err) })
   }
-  let readiness: ChecklistReadinessInput | null = options.readiness ?? null
-  if (readiness === undefined || readiness === null) {
-    if (options.readiness === undefined) {
-      try {
-        const v = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
-        readiness = { draftCount: v.draftCount, unexplainedGaps: v.unexplainedGaps.length, trialBalanceBalanced: v.trialBalanceBalanced }
-      } catch (err) {
-        log.warn('readiness unavailable for checklist', { companyId, fiscalPeriodId, error: String(err) })
-      }
-    }
-  }
+  const readiness = await readinessRead
 
   return assembleChecklist(period, computeAutoStates(accounts, readiness, period.period_end), rows)
 }

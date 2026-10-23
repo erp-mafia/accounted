@@ -11,7 +11,7 @@ import { generateMonthlyBreakdown } from '../monthly-breakdown'
 // invariant) so the tests don't hardcode the exact method chain.
 function chain(result: unknown) {
   const c: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'order']) {
+  for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'order', 'contains']) {
     c[m] = () => c
   }
   c.single = () => Promise.resolve(result)
@@ -19,6 +19,11 @@ function chain(result: unknown) {
   c.range = () => Promise.resolve(result)
   return c
 }
+
+// A dimension filter keeps the line-level path (the daily sums the RPC reads
+// cannot be split by dimension); without one the months come from
+// get_kpi_report_aggregates.
+const DIMS = { dimensions: { '6': 'P001' } }
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -53,7 +58,7 @@ describe('generateMonthlyBreakdown', () => {
       return chain({ data: null, error: { message: 'timeout', code: '57014' } })
     })
 
-    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')).rejects.toThrow()
+    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)).rejects.toThrow()
   })
 
   it('returns empty months when no journal entries exist', async () => {
@@ -77,7 +82,7 @@ describe('generateMonthlyBreakdown', () => {
         : chain({ data: [], error: null })
     })
 
-    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
     expect(result.months.length).toBe(12)
     expect(result.months[0].label).toBe('Jan')
     expect(result.months[0].income).toBe(0)
@@ -122,7 +127,7 @@ describe('generateMonthlyBreakdown', () => {
       })
     })
 
-    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
 
     // January
     const jan = result.months.find((m) => m.label === 'Jan')!
@@ -176,7 +181,7 @@ describe('generateMonthlyBreakdown', () => {
       })
     })
 
-    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
     const jan = result.months.find((m) => m.label === 'Jan')!
     // Class 1 and 2 are ignored
     // Class 8 debit (8400 interest expense) → expense
@@ -215,7 +220,9 @@ describe('generateMonthlyBreakdown', () => {
       })
     })
 
-    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    // The line path (a dimension filter); without one the same predicate is
+    // get_kpi_report_aggregates' (20261023081500), pinned by its pg test.
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
     const jan = result.months.find((m) => m.label === 'Jan')!
     expect(jan.income).toBe(10000)
     expect(jan.expenses).toBe(0)
@@ -240,7 +247,7 @@ describe('generateMonthlyBreakdown: year-end exclusion', () => {
       }
       // Record the entry-side filters so the exclusion is asserted, not assumed.
       const c: Record<string, unknown> = {}
-      for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'order', 'or']) {
+      for (const m of ['select', 'eq', 'in', 'gte', 'lte', 'lt', 'neq', 'order', 'or', 'contains']) {
         c[m] = (...args: unknown[]) => {
           filters.push({ method: m, args })
           return c
@@ -251,7 +258,7 @@ describe('generateMonthlyBreakdown: year-end exclusion', () => {
       return c
     })
 
-    await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+    await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1', DIMS)
 
     expect(filters).toContainEqual({ method: 'neq', args: ['source_type', 'year_end'] })
     // The storno/correction chain of a REVERSED year-end entry must go too, or
@@ -259,5 +266,51 @@ describe('generateMonthlyBreakdown: year-end exclusion', () => {
     const orFilters = filters.filter((f) => f.method === 'or').map((f) => String(f.args[0]))
     expect(orFilters.some((f) => f.includes('reverses_id') && f.includes('reversed-ye-1'))).toBe(true)
     expect(orFilters.some((f) => f.includes('correction_of_id') && f.includes('reversed-ye-1'))).toBe(true)
+  })
+})
+
+describe('generateMonthlyBreakdown: no dimension filter', () => {
+  it('reads the months from get_kpi_report_aggregates with no IB entry left out', async () => {
+    supabase.from.mockImplementation(() =>
+      chain({ data: { period_start: '2024-01-01', period_end: '2024-03-31' }, error: null }),
+    )
+    supabase.rpc.mockResolvedValueOnce({
+      data: {
+        tb: [],
+        tb_ex_year_end: [],
+        ob: [],
+        monthly: [
+          { year: 2024, month: 1, income: 10000, expenses: 3000 },
+          { year: 2024, month: 2, income: 5000.004, expenses: 1500 },
+        ],
+      },
+      error: null,
+    })
+
+    const result = await generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')
+
+    expect(supabase.rpc).toHaveBeenCalledWith('get_kpi_report_aggregates', {
+      p_company_id: 'company-1',
+      p_fiscal_period_id: 'period-1',
+      p_ob_entry_id: null,
+    })
+    expect(result.months).toEqual([
+      { label: 'Jan', income: 10000, expenses: 3000, net: 7000 },
+      { label: 'Feb', income: 5000, expenses: 1500, net: 3500 },
+      { label: 'Mar', income: 0, expenses: 0, net: 0 },
+    ])
+    // No line reads: only the fiscal period comes from a table.
+    expect(supabase.from).toHaveBeenCalledTimes(1)
+  })
+
+  it('throws when the aggregates read fails, instead of drawing an empty chart', async () => {
+    supabase.from.mockImplementation(() =>
+      chain({ data: { period_start: '2024-01-01', period_end: '2024-12-31' }, error: null }),
+    )
+    supabase.rpc.mockResolvedValueOnce({ data: null, error: { message: 'timeout', code: '57014' } })
+
+    await expect(generateMonthlyBreakdown(supabase as never, 'company-1', 'period-1')).rejects.toMatchObject({
+      code: '57014',
+    })
   })
 })

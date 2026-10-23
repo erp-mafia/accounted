@@ -227,6 +227,20 @@ export interface DetectSetArgs extends DetectArgs {
   bankAccountNumber?: string | null
 }
 
+/** One row of get_unexplained_bank_legs: a leg flattened with its entry. */
+interface UnexplainedLegRow {
+  journal_entry_id: string
+  entry_date: string
+  description: string | null
+  voucher_series: string | null
+  voucher_number: number | null
+  status: string
+  source_type: string | null
+  account_number: string
+  debit_amount: number | string | null
+  credit_amount: number | string | null
+}
+
 /** A bank leg with its parent entry, as {@link fetchBankLegs} returns it. */
 interface BankLegRow {
   account_number: string
@@ -605,30 +619,41 @@ export async function detectExplainingVoucherSets(
     if (target.highDate > highDate) highDate = target.highDate
   }
 
-  let legs: BankLegRow[]
+  // The legs nothing explains yet, in one read: get_unexplained_bank_legs
+  // (20261023094100) applies fetchBankLegs' window and account filter, drops
+  // the scaffolding verifikat and every verifikat fetchExplainedVoucherIds
+  // would report as explained, and keeps the legs' line order. The single
+  // detector keeps its own reads.
+  let legRows: UnexplainedLegRow[]
   try {
-    legs = await fetchBankLegs(supabase, {
-      companyId: args.companyId,
-      lowDate,
-      highDate,
-      bankAccountNumber: args.bankAccountNumber,
-      inbound: null,
+    const { data, error } = await supabase.rpc('get_unexplained_bank_legs', {
+      p_company_id: args.companyId,
+      p_account_number: args.bankAccountNumber?.trim() || null,
+      p_low: lowDate,
+      p_high: highDate,
+      p_own_transaction_ids: prepared.map((p) => p.row.id),
     })
+    if (error) return result
+    legRows = (data ?? []) as UnexplainedLegRow[]
   } catch {
     return result
   }
-  const entryIds = Array.from(
-    new Set(legs.filter((l) => !isScaffoldingEntry(l.journal_entry.source_type)).map((l) => l.journal_entry.id)),
-  )
-  if (entryIds.length === 0) return result
-
-  const linkedIds = await fetchExplainedVoucherIds(
-    supabase,
-    args.companyId,
-    entryIds,
-    new Set(prepared.map((p) => p.row.id)),
-  )
-  if (!linkedIds) return result
+  const legs: BankLegRow[] = legRows.map((r) => ({
+    account_number: r.account_number,
+    debit_amount: r.debit_amount,
+    credit_amount: r.credit_amount,
+    journal_entry: {
+      id: r.journal_entry_id,
+      entry_date: r.entry_date,
+      description: r.description,
+      voucher_series: r.voucher_series,
+      voucher_number: r.voucher_number,
+      status: r.status,
+      source_type: r.source_type,
+    },
+  }))
+  if (legs.length === 0) return result
+  const linkedIds = new Set<string>()
 
   const consumed = new Set<string>()
   const search = ({ row, target }: { row: ExplainingSetBatchRow; target: SetTarget }) => {

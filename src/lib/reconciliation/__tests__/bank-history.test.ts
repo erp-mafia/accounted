@@ -3,8 +3,9 @@
  * bank side covers leave the comparison, which starts there, the model the
  * skattekonto reconciliation has (skattekonto-reconciliation.test.ts).
  *
- * The status tests run the real engine against a small in-memory table set,
- * so the figures come out of the same reads production makes.
+ * The status tests run the engine on the answer of its facts read; the read's
+ * own rules for this shape are pinned against Postgres in
+ * tests/pg/bank-reconciliation-facts.pg.test.ts.
  */
 import { describe, it, expect, vi } from 'vitest'
 import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
@@ -12,156 +13,98 @@ import { getReconciliationStatus, splitBeforeBankHistory } from '../bank-reconci
 
 vi.mock('@/lib/supabase/server')
 
-type Row = Record<string, unknown>
-
-/**
- * An answer over in-memory rows, computed from the chain that asked:
- * eq / in / gte / lte / gt / lt / is filter on the columns a row has (a
- * column the row lacks passes), the first order applies, range pages, limit
- * shortens, maybeSingle returns the first row. A read whose select is
- * `failSelect` fails.
- */
-function rowsAnswer(rows: () => Row[], failSelect?: string): TableMockResolver {
-  return (chain) => {
-    const select = String(chain.find((c) => c.method === 'select')?.args[0] ?? '')
-    if (failSelect && select === failSelect) return { data: null, error: { message: 'boom' } }
-    const has = (r: Row, c: unknown) => r[String(c)] !== undefined
-    const value = (r: Row, c: unknown) => String(r[String(c)])
-    let out = rows()
-    let orderBy: { column: string; ascending: boolean } | null = null
-    let range: [number, number] | null = null
-    let limit: number | null = null
-    let single = false
-    for (const { method, args } of chain) {
-      const [c, v] = args
-      if (method === 'eq' || method === 'is') out = out.filter((r) => !has(r, c) || r[String(c)] === v)
-      else if (method === 'in') out = out.filter((r) => !has(r, c) || (v as unknown[]).includes(r[String(c)]))
-      else if (method === 'gte') out = out.filter((r) => !has(r, c) || value(r, c) >= String(v))
-      else if (method === 'lte') out = out.filter((r) => !has(r, c) || value(r, c) <= String(v))
-      else if (method === 'gt') out = out.filter((r) => !has(r, c) || value(r, c) > String(v))
-      else if (method === 'lt') out = out.filter((r) => !has(r, c) || value(r, c) < String(v))
-      else if (method === 'order' && !orderBy) {
-        orderBy = { column: String(c), ascending: (v as { ascending?: boolean } | undefined)?.ascending !== false }
-      } else if (method === 'range') range = [Number(c), Number(v)]
-      else if (method === 'limit') limit = Number(c)
-      else if (method === 'maybeSingle' || method === 'single') single = true
-    }
-    if (orderBy) {
-      const { column, ascending } = orderBy
-      out = [...out].sort((a, b) => String(a[column] ?? '').localeCompare(String(b[column] ?? '')) * (ascending ? 1 : -1))
-    }
-    if (range) out = out.slice(range[0], range[1] + 1)
-    if (limit !== null) out = out.slice(0, limit)
-    return { data: single ? (out[0] ?? null) : out }
-  }
-}
-
-function memorySupabase(
-  tables: Record<string, Row[]>,
-  rpcs: Record<string, (args: Record<string, unknown>) => Row[]> = {},
-  failSelect?: string,
-) {
-  const answers: Record<string, TableMockResolver> = {}
-  for (const [table, rows] of Object.entries(tables)) answers[table] = rowsAnswer(() => rows, failSelect)
-  // An RPC's arguments are on its rpc() call, the latest one being the read
-  // in flight: every reader here awaits its RPC before the next.
-  let mock: ReturnType<typeof createTableMockSupabase> | null = null
-  for (const [name, fn] of Object.entries(rpcs)) {
-    const key = `rpc:${name}`
-    answers[key] = rowsAnswer(() => fn((mock?.findCalls(key, 'rpc').at(-1)?.[0] ?? {}) as Record<string, unknown>))
-  }
-  mock = createTableMockSupabase(answers)
-  return mock.supabase
-}
 
 const COMPANY = 'company-1'
 const CASH = '11111111-1111-4111-8111-111111111111'
 
-interface Voucher {
-  id: string
-  date: string
-  amount: number
-  source_type?: string
-}
-
 /**
- * The crm#1221 shape: an imported year on 1930 (IB plus two verifikat from
- * before the bank connection), then the bank feed from 2026-07-20 with every
- * row linked to its verifikat.
+ * The crm#1221 shape, as get_bank_reconciliation_facts answers it (the SQL
+ * side of this shape is pinned in tests/pg/bank-reconciliation-facts.pg.test.ts):
+ * an imported year on 1930 (IB 10 000 on 2026-01-01, then +5 000 on 03-10 and
+ * -2 000 on 05-20 from before the bank connection), then the bank feed from
+ * 2026-07-20 with every row linked to its verifikat (+1 000 on 07-20, -300 on
+ * 08-05). The two imported verifikat are the ledger-only lines; the bank last
+ * reported 13 700 on 2026-10-15.
  */
-function ledger(extra: { vouchers?: Voucher[]; transactions?: Row[]; balance?: number | null } = {}) {
-  const vouchers: Voucher[] = [
-    { id: 'ib', date: '2026-01-01', amount: 10000, source_type: 'opening_balance' },
-    { id: 'imp-1', date: '2026-03-10', amount: 5000, source_type: 'import' },
-    { id: 'imp-2', date: '2026-05-20', amount: -2000, source_type: 'import' },
-    { id: 'je-a', date: '2026-07-20', amount: 1000 },
-    { id: 'je-b', date: '2026-08-05', amount: -300 },
-    ...(extra.vouchers ?? []),
-  ]
-  const transactions: Row[] = [
-    { id: 'tx-a', date: '2026-07-20', amount: 1000, currency: 'SEK', journal_entry_id: 'je-a', is_ignored: false },
-    { id: 'tx-b', date: '2026-08-05', amount: -300, currency: 'SEK', journal_entry_id: 'je-b', is_ignored: false },
-    ...(extra.transactions ?? []),
-  ]
-  const linked = new Set(transactions.map((t) => t.journal_entry_id))
-  const entries = vouchers.map((v) => ({
-    id: v.id,
-    company_id: COMPANY,
-    entry_date: v.date,
-    status: 'posted',
-    source_type: v.source_type ?? 'bank_transaction',
-  }))
-  const lines = vouchers.map((v) => ({
-    id: `line-${v.id}`,
-    journal_entry_id: v.id,
-    account_number: '1930',
-    debit_amount: v.amount > 0 ? v.amount : 0,
-    credit_amount: v.amount < 0 ? -v.amount : 0,
-  }))
-  // The candidate RPC: posted verifikat on the account with no bank link, IB excluded.
-  const candidates = vouchers
-    .filter((v) => v.source_type !== 'opening_balance' && !linked.has(v.id))
-    .map((v, i) => ({
-      line_id: `line-${v.id}`,
-      journal_entry_id: v.id,
-      debit_amount: v.amount > 0 ? v.amount : 0,
-      credit_amount: v.amount < 0 ? -v.amount : 0,
-      entry_date: v.date,
-      voucher_number: i + 1,
-      voucher_series: 'A',
-      entry_description: v.id,
-      source_type: v.source_type ?? 'manual',
-      linked_transaction_count: 0,
-    }))
-  const balance = extra.balance === undefined ? 13700 : extra.balance
+function imported(extra: {
+  bank?: Partial<ReturnType<typeof base>['bank']>
+  gl?: Partial<ReturnType<typeof base>['gl']>
+  candidates?: ReturnType<typeof base>['candidates']
+  saldo?: ReturnType<typeof base>['saldo']
+  ib_floor?: string | null
+  effective_from?: string | null
+} = {}) {
+  const b = base()
   return {
-    tables: {
-      transactions,
-      journal_entries: entries,
-      journal_entry_lines: lines,
-      cash_accounts: [
-        { id: CASH, company_id: COMPANY, balance, balance_updated_at: balance === null ? null : '2026-10-15T05:00:00Z' },
-      ],
-    },
-    rpcs: {
-      get_account_gl_lines_for_matching: (args: Record<string, unknown>) =>
-        candidates.filter(
-          (c) =>
-            (!args.p_date_from || c.entry_date >= String(args.p_date_from)) &&
-            (!args.p_date_to || c.entry_date <= String(args.p_date_to)),
-        ),
-    },
+    ...b,
+    ...('ib_floor' in extra ? { ib_floor: extra.ib_floor } : {}),
+    ...('effective_from' in extra ? { effective_from: extra.effective_from } : {}),
+    gl: { ...b.gl, ...extra.gl },
+    bank: { ...b.bank, ...extra.bank },
+    candidates: extra.candidates ?? b.candidates,
+    saldo: 'saldo' in extra ? extra.saldo : b.saldo,
   }
 }
 
-function status(setup: ReturnType<typeof ledger>, dateFrom?: string, dateTo?: string, failSelect?: string) {
-  const supabase = memorySupabase(setup.tables, setup.rpcs, failSelect)
+function candidate(id: string, date: string, amount: number, voucherNumber: number) {
+  return {
+    line_id: `line-${id}`,
+    journal_entry_id: id,
+    debit_amount: amount > 0 ? amount : 0,
+    credit_amount: amount < 0 ? -amount : 0,
+    line_description: null,
+    entry_date: date,
+    voucher_number: voucherNumber,
+    voucher_series: 'A',
+    entry_description: id,
+    source_type: 'import',
+    linked_transaction_count: 0,
+    remaining_amount: null,
+  }
+}
+
+function base() {
+  return {
+    ib_floor: '2026-01-01' as string | null,
+    effective_from: '2026-01-01' as string | null,
+    gl: { balance: 13700, opening_balance: 10000, correction_adjustment: 0, unconvertible_line_count: 0 },
+    bank: {
+      count: 2,
+      total: 700,
+      inflow: 1000,
+      outflow: -300,
+      ignored_count: 0,
+      ignored_total: 0,
+      matched_count: 2,
+      unmatched_count: 0,
+      unmatched_total: 0,
+      history_start: '2026-07-20' as string | null,
+    },
+    read_window_cash_accounts: null,
+    saldo: {
+      balance: 13700,
+      balance_updated_at: '2026-10-15T05:00:00Z',
+      balance_date: '2026-10-15',
+      rows_total: 700,
+    } as { balance: number | null; balance_updated_at: string | null; balance_date: string | null; rows_total: number | null } | null,
+    candidates: [candidate('imp-1', '2026-03-10', 5000, 1), candidate('imp-2', '2026-05-20', -2000, 2)],
+    entry_amounts: null,
+  }
+}
+
+/** A client whose facts read answers `facts` and whose settlement read finds none. */
+function status(facts: ReturnType<typeof imported>, dateFrom?: string, dateTo?: string) {
+  const answers: Record<string, TableMockResolver> = {
+    'rpc:get_bank_reconciliation_facts': () => ({ data: facts }),
+    account_reconciliation_settlements: () => ({ data: [] }),
+  }
+  const { supabase } = createTableMockSupabase(answers)
   return getReconciliationStatus(supabase as never, COMPANY, dateFrom, dateTo, '1930', 'SEK', CASH, true)
 }
 
 describe('getReconciliationStatus: the bank history (crm#1221)', () => {
   it('moves the verifikat before the first bank row out of the difference, the counts and the movement', async () => {
-    const s = await status(ledger())
+    const s = await status(imported())
 
     expect(s.history_start).toBe('2026-07-20')
     expect(s.before_history_count).toBe(2)
@@ -179,9 +122,9 @@ describe('getReconciliationStatus: the bank history (crm#1221)', () => {
   })
 
   it('leaves the unexplained difference exactly where the whole-window comparison has it', async () => {
-    const split = await status(ledger())
-    // The history read fails: the whole window is compared, as before the split.
-    const whole = await status(ledger(), undefined, undefined, 'date')
+    const split = await status(imported())
+    // Without a history start the whole window is compared, as before the split.
+    const whole = await status(imported({ bank: { history_start: null } }))
 
     expect(whole.history_start).toBeNull()
     expect(whole.before_history_count).toBe(0)
@@ -193,35 +136,33 @@ describe('getReconciliationStatus: the bank history (crm#1221)', () => {
   })
 
   it('compares the ledger before the history with the bank saldo that day, once', async () => {
-    const agrees = await status(ledger({ balance: 13700 }))
+    const agrees = await status(imported())
     // IB 10 000 + the two verifikat before the history (3 000).
     expect(agrees.ledger_balance_before_start).toBe(13000)
     // The reported 13 700 less the 700 the bank moved since its first row.
     expect(agrees.saldo_at_start).toBe(13000)
     expect(agrees.opening_difference).toBe(0)
 
-    const differs = await status(ledger({ balance: 14700 }))
+    const differs = await status(imported({ saldo: { ...base().saldo!, balance: 14700 } }))
     expect(differs.opening_difference).toBe(1000)
     // Informational: the comparison from the history start still reconciles.
     expect(differs.is_reconciled).toBe(true)
     expect(differs.difference).toBe(0)
 
-    const unknown = await status(ledger({ balance: null }))
+    const unknown = await status(imported({ saldo: { ...base().saldo!, balance: null, balance_updated_at: null, balance_date: null, rows_total: null } }))
     expect(unknown.saldo_at_start).toBeNull()
     expect(unknown.opening_difference).toBeNull()
     expect(unknown.ledger_balance_before_start).toBe(13000)
+
+    // A balance dated before the bank's first row says nothing about it.
+    const older = await status(imported({ saldo: { ...base().saldo!, balance_updated_at: '2026-07-01T05:00:00Z', balance_date: '2026-07-01', rows_total: 0 } }))
+    expect(older.saldo_at_start).toBeNull()
   })
 
-  it('reads the rows between the window end and the balance day for the bank saldo', async () => {
-    const s = await status(
-      ledger({
-        balance: 13750,
-        vouchers: [{ id: 'je-d', date: '2026-10-02', amount: 50 }],
-        transactions: [{ id: 'tx-d', date: '2026-10-02', amount: 50, currency: 'SEK', journal_entry_id: 'je-d', is_ignored: false }],
-      }),
-      undefined,
-      '2026-09-30',
-    )
+  it('takes the bank saldo through the balance day, past the window end', async () => {
+    // Window to 2026-09-30; the bank reported 13 750 on 2026-10-15, after a
+    // +50 row on 2026-10-02: the read sums the rows through the balance day.
+    const s = await status(imported({ saldo: { ...base().saldo!, balance: 13750, rows_total: 750 } }), undefined, '2026-09-30')
     expect(s.before_history_count).toBe(2)
     expect(s.difference).toBe(0)
     expect(s.saldo_at_start).toBe(13000)
@@ -229,12 +170,13 @@ describe('getReconciliationStatus: the bank history (crm#1221)', () => {
   })
 
   it('keeps a verifikat before the history start that a bank row is linked to in the comparison', async () => {
-    // Booked the day before the first bank row, which is linked to it.
+    // Booked the day before the first bank row (+400 on 07-19), which is
+    // linked to it: no ledger-only line, and the movement carries it.
     const s = await status(
-      ledger({
-        balance: 14100,
-        vouchers: [{ id: 'je-pre', date: '2026-07-19', amount: 400 }],
-        transactions: [{ id: 'tx-c', date: '2026-07-20', amount: 400, currency: 'SEK', journal_entry_id: 'je-pre', is_ignored: false }],
+      imported({
+        gl: { balance: 14100 },
+        bank: { count: 3, total: 1100, inflow: 1400, matched_count: 3 },
+        saldo: { ...base().saldo!, balance: 14100, rows_total: 1100 },
       }),
     )
     expect(s.before_history_count).toBe(2)
@@ -247,8 +189,8 @@ describe('getReconciliationStatus: the bank history (crm#1221)', () => {
 
   it('an older bank file moves the history start back and the verifikat become matchable again', async () => {
     const s = await status(
-      ledger({
-        transactions: [{ id: 'tx-file', date: '2026-03-10', amount: 5000, currency: 'SEK', journal_entry_id: null, is_ignored: false }],
+      imported({
+        bank: { count: 3, total: 5700, inflow: 6000, unmatched_count: 1, unmatched_total: 5000, history_start: '2026-03-10' },
       }),
     )
     expect(s.history_start).toBe('2026-03-10')
@@ -259,7 +201,17 @@ describe('getReconciliationStatus: the bank history (crm#1221)', () => {
   })
 
   it('splits nothing when the window starts inside the history', async () => {
-    const s = await status(ledger(), '2026-08-01', '2026-08-31')
+    const s = await status(
+      imported({
+        ib_floor: null,
+        effective_from: '2026-08-01',
+        gl: { balance: -300, opening_balance: 0 },
+        bank: { count: 1, total: -300, inflow: 0, outflow: -300, matched_count: 1 },
+        candidates: [],
+      }),
+      '2026-08-01',
+      '2026-08-31',
+    )
     expect(s.history_start).toBe('2026-07-20')
     expect(s.before_history_count).toBe(0)
     expect(s.before_history_total).toBe(0)
@@ -268,7 +220,14 @@ describe('getReconciliationStatus: the bank history (crm#1221)', () => {
   })
 
   it('splits nothing when the window ends before the history: the verifikat stay missing on the bank', async () => {
-    const s = await status(ledger(), '2026-01-01', '2026-06-30')
+    const s = await status(
+      imported({
+        gl: { balance: 13000 },
+        bank: { count: 0, total: 0, inflow: 0, outflow: 0, matched_count: 0 },
+      }),
+      '2026-01-01',
+      '2026-06-30',
+    )
     expect(s.history_start).toBe('2026-07-20')
     expect(s.before_history_count).toBe(0)
     expect(s.unmatched_gl_line_count).toBe(2)

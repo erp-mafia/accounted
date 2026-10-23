@@ -1,9 +1,11 @@
 'use client'
 
 import React, { useState } from 'react'
+import { useTranslations } from 'next-intl'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
+import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import {
@@ -11,13 +13,13 @@ import {
   ReportErrorCard,
   ReportLoadingCard,
 } from '@/components/reports/report-view-shared'
-import { useReportData } from '@/lib/hooks/use-report-data'
+import { useReportPages } from '@/lib/hooks/use-report-pages'
 import { formatAmount, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 
 // --- Journal Register (Grundbok) ---
 
-interface JournalRegisterData {
+interface JournalRegisterPageData {
   entries: {
     voucher_series: string
     voucher_number: number
@@ -34,19 +36,34 @@ interface JournalRegisterData {
     total_debit: number
     total_credit: number
   }[]
-  total_entries: number
-  total_debit: number
-  total_credit: number
-  period: { start: string; end: string }
+  next: { voucher_series: string; voucher_number: number; id: string } | null
+  /** The period's totals, on the first page. */
+  totals?: {
+    total_entries: number
+    total_debit: number
+    total_credit: number
+    period: { start: string; end: string }
+  }
 }
 
 const NO_ENTRIES: ReadonlySet<number> = new Set()
 
 export default function JournalRegisterView({ periodId }: { periodId: string }) {
-  const { data, loading, error } = useReportData<JournalRegisterData>(
-    periodId ? `/api/reports/journal-register?period_id=${periodId}` : null,
+  const t = useTranslations('journal_register')
+  const first = periodId ? `/api/reports/journal-register/page?${new URLSearchParams({ period_id: periodId })}` : null
+  const { pages, loading, error, hasMore, loadMore } = useReportPages<JournalRegisterPageData>(
+    first,
     'Kunde inte hämta grundbok',
+    (page) => page.next && first
+      ? `${first}&${new URLSearchParams({
+          after_series: page.next.voucher_series,
+          after_number: String(page.next.voucher_number),
+          after_id: page.next.id,
+        })}`
+      : null,
   )
+  const totals = pages[0]?.totals
+  const entries = pages.flatMap((page) => page.entries)
   // Expanded rows are indexes into one period's entries: another period
   // opens collapsed.
   const [expanded, setExpanded] = useState<{ periodId: string; entries: ReadonlySet<number> }>(
@@ -66,15 +83,15 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
     })
   }
 
-  if (loading) {
+  if (loading && pages.length === 0) {
     return <ReportLoadingCard />
   }
 
-  if (error) {
+  if (error && pages.length === 0) {
     return <ReportErrorCard message={error} />
   }
 
-  if (!data || data.entries.length === 0) {
+  if (!totals || entries.length === 0) {
     return (
       <ReportEmptyState
         title="Inga verifikationer i perioden"
@@ -86,9 +103,9 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
   return (
     <div className="space-y-4">
       <ReportExportMenu items={[{ format: 'xlsx', href: `/api/reports/journal-register/xlsx?period_id=${periodId}` }]} />
-      {data.period.start && (
+      {totals.period.start && (
         <p className="text-sm text-muted-foreground tabular-nums">
-          Period {data.period.start} till {data.period.end} · {data.total_entries} verifikationer
+          Period {totals.period.start} till {totals.period.end} · {totals.total_entries} verifikationer
         </p>
       )}
 
@@ -110,7 +127,7 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
               </tr>
             </thead>
             <tbody>
-              {data.entries.map((entry, index) => {
+              {entries.map((entry, index) => {
                 const isExpanded = expandedEntries.has(index)
                 const isReversed = entry.status === 'reversed'
 
@@ -163,11 +180,22 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
             <tfoot>
               <tr className="font-semibold border-t-2">
                 <td colSpan={5} className="py-2">Summa</td>
-                <td className="py-2 text-right">{formatAmount(data.total_debit)}</td>
-                <td className="py-2 text-right">{formatAmount(data.total_credit)}</td>
+                <td className="py-2 text-right">{formatAmount(totals.total_debit)}</td>
+                <td className="py-2 text-right">{formatAmount(totals.total_credit)}</td>
               </tr>
             </tfoot>
           </table></div>
+          {(loading || error || hasMore) && (
+            <div className="mt-3 flex items-center gap-3 text-sm text-muted-foreground">
+              {loading && <span>{t('loading_more')}</span>}
+              {error && <span className="text-destructive">{t('page_failed')}</span>}
+              {hasMore && (
+                <Button variant="outline" size="sm" onClick={loadMore}>
+                  {t('load_more', { shown: entries.length, total: totals.total_entries })}
+                </Button>
+              )}
+            </div>
+          )}
         </CardContent>
       </Card>
     </div>

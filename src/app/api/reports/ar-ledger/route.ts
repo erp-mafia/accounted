@@ -8,12 +8,11 @@ export const GET = withRouteContext('report.ar_ledger', async (request, { supaba
   const asOfDate = searchParams.get('as_of_date') || undefined
   const periodId = searchParams.get('period_id') || undefined
 
-  const ledger = await generateARLedger(supabase, companyId, asOfDate)
-
-  let reconciliation = null
-  if (periodId) {
-    reconciliation = await generateARReconciliation(supabase, companyId, periodId)
-  }
+  // Independent reads: run them side by side.
+  const [ledger, reconciliation] = await Promise.all([
+    generateARLedger(supabase, companyId, asOfDate),
+    periodId ? generateARReconciliation(supabase, companyId, periodId) : null,
+  ])
 
   return NextResponse.json({
     data: {

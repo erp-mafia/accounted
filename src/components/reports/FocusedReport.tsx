@@ -241,6 +241,8 @@ function FocusedReportInner({
               value={dateRange}
               onChange={setDateRange}
               initialValue={fromUrl.range}
+              defaultPreset={report?.defaultRange}
+              storageKeyPrefix={report?.defaultRange ? `Accounted:report-range-preset:${slug}:` : undefined}
             />
           )}
           {showDim && <DimensionFilter value={dimensionFilter} onChange={setDimensionFilter} />}

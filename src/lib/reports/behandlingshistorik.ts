@@ -2,14 +2,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { predicateDef } from '@/lib/arkiv/facts/predicates'
 import type { AuditLogEntry } from '@/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { dbError } from '@/lib/errors/db-error'
 import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases'
 import { SOURCE_TYPE_LABELS_SV } from '@/lib/reports/systemdokumentation'
 import { getPackage, packageForConfigKey } from '@/lib/modules/packages'
 import { parseGrantPolicyVersion } from '@/lib/grants/types'
 import {
   buildDecisionReceipts,
-  fetchDecisionRowsInWindow,
-  loadReceiptContext,
+  fetchPeriodDecisions,
   type DecisionCandidate,
   type DecisionReceipt,
 } from '@/lib/suggestion-log/receipts'
@@ -254,7 +254,11 @@ export interface RawBehandlingshistorikEvent extends Omit<BehandlingshistorikEve
 // Constants: tables, field labels, value labels
 // ============================================================
 
-/** audit_log tables the report reads. Everything else (registers) is out of scope per BFN's commentary. */
+/**
+ * audit_log tables the report reads. Everything else (registers) is out of scope per BFN's commentary.
+ * The rows are selected in SQL (behandlingshistorik_sources, together with
+ * GLOBAL_ACTIONS); a unit test pins the function's lists to these constants.
+ */
 export const AUDITED_TABLES = [
   'journal_entries',
   'chart_of_accounts',
@@ -323,14 +327,6 @@ export const GLOBAL_ACTIONS = [
   // (supplier_invoices today) are registers that are otherwise out of scope.
   'GUARD_BYPASSED',
 ] as const
-
-/**
- * PostgREST `or` filter selecting the rows above. Written as one literal so the
- * schema guard (tests/schema/no-phantom-columns.test.ts) can resolve the column
- * names statically; a unit test pins it to AUDITED_TABLES / GLOBAL_ACTIONS.
- */
-export const AUDIT_ROW_FILTER =
-  'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts,company_capability_config,company_grants,company_grant_settings),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)'
 
 const COMMIT_METHOD_LABELS: Record<string, string> = {
   user_accept: 'Godkänd av användare',
@@ -2469,18 +2465,24 @@ const SOURCE_ORDER: Record<BehandlingshistorikSource, number> = {
   suggestion_log: 7,
 }
 
+/** `a.localeCompare(b)` is defined as this collator's compare; one instance instead of one lookup per call. */
+const ID_COLLATOR = new Intl.Collator()
+
+/**
+ * Chronological, then by source, then by id. The keys are read once per
+ * event: a year is 100 000+ events, and parsing both timestamps inside the
+ * comparator cost two Date.parse calls per comparison.
+ */
 export function sortEvents<T extends { occurred_at: string; source: BehandlingshistorikSource; id: string }>(
   events: T[],
 ): T[] {
-  return [...events].sort((a, b) => {
-    const ta = toMs(a.occurred_at)
-    const tb = toMs(b.occurred_at)
-    if (ta !== tb) return ta - tb
-    const sa = SOURCE_ORDER[a.source]
-    const sb = SOURCE_ORDER[b.source]
-    if (sa !== sb) return sa - sb
-    return a.id.localeCompare(b.id)
+  const keyed = events.map((event) => ({ event, t: toMs(event.occurred_at), s: SOURCE_ORDER[event.source] }))
+  keyed.sort((a, b) => {
+    if (a.t !== b.t) return a.t - b.t
+    if (a.s !== b.s) return a.s - b.s
+    return ID_COLLATOR.compare(a.event.id, b.event.id)
   })
+  return keyed.map((k) => k.event)
 }
 
 export interface CollapseOptions {
@@ -2608,142 +2610,52 @@ async function fetchCompany(supabase: SupabaseClient, companyId: string): Promis
   return { name: row?.company_name ?? '', org_number: row?.org_number ?? null }
 }
 
-/** Postgres: the column does not exist. */
-const UNDEFINED_COLUMN = '42703'
-
-async function fetchPeriodEntries(supabase: SupabaseClient, companyId: string, periodId: string): Promise<EntryRow[]> {
-  try {
-    return await fetchAllRows<EntryRow>(({ from, to }) =>
-      supabase
-        .from('journal_entries')
-        .select(
-          'id, voucher_series, voucher_number, entry_date, description, source_type, status, committed_at, user_id, committed_actor_type, committed_actor_label, commit_method, reverses_id, correction_of_id, import_batch_id, committed_auth_role, committed_auth_uid',
-        )
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', periodId)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-  } catch (err) {
-    // A deploy can reach a database that migration 20261016110000 has not
-    // reached yet (CI applies migrations after the merge). Read without the
-    // verified principal then: the report shows the asserted actor alone.
-    if ((err as { code?: string } | null)?.code !== UNDEFINED_COLUMN) throw err
-    return fetchAllRows<EntryRow>(({ from, to }) =>
-      supabase
-        .from('journal_entries')
-        .select(
-          'id, voucher_series, voucher_number, entry_date, description, source_type, status, committed_at, user_id, committed_actor_type, committed_actor_label, commit_method, reverses_id, correction_of_id, import_batch_id',
-        )
-        .eq('company_id', companyId)
-        .eq('fiscal_period_id', periodId)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-  }
+/** The period's ledger history, as the report reads it. */
+interface LedgerHistoryRows {
+  entries: EntryRow[]
+  audit: AuditLogEntry[]
+  rattelse: RattelseRow[]
 }
 
-async function fetchAuditRows(
-  supabase: SupabaseClient,
-  companyId: string,
-  window: { fromTs: string; toTs: string },
-  recordIds: string[],
-  importIds: string[] = [],
-): Promise<AuditLogEntry[]> {
-  const byId = new Map<string, AuditLogEntry>()
-
-  const windowed = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
-    supabase
-      .from('audit_log')
-      .select('*')
-      .eq('company_id', companyId)
-      .gte('created_at', window.fromTs)
-      .lte('created_at', window.toTs)
-      // Literal on purpose (not AUDIT_ROW_FILTER): the schema guard only
-      // resolves string literals here. A test pins the two to each other.
-      .or(
-        'table_name.in.(journal_entries,chart_of_accounts,company_settings,fiscal_periods,api_keys,dimensions,dimension_values,account_dimension_rules,accrual_schedules,document_attachments,mapping_rules,categorization_templates,booking_template_library,sie_imports,sie_import_chunks,bank_file_imports,cash_accounts,invoice_payee_defaults,mail_connections,collection_connections,service_accounts,company_capability_config,company_grants,company_grant_settings),action.in.(SECURITY_EVENT,INTEGRITY_FAILURE,RETENTION_BLOCK,DOCUMENT_DELETE_BLOCKED,GUARD_BYPASSED)',
-      )
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
-  for (const row of windowed) byId.set(row.id, row)
-
-  for (const ids of chunk(recordIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
-      supabase
-        .from('audit_log')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('table_name', 'journal_entries')
-        .in('record_id', ids)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-    for (const row of rows) byId.set(row.id, row)
-  }
-  // A bypassed guard is dated by when it was overridden, which is not always
-  // inside the year it belongs to: a payment booked after year end (or a
-  // bokslut-period payment) would fall outside the window and vanish from the
-  // year whose voucher it explains. Selected by the voucher instead, the same
-  // record-id union the journal_entries rows above get.
-  for (const ids of chunk(recordIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) =>
-      supabase
-        .from('audit_log')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('action', 'GUARD_BYPASSED')
-        .in('new_state->>journal_entry_id', ids)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-    for (const row of rows) byId.set(row.id, row)
-  }
-  // An older fiscal year can be imported today. Its immutable chunk receipts
-  // belong to that year's history even outside the registration-time window.
-  for (const ids of chunk(importIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<AuditLogEntry>(({ from, to }) => supabase.from('audit_log')
-      .select('*').eq('company_id', companyId).eq('table_name', 'sie_import_chunks')
-      .in('new_state->>import_id', ids).order('id').range(from, to))
-    for (const row of rows) byId.set(row.id, row)
-  }
-  return [...byId.values()]
+/** The row behandlingshistorik_sources() returns: audit rows inside and outside the window apart. */
+interface LedgerHistoryRow extends LedgerHistoryRows {
+  audit_outside: AuditLogEntry[]
 }
 
-async function fetchRattelseRows(
+/**
+ * The verifikat, audit rows and rättelser of one report, in one statement
+ * (behandlingshistorik_sources, migration 20261023094050). It joins the
+ * period's verifikat in SQL: they were sent back as .in() lists of 200 ids,
+ * four times over, and the decisions list crossed the gateway's 8 KB request
+ * line. Fiscal-year mode returns every verifikat of the period and the
+ * record-id unions; date-range mode the verifikat committed in the window and
+ * the ones the window's rows look up by id, which is all entryById is read for.
+ * Rows no event can come from stay in the database (see the migration).
+ */
+async function fetchLedgerHistory(
   supabase: SupabaseClient,
   companyId: string,
+  periodId: string,
   window: { fromTs: string; toTs: string },
-  entryIds: string[],
-): Promise<RattelseRow[]> {
-  const byId = new Map<string, RattelseRow>()
-  const windowed = await fetchAllRows<RattelseRow>(({ from, to }) =>
-    supabase
-      .from('journal_entry_rattelse_log')
-      .select('*')
-      .eq('company_id', companyId)
-      .gte('created_at', window.fromTs)
-      .lte('created_at', window.toTs)
-      .order('created_at', { ascending: true })
-      .order('id', { ascending: true })
-      .range(from, to),
-  )
-  for (const row of windowed) byId.set(row.id, row)
-  for (const ids of chunk(entryIds, ID_CHUNK)) {
-    const rows = await fetchAllRows<RattelseRow>(({ from, to }) =>
-      supabase
-        .from('journal_entry_rattelse_log')
-        .select('*')
-        .eq('company_id', companyId)
-        .in('journal_entry_id', ids)
-        .order('id', { ascending: true })
-        .range(from, to),
-    )
-    for (const row of rows) byId.set(row.id, row)
+  fiscalYear: boolean,
+): Promise<LedgerHistoryRows> {
+  const { data, error } = await supabase.rpc('behandlingshistorik_sources', {
+    p_company_id: companyId,
+    p_period_id: periodId,
+    p_from: window.fromTs,
+    p_to: window.toTs,
+    p_fiscal_year: fiscalYear,
+  })
+  if (error) throw dbError(error, null)
+  // One row of JSON arrays (a scalar json result would be parsed again by PostgREST).
+  const row = ((data as Partial<LedgerHistoryRow>[] | null) ?? [])[0] ?? {}
+  return {
+    entries: row.entries ?? [],
+    // Disjoint by created_at: the window's rows, then those about the period's
+    // verifikat logged outside it (fiscal-year mode).
+    audit: [...(row.audit ?? []), ...(row.audit_outside ?? [])],
+    rattelse: row.rattelse ?? [],
   }
-  return [...byId.values()]
 }
 
 async function fetchMigrationResets(supabase: SupabaseClient, companyId: string): Promise<MigrationResetRow[]> {
@@ -2993,7 +2905,6 @@ export async function generateBehandlingshistorik(
 ): Promise<BehandlingshistorikReport | null> {
   const period = await fetchPeriod(supabase, companyId, params.periodId)
   if (!period) return null
-  const company = await fetchCompany(supabase, companyId)
 
   const mode: BehandlingshistorikReport['mode'] = params.fromDate || params.toDate ? 'date_range' : 'fiscal_year'
   const from = params.fromDate ?? period.period_start
@@ -3003,16 +2914,15 @@ export async function generateBehandlingshistorik(
   const fromMs = Date.parse(fromTs)
   const toMsBound = Date.parse(toTs)
   const window = { fromTs, toTs }
+  const fiscalYear = mode === 'fiscal_year'
 
-  const entries = await fetchPeriodEntries(supabase, companyId, period.id)
-  const entryById = new Map(entries.map((e) => [e.id, e]))
-  const entryIds = entries.map((e) => e.id)
-  const unionIds = mode === 'fiscal_year' ? entryIds : []
-
-  const [auditRows, rattelseRows, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities, collectionCases, collectionDecisions, decisionRows] = await Promise.all([
-    fetchAuditRows(supabase, companyId, window, unionIds, mode === 'fiscal_year'
-      ? [...new Set(entries.map(entry => entry.import_batch_id).filter((id): id is string => !!id))] : []),
-    fetchRattelseRows(supabase, companyId, window, unionIds),
+  const [company, ledger, decisions, resets, sieImports, bankImports, releases, globalAuditRows, companyFacts, arkivActivities, collectionCases, collectionDecisions] = await Promise.all([
+    fetchCompany(supabase, companyId),
+    fetchLedgerHistory(supabase, companyId, period.id, window, fiscalYear),
+    // Decisions on bank lines and underlag: those registered in the window,
+    // plus in fiscal-year mode every one that booked one of the year's
+    // vouchers, the same record-id union the audit rows get.
+    fetchPeriodDecisions(supabase, companyId, { periodId: period.id, window, fiscalYear }),
     fetchMigrationResets(supabase, companyId),
     fetchSieImports(supabase, companyId),
     fetchBankFileImports(supabase, companyId),
@@ -3022,11 +2932,9 @@ export async function generateBehandlingshistorik(
     fetchArkivActivities(supabase, companyId),
     fetchCollectionCases(supabase, companyId),
     fetchCollectionDecisions(supabase, companyId, window),
-    // Decisions on bank lines and underlag: those registered in the window,
-    // plus in fiscal-year mode every one that booked one of the year's
-    // vouchers, the same record-id union the audit rows get.
-    fetchDecisionRowsInWindow(supabase, companyId, window, unionIds),
   ])
+  const { entries, audit: auditRows, rattelse: rattelseRows } = ledger
+  const entryById = new Map(entries.map((e) => [e.id, e]))
 
   const raw: RawBehandlingshistorikEvent[] = []
 
@@ -3091,9 +2999,8 @@ export async function generateBehandlingshistorik(
   }
   // Beslut och förslag: each decision read as its receipt (suggestions on
   // offer, the one taken, who decided, the agent proposal that carried it).
-  if (decisionRows.length > 0) {
-    const receiptContext = await loadReceiptContext(supabase, companyId, decisionRows, { knownEntries: entryById })
-    raw.push(...decisionEvents(buildDecisionReceipts(decisionRows, receiptContext)))
+  if (decisions.rows.length > 0) {
+    raw.push(...decisionEvents(buildDecisionReceipts(decisions.rows, decisions.context)))
   }
 
   let events = collapseBursts(sortEvents(raw))

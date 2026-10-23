@@ -1,4 +1,5 @@
 import type { EntityType } from '@/types'
+import type { RangePreset } from './report-range-preset'
 import { ENTITY_TYPES, preparesForenklatArsbokslut } from '@/lib/company/entity-type'
 
 /**
@@ -78,6 +79,12 @@ export interface ReportDescriptor {
   searchTerms?: string
   /** Only shown when company_settings.dimensions_enabled is true. */
   needsDimensions?: boolean
+  /**
+   * The window a date-range report opens on until the user picks one for it,
+   * remembered apart from the choice the other reports share. Omitted: the
+   * shared choice, YTD by default.
+   */
+  defaultRange?: Exclude<RangePreset, 'custom'>
   /**
    * Nav-promoted page that happens to render in the focused-report shell.
    * Hides the report-library back link and the shell's fiscal-year selector —
@@ -385,6 +392,10 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     descKey: 'desc_behandlingshistorik',
     category: 'export',
     params: 'fiscal-range',
+    // A year of a busy company is ~100 000 events: the page opens on the
+    // current month, and the whole year stays one choice away (and in the
+    // PDF and XLSX exports).
+    defaultRange: 'this_month',
     exports: ['pdf', 'xlsx'],
     libraryOnly: true,
     searchTerms:

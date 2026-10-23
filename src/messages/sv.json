@@ -12391,6 +12391,20 @@
     "signed_other_date": "t.o.m. {date} ({who}), inte balansdagen",
     "unsigned": "Ej signerad"
   },
+  "general_ledger": {
+    "paged_hint": "{count, number} rader i perioden. Öppna ett konto för att se dess rader.",
+    "show_lines": "Visa {count, plural, one {# rad} other {# rader}}",
+    "no_lines": "Inga rader i perioden",
+    "closing_balance": "UB: {amount} kr",
+    "load_more": "Visa fler ({shown, number} av {total, number})",
+    "loading_lines": "Hämtar rader…",
+    "lines_failed": "Kunde inte hämta raderna"
+  },
+  "journal_register": {
+    "load_more": "Visa fler ({shown, number} av {total, number})",
+    "loading_more": "Hämtar verifikationer…",
+    "page_failed": "Kunde inte hämta fler verifikationer"
+  },
   "lonejournal": {
     "year_label": "År",
     "month_from_label": "Från månad",

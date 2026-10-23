@@ -1,58 +1,50 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-
-// ============================================================
-// Mock: sequential result queue
-// ============================================================
-
-let resultIdx: number
-let results: Array<{ data?: unknown; error?: unknown }>
-let calls: Array<{ method: string; args: unknown[] }>
-
-function makeBuilder() {
-  const b: Record<string, unknown> = {}
-  for (const m of ['select', 'eq', 'in', 'or', 'not', 'lte', 'order', 'range']) {
-    b[m] = vi.fn().mockImplementation((...args: unknown[]) => {
-      calls.push({ method: m, args })
-      return b
-    })
-  }
-  b.single = vi.fn().mockImplementation(async () => results[resultIdx++] ?? { data: null, error: null })
-  b.then = (resolve: (v: unknown) => void) => resolve(results[resultIdx++] ?? { data: null, error: null })
-  return b
-}
-
-function makeClient() {
-  return {
-    from: vi.fn().mockImplementation(() => makeBuilder()),
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any
-}
-
+import { createReskontraClient, type ReskontraTables } from '@/tests/reskontra-rpc-port'
 import { generateARLedger } from '../ar-ledger'
 
-let supabase: ReturnType<typeof makeClient>
+// ============================================================
+// The ledger reads its population (get_ar_ledger_invoices) and the register
+// coverage (get_invoice_register_coverage) through rpc(); both answer from
+// `tables` by their JS ports (tests/reskontra-rpc-port.ts). Rows keep their
+// table order, which stands in for id order.
+// ============================================================
+
+let tables: ReskontraTables
+let failures: Record<string, { message: string }>
+const { supabase, calls } = createReskontraClient(() => tables, () => failures)
+
+/** The population read's arguments, as the ledger made it. */
+function populationArgs() {
+  return calls.find((c) => c.name === 'get_ar_ledger_invoices')?.args
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
-  resultIdx = 0
-  results = []
-  calls = []
-  supabase = makeClient()
+  calls.length = 0
+  tables = {}
+  failures = {}
 })
 
 describe('generateARLedger', () => {
   it('only reads fakturor: proformas, delivery notes and quotes are not receivables', async () => {
-    results = [{ data: [], error: null }]
+    const open = { customer_id: 'cust-a', customer: { id: 'cust-a', name: 'Acme AB' }, invoice_date: '2024-05-01', due_date: '2024-06-01', total: 1000, paid_amount: 0, currency: 'SEK', status: 'sent' }
+    tables = {
+      invoices: [
+        { ...open, id: 'inv-1', invoice_number: 'F001' },
+        { ...open, id: 'inv-2', invoice_number: 'P001', document_type: 'proforma' },
+        { ...open, id: 'inv-3', invoice_number: 'D001', document_type: 'delivery_note' },
+      ],
+    }
 
-    await generateARLedger(supabase, 'company-1')
+    const report = await generateARLedger(supabase, 'company-1')
 
-    expect(calls).toContainEqual({ method: 'eq', args: ['document_type', 'invoice'] })
+    expect(populationArgs()).toEqual({ p_company_id: 'company-1', p_as_of_date: null, p_customer_id: null })
+    expect(report.entries[0].invoices.map((i) => i.invoice_number)).toEqual(['F001'])
+    expect(report.total_outstanding).toBe(1000)
   })
 
   it('returns empty report when no invoices found', async () => {
-    results = [
-      { data: [], error: null },
-    ]
+    tables = { invoices: [] }
 
     const report = await generateARLedger(supabase, 'company-1')
     expect(report.entries).toEqual([])
@@ -61,9 +53,7 @@ describe('generateARLedger', () => {
   })
 
   it('returns empty report on query error', async () => {
-    results = [
-      { data: null, error: { message: 'DB error' } },
-    ]
+    failures = { get_ar_ledger_invoices: { message: 'DB error' } }
 
     const report = await generateARLedger(supabase, 'company-1')
     expect(report.entries).toEqual([])
@@ -74,51 +64,48 @@ describe('generateARLedger', () => {
     // Reference date: 2024-06-15
     const asOfDate = '2024-06-15'
 
-    results = [
-      {
-        data: [
-          // Customer A: one current, one 1-30 days overdue
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Acme AB' },
-            invoice_number: 'F001',
-            invoice_date: '2024-05-01',
-            due_date: '2024-06-20', // not yet due
-            total: 5000,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'sent',
-          },
-          {
-            id: 'inv-2',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Acme AB' },
-            invoice_number: 'F002',
-            invoice_date: '2024-04-01',
-            due_date: '2024-06-01', // 14 days overdue
-            total: 3000,
-            paid_amount: 1000,
-            currency: 'SEK',
-            status: 'overdue',
-          },
-          // Customer B: 90+ days overdue
-          {
-            id: 'inv-3',
-            customer_id: 'cust-b',
-            customer: { id: 'cust-b', name: 'Beta Corp' },
-            invoice_number: 'F003',
-            invoice_date: '2024-01-01',
-            due_date: '2024-02-01', // 135 days overdue
-            total: 10000,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'overdue',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        // Customer A: one current, one 1-30 days overdue
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Acme AB' },
+          invoice_number: 'F001',
+          invoice_date: '2024-05-01',
+          due_date: '2024-06-20', // not yet due
+          total: 5000,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'sent',
+        },
+        {
+          id: 'inv-2',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Acme AB' },
+          invoice_number: 'F002',
+          invoice_date: '2024-04-01',
+          due_date: '2024-06-01', // 14 days overdue
+          total: 3000,
+          paid_amount: 1000,
+          currency: 'SEK',
+          status: 'overdue',
+        },
+        // Customer B: 90+ days overdue
+        {
+          id: 'inv-3',
+          customer_id: 'cust-b',
+          customer: { id: 'cust-b', name: 'Beta Corp' },
+          invoice_number: 'F003',
+          invoice_date: '2024-01-01',
+          due_date: '2024-02-01', // 135 days overdue
+          total: 10000,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'overdue',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', asOfDate)
 
@@ -143,25 +130,22 @@ describe('generateARLedger', () => {
   })
 
   it('computes outstanding as total minus paid_amount', async () => {
-    results = [
-      {
-        data: [
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Test AB' },
-            invoice_number: 'F001',
-            invoice_date: '2024-06-01',
-            due_date: '2024-07-01',
-            total: 10000,
-            paid_amount: 7500,
-            currency: 'SEK',
-            status: 'sent',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Test AB' },
+          invoice_number: 'F001',
+          invoice_date: '2024-06-01',
+          due_date: '2024-07-01',
+          total: 10000,
+          paid_amount: 7500,
+          currency: 'SEK',
+          status: 'sent',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -170,37 +154,34 @@ describe('generateARLedger', () => {
   })
 
   it('sorts invoices within customer by due_date', async () => {
-    results = [
-      {
-        data: [
-          {
-            id: 'inv-2',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Test AB' },
-            invoice_number: 'F002',
-            invoice_date: '2024-05-01',
-            due_date: '2024-07-01',
-            total: 1000,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'sent',
-          },
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Test AB' },
-            invoice_number: 'F001',
-            invoice_date: '2024-04-01',
-            due_date: '2024-06-01',
-            total: 2000,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'sent',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        {
+          id: 'inv-2',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Test AB' },
+          invoice_number: 'F002',
+          invoice_date: '2024-05-01',
+          due_date: '2024-07-01',
+          total: 1000,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'sent',
+        },
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Test AB' },
+          invoice_number: 'F001',
+          invoice_date: '2024-04-01',
+          due_date: '2024-06-01',
+          total: 2000,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'sent',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-05-15')
 
@@ -212,41 +193,38 @@ describe('generateARLedger', () => {
   it('aggregates foreign-currency invoices into SEK aging buckets but preserves original currency on detail rows', async () => {
     // The aging totals reconcile against account 1510 (SEK), but the per-invoice
     // detail row keeps `outstanding` in invoice currency for display.
-    results = [
-      {
-        data: [
-          // 225 EUR at 11 → 2 475 SEK
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Foreign AB' },
-            invoice_number: 'F100',
-            invoice_date: '2024-05-01',
-            due_date: '2024-06-01', // 14 days overdue at 2024-06-15
-            total: 225,
-            paid_amount: 0,
-            currency: 'EUR',
-            exchange_rate: 11,
-            status: 'overdue',
-          },
-          // 1 000 SEK (control)
-          {
-            id: 'inv-2',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Foreign AB' },
-            invoice_number: 'F101',
-            invoice_date: '2024-05-01',
-            due_date: '2024-06-01',
-            total: 1000,
-            paid_amount: 0,
-            currency: 'SEK',
-            exchange_rate: null,
-            status: 'overdue',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        // 225 EUR at 11 → 2 475 SEK
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Foreign AB' },
+          invoice_number: 'F100',
+          invoice_date: '2024-05-01',
+          due_date: '2024-06-01', // 14 days overdue at 2024-06-15
+          total: 225,
+          paid_amount: 0,
+          currency: 'EUR',
+          exchange_rate: 11,
+          status: 'overdue',
+        },
+        // 1 000 SEK (control)
+        {
+          id: 'inv-2',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Foreign AB' },
+          invoice_number: 'F101',
+          invoice_date: '2024-05-01',
+          due_date: '2024-06-01',
+          total: 1000,
+          paid_amount: 0,
+          currency: 'SEK',
+          exchange_rate: null,
+          status: 'overdue',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -270,41 +248,38 @@ describe('generateARLedger', () => {
   })
 
   it('lists FX invoices without exchange_rate but excludes them from totals (outstanding_sek = null)', async () => {
-    results = [
-      {
-        data: [
-          // 100 EUR with no rate: listed in detail but excluded from buckets
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Foreign AB' },
-            invoice_number: 'F200',
-            invoice_date: '2024-05-01',
-            due_date: '2024-06-01',
-            total: 100,
-            paid_amount: 0,
-            currency: 'EUR',
-            exchange_rate: null,
-            status: 'overdue',
-          },
-          // 500 SEK control
-          {
-            id: 'inv-2',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Foreign AB' },
-            invoice_number: 'F201',
-            invoice_date: '2024-05-01',
-            due_date: '2024-06-01',
-            total: 500,
-            paid_amount: 0,
-            currency: 'SEK',
-            exchange_rate: null,
-            status: 'overdue',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        // 100 EUR with no rate: listed in detail but excluded from buckets
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Foreign AB' },
+          invoice_number: 'F200',
+          invoice_date: '2024-05-01',
+          due_date: '2024-06-01',
+          total: 100,
+          paid_amount: 0,
+          currency: 'EUR',
+          exchange_rate: null,
+          status: 'overdue',
+        },
+        // 500 SEK control
+        {
+          id: 'inv-2',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Foreign AB' },
+          invoice_number: 'F201',
+          invoice_date: '2024-05-01',
+          due_date: '2024-06-01',
+          total: 500,
+          paid_amount: 0,
+          currency: 'SEK',
+          exchange_rate: null,
+          status: 'overdue',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -322,25 +297,22 @@ describe('generateARLedger', () => {
   })
 
   it('uses Math.round for monetary precision', async () => {
-    results = [
-      {
-        data: [
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Test' },
-            invoice_number: 'F001',
-            invoice_date: '2024-06-01',
-            due_date: '2024-07-01',
-            total: 100.1,
-            paid_amount: 33.33,
-            currency: 'SEK',
-            status: 'sent',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Test' },
+          invoice_number: 'F001',
+          invoice_date: '2024-06-01',
+          due_date: '2024-07-01',
+          total: 100.1,
+          paid_amount: 33.33,
+          currency: 'SEK',
+          status: 'sent',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
     expect(report.entries[0].invoices[0].outstanding).toBe(66.77)
@@ -350,38 +322,35 @@ describe('generateARLedger', () => {
   it('nets a credited invoice with its credit note to zero outstanding', async () => {
     // Original was sent (unpaid) and then fully credited.
     // Journal-level AR is 0; the ledger should match.
-    results = [
-      {
-        data: [
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Test AB' },
-            invoice_number: '2026001',
-            invoice_date: '2026-05-05',
-            due_date: '2026-06-05',
-            total: 1241.25,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'credited',
-          },
-          {
-            id: 'inv-2',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Test AB' },
-            invoice_number: 'KR-2026001',
-            invoice_date: '2026-05-05',
-            due_date: '2026-05-05',
-            total: -1241.25,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'sent',
-            credited_invoice_id: 'inv-1',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Test AB' },
+          invoice_number: '2026001',
+          invoice_date: '2026-05-05',
+          due_date: '2026-06-05',
+          total: 1241.25,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'credited',
+        },
+        {
+          id: 'inv-2',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Test AB' },
+          invoice_number: 'KR-2026001',
+          invoice_date: '2026-05-05',
+          due_date: '2026-05-05',
+          total: -1241.25,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'sent',
+          credited_invoice_id: 'inv-1',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2026-05-05')
 
@@ -398,26 +367,23 @@ describe('generateARLedger', () => {
     // "settled": the rows are counted in unconverted_fx_count, so they have to
     // be reachable somewhere. Dropping the customer made the PDF/XLSX/web view
     // claim N invoices lack a rate while showing none of them.
-    results = [
-      {
-        data: [
-          {
-            id: 'inv-1',
-            customer_id: 'cust-fx',
-            customer: { id: 'cust-fx', name: 'Foreign Only AB' },
-            invoice_number: 'F300',
-            invoice_date: '2024-05-01',
-            due_date: '2024-06-01',
-            total: 800,
-            paid_amount: 0,
-            currency: 'EUR',
-            exchange_rate: null,
-            status: 'overdue',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        {
+          id: 'inv-1',
+          customer_id: 'cust-fx',
+          customer: { id: 'cust-fx', name: 'Foreign Only AB' },
+          invoice_number: 'F300',
+          invoice_date: '2024-05-01',
+          due_date: '2024-06-01',
+          total: 800,
+          paid_amount: 0,
+          currency: 'EUR',
+          exchange_rate: null,
+          status: 'overdue',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -441,53 +407,50 @@ describe('generateARLedger', () => {
   it('separates "nets to zero" from "all unconvertible" in the same report', async () => {
     // Two customers both end at total_outstanding 0 for opposite reasons.
     // The settled one must stay suppressed; the unconvertible one must not.
-    results = [
-      {
-        data: [
-          // Customer A: invoice + credit note, genuinely settled.
-          {
-            id: 'inv-1',
-            customer_id: 'cust-net',
-            customer: { id: 'cust-net', name: 'Netted AB' },
-            invoice_number: '2026001',
-            invoice_date: '2026-05-05',
-            due_date: '2026-06-05',
-            total: 2000,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'credited',
-          },
-          {
-            id: 'inv-2',
-            customer_id: 'cust-net',
-            customer: { id: 'cust-net', name: 'Netted AB' },
-            invoice_number: 'KR-2026001',
-            invoice_date: '2026-05-05',
-            due_date: '2026-05-05',
-            total: -2000,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'sent',
-            credited_invoice_id: 'inv-1',
-          },
-          // Customer B: one open USD invoice, no rate.
-          {
-            id: 'inv-3',
-            customer_id: 'cust-fx',
-            customer: { id: 'cust-fx', name: 'Foreign Only AB' },
-            invoice_number: 'F400',
-            invoice_date: '2026-05-05',
-            due_date: '2026-06-05',
-            total: 1500,
-            paid_amount: 0,
-            currency: 'USD',
-            exchange_rate: null,
-            status: 'sent',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        // Customer A: invoice + credit note, genuinely settled.
+        {
+          id: 'inv-1',
+          customer_id: 'cust-net',
+          customer: { id: 'cust-net', name: 'Netted AB' },
+          invoice_number: '2026001',
+          invoice_date: '2026-05-05',
+          due_date: '2026-06-05',
+          total: 2000,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'credited',
+        },
+        {
+          id: 'inv-2',
+          customer_id: 'cust-net',
+          customer: { id: 'cust-net', name: 'Netted AB' },
+          invoice_number: 'KR-2026001',
+          invoice_date: '2026-05-05',
+          due_date: '2026-05-05',
+          total: -2000,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'sent',
+          credited_invoice_id: 'inv-1',
+        },
+        // Customer B: one open USD invoice, no rate.
+        {
+          id: 'inv-3',
+          customer_id: 'cust-fx',
+          customer: { id: 'cust-fx', name: 'Foreign Only AB' },
+          invoice_number: 'F400',
+          invoice_date: '2026-05-05',
+          due_date: '2026-06-05',
+          total: 1500,
+          paid_amount: 0,
+          currency: 'USD',
+          exchange_rate: null,
+          status: 'sent',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2026-05-05')
 
@@ -498,38 +461,35 @@ describe('generateARLedger', () => {
 
   it('keeps a credit note outstanding when it offsets an already-paid invoice', async () => {
     // Original was paid in full, then credited: we owe the customer the refund.
-    results = [
-      {
-        data: [
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Test AB' },
-            invoice_number: '2026001',
-            invoice_date: '2026-04-01',
-            due_date: '2026-05-01',
-            total: 1000,
-            paid_amount: 1000,
-            currency: 'SEK',
-            status: 'credited',
-          },
-          {
-            id: 'inv-2',
-            customer_id: 'cust-a',
-            customer: { id: 'cust-a', name: 'Test AB' },
-            invoice_number: 'KR-2026001',
-            invoice_date: '2026-05-05',
-            due_date: '2026-05-05',
-            total: -1000,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'sent',
-            credited_invoice_id: 'inv-1',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Test AB' },
+          invoice_number: '2026001',
+          invoice_date: '2026-04-01',
+          due_date: '2026-05-01',
+          total: 1000,
+          paid_amount: 1000,
+          currency: 'SEK',
+          status: 'credited',
+        },
+        {
+          id: 'inv-2',
+          customer_id: 'cust-a',
+          customer: { id: 'cust-a', name: 'Test AB' },
+          invoice_number: 'KR-2026001',
+          invoice_date: '2026-05-05',
+          due_date: '2026-05-05',
+          total: -1000,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'sent',
+          credited_invoice_id: 'inv-1',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2026-05-05')
 
@@ -540,25 +500,22 @@ describe('generateARLedger', () => {
   })
 
   it('handles missing customer name gracefully', async () => {
-    results = [
-      {
-        data: [
-          {
-            id: 'inv-1',
-            customer_id: 'cust-a',
-            customer: null,
-            invoice_number: 'F001',
-            invoice_date: '2024-06-01',
-            due_date: '2024-07-01',
-            total: 1000,
-            paid_amount: 0,
-            currency: 'SEK',
-            status: 'sent',
-          },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        {
+          id: 'inv-1',
+          customer_id: 'cust-a',
+          customer: null,
+          invoice_number: 'F001',
+          invoice_date: '2024-06-01',
+          due_date: '2024-07-01',
+          total: 1000,
+          paid_amount: 0,
+          currency: 'SEK',
+          status: 'sent',
+        },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
     expect(report.entries[0].customer_name).toBe('Okänd kund')
@@ -575,20 +532,12 @@ describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
   }
 
   it('reopens an invoice whose payment came after the as-of date', async () => {
-    results = [
-      // Query 1: invoices (historical path also fetches status='paid')
-      {
-        data: [
-          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 5000, paid_amount: 5000, paid_at: '2024-07-01T10:00:00Z', status: 'paid' },
-        ],
-        error: null,
-      },
-      // Query 2: payment rows: the payment is dated after the as-of date
-      {
-        data: [{ invoice_id: 'inv-1', amount: 5000, payment_date: '2024-07-01' }],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 5000, paid_amount: 5000, paid_at: '2024-07-01T10:00:00Z', status: 'paid' },
+      ],
+      invoice_payments: [{ invoice_id: 'inv-1', amount: 5000, payment_date: '2024-07-01' }],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -600,21 +549,15 @@ describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
   })
 
   it('reduces outstanding by payments made on or before the as-of date only', async () => {
-    results = [
-      {
-        data: [
-          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 10000, paid_amount: 10000, paid_at: '2024-07-05T10:00:00Z', status: 'paid' },
-        ],
-        error: null,
-      },
-      {
-        data: [
-          { invoice_id: 'inv-1', amount: 4000, payment_date: '2024-06-10' },
-          { invoice_id: 'inv-1', amount: 6000, payment_date: '2024-07-05' },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 10000, paid_amount: 10000, paid_at: '2024-07-05T10:00:00Z', status: 'paid' },
+      ],
+      invoice_payments: [
+        { invoice_id: 'inv-1', amount: 4000, payment_date: '2024-06-10' },
+        { invoice_id: 'inv-1', amount: 6000, payment_date: '2024-07-05' },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -624,51 +567,44 @@ describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
   })
 
   it('keeps an invoice written off after the as-of date, and drops one written off by then', async () => {
-    results = [
-      {
-        data: [
-          // Konstaterad on or before the as-of date: off 1510 by then.
-          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 5000, paid_amount: 0, status: 'written_off' },
-          // Konstaterad after the as-of date: still an open claim on the day.
-          { ...invoiceBase, id: 'inv-2', invoice_number: 'F002', total: 3000, paid_amount: 1000, status: 'written_off' },
-          // Konstaterad and annulled (storno) before the as-of date: open.
-          { ...invoiceBase, id: 'inv-3', invoice_number: 'F003', total: 2000, paid_amount: 0, status: 'written_off' },
-        ],
-        error: null,
-      },
-      { data: [{ invoice_id: 'inv-2', amount: 1000, payment_date: '2024-06-01' }], error: null },
-      // Kundförlust decisions dated on or before the as-of date.
-      {
-        data: [
-          { id: 'w-1', invoice_id: 'inv-1', kind: 'confirmed', reverses_id: null },
-          { id: 'w-3', invoice_id: 'inv-3', kind: 'confirmed', reverses_id: null },
-          { id: 'w-4', invoice_id: 'inv-3', kind: 'annulled', reverses_id: 'w-3' },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        // Konstaterad on or before the as-of date: off 1510 by then.
+        { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 5000, paid_amount: 0, status: 'written_off' },
+        // Konstaterad after the as-of date: still an open claim on the day.
+        { ...invoiceBase, id: 'inv-2', invoice_number: 'F002', total: 3000, paid_amount: 1000, status: 'written_off' },
+        // Konstaterad and annulled (storno) before the as-of date: open.
+        { ...invoiceBase, id: 'inv-3', invoice_number: 'F003', total: 2000, paid_amount: 0, status: 'written_off' },
+      ],
+      invoice_payments: [{ invoice_id: 'inv-2', amount: 1000, payment_date: '2024-06-01' }],
+      invoice_write_offs: [
+      // Konstaterad decisions: two on or before the as-of date, one after.
+      { id: 'w-1', invoice_id: 'inv-1', kind: 'confirmed', reverses_id: null, entry_date: '2024-06-01' },
+      { id: 'w-2', invoice_id: 'inv-2', kind: 'confirmed', reverses_id: null, entry_date: '2024-07-01' },
+      { id: 'w-3', invoice_id: 'inv-3', kind: 'confirmed', reverses_id: null, entry_date: '2024-05-01' },
+      { id: 'w-4', invoice_id: 'inv-3', kind: 'annulled', reverses_id: 'w-3', entry_date: '2024-06-10' },
+    ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
-    expect(calls.some((c) => c.method === 'in' && (c.args[1] as string[]).includes('written_off'))).toBe(true)
+    // A backdated read: the population is reconstructed as of the date.
+    expect(populationArgs()).toMatchObject({ p_as_of_date: '2024-06-15' })
     const ids = report.entries.flatMap((e) => e.invoices.map((i) => i.invoice_number))
     expect(ids.sort()).toEqual(['F002', 'F003'])
     expect(report.total_outstanding).toBe(4000)
   })
 
   it('skips invoices already settled by the as-of date', async () => {
-    results = [
-      {
-        data: [
-          // Settled before the as-of date: must not appear at all.
-          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 1000, paid_amount: 1000, paid_at: '2024-06-01T10:00:00Z', status: 'paid' },
-          // Still open: the only row in the report.
-          { ...invoiceBase, id: 'inv-2', invoice_number: 'F002', total: 2000, paid_amount: 0, status: 'sent' },
-        ],
-        error: null,
-      },
-      { data: [], error: null },
-    ]
+    tables = {
+      invoices: [
+        // Settled before the as-of date: must not appear at all.
+        { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 1000, paid_amount: 1000, paid_at: '2024-06-01T10:00:00Z', status: 'paid' },
+        // Still open: the only row in the report.
+        { ...invoiceBase, id: 'inv-2', invoice_number: 'F002', total: 2000, paid_amount: 0, status: 'sent' },
+      ],
+      invoice_payments: [],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -680,17 +616,14 @@ describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
   })
 
   it('falls back to paid_at for fully paid invoices without payment rows', async () => {
-    results = [
-      {
-        data: [
-          // No payment rows, but paid_at says the payment came after the
-          // as-of date: the invoice was open on that date.
-          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 3000, paid_amount: 3000, paid_at: '2024-08-01T10:00:00Z', status: 'paid' },
-        ],
-        error: null,
-      },
-      { data: [], error: null },
-    ]
+    tables = {
+      invoices: [
+        // No payment rows, but paid_at says the payment came after the
+        // as-of date: the invoice was open on that date.
+        { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 3000, paid_amount: 3000, paid_at: '2024-08-01T10:00:00Z', status: 'paid' },
+      ],
+      invoice_payments: [],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -700,17 +633,14 @@ describe('generateARLedger: historical as-of reconstruction (#1020)', () => {
   })
 
   it('keeps stored paid_amount for undateable legacy partial payments', async () => {
-    results = [
-      {
-        data: [
-          // No payment rows and no paid_at: the stored partial amount cannot
-          // be dated, so it is assumed to have stood at the as-of date.
-          { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 3000, paid_amount: 1000, status: 'sent' },
-        ],
-        error: null,
-      },
-      { data: [], error: null },
-    ]
+    tables = {
+      invoices: [
+        // No payment rows and no paid_at: the stored partial amount cannot
+        // be dated, so it is assumed to have stood at the as-of date.
+        { ...invoiceBase, id: 'inv-1', invoice_number: 'F001', total: 3000, paid_amount: 1000, status: 'sent' },
+      ],
+      invoice_payments: [],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2024-06-15')
 
@@ -738,10 +668,6 @@ describe('generateARLedger: partially paid invoices (feedback seq 817399)', () =
   }
   const payment = { invoice_id: 'inv-pp', amount: 15000, payment_date: '2026-07-01' }
 
-  // The first status filter recorded is the invoices query.
-  const invoiceStatusFilter = () =>
-    calls.find((c) => c.method === 'in' && c.args[0] === 'status')?.args[1]
-
   beforeEach(() => {
     vi.useFakeTimers()
     vi.setSystemTime(new Date('2026-09-28T12:00:00Z'))
@@ -752,13 +678,14 @@ describe('generateARLedger: partially paid invoices (feedback seq 817399)', () =
   })
 
   it('live view lists it with the unpaid remainder outstanding', async () => {
-    results = [{ data: [partiallyPaid], error: null }]
+    tables = {
+      invoices: [partiallyPaid],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
-    // The live population is filtered with .or() (paid invoices awaiting
-    // Skatteverket join the open ones).
-    expect(calls.find((c) => c.method === 'or')?.args[0]).toContain('partially_paid')
+    // The live population: no as-of date.
+    expect(populationArgs()).toMatchObject({ p_as_of_date: null })
     expect(report.entries).toHaveLength(1)
     expect(report.entries[0].customer_name).toBe('Kunden AB')
     expect(report.entries[0].invoices[0]).toMatchObject({
@@ -776,28 +703,28 @@ describe('generateARLedger: partially paid invoices (feedback seq 817399)', () =
   })
 
   it('historical view before the payment date reopens the full total', async () => {
-    results = [
-      { data: [partiallyPaid], error: null },
-      { data: [payment], error: null },
-    ]
+    tables = {
+      invoices: [partiallyPaid],
+      invoice_payments: [payment],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2026-06-30')
 
-    expect(invoiceStatusFilter()).toEqual(expect.arrayContaining(['partially_paid', 'paid']))
+    expect(populationArgs()).toMatchObject({ p_as_of_date: '2026-06-30' })
     expect(report.entries[0].invoices[0].paid_amount).toBe(0)
     expect(report.entries[0].invoices[0].outstanding).toBe(15625)
     expect(report.total_outstanding).toBe(15625)
   })
 
   it('historical view on or after the payment date shows the remainder', async () => {
-    results = [
-      { data: [partiallyPaid], error: null },
-      { data: [payment], error: null },
-    ]
+    tables = {
+      invoices: [partiallyPaid],
+      invoice_payments: [payment],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2026-07-01')
 
-    expect(invoiceStatusFilter()).toContain('partially_paid')
+    expect(populationArgs()).toMatchObject({ p_as_of_date: '2026-07-01' })
     expect(report.entries[0].invoices[0].paid_amount).toBe(15000)
     expect(report.entries[0].invoices[0].outstanding).toBe(625)
     expect(report.total_outstanding).toBe(625)
@@ -828,7 +755,9 @@ describe('generateARLedger: migrated credit notes', () => {
 
   it('leaves out an unlinked credit note whose original was imported as paid', async () => {
     // Invoice 5 came in as paid and is not in the population; 1510 is 0.
-    results = [{ data: [migratedCreditNote('6', -11615)], error: null }]
+    tables = {
+      invoices: [migratedCreditNote('6', -11615)],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -838,15 +767,12 @@ describe('generateARLedger: migrated credit notes', () => {
   })
 
   it('leaves out a linked credit note whose original is credited and fully paid', async () => {
-    results = [
-      {
-        data: [
-          { ...base, id: 'orig', invoice_number: '10', total: 5000, paid_amount: 5000, status: 'credited' },
-          migratedCreditNote('cn', -5000, 'orig'),
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        { ...base, id: 'orig', invoice_number: '10', total: 5000, paid_amount: 5000, status: 'credited' },
+        migratedCreditNote('cn', -5000, 'orig'),
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -857,15 +783,12 @@ describe('generateARLedger: migrated credit notes', () => {
   it('counts a partial credit once: the provider netted it into the original', async () => {
     // Faktura 9 694, krediterad med 4 847 i källsystemet: the original arrives
     // with paid_amount 4 847 carrying the credit, so 4 847 is still owed.
-    results = [
-      {
-        data: [
-          { ...base, id: 'orig', invoice_number: '5922', total: 9694, paid_amount: 4847, status: 'sent' },
-          migratedCreditNote('cn', -4847, 'orig'),
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        { ...base, id: 'orig', invoice_number: '5922', total: 9694, paid_amount: 4847, status: 'sent' },
+        migratedCreditNote('cn', -4847, 'orig'),
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -874,15 +797,12 @@ describe('generateARLedger: migrated credit notes', () => {
   })
 
   it('keeps the open invoices of the same customer', async () => {
-    results = [
-      {
-        data: [
-          { ...base, id: 'open', invoice_number: '12', total: 1000, paid_amount: 0, status: 'sent' },
-          migratedCreditNote('cn', -11615),
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        { ...base, id: 'open', invoice_number: '12', total: 1000, paid_amount: 0, status: 'sent' },
+        migratedCreditNote('cn', -11615),
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -891,15 +811,12 @@ describe('generateARLedger: migrated credit notes', () => {
   })
 
   it('does not touch an in-app credit note, which is issued as sent', async () => {
-    results = [
-      {
-        data: [
-          { ...base, id: 'orig', invoice_number: '13', total: 1000, paid_amount: 1000, status: 'credited' },
-          { ...base, id: 'cn', invoice_number: '14', total: -1000, paid_amount: 0, status: 'sent', credited_invoice_id: 'orig' },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [
+        { ...base, id: 'orig', invoice_number: '13', total: 1000, paid_amount: 1000, status: 'credited' },
+        { ...base, id: 'cn', invoice_number: '14', total: -1000, paid_amount: 0, status: 'sent', credited_invoice_id: 'orig' },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -947,14 +864,13 @@ describe('generateARLedger: a credit note set off against a new invoice (crm#105
   })
 
   it('live view: the credit used on the new invoice is no longer open, so the ledger matches 1510', async () => {
-    results = [
-      { data: [original, creditNote, newInvoice], error: null },
-      { data: [setOff], error: null },
-    ]
+    tables = {
+      invoices: [original, creditNote, newInvoice],
+      invoice_payments: [setOff],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
-    expect(calls).toContainEqual({ method: 'in', args: ['journal_entry_id', ['je-cn']] })
     expect(report.total_outstanding).toBe(10000)
     expect(report.entries).toHaveLength(1)
     const rows = Object.fromEntries(report.entries[0].invoices.map((inv) => [inv.invoice_id, inv]))
@@ -968,10 +884,10 @@ describe('generateARLedger: a credit note set off against a new invoice (crm#105
     // invoice's remaining); the rule reads the payment rows, whatever they
     // hold. A 25 000 invoice paid by the credit is not in the live population;
     // 15 000 of the credit is still the customer's.
-    results = [
-      { data: [original, creditNote], error: null },
-      { data: [{ ...setOff, amount: 25000 }], error: null },
-    ]
+    tables = {
+      invoices: [original, creditNote],
+      invoice_payments: [{ ...setOff, amount: 25000 }],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -989,16 +905,13 @@ describe('generateARLedger: a credit note set off against a new invoice (crm#105
       ...newInvoice, id: 'third', invoice_number: 'F-3', invoice_date: '2026-09-25', due_date: '2026-10-25',
       total: 60000, paid_amount: 40000, remaining_amount: 20000, journal_entry_id: 'je-third',
     }
-    results = [
-      { data: [original, creditNote, newInvoice, third], error: null },
-      {
-        data: [
-          setOff,
-          { ...setOff, id: 'pay-setoff-2', invoice_id: 'third', invoice: { invoice_date: '2026-09-25' } },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [original, creditNote, newInvoice, third],
+      invoice_payments: [
+        setOff,
+        { ...setOff, id: 'pay-setoff-2', invoice_id: 'third', invoice: { invoice_date: '2026-09-25' } },
+      ],
+    }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -1010,18 +923,11 @@ describe('generateARLedger: a credit note set off against a new invoice (crm#105
   })
 
   it('as of a date before the new invoice existed, the credit is still open', async () => {
-    results = [
+    tables = {
       // invoice_date <= 2026-09-15: the new invoice is not in the population yet.
-      { data: [original, creditNote], error: null },
-      { data: [setOff], error: null },
-      {
-        data: [
-          { invoice_id: 'orig', amount: 40000, payment_date: '2026-09-05' },
-          { invoice_id: 'new', amount: 40000, payment_date: '2026-09-10' },
-        ],
-        error: null,
-      },
-    ]
+      invoices: [original, creditNote, newInvoice],
+      invoice_payments: [{ invoice_id: 'orig', amount: 40000, payment_date: '2026-09-05' }, setOff],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2026-09-15')
 
@@ -1031,17 +937,10 @@ describe('generateARLedger: a credit note set off against a new invoice (crm#105
   })
 
   it('as of a date after the set-off, the ledger matches 1510', async () => {
-    results = [
-      { data: [original, creditNote, newInvoice], error: null },
-      { data: [setOff], error: null },
-      {
-        data: [
-          { invoice_id: 'orig', amount: 40000, payment_date: '2026-09-05' },
-          { invoice_id: 'new', amount: 40000, payment_date: '2026-09-10' },
-        ],
-        error: null,
-      },
-    ]
+    tables = {
+      invoices: [original, creditNote, newInvoice],
+      invoice_payments: [{ invoice_id: 'orig', amount: 40000, payment_date: '2026-09-05' }, setOff],
+    }
 
     const report = await generateARLedger(supabase, 'company-1', '2026-09-30')
 
@@ -1051,11 +950,9 @@ describe('generateARLedger: a credit note set off against a new invoice (crm#105
     expect(rows.new.outstanding).toBe(10000)
   })
 
-  it('returns the empty report when the set-off rows cannot be read, like any other failed read', async () => {
-    results = [
-      { data: [original, creditNote, newInvoice], error: null },
-      { data: null, error: { message: 'boom' } },
-    ]
+  it('returns the empty report when the population, set-offs included, cannot be read', async () => {
+    tables = { invoices: [original, creditNote, newInvoice], invoice_payments: [setOff] }
+    failures = { get_ar_ledger_invoices: { message: 'boom' } }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -1095,11 +992,12 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
     currency: 'SEK',
     status: 'sent',
   }
-  const item = (status: string, decided: number | null) => ({
-    id: `item-${status}`,
-    invoice_id: 'inv-rut',
-    decided_amount: decided,
-    request: { status, settlement: { entry_date: '2025-05-10' } },
+  // One begäran item for the invoice, on a begäran settled by the payout
+  // voucher of 2025-05-10.
+  const item = (status: string, decided: number | null): ReskontraTables => ({
+    rot_rut_payout_request_items: [{ id: `item-${status}`, invoice_id: 'inv-rut', request_id: `req-${status}`, decided_amount: decided }],
+    rot_rut_payout_requests: [{ id: `req-${status}`, status, settlement_journal_entry_id: 'je-payout' }],
+    journal_entries: [{ id: 'je-payout', entry_date: '2025-05-10', status: 'posted' }],
   })
   const payment = { invoice_id: 'inv-rut', amount: 7000, payment_date: '2025-03-01' }
   const rows = (report: Awaited<ReturnType<typeof generateARLedger>>) =>
@@ -1115,25 +1013,21 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
   })
 
   it('live view reads paid invoices with a deduction into the population', async () => {
-    results = [{ data: [], error: null }]
-
-    await generateARLedger(supabase, 'company-1')
-
-    expect(calls.find((c) => c.method === 'or')?.args[0]).toBe(
-      'status.in.(sent,overdue,partially_paid,credited),and(status.eq.paid,deduction_total.gt.0)'
-    )
-  })
-
-  it('live view lists a paid invoice whose begäran is not settled with the deduction outstanding', async () => {
-    results = [
-      { data: [rut, plain], error: null },
-      // No settled begäran item.
-      { data: [], error: null },
-    ]
+    // A paid invoice without a deduction is settled and not read live.
+    tables = { invoices: [rut, { ...plain, id: 'inv-paid', status: 'paid', paid_amount: 1250 }] }
 
     const report = await generateARLedger(supabase, 'company-1')
 
-    expect(calls).toContainEqual({ method: 'in', args: ['invoice_id', ['inv-rut']] })
+    expect(Object.keys(rows(report))).toEqual(['inv-rut'])
+  })
+
+  it('live view lists a paid invoice whose begäran is not settled with the deduction outstanding', async () => {
+    tables = {
+      invoices: [rut, plain],
+    }
+
+    const report = await generateARLedger(supabase, 'company-1')
+
     expect(rows(report)['inv-rut']).toMatchObject({ total: 10000, paid_amount: 7000, outstanding: 3000, outstanding_sek: 3000 })
     // The invoice without a deduction reads as it always did.
     expect(rows(report)['inv-plain']).toMatchObject({ total: 1250, paid_amount: 0, outstanding: 1250 })
@@ -1142,10 +1036,7 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
   })
 
   it('live view leaves out a paid invoice whose begäran is settled in full', async () => {
-    results = [
-      { data: [rut, plain], error: null },
-      { data: [item('paid', 3000)], error: null },
-    ]
+    tables = { invoices: [rut, plain], ...item('paid', 3000) }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -1155,10 +1046,7 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
   })
 
   it('live view keeps the refused remainder of a partly paid begäran', async () => {
-    results = [
-      { data: [rut], error: null },
-      { data: [item('partially_paid', 2000)], error: null },
-    ]
+    tables = { invoices: [rut], ...item('partially_paid', 2000) }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -1169,10 +1057,7 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
   it('live view counts a reclaimed remainder once, as the buyer\'s again', async () => {
     // The refused 1 000 moved onto the buyer: partially_paid until they pay it.
     const reclaimed = { ...rut, deduction_reclaimed_total: 1000, status: 'partially_paid', paid_at: null }
-    results = [
-      { data: [reclaimed], error: null },
-      { data: [item('partially_paid', 2000)], error: null },
-    ]
+    tables = { invoices: [reclaimed], ...item('partially_paid', 2000) }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -1182,10 +1067,7 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
 
   it('live view leaves out a paid invoice whose reclaimed remainder the buyer has paid', async () => {
     const settled = { ...rut, paid_amount: 8000, deduction_reclaimed_total: 1000 }
-    results = [
-      { data: [settled], error: null },
-      { data: [item('partially_paid', 2000)], error: null },
-    ]
+    tables = { invoices: [settled], ...item('partially_paid', 2000) }
 
     const report = await generateARLedger(supabase, 'company-1')
 
@@ -1194,11 +1076,7 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
   })
 
   it('historical view before the payout date keeps the deduction outstanding', async () => {
-    results = [
-      { data: [rut], error: null },
-      { data: [item('paid', 3000)], error: null },
-      { data: [payment], error: null },
-    ]
+    tables = { invoices: [rut], invoice_payments: [payment], ...item('paid', 3000) }
 
     const report = await generateARLedger(supabase, 'company-1', '2025-05-09')
 
@@ -1207,11 +1085,7 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
   })
 
   it('historical view on the payout date leaves the invoice out', async () => {
-    results = [
-      { data: [rut], error: null },
-      { data: [item('paid', 3000)], error: null },
-      { data: [payment], error: null },
-    ]
+    tables = { invoices: [rut], invoice_payments: [payment], ...item('paid', 3000) }
 
     const report = await generateARLedger(supabase, 'company-1', '2025-05-10')
 
@@ -1220,11 +1094,7 @@ describe('generateARLedger: ROT/RUT invoices awaiting Skatteverket', () => {
   })
 
   it('historical view before the buyer paid shows the whole invoice', async () => {
-    results = [
-      { data: [rut], error: null },
-      { data: [item('paid', 3000)], error: null },
-      { data: [payment], error: null },
-    ]
+    tables = { invoices: [rut], invoice_payments: [payment], ...item('paid', 3000) }
 
     const report = await generateARLedger(supabase, 'company-1', '2025-02-15')
 

@@ -21,9 +21,12 @@ vi.mock('../vat-declaration', () => ({
 
 const fetchEntryLinesMock = vi.fn()
 const fetchLinesByEntryIdsMock = vi.fn()
-vi.mock('@/lib/bookkeeping/entry-lines', () => ({
+const fetchEntriesWithAccountLinesMock = vi.fn()
+vi.mock('@/lib/bookkeeping/entry-lines', async (orig) => ({
+  ...(await orig<typeof import('@/lib/bookkeeping/entry-lines')>()),
   fetchEntryLines: (...args: unknown[]) => fetchEntryLinesMock(...args),
   fetchLinesByEntryIds: (...args: unknown[]) => fetchLinesByEntryIdsMock(...args),
+  fetchEntriesWithAccountLines: (...args: unknown[]) => fetchEntriesWithAccountLinesMock(...args),
 }))
 
 const fetchDynamicVatAccountsMock = vi.fn()
@@ -62,9 +65,35 @@ function line(entryId: string, account: string, debit: number, credit = 0) {
  */
 function mockVerifikat(rcLines: ReturnType<typeof rcLine>[], otherLines: ReturnType<typeof line>[] = []) {
   fetchEntryLinesMock.mockResolvedValue(rcLines)
-  fetchLinesByEntryIdsMock.mockResolvedValue(
-    [...rcLines.map(({ journal_entries: _entry, ...rest }) => rest), ...otherLines]
-      .map((l, i) => ({ id: `l-${i}`, ...l })),
+  fetchLinesByEntryIdsMock.mockResolvedValue(verifikatLines(rcLines, otherLines))
+}
+
+function verifikatLines(rcLines: ReturnType<typeof rcLine>[], otherLines: ReturnType<typeof line>[]) {
+  return [...rcLines.map(({ journal_entries: _entry, ...rest }) => rest), ...otherLines]
+    .map((l, i) => ({ id: `l-${i}`, ...l }))
+}
+
+/**
+ * The same verifikat as get_entries_with_account_lines returns them: each
+ * with every line, the verifikat ordered by id.
+ */
+function mockVerifikatRpc(rcLines: ReturnType<typeof rcLine>[], otherLines: ReturnType<typeof line>[] = []) {
+  const lines = verifikatLines(rcLines, otherLines)
+  const entries = new Map(rcLines.map((l) => [l.journal_entry_id, l.journal_entries]))
+  fetchEntriesWithAccountLinesMock.mockResolvedValue(
+    [...entries.values()]
+      .sort((a, b) => (a.id < b.id ? -1 : 1))
+      .map((entry) => ({
+        ...entry,
+        status: 'posted',
+        source_type: 'manual',
+        source_id: null,
+        reverses_id: null,
+        correction_of_id: null,
+        lines: lines
+          .filter((l) => l.journal_entry_id === entry.id)
+          .map(({ id, account_number, debit_amount, credit_amount }) => ({ id, account_number, debit_amount, credit_amount })),
+      })),
   )
 }
 
@@ -93,6 +122,8 @@ describe('findRcBasisGaps', () => {
     resolvePeriodDatesMock.mockResolvedValue({ start: '2025-07-17', end: '2026-12-31' })
     fetchEntryLinesMock.mockResolvedValue([])
     fetchLinesByEntryIdsMock.mockResolvedValue([])
+    // No get_entries_with_account_lines yet: the paged read answers.
+    fetchEntriesWithAccountLinesMock.mockResolvedValue(null)
     fetchDynamicVatAccountsMock.mockResolvedValue({
       explicitAccounts: new Set(),
       mappingByAccount: new Map(),
@@ -205,6 +236,54 @@ describe('findRcBasisGaps', () => {
     expect(gaps.map((g) => [g.entryId, g.rcOutputAccount, g.missingBasisAmount])).toEqual([
       ['entry-1', '2624', 500],
     ])
+  })
+})
+
+describe('findRcBasisGaps through get_entries_with_account_lines', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    resolvePeriodDatesMock.mockResolvedValue({ start: '2026-05-01', end: '2026-05-31' })
+    fetchDynamicVatAccountsMock.mockResolvedValue({
+      explicitAccounts: new Set(),
+      mappingByAccount: new Map(),
+      rcBasisRateByAccount: new Map(),
+    })
+  })
+
+  it('reads the posted verifikat on the output accounts, every line of them, in one call', async () => {
+    mockVerifikatRpc([rcLine('entry-1', 8, 527.29)])
+
+    const gaps = await findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 5)
+
+    expect(fetchEntriesWithAccountLinesMock).toHaveBeenCalledWith(supabase, 'company-1', {
+      start: '2026-05-01',
+      end: '2026-05-31',
+      accounts: ['2614', '2624', '2634'],
+      statuses: ['posted'],
+      allLines: true,
+    })
+    expect(fetchEntryLinesMock).not.toHaveBeenCalled()
+    expect(fetchLinesByEntryIdsMock).not.toHaveBeenCalled()
+    expect(gaps).toEqual([expect.objectContaining({ entryId: 'entry-1', voucherNumber: 8, missingBasisAmount: 2109.16 })])
+  })
+
+  it('finds the same gaps, in the same order, as the paged read', async () => {
+    const scenarios: Array<[ReturnType<typeof rcLine>[], ReturnType<typeof line>[]]> = [
+      [[rcLine('entry-2', 9, 250), rcLine('entry-1', 8, 527.29)], [line('entry-2', '4535', 1000)]],
+      [[rcLine('entry-1', 8, 2500)], [line('entry-1', '4535', 4000)]],
+      [[rcLine('entry-1', 8, 250), rcLine('entry-1', 8, 60, '2624')], [line('entry-1', '4515', 1000)]],
+      // Two verifikat with one voucher number (two räkenskapsår in a helår): the paged order breaks the tie.
+      [[rcLine('entry-b', 3, 100), rcLine('entry-a', 3, 200, '2634')], [line('entry-a', '1930', 0, 200)]],
+    ]
+    for (const [rcLines, otherLines] of scenarios) {
+      fetchEntriesWithAccountLinesMock.mockResolvedValue(null)
+      mockVerifikat(rcLines, otherLines)
+      const paged = await findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 5)
+      mockVerifikatRpc(rcLines, otherLines)
+      const rpc = await findRcBasisGaps(supabase, 'company-1', 'monthly', 2026, 5)
+      expect(rpc).toEqual(paged)
+      expect(paged.length).toBeGreaterThan(0)
+    }
   })
 })
 

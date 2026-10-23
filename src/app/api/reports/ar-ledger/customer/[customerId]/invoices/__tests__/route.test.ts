@@ -18,83 +18,45 @@ vi.mock('@/lib/bookkeeping/currency-utils', () => ({
 
 import { GET } from '../route'
 import { AR_LEDGER_STATUSES } from '@/lib/reports/ar-ledger'
+import { reskontraRpcPorts, type ReskontraTables } from '@/tests/reskontra-rpc-port'
 
-interface QueryResult {
-  data: unknown
-  error: unknown
-}
-
+/**
+ * The customer lookup is a table read; the invoices, their set-offs, begäran
+ * items and verifikat come from get_ar_ledger_invoices, answered from `books`
+ * by its JS port (tests/reskontra-rpc-port.ts). Invoices are the customer's
+ * ('cust-1') and open ('sent') unless they say otherwise.
+ */
 function buildSupabase(
   customer: { id: string; name: string } | null,
-  invoicesResult: QueryResult,
-  entriesResult: QueryResult,
-  /** The second journal_entries read: the verifikat invoices are linked to. */
-  linkedEntriesResult?: QueryResult,
-  /** Payment rows naming a credit note's verifikat (crm#1059). */
-  paymentsResult: QueryResult = { data: [], error: null },
-  /** Settled begäran items of ROT/RUT invoices. */
-  payoutItemsResult: QueryResult = { data: [], error: null }
+  books: ReskontraTables,
+  failures: Record<string, { message: string }> = {},
 ) {
-  const invoicesIn = vi.fn().mockReturnThis()
-  const invoicesOr = vi.fn().mockReturnThis()
-  const entriesIn = vi.fn().mockReturnThis()
-  const paymentsIn = vi.fn().mockReturnThis()
-  let entryReads = 0
+  const tables: ReskontraTables = {
+    ...books,
+    invoices: (books.invoices ?? []).map((row) => ({ customer_id: 'cust-1', status: 'sent', ...row })),
+  }
+  const rpc = vi.fn(async (name: string, args: Record<string, unknown>) => {
+    if (failures[name]) return { data: null, error: failures[name] }
+    return { data: reskontraRpcPorts(tables)[name](args), error: null }
+  })
   return {
-    invoicesIn,
-    invoicesOr,
-    entriesIn,
-    paymentsIn,
+    rpc,
     from: vi.fn().mockImplementation((table: string) => {
-      if (table === 'rot_rut_payout_request_items') {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          in: vi.fn().mockReturnThis(),
-          not: vi.fn().mockReturnThis(),
-          order: vi.fn().mockReturnThis(),
-          range: vi.fn().mockReturnThis(),
-          then: (resolve: (v: QueryResult) => void) => resolve(payoutItemsResult),
-        }
-      }
-      if (table === 'invoice_payments') {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          in: paymentsIn,
-          order: vi.fn().mockReturnThis(),
-          range: vi.fn().mockReturnThis(),
-          then: (resolve: (v: QueryResult) => void) => resolve(paymentsResult),
-        }
-      }
-      if (table === 'customers') {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          maybeSingle: vi.fn().mockResolvedValue({ data: customer, error: null }),
-        }
-      }
-      if (table === 'invoices') {
-        return {
-          select: vi.fn().mockReturnThis(),
-          eq: vi.fn().mockReturnThis(),
-          in: invoicesIn,
-          or: invoicesOr,
-          order: vi.fn().mockReturnThis(),
-          limit: vi.fn().mockReturnThis(),
-          then: (resolve: (v: QueryResult) => void) => resolve(invoicesResult),
-        }
-      }
-      // journal_entries
-      entryReads += 1
-      const result = entryReads > 1 && linkedEntriesResult ? linkedEntriesResult : entriesResult
+      if (table !== 'customers') throw new Error(`unexpected read of ${table}`)
       return {
         select: vi.fn().mockReturnThis(),
         eq: vi.fn().mockReturnThis(),
-        in: entriesIn,
-        then: (resolve: (v: QueryResult) => void) => resolve(result),
+        maybeSingle: vi.fn().mockResolvedValue({ data: customer, error: null }),
       }
     }),
+  }
+}
+
+/** The invoice engine's registration verifikat of an invoice. */
+function engineEntry(invoiceId: string, voucherNumber: number, description: string) {
+  return {
+    id: `je-${invoiceId}`, source_type: 'invoice_created', source_id: invoiceId, status: 'posted',
+    voucher_number: voucherNumber, voucher_series: 'A', description,
   }
 }
 
@@ -125,9 +87,7 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
   })
 
   it('returns 404 when customer is unknown', async () => {
-    authWith(
-      buildSupabase(null, { data: [], error: null }, { data: [], error: null })
-    )
+    authWith(buildSupabase(null, { invoices: [] }))
     const req = createMockRequest(
       '/api/reports/ar-ledger/customer/cust-1/invoices'
     )
@@ -150,22 +110,11 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
         notes: null,
       },
     ]
-    const entries = [
-      {
-        id: 'je-1',
-        voucher_number: 22,
-        voucher_series: 'A',
-        description: 'Faktura 2026-001',
-        source_id: 'inv-1',
-      },
-    ]
-    authWith(
-      buildSupabase(
-        { id: 'cust-1', name: 'Acme AB' },
-        { data: invoices, error: null },
-        { data: entries, error: null }
-      )
+    const supabase = buildSupabase(
+      { id: 'cust-1', name: 'Acme AB' },
+      { invoices, journal_entries: [{ ...engineEntry('inv-1', 22, 'Faktura 2026-001'), id: 'je-1' }] },
     )
+    authWith(supabase)
     const req = createMockRequest(
       '/api/reports/ar-ledger/customer/cust-1/invoices'
     )
@@ -185,6 +134,12 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
       }
     }
 
+    // One read of the customer's population, verifikat included.
+    expect(supabase.rpc).toHaveBeenCalledWith('get_ar_ledger_invoices', {
+      p_company_id: 'company-1',
+      p_as_of_date: null,
+      p_customer_id: 'cust-1',
+    })
     expect(body.data.customer_id).toBe('cust-1')
     expect(body.data.customer_name).toBe('Acme AB')
     expect(body.data.lines).toHaveLength(1)
@@ -209,10 +164,12 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
         notes: null,
       },
     ]
+    // Same population as the aggregate it drills into: every live status
+    // (AR_LEDGER_STATUSES), so a partially paid invoice is read.
+    expect(AR_LEDGER_STATUSES).toContain('partially_paid')
     const supabase = buildSupabase(
       { id: 'cust-1', name: 'Kunden AB' },
-      { data: invoices, error: null },
-      { data: [], error: null }
+      { invoices: invoices.map((inv) => ({ ...inv, status: 'partially_paid' })) },
     )
     authWith(supabase)
     const req = createMockRequest(
@@ -220,14 +177,6 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
     )
     const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
     expect(res.status).toBe(200)
-
-    // Same population as the aggregate it drills into.
-    // Same population as the aggregate: every live status, plus paid invoices
-    // with a deduction. The filter is a literal for the schema guard, so this
-    // holds it to AR_LEDGER_STATUSES.
-    const filter = `status.in.(${AR_LEDGER_STATUSES.join(',')}),and(status.eq.paid,deduction_total.gt.0)`
-    expect(supabase.invoicesOr).toHaveBeenCalledWith(filter)
-    expect(supabase.invoicesOr).toHaveBeenCalledWith(expect.stringContaining('partially_paid'))
 
     const body = (await res.json()) as {
       data: { lines: Array<Record<string, unknown>> }
@@ -261,17 +210,19 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
     ]
     const supabase = buildSupabase(
       { id: 'cust-1', name: 'Kunden AB' },
-      { data: invoices, error: null },
-      // No invoice_created entry: the invoice was booked by the SIE import.
-      { data: [], error: null },
-      { data: [{ id: 'je-sie', voucher_number: 45, voucher_series: 'B', description: 'Kundfaktura 1023' }], error: null }
+      {
+        invoices,
+        // No invoice_created entry: the invoice was booked by the SIE import.
+        journal_entries: [
+          { id: 'je-sie', source_type: 'import', status: 'posted', voucher_number: 45, voucher_series: 'B', description: 'Kundfaktura 1023' },
+        ],
+      },
     )
     authWith(supabase)
     const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
     const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
     expect(res.status).toBe(200)
 
-    expect(supabase.entriesIn).toHaveBeenCalledWith('id', ['je-sie'])
     const body = (await res.json()) as { data: { lines: Array<Record<string, unknown>> } }
     expect(body.data.lines[0]).toMatchObject({
       invoice_id: 'inv-registered',
@@ -296,13 +247,11 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices', () => {
       buildSupabase(
         { id: 'cust-1', name: 'Callidus Tech AB' },
         {
-          data: [
+          invoices: [
             { ...row, id: 'inv-open', invoice_number: '10', total: 1000, paid_amount: 0, remaining_amount: 1000, status: 'sent' },
             { ...row, id: 'inv-cn', invoice_number: '6', total: -11615, paid_amount: 0, status: 'credited' },
           ],
-          error: null,
         },
-        { data: [], error: null }
       )
     )
     const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
@@ -326,19 +275,12 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: credit note
   }
 
   it('shows a credit note whose credit paid the new invoice as used, like the aggregate', async () => {
-    const supabase = buildSupabase(
-      { id: 'cust-1', name: 'Kunden AB' },
-      { data: invoices, error: null },
-      { data: [], error: null },
-      { data: [], error: null },
-      { data: [setOff], error: null }
-    )
+    const supabase = buildSupabase({ id: 'cust-1', name: 'Kunden AB' }, { invoices, invoice_payments: [setOff] })
     authWith(supabase)
     const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
     const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
     expect(res.status).toBe(200)
 
-    expect(supabase.paymentsIn).toHaveBeenCalledWith('journal_entry_id', ['je-cn'])
     const body = (await res.json()) as {
       data: { lines: Array<{ invoice_id: string; outstanding: number; debit: number; paid_amount: number }> }
     }
@@ -348,14 +290,12 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: credit note
     expect(lines.new).toMatchObject({ outstanding: 10000, debit: 10000, paid_amount: 40000 })
   })
 
-  it('answers with an error when the set-off rows cannot be read', async () => {
+  it('answers with an error when the population, set-offs included, cannot be read', async () => {
     authWith(
       buildSupabase(
         { id: 'cust-1', name: 'Kunden AB' },
-        { data: invoices, error: null },
-        { data: [], error: null },
-        { data: [], error: null },
-        { data: null, error: { message: 'boom' } }
+        { invoices, invoice_payments: [setOff] },
+        { get_ar_ledger_invoices: { message: 'boom' } },
       )
     )
     const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
@@ -376,22 +316,16 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: ROT/RUT awa
     ...row, id: 'inv-plain', invoice_number: 'F-PLAIN', total: 1250, paid_amount: 0, remaining_amount: 1250,
     deduction_total: 0, deduction_reclaimed_total: 0, status: 'sent',
   }
-  const item = (status: string, decided: number) => ({
-    id: `item-${status}`, invoice_id: 'inv-rut', decided_amount: decided,
-    request: { status, settlement: { entry_date: '2026-07-01' } },
+  // One begäran item for the invoice, on a begäran settled by the payout
+  // voucher of 2026-07-01.
+  const item = (status: string, decided: number): ReskontraTables => ({
+    rot_rut_payout_request_items: [{ id: `item-${status}`, invoice_id: 'inv-rut', request_id: `req-${status}`, decided_amount: decided }],
+    rot_rut_payout_requests: [{ id: `req-${status}`, status, settlement_journal_entry_id: 'je-payout' }],
+    journal_entries: [{ id: 'je-payout', entry_date: '2026-07-01', status: 'posted' }],
   })
 
-  async function linesFor(payoutItems: unknown[]) {
-    authWith(
-      buildSupabase(
-        { id: 'cust-1', name: 'Hushållet' },
-        { data: [rut, plain], error: null },
-        { data: [], error: null },
-        undefined,
-        { data: [], error: null },
-        { data: payoutItems, error: null }
-      )
-    )
+  async function linesFor(payout: ReskontraTables = {}) {
+    authWith(buildSupabase({ id: 'cust-1', name: 'Hushållet' }, { invoices: [rut, plain], ...payout }))
     const req = createMockRequest('/api/reports/ar-ledger/customer/cust-1/invoices')
     const res = await GET(req, createMockRouteParams({ customerId: 'cust-1' }))
     expect(res.status).toBe(200)
@@ -402,18 +336,18 @@ describe('GET /api/reports/ar-ledger/customer/[customerId]/invoices: ROT/RUT awa
   }
 
   it('lists a paid invoice whose begäran is not settled with the deduction outstanding, like the aggregate', async () => {
-    const lines = await linesFor([])
+    const lines = await linesFor()
     expect(lines['inv-rut']).toMatchObject({ outstanding: 3000, debit: 3000, paid_amount: 7000 })
     expect(lines['inv-plain']).toMatchObject({ outstanding: 1250, debit: 1250, paid_amount: 0 })
   })
 
   it('keeps the refused remainder of a partly paid begäran', async () => {
-    const lines = await linesFor([item('partially_paid', 2000)])
+    const lines = await linesFor(item('partially_paid', 2000))
     expect(lines['inv-rut']).toMatchObject({ outstanding: 1000, debit: 1000 })
   })
 
   it('leaves out a paid invoice whose begäran is settled in full', async () => {
-    const lines = await linesFor([item('paid', 3000)])
+    const lines = await linesFor(item('paid', 3000))
     expect(Object.keys(lines)).toEqual(['inv-plain'])
   })
 })

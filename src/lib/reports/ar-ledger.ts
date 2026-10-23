@@ -1,20 +1,19 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { invoicesWrittenOffAsOf } from '@/lib/core/bookkeeping/written-off-as-of'
 import { resolveSekAmount } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
-import { fetchPaymentsAsOf, outstandingAsOf, todayIsoDate, type PaymentsAsOf } from './reskontra-payments'
+import { outstandingAsOf, paymentsAsOfFromFacts, todayIsoDate } from './reskontra-payments'
 import {
   fetchInvoiceRegisterCoverage,
   NO_INVOICE_REGISTER_COVERAGE,
   type InvoiceRegisterCoverage,
 } from '@/lib/reports/invoice-register-coverage'
 import {
-  fetchSkatteverketSettled,
   liveReceivableOutstanding,
   outstandingLessPayouts,
+  skatteverketSettledByInvoice,
 } from '@/lib/bookkeeping/skatteverket-share'
-import { fetchCreditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
+import { creditNoteCreditUsed, outstandingWithCreditUsed } from './credit-note-settlement'
+import { fetchArLedgerInvoices, type ArLedgerInvoice } from './ar-ledger-invoices'
 
 export interface ARInvoiceDetail {
   invoice_id: string
@@ -75,12 +74,12 @@ export interface ARLedgerReport {
  * 'sent' and 'overdue': the first partial payment moves an invoice there and
  * it stays until the rest is paid. 'credited' originals are kept so they net
  * against their credit notes; migrated credit notes that carry the same
- * status are left out by withoutSettledCreditNotes. Paid invoices whose
- * ROT/RUT deduction Skatteverket has yet to pay out join them in the live
- * read's `.or()` filter, which spells these statuses out as a literal for the
- * schema guard (a test holds the two together). The customer drill-down route
- * reads this same filter, so the aggregate and its detail rows cannot drift
- * apart.
+ * status are left out (isSettledCreditNote). Paid invoices whose ROT/RUT
+ * deduction Skatteverket has yet to pay out join them. The population read
+ * (get_ar_ledger_invoices) spells these statuses out in SQL, and a pg test
+ * holds the two together. The customer drill-down route and the 1510
+ * reconciliation read that same population, so the aggregate and its detail
+ * rows cannot drift apart.
  */
 export const AR_LEDGER_STATUSES = ['sent', 'overdue', 'partially_paid', 'credited'] as const
 
@@ -94,15 +93,11 @@ export const AR_LEDGER_STATUSES = ['sent', 'overdue', 'partially_paid', 'credite
  * netted it into the balance of the invoice it credits, whose paid_amount
  * carries it. Read like an original, total - paid_amount counted each credit a
  * second time, as an open negative receivable, while 1510 stood at 0. Same
- * rule as the kontantmetod cut-off (kontantmetod-cutoff.ts).
+ * rule as the kontantmetod cut-off (kontantmetod-cutoff.ts). The population
+ * read (get_ar_ledger_invoices) leaves these rows out in SQL.
  */
 export function isSettledCreditNote(inv: { status?: string | null; total?: unknown }): boolean {
   return inv.status === 'credited' && (Number(inv.total) || 0) < 0
-}
-
-/** The reskontra population without settled credit notes. */
-export function withoutSettledCreditNotes<T extends { status?: string | null; total?: unknown }>(rows: T[]): T[] {
-  return rows.filter((row) => !isSettledCreditNote(row))
 }
 
 /**
@@ -130,59 +125,25 @@ export async function generateARLedger(
   // the live view must stay byte-identical to what it always showed.
   const isHistorical = !!asOfDate && asOfDate < todayIsoDate()
 
-  // Fetch the ledger population. Live view: open invoices, plus paid ones
-  // still awaiting Skatteverket's share of a ROT/RUT deduction. Historical
-  // view: also invoices paid or written off (konstaterad kundförlust) since
-  // the as-of date, restricted to invoice dates on or before it. Invoices
-  // cancelled since are treated as never having existed (their cancellation
-  // is not reliably dated).
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let invoices: any[]
-  let payments: PaymentsAsOf | null = null
-  let creditUsed = new Map<string, number>()
-  let settled = new Map<string, number>()
+  // The ledger population, in one read (ar-ledger-invoices.ts). Live view:
+  // open invoices, plus paid ones still awaiting Skatteverket's share of a
+  // ROT/RUT deduction. Historical view: also invoices paid or written off
+  // (konstaterad kundförlust) since the as-of date, restricted to invoice
+  // dates on or before it, with the payment history; a claim written off by
+  // then had left 1510 and is not returned. Invoices cancelled since are
+  // treated as never having existed (their cancellation is not reliably
+  // dated). The coverage disclosure is read beside it: non-fatal, the
+  // ledger's own numbers do not depend on it, so a failed lookup degrades to
+  // "no marker", never to an error.
+  let invoices: ArLedgerInvoice[]
+  let registerCoverage: InvoiceRegisterCoverage = NO_INVOICE_REGISTER_COVERAGE
   try {
-    invoices = await fetchAllRows(({ from, to }) => {
-      let query = supabase
-        .from('invoices')
-        .select('*, customer:customers(id, name)')
-        .eq('company_id', companyId)
-        // Proformas, delivery notes and quotes are never receivables.
-        .eq('document_type', 'invoice')
-      query = isHistorical
-        ? query.in('status', [...AR_LEDGER_STATUSES, 'paid', 'written_off']).lte('invoice_date', asOfDate!)
-        : query.or('status.in.(sent,overdue,partially_paid,credited),and(status.eq.paid,deduction_total.gt.0)')
-      return query
-        // Stable total order for correct paging (see fetch-all.ts).
-        .order('id', { ascending: true })
-        .range(from, to)
-    })
-    // A credit note whose verifikat paid another invoice has used that much
-    // of its credit (credit-note-settlement.ts).
-    creditUsed = await fetchCreditNoteCreditUsed(
-      supabase,
-      companyId,
-      withoutSettledCreditNotes(invoices),
-      isHistorical ? asOfDate : undefined
-    )
-    // What Skatteverket has paid out of each ROT/RUT deduction, which no
-    // longer sits on 1513 (skatteverket-share.ts).
-    settled = await fetchSkatteverketSettled(
-      supabase,
-      companyId,
-      invoices,
-      isHistorical ? asOfDate : undefined
-    )
-
-    if (isHistorical) {
-      payments = await fetchPaymentsAsOf(supabase, 'invoice_payments', 'invoice_id', companyId, asOfDate!)
-      // A claim written off on or before the as-of date had left 1510 by then;
-      // one written off later was still open on the day.
-      if (invoices.some((inv) => inv.status === 'written_off')) {
-        const writtenOff = await invoicesWrittenOffAsOf(supabase, companyId, asOfDate!)
-        invoices = invoices.filter((inv) => inv.status !== 'written_off' || !writtenOff.has(inv.id))
-      }
-    }
+    const [population, coverage] = await Promise.all([
+      fetchArLedgerInvoices(supabase, companyId, { asOfDate: isHistorical ? asOfDate : undefined }),
+      fetchInvoiceRegisterCoverage(supabase, companyId).catch(() => NO_INVOICE_REGISTER_COVERAGE),
+    ])
+    invoices = population
+    registerCoverage = coverage
   } catch (err) {
     if (options?.strict) throw err
     return {
@@ -196,26 +157,29 @@ export async function generateARLedger(
     }
   }
 
-  // Coverage disclosure. Non-fatal: the ledger's own numbers do not depend
-  // on it, so a failed lookup degrades to "no marker", never to an error.
-  let registerCoverage: InvoiceRegisterCoverage = NO_INVOICE_REGISTER_COVERAGE
-  try {
-    registerCoverage = await fetchInvoiceRegisterCoverage(supabase, companyId)
-  } catch {
-    // keep NO_INVOICE_REGISTER_COVERAGE
-  }
+  const payments = isHistorical ? paymentsAsOfFromFacts(invoices) : null
+  // A credit note whose verifikat paid another invoice has used that much
+  // of its credit (credit-note-settlement.ts).
+  const creditUsed = creditNoteCreditUsed(invoices, isHistorical ? asOfDate : undefined)
+  // What Skatteverket has paid out of each ROT/RUT deduction, which no
+  // longer sits on 1513 (skatteverket-share.ts).
+  const settled = skatteverketSettledByInvoice(invoices, isHistorical ? asOfDate : undefined)
 
-  // Group by customer and calculate aging
-  const byCustomer = new Map<string, ARLedgerEntry>()
+  // Group by customer and calculate aging. An invoice without a customer
+  // groups under a null customer_id.
+  const byCustomer = new Map<string | null, ARLedgerEntry>()
   let unconvertedFxCount = 0
 
-  for (const inv of withoutSettledCreditNotes(invoices)) {
+  // The population leaves settled credit notes out and comes grouped per
+  // customer in first-seen order, so entries are created, and ties sorted
+  // below, as an id-ordered walk of the whole population would.
+  for (const inv of invoices) {
     const customerId = inv.customer_id
-    const customerName = inv.customer?.name || 'Okänd kund'
+    const customerName = inv.customer_name || 'Okänd kund'
 
     if (!byCustomer.has(customerId)) {
       byCustomer.set(customerId, {
-        customer_id: customerId,
+        customer_id: customerId as string,
         customer_name: customerName,
         invoices: [],
         current: 0,

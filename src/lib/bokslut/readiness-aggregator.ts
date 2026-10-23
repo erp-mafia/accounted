@@ -104,6 +104,123 @@ async function fiscalYearGapWarnings(supabase: SupabaseClient, companyId: string
   }
 }
 
+/** The period's own rows, as the report carries them. */
+type ReadinessPeriod = BokslutReadinessReport['period']
+
+/**
+ * Starts the period's checks, which read independently of each other and of
+ * the validation once the period and the company's settings are known: the
+ * bank snapshot, the reskontra tie-outs, the sign-off list, the EF preview
+ * and the fiscal-year chain. The caller assembles the reminders in their
+ * fixed order.
+ */
+async function startPeriodChecks(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  period: ReadinessPeriod,
+  settings: { entity_type?: string | null; accounting_method?: string | null } | null,
+) {
+  const entityType: EntityType = await resolveCompanyEntityType(supabase, companyId, settings?.entity_type)
+  const accountingMethod = settings?.accounting_method ?? 'accrual'
+
+  // Bank reconciliation snapshot for the period. Failure here must not break
+  // the report: fall back to null so the UI degrades gracefully.
+  const reconciliationRead = (async (): Promise<BokslutReadinessReport['reconciliation']> => {
+    try {
+      // Scope to the company's bank account. A 4-arg call leaves cashAccountId
+      // undefined and the bank side then sums every SEK cash account while the GL
+      // side stays on 1930 alone: the wizard surfaced that as "Bankavstämningen
+      // visar en differens" with nothing to match (#1290).
+      //
+      // resolveCashAccountScope fails CLOSED on a lookup error, so the catch below
+      // turns a failed lookup into "no reconciliation snapshot" rather than into
+      // the unscoped pooling path that produced the phantom difference.
+      const scope = await resolveCashAccountScope(supabase, companyId)
+      const status = await getReconciliationStatus(
+        supabase,
+        companyId,
+        period.period_start,
+        period.period_end,
+        scope.accountNumber,
+        scope.currency,
+        scope.cashAccountId,
+        scope.includeUnassigned,
+      )
+      return {
+        is_reconciled: status.is_reconciled,
+        unmatched_transaction_count: status.unmatched_transaction_count,
+        unmatched_gl_line_count: status.unmatched_gl_line_count,
+        difference: status.difference,
+      }
+    } catch {
+      return null
+    }
+  })()
+
+  // AR/AP tie-outs: Phase 1 avstämningar per the bokslut process, open
+  // sub-ledger vs konto 1510 / 2440. Accrual companies only: under
+  // kontantmetoden open invoices are deliberately not on 1510/2440 until the
+  // cut-off entry below puts them there, so the tie-out is "unreconciled" by
+  // construction for the whole year and would only mislead.
+  // Warnings, never blockers: a difference can be legitimate (e.g. partial
+  // payments settled at a different FX rate than the invoice-date rate).
+  const tieOutsRead =
+    accountingMethod === 'accrual'
+      ? Promise.allSettled([
+          (async () => generateARReconciliation(supabase, companyId, fiscalPeriodId))(),
+          (async () => generateAPReconciliation(supabase, companyId, fiscalPeriodId))(),
+        ])
+      : null
+
+  // Bokslutsbilagor: every balance account signed off per balansdagen is what
+  // Reko 760/765 asks for. Advisory: a failed read costs only this reminder.
+  const bilagorReminderRead = (async (): Promise<BokslutReminder | null> => {
+    try {
+      const accounts = await listReconciliationAccounts(supabase, companyId, {
+        today: period.period_end,
+        windowFrom: period.period_start,
+        windowTo: period.period_end,
+        withStatus: false,
+      })
+      const live = accounts.filter((a) => !a.superseded_by)
+      const unsigned = live.filter((a) => !a.signed_off_through || a.signed_off_through < period.period_end)
+      if (live.length === 0) return null
+      return {
+        code: 'bilagor_unsigned',
+        severity: unsigned.length > 0 ? 'warning' : 'info',
+        message:
+          unsigned.length > 0
+            ? `${unsigned.length} av ${live.length} balanskonton är inte signerade per balansdagen ${period.period_end}. Bokslutsbilagorna samlar avstämning, underlag och signering per konto.`
+            : `Alla ${live.length} balanskonton är signerade per balansdagen ${period.period_end}. Bokslutsbilagorna kan skrivas ut.`,
+        href: '/reports/bokslutsbilagor',
+      }
+    } catch (err) {
+      log.warn('bilagor reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
+      return null
+    }
+  })()
+
+  // Only a form that files NE-bilagan gets the EF declaration reminder and
+  // preview; the preview itself refuses every other form, so the capability
+  // is read here rather than the form compared to a string.
+  //
+  // Pre-compute the EF declaration so the wizard's overview reflects what
+  // the user will see when they reach the dispositions step. Egenavgifter,
+  // räntefördelning, periodiseringsfond-EF and expansionsfond are NOT
+  // booked: they go into the NE-bilaga / INK1 (explained behind the
+  // Dispositioner step's "?"). EF preview is informational: never block
+  // readiness on it.
+  const efPreviewRead =
+    filesIncomeReturn(entityType) === 'NE'
+      ? (async () => computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId, { entityType }))().catch(() => null)
+      : null
+
+  const gapWarningsRead = fiscalYearGapWarnings(supabase, companyId)
+
+  return { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead }
+}
+
 /**
  * Whether the period holds history imported from a previous bookkeeping
  * system: a verifikat with source_type 'import' (SIE file and provider
@@ -153,71 +270,50 @@ export async function buildBokslutReadinessReport(
   userId: string,
   fiscalPeriodId: string,
 ): Promise<BokslutReadinessReport> {
-  // Fetch period + entity type in parallel with the heavy validation.
-  const [periodResult, settingsResult, validation, holdsImportedHistory] = await Promise.all([
+  // The period and the company's settings are all the period's checks need,
+  // so those start as soon as the two are read and run alongside the heavy
+  // validation. Promise.resolve: a query builder sends its request on every
+  // then(), and both readers below await these two.
+  const periodRead = Promise.resolve(
     supabase
       .from('fiscal_periods')
       .select('id, name, period_start, period_end, is_closed, locked_at, closing_entry_id')
       .eq('id', fiscalPeriodId)
       .eq('company_id', companyId)
       .single(),
+  )
+  const settingsRead = Promise.resolve(
     supabase
       .from('company_settings')
       .select('entity_type, accounting_method')
       .eq('company_id', companyId)
       .maybeSingle(),
+  )
+  const checksRead = Promise.all([periodRead, settingsRead]).then(([periodResult, settingsResult]) =>
+    periodResult.error || !periodResult.data
+      ? null
+      : startPeriodChecks(supabase, companyId, fiscalPeriodId, periodResult.data, settingsResult.data),
+  )
+  // A failure surfaces where checksRead is awaited below, after the
+  // validation's as before; this only keeps one that lands while the
+  // validation still runs from counting as unhandled.
+  checksRead.catch(() => undefined)
+
+  const [periodResult, , validation, holdsImportedHistory] = await Promise.all([
+    periodRead,
+    settingsRead,
     validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId),
     periodHoldsImportedHistory(supabase, companyId, fiscalPeriodId),
   ])
 
-  if (periodResult.error || !periodResult.data) {
+  const checks = await checksRead
+  if (periodResult.error || !periodResult.data || !checks) {
     throw new Error('Fiscal period not found')
   }
+  const { period, entityType, reconciliationRead, tieOutsRead, bilagorReminderRead, efPreviewRead, gapWarningsRead } =
+    checks
 
-  const period = periodResult.data
-  const entityType: EntityType = await resolveCompanyEntityType(
-    supabase,
-    companyId,
-    settingsResult.data?.entity_type,
-  )
-  const accountingMethod =
-    ((settingsResult.data as { accounting_method?: string | null } | null)?.accounting_method ??
-      'accrual')
-
-  // Bank reconciliation snapshot for the period. Run after period fetch so we
-  // know the date range. Failure here must not break the report: fall back
-  // to null so the UI degrades gracefully.
-  let reconciliation: BokslutReadinessReport['reconciliation'] = null
-  try {
-    // Scope to the company's bank account. A 4-arg call leaves cashAccountId
-    // undefined and the bank side then sums every SEK cash account while the GL
-    // side stays on 1930 alone: the wizard surfaced that as "Bankavstämningen
-    // visar en differens" with nothing to match (#1290).
-    //
-    // resolveCashAccountScope fails CLOSED on a lookup error, so the catch below
-    // turns a failed lookup into "no reconciliation snapshot" rather than into
-    // the unscoped pooling path that produced the phantom difference.
-    const scope = await resolveCashAccountScope(supabase, companyId)
-    const status = await getReconciliationStatus(
-      supabase,
-      companyId,
-      period.period_start,
-      period.period_end,
-      scope.accountNumber,
-      scope.currency,
-      scope.cashAccountId,
-      scope.includeUnassigned,
-    )
-    reconciliation = {
-      is_reconciled: status.is_reconciled,
-      unmatched_transaction_count: status.unmatched_transaction_count,
-      unmatched_gl_line_count: status.unmatched_gl_line_count,
-      difference: status.difference,
-    }
-  } catch {
-    reconciliation = null
-  }
-
+  const reconciliation = await reconciliationRead
   const reminders: BokslutReminder[] = []
 
   if (reconciliation && !reconciliation.is_reconciled) {
@@ -232,18 +328,8 @@ export async function buildBokslutReadinessReport(
     })
   }
 
-  // AR/AP tie-outs: Phase 1 avstämningar per the bokslut process, open
-  // sub-ledger vs konto 1510 / 2440. Accrual companies only: under
-  // kontantmetoden open invoices are deliberately not on 1510/2440 until the
-  // cut-off entry below puts them there, so the tie-out is "unreconciled" by
-  // construction for the whole year and would only mislead.
-  // Warnings, never blockers: a difference can be legitimate (e.g. partial
-  // payments settled at a different FX rate than the invoice-date rate).
-  if (accountingMethod === 'accrual') {
-    const [arResult, apResult] = await Promise.allSettled([
-      generateARReconciliation(supabase, companyId, fiscalPeriodId),
-      generateAPReconciliation(supabase, companyId, fiscalPeriodId),
-    ])
+  if (tieOutsRead) {
+    const [arResult, apResult] = await tieOutsRead
     // A failed tie-out degrades to "no reminder" (these are advisory), but a
     // silently swallowed failure is indistinguishable from "reconciled" in
     // the report, so the rejection must at least be traceable in logs
@@ -284,67 +370,32 @@ export async function buildBokslutReadinessReport(
   // not booked) lives behind the wizard's "?" on the step it belongs to, so
   // the Kontroll step does not announce the very next step on every year.
 
-  // Bokslutsbilagor: every balance account signed off per balansdagen is what
-  // Reko 760/765 asks for. Advisory: a failed read costs only this reminder.
-  try {
-    const accounts = await listReconciliationAccounts(supabase, companyId, {
-      today: period.period_end,
-      windowFrom: period.period_start,
-      windowTo: period.period_end,
-      withStatus: false,
-    })
-    const live = accounts.filter((a) => !a.superseded_by)
-    const unsigned = live.filter((a) => !a.signed_off_through || a.signed_off_through < period.period_end)
-    if (live.length > 0) {
-      reminders.push({
-        code: 'bilagor_unsigned',
-        severity: unsigned.length > 0 ? 'warning' : 'info',
-        message:
-          unsigned.length > 0
-            ? `${unsigned.length} av ${live.length} balanskonton är inte signerade per balansdagen ${period.period_end}. Bokslutsbilagorna samlar avstämning, underlag och signering per konto.`
-            : `Alla ${live.length} balanskonton är signerade per balansdagen ${period.period_end}. Bokslutsbilagorna kan skrivas ut.`,
-        href: '/reports/bokslutsbilagor',
-      })
-    }
-  } catch (err) {
-    log.warn('bilagor reminder failed', { companyId, fiscalPeriodId, error: err instanceof Error ? err.message : String(err) })
-  }
+  const bilagorReminder = await bilagorReminderRead
+  if (bilagorReminder) reminders.push(bilagorReminder)
 
-  // Only a form that files NE-bilagan gets the EF declaration reminder and
-  // preview; the preview itself refuses every other form, so the capability
-  // is read here rather than the form compared to a string.
-  if (filesIncomeReturn(entityType) === 'NE') {
-    // Pre-compute the EF declaration so the wizard's overview reflects what
-    // the user will see when they reach the dispositions step. Egenavgifter,
-    // räntefördelning, periodiseringsfond-EF and expansionsfond are NOT
-    // booked: they go into the NE-bilaga / INK1 (explained behind the
-    // Dispositioner step's "?").
-    //
+  if (efPreviewRead) {
     // Surface a soft warning when kapitalunderlag is missing AND the booked
     // surplus is large enough to make positive räntefördelning meaningful
     // (> 50 000 kr: the spärrbelopp). This is non-blocking but actionable:
     // the user should enter their IB equity on the dispositions step.
-    try {
-      // The resolved form rides along so the preview does not read it again.
-      const preview = await computeEfDeclarationPreview(supabase, companyId, fiscalPeriodId, { entityType })
-      if (preview.bookedSurplus > 50_000) {
-        reminders.push({
-          code: 'ef_kapitalunderlag_missing',
-          severity: 'warning',
-          message:
-            'Kapitalunderlag (IB eget kapital) saknas: räntefördelning beräknas inte. Fyll i på dispositionssteget för att utnyttja skattefördelen.',
-        })
-      }
-    } catch {
-      // EF preview is informational: never block readiness on it.
+    const preview = await efPreviewRead
+    if (preview && preview.bookedSurplus > 50_000) {
+      reminders.push({
+        code: 'ef_kapitalunderlag_missing',
+        severity: 'warning',
+        message:
+          'Kapitalunderlag (IB eget kapital) saknas: räntefördelning beräknas inte. Fyll i på dispositionssteget för att utnyttja skattefördelen.',
+      })
     }
   }
+
+  const gapWarnings = await gapWarningsRead
 
   return {
     ready: validation.ready,
     blockers: validation.errors,
     blockerItems: validation.blockers,
-    warnings: [...validation.warnings, ...(await fiscalYearGapWarnings(supabase, companyId))],
+    warnings: [...validation.warnings, ...gapWarnings],
     reminders,
     draftCount: validation.draftCount,
     unexplainedGapCount: validation.unexplainedGaps.length,

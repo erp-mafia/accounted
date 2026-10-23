@@ -97,7 +97,8 @@ describe('cannot_check, never ok', () => {
   })
 
   it('an unreadable source is SOURCE_FAILED, retryable only when transient', async () => {
-    const permanent = ctxFor({}, { tables: { invoices: { message: 'permission denied for table invoices', code: '42501' } } })
+    // The kundreskontra reads its population in one call (get_ar_ledger_invoices).
+    const permanent = ctxFor({}, { rpcs: { get_ar_ledger_invoices: { message: 'permission denied for table invoices', code: '42501' } } })
     const r = (await results(permanent, 'receivables_vs_ledger')).results[0]
     expect(r.refusal).toMatchObject({ code: 'SOURCE_FAILED', retryable: false })
 

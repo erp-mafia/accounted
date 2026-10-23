@@ -106,6 +106,8 @@ describe('listReconciliationAccounts', () => {
     })
     listManualMock.mockResolvedValue([
       { account_key: 'manual:1510', kind: 'manual', account_number: '1510', name: 'Kundfordringar' },
+      // The skattekonto's own account: the skattekonto row owns it.
+      { account_key: 'manual:1630', kind: 'manual', account_number: '1630', name: 'Skattekonto' },
       { account_key: 'manual:2440', kind: 'manual', account_number: '2440', name: 'Leverantörsskulder' },
     ])
 
@@ -125,7 +127,9 @@ describe('listReconciliationAccounts', () => {
     ])
     const [, , opts] = listManualMock.mock.calls[0] as [unknown, unknown, { asOf: string; exclude: Set<string>; withStatus: boolean; signoffs: Map<string, unknown> }]
     expect(opts.asOf).toBe('2026-07-31')
-    expect([...opts.exclude].sort()).toEqual(['1630', '1930', '1931'])
+    // The cash accounts' ledgers up front; the skattekonto's account once its
+    // read answers (the groups read concurrently).
+    expect([...opts.exclude].sort()).toEqual(['1930', '1931'])
     expect(opts.withStatus).toBe(false)
     expect(opts.signoffs.has('manual:2440')).toBe(true)
   })
@@ -301,8 +305,8 @@ describe('listReconciliationAccounts', () => {
     enqueue({ data: [] }) // latest sign-offs (none)
     enqueue({ data: [] }) // bank names for logos
     bankStatusMock.mockResolvedValue(bankStatus({ unmatched_transaction_count: 2, unmatched_transaction_total: -1046, is_reconciled: false }))
-    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } }) // latestBankSyncAt inside bankStatus
-    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } }) // latestBankSyncAt for the account row
+    // latestBankSyncAt: one read serves the status and the account row.
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
     skattekontoStatusMock.mockResolvedValue(null)
 
     const accounts = await listReconciliationAccounts(supabase as never, COMPANY, {
