@@ -9,6 +9,7 @@ import { importProviderYears, planProviderYears, providerYearsComplete, type Pro
 import { resolveOnboardingMappings } from '@/lib/onboarding-books/mappings'
 import { obsAccountsOf } from '@/lib/import/sie-preview-mappings'
 import { previewCountsForSelection } from '@/lib/providers/preview-counts'
+import { missingTokenCredential, tokenCredentials } from '@/lib/providers/catalog'
 import { jobProgress, type JobPhase } from '../lib/job-progress'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -85,6 +86,11 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const [optsOpen, setOptsOpen] = useState(false)
   const [tokenA, setTokenA] = useState('')
   const [tokenB, setTokenB] = useState('')
+  // The token form asks for what /submit-token checks (lib/providers/catalog):
+  // for Björn Lundén that is the company key alone.
+  const credentials = tokenCredentials(providerId ?? '')
+  // The popup is Lundify's activation, not a login: the key can be typed instead.
+  const [activating, setActivating] = useState(false)
   const [model, setModel] = useState<TheaterModelInput | null>(null)
   const [shown, setShown] = useState(0)
   const [tick, setTick] = useState(0)
@@ -150,6 +156,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   async function connect() {
     if (!providerId) return
     setError(null)
+    setActivating(false)
     setPhase('connecting')
     const popup = openProviderWindow()
     popupRef.current = popup
@@ -160,6 +167,9 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       setConsentId(r.consentId)
       if (r.alreadyConnected) { popup?.close(); void loadPreview(r.consentId); return }
       if (r.authType === 'oauth' && r.authUrl) { pointWindow(popup, r.authUrl); return }
+      // Björn Lundén: Lundify activates the integration and hands the company
+      // key back through the same callback and message as a provider login.
+      if (r.activationUrl) { setActivating(true); pointWindow(popup, r.activationUrl); return }
       popup?.close()
       setPhase('token')
     } catch (err) {
@@ -167,6 +177,13 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       setError(getErrorMessage(err, { locale }))
       setPhase('connect')
     }
+  }
+
+  // Activated in Lundify already: the key is typed in and the window shut.
+  function enterKeyByHand() {
+    login.current.popup?.close()
+    setActivating(false)
+    setPhase('token')
   }
 
   async function submitToken() {
@@ -402,6 +419,13 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
         </div>
       ) : null}
       {phase === 'connecting' ? <Wait text={t('provider_connecting', { provider: provName })} /> : null}
+      {phase === 'connecting' && activating ? (
+        <div className="bks-center-col" style={{ marginTop: 12 }}>
+          <Button variant="link" size="sm" className="h-auto whitespace-normal text-center text-muted-foreground" onClick={enterKeyByHand}>
+            {tx('ext_arcim_bl_manual_key_toggle')}
+          </Button>
+        </div>
+      ) : null}
       {/* The SIE way round the login, on the same screen. Also while
           connecting: a popup closed on the provider's licence page sends
           no message back, so the step would otherwise wait there. */}
@@ -420,11 +444,16 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       {phase === 'loading' ? <Wait text={t('provider_reading', { provider: provName })} /> : null}
       {phase === 'token' ? (
         <div className="tokfields">
-          <input type="text" value={tokenB} onChange={(e) => setTokenB(e.target.value)} placeholder={t('tok_company', { provider: provName })} />
-          <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName })} autoComplete="off" />
+          {credentials.companyId ? (
+            <input type="text" value={tokenB} onChange={(e) => setTokenB(e.target.value)} placeholder={providerId === 'bjornlunden' ? t('tok_bl_key') : t('tok_company', { provider: provName })} />
+          ) : null}
+          {credentials.secret ? (
+            <input type="password" value={tokenA} onChange={(e) => setTokenA(e.target.value)} placeholder={t('tok_token', { provider: provName })} autoComplete="off" />
+          ) : null}
+          {providerId === 'bjornlunden' ? <p className="brandhint">{tx('ext_arcim_bl_token_help')}</p> : null}
           <div className="jny-qactions" style={{ marginTop: 12 }}>
             <Button variant="ghost" size="sm" className="text-muted-foreground" onClick={() => setPhase('connect')}>‹ {t('back')}</Button>
-            <Button size="lg" disabled={!tokenA} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
+            <Button size="lg" disabled={missingTokenCredential(providerId ?? '', { apiToken: tokenA, companyId: tokenB }) !== null} onClick={() => void submitToken()}>{t('tok_connect')}</Button>
           </div>
         </div>
       ) : null}
