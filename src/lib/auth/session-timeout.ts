@@ -168,7 +168,12 @@ export function evaluateSessionTimeout(
   return null
 }
 
-function getSigningSecret(env: Environment): string {
+/**
+ * The server-only secret the proxy signs its own state with: the dedicated
+ * SESSION_TIMEOUT_SECRET, else the service role key. Every signer derives
+ * its own key from it with a purpose-bound HKDF info string.
+ */
+export function getSigningSecret(env: Environment): string {
   const dedicated = env.SESSION_TIMEOUT_SECRET?.trim()
   if (dedicated) return dedicated
 
