@@ -129,3 +129,35 @@ describe('/onboarding: the BankID pick', () => {
     ).rejects.toThrow(/^NEXT_REDIRECT:\/onboarding$/)
   })
 })
+
+describe('/onboarding: Tillbaka on the first question', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('leads back to the BankID picker while it has companies to offer', async () => {
+    setup({ roles: [AKTIEBOLAG] })
+
+    const element = await OnboardingPage({ searchParams: Promise.resolve({ pick: '111' }) })
+
+    expect(element.props.backHref).toBe('/select-company')
+  })
+
+  it('leads to the company the user has when the picker has nothing left to offer', async () => {
+    setup({ roles: [AKTIEBOLAG], memberships: [{ id: 'ab-1', org_number: '5560125790' }] })
+
+    const element = await OnboardingPage({ searchParams: Promise.resolve({}) })
+
+    expect(element.props.backHref).toBe('/')
+  })
+
+  it('leads nowhere for a first company without BankID engagements', async () => {
+    // The browser's previous page is /login or /select-company, and both send
+    // this user straight back to the journey: the dead Tillbaka.
+    setup({ roles: [] })
+
+    const element = await OnboardingPage({ searchParams: Promise.resolve({}) })
+
+    expect(element.props.backHref).toBeNull()
+  })
+})

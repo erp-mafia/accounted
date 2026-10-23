@@ -8,6 +8,7 @@ import {
 } from '@/lib/company/pending-invites'
 import type { EntityType } from '@/types'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
+import { addableEngagements } from '@/lib/company-lookup/engagements'
 import { mapSetupEntityType as mapTicEntityType } from '@/lib/company-lookup/entity-type-map'
 import { isScbConfigured } from '@/lib/parties/scb/config'
 import { orgNumberKey, registrationNumberKey } from '@/lib/invariants/org-number'
@@ -84,6 +85,33 @@ export async function findOwnCompanyByOrgNumber(
     }
   }
   return null
+}
+
+/**
+ * Where Tillbaka on the journey's first question leads: the BankID picker
+ * while it has companies to offer (/select-company renders only then), else
+ * the company the user already has ("Lägg till företag" with nothing to pick
+ * lands here), else nowhere. Exported for unit testing.
+ */
+export async function firstQuestionBackHref(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  userId: string,
+): Promise<string | null> {
+  const [roles, { data }] = await Promise.all([
+    readCompanyRoles(supabase, userId),
+    supabase
+      .from('company_members')
+      .select('company:company_id ( org_number, archived_at )')
+      .eq('user_id', userId),
+  ])
+
+  type CompanyRow = { org_number: string | null; archived_at: string | null }
+  const companies = ((Array.isArray(data) ? data : []) as unknown as Array<{ company: CompanyRow | CompanyRow[] | null }>)
+    .map((row) => (Array.isArray(row.company) ? row.company[0] ?? null : row.company))
+    .filter((company): company is CompanyRow => !!company && !company.archived_at)
+
+  if (addableEngagements(roles, companies.map((company) => company.org_number)).length > 0) return '/select-company'
+  return companies.length > 0 ? '/' : null
 }
 
 export default async function OnboardingPage({
@@ -169,6 +197,7 @@ export default async function OnboardingPage({
   const initialOrgNumber = role ? registrationNumberKey(role.companyRegistrationNumber) ?? undefined : undefined
   const initialEntityType: EntityType | undefined = role ? mapTicEntityType(role.legalEntityType) ?? undefined : undefined
   const initialLegalName = role?.legalName
+  const backHref = await firstQuestionBackHref(supabase, user.id)
 
   return (
     <OnboardingJourney
@@ -184,6 +213,7 @@ export default async function OnboardingPage({
       // SCB credentials are server env: the client learns once whether the
       // search-as-you-type picker exists in this environment.
       companySearchEnabled={isScbConfigured()}
+      backHref={backHref}
     />
   )
 }

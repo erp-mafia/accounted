@@ -162,6 +162,11 @@ interface OnboardingJourneyProps {
   /** SCB credentials exist in this environment: the orgnr field suggests
    *  companies while a name is typed. Off: the field is orgnr-or-Enter. */
   companySearchEnabled?: boolean
+  /** Where Tillbaka on the first question leads in mode 'first': the BankID
+   *  picker or the company the user already has. Null when nothing comes
+   *  before it; the browser's previous page is no answer, since /login and
+   *  /select-company send this user straight back here. */
+  backHref?: string | null
 }
 
 export default function OnboardingJourney({
@@ -173,6 +178,7 @@ export default function OnboardingJourney({
   initialLegalName,
   hasPendingInvite = false,
   companySearchEnabled = false,
+  backHref = null,
 }: OnboardingJourneyProps) {
   const router = useRouter()
   const t = useTranslations('onboarding')
@@ -1170,6 +1176,10 @@ export default function OnboardingJourney({
 
   /* ── composition ──────────────────────────────────────────────── */
 
+  // Tillbaka from the first question leaves the journey for a page that renders.
+  const exitHref = mode === 'add' ? '/' : backHref
+  const canGoBack = state.step === 'done' || state.history.length > 0 || !!exitHref
+
   return (
     <div className="jny jny-fixed" style={{ ['--jny-dawn' as string]: String(station / 4) }}>
       <div className="jny-dawn" aria-hidden="true" />
@@ -1181,7 +1191,7 @@ export default function OnboardingJourney({
             onJump={
               state.submitting || state.step === 'done'
                 ? undefined
-                : (i) => navigation.backTo((saved) => stationOfStep(saved.journey.step) === i, () => dispatch({ type: 'STATION_JUMP', station: i as 0 | 1 | 2 | 3 }))
+                : (i) => navigation.backTo((saved) => stationOfStep(saved.journey.step) === i, () => navigation.stepBack(() => dispatch({ type: 'STATION_JUMP', station: i as 0 | 1 | 2 | 3 })))
             }
             orbLabel={t(`journey_orb_${orbState}`)}
           >
@@ -1227,7 +1237,7 @@ export default function OnboardingJourney({
 
         <div className="jny-balance" aria-hidden="true" />
         <div className="jny-backrow">
-            <Button variant="ghost" className="text-muted-foreground" disabled={!navigation.ready || state.submitting || state.lookupPending} onClick={() => state.step === 'done' ? router.push('/') : navigation.back(() => state.history.length > 0 ? dispatch({ type: 'BACK' }) : mode === 'add' ? router.push('/') : router.back())}>
+            <Button variant="ghost" className={canGoBack ? 'text-muted-foreground' : 'invisible'} disabled={!canGoBack || !navigation.ready || state.submitting || state.lookupPending} onClick={() => state.step === 'done' ? router.push('/') : navigation.back(() => state.history.length > 0 ? navigation.stepBack(() => dispatch({ type: 'BACK' })) : exitHref && router.push(exitHref))}>
               &lsaquo; {t('back')}
             </Button>
         </div>

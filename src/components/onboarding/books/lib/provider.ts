@@ -256,6 +256,7 @@ export function takeReturnedConsentId(): string | null {
   const consentId = url.searchParams.get('consentId')
   if (!consentId) return null
   for (const k of ['migration', 'consentId', 'handoff', 'reason', 'station', 'provider']) url.searchParams.delete(k)
-  window.history.replaceState({}, '', url.pathname + (url.search ? url.search : ''))
+  // Keep the entry's state: it carries the act's place for Tillbaka.
+  window.history.replaceState(window.history.state, '', url.pathname + (url.search ? url.search : ''))
   return status === 'error' ? null : consentId
 }
