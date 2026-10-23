@@ -254,7 +254,7 @@ export default function BooksJourney(props: BooksJourneyProps) {
           <JourneyOrb state={orbState} targetX={STATION_FRACS[station]} />
         </JourneyTrack>
         <div className="bks-backrow">
-          <Button variant="ghost" className="text-muted-foreground" disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => state.step === 'source' ? setSkipOpen(true) : dispatch({ type: 'GO_BACK', flags }))}>
+          <Button variant="ghost" className="text-muted-foreground" disabled={!canGoBack || !navigation.ready} onClick={() => navigation.back(() => state.step === 'source' ? setSkipOpen(true) : navigation.stepBack(() => dispatch({ type: 'GO_BACK', flags })))}>
             ‹ {t('back')}
           </Button>
           {/* Never disabled by running work: an import is the server's job, so
