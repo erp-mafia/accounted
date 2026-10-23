@@ -9,6 +9,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { mapEntityType, mapPlannedLegalForm, mapSetupEntityType } from '@/lib/company-lookup/entity-type-map'
 import { ENTITY_TYPE_LABELS_SV } from '@/lib/company/entity-type'
 import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
+import { hourIn, useClockValue } from '@/lib/hooks/use-clock-value'
 import '@/components/onboarding/journey/journey.css'
 
 /**
@@ -62,7 +63,9 @@ export default function BankIdCompanyPicker({
   const t = useTranslations('select_company')
   const [query, setQuery] = useState('')
 
-  const hour = new Date().getHours()
+  // The user's local hour, without the server and hydration renders
+  // disagreeing about it (lib/hooks/use-clock-value).
+  const hour = useClockValue(hourIn)
   const greeting = hour < 5 ? t('greeting_night') : hour < 10 ? t('greeting_morning') : hour < 14 ? t('greeting_hello') : hour < 18 ? t('greeting_afternoon') : t('greeting_evening')
 
   const q = query.trim().toLowerCase()

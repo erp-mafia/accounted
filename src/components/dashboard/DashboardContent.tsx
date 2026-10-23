@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, type ReactNode } from 'react'
+import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import { AgentPromo } from '@/components/dashboard/AgentPromo'
+import { hourIn, useClockValue } from '@/lib/hooks/use-clock-value'
 import type { InitialSetupState } from '@/types'
 
 interface DashboardContentProps {
@@ -37,6 +38,11 @@ interface DashboardContentProps {
   panes: ReactNode
 }
 
+/** The line under the greeting, "torsdag 23 oktober", read in `timeZone`. */
+function weekdayLine(now: Date, timeZone?: string): string {
+  return new Intl.DateTimeFormat('sv-SE', { weekday: 'long', day: 'numeric', month: 'long', timeZone }).format(now)
+}
+
 /**
  * Hem (concept scene 14): greeting, then the two panes side by side:
  * Att göra (obligations, lib/worklist) and Fortsätt (in-progress work,
@@ -57,18 +63,13 @@ export default function DashboardContent({
   const t = useTranslations('dashboard')
   const { company } = useCompany()
 
-  // Time-of-day greeting (concept: "God morgon, Jakob."). Client-side clock
-  // on purpose (the user's local morning, not the server's), captured once
-  // so render stays pure.
-  const [greetingNow] = useState(() => new Date())
-  const hour = greetingNow.getHours()
+  // Time-of-day greeting (concept: "God morgon, Jakob."): the user's local
+  // morning, not the server's, without the server and hydration renders
+  // disagreeing about it (lib/hooks/use-clock-value).
+  const hour = useClockValue(hourIn)
   const greeting =
     hour < 10 ? t('greeting_morning') : hour < 17 ? t('greeting_day') : t('greeting_evening')
-  const dateLine = new Intl.DateTimeFormat('sv-SE', {
-    weekday: 'long',
-    day: 'numeric',
-    month: 'long',
-  }).format(greetingNow)
+  const dateLine = useClockValue(weekdayLine)
 
   return (
     <div className="stagger-enter space-y-8">
