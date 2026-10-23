@@ -55,7 +55,6 @@ import {
   type TriggerSyncResult,
 } from '@/lib/bank-sync/trigger-sync-contract'
 import type { StoredAccount } from '../types'
-import type { Transaction } from '@/types'
 
 export { SYNC_COOLDOWN_MS }
 export type { TriggerSyncInput, TriggerSyncResult }
@@ -221,23 +220,8 @@ export async function triggerConnectionSync(
       log,
     })
 
-    if (imported > 0) {
-      const { data: syncedTransactions } = await supabase
-        .from('transactions')
-        .select('*')
-        .eq('company_id', companyId)
-        .eq('bank_connection_id', connection.id)
-        .gte('created_at', syncStartedAt)
-        .order('created_at', { ascending: false })
-        .limit(imported)
-      if (syncedTransactions && syncedTransactions.length > 0) {
-        await eventBus.emit({
-          type: 'transaction.synced',
-          payload: { transactions: syncedTransactions as Transaction[], userId, companyId },
-        })
-      }
-    }
-
+    // transaction.synced for the inserted rows is runConnectionSync's, as for
+    // every other door: announcing here as well would deliver them twice.
     log.info('agent-triggered bank sync completed', {
       connectionId,
       imported,

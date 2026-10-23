@@ -18,7 +18,10 @@
  *     A first sync completes only when every account was read to its end: a
  *     read the bank had not finished (truncated) leaves the first import
  *     owed, so the cron asks again instead of recording an empty or partial
- *     history as the whole of it (PH 195).
+ *     history as the whole of it (PH 195);
+ *   - announcing the rows it inserted, once (transaction.synced), as the Open
+ *     Payments feed and the bank-file import do: from every door, the cron
+ *     included, so event_log and the inbox bank match see every arrival.
  *
  * A failure throws: each door maps it to its own answer.
  */
@@ -26,8 +29,14 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
 import { persistBankSyncResult } from '@/lib/bank-sync/persist-sync-result'
 import { sweepAfterOverlappingSync } from '@/lib/bank-sync/post-sync-sweep'
+import { eventBus } from '@/lib/events/bus'
+import { chunk } from '@/lib/utils'
+import type { Transaction } from '@/types'
 import { syncAccountTransactions, type IngestFn, type SyncOptions, type SyncResult } from './sync'
 import type { StoredAccount } from '../types'
+
+/** Ids per read of the inserted rows: keeps the PostgREST URL short on a 90-day first import. */
+const SYNCED_ROWS_READ_CHUNK = 200
 
 /** A window this long or longer asks the bank for its deepest history. */
 export const LONGEST_STRATEGY_MIN_DAYS = 30
@@ -191,6 +200,18 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
       : {}),
   })
 
+  // After the sweep and the persist, like the Open Payments feed: a row the
+  // sweep linked arrives linked, and a sync whose result was refused
+  // announces nothing. A viewer's raw insert announces nothing either (the
+  // feed's rule). Awaited in every door, the cron too: the handlers are
+  // bounded (event_log one batch insert, the inbox match at most
+  // ITEMS_REFRESHED_PER_ARRIVAL items), and only a sync that inserted rows
+  // pays for them.
+  const transactionIds = results.flatMap((r) => r.transactionIds ?? [])
+  if (transactionIds.length > 0 && !rawInsertOnly) {
+    await announceSyncedRows(supabase, { companyId, userId, connectionId: connection.id, transactionIds, log })
+  }
+
   return {
     results,
     imported,
@@ -204,6 +225,29 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     truncated,
     completedAt,
   }
+}
+
+/**
+ * One transaction.synced for the rows a sync inserted, read by their ids.
+ * Best effort: the rows are stored and the sync persisted, so a failed read
+ * is logged and the event skipped, never thrown at the door.
+ */
+async function announceSyncedRows(
+  supabase: SupabaseClient,
+  input: { companyId: string; userId: string; connectionId: string; transactionIds: string[]; log: ConnectionSyncLog },
+): Promise<void> {
+  const { companyId, userId, connectionId, transactionIds, log } = input
+  const transactions: Transaction[] = []
+  for (const ids of chunk(transactionIds, SYNCED_ROWS_READ_CHUNK)) {
+    const { data, error } = await supabase.from('transactions').select('*').eq('company_id', companyId).in('id', ids)
+    if (error) {
+      log.warn('synced rows not announced: the read failed', { connectionId, rows: transactionIds.length, message: error.message })
+      return
+    }
+    transactions.push(...((data ?? []) as Transaction[]))
+  }
+  if (transactions.length === 0) return
+  await eventBus.emit({ type: 'transaction.synced', payload: { transactions, userId, companyId } })
 }
 
 async function withTimeout<T>(work: Promise<T>, timeoutMs: number | undefined): Promise<T> {

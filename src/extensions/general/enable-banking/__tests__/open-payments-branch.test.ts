@@ -53,7 +53,7 @@ describe('syncAccountTransactions on an Open Payments route', () => {
     const result = await syncAccountTransactions(supabase, 'co-1', 'user-1', 'conn-1', { ...account }, '2026-09-01', '2026-10-12', ingest, {
       skipAutoCategorization: true, signer: { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' },
     })
-    expect(result).toEqual({ imported: 2, duplicates: 1, errors: 0, returnedMinBookingDate: '2026-10-01', returnedMaxBookingDate: '2026-10-10', requestedFromDate: '2026-09-01', effectiveFromDate: undefined, historyNarrowed: false })
+    expect(result).toEqual({ imported: 2, duplicates: 1, errors: 0, transactionIds: ['t1', 't2'], returnedMinBookingDate: '2026-10-01', returnedMaxBookingDate: '2026-10-10', requestedFromDate: '2026-09-01', effectiveFromDate: undefined, historyNarrowed: false })
     expect(mocks.party).toHaveBeenCalledWith(supabase, expect.objectContaining({ bic: 'SWEDSESS', affiliatedAspspId: '08999', psuType: 'business', signer: expect.objectContaining({ ipAddress: '203.0.113.1' }) }))
     expect(mocks.syncOp).toHaveBeenCalledWith(supabase, expect.objectContaining({ companyId: 'co-1', connectionId: 'conn-1', fromDate: '2026-09-01', toDate: '2026-10-12', ingest, options: { skipAutoCategorization: true } }))
     expect(mocks.fetchEb).not.toHaveBeenCalled()

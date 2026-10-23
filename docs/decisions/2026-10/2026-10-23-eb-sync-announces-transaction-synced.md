@@ -1,0 +1,1 @@
+[2026-10-23] Enable Banking syncs emit transaction.synced from runConnectionSync (every door, cron included) by inserted ids, awaited, never for a viewer's raw insert; trigger-sync no longer emits. Stopgap until the Open Payments switch; the inbox match's per-arrival cap fits the cron budget.

@@ -68,6 +68,8 @@ export interface SyncResult {
   imported: number
   duplicates: number
   errors: number
+  /** The rows this read inserted (IngestResult.transaction_ids): what transaction.synced announces. */
+  transactionIds?: string[]
   /** Earliest booking date the ASPSP returned. Undefined when no transactions came back. */
   returnedMinBookingDate?: string
   /** Latest booking date the ASPSP returned. Undefined when no transactions came back. */
@@ -634,6 +636,7 @@ export async function syncAccountTransactions(
     imported: ingestResult.imported,
     duplicates: ingestResult.duplicates,
     errors: ingestResult.errors,
+    transactionIds: ingestResult.transaction_ids,
     returnedMinBookingDate: minBookingDate,
     returnedMaxBookingDate: maxBookingDate,
     requestedFromDate: fromDate,
@@ -689,6 +692,7 @@ async function syncOpenPaymentsAccountAsEnableBanking(
       imported: result.imported,
       duplicates: result.duplicates,
       errors: result.errors,
+      transactionIds: result.transactionIds,
       returnedMinBookingDate: result.returnedMinBookingDate,
       returnedMaxBookingDate: result.returnedMaxBookingDate,
       requestedFromDate: fromDate,

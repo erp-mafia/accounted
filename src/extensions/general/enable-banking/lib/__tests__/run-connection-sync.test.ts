@@ -15,16 +15,19 @@ vi.mock('@/lib/reconciliation/unattended-sweep', () => ({
   runUnattendedReconciliationSweep: vi.fn(),
   toSweepSummary: vi.fn(() => ({ summary: true })),
 }))
+vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
 
 import { syncAccountTransactions } from '../sync'
 import { persistBankSyncResult } from '@/lib/bank-sync/persist-sync-result'
 import { runUnattendedReconciliationSweep } from '@/lib/reconciliation/unattended-sweep'
+import { eventBus } from '@/lib/events/bus'
 import { INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
 import { runConnectionSync, type ConnectionSyncInput } from '../run-connection-sync'
 
 const mockSync = vi.mocked(syncAccountTransactions)
 const mockPersist = vi.mocked(persistBankSyncResult)
 const mockSweep = vi.mocked(runUnattendedReconciliationSweep)
+const mockEmit = vi.mocked(eventBus.emit)
 
 const ACCOUNTS = [
   { uid: 'acc-1', ledger_account: '1930' },
@@ -240,5 +243,96 @@ describe('runConnectionSync', () => {
 
     await expect(runConnectionSync(input(supabase))).rejects.toThrow('bank down')
     expect(mockPersist).not.toHaveBeenCalled()
+    expect(mockEmit).not.toHaveBeenCalled()
+  })
+})
+
+/** The rows the mock database holds, answered for the ids a read asks for. */
+function storedRows(rows: { id: string }[]) {
+  return (chainCalls: { method: string; args: unknown[] }[]) => {
+    const ids = chainCalls.find((c) => c.method === 'in')?.args[1] as string[] | undefined
+    return { data: rows.filter((row) => ids?.includes(row.id)) }
+  }
+}
+
+describe('runConnectionSync: transaction.synced', () => {
+  const ROWS = [{ id: 'tx-1' }, { id: 'tx-2' }, { id: 'tx-3' }]
+
+  it('announces the rows every account inserted, once, read by their ids after the persist', async () => {
+    const { supabase, findCalls } = createTableMockSupabase({ sie_imports: { data: null }, transactions: storedRows(ROWS) })
+    mockSync
+      .mockResolvedValueOnce(result({ imported: 2, transactionIds: ['tx-1', 'tx-2'] }) as never)
+      .mockResolvedValueOnce(result({ imported: 1, transactionIds: ['tx-3'] }) as never)
+    mockEmit.mockImplementationOnce(async () => {
+      // The rows are announced as the persisted sync left them.
+      expect(mockPersist).toHaveBeenCalledTimes(1)
+    })
+
+    await runConnectionSync(input(supabase))
+
+    expect(mockEmit).toHaveBeenCalledTimes(1)
+    expect(mockEmit).toHaveBeenCalledWith({
+      type: 'transaction.synced',
+      payload: { transactions: ROWS, userId: 'user-1', companyId: 'company-1' },
+    })
+    expect(findCalls('transactions', 'eq')).toEqual([['company_id', 'company-1']])
+  })
+
+  it('announces nothing when no account inserted a row', async () => {
+    const { supabase, tables } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync.mockResolvedValue(result({ imported: 0, duplicates: 4, transactionIds: [] }) as never)
+
+    await runConnectionSync(input(supabase))
+
+    expect(mockEmit).not.toHaveBeenCalled()
+    expect(tables()).not.toContain('transactions')
+  })
+
+  it('announces nothing for a viewer, whose rows are stored raw', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null }, transactions: storedRows(ROWS) })
+    mockSync.mockResolvedValue(result({ transactionIds: ['tx-1'] }) as never)
+
+    await runConnectionSync(input(supabase, { rawInsertOnly: true }))
+
+    expect(mockEmit).not.toHaveBeenCalled()
+  })
+
+  it('announces nothing when the persist refuses the result', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null }, transactions: storedRows(ROWS) })
+    mockSync.mockResolvedValue(result({ transactionIds: ['tx-1'] }) as never)
+    mockPersist.mockRejectedValueOnce(new Error('obsolete'))
+
+    await expect(runConnectionSync(input(supabase))).rejects.toThrow('obsolete')
+    expect(mockEmit).not.toHaveBeenCalled()
+  })
+
+  it('reads a large first import in chunks and still announces it once', async () => {
+    const many = Array.from({ length: 450 }, (_, i) => ({ id: `tx-${i}` }))
+    const { supabase, findCalls } = createTableMockSupabase({ sie_imports: { data: null }, transactions: storedRows(many) })
+    mockSync.mockResolvedValue(result({ imported: 450, transactionIds: many.map((row) => row.id) }) as never)
+
+    await runConnectionSync(input(supabase, { accounts: [ACCOUNTS[0]] }))
+
+    expect(findCalls('transactions', 'in').map((args) => (args[1] as string[]).length)).toEqual([200, 200, 50])
+    expect(mockEmit).toHaveBeenCalledTimes(1)
+    expect(mockEmit.mock.calls[0][0]).toMatchObject({ payload: { transactions: many } })
+  })
+
+  it('keeps the sync when the rows cannot be read back: logged, not announced, not thrown', async () => {
+    const { supabase } = createTableMockSupabase({
+      sie_imports: { data: null },
+      transactions: { data: null, error: { message: 'read failed' } },
+    })
+    const log = { info: vi.fn(), warn: vi.fn() }
+    mockSync.mockResolvedValue(result({ transactionIds: ['tx-1'] }) as never)
+
+    const outcome = await runConnectionSync(input(supabase, { log }))
+
+    expect(outcome.imported).toBe(4)
+    expect(mockEmit).not.toHaveBeenCalled()
+    expect(log.warn).toHaveBeenCalledWith(
+      expect.stringContaining('not announced'),
+      expect.objectContaining({ connectionId: 'conn-1', message: 'read failed' }),
+    )
   })
 })
