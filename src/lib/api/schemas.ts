@@ -2715,9 +2715,32 @@ export const BulkBookWebshopOrdersSchema = z.object({
     .optional(),
 })
 
+/**
+ * The new customer as the user confirmed it in the dialog, e.g. prefilled
+ * from the billing contact fetched on demand from Shopify (whose order rows
+ * carry no names). A person, a company, or both: the company becomes the
+ * customer name and the person its contact.
+ */
+const WebshopOrderNewCustomerSchema = z
+  .object({
+    name: emptyStringAsNull(z.string().trim().max(200)),
+    company: emptyStringAsNull(z.string().trim().max(200)),
+    email: emptyStringAsNull(z.string().trim().email('Ange en giltig e-postadress').max(254)),
+  })
+  .strict()
+  .refine((customer) => Boolean(customer.name || customer.company), {
+    message: 'Ange kundens namn eller företag',
+    path: ['name'],
+  })
+
 export const CreateInvoiceFromWebshopOrderSchema = z.object({
   /** Omitted: match by email/orgnr within the company, else create. */
   customer_id: uuid.optional(),
+  /**
+   * Used only when the route creates the customer: ignored when customer_id
+   * is given, and an existing customer with the same email wins over it.
+   */
+  customer: WebshopOrderNewCustomerSchema.optional(),
 })
 
 /**
@@ -2729,17 +2752,54 @@ export const MarkWebshopOrderBookedSchema = z.object({
 })
 
 /** {"<payment_method>": {mode:'book', account:'1930'} | {mode:'invoice'}} */
-export const WebshopStoreSettingsUpdateSchema = z.object({
-  platform: WebshopPlatformSchema,
-  store_scope: z.string().min(1).max(255),
-  payment_method_account_map: z.record(
-    z.string().min(1).max(64),
-    z.discriminatedUnion('mode', [
-      z.object({ mode: z.literal('book'), account: accountNumber }),
-      z.object({ mode: z.literal('invoice') }),
-    ]),
-  ),
-})
+/**
+ * One country rule (WebshopCountryAccountRule): an ISO 3166-1 alpha-2 code
+ * or the EU / NON_EU catch-all, a VAT rate in percent (null: every rate with
+ * VAT), and where the bucket books. The settings route checks the accounts
+ * against the chart (lib/webshop-orders/country-rule-checks.ts).
+ */
+const webshopCountryRuleCountry = z.string().regex(/^([A-Z]{2}|EU|NON_EU)$/)
+const webshopCountryRuleRate = z.number().min(0).max(100).nullable()
+const WebshopCountryAccountRuleSchema = z.discriminatedUnion('mode', [
+  z.object({
+    country: webshopCountryRuleCountry,
+    vat_rate: webshopCountryRuleRate,
+    mode: z.literal('accounts'),
+    revenue_account: accountNumber,
+    vat_account: accountNumber.nullable(),
+  }),
+  z.object({
+    country: webshopCountryRuleCountry,
+    vat_rate: webshopCountryRuleRate,
+    mode: z.literal('swedish'),
+  }),
+])
+
+/**
+ * Either part of the per-store settings, or both: a PUT replaces only the
+ * parts it carries, so the payment-method form and the country form never
+ * overwrite each other.
+ */
+export const WebshopStoreSettingsUpdateSchema = z
+  .object({
+    platform: WebshopPlatformSchema,
+    store_scope: z.string().min(1).max(255),
+    payment_method_account_map: z
+      .record(
+        z.string().min(1).max(64),
+        z.discriminatedUnion('mode', [
+          z.object({ mode: z.literal('book'), account: accountNumber }),
+          z.object({ mode: z.literal('invoice') }),
+        ]),
+      )
+      .optional(),
+    country_account_rules: z.array(WebshopCountryAccountRuleSchema).max(100).optional(),
+  })
+  .refine(
+    (value) =>
+      value.payment_method_account_map !== undefined || value.country_account_rules !== undefined,
+    { message: 'Nothing to update: send payment_method_account_map, country_account_rules or both' },
+  )
 
 /**
  * Edit a bank transaction's title (description). Only the working label:

@@ -40,6 +40,9 @@ const SE_EXPECTED: Record<AccountRole, { account: string; name: string }> = {
     name: 'Ingående moms omvänd betalningsskyldighet varor och tjänster i Sverige',
   },
   rot_rut_receivable: { account: '1513', name: 'Kundfordringar: delad faktura' },
+  oss_sales: { account: '3106', name: 'Försäljning varor till annat EU-land, momspliktig' },
+  oss_output_vat: { account: '2670', name: 'Utgående moms på försäljning inom EU, OSS' },
+  export_goods_sales: { account: '3105', name: 'Försäljning varor till land utanför EU' },
 }
 
 function caught(fn: () => unknown): AccountRoleError {

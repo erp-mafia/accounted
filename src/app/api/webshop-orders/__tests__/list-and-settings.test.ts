@@ -30,6 +30,11 @@ vi.mock('@/lib/auth/require-write', () => ({
   requireWritePermission: (...args: unknown[]) => requireWriteMock(...args),
 }))
 
+const mockEnsurePresetAccounts = vi.fn().mockResolvedValue(undefined)
+vi.mock('@/lib/webshop-orders/ensure-accounts', () => ({
+  ensureCountryPresetAccounts: (...args: unknown[]) => mockEnsurePresetAccounts(...args),
+}))
+
 import { GET as listOrders } from '../route'
 import { GET as getSettings, PUT as putSettings } from '../settings/route'
 
@@ -304,5 +309,144 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
     const upsert = findCall('webshop_store_settings', 'upsert')
     expect(upsert).toBeDefined()
     expect((upsert![0] as Record<string, unknown>).company_id).toBe('company-1')
+  })
+
+  describe('country_account_rules (crm#1032)', () => {
+    const SHOP = 'minbutik.myshopify.com'
+    const OSS_RULES = [
+      { country: 'EU', vat_rate: null, mode: 'accounts', revenue_account: '3106', vat_account: '2670' },
+      { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+    ]
+    const chartRow = (
+      account_number: string,
+      account_name: string,
+      overrides: Record<string, unknown> = {},
+    ) => ({
+      account_number,
+      account_name,
+      account_class: Number(account_number.charAt(0)),
+      is_active: true,
+      default_vat_rate: null,
+      default_vat_treatment: null,
+      vat_box: null,
+      ...overrides,
+    })
+    const put = (body: Record<string, unknown>) =>
+      putSettings(createMockRequest('/api/webshop-orders/settings', { method: 'PUT', body }))
+
+    it('stores the OSS preset and adds the preset accounts the chart lacks', async () => {
+      enqueue({ data: [] }) // chart lookup: none of 3106/2670/3105 yet
+      enqueue({ data: { platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES } })
+      const { status } = await parseJsonResponse(
+        await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: OSS_RULES }),
+      )
+      expect(status).toBe(200)
+      expect(mockEnsurePresetAccounts).toHaveBeenCalledTimes(1)
+      expect([...(mockEnsurePresetAccounts.mock.calls[0][3] as string[])].sort()).toEqual([
+        '2670',
+        '3105',
+        '3106',
+      ])
+      // 3106 is created with VAT code OSS by the ensure step; nothing else to mark.
+      expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+      const upsert = findCall('webshop_store_settings', 'upsert')![0] as Record<string, unknown>
+      expect(upsert.country_account_rules).toEqual(OSS_RULES)
+      // Only the part the request carries: the payment-method map is left out
+      // of the body (undefined is dropped by JSON), so the column is untouched.
+      expect(upsert.payment_method_account_map).toBeUndefined()
+      expect(JSON.parse(JSON.stringify(upsert))).not.toHaveProperty('payment_method_account_map')
+    })
+
+    it('marks an existing OSS sales account without a VAT code', async () => {
+      const rules = [
+        { country: 'DE', vat_rate: null, mode: 'accounts', revenue_account: '3013', vat_account: '2674' },
+      ]
+      enqueue({
+        data: [
+          chartRow('3013', 'Försäljning OSS Tyskland'),
+          chartRow('2674', 'Utgående moms OSS Tyskland'),
+        ],
+      })
+      enqueue({ data: null }) // VAT code update
+      enqueue({ data: { platform: 'shopify', store_scope: SHOP, country_account_rules: rules } })
+      const { status } = await parseJsonResponse(
+        await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }),
+      )
+      expect(status).toBe(200)
+      expect(mockEnsurePresetAccounts.mock.calls[0][3]).toEqual([])
+      const update = findCall('chart_of_accounts', 'update')
+      expect(update?.[0]).toEqual({ default_vat_treatment: 'oss' })
+    })
+
+    it('refuses rules that would put a sale taxed abroad in the Swedish VAT return', async () => {
+      const rules = [
+        { country: 'DK', vat_rate: null, mode: 'accounts', revenue_account: '3001', vat_account: '2611' },
+      ]
+      enqueue({
+        data: [
+          chartRow('3001', 'Försäljning inom Sverige, 25 % moms'),
+          chartRow('2611', 'Utgående moms på försäljning inom Sverige, 25 %'),
+        ],
+      })
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; details: { problems: Array<{ index: number; code: string }> } }
+      }>(await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }))
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('WEBSHOP_COUNTRY_RULES_INVALID')
+      expect(body.error.details.problems.map((p) => p.code)).toEqual([
+        'revenue_counts_as_swedish',
+        'vat_account_in_declaration',
+      ])
+      expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
+      expect(mockEnsurePresetAccounts).not.toHaveBeenCalled()
+    })
+
+    it('names an account that is not in the chart', async () => {
+      const rules = [
+        { country: 'NO', vat_rate: 25, mode: 'accounts', revenue_account: '3105', vat_account: '2899' },
+      ]
+      enqueue({ data: [chartRow('3105', 'Försäljning varor till land utanför EU')] })
+      const { status, body } = await parseJsonResponse<{
+        error: { details: { problems: Array<{ code: string; account?: string }> } }
+      }>(await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }))
+      expect(status).toBe(400)
+      expect(body.error.details.problems).toEqual([
+        { index: 0, field: 'vat_account', code: 'account_unknown', account: '2899' },
+      ])
+    })
+
+    it('keeps country rules to Shopify stores', async () => {
+      const { status, body } = await parseJsonResponse<{
+        error: { details: { problems: Array<{ code: string }> } }
+      }>(await put({ platform: 'woocommerce', store_scope: 'a.se', country_account_rules: OSS_RULES }))
+      expect(status).toBe(400)
+      expect(body.error.details.problems[0].code).toBe('platform_unsupported')
+      expect(findCall('chart_of_accounts', 'select')).toBeUndefined()
+    })
+
+    it('saves the payment-method map without touching the rules', async () => {
+      enqueue({ data: { platform: 'shopify', store_scope: SHOP } })
+      const { status } = await parseJsonResponse(
+        await put({
+          platform: 'shopify',
+          store_scope: SHOP,
+          payment_method_account_map: { shopify_payments: { mode: 'book', account: '1686' } },
+        }),
+      )
+      expect(status).toBe(200)
+      const upsert = findCall('webshop_store_settings', 'upsert')![0] as Record<string, unknown>
+      expect(JSON.parse(JSON.stringify(upsert))).not.toHaveProperty('country_account_rules')
+    })
+
+    it('returns 400 for a body with neither part, or a malformed rule', async () => {
+      const empty = await put({ platform: 'shopify', store_scope: SHOP })
+      expect(empty.status).toBe(400)
+      const malformed = await put({
+        platform: 'shopify',
+        store_scope: SHOP,
+        country_account_rules: [{ country: 'Danmark', vat_rate: null, mode: 'swedish' }],
+      })
+      expect(malformed.status).toBe(400)
+    })
   })
 })

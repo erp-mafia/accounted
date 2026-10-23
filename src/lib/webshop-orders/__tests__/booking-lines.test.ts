@@ -33,6 +33,7 @@ const settings: WebshopStoreSettings = {
     klarna_payments: { mode: 'book', account: '1580' },
     bacs: { mode: 'invoice' },
   },
+  country_account_rules: [],
   created_at: '',
   updated_at: '',
 }
@@ -335,6 +336,98 @@ describe('buildOrderBookingLines', () => {
         settings,
       }),
     ).toThrow(/exchange rate/i)
+  })
+})
+
+describe('buildOrderBookingLines with country rules (crm#1032)', () => {
+  const shopifySettings: WebshopStoreSettings = {
+    ...settings,
+    platform: 'shopify',
+    store_scope: 'minbutik.myshopify.com',
+    payment_method_account_map: {},
+    country_account_rules: [
+      { country: 'EU', vat_rate: null, mode: 'accounts', revenue_account: '3106', vat_account: '2670' },
+      { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+    ],
+  }
+  const toCountry = (customer_country: string, overrides: Record<string, unknown> = {}) => ({
+    ...makeOrder({ payment_method: 'shopify_payments', ...overrides }),
+    platform: 'shopify',
+    customer_country,
+  })
+
+  it('books each bucket of an order shipped abroad on the rule\'s accounts', () => {
+    const lines = buildOrderBookingLines({
+      order: toCountry('DE', {
+        total: 160,
+        total_sek: 160,
+        total_tax: 21,
+        vat_breakdown: [
+          { rate: 19, net: 100, tax: 19 },
+          { rate: 7, net: 39, tax: 2 },
+        ],
+      }),
+      settings: shopifySettings,
+    })
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1686', 160, 0],
+      ['3106', 0, 100],
+      ['2670', 0, 19],
+      ['3106', 0, 39],
+      ['2670', 0, 2],
+    ])
+    expect(sumDebits(lines)).toBe(sumCredits(lines))
+  })
+
+  it('never applies the revenue template to a bucket a rule books', () => {
+    const lines = buildOrderBookingLines({
+      order: toCountry('DK'),
+      settings: shopifySettings,
+      revenueAccounts: { 25: '3011' },
+    })
+    expect(lineFor(lines, '3011')).toBeUndefined()
+    expect(lineFor(lines, '3106')?.credit_amount).toBe(400)
+  })
+
+  it('keeps the Swedish prefill for a bucket no rule covers, for the user to change', () => {
+    // Norway at 25 %: only the 0 % export rule exists.
+    const lines = buildOrderBookingLines({ order: toCountry('NO'), settings: shopifySettings })
+    expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+    expect(lineFor(lines, '2611')?.credit_amount).toBe(100)
+  })
+
+  it('books a VAT-free order outside the EU as export without a VAT line', () => {
+    const lines = buildOrderBookingLines({
+      order: toCountry('US', { total_tax: 0, vat_breakdown: [{ rate: 0, net: 500, tax: 0 }] }),
+      settings: shopifySettings,
+    })
+    expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+      ['1686', 500, 0],
+      ['3105', 0, 500],
+    ])
+  })
+
+  it('ignores the rules for a WooCommerce order (billing country)', () => {
+    const lines = buildOrderBookingLines({
+      order: makeOrder({ platform: 'woocommerce', customer_country: 'DK' }),
+      settings: { ...shopifySettings, platform: 'woocommerce' },
+    })
+    expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+  })
+
+  it('drops the advisories a rule answers', () => {
+    const zeroRateUs = toCountry('US', { total_tax: 0, vat_breakdown: [{ rate: 0, net: 500, tax: 0 }] })
+    expect(resolveBookingWarnings(zeroRateUs)).toEqual(['country_not_routed', 'zero_rate_foreign'])
+    expect(resolveBookingWarnings(zeroRateUs, shopifySettings)).toEqual([])
+    const eurDk = toCountry('DK', { currency: 'EUR' })
+    expect(resolveBookingWarnings(eurDk)).toEqual(['country_not_routed', 'foreign_vat'])
+    expect(resolveBookingWarnings(eurDk, shopifySettings)).toEqual([])
+  })
+
+  it('warns first when a bucket of an order shipped abroad has no rule', () => {
+    // Norway at 25 % in SEK: no currency or 0 % hint would fire, so without
+    // this the dialog would show Swedish accounts in silence.
+    expect(resolveBookingWarnings(toCountry('NO'), shopifySettings)).toEqual(['country_not_routed'])
   })
 })
 

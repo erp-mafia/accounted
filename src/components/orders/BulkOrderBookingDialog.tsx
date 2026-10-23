@@ -21,8 +21,11 @@ import {
   ROUNDING_ACCOUNT,
   resolveBookingWarnings,
   resolvePaymentAccount,
-  unsupportedVatRates,
+  routeOrder,
+  unsupportedSwedishRates,
 } from '@/lib/webshop-orders/booking-lines'
+import { usesSwedishAccounts } from '@/lib/webshop-orders/country-routing'
+import { getCountryName } from '@/lib/vat/country-codes'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
@@ -80,31 +83,38 @@ export default function BulkOrderBookingDialog({
   // sweep the server then partially refuses:
   // - empty vat_breakdown: the prefill would be a ratio-inferred GUESS that
   //   only the single dialog's editable form may show;
-  // - a non-Swedish VAT rate (foreign OSS bucket): the account map would
-  //   silently fall back to the 25% accounts;
+  // - a destination outside Sweden that the store's country rules do not
+  //   cover: the Swedish accounts would book a sale taxed abroad;
+  // - a non-Swedish VAT rate on the Swedish accounts (foreign OSS bucket no
+  //   rule books): the account map would silently fall back to 25%;
   // - invoice-mode mapping: the store routes this method through the invoice
   //   flow, and booking would foreclose Skapa faktura for the order.
   // The server enforces the same rules for non-UI callers.
   const {
     bookableOrders,
     skippedMissingBreakdown,
+    skippedCountryNotRouted,
     skippedUnsupportedRate,
     skippedInvoiceMode,
   } = useMemo(() => {
     const missing: WebshopOrder[] = []
+    const notRouted: WebshopOrder[] = []
     const badRate: WebshopOrder[] = []
     const invoiceMode: WebshopOrder[] = []
     const bookable: WebshopOrder[] = []
     for (const order of orders) {
+      const settings = settingsFor(order)
+      const routing = routeOrder(order, settings)
       if (order.vat_breakdown.length === 0) missing.push(order)
-      else if (unsupportedVatRates(order.vat_breakdown).length > 0) badRate.push(order)
-      else if (resolvePaymentAccount(order, settingsFor(order)).invoiceMode)
-        invoiceMode.push(order)
+      else if (routing.unroutedRates.length > 0) notRouted.push(order)
+      else if (unsupportedSwedishRates(routing).length > 0) badRate.push(order)
+      else if (resolvePaymentAccount(order, settings).invoiceMode) invoiceMode.push(order)
       else bookable.push(order)
     }
     return {
       bookableOrders: bookable,
       skippedMissingBreakdown: missing,
+      skippedCountryNotRouted: notRouted,
       skippedUnsupportedRate: badRate,
       skippedInvoiceMode: invoiceMode,
     }
@@ -137,13 +147,18 @@ export default function BulkOrderBookingDialog({
     return Array.from(groups.values()).sort((a, b) => a.label.localeCompare(b.label))
   }, [bookableOrders, settingsFor])
 
-  // The VAT rates actually present in the bookable selection, highest first,
-  // with order counts: the revenue template only offers inputs for rates a
-  // revenue line will actually book on.
+  // The VAT rates actually present on the Swedish accounts in the bookable
+  // selection, highest first, with order counts: the revenue template only
+  // offers inputs for rates a templated revenue line will actually book on
+  // (a bucket a country rule books never reaches the template).
   const ratesPresent = useMemo(() => {
     const counts = new Map<number, number>()
     for (const order of bookableOrders) {
-      const rates = new Set(order.vat_breakdown.map((b) => b.rate))
+      const rates = new Set(
+        routeOrder(order, settingsFor(order))
+          .buckets.filter(usesSwedishAccounts)
+          .map(({ bucket }) => bucket.rate),
+      )
       for (const rate of rates) {
         counts.set(rate, (counts.get(rate) ?? 0) + 1)
       }
@@ -151,16 +166,50 @@ export default function BulkOrderBookingDialog({
     return Array.from(counts.entries())
       .sort(([a], [b]) => b - a)
       .map(([rate, count]) => ({ rate, count }))
-  }, [bookableOrders])
+  }, [bookableOrders, settingsFor])
+
+  // Orders shipped abroad, per destination with the accounts the store's
+  // country rules book them on, so the user sees where each slice lands
+  // before confirming (convention 10).
+  const countryGroups = useMemo(() => {
+    const groups = new Map<string, { country: string; accounts: Set<string>; count: number }>()
+    for (const order of bookableOrders) {
+      const routing = routeOrder(order, settingsFor(order))
+      if (!routing.country) continue
+      const group = groups.get(routing.country) ?? {
+        country: routing.country,
+        accounts: new Set<string>(),
+        count: 0,
+      }
+      for (const { rule } of routing.buckets) {
+        if (!rule) continue
+        group.accounts.add(
+          rule.mode === 'swedish'
+            ? t('bulk_country_swedish_accounts')
+            : [rule.revenue_account, rule.vat_account].filter(Boolean).join(' / '),
+        )
+      }
+      group.count += 1
+      groups.set(routing.country, group)
+    }
+    return Array.from(groups.values())
+      .map((g) => ({
+        country: g.country,
+        name: getCountryName(g.country, locale === 'en' ? 'en' : 'sv'),
+        accounts: Array.from(g.accounts).join(', '),
+        count: g.count,
+      }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+  }, [bookableOrders, settingsFor, locale, t])
 
   // Advisory VAT warnings stay per order, not an anonymous count: the user
   // must be able to tell WHICH orders deserve the single-dialog review.
   const warningOrderNumbers = useMemo(
     () =>
       bookableOrders
-        .filter((o) => resolveBookingWarnings(o).length > 0)
+        .filter((o) => resolveBookingWarnings(o, settingsFor(o)).length > 0)
         .map((o) => o.order_number),
-    [bookableOrders],
+    [bookableOrders, settingsFor],
   )
 
   const uniformAccount =
@@ -355,6 +404,29 @@ export default function BulkOrderBookingDialog({
               </ul>
             </div>
 
+            {countryGroups.length > 0 && (
+              <div className="space-y-2">
+                <p className="text-xs font-medium text-muted-foreground">
+                  {t('bulk_country_plan_label')}
+                </p>
+                <ul className="space-y-1">
+                  {countryGroups.map((g) => (
+                    <li
+                      key={g.country}
+                      className="flex items-center justify-between gap-4 text-sm"
+                    >
+                      <span className="truncate">{g.name}</span>
+                      <span className="tabular-nums text-muted-foreground">
+                        {g.accounts}
+                        {' · '}
+                        {t('bulk_group_count', { count: g.count })}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             <div className="space-y-2">
               <label className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
                 <Checkbox
@@ -462,6 +534,13 @@ export default function BulkOrderBookingDialog({
               <p className="attn text-[12.5px]" data-ph-mask="">
                 {t('bulk_skipped_missing_breakdown', {
                   numbers: skippedMissingBreakdown.map((o) => o.order_number).join(', '),
+                })}
+              </p>
+            )}
+            {skippedCountryNotRouted.length > 0 && (
+              <p className="attn text-[12.5px]" data-ph-mask="">
+                {t('bulk_skipped_country_not_routed', {
+                  numbers: skippedCountryNotRouted.map((o) => o.order_number).join(', '),
                 })}
               </p>
             )}

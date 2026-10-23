@@ -538,3 +538,108 @@ export async function testConnectionAndFetchShopInfo(
     currency: data.shop?.currencyCode ? data.shop.currencyCode.toUpperCase() : null,
   }
 }
+
+/**
+ * One order's billing contact, read on demand when the user creates an
+ * invoice from that order (Skapa faktura), never by the feed. The sync keeps
+ * storing no names or emails (crm#1032); this reads them one order at a time
+ * and the caller keeps them only on the customer the user creates.
+ *
+ * Name, email and address are protected customer data (level 2 fields, which
+ * Shopify grants a merchant's own app by plan). A store that withholds one
+ * answers with null plus a field-scoped error, reported in `withheld` rather
+ * than failing; a store that refuses the whole query (ACCESS_DENIED) reports
+ * all three withheld. Neither ever reads as revoked credentials here.
+ */
+const ORDER_CONTACT_QUERY = `
+query OrderContact($id: ID!) {
+  order(id: $id) {
+    email
+    billingAddress { name firstName lastName company }
+  }
+}`
+
+/** Fields the order contact lookup can report as withheld. */
+export type ShopifyContactField = 'name' | 'company' | 'email'
+
+export interface ShopifyOrderContact {
+  name: string | null
+  company: string | null
+  email: string | null
+  /** Fields the store did not share with the app (protected customer data). */
+  withheld: ShopifyContactField[]
+}
+
+interface OrderContactData {
+  order: {
+    email: string | null
+    billingAddress: {
+      name: string | null
+      firstName: string | null
+      lastName: string | null
+      company: string | null
+    } | null
+  } | null
+}
+
+const CONTACT_FIELDS: readonly ShopifyContactField[] = ['name', 'company', 'email']
+
+function cleanContactText(value: string | null | undefined): string | null {
+  const trimmed = value?.trim()
+  return trimmed ? trimmed : null
+}
+
+/** The contact fields one field-scoped error covers. */
+function withheldContactFields(error: GraphQLErrorShape): ShopifyContactField[] {
+  const path = (error.path ?? []).filter((segment): segment is string => typeof segment === 'string')
+  if (path.includes('email')) return ['email']
+  if (!path.includes('billingAddress')) return []
+  if (path.includes('company')) return ['company']
+  if (path.some((segment) => segment === 'name' || segment === 'firstName' || segment === 'lastName')) {
+    return ['name']
+  }
+  return ['name', 'company']
+}
+
+/**
+ * The billing name, company and email of one order, by its numeric id
+ * (legacyResourceId). Null when the store has no such order (deleted since
+ * the sync, or another store's id).
+ */
+export async function fetchOrderContact(
+  session: ShopifySession,
+  orderId: string,
+): Promise<ShopifyOrderContact | null> {
+  let result: { data: OrderContactData; optionalFieldErrors: GraphQLErrorShape[] }
+  try {
+    result = await requestGraphQL<OrderContactData>(
+      session,
+      ORDER_CONTACT_QUERY,
+      { id: `gid://shopify/Order/${orderId}` },
+      ['email', 'billingAddress'],
+    )
+  } catch (error) {
+    if (error instanceof ShopifyApiError && error.code === ACCESS_DENIED_CODE) {
+      return { name: null, company: null, email: null, withheld: [...CONTACT_FIELDS] }
+    }
+    throw error
+  }
+
+  const order = result.data.order
+  if (!order) return null
+  const withheld = new Set<ShopifyContactField>()
+  for (const error of result.optionalFieldErrors) {
+    for (const field of withheldContactFields(error)) withheld.add(field)
+  }
+  const address = order.billingAddress
+  const joinedName = [address?.firstName, address?.lastName]
+    .map(cleanContactText)
+    .filter((part): part is string => part !== null)
+    .join(' ')
+  return {
+    name: cleanContactText(address?.name) ?? (joinedName || null),
+    company: cleanContactText(address?.company),
+    email: cleanContactText(order.email),
+    withheld: CONTACT_FIELDS.filter((field) => withheld.has(field)),
+  }
+}

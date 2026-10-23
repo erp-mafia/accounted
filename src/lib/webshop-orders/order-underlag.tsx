@@ -166,9 +166,17 @@ export function buildOrderUnderlagModel(
   }
 }
 
+/**
+ * Every orderunderlag file name starts with this, order and refund alike: how
+ * a retry recognises the document it already archived on a verifikat.
+ */
+export const ORDER_UNDERLAG_FILENAME_PREFIX = 'Orderunderlag'
+
 /** Sanitized-enough name; uploadDocument sanitizes the storage key itself. */
 export function orderUnderlagFilename(model: Pick<OrderUnderlagModel, 'isRefund' | 'orderNumber' | 'orderDate'>): string {
-  const kind = model.isRefund ? 'Orderunderlag_aterbetalning' : 'Orderunderlag'
+  const kind = model.isRefund
+    ? `${ORDER_UNDERLAG_FILENAME_PREFIX}_aterbetalning`
+    : ORDER_UNDERLAG_FILENAME_PREFIX
   return `${kind}_${model.orderNumber}_${model.orderDate}.pdf`
 }
 
@@ -461,6 +469,49 @@ export function WebshopOrderUnderlagPDF({
   )
 }
 
+export interface RenderedOrderUnderlag {
+  bytes: Uint8Array<ArrayBuffer>
+  filename: string
+}
+
+/**
+ * Render one order row's orderunderlag PDF without storing anything. The
+ * document archiveWebshopOrderUnderlag files on the verifikat is this one,
+ * so the booking dialog's preview (GET /api/webshop-orders/[id]/underlag)
+ * shows exactly what booking will archive. Throws when rendering fails; the
+ * caller decides whether that is fatal.
+ */
+export async function renderWebshopOrderUnderlagPdf(args: {
+  supabase: SupabaseClient
+  companyId: string
+  order: WebshopOrder
+}): Promise<RenderedOrderUnderlag> {
+  const { supabase, companyId, order } = args
+  const model = buildOrderUnderlagModel(order)
+
+  // Header context only; the underlag is valid without it.
+  let company: OrderUnderlagCompany = {}
+  try {
+    const { data } = await supabase
+      .from('company_settings')
+      .select('company_name, org_number')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    company = (data as OrderUnderlagCompany | null) ?? {}
+  } catch {
+    company = {}
+  }
+
+  const pdfBuffer = await renderToBuffer(
+    WebshopOrderUnderlagPDF({
+      model,
+      company,
+      generatedAt: todayIsoStockholm(),
+    }),
+  )
+  return { bytes: new Uint8Array(pdfBuffer), filename: orderUnderlagFilename(model) }
+}
+
 export interface ArchiveOrderUnderlagResult {
   ok: boolean
   documentId: string | null
@@ -471,8 +522,9 @@ export interface ArchiveOrderUnderlagResult {
  * Mirrors archiveIssuedInvoicePdf: never throws, the booking is already
  * committed and immutable, so a failure here is logged and surfaced to the
  * caller as ok=false. The verifikat then stays on the "saknar underlag"
- * worklist (webshop_order is a needs-doc source type), which is exactly the
- * recovery mechanism: the user attaches an underlag by hand.
+ * worklist (webshop_order is a needs-doc source type), where the user can
+ * attach an underlag by hand or retry this archive
+ * (POST /api/webshop-orders/[id]/underlag).
  */
 export async function archiveWebshopOrderUnderlag(args: {
   supabase: SupabaseClient
@@ -484,37 +536,15 @@ export async function archiveWebshopOrderUnderlag(args: {
 }): Promise<ArchiveOrderUnderlagResult> {
   const { supabase, companyId, userId, order, journalEntryId, log } = args
   try {
-    const model = buildOrderUnderlagModel(order)
-
-    // Header context only; the underlag is valid without it.
-    let company: OrderUnderlagCompany = {}
-    try {
-      const { data } = await supabase
-        .from('company_settings')
-        .select('company_name, org_number')
-        .eq('company_id', companyId)
-        .maybeSingle()
-      company = (data as OrderUnderlagCompany | null) ?? {}
-    } catch {
-      company = {}
-    }
-
-    const pdfBuffer = await renderToBuffer(
-      WebshopOrderUnderlagPDF({
-        model,
-        company,
-        generatedAt: todayIsoStockholm(),
-      }),
-    )
-    const pdfArrayBuffer = new Uint8Array(pdfBuffer).buffer as ArrayBuffer
+    const { bytes, filename } = await renderWebshopOrderUnderlagPdf({ supabase, companyId, order })
 
     const document = await uploadDocument(
       supabase,
       userId,
       companyId,
       {
-        name: orderUnderlagFilename(model),
-        buffer: pdfArrayBuffer,
+        name: filename,
+        buffer: bytes.buffer,
         type: 'application/pdf',
       },
       {

@@ -8667,6 +8667,20 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order has a VAT rate that is not a Swedish rate (25/12/6/0 %), for example foreign OSS VAT. Book the order individually and review the lines.',
   },
+  WEBSHOP_ORDER_COUNTRY_NOT_ROUTED: {
+    httpStatus: 422,
+    message_sv:
+      'Ordern skickas till ett land utanför Sverige som saknar kontoval för sin momssats, så massbokföringen skulle bokföra den som svensk försäljning. Välj konton för landet under Inställningar > Kopplingar > Shopify, eller bokför ordern enskilt.',
+    message_en:
+      'The order ships to a country outside Sweden that has no account choice for its VAT rate, so bulk booking would book it as a Swedish sale. Choose accounts for the country under Settings > Connections > Shopify, or book the order individually.',
+  },
+  WEBSHOP_COUNTRY_RULES_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Kontovalet per land kunde inte sparas: minst en rad har ett konto som inte passar landet eller saknas i kontoplanen. Se raderna som är markerade.',
+    message_en:
+      'The accounts per country could not be saved: at least one row has an account that does not fit the country or is missing from the chart of accounts. See the marked rows.',
+  },
   WEBSHOP_ORDER_REVENUE_ACCOUNT_RATE_MISMATCH: {
     httpStatus: 422,
     message_sv:
@@ -8736,6 +8750,19 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     httpStatus: 500,
     message_sv: 'Ordern kunde inte bokföras. Inget verifikat skapades.',
     message_en: 'The order could not be booked. No journal entry was created.',
+  },
+  WEBSHOP_ORDER_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Ordern är inte bokförd än. Orderunderlaget bifogas verifikatet när ordern bokförs.',
+    message_en:
+      'The order is not booked yet. The order underlag is attached to the journal entry when the order is booked.',
+  },
+  WEBSHOP_ORDER_UNDERLAG_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Orderunderlaget kunde inte skapas. Försök igen om en stund.',
+    message_en: 'The order underlag could not be created. Try again shortly.',
+    retryable: true,
   },
 }
 

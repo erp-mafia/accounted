@@ -482,7 +482,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     summary: 'Orders and refunds from connected webshops, imported as a feed and booked.',
     dependsOn: [],
     layer: 'process',
-    uses: [],
+    // The accounts per destination country read EU membership and the
+    // momsdeklaration boxes (lib/webshop-orders/country-routing.ts).
+    uses: ['vat'],
     libFolders: ['webshop-orders'],
     operationPrefixes: ['webshop-orders'],
     v1Segments: ['webshop-orders'],

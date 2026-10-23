@@ -10,6 +10,7 @@ import { normalizeShopDomain, testConnectionAndFetchShopInfo } from './lib/api-c
 import { syncShopifyOrders, type ShopifySyncSummary } from './lib/order-sync'
 import { MAX_BACKFILL_YEARS } from './types'
 import type { ShopifyConnection } from './types'
+import { shopifyOrderContactRoute } from './lib/order-contact-route'
 
 // Per-user limit: connect probes the merchant's store.
 const RATE_LIMIT_CONNECT = { maxRequests: 10, windowMs: 60_000 }
@@ -192,5 +193,6 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       return NextResponse.json({ success: true, connection_id: created.id })
     },
   },
+  shopifyOrderContactRoute,
   ...feedConnectorRoutes(shopifyFeed),
 ]

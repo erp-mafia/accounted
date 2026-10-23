@@ -535,8 +535,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/webshop-orders/:id/create-invoice': gap('P3'),
   'POST /api/webshop-orders/:id/mark-booked': gap('P3'),
   'DELETE /api/webshop-orders/:id/mark-booked': gap('P3'),
+  'POST /api/webshop-orders/:id/underlag': gap('P3', 'retry the orderunderlag PDF on a booked order'),
   'POST /api/webshop-orders/bulk-book': gap('P3'),
-  'PUT /api/webshop-orders/settings': gap('P3', 'payment-method to account mapping'),
+  'PUT /api/webshop-orders/settings': gap('P3', 'payment-method mapping and accounts per country'),
   // POS sales (kassasystem via Accounted Connect): lib/operations/pos-sales.ts
   'POST /api/pos-sales/connections': covered([`POST ${V}/pos-sales/connections`, 'gnubok_connect_pos_venue']),
   'POST /api/pos-sales/connections/:id/disconnect': covered([
@@ -872,5 +873,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * this; adding one means raising it in the same diff, visibly.
  * 144 -> 150 (2026-10-19): the six digital mailbox doors (Kivra, Billo),
  * public API to follow once the dashboard flow is proven in production.
+ * 150 -> 151 (2026-10-23): the orderunderlag retry on a booked order
+ * (crm#1032). Agents book through webshop-orders.book, which archives the
+ * underlag itself; the retry repairs a dashboard booking where it failed.
  */
-export const GAP_CEILING = 150
+export const GAP_CEILING = 151

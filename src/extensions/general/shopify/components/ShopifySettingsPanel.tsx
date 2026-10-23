@@ -11,6 +11,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { failureDescription } from '@/lib/browser/action-failure'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { FeedConnectorPanel } from '@/components/extensions/shared/FeedConnectorPanel'
+import { CountryAccountRulesForm } from '@/components/orders/CountryAccountRulesForm'
 import {
   shippingCountryWithheld as shippingCountryWithheldIn,
   shopifyRequest,
@@ -63,6 +64,13 @@ export default function ShopifySettingsPanel() {
       renderNotes={(c) =>
         c.status === 'active' && shippingCountryWithheld ? (
           <AttnLine className="mt-1">{t('shipping_country_withheld')}</AttnLine>
+        ) : null
+      }
+      // The store scope is the shop domain as stored (client twin of
+      // shopifyShopScope(), which is the identity).
+      renderExtras={(c) =>
+        c.status === 'active' && c.shop_domain ? (
+          <CountryAccountRulesForm platform="shopify" storeScope={c.shop_domain} />
         ) : null
       }
       renderConnect={({ reload, failureCopy }) => {

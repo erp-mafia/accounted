@@ -4435,6 +4435,26 @@ export type WebshopPaymentMethodPolicy =
   | { mode: 'book'; account: string }
   | { mode: 'invoice' }
 
+/**
+ * Where an order shipped outside Sweden books, per destination country in
+ * webshop_store_settings.country_account_rules (lib/webshop-orders/
+ * country-routing.ts). `country` is an ISO 3166-1 alpha-2 code, or 'EU' /
+ * 'NON_EU' for every other country in or outside the EU. `vat_rate` is a
+ * percentage; null covers every rate that carries VAT (a 0 % bucket needs its
+ * own rule). 'accounts' books the bucket's net and VAT on the given accounts;
+ * 'swedish' books it like a Swedish sale (EU sales taxed in Sweden, below the
+ * distance-selling threshold).
+ */
+export type WebshopCountryAccountRule =
+  | {
+      country: string
+      vat_rate: number | null
+      mode: 'accounts'
+      revenue_account: string
+      vat_account: string | null
+    }
+  | { country: string; vat_rate: number | null; mode: 'swedish' }
+
 /** Row shape of public.webshop_store_settings. */
 export interface WebshopStoreSettings {
   id: string
@@ -4443,6 +4463,7 @@ export interface WebshopStoreSettings {
   platform: WebshopPlatform
   store_scope: string
   payment_method_account_map: Record<string, WebshopPaymentMethodPolicy>
+  country_account_rules: WebshopCountryAccountRule[]
   created_at: string
   updated_at: string
 }

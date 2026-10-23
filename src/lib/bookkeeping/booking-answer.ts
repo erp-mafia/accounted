@@ -17,6 +17,12 @@ export interface BookedEntry {
   id: string | null
   voucher_series?: string | null
   voucher_number?: number | null
+  /**
+   * Whether the door archived its own generated underlag on the verifikat
+   * (POST /api/webshop-orders/:id/book answers it, top level). Absent when
+   * the door does not say.
+   */
+  underlag_archived?: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -33,11 +39,13 @@ function entryFields(value: Record<string, unknown>): Omit<BookedEntry, 'id'> {
 /** The entry a booking answer names, or `{ id: null }` when it names none. */
 export function bookedEntryOf(answer: unknown): BookedEntry {
   if (!isRecord(answer)) return { id: null }
+  const underlag =
+    typeof answer.underlag_archived === 'boolean' ? { underlag_archived: answer.underlag_archived } : {}
   const data = isRecord(answer.data) ? answer.data : null
   // book-direct: the entry is nested under data.journal_entry.
   const nested = data && isRecord(data.journal_entry) ? data.journal_entry : null
-  if (nested && typeof nested.id === 'string') return { id: nested.id, ...entryFields(nested) }
-  if (data && typeof data.id === 'string') return { id: data.id, ...entryFields(data) }
+  if (nested && typeof nested.id === 'string') return { id: nested.id, ...entryFields(nested), ...underlag }
+  if (data && typeof data.id === 'string') return { id: data.id, ...entryFields(data), ...underlag }
   const top = typeof answer.journal_entry_id === 'string' ? answer.journal_entry_id : null
-  return { id: top, ...(data ? entryFields(data) : {}) }
+  return { id: top, ...(data ? entryFields(data) : {}), ...underlag }
 }

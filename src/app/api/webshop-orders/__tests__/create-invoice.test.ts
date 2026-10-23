@@ -408,3 +408,134 @@ describe('POST /api/webshop-orders/[id]/create-invoice: dates on the Swedish day
     )
   })
 })
+
+/**
+ * A Shopify order row carries no names (crm#1032): the dialog fetches the
+ * billing contact from the store on demand and sends the customer the user
+ * confirmed. It only shapes a customer the route creates.
+ */
+describe('POST /api/webshop-orders/[id]/create-invoice: customer confirmed in the dialog', () => {
+  const shopifyRow = () =>
+    makeOrderRow({
+      platform: 'shopify',
+      external_id: 'shopify_minbutik.myshopify.com_order_1001',
+      customer_name: null,
+      customer_company: null,
+      customer_email: null,
+      customer_orgnr: null,
+      customer_country: 'DK',
+    })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    eventBus.clear()
+    requireAuthMock.mockResolvedValue({ user: { id: 'user-1', email: 'test@test.se' }, supabase: mockSupabase })
+    requireWriteMock.mockResolvedValue({ ok: true })
+    mockBuildInvoiceWriteData.mockResolvedValue(okBuild)
+  })
+
+  it.each([
+    ['neither a name nor a company', { email: 'kund@example.se' }],
+    ['only blank names', { name: '  ', company: '' }],
+    ['an invalid email', { name: 'Anna Andersson', email: 'inte-en-adress' }],
+    ['an unknown field', { name: 'Anna Andersson', org_number: '556677-8899' }],
+  ])('returns 400 for a customer with %s', async (_label, customer) => {
+    const { status } = await parseJsonResponse(await postCreate({ customer }))
+    expect(status).toBe(400)
+    expect(findCall('webshop_orders', 'select')).toBeUndefined()
+  })
+
+  it('creates the confirmed company customer with the person as contact', async () => {
+    enqueue({ data: shopifyRow() }) // order fetch
+    enqueue({ data: null }) // email match: none
+    enqueue({ data: { id: 'cust-new', name: 'Kund AB', customer_type: 'eu_business' } }) // customer insert
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(
+      await postCreate({
+        customer: { name: 'Anna Andersson', company: 'Kund AB', email: 'kund@example.se' },
+      }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'ilike')).toEqual(['email', 'kund@example.se'])
+    expect(findCall('customers', 'insert')![0]).toMatchObject({
+      name: 'Kund AB',
+      contact_person: 'Anna Andersson',
+      email: 'kund@example.se',
+      // Classified by the order's country, as for the row's own snapshot.
+      customer_type: 'eu_business',
+      country: 'DK',
+    })
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input
+    expect(input.your_reference).toBe('Anna Andersson')
+    // The order row itself never receives the contact.
+    const linkUpdate = findCall('webshop_orders', 'update')![0] as Record<string, unknown>
+    expect(Object.keys(linkUpdate)).toEqual(['invoice_id'])
+  })
+
+  it('creates a private customer from a name alone, without an email lookup', async () => {
+    enqueue({ data: shopifyRow() }) // order fetch
+    enqueue({ data: { id: 'cust-new', name: 'Anna Andersson', customer_type: 'individual' } }) // customer insert
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(
+      await postCreate({ customer: { name: 'Anna Andersson', company: '', email: '' } }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'ilike')).toBeUndefined()
+    expect(findCall('customers', 'insert')![0]).toMatchObject({
+      name: 'Anna Andersson',
+      contact_person: null,
+      email: null,
+      customer_type: 'individual',
+    })
+  })
+
+  it('reuses an existing customer with the confirmed email instead of creating one', async () => {
+    enqueue({ data: shopifyRow() }) // order fetch
+    enqueue({ data: { id: 'cust-1', name: 'Kund AB', customer_type: 'eu_business' } }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(
+      await postCreate({ customer: { name: 'Anna Andersson', email: 'kund@example.se' } }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'insert')).toBeUndefined()
+    expect(mockBuildInvoiceWriteData).toHaveBeenCalledWith(
+      expect.objectContaining({ customer: expect.objectContaining({ id: 'cust-1' }) }),
+    )
+  })
+
+  it('ignores the confirmed customer when a customer_id is chosen', async () => {
+    const chosenId = '7c9e6679-7425-40de-944b-e07fc1f90ae7'
+    enqueue({ data: shopifyRow() }) // order fetch
+    enqueue({ data: { id: chosenId, name: 'Befintlig kund', customer_type: 'individual' } }) // customer by id
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } })
+    enqueue({ data: null }) // items
+    enqueue({ data: [{ id: 'order-1' }] }) // link-back matched
+
+    const { status } = await parseJsonResponse(
+      await postCreate({
+        customer_id: chosenId,
+        customer: { name: 'Anna Andersson', email: 'kund@example.se' },
+      }),
+    )
+
+    expect(status).toBe(200)
+    expect(findCall('customers', 'eq')).toEqual(['id', chosenId])
+    expect(findCall('customers', 'ilike')).toBeUndefined()
+    expect(findCall('customers', 'insert')).toBeUndefined()
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { your_reference?: string } }).input
+    expect(input.your_reference).toBeUndefined()
+  })
+})

@@ -60,6 +60,16 @@ export const ACCOUNT_ROLES = [
    * (ACCOUNT_ROLE_NOT_IN_PACK) instead of borrowing the BAS number.
    */
   'rot_rut_receivable',
+  /**
+   * Sales to consumers in other EU countries taxed there through the EU's
+   * one-stop shop (OSS): declared in the OSS return, never in the domestic
+   * VAT return.
+   */
+  'oss_sales',
+  /** Output VAT owed to other EU countries through the one-stop shop (OSS). */
+  'oss_output_vat',
+  /** Sales of goods shipped to a customer outside the EU: an export, no domestic VAT. */
+  'export_goods_sales',
 ] as const
 
 export type AccountRole = (typeof ACCOUNT_ROLES)[number]
