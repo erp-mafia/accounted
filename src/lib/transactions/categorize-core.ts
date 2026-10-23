@@ -92,9 +92,17 @@ import type {
   TransactionCategory,
   VatTreatment,
 } from '@/types'
-import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
+import { isReverseChargeBasisAccount, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { linkBasisColumns } from '@/lib/links/stamp'
-import { purchaseSellerRegion, reverseChargeBoxFor } from '@/lib/vat/reverse-charge-box'
+import {
+  purchaseSellerRegion,
+  reverseChargeBoxAsk,
+  reverseChargeBoxFor,
+  sellerChargedVat,
+  type ChargedVatReading,
+  type ReverseChargeBoxParam,
+  type ReverseChargeBoxRefusal,
+} from '@/lib/vat/reverse-charge-box'
 import type { SellerIdentity, SellerRegion } from '@/lib/vat/seller-country'
 
 const log = createLogger('transactions/categorize-core')
@@ -114,7 +122,11 @@ export interface CategorizeInput {
   template_id?: string
   counterparty_template_id?: string
   vat_treatment?: VatTreatment
-  /** Basis box of a reverse-charge purchase (ruta 20/21/22); omitted = EU services. */
+  /**
+   * Basis box of a reverse-charge purchase (ruta 20/21/22). Omitted: read off
+   * the underlag at an agent or API door (reverseChargeBoxParam), EU services
+   * at the dashboard, whose review shows the box.
+   */
   reverse_charge_kind?: ReverseChargeKind
   /** The underlag's actual VAT when it differs from rate × belopp (e.g. dricks). */
   vat_amount?: number
@@ -163,6 +175,15 @@ export interface CategorizeOptions {
    * match tools, so a staged plain categorization books as staged.
    */
   invoiceMatchIntercept?: boolean
+  /**
+   * Agent and API doors (#94): a reverse charge sent without
+   * reverse_charge_kind reads its box off the underlag's seller and the
+   * category, as the bulk doors do (lib/vat/reverse-charge-box.ts), and is
+   * refused when that cannot tell it and the booking would carry a basis
+   * pair. The value is the door's parameter for the box, named in the
+   * refusal. The dashboard leaves it off: its review shows the box it books.
+   */
+  reverseChargeBoxParam?: ReverseChargeBoxParam
   log?: Logger
 }
 
@@ -183,6 +204,8 @@ export interface CategorizePreview {
   already_had_journal_entry: boolean
   underlag: CategorizeUnderlag | null
   transaction: Transaction
+  /** The reverse-charge box booked: the one sent, or the one read off the underlag (reverseChargeBoxParam). */
+  reverse_charge_kind?: ReverseChargeKind
 }
 
 export interface CategorizeBooked {
@@ -668,11 +691,13 @@ export async function categorizeTransaction(
     amount_sek: transaction.amount_sek ?? null,
     exchange_rate: transaction.exchange_rate ?? null,
     cash_account_id: transaction.cash_account_id ?? null,
-    // The row's provider identity: two bookings of one feed under different
-    // ids are never twins (crm#1271).
+    // The row's provider identity: two entries of one feed the ids tell
+    // apart are never twins (crm#1271, crm#1312).
     external_id: transaction.external_id ?? null,
     import_source: transaction.import_source ?? null,
     bank_connection_id: transaction.bank_connection_id ?? null,
+    provider_transaction_id: transaction.provider_transaction_id ?? null,
+    bank_file_import_id: transaction.bank_file_import_id ?? null,
   }
 
   // Booking-time duplicate guard: refuse a second verifikat for an
@@ -705,6 +730,7 @@ export async function categorizeTransaction(
   // foreign charge). Omvänd skattskyldighet only covers invoices without the
   // seller's VAT; the foreign VAT is then part of the cost.
   let underlag: CategorizeUnderlag | null = null
+  let documentSeller: SellerIdentity | null = null
   if (transaction.document_id && (dryRun || input.vat_treatment === 'reverse_charge')) {
     const { data: doc } = await supabase
       .from('document_attachments')
@@ -714,8 +740,9 @@ export async function categorizeTransaction(
       .maybeSingle()
     if (doc) {
       const ex = (doc.extracted_data ?? null) as
-        | { totals?: { total?: number; vatAmount?: number }; invoice?: { currency?: string } }
+        | { totals?: { total?: number; vatAmount?: number }; invoice?: { currency?: string }; supplier?: SellerIdentity | null }
         | null
+      documentSeller = ex?.supplier ?? null
       underlag = {
         document_id: doc.id as string,
         total: ex?.totals?.total ?? null,
@@ -740,12 +767,43 @@ export async function categorizeTransaction(
     }
   }
 
+  // A reverse charge without its box, at an agent or API door (#94): the box
+  // its underlag's seller and the category give, never ruta 21 by default.
+  // Read only for a category booking: a template states its own lines.
+  let boxUnknown: ReverseChargeBoxRefusal | null = null
+  if (
+    options.reverseChargeBoxParam &&
+    input.vat_treatment === 'reverse_charge' &&
+    !input.reverse_charge_kind &&
+    isBusiness &&
+    !context.template &&
+    !input.counterparty_template_id &&
+    finalCategory.startsWith('expense_')
+  ) {
+    const region =
+      purchaseSellerRegion(documentSeller) ??
+      (input.inbox_item_id ? await inboxItemSellerRegionById(supabase, companyId, input.inbox_item_id) : null)
+    const box = reverseChargeBoxFor(region, finalCategory)
+    if (box.ok) input = { ...input, reverse_charge_kind: box.kind }
+    else boxUnknown = box.reason
+  }
+
   const mapped = await buildCategorizeMapping(supabase, companyId, transaction, input, context, {
     log: txLog,
     loadChart: options.loadChart,
   })
   if (!mapped.ok) return { ...mapped, transaction }
   const { mappingResult } = mapped
+  // The default would decide the box only where a basis pair is booked: a
+  // cost account whose momskod reports ruta 20-24, or an override onto a
+  // basis account, decides it itself (crm#1096).
+  if (boxUnknown && mappingResult.vat_lines.some((l) => l.debit_amount > 0 && isReverseChargeBasisAccount(l.account_number))) {
+    return refuseFor(
+      'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN',
+      { reason: boxUnknown, parameter: options.reverseChargeBoxParam },
+      { message: reverseChargeBoxAsk(boxUnknown, options.reverseChargeBoxParam!) },
+    )
+  }
   // The mapping returns only after guardCounterLegs let its legs through.
   checks.push(passed('counter_legs'))
 
@@ -831,6 +889,7 @@ export async function categorizeTransaction(
         already_had_journal_entry: !wouldBook,
         underlag,
         transaction,
+        ...(input.reverse_charge_kind ? { reverse_charge_kind: input.reverse_charge_kind } : {}),
       },
     }
   }
@@ -1284,7 +1343,8 @@ export interface BulkBookInboxResult {
  * underlag never blocks the rest ("Bokför valda hoppar över"). A per-item throw (period locked, accounts not in chart) is caught and
  * recorded as a skip with the actionable message. Under reverse charge each
  * item books the box its own seller and the category give (ruta 20, 21 or
- * 22), and an item whose box cannot be told is skipped.
+ * 22), and an item whose box cannot be told, or whose reading shows the
+ * seller's VAT, is skipped.
  *
  * Shared by the direct UI route (POST /items/bulk-book) and the
  * `bulk_book_inbox_items` pending-operation executor (Lena-driven flow).
@@ -1356,6 +1416,25 @@ export async function bulkBookMatchedInboxItems(
     // batch. An item whose box cannot be told is left out with the reason
     // (lib/vat/reverse-charge-box.ts) instead of landing in ruta 21 by default.
     let reverseChargeKind: ReverseChargeKind | undefined
+    // Omvänd skattskyldighet only covers a purchase the seller charged no VAT
+    // on: an underlag that shows a charge is left out (#94), as the single
+    // door refuses it (TX_CATEGORIZE_REVERSE_CHARGE_SELLER_VAT) and the
+    // Inkorg's one click sends it to the editor. The item's document is not
+    // on its bank row yet, so the single door's check would not see it.
+    const sellerVat = vat_treatment === 'reverse_charge' ? sellerChargedVat(item.extracted_data as ChargedVatReading | null) : 0
+    if (sellerVat > 0) {
+      const currency = (item.extracted_data as { invoice?: { currency?: string | null } } | null)?.invoice?.currency
+      const amount = [sellerVat.toLocaleString('sv-SE'), currency].filter(Boolean).join(' ')
+      skipped.push({
+        item_id: itemId,
+        reason: 'reverse_charge_seller_vat',
+        detail:
+          `Underlaget visar att säljaren har debiterat moms (${amount}), och omvänd skattskyldighet gäller bara ` +
+          'köp utan säljarens moms. Bokför underlaget för sig: svensk moms som ingående moms, utländsk moms som en ' +
+          'del av kostnaden.',
+      })
+      continue
+    }
     if (vat_treatment === 'reverse_charge' && category.startsWith('expense_')) {
       const box = reverseChargeBoxFor(await inboxItemSellerRegion(supabase, companyId, item), category)
       if (!box.ok) {
@@ -1454,8 +1533,28 @@ export async function bulkBookMatchedInboxItems(
 }
 
 /**
+ * Where an inbox item's seller is, by its id: the single door's underlag when
+ * the bank row has no document of its own yet (#94). Null for an item of
+ * another company or none.
+ */
+async function inboxItemSellerRegionById(
+  supabase: SupabaseClient,
+  companyId: string,
+  itemId: string,
+): Promise<SellerRegion | null> {
+  const { data: item } = await supabase
+    .from('invoice_inbox_items')
+    .select('extracted_data, matched_supplier_id')
+    .eq('id', itemId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  return item ? inboxItemSellerRegion(supabase, companyId, item as { extracted_data?: unknown; matched_supplier_id?: string | null }) : null
+}
+
+/**
  * Where an inbox item's seller is: its reading, then a matched supplier
- * card's type (read only when the reading says nothing).
+ * card's type (read only when the reading says nothing). The one reading
+ * both the bulk booking and the single agent/API door use.
  */
 async function inboxItemSellerRegion(
   supabase: SupabaseClient,

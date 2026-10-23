@@ -50,9 +50,14 @@ interface RunJournalPreviewProps {
   // Booked runs: the Lönesammanställning PDF, the underlag filed with the
   // vouchers listed below, downloads from the same kicker line.
   underlagHref?: string
+  // The run's taxable förmånsvärden (sum of salary_run_employees.
+  // benefit_values). They book no line of their own (salary-entries.ts), so
+  // the preview says where they went instead of leaving the reader to look
+  // for a 73xx account (crm#1354).
+  benefitValues?: number
 }
 
-export function RunJournalPreview({ preview, onRecalculate, recalculating, underlagHref }: RunJournalPreviewProps) {
+export function RunJournalPreview({ preview, onRecalculate, recalculating, underlagHref, benefitValues }: RunJournalPreviewProps) {
   const t = useTranslations('salary_run')
 
   const entries = [
@@ -117,6 +122,11 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
               </div>
             </div>
           ))}
+          {benefitValues !== undefined && benefitValues > 0 && (
+            <p className="text-sm text-muted-foreground">
+              {t('journal_preview_benefits_note', { amount: formatRunAmount(benefitValues) })}
+            </p>
+          )}
         </div>
       )}
     </DetailSection>

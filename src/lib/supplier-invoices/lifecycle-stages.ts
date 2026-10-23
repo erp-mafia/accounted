@@ -181,6 +181,20 @@ export async function computeSupplierInvoiceLifecycle(
     }
   }
 
+  // The ladder is the company's (stagesFor): kontantmetoden has no attest
+  // step, so the method is read when an invoice carries an attest, the one
+  // stage it changes.
+  let accountingMethod: string | null = null
+  if (invoices.some((inv) => inv.approved_at || inv.status === 'approved')) {
+    const { data: settings, error: settingsError } = await supabase
+      .from('company_settings')
+      .select('accounting_method')
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (settingsError) throw settingsError
+    accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method ?? null
+  }
+
   const result: Record<string, InvoiceLifecycle> = {}
   for (const inv of invoices) {
     const batch = open.get(inv.id)?.batch ?? null
@@ -207,6 +221,7 @@ export async function computeSupplierInvoiceLifecycle(
         is_credit_note: inv.is_credit_note,
         in_open_batch: batch !== null || order !== null,
         reconciled: reconciledThrough !== null,
+        accounting_method: accountingMethod,
       }),
       approved_at: inv.approved_at,
       batch,

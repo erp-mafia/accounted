@@ -26,9 +26,9 @@ vi.mock('@/lib/invoices/book-service', () => ({
   bookInvoice: (...args: unknown[]) => mockBookInvoice(...args),
 }))
 
-const mockIsDeductionShareUnbooked = vi.fn()
+const mockGetDeductionShareBooked = vi.fn()
 vi.mock('@/lib/invoices/rot-rut-payout-recognition', () => ({
-  isDeductionShareUnbooked: (...args: unknown[]) => mockIsDeductionShareUnbooked(...args),
+  getDeductionShareBookedByPayout: (...args: unknown[]) => mockGetDeductionShareBooked(...args),
 }))
 
 import {
@@ -115,7 +115,7 @@ describe('issueCreditNote', () => {
       'Testkund',
       'A-42',
       expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
-      { deductionUnbooked: false },
+      { deductionBookedSek: null },
     )
     expect(mockCancelSchedulesForSource).toHaveBeenCalledWith(
       expect.anything(),
@@ -319,7 +319,7 @@ describe('issueCreditNote: a deferred original that was never booked', () => {
       'Testkund',
       'A-7',
       expect.any(Function), // what the door saw, read by the posting port only while POSTING_EVENTS is on
-      { deductionUnbooked: false },
+      { deductionBookedSek: null },
     )
   })
 
@@ -470,8 +470,8 @@ describe('issueCreditNote: a deferred original that was never booked', () => {
 })
 
 // Kontantmetodens two steps (ML 2023:200 7 kap. 16 §): an original whose
-// payment booked only the customer's share, with no payout booked yet, is
-// credited for that share alone.
+// payment booked only the customer's share is credited for that share and
+// what its payout booked of Skatteverket's, nothing more.
 describe('issueCreditNote: a kontantmetod ROT/RUT original', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -508,22 +508,59 @@ describe('issueCreditNote: a kontantmetod ROT/RUT original', () => {
   }
 
   it('credits the customer share alone while Skatteverket\'s share is unbooked', async () => {
-    mockIsDeductionShareUnbooked.mockResolvedValue({ ok: true, unbooked: true })
+    mockGetDeductionShareBooked.mockResolvedValue({ ok: true, bookedSek: 0 })
     const result = await issue('cash')
     expect(result.complete).toBe(true)
-    expect(mockIsDeductionShareUnbooked).toHaveBeenCalledWith(supabase, 'company-1', { id: 'invoice-1', journal_entry_id: null })
-    expect(mockCreateCreditNoteJournalEntry.mock.calls[0][8]).toEqual({ deductionUnbooked: true })
+    expect(mockGetDeductionShareBooked).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      { id: 'invoice-1', journal_entry_id: null },
+      '2026-07-14',
+    )
+    expect(mockCreateCreditNoteJournalEntry.mock.calls[0][8]).toEqual({ deductionBookedSek: 0 })
   })
 
-  it('credits it all once a payout booked the share', async () => {
-    mockIsDeductionShareUnbooked.mockResolvedValue({ ok: true, unbooked: false })
+  it('credits what a partial payout booked of the share (issue #93), and all of it once paid in full', async () => {
+    mockGetDeductionShareBooked.mockResolvedValue({ ok: true, bookedSek: 3000 })
     await issue('cash')
-    expect(mockCreateCreditNoteJournalEntry.mock.calls[0][8]).toEqual({ deductionUnbooked: false })
+    expect(mockCreateCreditNoteJournalEntry.mock.calls[0][8]).toEqual({ deductionBookedSek: 3000 })
+
+    vi.clearAllMocks()
+    reset()
+    mockGetDeductionShareBooked.mockResolvedValue({ ok: true, bookedSek: null })
+    await issue('cash')
+    expect(mockCreateCreditNoteJournalEntry.mock.calls[0][8]).toEqual({ deductionBookedSek: null })
+  })
+
+  it('refuses before posting when a partial beslut over several invoices names no per-invoice amounts', async () => {
+    mockGetDeductionShareBooked.mockResolvedValue({
+      ok: false,
+      code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN',
+      details: { request_id: 'req-1', reason: 'per_invoice_amounts_unknown' },
+    })
+    enqueue({ data: null, error: null }) // existing credit verifikat lookup
+    const result = await issueCreditNote({
+      supabase: supabase as never,
+      companyId: 'company-1',
+      userId: 'user-1',
+      creditNote: rotCreditNote(),
+      originalInvoice: { id: 'invoice-1', invoice_number: 'F-100', status: 'paid', journal_entry_id: null, paid_amount: 8750 },
+      entityType: 'enskild_firma',
+      accountingMethod: 'cash',
+      deferInvoiceBooking: false,
+      log,
+    })
+    expect(result.complete).toBe(false)
+    expect(result.journalEntryId).toBeNull()
+    expect(result.failures).toEqual([
+      expect.objectContaining({ step: 'journal_entry', code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN' }),
+    ])
+    expect(mockCreateCreditNoteJournalEntry).not.toHaveBeenCalled()
   })
 
   it('faktureringsmetoden never asks', async () => {
     await issue('accrual')
-    expect(mockIsDeductionShareUnbooked).not.toHaveBeenCalled()
-    expect(mockCreateCreditNoteJournalEntry.mock.calls[0][8]).toEqual({ deductionUnbooked: false })
+    expect(mockGetDeductionShareBooked).not.toHaveBeenCalled()
+    expect(mockCreateCreditNoteJournalEntry.mock.calls[0][8]).toEqual({ deductionBookedSek: null })
   })
 })

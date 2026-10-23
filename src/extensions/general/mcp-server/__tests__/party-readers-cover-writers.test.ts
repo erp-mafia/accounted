@@ -192,6 +192,47 @@ describe('gnubok_get_customer', () => {
     expect(JSON.stringify(result)).not.toContain(PERSONAL_NUMBER)
   })
 
+  it("masks an enskild firma's org number, which is the owner's personnummer (#95)", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ...rowFor(CUSTOMER_RECORD_COLUMNS),
+        id: CUSTOMER_ID,
+        customer_type: 'swedish_business',
+        org_number: PERSONAL_NUMBER,
+        vat_number: 'SE900101123401',
+        personal_number: null,
+      },
+    })
+    const result = (await tool('gnubok_get_customer').execute(
+      { customer_id: CUSTOMER_ID }, COMPANY_ID, 'user-1', supabase as never,
+    )) as Record<string, unknown>
+
+    expect(result).toMatchObject({ org_number: null, vat_number: null, personal_number_masked: '********-1234' })
+    const serialized = JSON.stringify(result)
+    expect(serialized).not.toContain(PERSONAL_NUMBER)
+    expect(serialized).not.toContain('9001011234')
+  })
+
+  it("keeps a company's org and VAT numbers in full", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        ...rowFor(CUSTOMER_RECORD_COLUMNS),
+        id: CUSTOMER_ID,
+        customer_type: 'swedish_business',
+        org_number: '556677-8899',
+        vat_number: 'SE556677889901',
+        personal_number: null,
+      },
+    })
+    const result = (await tool('gnubok_get_customer').execute(
+      { customer_id: CUSTOMER_ID }, COMPANY_ID, 'user-1', supabase as never,
+    )) as Record<string, unknown>
+
+    expect(result).toMatchObject({ org_number: '556677-8899', vat_number: 'SE556677889901', personal_number_masked: null })
+  })
+
   it('reads one row of the active company by the shared projection', async () => {
     const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
     enqueue({ data: rowFor(CUSTOMER_RECORD_COLUMNS, { id: CUSTOMER_ID, personal_number: null }) })

@@ -193,13 +193,16 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
       }
       const bookedCount: number = json.data?.booked_count ?? 0
       const skippedCount: number = json.data?.skipped_count ?? 0
-      const noBoxCount = Array.isArray(json.data?.skipped)
-        ? (json.data.skipped as Array<{ reason?: string }>).filter((s) => s.reason === 'reverse_charge_box_unknown').length
+      const skippedFor = (reason: string) => Array.isArray(json.data?.skipped)
+        ? (json.data.skipped as Array<{ reason?: string }>).filter((s) => s.reason === reason).length
         : 0
+      const noBoxCount = skippedFor('reverse_charge_box_unknown')
+      const sellerVatCount = skippedFor('reverse_charge_seller_vat')
       const parts: string[] = []
       if (bookedCount > 0) parts.push(`${bookedCount} bokförda`)
       if (skippedCount > 0) parts.push(`${skippedCount} överhoppade`)
       if (noBoxCount > 0) parts.push(t('reverse_charge_skipped', { count: noBoxCount }))
+      if (sellerVatCount > 0) parts.push(t('reverse_charge_seller_vat_skipped', { count: sellerVatCount }))
       toast({
         title: 'Bulkbokföring klar',
         description: parts.join(' · ') || 'Inga underlag bokfördes',

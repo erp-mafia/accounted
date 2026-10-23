@@ -20,10 +20,17 @@
  * where the box is shown and picked. The seller's country is read the way
  * the Inkorg's one click reads it (./seller-country.ts), the supplier card
  * second.
+ *
+ * The single agent and API categorize (MCP gnubok_categorize_transaction,
+ * v1 /transactions/{id}/categorize and its batch) follow the same rule for a
+ * reverse charge sent without its box (#94): read off the bank row's
+ * underlag, or refused with the question (reverseChargeBoxAsk). Nobody
+ * there sees the box before it is booked.
  */
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import type { TransactionCategory } from '@/types'
 import { sellerCountry, type SellerIdentity, type SellerRegion } from './seller-country'
+import { roundOre } from '@/lib/money'
 
 /**
  * What a bank-booking category buys, for a seller abroad. Only the
@@ -93,4 +100,68 @@ export function reverseChargeBoxFor(region: SellerRegion | null, category: Trans
   if (!nature) return refuse('purchase_kind_unknown')
   if (nature === 'goods') return region === 'eu' ? { ok: true, kind: 'eu_goods' } : refuse('goods_from_outside_eu')
   return { ok: true, kind: region === 'eu' ? 'eu_services' : 'non_eu_services' }
+}
+
+/** How a door names the box parameter: v1 takes reverse_charge_kind, the MCP tool vat_treatment variants. */
+export type ReverseChargeBoxParam = 'reverse_charge_kind' | 'vat_treatment'
+
+const ASK_REASON: Record<ReverseChargeBoxRefusal, { sv: string; en: string }> = {
+  seller_country_unknown: {
+    sv: 'inget underlag till transaktionen visar säljarens land',
+    en: "no underlag of the transaction names the seller's country",
+  },
+  seller_in_sweden: {
+    sv: 'underlaget visar en svensk säljare, och omvänd skattskyldighet inom Sverige (ruta 23-24) bokförs inte med en kategori',
+    en: 'the underlag shows a Swedish seller, and domestic reverse charge (boxes 23-24) is not booked by category',
+  },
+  goods_from_outside_eu: {
+    sv: 'varor från ett land utanför EU är import, med momsen på tullvärdet i ruta 50 och 60',
+    en: 'goods from outside the EU are an import, with the VAT on the customs value in boxes 50 and 60',
+  },
+  purchase_kind_unknown: {
+    sv: 'kategorin säger inte om köpet är en vara eller en tjänst',
+    en: 'the category does not say whether goods or a service was bought',
+  },
+}
+
+const ASK_VALUES: Record<ReverseChargeBoxParam, { sv: string; en: string }> = {
+  reverse_charge_kind: {
+    sv: 'reverse_charge_kind "eu_services" (tjänst från ett annat EU-land, ruta 21), "non_eu_services" (tjänst från ett land utanför EU, ruta 22) eller "eu_goods" (varor från ett annat EU-land, ruta 20)',
+    en: 'reverse_charge_kind "eu_services" (a service from another EU country, box 21), "non_eu_services" (a service from outside the EU, box 22) or "eu_goods" (goods from another EU country, box 20)',
+  },
+  vat_treatment: {
+    sv: 'vat_treatment "reverse_charge_eu_services" (ruta 21), "reverse_charge_non_eu_services" (ruta 22) eller "reverse_charge_eu_goods" (ruta 20)',
+    en: 'vat_treatment "reverse_charge_eu_services" (box 21), "reverse_charge_non_eu_services" (box 22) or "reverse_charge_eu_goods" (box 20)',
+  },
+}
+
+/** The single door's refusal: why the box cannot be told, and how to name it. */
+export function reverseChargeBoxAsk(reason: ReverseChargeBoxRefusal, param: ReverseChargeBoxParam): { sv: string; en: string } {
+  const why = ASK_REASON[reason]
+  const values = ASK_VALUES[param]
+  return {
+    sv: `Rutan för omvänd skattskyldighet kan inte avgöras: ${why.sv}. Ange den med ${values.sv}, eller bokför utan omvänd skattskyldighet om köpet inte är det.`,
+    en: `The reverse-charge box cannot be told: ${why.en}. Name it with ${values.en}, or book without reverse charge if the purchase is not one.`,
+  }
+}
+
+/** What a document reading says about its VAT, as far as the seller's charge goes (the extraction's shape fits). */
+export interface ChargedVatReading {
+  totals?: { vatAmount?: unknown } | null
+  vatBreakdown?: unknown
+}
+
+/**
+ * The VAT the seller charged on the document, as its reading states it: the
+ * breakdown's charged groups, else the total's VAT; 0 when it shows none.
+ * Omvänd skattskyldighet covers only a purchase the seller charged no VAT on,
+ * so a reverse charge booked in bulk skips an underlag that shows a charge,
+ * as the Inkorg's one click sends it to the editor (#94).
+ */
+export function sellerChargedVat(reading: ChargedVatReading | null | undefined): number {
+  const groups = Array.isArray(reading?.vatBreakdown) ? (reading.vatBreakdown as Array<{ amount?: unknown }>) : []
+  const charged = groups.map((group) => Number(group?.amount)).filter((amount) => Number.isFinite(amount) && amount > 0)
+  if (charged.length > 0) return roundOre(charged.reduce((sum, amount) => sum + amount, 0))
+  const total = Number(reading?.totals?.vatAmount)
+  return Number.isFinite(total) && total > 0 ? roundOre(total) : 0
 }

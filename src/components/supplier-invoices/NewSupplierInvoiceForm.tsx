@@ -19,7 +19,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
 import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
-import { supplierInvoiceBookingMoment } from '@/lib/bookkeeping/booking-mode'
+import { supplierInvoiceBookingMoment, supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
@@ -504,17 +504,32 @@ export default function NewSupplierInvoiceForm({
   // Under kontantmetoden an EU goods acquisition is booked at registration
   // too (ML 7 kap. 26 §), by the rule create.ts posts by.
   const settlesNow = !!(settleWith && inboxItemId && watchedPayer === 'company')
+  const watchedSupplierType = suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type
   const invoiceBookingMomentHere = supplierInvoiceBookingMoment(
     bookingMoment,
     { reverse_charge: watchedReverseCharge, reverse_charge_kind: watchedReverseChargeKind || null },
-    suppliers.find((s) => s.id === watchedSupplierId)?.supplier_type,
+    watchedSupplierType,
   )
   const effectiveBookingMoment = settlesNow && invoiceBookingMomentHere === 'manual' ? 'issue' : invoiceBookingMomentHere
   const willBookAtRegistration = effectiveBookingMoment === 'issue' || watchedPaidPrivately
+  // The registration verifikat's date, by the rule the builder dates it by:
+  // an EU goods acquisition at the latest on the 15th of the month after its
+  // delivery (ML 7 kap. 26 §). The utlägg verifikat keeps the invoice date.
+  const registrationDateHere = supplierInvoiceRegistrationDate(
+    {
+      invoice_date: watchedInvoiceDate || '',
+      delivery_date: watchedDeliveryDate || null,
+      reverse_charge: watchedReverseCharge,
+      reverse_charge_kind: watchedReverseChargeKind || null,
+    },
+    watchedSupplierType,
+  )
+  const registrationDateCapped = !watchedPaidPrivately && !!watchedInvoiceDate && registrationDateHere !== watchedInvoiceDate
+  const bookedDateHere = watchedPaidPrivately ? watchedInvoiceDate : registrationDateHere
   const invoiceDateOutsidePeriod =
     periodsLoaded &&
-    !!watchedInvoiceDate &&
-    !periods.some((p) => watchedInvoiceDate >= p.period_start && watchedInvoiceDate <= p.period_end)
+    !!bookedDateHere &&
+    !periods.some((p) => bookedDateHere >= p.period_start && bookedDateHere <= p.period_end)
   const showNoPeriodWarning = willBookAtRegistration && invoiceDateOutsidePeriod
 
   // Advisory nudge (#863 item 2): reverse charge purchases are normally booked
@@ -2131,7 +2146,7 @@ export default function NewSupplierInvoiceForm({
               >
                 <AlertCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
                 <div className="flex-1 text-sm text-destructive">
-                  <p className="font-medium">{t('no_period_warning', { date: watchedInvoiceDate })}</p>
+                  <p className="font-medium">{t('no_period_warning', { date: bookedDateHere })}</p>
                   <p className="mt-0.5">{t('no_period_help')}</p>
                 </div>
               </div>
@@ -2528,6 +2543,11 @@ export default function NewSupplierInvoiceForm({
                     {...register('delivery_date')}
                   />
                 </div>
+                {registrationDateCapped && (
+                  <p className="border-b border-border py-2 text-xs text-muted-foreground">
+                    {t('eu_goods_registration_date_hint', { date: formatDate(registrationDateHere) })}
+                  </p>
+                )}
                 {dimensionsEnabled && (
                   <div className="border-b border-border py-3 text-[13px]">
                     <span>{t('row_dimensions_title')}</span>

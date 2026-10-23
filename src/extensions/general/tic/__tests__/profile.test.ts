@@ -32,10 +32,11 @@ const mockStatus = vi.mocked(getCompanyStatus)
 const mockBeneficialOwners = vi.mocked(getBeneficialOwners)
 
 function makeRequest(orgNumber?: string): Request {
-  const url = orgNumber
-    ? `http://localhost/api/extensions/ext/tic/profile?org_number=${encodeURIComponent(orgNumber)}`
-    : 'http://localhost/api/extensions/ext/tic/profile'
-  return new Request(url)
+  return new Request('http://localhost/api/extensions/ext/tic/profile', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(orgNumber === undefined ? {} : { org_number: orgNumber }),
+  })
 }
 
 const profileHandler = testRoutes(ticExtension)[1].handler

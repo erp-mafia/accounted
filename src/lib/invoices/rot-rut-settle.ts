@@ -277,6 +277,49 @@ async function mirrorDecidedAmounts(supabase: SupabaseClient, requestId: string)
   }
 }
 
+/**
+ * Point a begäran at a payout verifikat booked outside the settle flow, with
+ * the settle's own writes: a set-off on the skattekonto is Skatteverket's
+ * payout received there instead of the bank, and its verifikat
+ * (skattekonto-booking.ts, the payout's lines from buildRotRutPayoutLines)
+ * settles the begäran like a settle voucher. The CAS on
+ * settlement_journal_entry_id IS NULL picks one winner; the decided_amount
+ * mirror for a fully paid begäran and the dead bank-row hints follow. The
+ * verifikat may still be a draft: deleting it clears the pointer (ON DELETE
+ * SET NULL), a reversal releases it (release_rot_rut_settlement_on_reversal).
+ */
+export async function attachRotRutPayoutVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: { requestId: string; journalEntryId: string; amount: number },
+): Promise<
+  | { ok: true; request: SettledRotRutPayoutRequest; fullyPaid: boolean }
+  | { ok: false; kind: 'code'; code: 'ROT_RUT_REQUEST_NOT_FOUND' | 'ROT_RUT_SETTLE_INVALID_STATE' | 'ROT_RUT_SETTLE_RACE' }
+  | { ok: false; kind: 'error'; error: unknown }
+> {
+  const { data: request, error: fetchError } = await supabase
+    .from('rot_rut_payout_requests')
+    .select('id, name, deduction_type, status, requested_total, decided_total, decided_at, settlement_journal_entry_id')
+    .eq('company_id', companyId)
+    .eq('id', params.requestId)
+    .maybeSingle()
+  if (fetchError) return { ok: false, kind: 'error', error: fetchError }
+  if (!request) return { ok: false, kind: 'code', code: 'ROT_RUT_REQUEST_NOT_FOUND' }
+  const row = request as PayoutRequestRow
+  if (!isSettleable(row)) return { ok: false, kind: 'code', code: 'ROT_RUT_SETTLE_INVALID_STATE' }
+
+  const amount = roundOre(params.amount)
+  const fullyPaid = amount >= Number(row.requested_total)
+  const { updated, error } = await attachSettlementVoucher(supabase, companyId, row, params.journalEntryId, amount, fullyPaid)
+  if (error) return { ok: false, kind: 'error', error }
+  if (!updated) return { ok: false, kind: 'code', code: 'ROT_RUT_SETTLE_RACE' }
+  if (fullyPaid) await mirrorDecidedAmounts(supabase, params.requestId)
+  await clearSettledInvoiceSuggestions(supabase, companyId, 'rot_rut_payout_request', params.requestId, {
+    exceptTransactionId: null,
+  })
+  return { ok: true, request: updated, fullyPaid }
+}
+
 export async function settleRotRutPayoutRequest(
   supabase: SupabaseClient,
   userId: string,

@@ -612,7 +612,15 @@ describe('reverse-charge basis pair (#2919)', () => {
   }
 
   it.each([
-    { account_override: undefined, chartRow: undefined, momskoder: [], expected: ['2645', '2614', '4535', '4598'] },
+    {
+      // The box named: this door no longer defaults to EU services (#94); a
+      // plain reverse_charge takes the box off the underlag, or is refused.
+      account_override: undefined,
+      reverse_charge_kind: 'eu_services',
+      chartRow: undefined,
+      momskoder: [],
+      expected: ['2645', '2614', '4535', '4598'],
+    },
     {
       // crm#1028: a service from outside the EU reports its basis in ruta 22.
       account_override: undefined,

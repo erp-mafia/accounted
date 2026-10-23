@@ -10,10 +10,13 @@ vi.mock('@/lib/reports/vat-revenue-accounts', () => ({
 
 import {
   accountRutaFor,
+  assertCorrectedImportVatBase,
   importVatWithoutBase,
+  refuseCorrectedImportVatWithoutBase,
   refuseImportVatWithoutBase,
   IMPORT_VAT_WITHOUT_BASE_CODE,
 } from '../import-vat-base'
+import { ImportVatWithoutBaseError } from '../errors'
 import { applyTemplate } from '../template-library'
 
 function dynamicWith(
@@ -159,5 +162,48 @@ describe('refuseImportVatWithoutBase', () => {
   it('refuses nothing when the chart cannot be read', async () => {
     mockFetchDynamic.mockRejectedValue(new Error('timeout'))
     expect(await refuseImportVatWithoutBase(supabase, 'company-1', MALL_SHAPE)).toBeNull()
+  })
+})
+
+// The rättelse doors (#94): judged on the lines the correction leaves.
+describe('refuseCorrectedImportVatWithoutBase', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockFetchDynamic.mockResolvedValue(dynamicWith())
+  })
+
+  it('refuses the shape a rättelse keeps, worded for a rättelse (no mall sentence)', async () => {
+    const refusal = await refuseCorrectedImportVatWithoutBase(supabase, 'company-1', 'bank_transaction', MALL_SHAPE)
+    expect(refusal?.code).toBe(IMPORT_VAT_WITHOUT_BASE_CODE)
+    expect(refusal?.details).toEqual({ import_vat_accounts: ['2615'] })
+    expect(refusal?.messageSv).toContain('Efter rättelsen')
+    expect(refusal?.messageSv).toContain('2614, 2624 eller 2634')
+    expect(refusal?.messageSv).not.toContain('Bokföringsmallar')
+    expect(refusal?.messageEn).toContain('After the correction')
+  })
+
+  it('passes a rättelse that takes the importmoms out or adds its base', async () => {
+    const out = MALL_SHAPE.map((l) => (l.account_number === '2615' ? { ...l, account_number: '2614' } : l))
+    const withBase = MALL_SHAPE.map((l) => (l.account_number === '4515' ? { ...l, account_number: '4545' } : l))
+    expect(await refuseCorrectedImportVatWithoutBase(supabase, 'company-1', 'manual', out)).toBeNull()
+    expect(await refuseCorrectedImportVatWithoutBase(supabase, 'company-1', 'manual', withBase)).toBeNull()
+  })
+
+  it('passes the balances of an opening balance and a momsredovisning', async () => {
+    const balance = [
+      { account_number: '2615', debit_amount: 0, credit_amount: 250 },
+      { account_number: '2099', debit_amount: 250, credit_amount: 0 },
+    ]
+    expect(await refuseCorrectedImportVatWithoutBase(supabase, 'company-1', 'opening_balance', balance)).toBeNull()
+    expect(await refuseCorrectedImportVatWithoutBase(supabase, 'company-1', 'vat_settlement', balance)).toBeNull()
+    expect(mockFetchDynamic).not.toHaveBeenCalled()
+    expect(await refuseCorrectedImportVatWithoutBase(supabase, 'company-1', 'manual', balance)).not.toBeNull()
+  })
+
+  it('throws the typed bookkeeping error for a door that throws', async () => {
+    const thrown = await assertCorrectedImportVatBase(supabase, 'company-1', 'manual', MALL_SHAPE).catch((e) => e)
+    expect(thrown).toBeInstanceOf(ImportVatWithoutBaseError)
+    expect(thrown).toMatchObject({ code: 'IMPORT_VAT_WITHOUT_BASE', importVatAccounts: ['2615'] })
+    await expect(assertCorrectedImportVatBase(supabase, 'company-1', 'manual', [])).resolves.toBeUndefined()
   })
 })

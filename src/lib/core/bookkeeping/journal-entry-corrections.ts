@@ -35,6 +35,7 @@ import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/b
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
+import { refuseCorrectedImportVatWithoutBase, type ImportVatShapeLine } from '@/lib/bookkeeping/import-vat-base'
 import {
   AccountsNotInChartError,
   CannotCorrectNonPostedError,
@@ -301,6 +302,23 @@ export async function strikeJournalEntryLines(
 ): Promise<OperationOutcome<Record<string, unknown>>> {
   if (options.dryRun) return previewLineRattelse(ctx, entryId, input)
 
+  // The RPC knows no momsrutor: the importmoms rule (#94) runs here, on the
+  // verifikat as the rättelse leaves it. An entry this read cannot see is the
+  // RPC's to refuse (not found, other company).
+  const { data: current } = await ctx.supabase
+    .from('journal_entries')
+    .select('source_type, lines:journal_entry_lines(id, account_number, debit_amount, credit_amount)')
+    .eq('id', entryId)
+    .eq('company_id', ctx.companyId)
+    .maybeSingle()
+  if (current) {
+    const row = current as { source_type: string; lines: Array<{ id: string } & ImportVatShapeLine> | null }
+    const struck = new Set(input.strike_line_ids)
+    const resulting = [...(row.lines ?? []).filter((l) => !struck.has(l.id)), ...input.lines]
+    const importVat = await importVatRefusal(ctx, row.source_type, resulting)
+    if (importVat) return importVat
+  }
+
   // Seed standard BAS accounts the replacement lines reference but the
   // company chart lacks (same courtesy as the engine/storno flow); unknown
   // numbers stay missing and fail the RPC's chart check with a clear error.
@@ -324,6 +342,21 @@ export async function strikeJournalEntryLines(
   })
   if (error) return rpcFailure(ctx, 'correct_entry_lines_inline', entryId, error)
   return { ok: true, data: (data ?? {}) as Record<string, unknown> }
+}
+
+/**
+ * Importmoms (rutor 60-62) with no ruta 50 line in the verifikat the rättelse
+ * leaves, kept and added lines together (#94): refused as the booking doors
+ * refuse it (#83).
+ */
+async function importVatRefusal(
+  ctx: OperationContext,
+  sourceType: string,
+  resulting: readonly ImportVatShapeLine[],
+): Promise<Failure | null> {
+  const refusal = await refuseCorrectedImportVatWithoutBase(ctx.supabase, ctx.companyId, sourceType, resulting)
+  if (!refusal) return null
+  return { ok: false, code: refusal.code, details: refusal.details, messageSv: refusal.messageSv }
 }
 
 interface LineRow {
@@ -505,6 +538,8 @@ async function previewLineRattelse(
   if (struckKeys.length === addedKeys.length && struckKeys.every((k, i) => k === addedKeys[i])) {
     return { ok: false, code: 'MEANINGLESS_CORRECTION', error: new MeaninglessCorrectionError('identical_to_original') }
   }
+  const importVat = await importVatRefusal(ctx, entry.source_type, resulting)
+  if (importVat) return importVat
 
   // Reconciliation anchors. A reskontra side (15xx under a customer payment,
   // 24xx under a supplier payment) must keep its net: refused here as the RPC

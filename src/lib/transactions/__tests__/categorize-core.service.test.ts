@@ -349,6 +349,66 @@ describe('categorizeTransaction: refusals every door shares', () => {
   })
 })
 
+// #94: a reverse charge sent without its box at an agent or API door takes
+// the box its underlag's seller and the category give, as the bulk doors do,
+// and is refused when they cannot tell it. The dashboard shows the box it
+// books and keeps the EU-services default.
+describe('categorizeTransaction: the reverse-charge box at an agent or API door', () => {
+  const software = { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge' } as const
+  const api: CategorizeOptions = { onBooked: 'refuse', dryRun: true, reverseChargeBoxParam: 'reverse_charge_kind' }
+  const accounts = (outcome: Awaited<ReturnType<typeof categorizeTransaction>>) =>
+    outcome.ok && outcome.dryRun ? outcome.preview.lines.map((l) => l.account_number) : []
+  const withDocument = (supplier: Record<string, unknown>) =>
+    ledger({
+      transactions: { data: row({ document_id: 'doc-1' }), error: null },
+      document_attachments: { data: { id: 'doc-1', extracted_data: { supplier, totals: { total: 1250, vatAmount: 0 } } }, error: null },
+    })
+
+  it('dashboard: keeps the EU-services default the review shows', async () => {
+    const outcome = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, software, {
+      onBooked: 'refuse',
+      dryRun: true,
+    })
+    expect(accounts(outcome)).toContain('4535')
+  })
+
+  it('refuses when no underlag names the seller country, naming the door\'s parameter', async () => {
+    const outcome = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, software, api)
+    expect(outcome).toMatchObject({
+      ok: false,
+      code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN',
+      details: { reason: 'seller_country_unknown', parameter: 'reverse_charge_kind' },
+    })
+    if (!outcome.ok) expect(outcome.message?.sv).toMatch(/reverse_charge_kind .*"non_eu_services" \(tjänst från ett land utanför EU, ruta 22\)/)
+  })
+
+  it('books a US seller on the pinned underlag in ruta 22, not 21', async () => {
+    const { supabase } = withDocument({ address: '548 Market St, San Francisco, California 94104, United States' })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, software, api)
+    expect(accounts(outcome)).toContain('4531')
+    expect(accounts(outcome)).not.toContain('4535')
+    expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('non_eu_services')
+  })
+
+  it('reads the inbox item the booking started from when the row has no document', async () => {
+    const { supabase } = ledger({
+      invoice_inbox_items: { data: { extracted_data: { supplier: { vatNumber: 'IE3668997OH' } }, matched_supplier_id: null }, error: null },
+    })
+    const outcome = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, inbox_item_id: 'item-1' }, api)
+    expect(accounts(outcome)).toContain('4535')
+    expect(outcome.ok && outcome.dryRun && outcome.preview.reverse_charge_kind).toBe('eu_services')
+  })
+
+  it('keeps a box the caller named, and refuses a category that says neither goods nor service', async () => {
+    const named = await categorizeTransaction(ledger().supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, reverse_charge_kind: 'eu_goods' }, api)
+    expect(accounts(named)).toContain('4515')
+
+    const { supabase } = withDocument({ vatNumber: 'IE3668997OH' })
+    const other = await categorizeTransaction(supabase as never, 'user-1', COMPANY_ID, TX_ID, { ...software, category: 'expense_other' }, api)
+    expect(other).toMatchObject({ ok: false, code: 'TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN', details: { reason: 'purchase_kind_unknown' } })
+  })
+})
+
 describe('categorizeTransaction: the decision record', () => {
   const pass = (id: string) => ({ id, result: 'pass', detail: null })
   const recordedChecks = () => vi.mocked(recordDecisions).mock.calls[0]?.[2][0]?.checks

@@ -308,6 +308,11 @@ const RISK_TIERS = {
   // Same fields on an existing supplier: rerouting a known supplier's
   // payments is the more likely fraud, so the update is no lower.
   update_supplier: 'medium',
+  // Moves a duplicate customer's invoices, orders and schedules to the card
+  // that stays and archives the duplicate (crm#1299). Nothing is booked and
+  // the dashboard can undo it, but issued invoices then show the survivor's
+  // buyer details: never a silent auto-commit.
+  merge_customers: 'medium',
   // Company payment settings control where customers send money on future
   // invoices. Treat changes like supplier payment-routing data: reversible,
   // but never eligible for silent low-risk auto-commit.

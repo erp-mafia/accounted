@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useMemo } from 'react'
+import { useState, useEffect, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -44,6 +44,12 @@ interface CorrectionLine {
   line_description: string
 }
 
+/** The overrides a resubmit carries after the user confirmed a refusal. */
+interface SubmitFlags {
+  allowDeepChain?: boolean
+  sidesSwapped?: boolean
+}
+
 interface Props {
   entry: JournalEntry
   open: boolean
@@ -69,10 +75,19 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         : 'ready'
   const [lines, setLines] = useState<CorrectionLine[]>([])
   const [description, setDescription] = useState('')
+  // The rättelse's own date (crm#1368). Prefilled with the original's; the
+  // storno always stays on the original's date.
+  const [entryDate, setEntryDate] = useState('')
   const [isSubmitting, setIsSubmitting] = useState(false)
   // Non-null when the server refused with CORRECTION_CHAIN_TOO_DEEP: holds the
   // reported chain depth and opens the bypass confirm ("Rätta ändå").
   const [deepChainDepth, setDeepChainDepth] = useState<number | null>(null)
+  // True when the server refused lines that are the original with debit and
+  // credit swapped (MEANINGLESS_CORRECTION, negates_original): a second
+  // reversal unless the original itself had the sides swapped (crm#1397).
+  const [negatesOriginal, setNegatesOriginal] = useState(false)
+  // The overrides of the last submit, so a second confirm keeps the first.
+  const lastFlags = useRef<SubmitFlags>({})
   // Index of the line whose combobox opened the create dialog, and the search
   // string it was showing. Null index = the dialog is closed.
   const [creatingAccountForLine, setCreatingAccountForLine] = useState<number | null>(null)
@@ -109,6 +124,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
       // Pre-fill the verifikationstext with the same auto text the server
       // would generate; only a user edit is sent along (see handleSubmit).
       setDescription(autoCorrectionDescription(entry.description))
+      setEntryDate(entry.entry_date?.slice(0, 10) || '')
       void loadCatalog()
     }
   }, [open, entry.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -198,9 +214,13 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
   const hasValidLines = lines.length >= 2 && lines.every((l) => l.account_number.length === 4)
 
-  async function handleSubmit(allowDeepChain = false) {
+  const originalDate = entry.entry_date?.slice(0, 10) || ''
+  const dateChanged = entryDate.length > 0 && entryDate !== originalDate
+
+  async function handleSubmit(flags: SubmitFlags = {}) {
     if (!isBalanced || !hasValidLines) return
 
+    lastFlags.current = flags
     setIsSubmitting(true)
     try {
       const apiLines = lines.map((l) => ({
@@ -218,7 +238,9 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           // Only sent when the user changed the auto prefill: the server
           // fallback ("Rättelse: <original>") stays the source of truth.
           description: correctionDescriptionForSubmit(description, entry.description),
-          ...(allowDeepChain ? { allow_deep_chain: true } : {}),
+          ...(dateChanged ? { entry_date: entryDate } : {}),
+          ...(flags.allowDeepChain ? { allow_deep_chain: true } : {}),
+          ...(flags.sidesSwapped ? { sides_swapped: true } : {}),
         }),
       })
 
@@ -227,9 +249,15 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
       if (!res.ok) {
         // Chain-depth guard: open the bypass confirm instead of a dead-end
         // toast. "Rätta ändå" resubmits with allow_deep_chain=true.
-        const structured = (result as { error?: { code?: string; details?: { depth?: number } } })?.error
+        const structured = (result as { error?: { code?: string; details?: { depth?: number; reason?: string } } })?.error
         if (structured?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
           setDeepChainDepth(structured.details?.depth ?? 3)
+          return
+        }
+        // A second reversal: ask instead of a dead-end toast. Only a user
+        // who says the original had the sides swapped resubmits it.
+        if (structured?.code === 'MEANINGLESS_CORRECTION' && structured.details?.reason === 'negates_original') {
+          setNegatesOriginal(true)
           return
         }
         const error = new Error('Failed to create correction') as Error & { body?: unknown; status?: number }
@@ -238,6 +266,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
         throw error
       }
       setDeepChainDepth(null)
+      setNegatesOriginal(false)
 
       const correctedId = result.data?.corrected?.id
 
@@ -276,8 +305,8 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
               <p>
                 Här skapas automatiskt en stornoverifikation som nollställer
                 originalet och en ny verifikation med dina rättade uppgifter.
-                Rättelsen bokförs i samma räkenskapsperiod som originalet: du
-                hittar den under originalets räkenskapsår.
+                Stornon bokförs på originalets datum, rättelsen på det datum du
+                anger: samma som originalets om du inte ändrar det.
               </p>
               <p>
                 Spårbarheten ligger i stornokedjan: originalet,
@@ -323,6 +352,21 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           <p className="text-xs text-muted-foreground">
             Texten på den nya verifikationen. Ändra den om originalets beskrivning inte längre
             stämmer, till exempel när rättelsen byter konto.
+          </p>
+        </div>
+
+        {/* The rättelse's date: the storno keeps the original's (crm#1368). */}
+        <div className="space-y-1">
+          <Label htmlFor="correction-entry-date">{t('correction_date_label')}</Label>
+          <Input
+            id="correction-entry-date"
+            type="date"
+            value={entryDate}
+            onChange={(e) => setEntryDate(e.target.value)}
+            className="w-44"
+          />
+          <p className="text-xs text-muted-foreground">
+            {t('correction_date_hint', { date: formatDate(entry.entry_date) })}
           </p>
         </div>
 
@@ -403,7 +447,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </Button>
           <Button
             onClick={() => handleSubmit()}
-            disabled={!isBalanced || !hasValidLines || isSubmitting}
+            disabled={!isBalanced || !hasValidLines || entryDate.length === 0 || isSubmitting}
           >
             {isSubmitting ? 'Skapar...' : 'Skapa ändringsverifikation'}
           </Button>
@@ -425,10 +469,35 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
                 {t('deep_chain_cancel')}
               </Button>
               <Button
-                onClick={() => { setDeepChainDepth(null); void handleSubmit(true) }}
+                onClick={() => { setDeepChainDepth(null); void handleSubmit({ ...lastFlags.current, allowDeepChain: true }) }}
                 disabled={isSubmitting}
               >
                 {t('deep_chain_correct_anyway')}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Second-reversal confirm (crm#1397): the lines are the original
+            with debit and credit swapped. Cancelling is the default; the
+            override is for an original booked the wrong way round. */}
+        <Dialog open={negatesOriginal} onOpenChange={(next) => { if (!next) setNegatesOriginal(false) }}>
+          <DialogContent className="sm:max-w-md">
+            <DialogHeader>
+              <DialogTitle>{t('negates_original_title')}</DialogTitle>
+            </DialogHeader>
+            <p className="text-sm text-muted-foreground">
+              {t('negates_original_body', { voucher: formatVoucher(entry) })}
+            </p>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setNegatesOriginal(false)} disabled={isSubmitting}>
+                {t('negates_original_cancel')}
+              </Button>
+              <Button
+                onClick={() => { setNegatesOriginal(false); void handleSubmit({ ...lastFlags.current, sidesSwapped: true }) }}
+                disabled={isSubmitting}
+              >
+                {t('negates_original_confirm')}
               </Button>
             </DialogFooter>
           </DialogContent>

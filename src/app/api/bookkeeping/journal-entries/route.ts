@@ -11,8 +11,9 @@ import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
   MissingUnderlagQueryError,
-  resolveMissingUnderlagEntries,
-  type MissingUnderlagEntry,
+  listMissingUnderlagPage,
+  missingUnderlagOrder,
+  type MissingUnderlagPage,
 } from '@/lib/bookkeeping/missing-underlag'
 import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
 
@@ -94,28 +95,29 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   const sortDateParam = soloDateKey ? (soloDateKey.ascending ? 'asc' : 'desc') : sortDate === 'asc' ? 'asc' : 'desc'
 
   if (missingUnderlag) {
-    // The missing-underlag predicate spans three tables (current-version
-    // documents, anchored supplier-invoice references per BFL 5 kap 7 §, and
-    // journal_entry_no_doc_required exemptions), which PostgREST cannot
-    // express as a row filter. So this path resolves the FULL missing set via
-    // the shared helper (the same code the bulk "Inget underlag krävs" route
-    // uses, mirroring the verifikat_without_documents RPC that feeds the
-    // dashboard badge), sorts it with the active sort stack, pages it, and
-    // fetches only the page's rows. count is the full filtered total, so
-    // pagination and the dialog badge stay honest.
+    // The missing-underlag predicate spans documents, anchored supplier-invoice
+    // references and issued customer invoices (BFL 5 kap 7 § hänvisning), and
+    // journal_entry_no_doc_required exemptions, which PostgREST cannot express
+    // as a row filter. The list_verifikat_missing_underlag RPC (the
+    // verifikat_without_documents predicate that feeds the dashboard badge,
+    // narrowed by this list's filters) resolves, sorts and pages the set in
+    // one statement and returns the page's ids with the full filtered total,
+    // so pagination and the dialog badge stay honest; this path then fetches
+    // only the page's rows. The same helper backs the bulk "Inget underlag
+    // krävs" route. Resolving the set here instead cost hundreds of
+    // sequential round trips on a long ledger (crm#1390).
     //
     // collapse_corrections is deliberately NOT applied here: the dashboard
     // badge has no collapse notion, and hiding corrected originals would make
     // the filtered list disagree with the count that led the user here.
-    let missing
+    let page: MissingUnderlagPage
     try {
-      missing = await resolveMissingUnderlagEntries(supabase, companyId, {
-        periodId,
-        series: seriesFilter,
-        dateFrom,
-        dateTo,
-        search,
-      })
+      page = await listMissingUnderlagPage(
+        supabase,
+        companyId,
+        { periodId, series: seriesFilter, dateFrom, dateTo, search },
+        { order: missingUnderlagOrder(sortKeys, sortDate), limit, offset },
+      )
     } catch (err) {
       if (err instanceof MissingUnderlagQueryError) {
         // err.message is the user-facing Swedish text; the driver error is
@@ -129,60 +131,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       throw err
     }
 
-    // Sort the full set with the same key semantics as the direct query
-    // below: the sort stack in priority order, a voucher tiebreak in the last
-    // key's direction unless voucher is already a key, and a final id
-    // tiebreak for a stable total order across page requests.
-    const keys =
-      sortKeys.length > 0
-        ? sortKeys
-        : sortDate === 'asc' || sortDate === 'desc'
-          ? [{ column: 'date' as const, ascending: dateAscending }]
-          : []
-    const compareVoucher = (a: MissingUnderlagEntry, b: MissingUnderlagEntry) => {
-      const seriesA = a.voucher_series ?? ''
-      const seriesB = b.voucher_series ?? ''
-      if (seriesA !== seriesB) return seriesA < seriesB ? -1 : 1
-      return (a.voucher_number ?? 0) - (b.voucher_number ?? 0)
-    }
-    const compareBy = (
-      column: 'date' | 'voucher' | 'total' | 'description',
-      a: MissingUnderlagEntry,
-      b: MissingUnderlagEntry,
-    ) => {
-      switch (column) {
-        case 'date': {
-          const dateA = a.entry_date ?? ''
-          const dateB = b.entry_date ?? ''
-          return dateA < dateB ? -1 : dateA > dateB ? 1 : 0
-        }
-        case 'voucher':
-          return compareVoucher(a, b)
-        case 'total':
-          return (a.display_amount ?? 0) - (b.display_amount ?? 0)
-        case 'description': {
-          const descA = a.description ?? ''
-          const descB = b.description ?? ''
-          return descA < descB ? -1 : descA > descB ? 1 : 0
-        }
-      }
-    }
-    const lastAscending = keys.length > 0 ? keys[keys.length - 1].ascending : true
-    const sorted = [...missing].sort((a, b) => {
-      for (const key of keys) {
-        const cmp = compareBy(key.column, a, b)
-        if (cmp !== 0) return key.ascending ? cmp : -cmp
-      }
-      if (!keys.some((k) => k.column === 'voucher')) {
-        const cmp = compareVoucher(a, b)
-        if (cmp !== 0) return lastAscending ? cmp : -cmp
-      }
-      const cmp = a.id < b.id ? -1 : a.id > b.id ? 1 : 0
-      return lastAscending ? cmp : -cmp
-    })
-
-    const total = sorted.length
-    const pageIds = sorted.slice(offset, offset + limit).map((e) => e.id)
+    const { total, ids: pageIds } = page
     if (pageIds.length === 0) {
       return NextResponse.json({ data: [], count: total })
     }

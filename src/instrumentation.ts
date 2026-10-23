@@ -3,6 +3,7 @@ import type { Instrumentation } from 'next'
 // this file's module graph is loaded in every runtime Next boots, and the
 // predicate is a dependency-free pure function.
 import { isClientDisconnectError } from '@/lib/observability/is-client-disconnect'
+import { redactRequestPath, redactedError } from '@/lib/observability/redact'
 
 /**
  * Loads lib/init (the core event handlers and every enabled extension) for
@@ -67,8 +68,11 @@ export const onRequestError: Instrumentation.onRequestError = async (err, reques
     const raw = headers?.['x-posthog-distinct-id']
     const distinctId = Array.isArray(raw) ? raw[0] : raw
 
-    posthog.captureException(err instanceof Error ? err : new Error(String(err)), distinctId, {
-      path: request.path,
+    // Redacted like every other path into the vendor (lib/observability/sink.ts
+    // header): the path carries its query string, where an org number is a
+    // sole trader's personnummer, and a message can quote input.
+    posthog.captureException(redactedError(err), distinctId, {
+      path: redactRequestPath(request.path),
       method: request.method,
     })
     // Vercel tears the function down per invocation: without the awaited

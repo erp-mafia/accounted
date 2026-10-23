@@ -616,3 +616,166 @@ Example response `200`:
   }
 }
 ```
+
+---
+
+### `POST /api/v1/companies/{companyId}/customers/merge`
+
+**Merge duplicate customers into one.**
+`scope:customers:write · risk:medium · idempotent · dry-run · reversible`
+
+Moves every invoice (quotes, proformas and credit notes included), sales order, recurring invoice, deadline and import source mapping of the merged customers to the survivor in one transaction, then archives the merged customers (kept, never deleted: issued invoices named them). Nothing on the survivor changes and no verifikat is touched. Refuses customers that state different org numbers, VAT numbers or personal numbers. The dry run answers the same counts and writes nothing. Requires Idempotency-Key.
+
+**Use when:** One buyer has two or more customer cards, e.g. a card created by hand before an import from Fortnox or Visma, and its invoice history is split between them. Dry-run first and check the counts.
+**Do not use for:** Two different buyers that share an org number (departments of one authority): those are separate customers. Merging counterparties (Motparter), which have their own merge in the dashboard. Correcting a customer's details (PATCH the customer).
+
+**Pitfalls:**
+- Idempotency-Key is mandatory.
+- The survivor must be an active customer; a merged customer may already be archived.
+- Issued invoices show the survivor's name and address from now on: pick the card whose details are right, or correct it first.
+- Archived merged customers stay in the register for the retention period and cannot be hard-deleted.
+- Undo is in the dashboard for 30 days (the toast after the merge).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{ survivor_customer_id: string, merged_customer_ids: string[] }
+```
+
+Example request:
+```json
+{
+  "survivor_customer_id": "7c1e…",
+  "merged_customer_ids": [
+    "9a42…"
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    survivor: { customer_id: string, name: string, customer_number: string | null },
+    merged: { customer_id: string, name: string, customer_number: string | null, merge_id: string | null, was_archived: boolean, invoices: number, sales_orders: number, recurring_invoice_schedules: number, deadlines: number, source_records: number }[],
+    totals: { invoices: number, sales_orders: number, recurring_invoice_schedules: number, deadlines: number }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "survivor": {
+      "customer_id": "7c1e…",
+      "name": "Exempel AB",
+      "customer_number": "120"
+    },
+    "merged": [
+      {
+        "customer_id": "9a42…",
+        "name": "Exempel AB",
+        "customer_number": "120",
+        "merge_id": "3f0d…",
+        "was_archived": false,
+        "invoices": 1,
+        "sales_orders": 0,
+        "recurring_invoice_schedules": 0,
+        "deadlines": 0,
+        "source_records": 0
+      }
+    ],
+    "totals": {
+      "invoices": 1,
+      "sales_orders": 0,
+      "recurring_invoice_schedules": 0,
+      "deadlines": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/customers/merges/{mergeId}/undo`
+
+**Undo a customer merge.**
+`scope:customers:write · risk:medium · idempotent · dry-run · reversible`
+
+Within 30 days of a merge: moves the invoices, sales orders, recurring invoices, deadlines and import source mappings the merge moved back to the merged customer, where they still point at the survivor, and restores the merged customer's archived state. Rows written to the survivor after the merge stay. The dry run checks the merge exists and can be undone. Requires Idempotency-Key.
+
+**Use when:** A merge joined two customers that are not the same buyer.
+**Do not use for:** Splitting rows that were on the survivor before the merge: only what the merge moved comes back.
+
+**Pitfalls:**
+- merge_id is merged[].merge_id from the merge's answer.
+- Refused with CUSTOMER_MERGE_UNDO_BLOCKED while the survivor has since been merged into another customer: undo that merge first.
+- After 30 days: CUSTOMER_MERGE_UNDO_EXPIRED.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `mergeId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: {
+    merge_id: string,
+    survivor_customer_id: string,
+    restored_customer_id: string,
+    restored: { invoices: number, sales_orders: number, recurring_invoice_schedules: number, deadlines: number, source_records: number }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "merge_id": "3f0d…",
+    "survivor_customer_id": "7c1e…",
+    "restored_customer_id": "9a42…",
+    "restored": {
+      "invoices": 1,
+      "sales_orders": 0,
+      "recurring_invoice_schedules": 0,
+      "deadlines": 0,
+      "source_records": 0
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```

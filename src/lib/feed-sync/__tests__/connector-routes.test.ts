@@ -10,11 +10,15 @@ vi.mock('@/lib/auth/rate-limit-http', () => ({
 vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: vi.fn(() => ({ service: true })),
 }))
+vi.mock('../ledger-coverage', () => ({
+  ledgerCoveredThrough: vi.fn().mockResolvedValue(null),
+}))
 
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { ExtensionContext } from '@/lib/extensions/types'
+import { ledgerCoveredThrough } from '../ledger-coverage'
 import {
   feedBackfillRoute,
   feedConnectorRoutes,
@@ -34,6 +38,7 @@ function spec(overrides: Partial<FeedConnectorSpec<Row, Summary>> = {}): FeedCon
     capability: CAPABILITY.shopify_sync,
     cursorColumn: 'cursor_at',
     maxBackfillYears: 3,
+    settlementAccounts: ['1686'],
     notConnectedMessage: 'Ingen anslutning.',
     statusColumns: 'id, status',
     isConfigured: () => true,
@@ -78,6 +83,7 @@ const ACTIVE: Row = { id: 'c1', company_id: 'company-1', status: 'active', curso
 
 beforeEach(() => {
   vi.clearAllMocks()
+  vi.mocked(ledgerCoveredThrough).mockResolvedValue(null)
 })
 
 describe('feedConnectorRoutes', () => {
@@ -157,12 +163,73 @@ describe('POST /backfill', () => {
 
   it('syncs from the chosen date', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
-    serviceReturning({ data: [ACTIVE] })
+    const service = serviceReturning({ data: [ACTIVE] })
     enqueue({ data: [] })
     const s = spec()
     const res = await feedBackfillRoute(s).handler(request('POST', { from: '2026-01-01' }), context(supabase))
     expect(res.status).toBe(200)
     expect(vi.mocked(s.sync).mock.calls[0][1].cursor_at).toBe('2026-01-01T00:00:00.000Z')
+    expect(ledgerCoveredThrough).toHaveBeenCalledWith(service.supabase, 'company-1', ['1686'], '2026-01-01')
+    expect((await res.json()).booked_through).toBeNull()
+  })
+
+  it('starts after the days the books already hold, never inside them (crm#1386)', async () => {
+    // A hand-entered samlingsverifikat on 1686 covers 1-17 October; the user
+    // asked from the 17th to catch one payment of the 18th.
+    vi.mocked(ledgerCoveredThrough).mockResolvedValueOnce('2026-10-17')
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    serviceReturning({ data: [ACTIVE] })
+    enqueue({ data: [] })
+    const s = spec({ backfillCursor: (day) => `${day}T-start` })
+    const res = await feedBackfillRoute(s).handler(request('POST', { from: '2026-10-17' }), context(supabase))
+    expect(res.status).toBe(200)
+    expect(findCalls('feed_connections', 'update')[0][0]).toEqual({ cursor_at: '2026-10-18T-start', error_message: null })
+    expect(vi.mocked(s.sync).mock.calls[0][1].cursor_at).toBe('2026-10-18T-start')
+    const body = await res.json()
+    expect(body.from).toBe('2026-10-18T-start')
+    expect(body.booked_through).toBe('2026-10-17')
+  })
+
+  it('reaches into booked days only when the caller says include_booked', async () => {
+    vi.mocked(ledgerCoveredThrough).mockResolvedValue('2026-10-17')
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    serviceReturning({ data: [ACTIVE] })
+    enqueue({ data: [] })
+    const s = spec()
+    const res = await feedBackfillRoute(s).handler(
+      request('POST', { from: '2026-10-01', include_booked: true }),
+      context(supabase),
+    )
+    expect(res.status).toBe(200)
+    expect(ledgerCoveredThrough).not.toHaveBeenCalled()
+    expect(vi.mocked(s.sync).mock.calls[0][1].cursor_at).toBe('2026-10-01T00:00:00.000Z')
+    expect((await res.json()).booked_through).toBeNull()
+  })
+
+  it('leaves the cursor alone when the books already hold every day asked for', async () => {
+    vi.mocked(ledgerCoveredThrough).mockResolvedValueOnce('2999-12-31')
+    const { supabase, findCalls } = createQueuedMockSupabase()
+    serviceReturning({ data: [ACTIVE] })
+    const s = spec()
+    const res = await feedBackfillRoute(s).handler(request('POST', { from: '2026-10-01' }), context(supabase))
+    expect(res.status).toBe(200)
+    expect(findCalls('feed_connections', 'update')).toHaveLength(0)
+    // An ordinary sync from where the feed stands.
+    expect(vi.mocked(s.sync).mock.calls[0][1].cursor_at).toBe(ACTIVE.cursor_at)
+    const body = await res.json()
+    expect(body.from).toBeNull()
+    expect(body.booked_through).toBe('2999-12-31')
+  })
+
+  it('moves nothing when the books cannot be read', async () => {
+    vi.mocked(ledgerCoveredThrough).mockRejectedValueOnce(new Error('statement timeout'))
+    const { supabase, findCalls } = createQueuedMockSupabase()
+    serviceReturning({ data: [ACTIVE] })
+    const s = spec()
+    const res = await feedBackfillRoute(s).handler(request('POST', { from: '2026-10-01' }), context(supabase))
+    expect(res.status).toBe(500)
+    expect(findCalls('feed_connections', 'update')).toHaveLength(0)
+    expect(s.sync).not.toHaveBeenCalled()
   })
 
   it("lets a connector say where the chosen day starts (validated day in, cursor out)", async () => {

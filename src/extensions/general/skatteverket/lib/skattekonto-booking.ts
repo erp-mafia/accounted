@@ -22,6 +22,14 @@ import { VAT_REFUND_ACCOUNT, VAT_ROUNDING_ACCOUNT, VAT_SETTLEMENT_ACCOUNT } from
 import { SALARY_ACCOUNTS } from '@/lib/salary/account-mapping'
 import { findAvgifterLiabilityAccount } from '@/lib/salary/agi/avgifter-liability-account'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { buildRotRutPayoutLines, type RotRutPayoutLeg } from '@/lib/bookkeeping/rot-rut-entries'
+import { installmentOutputVat } from '@/lib/bookkeeping/invoice-lines'
+import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-candidates'
+import { findRotRutPayoutMatch } from '@/lib/invoices/rot-rut-payout-matching'
+import { getPayoutRecognition } from '@/lib/invoices/rot-rut-payout-recognition'
+import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
+import { attachRotRutPayoutVoucher } from '@/lib/invoices/rot-rut-settle'
 import {
   findLedgerTwinCandidates,
   findLedgerTwinCandidatesForIds,
@@ -141,6 +149,14 @@ export interface CounterAccountMatch {
    * counter account then takes the receivable, not the refund.
    */
   oreRounding?: number
+  /**
+   * Only on a rot/rut set-off under kontantmetoden that pays one open
+   * begäran (resolveRotRutSetOffCounterAccount): the payout leg. The
+   * verifikat then books the payout's own lines with the skattekonto as the
+   * money-in account (buildRotRutPayoutLines) instead of one counter line,
+   * and the booking marks the begäran paid.
+   */
+  rotRutPayout?: RotRutPayoutLeg
 }
 
 /**
@@ -273,6 +289,102 @@ async function resolveAvgifterLiabilityCounterAccount(
   const account = await readLiabilityAccount(eventDate)
   if (!account || account === match.account) return match
   return { ...match, account }
+}
+
+/** The receivable a rot/rut payout clears (1513 in the SE pack), the kvittning seed rule's account. */
+const ROT_RUT_RECEIVABLE = resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable')
+
+/**
+ * What a rot/rut set-off pays: the payout leg of the one open begäran it
+ * matches, 'refuse' when the payout cannot be split per invoice, null when
+ * the rule's 1513 stands.
+ */
+type RotRutSetOffReader = (event: {
+  belopp: number
+  transaktionsdatum: string
+  transaktionstext: string
+}) => Promise<RotRutPayoutLeg | 'refuse' | null>
+
+/**
+ * The payout behind a "Kvittning av utbetalning för rot- och rutarbeten"
+ * (#93). Under kontantmetodens two steps (rot-rut-payout-recognition.ts) the
+ * customer's payment left Skatteverket's share unbooked and 1513 holds
+ * nothing, so crediting 1513 for the set-off drives it negative and never
+ * books the share's försäljning and moms. The set-off is the payout itself,
+ * received on the skattekonto: it books exactly what the settle flow books
+ * for a payout (getPayoutOreRounding, getPayoutRecognition, then
+ * buildRotRutPayoutLines), against the begäran the bank matcher would pick
+ * for the amount (findRotRutPayoutMatch: exactly one open begäran expecting
+ * it). Only on positive evidence, as the payout: faktureringsmetoden, no or
+ * several matching begäran, no invoice on the two steps, or a failed read
+ * keep the rule's 1513. A partial beslut over several invoices without
+ * per-invoice amounts refuses ('refuse'): never guessed. The accounting
+ * method is read once; the open begäran fresh per row, so a batch never
+ * books one begäran twice.
+ */
+function readRotRutSetOff(supabase: SupabaseClient, companyId: string): RotRutSetOffReader {
+  let method: Promise<string | null> | null = null
+  return async (event) => {
+    if (!(event.belopp > 0)) return null
+    method ??= Promise.resolve(
+      supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
+    ).then(
+      ({ data, error }) => (error ? null : ((data as { accounting_method?: string | null } | null)?.accounting_method ?? null)),
+      () => null,
+    )
+    if ((await method) !== 'cash') return null
+    const match = findRotRutPayoutMatch(
+      { amount: event.belopp, currency: 'SEK', description: event.transaktionstext },
+      await loadOpenRotRutPayoutRequests(supabase, companyId),
+    )
+    if (!match) return null
+    const request = match.request
+    const amount = roundOre(event.belopp)
+    try {
+      const [ore, recognition] = await Promise.all([
+        amount >= Number(request.requested_total)
+          ? getPayoutOreRounding(supabase, companyId, request, amount)
+          : Promise.resolve({ rounding: 0, invoiceCount: 0 }),
+        getPayoutRecognition(supabase, companyId, request, amount, event.transaktionsdatum),
+      ])
+      if (!recognition.ok) return 'code' in recognition ? 'refuse' : null
+      if (!recognition.recognition) return null
+      return {
+        requestId: request.id,
+        requestName: request.name,
+        deductionType: request.deduction_type,
+        amount,
+        oreRounding: ore.rounding,
+        invoiceCount: ore.invoiceCount,
+        recognition: { amount: recognition.recognition.amount, lines: recognition.recognition.lines },
+      }
+    } catch {
+      return null
+    }
+  }
+}
+
+/**
+ * The seed kvittning rule's 1513, re-routed to the payout of its begäran
+ * under kontantmetoden (readRotRutSetOff). Everything else keeps the rule's
+ * account: a company's own rule, another account, a debit event, and no
+ * payout found.
+ */
+async function resolveRotRutSetOffCounterAccount(
+  match: CounterAccountMatch,
+  seedRule: boolean,
+  event: { transaktionstext: string; belopp: number | undefined; transaktionsdatum: string | undefined },
+  readSetOff: RotRutSetOffReader,
+): Promise<CounterAccountMatch | 'refuse'> {
+  if (!seedRule || match.account !== ROT_RUT_RECEIVABLE) return match
+  if (event.belopp === undefined || !(event.belopp > 0) || !event.transaktionsdatum) return match
+  const leg = await readSetOff({
+    belopp: event.belopp,
+    transaktionsdatum: event.transaktionsdatum,
+    transaktionstext: event.transaktionstext,
+  })
+  if (leg === 'refuse') return 'refuse'
+  return leg ? { ...match, rotRutPayout: leg } : match
 }
 
 /**
@@ -441,6 +553,7 @@ export async function guessCounterAccount(
       employerRegistered,
       resolvePrimarySek: () => resolvePrimarySekAccount(supabase, companyId),
       readAvgifterLiability: readAvgifterLiabilityAccount(supabase, companyId),
+      readRotRutSetOff: readRotRutSetOff(supabase, companyId),
     },
     { transaktionstext, belopp, transaktionsdatum: eventDate },
     readVatReceivableBalance(supabase, companyId),
@@ -467,6 +580,9 @@ export interface SkattekontoRuleContext {
   /** Where the avgifter liability sits per event date, memoized: read only
    *  when the seed arbetsgivaravgift rule matches. */
   readAvgifterLiability: AvgifterLiabilityReader
+  /** The payout a rot/rut set-off pays under kontantmetoden: read only when
+   *  the seed kvittning rule matches (readRotRutSetOff). */
+  readRotRutSetOff: RotRutSetOffReader
 }
 
 export async function loadRuleContext(
@@ -485,6 +601,7 @@ export async function loadRuleContext(
       employerRegistered: false,
       resolvePrimarySek: async () => PRIMARY_SEK_FALLBACK,
       readAvgifterLiability: async () => null,
+      readRotRutSetOff: async () => null,
     }
   }
 
@@ -517,6 +634,7 @@ export async function loadRuleContext(
       return primary
     },
     readAvgifterLiability: readAvgifterLiabilityAccount(supabase, companyId),
+    readRotRutSetOff: readRotRutSetOff(supabase, companyId),
   }
 }
 
@@ -527,9 +645,11 @@ export async function loadRuleContext(
  * (matchSkattekontoRule: legal form, amount bounds, the employer gate),
  * resolves the __PRIMARY_SEK__ sentinel against cash_accounts, lets a
  * seed-rule VAT refund clear the 1650 receivable
- * (resolveVatRefundCounterAccount), and moves a seed-rule avgift event onto
+ * (resolveVatRefundCounterAccount), moves a seed-rule avgift event onto
  * the account the company's liability sits on
- * (resolveAvgifterLiabilityCounterAccount). A caller only chooses how the 1650
+ * (resolveAvgifterLiabilityCounterAccount), and books a seed-rule rot/rut
+ * set-off under kontantmetoden as its begäran's payout
+ * (resolveRotRutSetOffCounterAccount). A caller only chooses how the 1650
  * balance is read: fresh per row when booking, the page's remaining
  * receivable when suggesting.
  */
@@ -561,12 +681,15 @@ async function resolveCounterAccount(
     event.transaktionsdatum,
     readBalance,
   )
-  const match = await resolveAvgifterLiabilityCounterAccount(
+  const avgifterMatch = await resolveAvgifterLiabilityCounterAccount(
     vatMatch,
     outcome.seedRule,
     event.transaktionsdatum,
     ctx.readAvgifterLiability,
   )
+  const match = await resolveRotRutSetOffCounterAccount(avgifterMatch, outcome.seedRule, event, ctx.readRotRutSetOff)
+  // The payout cannot be split per invoice: no account is better than a guess.
+  if (match === 'refuse') return { kind: 'none' }
   return { ...outcome, match }
 }
 
@@ -674,6 +797,15 @@ export async function attachBookingSuggestions<
         account_name: getBASReference(match.account)?.account_name ?? null,
         label: match.label,
         ...(match.oreRounding ? { ore_rounding: match.oreRounding } : {}),
+        ...(match.rotRutPayout
+          ? {
+              rot_rut_payout: {
+                request_id: match.rotRutPayout.requestId,
+                request_name: match.rotRutPayout.requestName,
+                leg: match.rotRutPayout,
+              },
+            }
+          : {}),
       },
     })
   }
@@ -1010,6 +1142,8 @@ export interface SkattekontoEntrySource {
  * the builder bokforSkattekontoTransaction posts with and the MCP staging
  * preview shows (toEntryPreview), so the approver reads the executor's own
  * lines, not a description of them. Sign convention at the top of the file.
+ * A rot/rut set-off with guess.rotRutPayout books the payout's lines
+ * (buildRotRutPayoutLines) in place of the one counter line.
  */
 export function buildSkattekontoEntry(
   tx: SkattekontoEntrySource,
@@ -1034,7 +1168,19 @@ export function buildSkattekontoEntry(
           },
         ]
 
-  const lines: CreateJournalEntryLineInput[] = isCreditToSkattekonto
+  // A rot/rut set-off under kontantmetoden is its begäran's payout: the
+  // payout's own lines, with the skattekonto as the money in.
+  const payout =
+    isCreditToSkattekonto && guess.rotRutPayout
+      ? buildRotRutPayoutLines({ bankAccount: account, legs: [guess.rotRutPayout] })
+      : null
+  if (payout && payout.total !== roundOre(amount)) {
+    throw new Error(`Rot/rut-utbetalningen ${payout.total} stämmer inte med skattekontohändelsen ${amount}`)
+  }
+
+  const lines: CreateJournalEntryLineInput[] = payout
+    ? [{ ...payout.lines[0], line_description: tx.transaktionstext }, ...payout.lines.slice(1)]
+    : isCreditToSkattekonto
     ? [
         {
           account_number: account,
@@ -1090,9 +1236,13 @@ export function buildSkattekontoEntry(
 export function skattekontoBusinessEvent(
   tx: Pick<SkattekontoEntrySource, 'transaktionsdatum' | 'belopp_skatteverket'>,
   linkBasis: LinkBasisColumns,
+  /** The utgående moms a rot/rut set-off books as its begäran's payout (CounterAccountMatch.rotRutPayout). */
+  recognisedVatSek = 0,
 ): BusinessEventDraft {
   const belopp = Number(tx.belopp_skatteverket)
+  const vat = Math.abs(recognisedVatSek)
   return {
+    ...(vat > 0 ? { taxAmounts: [{ tax: 'vat' as const, treatment: null, amount_sek: vat }] } : {}),
     kind: 'se.tax_account.booked',
     category: 'se.tax.settlement',
     occurredOn: tx.transaktionsdatum,
@@ -1321,7 +1471,10 @@ export async function bokforSkattekontoTransaction(
   // the rule match. Linking is no way out (no skattekonto line to link):
   // the answer is to leave the row unbooked, or to correct the verifikat;
   // the same override books it anyway.
-  const counter = counterLineOf(built, ctx.account)
+  // A set-off booked as its begäran's payout has no single counter line; the
+  // open begäran it matched is its duplicate guard (a payout booked anywhere
+  // else settled it).
+  const counter = guess.rotRutPayout ? null : counterLineOf(built, ctx.account)
   const direct =
     twins.length === 0 && !held && counter
       ? options?.ledgerDirect && sameCounterLine(options.ledgerDirect.counter, counter)
@@ -1406,7 +1559,12 @@ export async function bokforSkattekontoTransaction(
       companyId,
       userId,
       // Built only while the port is on: off, the call is the one it was.
-      event: () => skattekontoBusinessEvent(tx, linkBasisColumns('user_created')),
+      event: () =>
+        skattekontoBusinessEvent(
+          tx,
+          linkBasisColumns('user_created'),
+          installmentOutputVat(guess.rotRutPayout?.recognition?.lines ?? []),
+        ),
       input,
     })
   } catch (err) {
@@ -1417,6 +1575,28 @@ export async function bokforSkattekontoTransaction(
       )
     }
     throw err
+  }
+
+  // A set-off booked as its begäran's payout settles the begäran with the
+  // settle flow's own writes, before the row is claimed: a begäran settled
+  // meanwhile (a bank row matched to it) refuses the row instead of booking
+  // the payout twice. The draft is then left behind unlinked, like below.
+  if (guess.rotRutPayout) {
+    const attached = await attachRotRutPayoutVoucher(supabase, companyId, {
+      requestId: guess.rotRutPayout.requestId,
+      journalEntryId: entry.id,
+      amount: guess.rotRutPayout.amount,
+    })
+    if (!attached.ok) {
+      if (attached.kind === 'error') {
+        throw new Error(`Rot/rut-begäran ${guess.rotRutPayout.requestName} kunde inte markeras som utbetald.`)
+      }
+      throw new SkattekontoBookingError(
+        `Rot/rut-begäran ${guess.rotRutPayout.requestName} har redan bokförts som utbetald. ` +
+          'Ladda om och försök igen.',
+        'ALREADY_BOOKED',
+      )
+    }
   }
 
   // Link the row back so the dashboard can show "Bokförd" status. The
@@ -1528,7 +1708,7 @@ export async function bokforSkattekontoTransactionsBatch(
         },
         readVatReceivableBalance(supabase, companyId),
       )
-      return outcome.kind === 'match'
+      return outcome.kind === 'match' && !outcome.match.rotRutPayout
         ? counterLineOf(buildSkattekontoEntry(row, outcome.match, ruleContext.account), ruleContext.account)
         : null
     },

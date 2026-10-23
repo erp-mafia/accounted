@@ -58,6 +58,7 @@ const mockedCreateEntry = vi.mocked(createJournalEntry)
 const mockedFindFiscalPeriod = vi.mocked(findFiscalPeriod)
 
 const {
+  buildSupplierInvoiceRegistrationEntryInput,
   createSupplierInvoiceRegistrationEntry,
   createSupplierInvoicePaymentEntry,
   createSupplierInvoiceCashEntry,
@@ -3651,5 +3652,72 @@ describe('kontantmetoden: EU goods registered in March and paid in May (#73)', (
     expect(supplierInvoiceBooksOnRegistration(accrual, { reverse_charge: true, reverse_charge_kind: 'eu_goods' }, 'eu_business')).toBe(true)
     expect(supplierInvoiceBooksOnRegistration(accrual, { reverse_charge: true, reverse_charge_kind: 'eu_services' }, 'eu_business')).toBe(true)
     expect(supplierInvoiceBooksOnRegistration(accrual, { reverse_charge: false }, 'swedish_business')).toBe(true)
+  })
+})
+
+// ============================================================
+// #93: ML 2023:200 7 kap. 26 and 40 §§ report an EU goods acquisition's moms
+// at the latest for the period holding the 15th of the month after the
+// delivery month, so a late invoice's registration is dated on that 15th
+// ============================================================
+
+describe('EU goods registration: at the latest the 15th of the month after delivery (#93)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mockedFindFiscalPeriod.mockResolvedValue('period-1')
+  })
+
+  const items = [makeItem({ line_total: 1000, account_number: '4010', vat_rate: 0 })]
+  const euGoods = (overrides: Partial<SupplierInvoice>) => makeSupplierInvoice({
+    subtotal: 1000, vat_amount: 0, total: 1000, remaining_amount: 1000,
+    reverse_charge: true, reverse_charge_kind: 'eu_goods', ...overrides,
+  })
+
+  it.each([
+    ['kontantmetoden', { accounting_method: 'cash' }],
+    ['faktureringsmetoden', { accounting_method: 'accrual' }],
+  ])('dates a January delivery invoiced in March on 15 February under %s', async (_label, settings) => {
+    const { supplierInvoiceBooksOnRegistration } = await import('../booking-mode')
+    const invoice = euGoods({ invoice_date: '2026-03-05', delivery_date: '2026-01-10' })
+    expect(supplierInvoiceBooksOnRegistration(settings, invoice, 'eu_business')).toBe(true)
+
+    await createSupplierInvoiceRegistrationEntry(null as never, 'company-1', 'user-1', invoice, items, 'eu_business')
+    const reg = mockedCreateEntry.mock.calls[0][3]
+    expect(reg.entry_date).toBe('2026-02-15')
+    expect(mockedFindFiscalPeriod).toHaveBeenCalledWith(null, 'company-1', '2026-02-15')
+    // The same verifikat, only its date moves: ruta 20, 30 and 48 in February.
+    expect(findByAccount(reg.lines, '4515')[0].debit_amount).toBe(1000)
+    expect(findByAccount(reg.lines, '2614')[0].credit_amount).toBe(250)
+    expect(findByAccount(reg.lines, '2645')[0].debit_amount).toBe(250)
+    expect(findByAccount(reg.lines, '2440')[0].credit_amount).toBe(1000)
+    assertBalanced(reg)
+  })
+
+  it('keeps the invoice date for an invoice issued by the 15th, and without a delivery date', async () => {
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', euGoods({ invoice_date: '2026-02-10', delivery_date: '2026-01-10' }), items, 'eu_business',
+    )
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', euGoods({ invoice_date: '2026-03-05', delivery_date: null }), items, 'eu_business',
+    )
+    expect(mockedCreateEntry.mock.calls[0][3].entry_date).toBe('2026-02-10')
+    expect(mockedCreateEntry.mock.calls[1][3].entry_date).toBe('2026-03-05')
+  })
+
+  it('keeps the invoice date of an EU service whatever its delivery date', async () => {
+    const invoice = euGoods({ invoice_date: '2026-03-05', delivery_date: '2026-01-10', reverse_charge_kind: 'eu_services' })
+    await createSupplierInvoiceRegistrationEntry(
+      null as never, 'company-1', 'user-1', invoice, [makeItem({ line_total: 1000, account_number: '6540', vat_rate: 0 })], 'eu_business',
+    )
+    expect(mockedCreateEntry.mock.calls[0][3].entry_date).toBe('2026-03-05')
+  })
+
+  it('answers null (no fiscal period) when no year covers the registration date', async () => {
+    mockedFindFiscalPeriod.mockResolvedValue(null)
+    const input = await buildSupplierInvoiceRegistrationEntryInput(
+      null as never, 'company-1', euGoods({ invoice_date: '2026-01-20', delivery_date: '2025-11-20' }), items, 'eu_business',
+    )
+    expect(input).toBeNull()
+    expect(mockedFindFiscalPeriod).toHaveBeenCalledWith(null, 'company-1', '2025-12-15')
   })
 })

@@ -5,8 +5,8 @@ import {
   isSwedishUserMessage,
   looksLikeUserFacingSwedish,
 } from '../get-error-message'
-import { getErrorEntry, listErrorCodes } from '../structured-errors'
-import { errorResponse } from '../get-structured-error'
+import { getErrorEntry, listErrorCodes, SI_CREATE_INVALID_INPUT_REASONS } from '../structured-errors'
+import { errorResponse, errorResponseFromCode, getStructuredError } from '../get-structured-error'
 import {
   AccountsNotInChartError,
   BookkeepingDatabaseError,
@@ -627,6 +627,85 @@ describe('getErrorMessage: INVOICE_SEND_PAYMENT_ACCOUNT_MISSING (#2126)', () => 
   })
 })
 
+
+// #96, crm#1377: every SI_CREATE_INVALID_INPUT showed "Ogiltig kombination av
+// fakturafält", so the customer could not tell which rule refused the save.
+describe('getErrorMessage: SI_CREATE_INVALID_INPUT names the rule (details.reason)', () => {
+  const generic = getErrorEntry('SI_CREATE_INVALID_INPUT')!
+  const envelope = (details?: unknown) => ({
+    error: {
+      code: 'SI_CREATE_INVALID_INPUT',
+      message: generic.message_sv,
+      message_en: generic.message_en,
+      ...(details !== undefined ? { details } : {}),
+    },
+  })
+  const log = { error: () => {}, warn: () => {} }
+
+  it('shows the reason\'s own Swedish sentence, and the English one for an English UI', () => {
+    const body = envelope({ reason: 'accrual_requires_accrual_method' })
+    expect(getErrorMessage(body, { context: 'supplier_invoice', statusCode: 400 })).toBe(
+      SI_CREATE_INVALID_INPUT_REASONS.accrual_requires_accrual_method.message_sv,
+    )
+    expect(getErrorMessage(body, { locale: 'en' })).toBe(
+      SI_CREATE_INVALID_INPUT_REASONS.accrual_requires_accrual_method.message_en,
+    )
+  })
+
+  it('keeps the registry sentence without a reason or for one it does not list', () => {
+    expect(getErrorMessage(envelope(), { statusCode: 400 })).toBe(generic.message_sv)
+    expect(getErrorMessage(envelope({ reason: 'something_new' }), { statusCode: 400 })).toBe(generic.message_sv)
+    expect(getErrorMessage(envelope({ reason: 'toString' }), { statusCode: 400 })).toBe(generic.message_sv)
+    expect(getErrorMessage(envelope({ reason: 'something_new' }), { locale: 'en' })).toBe(generic.message_en)
+  })
+
+  it('every reason has a Swedish sentence the toast keeps and an English one, without dashes', () => {
+    for (const [reason, messages] of Object.entries(SI_CREATE_INVALID_INPUT_REASONS)) {
+      expect(messages.message_sv, reason).not.toBe(generic.message_sv)
+      expect(messages.message_sv, reason).not.toMatch(/[\u2013\u2014]/)
+      expect(messages.message_en, reason).not.toMatch(/[\u2013\u2014]/)
+      expect(messages.message_sv.length, reason).toBeLessThan(220)
+    }
+  })
+
+  it('the REST envelope carries the reason\'s sentences in message and message_en', async () => {
+    const res = errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+      details: { reason: 'vat_on_non_vat_registered' },
+    })
+    const body = await res.json()
+    expect(res.status).toBe(400)
+    expect(body.error.details).toEqual({ reason: 'vat_on_non_vat_registered' })
+    expect(body.error.message).toBe(SI_CREATE_INVALID_INPUT_REASONS.vat_on_non_vat_registered.message_sv)
+    expect(body.error.message_en).toBe(SI_CREATE_INVALID_INPUT_REASONS.vat_on_non_vat_registered.message_en)
+    // The dashboard toast reads the same envelope.
+    expect(getErrorMessage(body, { context: 'supplier_invoice', statusCode: 400 })).toBe(body.error.message)
+  })
+
+  it('the REST envelope keeps the registry sentence for an unlisted reason and an authored one over the reason', async () => {
+    const unlisted = await errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, { details: { reason: 'pg_check' } }).json()
+    expect(unlisted.error.message).toBe(generic.message_sv)
+    expect(unlisted.error.message_en).toBe(generic.message_en)
+
+    const authored = await errorResponseFromCode('SI_CREATE_INVALID_INPUT', log, {
+      details: { reason: 'vat_on_non_vat_registered' },
+      messageSv: 'Egen mening.',
+      messageEn: 'Own sentence.',
+    }).json()
+    expect(authored.error.message).toBe('Egen mening.')
+    expect(authored.error.message_en).toBe('Own sentence.')
+  })
+
+  it('an MCP refusal thrown with a reason gets the Swedish sentence and keeps its own English', () => {
+    const thrown = Object.assign(new Error('No line items were extracted (document total 100).'), {
+      code: 'SI_CREATE_INVALID_INPUT',
+      reason: 'lines_missing',
+    })
+    const structured = getStructuredError(thrown)
+    expect(structured.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(structured.message_sv).toBe(SI_CREATE_INVALID_INPUT_REASONS.lines_missing.message_sv)
+    expect(structured.message_en).toBe('No line items were extracted (document total 100).')
+  })
+})
 
 // Issue #2086: the keyword heuristic dropped correct Swedish route messages
 // that happened to lack one of its ~30 keywords and replaced them with generic

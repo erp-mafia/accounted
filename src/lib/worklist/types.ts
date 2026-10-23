@@ -553,7 +553,8 @@ export type InvoiceSetAllocation =
  *
  * Single source of truth for EVERY TS surface (worklist counts, journal-list
  * chip/waiver UI, no-doc-required batch route, push notifications); the SQL
- * mirror lives in the verifikat_without_documents RPC, pinned by
+ * mirrors live in the verifikat_without_documents RPC and the journal list's
+ * list_verifikat_missing_underlag RPC (change both together), pinned by
  * tests/pg/document-surfaces-unification.pg.test.ts. Lives here (not in
  * categories.ts) because this module is dependency-free and safe to import
  * from client components.

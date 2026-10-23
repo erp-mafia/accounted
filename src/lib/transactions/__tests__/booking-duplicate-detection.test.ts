@@ -29,6 +29,8 @@ type TxRow = {
   external_id?: string | null
   import_source?: string | null
   bank_connection_id?: string | null
+  provider_transaction_id?: string | null
+  bank_file_import_id?: string | null
 }
 type JeRow = { voucher_series: string | null; voucher_number: number | null; entry_date: string | null }
 
@@ -439,7 +441,8 @@ const tablesTouched: string[] = []
  * "reconciled to something else" exclusion behaviour the old tests pinned.
  */
 type LedgerTxLink = {
-  journal_entry_id: string
+  /** null for a bulk-linked row: its anchor is in transaction_voucher_links. */
+  journal_entry_id: string | null
   id?: string
   date?: string
   amount?: number | string
@@ -448,6 +451,7 @@ type LedgerTxLink = {
   external_id?: string | null
   import_source?: string | null
   bank_connection_id?: string | null
+  provider_transaction_id?: string | null
 }
 
 function makeLedgerSupabase(opts: {
@@ -455,6 +459,8 @@ function makeLedgerSupabase(opts: {
   lines?: Jel[]
   txLinks?: LedgerTxLink[]
   payLinks?: { journal_entry_id: string; transaction_id?: string | null }[]
+  /** Bulk links (bulk_book_transactions); served to both scans. */
+  voucherLinks?: { transaction_id: string; journal_entry_id: string }[]
   transactionRows?: TxRow[] // siblings for the orchestrator fall-through
 }) {
   // Fixtures stay embed-shaped for readability; the two-step fetch reads the
@@ -488,6 +494,8 @@ function makeLedgerSupabase(opts: {
           return entryLinesChain(bareLines)
         case 'invoice_payments':
           return ledgerChain({ data: opts.payLinks ?? [], error: null })
+        case 'transaction_voucher_links':
+          return ledgerChain({ data: opts.voucherLinks ?? null, error: null })
         case 'transactions':
           // Same table backs the sibling scan (.limit) and the link-exclusion
           // lookup (.in). The sibling scan returns transactionRows; the link
@@ -1073,5 +1081,163 @@ describe('provider identity: detectBookingDuplicate (orchestrator)', () => {
     })
     const result = await detectBookingDuplicate(supabase, COMPANY, stripeTarget())
     expect(result).toBeNull()
+  })
+})
+
+// ── Bank-feed and bank-file identity (crm#1312) ──────────────────────────────
+// Hundreds of Swish payments of one ticket price arrive through one bank feed.
+// After the first day's batch was bulk-booked, every row of the next batch was
+// called a copy of a row on that voucher: same amount, a day apart. Two rows of
+// one feed booked on different days, or carrying two bank ids, are two
+// payments; copies the ids cannot separate and other channels still flag.
+
+const FEED = { import_source: 'enable_banking', bank_connection_id: 'bc-1' }
+const swishTarget = (over: Record<string, unknown> = {}) => ({
+  id: 'self',
+  date: '2026-10-15',
+  amount: 395,
+  currency: 'SEK',
+  cash_account_id: 'ca-bank',
+  external_id: 'eb_SE00_2026-10-15_39500_3',
+  provider_transaction_id: 'ref-new',
+  ...FEED,
+  ...over,
+})
+const bookedSwish = (over: Partial<TxRow> = {}): TxRow => ({
+  id: 'sib-a43',
+  date: '2026-10-14',
+  amount: 395,
+  description: 'Swish',
+  cash_account_id: 'ca-bank',
+  // Bulk-booked: anchored in transaction_voucher_links, not on the row.
+  journal_entry_id: null,
+  external_id: 'eb_SE00_2026-10-14_39500_3',
+  provider_transaction_id: 'ref-old',
+  ...FEED,
+  ...over,
+})
+const bulkAnchor = { voucherLinks: [{ transaction_id: 'sib-a43', journal_entry_id: 'je-a43' }] }
+
+describe('bank-feed identity: detectBookedDuplicateTransaction', () => {
+  it('does NOT flag a same-price row of the next day against the bulk-booked batch (the crm#1312 shape)', async () => {
+    const supabase = makeSupabase([bookedSwish()], undefined, bulkAnchor)
+    expect(await detectBookedDuplicateTransaction(supabase, COMPANY, swishTarget())).toBeNull()
+  })
+
+  it('does NOT flag a same-day row of the second batch when both rows carry different bank ids', async () => {
+    const supabase = makeSupabase(
+      [bookedSwish({ date: '2026-10-14', external_id: 'eb_SE00_2026-10-14_39500_2' })],
+      undefined,
+      bulkAnchor,
+    )
+    const result = await detectBookedDuplicateTransaction(
+      supabase,
+      COMPANY,
+      swishTarget({ date: '2026-10-14', external_id: 'eb_SE00_2026-10-14_39500_200' }),
+    )
+    expect(result).toBeNull()
+  })
+
+  it('still flags a stored copy of a repeated bank page: same day, same bank id (crm#1295)', async () => {
+    const supabase = makeSupabase(
+      [bookedSwish({ date: '2026-10-14', external_id: 'eb_SE00_2026-10-14_39500_2', provider_transaction_id: 'ref-a' })],
+      undefined,
+      bulkAnchor,
+    )
+    const result = await detectBookedDuplicateTransaction(
+      supabase,
+      COMPANY,
+      swishTarget({ date: '2026-10-14', external_id: 'eb_SE00_2026-10-14_39500_9', provider_transaction_id: 'ref-a' }),
+    )
+    expect(result?.transaction_id).toBe('sib-a43')
+    expect(result?.journal_entry_id).toBe('je-a43')
+  })
+
+  it('still flags the same movement from another channel (a bank file on top of the feed)', async () => {
+    const supabase = makeSupabase(
+      [bookedSwish({ import_source: 'csv_nordea_business', bank_connection_id: null, external_id: 'nordea_x', provider_transaction_id: null })],
+      undefined,
+      bulkAnchor,
+    )
+    expect((await detectBookedDuplicateTransaction(supabase, COMPANY, swishTarget()))?.transaction_id).toBe('sib-a43')
+  })
+
+  it('still flags a row of a reconnected bank (another connection) a day apart', async () => {
+    const supabase = makeSupabase([bookedSwish({ bank_connection_id: 'bc-old' })], undefined, bulkAnchor)
+    expect((await detectBookedDuplicateTransaction(supabase, COMPANY, swishTarget()))?.transaction_id).toBe('sib-a43')
+  })
+
+  it('does NOT flag another row of the same uploaded bank file, and still flags the same row from a second upload', async () => {
+    const file = { import_source: 'csv_nordea_business', bank_connection_id: null, provider_transaction_id: null }
+    const target = swishTarget({ ...file, external_id: 'nordea_bbbb', bank_file_import_id: 'bfi-1' })
+    const sameFile = makeSupabase([bookedSwish({ ...file, external_id: 'nordea_aaaa', bank_file_import_id: 'bfi-1' })], undefined, bulkAnchor)
+    expect(await detectBookedDuplicateTransaction(sameFile, COMPANY, target)).toBeNull()
+    const secondUpload = makeSupabase([bookedSwish({ ...file, external_id: 'nordea_aaaa', bank_file_import_id: 'bfi-0' })], undefined, bulkAnchor)
+    expect((await detectBookedDuplicateTransaction(secondUpload, COMPANY, target))?.transaction_id).toBe('sib-a43')
+  })
+})
+
+describe('bulk links: detectLedgerDuplicateVoucher', () => {
+  // A one_line_per_tx samlingsverifikat (or a link to an existing voucher)
+  // carries a 395 kr bank leg per row, and its rows are anchored only in
+  // transaction_voucher_links.
+  const bulkLeg = () =>
+    jel({
+      account_number: '1930',
+      debit_amount: 395,
+      credit_amount: 0,
+      journal_entry: {
+        id: 'je-a43', entry_date: '2026-10-14', description: 'Swish-försäljning',
+        voucher_series: 'A', voucher_number: 43, status: 'posted', source_type: 'manual',
+      },
+    })
+  const linkedRow = (over: Partial<LedgerTxLink> = {}): LedgerTxLink => ({
+    id: 'sib-a43', date: '2026-10-14', amount: 395, currency: 'SEK', cash_account_id: 'ca-bank',
+    journal_entry_id: null, external_id: 'eb_SE00_2026-10-14_39500_3', provider_transaction_id: 'ref-old', ...FEED,
+    ...over,
+  })
+
+  it('excludes a voucher whose bank leg is bulk-linked to another payment (reconciled, not an orphan)', async () => {
+    const supabase = makeLedgerSupabase({
+      ledgerAccount: '1930', lines: [bulkLeg()], txLinks: [linkedRow()],
+      voucherLinks: [{ transaction_id: 'sib-a43', journal_entry_id: 'je-a43' }],
+    })
+    expect(await detectLedgerDuplicateVoucher(supabase, COMPANY, swishTarget())).toBeNull()
+  })
+
+  it('returns the bulk-linked twin when the linked row is the same movement from another channel', async () => {
+    const supabase = makeLedgerSupabase({
+      ledgerAccount: '1930', lines: [bulkLeg()],
+      txLinks: [linkedRow({ import_source: 'csv_nordea_business', bank_connection_id: null, external_id: 'nordea_x', provider_transaction_id: null })],
+      voucherLinks: [{ transaction_id: 'sib-a43', journal_entry_id: 'je-a43' }],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, swishTarget())
+    expect(result?.journal_entry_id).toBe('je-a43')
+    expect(result?.transaction_id).toBe('sib-a43')
+  })
+
+  it('still flags the same voucher when nothing is linked to it (a hand-posted orphan)', async () => {
+    const supabase = makeLedgerSupabase({ ledgerAccount: '1930', lines: [bulkLeg()] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, swishTarget())
+    expect(result?.journal_entry_id).toBe('je-a43')
+    expect(result?.transaction_id).toBeNull()
+  })
+})
+
+describe('bank-feed identity: detectBookingDuplicate (orchestrator)', () => {
+  it('clears the crm#1312 shape end to end: neither the sibling scan nor the bulk-linked voucher flags it', async () => {
+    const supabase = makeLedgerSupabase({
+      ledgerAccount: '1930',
+      transactionRows: [bookedSwish()],
+      voucherLinks: [{ transaction_id: 'sib-a43', journal_entry_id: 'je-a43' }],
+      lines: [jel({
+        account_number: '1930', debit_amount: 395, credit_amount: 0,
+        journal_entry: {
+          id: 'je-a43', entry_date: '2026-10-14', description: 'Swish-försäljning',
+          voucher_series: 'A', voucher_number: 43, status: 'posted', source_type: 'manual',
+        },
+      })],
+    })
+    expect(await detectBookingDuplicate(supabase, COMPANY, swishTarget())).toBeNull()
   })
 })

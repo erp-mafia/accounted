@@ -37,6 +37,7 @@ import {
   ACCRUAL_RELEASE_FAILED_WARNING,
   createSchedulesForSupplierInvoice,
 } from '@/lib/bookkeeping/accruals/from-invoices'
+import { supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -131,7 +132,14 @@ export async function bookSupplierInvoice(
     return { ok: false, code: 'SI_BOOK_CASH_METHOD' }
   }
 
-  const verdict = await checkPeriodLock(supabase, companyId, invoice.invoice_date)
+  const items = (invoice.items ?? []) as SupplierInvoiceItem[]
+  const supplierType = invoice.supplier?.supplier_type || 'company'
+
+  // The date the registration builder dates the verifikat on: the invoice
+  // date, or for an EU goods acquisition at the latest the 15th of the month
+  // after its delivery (ML 7 kap. 26 §).
+  const registrationDate = supplierInvoiceRegistrationDate(invoice, supplierType)
+  const verdict = await checkPeriodLock(supabase, companyId, registrationDate)
   if (verdict.locked) {
     return {
       ok: false,
@@ -140,12 +148,11 @@ export async function bookSupplierInvoice(
         reason: verdict.reason,
         ...(verdict.fiscal_period_id ? { fiscal_period_id: verdict.fiscal_period_id } : {}),
         invoice_date: invoice.invoice_date,
+        ...(registrationDate !== invoice.invoice_date ? { entry_date: registrationDate } : {}),
       },
     }
   }
 
-  const items = (invoice.items ?? []) as SupplierInvoiceItem[]
-  const supplierType = invoice.supplier?.supplier_type || 'company'
   const supplierName = invoice.supplier?.name ?? undefined
   const noPeriod: Failure = {
     ok: false,

@@ -41,6 +41,8 @@ later: much cheaper to ask the customer once at onboarding.
 \`gnubok_list_customers\` returns all customers. Search by name client-side.
 If a customer with the same org_number or vat_number exists, USE THAT ONE.
 Duplicate customers fragment the AR ledger and confuse aging reports.
+If one buyer already has two cards, stage \`gnubok_merge_customers\`: the
+duplicate's invoices move to the card that stays and the duplicate is archived.
 
 ### Step 2: Decide customer_type
 

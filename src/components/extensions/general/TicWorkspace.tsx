@@ -235,9 +235,12 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
         return
       }
 
-      const res = await fetch(
-        `/api/extensions/ext/tic/profile?org_number=${encodeURIComponent(orgNumber)}`
-      )
+      // In the body, never the URL: a sole trader's org number is a personnummer.
+      const res = await fetch('/api/extensions/ext/tic/profile', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ org_number: orgNumber }),
+      })
 
       if (!res.ok) {
         // `error` is the canonical envelope object, not a string: as a bare

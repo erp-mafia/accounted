@@ -5,6 +5,7 @@ import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { feedConnectorRoutes, type FeedConnectorSpec } from '@/lib/feed-sync/connector-routes'
+import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
 import { isShopifyConfigured, encryptCredential } from './lib/credentials'
 import { normalizeShopDomain, testConnectionAndFetchShopInfo } from './lib/api-client'
 import { syncShopifyOrders, type ShopifySyncSummary } from './lib/order-sync'
@@ -31,6 +32,8 @@ export const shopifyFeed: FeedConnectorSpec<ShopifyConnection, ShopifySyncSummar
   capability: CAPABILITY.shopify_sync,
   cursorColumn: 'last_order_synced_at',
   maxBackfillYears: MAX_BACKFILL_YEARS,
+  // Orders book against the payment account, 1686 unless the store maps another.
+  settlementAccounts: [DEFAULT_PAYMENT_ACCOUNT],
   notConnectedMessage: 'Ingen ansluten Shopify-butik.',
   statusColumns:
     'id, status, shop_domain, shop_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at',

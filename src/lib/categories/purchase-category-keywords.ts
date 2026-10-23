@@ -253,8 +253,10 @@ export const PURCHASE_CATEGORY_KEYWORDS: Partial<Record<PurchaseCategoryCode, Ca
   },
 
   'expense.representation.client': {
+    // '=representation': a compound is what its last part names, so a
+    // "representationsgåva" is a gift, not a client meal (accounted#92).
     strong: [
-      'representation', 'extern representation', 'kundmöte', 'kundmiddag', 'kundlunch', 'affärsmiddag',
+      '=representation', 'extern representation', 'kundmöte', 'kundmiddag', 'kundlunch', 'affärsmiddag',
       'affärslunch', 'business lunch', 'business dinner', 'client dinner', 'client lunch',
     ],
   },

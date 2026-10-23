@@ -536,10 +536,12 @@ describe('POST /api/supplier-invoices', () => {
     })
 
     const response = await POST(request)
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details?: { reason?: string } } }>(response)
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(body.error.details?.reason).toBe('document_unavailable')
+    expect(body.error.message).toContain('Underlaget hittades inte')
     expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
     expect(mockLinkToJournalEntry).not.toHaveBeenCalled()
   })
@@ -1025,10 +1027,12 @@ describe('POST /api/supplier-invoices', () => {
       body: privatelyPaidBody({ paid_with_private_funds: false, inbox_item_id: INBOX_UUID }),
     })
     const response = await POST(request)
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details?: { reason?: string } } }>(response)
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(body.error.details?.reason).toBe('inbox_item_requires_private_payment')
+    expect(body.error.message).toContain('utlägg')
     expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
   })
 
@@ -1042,10 +1046,12 @@ describe('POST /api/supplier-invoices', () => {
       body: privatelyPaidBody({ inbox_item_id: INBOX_UUID }),
     })
     const response = await POST(request)
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details?: { reason?: string } } }>(response)
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(body.error.details?.reason).toBe('inbox_item_already_booked')
+    expect(body.error.message).toContain('redan bokfört')
     expect(mockRegisterExpenseClaim).not.toHaveBeenCalled()
   })
 
@@ -1481,20 +1487,25 @@ describe('POST /api/supplier-invoices: unified registration guards', () => {
   })
 
   it.each([
-    ['a Swedish supplier', 'swedish_business', {}],
-    ['a non-EU supplier', 'non_eu_business', {}],
-    ['an EU supplier without reverse charge', 'eu_business', { reverse_charge: false, vat_treatment: 'exempt' }],
-  ] as const)('refuses reverse_charge_kind for %s before anything is written', async (_label, supplierType, extra) => {
+    ['a Swedish supplier', 'swedish_business', {}, 'reverse_charge_kind_without_reverse_charge'],
+    ['a non-EU supplier', 'non_eu_business', {}, 'reverse_charge_kind_not_eu_supplier'],
+    ['an EU supplier without reverse charge', 'eu_business', { reverse_charge: false, vat_treatment: 'exempt' }, 'reverse_charge_kind_without_reverse_charge'],
+  ] as const)('refuses reverse_charge_kind for %s before anything is written', async (_label, supplierType, extra, reason) => {
     stubRegistration({ supplier: makeSupplier({ id: VALID_UUID, supplier_type: supplierType }) })
 
     const response = await POST(createMockRequest('/api/supplier-invoices', {
       method: 'POST',
       body: body({ reverse_charge_kind: 'eu_goods', ...extra }),
     }))
-    const { status, body: responseBody } = await parseJsonResponse<{ error: { code: string } }>(response)
+    const { status, body: responseBody } = await parseJsonResponse<{
+      error: { code: string; message: string; details?: { reason?: string } }
+    }>(response)
 
     expect(status).toBe(400)
     expect(responseBody.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    // The form shows which rule refused it, not the one sentence for all (#96).
+    expect(responseBody.error.details?.reason).toBe(reason)
+    expect(responseBody.error.message).toContain('Köpet avser')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
     expect(findCall('supplier_invoices', 'insert')).toBeUndefined()
   })
@@ -1914,10 +1925,12 @@ describe('POST /api/supplier-invoices: icke momsregistrerad (vat_registered=fals
       ]),
     })
     const response = await POST(request)
-    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string; details?: { reason?: string } } }>(response)
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(body.error.details?.reason).toBe('vat_on_non_vat_registered')
+    expect(body.error.message).toContain('inte momsregistrerat')
     expect(mockSupabase.rpc).not.toHaveBeenCalled()
     expect(mockCreateSupplierInvoiceRegistrationEntry).not.toHaveBeenCalled()
   })

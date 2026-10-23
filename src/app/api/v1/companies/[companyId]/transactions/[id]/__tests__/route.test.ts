@@ -232,6 +232,35 @@ describe('POST :id/categorize', () => {
     expect(createTxJE).not.toHaveBeenCalled()
   })
 
+  // #94: no reverse-charge box by default at the API door. Without
+  // reverse_charge_kind the box comes from the underlag's seller; a row
+  // without one is refused, never booked in ruta 21.
+  it('400 TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN for reverse_charge without its box or an underlag', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: { id: TX_ID, company_id: COMPANY_ID, date: '2026-05-12', amount: -250, currency: 'SEK', merchant_name: 'SaaS', journal_entry_id: null },
+          error: null,
+        },
+        company_settings: { data: { entity_type: 'aktiebolag', vat_registered: true }, error: null },
+      }).supabase,
+    )
+
+    const res = await categorizePOST(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/categorize?dry_run=true`,
+        { is_business: true, category: 'expense_software', vat_treatment: 'reverse_charge' },
+      ),
+      txParams(TX_ID),
+    )
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN')
+    expect(body.error.details).toMatchObject({ reason: 'seller_country_unknown', parameter: 'reverse_charge_kind' })
+    expect(createTxJE).not.toHaveBeenCalled()
+  })
+
   it('rejects unknown transaction id with TX_CATEGORIZE_TX_NOT_FOUND', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({

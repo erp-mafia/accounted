@@ -7,7 +7,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildSystemdokumentation, loadSystemdokumentationFacts, type SystemdokumentationFacts } from '../systemdokumentation'
-import { CASH_PARTIAL_PAYMENT_RULE, COUNTERPARTY_SETOFF_RULE, KONTANTMETOD_CUTOFF_RULES, KONTANTMETOD_EU_GOODS_RULE, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
+import { CASH_PARTIAL_PAYMENT_RULE, COUNTERPARTY_SETOFF_RULE, EU_GOODS_REGISTRATION_DATE_RULE, KONTANTMETOD_CUTOFF_RULES, KONTANTMETOD_EU_GOODS_RULE, SUPPLIER_INVOICE_ROUNDING_RULES, VOUCHER_SERIES_RULES } from '../system-rules'
 
 vi.mock('@/lib/branding/service', () => ({
   getBranding: () => ({ appName: 'Accounted', appUrl: 'https://app.accounted.se' }),
@@ -189,6 +189,18 @@ describe('buildSystemdokumentation', () => {
     const rule = cash.behandlingsregler.find((x) => x.rubrik === rubrik)
     expect(rule?.text).toBe(KONTANTMETOD_EU_GOODS_RULE)
     expect(rule?.text).toContain('ML 7 kap. 26 och 40 §§')
+  })
+
+  // #93: ML 2023:200 7 kap. 26 och 40 §§; both methods date the registration by it.
+  it('describes the EU goods registration date for every company', () => {
+    const rubrik = 'Varor från annat EU-land, registreringsdatum'
+    for (const accounting_method of ['accrual', 'cash'] as const) {
+      const r = buildSystemdokumentation(facts({ settings: { ...facts().settings!, accounting_method } }))
+      const rule = r.behandlingsregler.find((x) => x.rubrik === rubrik)
+      expect(rule?.text).toBe(EU_GOODS_REGISTRATION_DATE_RULE)
+      expect(rule?.text).toContain('senast den 15:e i månaden efter')
+      expect(rule?.text).toContain('ML 7 kap. 12, 26 och 40 §§')
+    }
   })
 
   it('describes the kontantmetoden part-payment rule while its switch is on for a cash-method company, or once it booked', () => {

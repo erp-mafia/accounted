@@ -4406,8 +4406,9 @@ export interface WebshopOrder {
   /**
    * Order country, ISO 3166-1 alpha-2; drives the export/EU 0%-sale hint and
    * the bulk-book rate-0 guard. Per platform: WooCommerce stores the BILLING
-   * country, Shopify the SHIPPING (destination) country (null when the order
-   * ships nowhere or the store withholds addresses).
+   * country, Shopify the SHIPPING (destination) country, or the billing
+   * country for an order with nothing to ship (digital products, services),
+   * null for a local pickup or when the store withholds addresses.
    */
   customer_country: string | null
   payment_method: string | null

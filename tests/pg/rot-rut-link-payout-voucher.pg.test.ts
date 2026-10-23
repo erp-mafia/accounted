@@ -6,6 +6,10 @@
  * begäran, which then read "Uppladdad" forever. The RPC attaches the existing
  * verifikat and must never write to the journal. Reversing that verifikat
  * must hand the begäran back so it can be settled again.
+ *
+ * 20261023012000 (#93): under kontantmetodens two steps 1513 holds nothing,
+ * so a payout booked by hand as revenue and moms qualifies too, in exactly
+ * that shape and never from a document's own verifikat.
  */
 import { describe, it, expect } from 'vitest'
 import { randomUUID } from 'node:crypto'
@@ -21,6 +25,7 @@ interface LinkResult {
   already_linked?: boolean
   expected_total?: number
   voucher_1513_credit?: number
+  share_credit?: number
   bank_amount?: number
   rounding?: number
   requests?: Array<{ request_id: string; status: string; amount: number }>
@@ -69,6 +74,24 @@ function payoutLines(bank: number, receivable: number): PostedJournalEntryLine[]
     { accountNumber: '1930', debitAmount: bank, creditAmount: 0 },
     ...(rounding > 0 ? [{ accountNumber: '3740', debitAmount: rounding, creditAmount: 0 }] : []),
     { accountNumber: '1513', debitAmount: 0, creditAmount: receivable },
+  ]
+}
+
+async function setAccountingMethod(company: Seeded, method: 'cash' | 'accrual'): Promise<void> {
+  // seedCompany() inserts companies/members/period but not company_settings.
+  await getPool().query(
+    `INSERT INTO public.company_settings (user_id, company_id, accounting_method)
+     VALUES ($1, $2, $3)`,
+    [company.userId, company.companyId, method],
+  )
+}
+
+/** A payout booked by hand the two-step way: money in against the share's revenue and moms. */
+function twoStepLines(moneyIn: number, revenue: number, vat: number, account = '1930'): PostedJournalEntryLine[] {
+  return [
+    { accountNumber: account, debitAmount: moneyIn, creditAmount: 0 },
+    { accountNumber: '3001', debitAmount: 0, creditAmount: revenue },
+    { accountNumber: '2611', debitAmount: 0, creditAmount: vat },
   ]
 }
 
@@ -292,5 +315,74 @@ describe('link_rot_rut_payout_voucher', () => {
     // And it can be settled again.
     const again = await seedVoucher(company, payoutLines(1000, 1000))
     expect((await link(company.companyId, [requestId], again)).ok).toBe(true)
+  })
+
+  describe('kontantmetodens two steps (#93)', () => {
+    it('links a hand-booked payout of revenue and moms, from the bank or set off on the skattekonto', async () => {
+      const company = await seedCompany()
+      await setAccountingMethod(company, 'cash')
+      const fromBank = await seedRequest(company, { requested: [3750] })
+      const setOff = await seedRequest(company, { requested: [1250] })
+      const bankVoucher = await seedVoucher(company, twoStepLines(3750, 3000, 750))
+      const skattekontoVoucher = await seedVoucher(company, twoStepLines(1250, 1000, 250, '1630'), 'system')
+      const before = await journalCount(company.companyId)
+
+      expect(await link(company.companyId, [fromBank], bankVoucher)).toMatchObject({
+        ok: true,
+        expected_total: 3750,
+        voucher_1513_credit: 0,
+        share_credit: 3750,
+        bank_amount: 3750,
+        rounding: 0,
+      })
+      expect(await link(company.companyId, [setOff], skattekontoVoucher)).toMatchObject({ ok: true, share_credit: 1250 })
+      expect(await requestRow(fromBank)).toMatchObject({ status: 'paid', settlement_journal_entry_id: bankVoucher })
+      expect(await requestRow(setOff)).toMatchObject({ status: 'paid', settlement_journal_entry_id: skattekontoVoucher })
+      expect(await journalCount(company.companyId)).toBe(before)
+    })
+
+    it('a 1513 payout keeps working and reports no share', async () => {
+      const company = await seedCompany()
+      await setAccountingMethod(company, 'cash')
+      const requestId = await seedRequest(company, { requested: [1000] })
+      const voucherId = await seedVoucher(company, payoutLines(1000, 1000))
+      expect(await link(company.companyId, [requestId], voucherId)).toMatchObject({
+        ok: true,
+        voucher_1513_credit: 1000,
+        share_credit: 0,
+        rounding: 0,
+      })
+    })
+
+    it('never takes anything else of that amount for a payout', async () => {
+      const company = await seedCompany()
+      await setAccountingMethod(company, 'cash')
+      const requestId = await seedRequest(company, { requested: [3750] })
+      const customerPayment = await seedVoucher(company, twoStepLines(3750, 3000, 750), 'invoice_cash_payment')
+      const otherAccount = await seedVoucher(company, [
+        { accountNumber: '1930', debitAmount: 3750, creditAmount: 0 },
+        { accountNumber: '3001', debitAmount: 0, creditAmount: 3000 },
+        { accountNumber: '2440', debitAmount: 0, creditAmount: 750 },
+      ])
+      const wrongAmount = await seedVoucher(company, twoStepLines(3751, 3001, 750))
+      const noMoneyIn = await seedVoucher(company, [
+        { accountNumber: '6570', debitAmount: 3750, creditAmount: 0 },
+        { accountNumber: '3001', debitAmount: 0, creditAmount: 3000 },
+        { accountNumber: '2611', debitAmount: 0, creditAmount: 750 },
+      ])
+
+      for (const voucherId of [customerPayment, otherAccount, wrongAmount, noMoneyIn]) {
+        expect((await link(company.companyId, [requestId], voucherId)).code).toBe('ROT_RUT_LINK_AMOUNT_MISMATCH')
+      }
+      expect((await requestRow(requestId)).settlement_journal_entry_id).toBeNull()
+    })
+
+    it('faktureringsmetoden keeps the share on 1513: the two-step shape is refused', async () => {
+      const company = await seedCompany()
+      await setAccountingMethod(company, 'accrual')
+      const requestId = await seedRequest(company, { requested: [3750] })
+      const voucherId = await seedVoucher(company, twoStepLines(3750, 3000, 750))
+      expect((await link(company.companyId, [requestId], voucherId)).code).toBe('ROT_RUT_LINK_AMOUNT_MISMATCH')
+    })
   })
 })

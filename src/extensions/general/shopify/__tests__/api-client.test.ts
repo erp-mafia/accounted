@@ -256,7 +256,7 @@ describe('listOrdersPage', () => {
       after: 'cursor-1',
       query: "updated_at:>='2026-05-01T00:00:00.000Z'",
     })
-    expect(page.shippingAddressWithheld).toBe(false)
+    expect(page.addressesWithheld).toBe(false)
   })
 
   const OPTIONS = { updatedAtMin: '2026-05-01T00:00:00.000Z', after: null }
@@ -269,16 +269,26 @@ describe('listOrdersPage', () => {
     return { orders: { pageInfo: { hasNextPage: false, endCursor: null }, nodes } }
   }
 
-  it('asks for the destination country only, nothing else from the address', async () => {
+  it('asks for the country codes only, nothing else from the addresses', async () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
-        data: ordersData([{ legacyResourceId: '1042', shippingAddress: { countryCodeV2: 'NO' } }]),
+        data: ordersData([
+          {
+            legacyResourceId: '1042',
+            shippingAddress: { countryCodeV2: 'NO' },
+            billingAddress: { countryCodeV2: 'SE' },
+          },
+        ]),
       }),
     )
     const page = await listOrdersPage(SESSION, OPTIONS)
     expect(page.orders[0].shippingAddress).toEqual({ countryCodeV2: 'NO' })
+    expect(page.orders[0].billingAddress).toEqual({ countryCodeV2: 'SE' })
     expect(sentQuery(0)).toContain('shippingAddress { countryCodeV2 }')
-    expect(sentQuery(0)).not.toMatch(/address1|zip|billingAddress|email|customer/)
+    expect(sentQuery(0)).toContain('billingAddress { countryCodeV2 }')
+    // Each line's physical-product flag decides whether billing may stand in (#98).
+    expect(sentQuery(0)).toMatch(/lineItems\([^)]*\) \{[\s\S]*requiresShipping/)
+    expect(sentQuery(0)).not.toMatch(/address1|address2|zip|city|province|email|phone|customer|firstName|lastName/)
   })
 
   it('tolerates the documented protected-data refusal: null field plus a field-scoped error', async () => {
@@ -287,8 +297,8 @@ describe('listOrdersPage', () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse({
         data: ordersData([
-          { legacyResourceId: '1042', shippingAddress: null },
-          { legacyResourceId: '1043', shippingAddress: null },
+          { legacyResourceId: '1042', shippingAddress: null, billingAddress: null },
+          { legacyResourceId: '1043', shippingAddress: null, billingAddress: null },
         ]),
         errors: [
           {
@@ -301,13 +311,38 @@ describe('listOrdersPage', () => {
             message: 'This app is not approved to use the countryCodeV2 field.',
             path: ['orders', 'nodes', 1, 'shippingAddress', 'countryCodeV2'],
           },
+          {
+            message:
+              'This app is not approved to access the MailingAddress object. See https://partners.shopify.com/1/apps/2/customer_data for more details.',
+            path: ['orders', 'nodes', 0, 'billingAddress'],
+            extensions: { code: 'ACCESS_DENIED' },
+          },
         ],
       }),
     )
     const page = await listOrdersPage(SESSION, OPTIONS)
     expect(page.orders).toHaveLength(2)
-    expect(page.shippingAddressWithheld).toBe(true)
+    expect(page.addressesWithheld).toBe(true)
     // Answered in place: no retry, and nothing classified as revoked.
+    expect(fetchMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('tolerates a withheld billing address on its own (a digital order never fails the page)', async () => {
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse({
+        data: ordersData([{ legacyResourceId: '2001', shippingAddress: null, billingAddress: null }]),
+        errors: [
+          {
+            message: 'This app is not approved to access the MailingAddress object.',
+            path: ['orders', 'nodes', 0, 'billingAddress'],
+            extensions: { code: 'ACCESS_DENIED' },
+          },
+        ],
+      }),
+    )
+    const page = await listOrdersPage(SESSION, OPTIONS)
+    expect(page.orders).toHaveLength(1)
+    expect(page.addressesWithheld).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(1)
   })
 
@@ -321,10 +356,13 @@ describe('listOrdersPage', () => {
       .mockResolvedValueOnce(jsonResponse({ data: ordersData([{ legacyResourceId: '1042' }]) }))
     const page = await listOrdersPage(SESSION, OPTIONS)
     expect(page.orders).toHaveLength(1)
-    expect(page.shippingAddressWithheld).toBe(true)
+    expect(page.addressesWithheld).toBe(true)
     expect(fetchMock).toHaveBeenCalledTimes(2)
     expect(sentQuery(0)).toContain('shippingAddress')
-    expect(sentQuery(1)).not.toContain('shippingAddress')
+    expect(sentQuery(0)).toContain('billingAddress')
+    // The retry asks for exactly the fields that worked before the
+    // addresses were added: no address and no shipping flag.
+    expect(sentQuery(1)).not.toMatch(/shippingAddress|billingAddress|requiresShipping/)
   })
 
   it('still classifies as revoked when the query is refused without the address too (read_orders missing)', async () => {
@@ -352,10 +390,10 @@ describe('listOrdersPage', () => {
     expect(isRevokedCredentialsError(error)).toBe(false)
   })
 
-  it('leaves the address out when the caller stopped asking for it', async () => {
+  it('leaves the addresses out when the caller stopped asking for them', async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse({ data: ordersData([]) }))
-    const page = await listOrdersPage(SESSION, { ...OPTIONS, includeShippingAddress: false })
-    expect(sentQuery(0)).not.toContain('shippingAddress')
-    expect(page.shippingAddressWithheld).toBe(false)
+    const page = await listOrdersPage(SESSION, { ...OPTIONS, includeAddresses: false })
+    expect(sentQuery(0)).not.toMatch(/shippingAddress|billingAddress|requiresShipping/)
+    expect(page.addressesWithheld).toBe(false)
   })
 })

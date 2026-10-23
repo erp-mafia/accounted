@@ -81,6 +81,57 @@ export function redactString(value: string): string {
     .replace(EMAIL_PATTERN, '[REDACTED_EMAIL]')
 }
 
+/**
+ * Query keys whose value is an identity number whatever its written form. An
+ * organisationsnummer is listed because a sole trader's IS the owner's
+ * personnummer, and a form the regex misses ('121212+1212' decodes to a space
+ * where the '+' was) must not slip through on such a key.
+ */
+const IDENTITY_QUERY_KEYS = new Set(['org_number', 'orgnr', 'personal_number', 'pnr'])
+
+function decodeQueryPart(part: string): string {
+  try {
+    return decodeURIComponent(part.replace(/\+/g, ' '))
+  } catch {
+    return part
+  }
+}
+
+/**
+ * A request path ('/route?a=1&b=2') as it may leave the process. The pathname
+ * goes through redactString like any string; each query value is decoded and
+ * goes through it on its own, and the value of a key on the denylist (or one
+ * naming an identity number) is replaced whole, so `?org_number=` never
+ * reaches a vendor in clear while `?page=2` stays readable.
+ */
+export function redactRequestPath(path: string): string {
+  const q = path.indexOf('?')
+  const pathname = redactString(q === -1 ? path : path.slice(0, q))
+  const query = q === -1 ? '' : path.slice(q + 1)
+  if (!query) return pathname
+  const pairs = query.split('&').map((pair) => {
+    const eq = pair.indexOf('=')
+    const key = decodeQueryPart(eq === -1 ? pair : pair.slice(0, eq))
+    if (eq === -1) return redactString(key)
+    const lower = key.toLowerCase()
+    if (REDACT_KEYS.has(lower) || IDENTITY_QUERY_KEYS.has(lower)) return `${key}=${REDACTED}`
+    return `${key}=${redactString(decodeQueryPart(pair.slice(eq + 1)))}`
+  })
+  return `${pathname}?${pairs.join('&')}`
+}
+
+/**
+ * An Error a vendor SDK can take (it wants an instance, not redact()'s plain
+ * object), with the message and the stack redacted as redact() does them.
+ */
+export function redactedError(err: unknown): Error {
+  const source = err instanceof Error ? err : new Error(String(err))
+  const safe = new Error(redactString(source.message))
+  safe.name = source.name
+  safe.stack = typeof source.stack === 'string' ? redactString(source.stack) : undefined
+  return safe
+}
+
 export function redact(value: unknown, keyPath = ''): unknown {
   if (value === null || value === undefined) return value
   if (typeof value === 'string') return redactString(value)

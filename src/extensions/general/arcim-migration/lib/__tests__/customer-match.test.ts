@@ -114,6 +114,35 @@ describe('matchExistingCustomer', () => {
     expect(matchExistingCustomer({ number: '9001', name: 'anna exempel' }, nameOnly)).toBe('hand-made')
   })
 
+  it('finds the hand-made cards among several customers that share one org number (crm#1398)', () => {
+    // Departments of one public authority: one org number, a customer number
+    // and a name each. Two were entered by hand before the import.
+    const cards = [
+      card('hand-120', { identities: ['2021000001'], number: '120', name: 'myndigheten avdelning a' }),
+      card('hand-400', { identities: ['2021000001'], number: '400', name: 'myndigheten avdelning b' }),
+    ]
+    const department = (number: string, name: string) => ({ identity: '2021000001', number, name })
+    expect(matchExistingCustomer(department('120', 'myndigheten, avd a'), cards)).toBe('hand-120')
+    expect(matchExistingCustomer(department('400', 'myndigheten, avd b'), cards)).toBe('hand-400')
+    for (const number of ['110', '112', '130', '132', '150', '301']) {
+      expect(matchExistingCustomer(department(number, `myndigheten avdelning ${number}`), cards)).toBeNull()
+    }
+  })
+
+  it('does not fold another department into the only card with its org number', () => {
+    const cards = [card('hand-120', { identities: ['2021000001'], vat: 'SE202100000101', number: '120', name: 'myndigheten avdelning a' })]
+    expect(matchExistingCustomer({ identity: '2021000001', number: '110', name: 'myndigheten avdelning c' }, cards)).toBeNull()
+    expect(matchExistingCustomer({ vat: 'SE202100000101', number: '110', name: 'myndigheten avdelning c' }, cards)).toBeNull()
+    // The department the card is for, and a source record with no number of its own.
+    expect(matchExistingCustomer({ identity: '2021000001', number: '120', name: 'myndigheten avd a' }, cards)).toBe('hand-120')
+    expect(matchExistingCustomer({ identity: '2021000001', name: 'myndigheten avdelning c' }, cards)).toBe('hand-120')
+  })
+
+  it('keeps an org-number match under the user\'s own numbering when the name is the same', () => {
+    const cards = [card('hand-made', { identities: ['5566778899'], number: '1', name: 'exempel ab' })]
+    expect(matchExistingCustomer({ identity: '5566778899', number: '2329', name: 'exempel ab' }, cards)).toBe('hand-made')
+  })
+
   it('answers null when nothing matches', () => {
     expect(matchExistingCustomer({ name: 'anna exempel' }, [card('x', { name: 'bo exempel' })])).toBeNull()
     expect(matchExistingCustomer({}, [card('x', { name: 'bo exempel' })])).toBeNull()
@@ -256,6 +285,23 @@ describe('adoptExistingCustomers', () => {
       [{ sourceId: '9001', facts: { identity: identityKey(PERSON), number: '9001', name: 'anna exempel' } }], within)
     expect(adopted).toBe(1)
     expect(db.mappings).toContainEqual({ source_id: '9001', target_id: 'hand-made' })
+  })
+
+  it('maps a Visma register onto the two hand-made cards of departments that share an org number (crm#1398)', async () => {
+    const department = (id: string, number: string, name: string) => ({ id, name, org_number: '202100-0001',
+      created_at: '2026-10-04T17:36:16Z', personal_number: null, vat_number: null, customer_number: number })
+    const db = database([department('hand-120', '120', 'Myndigheten Avdelning A'), department('hand-400', '400', 'Myndigheten Avdelning B')])
+    const facts = (number: string, name: string) => ({ identity: '2021000001', number, name: customerNameKey(name) })
+    const adopted = await adoptExistingCustomers(db.supabase, { ...job, provider: 'visma' }, [
+      { sourceId: 'visma-110', facts: facts('110', 'Myndigheten Avdelning C') },
+      { sourceId: 'visma-120', facts: facts('120', 'Myndigheten, avd A') },
+      { sourceId: 'visma-400', facts: facts('400', 'Myndigheten, avd B') },
+    ], within)
+    expect(adopted).toBe(2)
+    expect(db.mappings).toEqual([
+      { source_id: 'visma-120', target_id: 'hand-120' },
+      { source_id: 'visma-400', target_id: 'hand-400' },
+    ])
   })
 
   it('does nothing without the job start', async () => {

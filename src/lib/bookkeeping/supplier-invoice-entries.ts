@@ -8,6 +8,7 @@ import {
   type ChartVatTreatments,
 } from './vat-entries'
 import { fetchChartVatTreatments } from './chart-vat-treatments'
+import { supplierInvoiceRegistrationDate } from './booking-mode'
 import { assertAccruedCostLinesBookable } from './accruals/accrued-cost-guard'
 import { generateSlpLines, isSlpPensionAccount } from './slp-lines'
 import { coerceDimensionsBag } from './dimension-resolver'
@@ -178,8 +179,8 @@ export async function createSupplierInvoiceRegistrationEntry(
  * reverse-charge invoice, the company's momskoder; for an upplupen kostnad on
  * 29xx, the lock state of its month-ends) are the only database reads, and
  * nothing is written. The deferred "Bokför" dry run previews these lines.
- * Returns null when no open fiscal period covers invoice_date. Throws the
- * same generator errors (SupplierInvoiceFxRateMissingError,
+ * Returns null when no open fiscal period covers the registration date
+ * (supplierInvoiceRegistrationDate). Throws the same generator errors (SupplierInvoiceFxRateMissingError,
  * AccruedCostPeriodInvalidError, AccruedCostPeriodLockedError) the
  * committing path throws.
  */
@@ -191,9 +192,12 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
   supplierType: string,
   supplierName?: string
 ): Promise<CreateJournalEntryInput | null> {
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, invoice.invoice_date)
+  // The invoice date, or for an EU goods acquisition at the latest the 15th
+  // of the month after its delivery (ML 7 kap. 26 and 40 §§).
+  const entryDate = supplierInvoiceRegistrationDate(invoice, supplierType)
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
   if (!fiscalPeriodId) {
-    log.warn('No open fiscal period found for invoice date:', invoice.invoice_date)
+    log.warn('No open fiscal period found for registration date:', entryDate)
     return null
   }
 
@@ -219,7 +223,7 @@ export async function buildSupplierInvoiceRegistrationEntryInput(
 
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
-    entry_date: invoice.invoice_date,
+    entry_date: entryDate,
     description: desc,
     source_type: 'supplier_invoice_registered',
     source_id: invoice.id,

@@ -58,6 +58,7 @@ export function operationLabel(
 // singleActionWarning when the caller passes its translator.
 export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   book_counterparty_setoff: 'warning_book_counterparty_setoff',
+  merge_customers: 'warning_merge_customers',
 }
 
 // Full-sentence warning for the single-op confirmation dialog AND the inline

@@ -50,6 +50,7 @@ export const INVOICE_ACCRUED_INCOME_PERIOD_LOCKED = 'INVOICE_ACCRUED_INCOME_PERI
 export const CUTOFF_CARRY_REVERSAL_DATE = 'CUTOFF_CARRY_REVERSAL_DATE' as const
 export const KONTANTMETOD_CARRY_HAS_SETTLEMENTS = 'KONTANTMETOD_CARRY_HAS_SETTLEMENTS' as const
 export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED' as const
+export const IMPORT_VAT_WITHOUT_BASE = 'IMPORT_VAT_WITHOUT_BASE' as const
 
 // ============================================================================
 // AccountsNotInChartError: kept for back-compat (many existing call sites)
@@ -349,6 +350,7 @@ export type MeaninglessCorrectionReason =
   | 'net_zero_per_account'
   | 'identical_to_original'
   | 'no_date_change'
+  | 'negates_original'
 
 export class MeaninglessCorrectionError extends Error {
   readonly code = MEANINGLESS_CORRECTION
@@ -358,7 +360,9 @@ export class MeaninglessCorrectionError extends Error {
         ? 'Correction lines net to zero on every account: no economic event represented (BFL 5 kap. 5 §).'
         : reason === 'no_date_change'
           ? 'New date equals the current date: nothing to move.'
-          : 'Correction lines are identical to the original entry: nothing to correct.'
+          : reason === 'negates_original'
+            ? 'Correction lines are the original with debit and credit swapped: the storno already reverses the original, so this would reverse it a second time. To only cancel the entry, reverse it (storno). Pass sides_swapped=true only when the original itself was booked with debit and credit swapped.'
+            : 'Correction lines are identical to the original entry: nothing to correct.'
     )
     this.name = 'MeaninglessCorrectionError'
   }
@@ -566,6 +570,23 @@ export class CutoffCarryCorrectionRefusedError extends Error {
   }
 }
 
+/**
+ * A rättelse that would leave importmoms (rutor 60-62) in the verifikat with
+ * no beskattningsunderlag in ruta 50 (#94), the shape the booking doors refuse
+ * too (#83, lib/bookkeeping/import-vat-base.ts). The message is the Swedish
+ * sentence naming the accounts and what to change.
+ */
+export class ImportVatWithoutBaseError extends Error {
+  readonly code = IMPORT_VAT_WITHOUT_BASE
+  constructor(
+    public readonly importVatAccounts: string[],
+    messageSv: string,
+  ) {
+    super(messageSv)
+    this.name = 'ImportVatWithoutBaseError'
+  }
+}
+
 export class InvalidMappingResultError extends Error {
   readonly code = INVALID_MAPPING_RESULT
   constructor(
@@ -732,6 +753,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof CutoffCarryReversalDateError ||
     err instanceof KontantmetodCarryHasSettlementsError ||
     err instanceof CutoffCarryCorrectionRefusedError ||
+    err instanceof ImportVatWithoutBaseError ||
     err instanceof DimensionValidationError ||
     err instanceof MandatoryDimensionMissingError
   )
@@ -1082,6 +1104,19 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
     return NextResponse.json(
       { error: { code: err.code, message: err.message } },
       { status: 409 }
+    )
+  }
+
+  if (err instanceof ImportVatWithoutBaseError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { import_vat_accounts: err.importVatAccounts },
+        },
+      },
+      { status: 400 }
     )
   }
 

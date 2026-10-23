@@ -1551,9 +1551,9 @@ describe('PUT /api/settings: accounting method mid-year', () => {
     enqueueMany([
       { data: { id: 's1', accounting_method: 'accrual' } }, // oldSettings
       PERIOD,                                                // current fiscal year
-      { data: null, count: 112 },                            // posted verifikat
       { data: null, count: 0 },                              // open invoices without verifikat
       { data: null, count: 0 },                              // open supplier invoices without verifikat
+      { data: null, count: 112 },                            // posted verifikat
     ])
     const response = await put({ accounting_method: 'cash' })
     const { status, body } = await parseJsonResponse<{ error: string }>(response)
@@ -1567,9 +1567,9 @@ describe('PUT /api/settings: accounting method mid-year', () => {
     enqueueMany([
       { data: { id: 's1', accounting_method: 'accrual' } },
       PERIOD,
-      { data: null, count: 112 },
-      { data: null, count: 0 },
-      { data: null, count: 0 },
+      { data: null, count: 0 },                              // open invoices without verifikat
+      { data: null, count: 0 },                              // open supplier invoices without verifikat
+      { data: null, count: 112 },                            // posted verifikat
       { data: [], count: 0 },                                // invoice-flow verifikat this year
       { data: { id: 's1', accounting_method: 'cash' } },    // update ... returning
       { data: null, count: 5 },                              // deadlines count

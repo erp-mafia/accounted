@@ -38,6 +38,8 @@ const DIRECT_WRITES_WITHOUT_KEY: Record<string, string> = {
     'Compare-and-set on status pending: a repeat answers CONFLICT (already rejected) and changes nothing.',
   gnubok_sync_bank:
     'A durable 15-minute lease answers a repeat in-band (synced=false, next_allowed_at), and fetched rows dedupe on the bank transaction id.',
+  gnubok_backfill_feed:
+    "Fetched rows dedupe on the provider's own id (external_id) and the cursor moves back to the same day: a repeat imports nothing new.",
   gnubok_remember_fact:
     'Content dedupe: a fact within Jaccard 0.82 of a stored one returns the stored fact instead of writing a second row.',
   gnubok_forget_fact: 'Sets is_active=false on one fact: a repeat leaves it inactive.',

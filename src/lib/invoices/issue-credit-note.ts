@@ -8,7 +8,7 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { bookInvoice } from '@/lib/invoices/book-service'
-import { isDeductionShareUnbooked } from '@/lib/invoices/rot-rut-payout-recognition'
+import { getDeductionShareBookedByPayout } from '@/lib/invoices/rot-rut-payout-recognition'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import type { Logger } from '@/lib/logger'
 import type { OperationOutcome } from '@/lib/operations/types'
@@ -320,16 +320,30 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
           log,
         )
         // Kontantmetodens two steps: an original whose payment booked only
-        // the customer's share, with no payout booked yet, is credited for
-        // that share alone (no 1513, no revenue or moms never booked).
-        let deductionUnbooked = false
+        // the customer's share is credited for that share and for what its
+        // payout booked of Skatteverket's, nothing more (no revenue, moms or
+        // 1513 that was never booked).
+        let deductionBookedSek: number | null = null
         if (accountingMethod === 'cash' && (creditNote.items ?? []).some((item) => !!item.deduction_type)) {
-          const state = await isDeductionShareUnbooked(supabase, companyId, {
-            id: originalInvoice.id,
-            journal_entry_id: originalJournalEntryId,
-          })
-          if (!state.ok) throw state.error
-          deductionUnbooked = state.unbooked
+          const state = await getDeductionShareBookedByPayout(
+            supabase,
+            companyId,
+            { id: originalInvoice.id, journal_entry_id: originalJournalEntryId },
+            creditNote.invoice_date,
+          )
+          if (!state.ok) {
+            if ('code' in state) {
+              failures.push({
+                step: 'journal_entry',
+                code: state.code,
+                details: state.details,
+                reason: getErrorEntry(state.code)?.message_sv ?? state.code,
+              })
+              return withOriginal({ complete: false, journalEntryId: null, journalEntryRequired, repairRequired: false, failures })
+            }
+            throw state.error
+          }
+          deductionBookedSek = state.bookedSek
         }
         const journalEntry = await createCreditNoteJournalEntry(
           supabase,
@@ -342,7 +356,7 @@ export async function issueCreditNote(input: IssueCreditNoteInput): Promise<Issu
           // The posting port's event, while POSTING_EVENTS is on: the person
           // (or the approved operation) credited the invoice.
           () => ({ linkBasis: linkBasisColumns('user_created') }),
-          { deductionUnbooked },
+          { deductionBookedSek },
         )
         journalEntryId = journalEntry?.id ?? null
       }

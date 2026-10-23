@@ -432,9 +432,10 @@ export async function updateCompanySettings(
   if (body.employer_registered === false) {
     body.employer_seasonal = false
   }
-  // The accounting method: free while the current fiscal year has no posted
-  // verifikat, afterwards only as a stated correction (the same rule on every
-  // door, recorded below once the row is saved).
+  // The accounting method: never while an open invoice lacks a verifikat of
+  // its own, else free while the current fiscal year has no posted verifikat,
+  // afterwards only as a stated correction (the same rule on every door,
+  // recorded below once the row is saved).
   const methodChange = await checkAccountingMethodChange(ctx, {
     stored: oldSettings?.accounting_method as string | null | undefined,
     requested: body.accounting_method,

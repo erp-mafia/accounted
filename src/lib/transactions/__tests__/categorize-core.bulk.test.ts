@@ -538,6 +538,42 @@ describe('bulkBookMatchedInboxItems: the reverse-charge box per item', () => {
     expect(skipped[1].detail).toMatch(/Säljaren är svensk/)
   })
 
+  // #94: omvänd skattskyldighet only covers a purchase the seller charged no
+  // VAT on. The single door and the Inkorg's one click refuse a reading that
+  // shows a charge; the bulk door booked it with fiktiv moms on top.
+  it('skips an item whose reading shows the seller charged VAT, naming the charge', async () => {
+    const charged = (id: string, extracted: Record<string, unknown>) => ({
+      data: { id, matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null, extracted_data: extracted },
+    })
+    const supabase = queuedSupabase([
+      charged('i-total', { supplier: { vatNumber: 'IE1234567T' }, totals: { vatAmount: 23 }, invoice: { currency: 'EUR' } }),
+      charged('i-breakdown', { supplier: { vatNumber: 'IE1234567T' }, totals: { vatAmount: 0 }, vatBreakdown: [{ rate: 0.23, amount: 11.5 }] }),
+    ])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i-total', 'i-breakdown'], category: 'expense_software', vat_treatment: 'reverse_charge',
+    })
+    expect(booked).toEqual([])
+    expect(skipped.map((s) => [s.item_id, s.reason])).toEqual([
+      ['i-total', 'reverse_charge_seller_vat'],
+      ['i-breakdown', 'reverse_charge_seller_vat'],
+    ])
+    expect(skipped[0].detail).toMatch(/debiterat moms \(23 EUR\)/)
+    expect(skipped[1].detail).toMatch(/\(11,5\)/)
+    expect(mockMapping).not.toHaveBeenCalled()
+  })
+
+  it('books the same reading under its own VAT: only reverse charge is refused', async () => {
+    const supabase = queuedSupabase([
+      { data: { id: 'i1', matched_transaction_id: 'tx-1', created_journal_entry_id: null, created_supplier_invoice_id: null, extracted_data: { totals: { vatAmount: 100 } } } },
+      ...bookedChain('tx-1'),
+    ])
+    const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {
+      item_ids: ['i1'], category: 'expense_software', vat_treatment: 'standard_25',
+    })
+    expect(skipped).toEqual([])
+    expect(booked).toHaveLength(1)
+  })
+
   it('reads no box for a treatment other than reverse charge', async () => {
     const supabase = queuedSupabase([item('i1', 'tx-1', null), ...bookedChain('tx-1')])
     const { booked, skipped } = await bulkBookMatchedInboxItems(supabase, 'u1', 'c1', {

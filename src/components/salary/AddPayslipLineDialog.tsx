@@ -23,9 +23,13 @@ import { VACATION_CATEGORIES, type VacationCategory } from '@/lib/salary/vacatio
 import {
   MANUAL_PAYSLIP_LINE_SPECS,
   MANUAL_PAYSLIP_LINE_TYPES,
+  MEAL_BENEFIT_KINDS,
   buildManualPayslipLine,
+  mealBenefitUnit,
   type ManualLineCaps,
   type ManualPayslipLineType,
+  type MealBenefitKind,
+  type MealBenefitSchablon,
 } from '@/lib/salary/manual-payslip-lines'
 import { TEXT_ROW_MAX_LENGTH, isTextRow } from '@/lib/salary/text-rows'
 import { isBenefitItemType } from '@/lib/salary/benefit-payments'
@@ -33,6 +37,7 @@ import { isAllowedOverrideAccount, lineAccountOverride } from '@/lib/salary/line
 import { LineAccountField } from '@/components/salary/LineAccountField'
 
 const DEFAULT_TYPE: ManualPayslipLineType = 'mileage_taxfree'
+const DEFAULT_MEAL: MealBenefitKind = 'lunch_middag'
 
 // Quantity, unit price and amount keep what was typed; the line amount is
 // rounded where it is computed.
@@ -40,13 +45,16 @@ const parseNumber = (s: string): number | undefined => parseDecimalInput(s) ?? u
 
 /**
  * One-off payslip line ("Lägg till rad"): milersättning, traktamente, bonus,
- * övertid, OB, kostförmån, a deduction, or a Textrad (words only, no amount). Convention
+ * övertid, OB, kostförmån, övrig förmån, a deduction, or a Textrad (words only, no amount). Convention
  * 13: centered modal for create. The catalogue and the flags each type
  * carries live in lib/salary/manual-payslip-lines.ts; this dialog only
  * collects the numbers, or the text, and, on rows that post on their own
  * account, an optional account override (empty = the default the booking
  * resolves for this employee). Semester takes the days taken and which days
- * they are; its amount is optional (crm#1331).
+ * they are; its amount is optional (crm#1331). Kostförmån takes the meal and
+ * the count, priced at Skatteverket's schablon for the run's year
+ * (mealSchablon); the à-pris stays editable for a value Skatteverket has
+ * adjusted (crm#1349).
  */
 export function AddPayslipLineDialog({
   open,
@@ -54,6 +62,7 @@ export function AddPayslipLineDialog({
   runId,
   salaryRunEmployeeId,
   taxFreeCaps,
+  mealSchablon,
   employmentType,
   personnelCategory,
   onAdded,
@@ -67,6 +76,8 @@ export function AddPayslipLineDialog({
   personnelCategory: string | null | undefined
   /** Schablon per mil / per day for the run's year; a tax-free line above it is refused. */
   taxFreeCaps?: ManualLineCaps
+  /** Kostförmån per meal for the run's year; empty before the first calculation. */
+  mealSchablon?: MealBenefitSchablon
   onAdded: () => void | Promise<void>
 }) {
   const t = useTranslations('salary_run_employee')
@@ -81,12 +92,17 @@ export function AddPayslipLineDialog({
   const [account, setAccount] = useState('')
   const [accountInvalid, setAccountInvalid] = useState(false)
   const [vacationCategory, setVacationCategory] = useState<VacationCategory>('paid')
+  const [mealKind, setMealKind] = useState<MealBenefitKind>(DEFAULT_MEAL)
 
   const spec = MANUAL_PAYSLIP_LINE_SPECS[type]
   // A Textrad is words only: no quantity, no à-pris, no amount.
   const isText = isTextRow({ item_type: type })
   // Semester needs its days; the amount is optional.
   const isVacation = type === 'vacation'
+  // Kostförmån is counted in meals (or days of helt fri kost) at the schablon.
+  const isMeal = type === 'benefit_meals'
+  const unit = isMeal ? mealBenefitUnit(mealKind) : spec.unit
+  const mealValue = isMeal ? mealSchablon?.perKind[mealKind] : undefined
   const quantityN = parseNumber(quantity)
   const unitPriceN = parseNumber(unitPrice)
   // Quantity x unit price wins over a typed amount, same rule as the body
@@ -101,6 +117,7 @@ export function AddPayslipLineDialog({
       unit_price: unitPriceN,
       amount: parseNumber(amount),
       vacation_category: isVacation ? vacationCategory : undefined,
+      meal_kind: isMeal ? mealKind : undefined,
     },
     taxFreeCaps,
   )
@@ -119,7 +136,15 @@ export function AddPayslipLineDialog({
     setAccount('')
     setAccountInvalid(false)
     setVacationCategory('paid')
+    setMealKind(DEFAULT_MEAL)
     onOpenChange(false)
+  }
+
+  // Prices the meal at the year's schablon; a typed à-pris is replaced only
+  // when the meal (or the type) changes, never while the operator types.
+  function applyMealSchablon(kind: MealBenefitKind) {
+    const value = mealSchablon?.perKind[kind]
+    if (value !== undefined) setUnitPrice(String(value))
   }
 
   async function handleAdd() {
@@ -196,6 +221,7 @@ export function AddPayslipLineDialog({
                 value={type}
                 onValueChange={(v) => {
                   setType(v as ManualPayslipLineType)
+                  if (v === 'benefit_meals') applyMealSchablon(mealKind)
                   setInvalid(false)
                   // An override picked for the old type need not fit the new one.
                   setAccount('')
@@ -248,6 +274,34 @@ export function AddPayslipLineDialog({
             </div>
           )}
 
+          {isMeal && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="payslip_line_meal_kind">{t('add_line_meal_kind')}</Label>
+                <Select
+                  value={mealKind}
+                  onValueChange={(v) => {
+                    const kind = v as MealBenefitKind
+                    setMealKind(kind)
+                    applyMealSchablon(kind)
+                    setInvalid(false)
+                  }}
+                >
+                  <SelectTrigger id="payslip_line_meal_kind">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MEAL_BENEFIT_KINDS.map((kind) => (
+                      <SelectItem key={kind} value={kind}>
+                        {t(`add_line_meal_kind_${kind}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+          )}
+
           {isText ? (
             <div className="space-y-2">
               <Label htmlFor="payslip_line_text">{t('add_line_text')}</Label>
@@ -266,8 +320,8 @@ export function AddPayslipLineDialog({
               <div className="space-y-2">
                 <Label htmlFor="payslip_line_quantity">
                   {t('add_line_quantity')}
-                  {spec.unit && (
-                    <span className="text-muted-foreground"> ({t(`add_line_unit_${spec.unit}`)})</span>
+                  {unit && (
+                    <span className="text-muted-foreground"> ({t(`add_line_unit_${unit}`)})</span>
                   )}
                 </Label>
                 <Input
@@ -323,7 +377,9 @@ export function AddPayslipLineDialog({
                     : t('add_line_invalid')
                 : computed && preview && !isText
                   ? `${t('add_line_computed')} = ${formatCurrency(preview.amount)}`
-                  : t(isVacation ? 'add_line_hint_vacation' : hintKey)}
+                  : isMeal && mealValue !== undefined && mealSchablon?.year !== undefined
+                    ? t('add_line_hint_meal', { year: mealSchablon.year, amount: formatCurrency(mealValue) })
+                    : t(isVacation ? 'add_line_hint_vacation' : hintKey)}
           </p>
 
           <LineAccountField

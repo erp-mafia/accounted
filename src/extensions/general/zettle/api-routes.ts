@@ -7,6 +7,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { resolveOAuthOrigin } from '@/lib/auth/oauth-flows'
 import { feedConnectorRoutes, type FeedConnectorSpec } from '@/lib/feed-sync/connector-routes'
+import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
 import { isZettleConfigured, refreshTokenOf } from './lib/credentials'
 import { buildAuthorizeUrl, disconnectApplication, refreshAccessToken } from './lib/oauth'
 import { syncZettlePurchases, type ZettleSyncSummary } from './lib/order-sync'
@@ -30,6 +31,8 @@ export const zettleFeed: FeedConnectorSpec<ZettleConnection, ZettleSyncSummary> 
   capability: CAPABILITY.zettle_sync,
   cursorColumn: 'last_order_synced_at',
   maxBackfillYears: MAX_BACKFILL_YEARS,
+  // Orders book against the payment account, 1686 unless the store maps another.
+  settlementAccounts: [DEFAULT_PAYMENT_ACCOUNT],
   notConnectedMessage: 'Inget anslutet Zettle-konto.',
   statusColumns:
     'id, status, organization_uuid, organization_name, currency, error_message, connected_at, transaction_sync_enabled, last_order_synced_at',

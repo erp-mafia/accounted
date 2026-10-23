@@ -5,7 +5,7 @@ vi.mock('@/lib/supabase/server', () => ({
 }))
 
 import { createClient } from '@/lib/supabase/server'
-import { GET } from '../route'
+import * as route from '../route'
 import { createMockRequest, parseJsonResponse } from '@/tests/helpers'
 
 const mockCreateClient = vi.mocked(createClient)
@@ -39,17 +39,27 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-describe('GET /api/company/check-org-number', () => {
+const { POST } = route
+
+/** The org number goes in the body: a sole trader's is the owner's personnummer (#95). */
+function check(orgNumber?: string): Request {
+  return createMockRequest('/api/company/check-org-number', {
+    method: 'POST',
+    body: orgNumber === undefined ? {} : { org_number: orgNumber },
+  })
+}
+
+describe('POST /api/company/check-org-number', () => {
   it('returns 401 when unauthenticated', async () => {
     mockCreateClient.mockResolvedValue(buildSupabase({ user: null }) as never)
-    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const res = await POST(check('5560125790'))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(401)
   })
 
   it('returns 400 when org_number is missing', async () => {
     mockCreateClient.mockResolvedValue(buildSupabase({ user: { id: 'u1' } }) as never)
-    const res = await GET(createMockRequest('/api/company/check-org-number'))
+    const res = await POST(check())
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(400)
   })
@@ -57,7 +67,7 @@ describe('GET /api/company/check-org-number', () => {
   it('returns exists:false for malformed org_number without querying', async () => {
     const supabase = buildSupabase({ user: { id: 'u1' } })
     mockCreateClient.mockResolvedValue(supabase as never)
-    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=not-a-number'))
+    const res = await POST(check('not-a-number'))
     const { status, body } = await parseJsonResponse<{
       data: { exists: boolean; companies: unknown[] }
     }>(res)
@@ -75,7 +85,7 @@ describe('GET /api/company/check-org-number', () => {
       }) as never,
     )
     // Hyphenated input still matches the stored 10-digit canonical.
-    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=556012-5790'))
+    const res = await POST(check('556012-5790'))
     const { status, body } = await parseJsonResponse<{
       data: { exists: boolean; companies: { id: string; name: string }[] }
     }>(res)
@@ -88,7 +98,7 @@ describe('GET /api/company/check-org-number', () => {
     mockCreateClient.mockResolvedValue(
       buildSupabase({ user: { id: 'u1' }, companies: { data: [] } }) as never,
     )
-    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const res = await POST(check('5560125790'))
     const { status, body } = await parseJsonResponse<{ data: { exists: boolean } }>(res)
     expect(status).toBe(200)
     expect(body.data.exists).toBe(false)
@@ -98,8 +108,20 @@ describe('GET /api/company/check-org-number', () => {
     mockCreateClient.mockResolvedValue(
       buildSupabase({ user: { id: 'u1' }, companies: { error: { message: 'boom' } } }) as never,
     )
-    const res = await GET(createMockRequest('/api/company/check-org-number?org_number=5560125790'))
+    const res = await POST(check('5560125790'))
     const { status } = await parseJsonResponse(res)
     expect(status).toBe(500)
+  })
+
+  it('answers no GET: the org number never travels in the URL (#95)', () => {
+    expect('GET' in route).toBe(false)
+  })
+
+  it('returns 400 for a body that is not JSON', async () => {
+    mockCreateClient.mockResolvedValue(buildSupabase({ user: { id: 'u1' } }) as never)
+    const res = await POST(
+      new Request('http://localhost:3000/api/company/check-org-number', { method: 'POST', body: 'org_number=5560125790' }),
+    )
+    expect(res.status).toBe(400)
   })
 })

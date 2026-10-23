@@ -16,7 +16,7 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
 }))
 
 const { createJournalEntry } = await import('@/lib/bookkeeping/engine')
-const { getPayoutRecognition, isDeductionShareUnbooked } = await import('../rot-rut-payout-recognition')
+const { getPayoutRecognition, getDeductionShareBookedByPayout } = await import('../rot-rut-payout-recognition')
 const { createRotRutPayoutEntry } = await import('@/lib/bookkeeping/rot-rut-entries')
 const { buildInvoiceCashLines, buildInvoiceRegistrationLines } = await import('@/lib/bookkeeping/invoice-lines')
 
@@ -237,20 +237,87 @@ describe('kontantmetoden end to end: customer payment, then payout', () => {
   })
 })
 
-describe('isDeductionShareUnbooked (the kreditfaktura question)', () => {
-  const ask = (mock: ReturnType<typeof setup>, journalEntryId: string | null = null) =>
-    isDeductionShareUnbooked(mock.supabase as unknown as SupabaseClient, 'company-1', { id: 'inv-1', journal_entry_id: journalEntryId })
-
-  it('unbooked: paid under the two steps and no payout booked', async () => {
-    expect(await ask(setup({ items: [] }))).toEqual({ ok: true, unbooked: true })
-    const pending = setup({ items: [{ invoice_id: 'inv-1', request: { status: 'submitted', settlement_journal_entry_id: null } }] })
-    expect(await ask(pending)).toEqual({ ok: true, unbooked: true })
+describe('getDeductionShareBookedByPayout (the kreditfaktura question)', () => {
+  const ask = (mock: ReturnType<typeof setup>, journalEntryId: string | null = null, creditDate = '2026-10-20') =>
+    getDeductionShareBookedByPayout(
+      mock.supabase as unknown as SupabaseClient,
+      'company-1',
+      { id: 'inv-1', journal_entry_id: journalEntryId },
+      creditDate,
+    )
+  const cashEntry = { id: 'je-cash', status: 'posted', reversed_by_id: null, source_type: 'invoice_cash_payment', entry_date: '2026-09-20' }
+  const payoutEntry = { id: 'je-payout', status: 'posted', reversed_by_id: null, source_type: 'rot_rut_payout', entry_date: '2026-10-10' }
+  const settledItem = (request: Record<string, unknown>, item: Record<string, unknown> = {}) => ({
+    invoice_id: 'inv-1',
+    requested_amount: 3750,
+    decided_amount: null,
+    request: { id: 'req-1', requested_total: 3750, decided_total: null, settlement_journal_entry_id: 'je-payout', ...request },
+    ...item,
   })
 
-  it('booked: a payout settled it, the payment carried 1513, or the invoice has its own verifikat', async () => {
-    const settled = setup({ items: [{ invoice_id: 'inv-1', request: { status: 'paid', settlement_journal_entry_id: 'je-payout' } }] })
-    expect(await ask(settled)).toEqual({ ok: true, unbooked: false })
-    expect(await ask(setup({ lines1513: [{ journal_entry_id: 'je-cash' }] }))).toEqual({ ok: true, unbooked: false })
-    expect(await ask(setup({}), 'je-carry')).toEqual({ ok: true, unbooked: false })
+  it('0: paid under the two steps and no payout booked, the begäran pending or none', async () => {
+    expect(await ask(setup({ items: [] }))).toEqual({ ok: true, bookedSek: 0 })
+    const pending = setup({ items: [settledItem({ status: 'submitted', settlement_journal_entry_id: null })] })
+    expect(await ask(pending)).toEqual({ ok: true, bookedSek: 0 })
+  })
+
+  it('the whole share once a payout paid the begäran in full', async () => {
+    const paid = setup({
+      items: [settledItem({ status: 'paid', decided_total: 3750 }, { decided_amount: 3750 })],
+      entries: [cashEntry, payoutEntry],
+    })
+    expect(await ask(paid)).toEqual({ ok: true, bookedSek: 3750 })
+  })
+
+  it('a partial payout: what Skatteverket paid on the invoice, never the whole share (issue #93)', async () => {
+    const one = setup({
+      items: [settledItem({ status: 'partially_paid', decided_total: 3000 })],
+      entries: [cashEntry, payoutEntry],
+    })
+    expect(await ask(one)).toEqual({ ok: true, bookedSek: 3000 })
+
+    const two = setup({
+      items: [
+        settledItem({ status: 'partially_paid', requested_total: 7500, decided_total: 5000 }, { decided_amount: 1250 }),
+        { invoice_id: 'inv-2', requested_amount: 3750, decided_amount: 3750 },
+      ],
+      entries: [cashEntry, payoutEntry],
+    })
+    expect(await ask(two)).toEqual({ ok: true, bookedSek: 1250 })
+  })
+
+  it('refuses a partial beslut over several invoices that names no per-invoice amounts: never guessed', async () => {
+    const unknown = setup({
+      items: [
+        settledItem({ status: 'partially_paid', requested_total: 7500, decided_total: 5000 }),
+        { invoice_id: 'inv-2', requested_amount: 3750, decided_amount: null },
+      ],
+      entries: [cashEntry, payoutEntry],
+    })
+    expect(await ask(unknown)).toMatchObject({ ok: false, code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN' })
+  })
+
+  it('null (the ledger holds it whole): the payment carried 1513, the invoice has its own verifikat', async () => {
+    expect(await ask(setup({ lines1513: [{ journal_entry_id: 'je-cash' }] }))).toEqual({ ok: true, bookedSek: null })
+    expect(await ask(setup({}), 'je-carry')).toEqual({ ok: true, bookedSek: null })
+  })
+
+  it('null: a payment in an earlier räkenskapsår than its payout, or than the credit with no payout (the year end carried it)', async () => {
+    const payoutNextYear = setup({
+      items: [settledItem({ status: 'paid', decided_total: 3750 })],
+      entries: [cashEntry, { ...payoutEntry, entry_date: '2027-01-12' }],
+      periodStart: '2027-01-01',
+    })
+    expect(await ask(payoutNextYear, null, '2027-02-01')).toEqual({ ok: true, bookedSek: null })
+    const creditNextYear = setup({ items: [], periodStart: '2027-01-01' })
+    expect(await ask(creditNextYear, null, '2027-02-01')).toEqual({ ok: true, bookedSek: null })
+  })
+})
+
+describe('getPayoutRecognition after a kreditfaktura', () => {
+  it('a credited invoice keeps the 1513 path: what Skatteverket pays on it is owed back, not a sale', async () => {
+    const mock = setup({ invoices: [invoiceRow({ status: 'credited' })] })
+    const result = await getPayoutRecognition(mock.supabase as unknown as SupabaseClient, 'company-1', REQUEST, 3750, '2026-10-10')
+    expect(result).toEqual({ ok: true, recognition: null })
   })
 })

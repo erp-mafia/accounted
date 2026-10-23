@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
+import { Switch } from '@/components/ui/switch'
 import {
   SettingsInput,
   SettingsRow,
@@ -47,11 +48,16 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       props.avgifterBasisOverride !== null,
   )
   const [taxStr, setTaxStr] = useState(props.taxOverride !== null ? String(props.taxOverride) : '')
+  // The avgiftsunderlag override is a switch (#91): on stores underlag 0 and
+  // avgift 0, which the AGI declares as pay that is no underlag for
+  // socialavgifter (FK131-FK134). A partial underlag cannot be declared, so
+  // there is no amount to type. The avgift 0 that comes with the switch is
+  // not a separate value, so the amount field starts empty under it.
+  const [noUnderlag, setNoUnderlag] = useState(props.avgifterBasisOverride === 0)
   const [avgStr, setAvgStr] = useState(
-    props.avgifterOverride !== null ? String(props.avgifterOverride) : '',
-  )
-  const [basisStr, setBasisStr] = useState(
-    props.avgifterBasisOverride !== null ? String(props.avgifterBasisOverride) : '',
+    props.avgifterOverride !== null && props.avgifterBasisOverride !== 0
+      ? String(props.avgifterOverride)
+      : '',
   )
   const [reason, setReason] = useState(props.reason ?? '')
   const [saving, setSaving] = useState(false)
@@ -70,8 +76,8 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       const taxOverride = num(taxStr)
       const body = {
         tax_withheld_override: taxOverride === null ? null : Math.trunc(taxOverride),
-        avgifter_amount_override: num(avgStr),
-        avgifter_basis_override: num(basisStr),
+        avgifter_amount_override: noUnderlag ? 0 : num(avgStr),
+        avgifter_basis_override: noUnderlag ? 0 : null,
         reason: reason.trim() || null,
       }
       const res = await fetch(`/api/salary/runs/${props.runId}/employees/${props.employeeId}`, {
@@ -125,7 +131,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       }
       setTaxStr('')
       setAvgStr('')
-      setBasisStr('')
+      setNoUnderlag(false)
       setReason('')
       toast({ title: t('cleared') })
       props.onSaved()
@@ -179,9 +185,9 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
               id="avgifter_override"
               inputMode="decimal"
               placeholder={String(props.avgifterAmount)}
-              value={avgStr}
+              value={noUnderlag ? '0' : avgStr}
               onChange={(e) => setAvgStr(e.target.value)}
-              disabled={fieldDisabled}
+              disabled={fieldDisabled || noUnderlag}
               className={FIELD_CLASS}
             />
             <SettingsRowNote>
@@ -189,19 +195,20 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
             </SettingsRowNote>
           </SettingsRow>
 
-          <SettingsRow label={t('basis_label')} htmlFor="avgifter_basis_override" align="baseline">
-            <SettingsInput
-              id="avgifter_basis_override"
-              inputMode="decimal"
-              placeholder={String(props.avgifterBasis)}
-              value={basisStr}
-              onChange={(e) => setBasisStr(e.target.value)}
-              disabled={fieldDisabled}
-              className={FIELD_CLASS}
-            />
+          <SettingsRow
+            label={t('no_underlag_label')}
+            htmlFor="avgifter_no_underlag"
+            help={t('no_underlag_help')}
+          >
             <SettingsRowNote>
-              {t('calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
+              {t('basis_calculated')} <span className="tabular-nums">{formatCurrency(props.avgifterBasis)}</span>
             </SettingsRowNote>
+            <Switch
+              id="avgifter_no_underlag"
+              checked={noUnderlag}
+              onCheckedChange={setNoUnderlag}
+              disabled={fieldDisabled}
+            />
           </SettingsRow>
 
           <SettingsRow label={t('reason_label')} htmlFor="override_reason" align="baseline" borderless>

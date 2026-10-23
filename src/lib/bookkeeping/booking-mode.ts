@@ -92,6 +92,48 @@ export function supplierInvoiceBookingMoment(
   return companyMoment
 }
 
+/**
+ * The date THIS supplier invoice's registration verifikat is dated: the
+ * invoice date, except that an EU goods acquisition is dated no later than
+ * the 15th of the month after its delivery.
+ *
+ * ML 2023:200 7 kap. 26 § reports the output moms of a unionsinternt förvärv
+ * av varor for the period in which the invoice is issued, but at the latest
+ * for the period holding the 15th day of the month after the month the
+ * beskattningsgrundande händelse occurred, which 7 kap. 12 § puts at the
+ * acquisition (the delivery); 7 kap. 40 § deducts the input moms in the
+ * same period. The registration books both, so an invoice issued after that
+ * 15th is dated on it, and an earlier invoice keeps its own date. Without a
+ * delivery_date (an optional field) the invoice date is all there is to go
+ * by. One rule for every door, under both methods: the registration builder
+ * dates the verifikat by it and the doors check the period lock on it.
+ */
+export function supplierInvoiceRegistrationDate(
+  invoice: {
+    invoice_date: string
+    delivery_date?: string | null
+    reverse_charge?: boolean | null
+    reverse_charge_kind?: string | null
+  },
+  supplierType: string | null | undefined,
+): string {
+  if (!invoice.delivery_date || !isEuGoodsAcquisition(invoice, supplierType)) return invoice.invoice_date
+  const latest = fifteenthOfFollowingMonth(invoice.delivery_date)
+  return latest !== null && latest < invoice.invoice_date ? latest : invoice.invoice_date
+}
+
+/** YYYY-MM-15 of the month after a YYYY-MM-DD date, or null for any other shape. */
+function fifteenthOfFollowingMonth(date: string): string | null {
+  const match = /^(\d{4})-(\d{2})-\d{2}/.exec(date)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  if (month < 1 || month > 12) return null
+  const nextYear = month === 12 ? year + 1 : year
+  const nextMonth = month === 12 ? 1 : month + 1
+  return `${nextYear}-${String(nextMonth).padStart(2, '0')}-15`
+}
+
 /** Whether registering this supplier invoice posts its verifikat now (supplierInvoiceBookingMoment). */
 export function supplierInvoiceBooksOnRegistration(
   settings: Parameters<typeof booksInvoicesOnIssue>[0],

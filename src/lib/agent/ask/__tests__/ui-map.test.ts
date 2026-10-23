@@ -136,6 +136,17 @@ describe('renderUiGrounding: the menu', () => {
     expect(out).not.toContain('(/settings/brand)')
   })
 
+  // PH 204, #96: the assistant said there was no customer CSV import, because
+  // the menu line names Importera/Exportera and nothing it takes.
+  it('says what the import page takes, so a customer CSV import is findable', () => {
+    const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
+    expect(out).toContain(
+      `Sidan ${nav.bookkeeping} → ${nav.import} (/import) innehåller: ${settingsNav.keywords_import}.`,
+    )
+    expect(settingsNav.keywords_import).toMatch(/Importera kunder/)
+    expect(settingsNav.keywords_import).toMatch(/CSV/)
+  })
+
   it('uses the English labels for an English UI', async () => {
     const en = await loadUiLabels('en')
     const trail = menuTrail('/e/general/invoice-inbox', { ctx: gateContext(), labels: en })

@@ -993,11 +993,15 @@ async function writeSieSourceFiles(
       originalFolder.file('manifest.json', JSON.stringify(manifest, null, 2))
     }
 
+    // Paged on a unique order: without one a page boundary can repeat or
+    // skip rows past the first 1000 (the #58 class).
     const mappings = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
       supabase
         .from('sie_account_mappings')
         .select('*')
         .eq('company_id', companyId)
+        .order('source_account', { ascending: true })
+        .order('id', { ascending: true })
         .range(from, to)
     )
     sieFolder.file('account_mappings.json', JSON.stringify(mappings, null, 2))
@@ -1078,6 +1082,10 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // Bank-side counterpart names, including the person's own corrections.
   { name: 'counterparty_aliases', file: 'counterparty_aliases.json', orderBy: 'created_at' },
   { name: 'party_decisions', file: 'party_decisions.json', orderBy: 'created_at' },
+  // Customer merges: which duplicate card was folded into which, by whom,
+  // and which invoices moved (crm#1299): the behandlingshistorik of the
+  // buyer each issued invoice names.
+  { name: 'customer_merges', file: 'customer_merges.json', orderBy: 'created_at' },
   { name: 'articles', file: 'articles.json', orderBy: 'created_at' },
   // Customer invoicing
   { name: 'invoices', file: 'invoices.json', orderBy: 'invoice_date' },

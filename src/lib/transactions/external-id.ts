@@ -319,33 +319,79 @@ export function descriptionsBridge(
  */
 export const PROVIDER_BOOKING_ID_SOURCES: ReadonlySet<string> = new Set(['stripe'])
 
+/**
+ * Bank feeds whose stored external_id is the buildStableExternalIds key
+ * `{prefix}_{scope}_{booking date}_{öre}_{n}` (one 'eb' namespace for both
+ * aggregators, lib/bank-feed/sync.ts). The id is derived, so a different id
+ * alone proves nothing, but two of its parts do (crm#1312):
+ *
+ * - the booking date: both feeds store booked entries only (pending ones are
+ *   skipped until the bank books them), and a booked entry keeps its booking
+ *   date, so one feed never stores one entry under two dates;
+ * - within one date and amount, the bank's own id (provider_transaction_id):
+ *   a page the bank served twice repeats the entry WITH its id (crm#1295), so
+ *   two stored rows with two different bank ids are two entries.
+ */
+export const BOOKING_DATE_ID_SOURCES: ReadonlySet<string> = new Set(['enable_banking', 'open_payments'])
+
+/** `{prefix}_{scope}`, booking date, öre and occurrence index of a buildStableExternalIds id. */
+const BOOKING_DATE_ID = /^(.+)_(\d{4}-\d{2}-\d{2})_(-?\d+)_(\d+)$/
+
 /** The `transactions` columns that say which feed a row came from and under which id. */
 export interface TransactionIdentity {
   external_id?: string | null
   import_source?: string | null
   bank_connection_id?: string | null
+  /** The bank's own id for the entry, as the bank feed sent it (not stable between requests at every bank). */
+  provider_transaction_id?: string | null
+  /** The uploaded bank file a file-import row came from (bank_file_imports). */
+  bank_file_import_id?: string | null
 }
 
 /**
- * True when the ids ALONE prove two rows are different bookings: both rows
- * come from the same provider feed whose ids are per-booking references (same
- * import_source in PROVIDER_BOOKING_ID_SOURCES, same bank connection), both
- * carry an id, and the ids differ.
+ * True when the ids ALONE prove two rows are different bookings. Both rows
+ * must come from the same feed (same import_source and bank connection) and
+ * carry an id, and then:
+ *
+ * - a feed whose ids are per-booking references (PROVIDER_BOOKING_ID_SOURCES):
+ *   the ids differ;
+ * - a bank feed keyed on the booking date (BOOKING_DATE_ID_SOURCES): both ids
+ *   have that shape under the same account scope, and either the booking
+ *   dates (or amounts) in them differ, or both rows carry a bank id and the
+ *   bank ids differ;
+ * - a file import: both rows came from the same uploaded file under
+ *   different ids. One statement lists each booked movement once, and the
+ *   importer already keeps every row of a file as its own (the row index in
+ *   its id); a second upload of the same period is another file and still
+ *   dedups on content.
  *
  * False whenever the ids cannot speak: a missing id on either side, rows from
- * two different feeds (a bank file and the feed, a hand-entered row), or a
- * feed whose ids are derived. Callers then judge on content, as before.
+ * two different feeds (a bank file and the feed, a hand-entered row, a
+ * reconnected bank under a new connection), an id of another shape (the
+ * pre-June-2026 Enable Banking ids), same-day rows of one amount without two
+ * bank ids, or two uploads. Callers then judge on content, as before.
  * Mirrors the ingest-time identity guard (isOtherBookingOfSameFeed in
  * lib/transactions/ingest.ts), so a row the ingest kept apart from its
  * look-alike is not called that look-alike's copy at booking time.
  */
 export function idsProveDistinctBookings(a: TransactionIdentity, b: TransactionIdentity): boolean {
   const source = a.import_source ?? null
-  if (source === null || !PROVIDER_BOOKING_ID_SOURCES.has(source)) return false
+  if (source === null) return false
   if ((b.import_source ?? null) !== source) return false
   if ((a.bank_connection_id ?? null) !== (b.bank_connection_id ?? null)) return false
   const idA = a.external_id ?? null
   const idB = b.external_id ?? null
-  if (!idA || !idB) return false
-  return idA !== idB
+  if (!idA || !idB || idA === idB) return false
+  if (PROVIDER_BOOKING_ID_SOURCES.has(source)) return true
+  if (BOOKING_DATE_ID_SOURCES.has(source)) {
+    const keyA = BOOKING_DATE_ID.exec(idA)
+    const keyB = BOOKING_DATE_ID.exec(idB)
+    if (!keyA || !keyB || keyA[1] !== keyB[1]) return false
+    if (keyA[2] !== keyB[2] || keyA[3] !== keyB[3]) return true
+    const bankA = a.provider_transaction_id?.trim() || null
+    const bankB = b.provider_transaction_id?.trim() || null
+    return bankA !== null && bankB !== null && bankA !== bankB
+  }
+  const fileA = a.bank_file_import_id ?? null
+  return fileA !== null && fileA === (b.bank_file_import_id ?? null)
 }

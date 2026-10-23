@@ -32,6 +32,7 @@ import {
   computeVatCloseCheck,
   RC_BASIS_ADVISORY_HINT,
   RC_BASIS_MISSING_HINT,
+  RC_BASIS_NEGATIVE_HINT,
   REVENUE_ACCOUNT_WITHOUT_RUTA_HINT,
   vatFilingVerdict,
 } from '@/lib/reports/vat-close-check'
@@ -363,6 +364,36 @@ describe('gnubok_vat_close_check: declaration completeness', () => {
     // And the agent now sees the empty basis boxes itself (#2919).
     expect(result.rutor.ruta21).toBe(0)
     expect(result.rutor.ruta22).toBe(0)
+  })
+
+  // #94: the negative FK004 case. A credit note on a reverse-charge purchase
+  // took the fiktiv moms back (2614 debited) but its basis stayed put, so ruta
+  // 30 is negative and rutor 20-24 are empty. The repair is the opposite of
+  // the positive case: the basis follows on 45xx credit, never another 45xx D.
+  it('gives the negative fiktiv moms its own repair, not "add 45xx D / 4598 K"', async () => {
+    const result = await computeVatCloseCheck(
+      PERIOD,
+      'company-1',
+      mockSupabase([
+        { entry: 'e1', account_number: '3001', credit_amount: 10000 },
+        { entry: 'e1', account_number: '2611', credit_amount: 2500 },
+        { entry: 'e1', account_number: '1510', debit_amount: 12500 },
+        { entry: 'e2', account_number: '2440', debit_amount: 1000 },
+        { entry: 'e2', account_number: '6540', credit_amount: 1000 },
+        { entry: 'e2', account_number: '2614', debit_amount: 250 },
+        { entry: 'e2', account_number: '2645', credit_amount: 250 },
+      ]),
+    )
+
+    expect(result.rutor.ruta30).toBe(-250)
+    const finding = result.declaration_checks.find((c) => c.code === 'RC_BASIS_MISSING')!
+    expect(finding.status).toBe('ERROR')
+    expect(finding.message).toMatch(/FK004/)
+    const blocker = result.blockers.find((b) => b.check_code === 'RC_BASIS_MISSING')!
+    expect(blocker.hint).toBe(RC_BASIS_NEGATIVE_HINT)
+    expect(blocker.hint).not.toBe(RC_BASIS_MISSING_HINT)
+    expect(blocker.hint).toMatch(/4598 D \/ 45xx K/)
+    expect(blocker.hint).toMatch(/storno/)
   })
 
   it('one ordinary domestic receipt no longer suppresses the reverse-charge check', async () => {

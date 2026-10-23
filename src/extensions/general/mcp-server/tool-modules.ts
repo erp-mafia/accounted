@@ -68,6 +68,9 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_uncategorize_transaction',
     'gnubok_ignore_transaction',
     'gnubok_create_transactions',
+    // The connector feeds land rows in the inbox or on the Orders page (crm#1385).
+    'gnubok_list_feed_connections',
+    'gnubok_backfill_feed',
     'gnubok_suggest_categories',
     'gnubok_receipt_matcher',
     'gnubok_match_transaction_to_invoice',

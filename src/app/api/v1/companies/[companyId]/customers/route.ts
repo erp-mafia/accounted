@@ -213,7 +213,7 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const customers = trimmed.map((r) => {
       const isIndividual =
         INDIVIDUAL_TYPES.has(r.customer_type)
-        || orgNumberIsPersonalIdentifier(r.customer_type, r.org_number)
+        || orgNumberIsPersonalIdentifier(r.org_number)
       return {
         id: r.id,
         name: r.name,

@@ -172,7 +172,7 @@ import {
   isDocumentImmutabilityRefusal,
 } from '@/lib/documents/link-holder'
 import { linkDocumentCopyToVoucher, linkDocumentToVoucher, type LinkDocumentRefusal } from '@/lib/documents/link-document'
-import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
 import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
@@ -4880,7 +4880,7 @@ async function commitCreateSupplierInvoiceFromInbox(
     : resolveSupplierInvoiceReverseChargeKind(supplier.supplier_type as string | null, reverseCharge, stagedKind)
   if (!reverseChargeKind?.ok) {
     return {
-      error: String(reverseChargeKind?.details?.reason ?? 'reverse_charge_kind must be eu_goods or eu_services'),
+      error: siCreateInvalidInputMessages(reverseChargeKind?.details)?.message_en ?? 'reverse_charge_kind must be eu_goods or eu_services',
       errorCode: 'SI_CREATE_INVALID_INPUT',
       status: 400,
     }
@@ -6014,6 +6014,10 @@ async function commitCorrectEntry(
           // The corrected entry's text when the agent gave one; rows staged
           // without it keep correctEntry's "Rättelse: <original text>".
           description: typeof params.description === 'string' ? params.description : undefined,
+          // Staged only when the agent said the original had debit and
+          // credit swapped; without it a correction that negates the
+          // original is refused here too (crm#1397).
+          ...(params.sides_swapped === true ? { sidesSwapped: true } : {}),
         },
       },
     })

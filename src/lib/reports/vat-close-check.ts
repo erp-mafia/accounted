@@ -547,6 +547,25 @@ export const RC_BASIS_MISSING_HINT =
   'kontot i kontoplanen först.'
 
 /**
+ * Hint for the blocking RC_BASIS_MISSING when the period's fiktiv moms is
+ * NEGATIVE (rutor 30-32 below zero, rutor 20-24 empty: FK004 by presence,
+ * vat-declaration-checks.ts). The basis is missing on the other side: a credit
+ * of a reverse-charge purchase (2614/2624/2634 debited) whose basis did not
+ * follow. Adding 45xx D / 4598 K would push rutor 20-24 the wrong way, and
+ * Korrigera in the momsvy lists only positive gaps, so the hint names the
+ * opposite pair and the storno path. Exported so the test can pin the contract.
+ */
+export const RC_BASIS_NEGATIVE_HINT =
+  'Den fiktiva momsen (2614/2624/2634) är negativ i perioden men ruta 20-24 är tomma: lägg INTE till ' +
+  '45xx D / 4598 K, det ökar underlaget åt fel håll. Hitta verifikaten som debiterar 2614/2624/2634 i ' +
+  'huvudboken (gnubok_get_general_ledger). Är det en kreditnota på ett inköp med omvänd ' +
+  'skattskyldighet: rätta verifikatet med gnubok_correct_entry så att underlaget följer med åt samma håll, ' +
+  '4598 D / 45xx K på samma basbeloppskonto som inköpet (4535-4537 EU-tjänster ruta 21, 4531-4533 ' +
+  'tjänster utanför EU ruta 22, 4515-4517 EU-varor ruta 20). Har en rättelse flyttat bara den fiktiva ' +
+  'momsen: återför den med storno och rätta underlag och fiktiv moms i samma verifikation, i den period ' +
+  'där inköpet redovisades.'
+
+/**
  * Hint for the advisory (WARNING) RC_BASIS_MISSING: the period's basis matches
  * its fiktiv moms per momssats, so the flagged verifikat's basis is booked in
  * another verifikat. Adding basis would count it twice; what is left is the
@@ -1248,7 +1267,7 @@ export async function computeVatCloseCheck(
       // consistent per rate) and the scan-unavailable one must not be told to
       // add basis pairs, that would double-count rutor 20-24.
       check.code === 'RC_BASIS_MISSING' && check.status === 'ERROR'
-        ? RC_BASIS_MISSING_HINT
+        ? (rcOutput < 0 ? RC_BASIS_NEGATIVE_HINT : RC_BASIS_MISSING_HINT)
         : check.code === 'RC_BASIS_MISSING' && isReviewableVatCheck(check, reviewInputs)
           ? RC_BASIS_ADVISORY_HINT
           : check.code === 'REVENUE_ACCOUNT_WITHOUT_RUTA'

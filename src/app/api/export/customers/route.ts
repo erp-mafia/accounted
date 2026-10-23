@@ -77,7 +77,7 @@ export const GET = withRouteContext(
               // an enskild firma has no org number of its own, and a legacy
               // individual row can still carry one there (#2367). The column
               // is the identifier either way, so it is masked, not dropped.
-              orgNumberIsPersonalIdentifier(c.customer_type, c.org_number)
+              orgNumberIsPersonalIdentifier(c.org_number)
                 ? maskCustomerPersonalNumber(c.org_number)
                 : c.org_number ?? maskStoredCustomerPersonalNumber(c.personal_number),
               c.customer_type,

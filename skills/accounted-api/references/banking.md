@@ -3607,6 +3607,7 @@ Resolves the BAS account mapping for the transaction (via category, booking temp
 - Already-categorized fast path: if the transaction already has a journal_entry_id, only flags get updated. The JE is immutable post-commit.
 - account_override must exist and be active in the chart of accounts (else TX_CATEGORIZE_INVALID_ACCOUNT). It books the business side gross unless you also pass vat_treatment or vat_amount: the category default VAT is never carried onto an arbitrary account.
 - vat_amount replaces the rate-based VAT line with the underlag's actual moms (e.g. dricks); it needs a rate-based treatment, else TX_CATEGORIZE_INVALID_VAT_AMOUNT.
+- vat_treatment reverse_charge without reverse_charge_kind takes the box (20, 21 or 22) from the seller country on the row's underlag and the category; when they cannot tell it, 400 TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN (details.reason): send reverse_charge_kind. Never ruta 21 by default.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -4412,6 +4413,7 @@ Per-item categorization mirroring the single :categorize endpoint. Same `{ resul
 - Idempotency-Key covers the WHOLE batch: replays return the cached full response.
 - all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.
 - Per item, the same double-booking guards as `:categorize`: TRANSACTION_BOOK_POSSIBLE_DUPLICATE (the ledger already books that bank line; override per item with `force: true` plus the echoed `expected_duplicate_journal_entry_id` / `expected_duplicate_transaction_id`) and TX_CATEGORIZE_SUGGEST_SI_MATCH / TX_CATEGORIZE_SUGGEST_CI_MATCH (an open invoice covers a plain 244x / 151x categorization; override with `confirm_no_match: true`). An item never dedupes against a verifikat booked earlier in the same batch.
+- Per item as on `:categorize`: reverse_charge without reverse_charge_kind takes the box from the seller country on that row's underlag, else the item fails with TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -4701,7 +4703,7 @@ Lists the rows the Shopify, WooCommerce and Zettle syncs store: one per paid ord
 **Do not use for:** One order with its line items and suggested booking (GET /webshop-orders/{orderId}).
 
 **Pitfalls:**
-- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, WooCommerce the billing country, and it is null when the store withholds addresses or the order ships nowhere.
+- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.
 - booked=unbooked also returns unpaid and invoiced rows: only booking_status to_book can be booked.
 
 | Parameter | In | Type | Required | Notes |
@@ -4799,7 +4801,7 @@ Everything GET /webshop-orders returns for the row plus its line items and sugge
 **Do not use for:** Listing orders (GET /webshop-orders) or booking (POST /webshop-orders/{orderId}/book).
 
 **Pitfalls:**
-- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, WooCommerce the billing country, and it is null when the store withholds addresses or the order ships nowhere.
+- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.
 - For a Shopify order shipped outside Sweden the suggested lines use the store's accounts for that country and VAT rate when the store has set them (Settings > Connections > Shopify), e.g. 3106/2670 for OSS. Otherwise they use Swedish accounts (3001-3004, 2611-2631): for an OSS, export or VOEC sale choose the accounts yourself. The account choice is the caller's.
 - suggestion.lines is null while a non-SEK order has no exchange rate; booking resolves the rate once more and refuses with WEBSHOP_ORDER_FX_UNRESOLVED if it still cannot.
 
@@ -4960,7 +4962,7 @@ Posts one verifikat for the order row through the bookkeeping engine (source_typ
 **Pitfalls:**
 - Send the complete line set; sum debit = sum credit > 0. Start from suggestion.lines of GET /webshop-orders/{orderId} and change the accounts.
 - The account choice is yours: Accounted only checks balance, period, lock and that the accounts exist. Shopify's amounts and VAT are the source; the lines should add up to them.
-- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, WooCommerce the billing country, and it is null when the store withholds addresses or the order ships nowhere.
+- customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.
 - A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.
 
 | Parameter | In | Type | Required | Notes |

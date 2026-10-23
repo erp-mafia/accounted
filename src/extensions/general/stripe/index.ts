@@ -15,7 +15,11 @@ import {
   handleCreditNoteCreated,
   handleInvoicePaid,
 } from './lib/payment-links'
-import { syncStripeBalanceTransactions, type StripeTransactionSyncSummary } from './lib/transaction-sync'
+import {
+  STRIPE_LEDGER_ACCOUNT,
+  syncStripeBalanceTransactions,
+  type StripeTransactionSyncSummary,
+} from './lib/transaction-sync'
 import { feedConnectorRoutes, type FeedConnectorSpec } from '@/lib/feed-sync/connector-routes'
 import { MAX_BACKFILL_YEARS } from './types'
 import { stockholmWallTimeToUtc } from '@/lib/dates/iso'
@@ -49,6 +53,7 @@ export const stripeFeed: FeedConnectorSpec<StripeConnection, StripeTransactionSy
   // Rows are dated on the Swedish day (transaction-sync isoDate), so the
   // chosen day starts at Swedish midnight (crm#1344).
   backfillCursor: (day) => stockholmWallTimeToUtc(day, '00:00').toISOString(),
+  settlementAccounts: [STRIPE_LEDGER_ACCOUNT],
   notConnectedMessage: 'Inget anslutet Stripe-konto.',
   statusColumns:
     'id, status, stripe_account_id, livemode, display_name, error_message, connected_at, last_event_created_at, transaction_sync_enabled, last_balance_txn_synced_at',

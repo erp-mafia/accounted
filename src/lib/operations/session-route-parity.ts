@@ -136,6 +136,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/company/current': uiOnly('switches the browser session\'s active company; the API addresses companies per request'),
   'POST /api/company/:id/delete': uiOnly('destructive owner-only company archive'),
   'POST /api/company/:id/migration-reset': uiOnly('destructive owner-only migration reset'),
+  'POST /api/company/check-org-number': uiOnly('read-only onboarding check for a company the user already has, a POST so the org number stays out of the URL'),
   'PATCH /api/byra/brand': gap('P3', 'byrå brand profile'),
   'PUT /api/clients/:companyId/client-number': gap('P3', "the byrå's own customer number for a client; read on GET /api/v1/portfolio/overview and gnubok_client_overview (client_number), not writable there yet"),
   'POST /api/byra/brand/logo': gap('P3', 'byrå brand logo'),
@@ -358,6 +359,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Customers, articles, sales ─────────────────────────────────────
   'POST /api/customers': covered([`POST ${V}/customers`, 'gnubok_create_customer']),
   'PATCH /api/customers/:id': covered([`PATCH ${V}/customers/:id`, 'gnubok_update_customer']),
+  'POST /api/customers/merge': covered([`POST ${V}/customers/merge`, 'gnubok_merge_customers']),
+  'POST /api/customers/merge/undo': covered([`POST ${V}/customers/merges/:mergeId/undo`]),
   'DELETE /api/customers/:id': covered([`DELETE ${V}/customers/:id`]),
   'PATCH /api/customers/:id/collections-exclusion': gap(
     'P3',
@@ -748,6 +751,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/tic/bankid/cancel': uiOnly('BankID flow'),
   'POST /api/extensions/ext/tic/bankid/link': uiOnly('links a BankID identity to the logged-in person'),
   'POST /api/extensions/ext/tic/bankid/unlink': uiOnly('unlinks a BankID identity from the logged-in person'),
+  'POST /api/extensions/ext/tic/lookup': covered(['gnubok_lookup_company'], 'read-only registry lookup, a POST so the org number stays out of the URL'),
+  'POST /api/extensions/ext/tic/profile': uiOnly('read-only registry profile for the Bolagsuppgifter page, a POST so the org number stays out of the URL'),
 
   // mcp-server
   'POST /api/extensions/ext/mcp-server/mcp': machine('machine endpoint: the MCP door itself'),
@@ -835,7 +840,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/stripe/connect': uiOnly(OAUTH_CONNECT),
   'DELETE /api/extensions/ext/stripe/disconnect': gap('P3'),
   'POST /api/extensions/ext/stripe/sync': gap('P3', EXT_SYNC),
-  'POST /api/extensions/ext/stripe/backfill': gap('P3', EXT_SYNC),
+  'POST /api/extensions/ext/stripe/backfill': covered(['gnubok_backfill_feed']),
   'POST /api/extensions/ext/stripe/transaction-sync': gap('P3', EXT_SYNC),
 
   // whatsapp-inbox
@@ -850,21 +855,21 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/woocommerce/manual-connect': uiOnly('enters a third-party store credential'),
   'DELETE /api/extensions/ext/woocommerce/disconnect': gap('P3'),
   'POST /api/extensions/ext/woocommerce/sync': gap('P3', EXT_SYNC),
-  'POST /api/extensions/ext/woocommerce/backfill': gap('P3', EXT_SYNC),
+  'POST /api/extensions/ext/woocommerce/backfill': covered(['gnubok_backfill_feed']),
   'POST /api/extensions/ext/woocommerce/transaction-sync': gap('P3', EXT_SYNC),
 
   // shopify
   'POST /api/extensions/ext/shopify/connect': uiOnly(OAUTH_CONNECT),
   'DELETE /api/extensions/ext/shopify/disconnect': gap('P3'),
   'POST /api/extensions/ext/shopify/sync': gap('P3', EXT_SYNC),
-  'POST /api/extensions/ext/shopify/backfill': gap('P3', EXT_SYNC),
+  'POST /api/extensions/ext/shopify/backfill': covered(['gnubok_backfill_feed']),
   'POST /api/extensions/ext/shopify/transaction-sync': gap('P3', EXT_SYNC),
 
   // zettle
   'POST /api/extensions/ext/zettle/connect': uiOnly(OAUTH_CONNECT),
   'DELETE /api/extensions/ext/zettle/disconnect': gap('P3'),
   'POST /api/extensions/ext/zettle/sync': gap('P3', EXT_SYNC),
-  'POST /api/extensions/ext/zettle/backfill': gap('P3', EXT_SYNC),
+  'POST /api/extensions/ext/zettle/backfill': covered(['gnubok_backfill_feed']),
   'POST /api/extensions/ext/zettle/transaction-sync': gap('P3', EXT_SYNC),
 }
 
@@ -873,8 +878,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * this; adding one means raising it in the same diff, visibly.
  * 144 -> 150 (2026-10-19): the six digital mailbox doors (Kivra, Billo),
  * public API to follow once the dashboard flow is proven in production.
- * 150 -> 151 (2026-10-23): the orderunderlag retry on a booked order
+ * 150 -> 146 (2026-10-23, crm#1385): the four feed backfills are covered by
+ * gnubok_backfill_feed.
+ * 146 -> 147 (2026-10-23): the orderunderlag retry on a booked order
  * (crm#1032). Agents book through webshop-orders.book, which archives the
  * underlag itself; the retry repairs a dashboard booking where it failed.
  */
-export const GAP_CEILING = 151
+export const GAP_CEILING = 147

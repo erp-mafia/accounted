@@ -111,7 +111,7 @@ function orderOut(order: WebshopOrder): z.infer<typeof OrderSummary> {
 }
 
 const COUNTRY_PITFALL =
-  'customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, WooCommerce the billing country, and it is null when the store withholds addresses or the order ships nowhere.'
+  'customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.'
 
 const EXAMPLE_ORDER = {
   webshop_order_id: '3f2a…',

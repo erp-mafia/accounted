@@ -86,21 +86,34 @@ export function isPersonalNumberOrgNumberDisallowed(
  * read paths, so it is fixed there: every list surface (the customers page,
  * the register export, the v1 list, the MCP list tool) runs its identifier
  * through this and masks what it matches. Detail surfaces, a deliberate
- * drill-in to one record, still show the full value.
+ * drill-in to one record, still show the full value, except over MCP: every
+ * MCP read lands in a model's context, so gnubok_get_customer masks it too.
  *
- * Covers both an enskild firma stored as swedish_business and the legacy
- * individual rows that still carry their personnummer in org_number.
+ * Whatever the customer type: an enskild firma stored as swedish_business,
+ * the legacy individual rows that still carry their personnummer in
+ * org_number, and the legacy foreign-business rows that do (the write paths
+ * refuse one there, isPersonalNumberOrgNumberDisallowed above, but rows
+ * written before that still hold real personnummer). No checksum: a mistyped
+ * personnummer is still a person's number, and a legal person's org number
+ * can never match, its month position is 20 or more.
  */
-export function orgNumberIsPersonalIdentifier(
-  customerType: string | null | undefined,
-  orgNumber: string | null | undefined,
-): boolean {
+export function orgNumberIsPersonalIdentifier(orgNumber: string | null | undefined): boolean {
   return (
-    (customerType === 'individual' || customerType === 'swedish_business')
-    && typeof orgNumber === 'string'
+    typeof orgNumber === 'string'
     && orgNumber.trim() !== ''
     && looksLikeSwedishPersonalNumber(orgNumber)
   )
+}
+
+/**
+ * True when a Swedish VAT number is built on a personnummer: SE, the ten
+ * digits of the org number, 01. An enskild firma's VAT number therefore
+ * carries the owner's whole personnummer, and a surface that masks the org
+ * number has to mask this too.
+ */
+export function vatNumberHoldsPersonalNumber(vatNumber: string | null | undefined): boolean {
+  const match = /^SE(\d{10})01$/.exec((vatNumber ?? '').replace(/[\s-]/g, '').toUpperCase())
+  return match !== null && looksLikeSwedishPersonalNumber(match[1]!)
 }
 
 /**

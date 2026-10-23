@@ -37,7 +37,7 @@ import { assertAccruedCostLinesBookable } from '@/lib/bookkeeping/accruals/accru
 import { suggestBalanceAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { isSlpPensionAccount } from '@/lib/bookkeeping/slp-lines'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
+import { supplierInvoiceBooksOnRegistration, supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import { sellerVatIsCost } from '@/lib/bookkeeping/vat-registration'
 import { supplierInvoiceStornoBusinessEvent } from '@/lib/bookkeeping/supplier-invoice-business-events'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -58,6 +58,7 @@ import { allocateDocumentVat, type DocumentRateVat } from '@/lib/vat/document-va
 import { linkToJournalEntry } from '@/lib/core/documents/document-service'
 import { parseEntityType } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import type { SiCreateInvalidInputReason } from '@/lib/errors/structured-errors'
 import {
   backfillSupplierPaymentDetails,
   inboxStatedPaymentDetails,
@@ -178,8 +179,9 @@ export type CreateSupplierInvoiceResult =
   | CreatedSupplierInvoice
   | CreateSupplierInvoiceFailure
 
-function invalid(reason: string): CreateSupplierInvoiceFailure {
-  return { ok: false, code: 'SI_CREATE_INVALID_INPUT', details: { reason } }
+/** A refusal with its stable reason; the error registry holds the sentence for each. */
+function invalid(reason: SiCreateInvalidInputReason, extra: Record<string, unknown> = {}): CreateSupplierInvoiceFailure {
+  return { ok: false, code: 'SI_CREATE_INVALID_INPUT', details: { reason, ...extra } }
 }
 
 // ── The reverse-charge rules of a supplier invoice ──────────────────────
@@ -227,9 +229,9 @@ export function resolveSupplierInvoiceReverseChargeKind(
   kind: SupplierInvoiceReverseChargeKind | null | undefined,
 ): { ok: true; kind: SupplierInvoiceReverseChargeKind | null } | CreateSupplierInvoiceFailure {
   if (kind == null) return { ok: true, kind: null }
-  if (!reverseCharge) return invalid('reverse_charge_kind is only accepted with reverse_charge')
+  if (!reverseCharge) return invalid('reverse_charge_kind_without_reverse_charge')
   if (supplierType !== 'eu_business') {
-    return invalid('reverse_charge_kind is only accepted for a supplier in another EU country (supplier_type eu_business)')
+    return invalid('reverse_charge_kind_not_eu_supplier')
   }
   return { ok: true, kind }
 }
@@ -338,7 +340,7 @@ export async function createSupplierInvoice(
   let inboxItem: { id: string; document_id: string | null; extracted_data: Record<string, unknown> | null } | null = null
   if (body.inbox_item_id) {
     if (!paidPrivately) {
-      return invalid('inbox_item_id is only accepted with paid_with_private_funds')
+      return invalid('inbox_item_requires_private_payment')
     }
     const { data: item, error: itemError } = await supabase
       .from('invoice_inbox_items')
@@ -347,10 +349,10 @@ export async function createSupplierInvoice(
       .eq('company_id', companyId)
       .maybeSingle()
     if (itemError || !item) {
-      return invalid('inbox_item_id is missing or belongs to another company')
+      return invalid('inbox_item_not_found')
     }
     if (item.created_supplier_invoice_id || item.created_journal_entry_id) {
-      return invalid('inbox item is already booked')
+      return invalid('inbox_item_already_booked')
     }
     // The other half of this purchase is booked already: an utlägg of this one books it twice.
     const pairBooked = await refuseWhenPairBooked(supabase, companyId, item.id as string)
@@ -373,7 +375,7 @@ export async function createSupplierInvoice(
       .eq('company_id', companyId)
       .maybeSingle()
     if (documentError || !document || document.journal_entry_id) {
-      return invalid('document_id is missing, belongs to another company, or is already linked')
+      return invalid('document_unavailable')
     }
 
     const { data: existingDocumentUse, error: existingDocumentUseError } = await supabase
@@ -388,7 +390,7 @@ export async function createSupplierInvoice(
       return { ok: false, code: 'SI_CREATE_FAILED', details: { step: 'document_lookup' } }
     }
     if (existingDocumentUse) {
-      return invalid('document_id is already used by a supplier invoice')
+      return invalid('document_already_used')
     }
   }
 
@@ -441,7 +443,7 @@ export async function createSupplierInvoice(
   if (hasAccrualItems && paidPrivately) {
     // Eget utlägg books the expense in one verifikat at registration:
     // there is no interim-account flow to defer.
-    return invalid('periodisering is not supported with paid_with_private_funds')
+    return invalid('accrual_with_private_payment')
   }
 
   const settingsRead = await supabase
@@ -466,7 +468,7 @@ export async function createSupplierInvoice(
     // Kontantmetoden recognises the cost at payment; periodisering only
     // exists under faktureringsmetoden. Reject loudly instead of silently
     // dropping the periods.
-    return invalid('periodisering requires faktureringsmetoden (accrual)')
+    return invalid('accrual_requires_accrual_method')
   }
 
   // Icke momsregistrerad verksamhet has no deduction right for input VAT
@@ -480,7 +482,7 @@ export async function createSupplierInvoice(
     sellerVatIsCost(companySettings?.vat_registered, reverseCharge) &&
     body.items.some((item) => (item.vat_rate ?? 0) > 0 || (item.vat_amount ?? 0) > 0)
   ) {
-    return invalid('company is not VAT-registered; supplier invoice lines cannot carry moms')
+    return invalid('vat_on_non_vat_registered')
   }
 
   const items: ComputedSupplierInvoiceItem[] = body.items.map((item, index) => {
@@ -594,10 +596,11 @@ export async function createSupplierInvoice(
     selfBillingSnapshot = built.snapshot
   }
 
-  // A verifikat dated invoice_date is posted now when the invoice books at
-  // registration (faktureringsmetoden, or an EU goods acquisition under
-  // kontantmetoden: supplierInvoiceBooksOnRegistration) or a person paid (the
-  // utlägg verifikat). Answer a locked date with a structured PERIOD_LOCKED
+  // A verifikat is posted now when the invoice books at registration
+  // (faktureringsmetoden, or an EU goods acquisition under kontantmetoden:
+  // supplierInvoiceBooksOnRegistration), dated by
+  // supplierInvoiceRegistrationDate, or a person paid (the utlägg verifikat,
+  // dated invoice_date). Answer a locked date with a structured PERIOD_LOCKED
   // instead of the trigger's generic error. The triggers stay authoritative;
   // this is for the caller.
   const booksOnRegistration = supplierInvoiceBooksOnRegistration(
@@ -605,8 +608,17 @@ export async function createSupplierInvoice(
     { reverse_charge: reverseCharge, reverse_charge_kind: reverseChargeKind.kind },
     supplier.supplier_type as string | null,
   )
+  const registrationDate = supplierInvoiceRegistrationDate(
+    {
+      invoice_date: body.invoice_date,
+      delivery_date: body.delivery_date || null,
+      reverse_charge: reverseCharge,
+      reverse_charge_kind: reverseChargeKind.kind,
+    },
+    supplier.supplier_type as string | null,
+  )
   if (booksOnRegistration || paidPrivately) {
-    const lockVerdict = await checkPeriodLock(supabase, companyId, body.invoice_date)
+    const lockVerdict = await checkPeriodLock(supabase, companyId, paidPrivately ? body.invoice_date : registrationDate)
     if (lockVerdict.locked) {
       return {
         ok: false,
@@ -937,7 +949,7 @@ export async function createSupplierInvoice(
         return { ok: false, code: 'INBOX_ITEM_PAIR_ALREADY_BOOKED', details: { reason: claimResult.detail ?? claimResult.code } }
       }
       if (claimResult.code === 'INVALID_LINES') {
-        return invalid(`expense claim lines: ${claimResult.detail ?? 'invalid'}`)
+        return invalid('expense_claim_lines_invalid', { detail: claimResult.detail ?? null })
       }
       log.error('expense claim registration failed', new Error(claimResult.detail ?? claimResult.code), { invoiceId })
       return { ok: false, code: 'SI_CREATE_FAILED', details: { reason: claimResult.code, step: 'expense_claim' } }
@@ -1008,7 +1020,7 @@ export async function createSupplierInvoice(
       }
       entryId = journalEntry.id
     } catch (err) {
-      await undoFailedRegistration(ctx, invoiceId, body.invoice_date, 'registration_journal_entry')
+      await undoFailedRegistration(ctx, invoiceId, registrationDate, 'registration_journal_entry')
       if (isBookkeepingError(err)) return { ok: false, code: 'SI_CREATE_FAILED', error: err }
       log.error('failed to create registration journal entry', err as Error, { invoiceId })
       return {
@@ -1031,7 +1043,7 @@ export async function createSupplierInvoice(
         invoiceId,
         journalEntryId: entryId,
       })
-      await undoFailedRegistration(ctx, invoiceId, body.invoice_date, 'registration_journal_entry_link', entryId)
+      await undoFailedRegistration(ctx, invoiceId, registrationDate, 'registration_journal_entry_link', entryId)
       return { ok: false, code: 'SI_CREATE_FAILED', details: { step: 'registration_journal_entry_link' } }
     }
     registrationJournalEntryId = entryId
@@ -1275,7 +1287,8 @@ async function hardDeleteSupplierInvoice(
 async function undoFailedRegistration(
   ctx: CreateSupplierInvoiceContext,
   invoiceId: string,
-  invoiceDate: string,
+  /** The registration verifikat's own date: the storno is dated on it. */
+  registrationDate: string,
   reason: string,
   knownEntryId?: string,
 ): Promise<void> {
@@ -1307,7 +1320,7 @@ async function undoFailedRegistration(
       companyId,
       userId,
       entryId,
-      reversalDate: invoiceDate,
+      reversalDate: registrationDate,
       event: () => supplierInvoiceStornoBusinessEvent(invoiceId, todayIsoStockholm(), linkBasisColumns('system_derived')),
       role: 'reversal',
     })

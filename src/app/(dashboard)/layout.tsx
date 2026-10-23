@@ -441,6 +441,9 @@ export default async function DashboardLayout({
               </MainContainer>
             </main>
             <SettingsHotkey />
+            <Suspense fallback={null}>
+              <SupportDialogHost />
+            </Suspense>
             <LegalAcceptanceGate state={acceptance} pathname={pathname} company={null} role={null} isAnonymous={user.is_anonymous} />
           </div>
         </AgentSheetProvider>
@@ -694,6 +697,12 @@ export default async function DashboardLayout({
           {/* The palette's inbox entry goes where the menu puts the inbox (lib/inkorg/flag.ts). */}
           <LazyCommandPalette inkorgV2Enabled={navRollouts(companyId).inkorgV2Enabled} />
           <SettingsHotkey />
+          {/* ?support=1, the link in the "we have answered" mail. Every shell
+              mounts it: this one lacked it, so the link opened nothing for
+              anyone with a company (crm#1393). */}
+          <Suspense fallback={null}>
+            <SupportDialogHost />
+          </Suspense>
           <LegalAcceptanceGate
             state={acceptance}
             pathname={pathname}

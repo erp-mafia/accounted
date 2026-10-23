@@ -29,12 +29,16 @@ export const SHOPIFY_API_VERSION = '2026-07'
 /**
  * Orders per page. The API caps `first` at 250, but query cost is what binds
  * here: each order carries nested lineItems/shippingLines connections, and a
- * single GraphQL query must stay under the 1000-point ceiling
- * (25 * (~1 + lineItems 25 + shipping 5 + shippingAddress 1 + overhead) lands
- * well below it; shippingAddress is one object with one enum, so it adds 25
- * points per page).
+ * single GraphQL query must stay under the 1000-point ceiling. The requested
+ * cost is linear in this number (2 + pageSize * per-order cost), and the
+ * per-order cost is at least 36 (the order, lineItems 2 + 25, shippingLines
+ * 2 + 5, shippingAddress 1), so a 25-order page cost at least 902. Each
+ * address is one object with one enum (1 point per order; requiresShipping
+ * is a scalar, 0): 24 orders with billingAddress added (#98) never cost more
+ * than the 25 without it did, since 24 * (c + 1) <= 25 * c for any per-order
+ * cost c >= 24.
  */
-export const SHOPIFY_PAGE_SIZE = 25
+export const SHOPIFY_PAGE_SIZE = 24
 /** Line items fetched per order; more than this drops the line snapshot. */
 export const SHOPIFY_LINE_ITEMS_PAGE = 25
 /** Shipping lines fetched per order; >5 on one order is effectively unheard of. */
@@ -362,19 +366,24 @@ async function requestGraphQL<T>(
  * Order fields for the feed. Customer/PII fields stay out (customer, email,
  * names, street addresses): the order feed does not need them, and the
  * verifikat reference is the order name/id. The one exception is the
- * shipping address's country code and nothing else from the address
- * (crm#1032): the destination decides how a goods sale is taxed (domestic,
- * EU distance sale under OSS, export), so the Orders page needs it to pick
- * sales and VAT accounts. Tax lines, line items and shipping lines carry the
- * booking underlag (per-rate VAT, line snapshot). Refunds come inline (plain
- * list, not a connection), so no per-order follow-up requests are needed.
+ * country code of the shipping and billing addresses and nothing else from
+ * them: the destination decides how a goods sale is taxed (domestic, EU
+ * distance sale under OSS, export; crm#1032), and for an order with nothing
+ * to ship (digital products, services) the customer's billing country is the
+ * evidence of where the customer is (#98). Each line's requiresShipping tells
+ * the two apart; it rides with the addresses, so the fallback query without
+ * them asks for exactly the fields that worked before either was added. Tax
+ * lines, line items and shipping lines carry the booking underlag (per-rate
+ * VAT, line snapshot). Refunds come inline (plain list, not a connection), so
+ * no per-order follow-up requests are needed.
  *
  * Shopify counts addresses as protected customer data (the protected field
- * "Address", level 2). A store that withholds it from the app answers with
- * shippingAddress null plus a field-scoped error; listOrdersPage treats that
- * as "no destination", never as a failed page.
+ * "Address", level 2, covering billing and shipping alike). A store that
+ * withholds it from the app answers with the address null plus a
+ * field-scoped error; listOrdersPage treats that as "no country", never as a
+ * failed page.
  */
-function buildOrdersQuery(includeShippingAddress: boolean): string {
+function buildOrdersQuery(includeAddresses: boolean): string {
   return `
 query OrdersFeed($first: Int!, $after: String, $query: String) {
   orders(first: $first, after: $after, query: $query, sortKey: UPDATED_AT) {
@@ -391,12 +400,14 @@ query OrdersFeed($first: Int!, $after: String, $query: String) {
       taxesIncluded
       totalPriceSet { shopMoney { amount currencyCode } }
       taxLines { ratePercentage priceSet { shopMoney { amount currencyCode } } }
-      ${includeShippingAddress ? 'shippingAddress { countryCodeV2 }' : ''}
+      ${includeAddresses ? 'shippingAddress { countryCodeV2 }' : ''}
+      ${includeAddresses ? 'billingAddress { countryCodeV2 }' : ''}
       lineItems(first: ${SHOPIFY_LINE_ITEMS_PAGE}) {
         pageInfo { hasNextPage }
         nodes {
           name
           quantity
+          ${includeAddresses ? 'requiresShipping' : ''}
           discountedTotalSet { shopMoney { amount currencyCode } }
           taxLines { ratePercentage priceSet { shopMoney { amount currencyCode } } }
         }
@@ -420,19 +431,20 @@ query OrdersFeed($first: Int!, $after: String, $query: String) {
 }
 
 const ORDERS_QUERY = buildOrdersQuery(true)
-const ORDERS_QUERY_WITHOUT_SHIPPING_ADDRESS = buildOrdersQuery(false)
+const ORDERS_QUERY_WITHOUT_ADDRESSES = buildOrdersQuery(false)
+/** The address fields a store may withhold without failing the page. */
+const ADDRESS_FIELDS = ['shippingAddress', 'billingAddress'] as const
 
 export interface OrdersPage {
   orders: ShopifyOrder[]
   hasNextPage: boolean
   endCursor: string | null
   /**
-   * The store refused the shipping address on this request (protected
-   * customer data not granted to the app), so no order on the page carries a
-   * destination country. The page is otherwise complete. False when the
-   * address was not asked for.
+   * The store refused the addresses on this request (protected customer data
+   * not granted to the app), so no order on the page carries a country. The
+   * page is otherwise complete. False when the addresses were not asked for.
    */
-  shippingAddressWithheld: boolean
+  addressesWithheld: boolean
 }
 
 export interface ListOrdersOptions {
@@ -441,10 +453,10 @@ export interface ListOrdersOptions {
   /** Relay cursor from the previous page's endCursor, or null for page one. */
   after: string | null
   /**
-   * Ask for the destination country (default true). The sync stops asking
-   * for the rest of a run once the store refused it.
+   * Ask for the shipping and billing countries (default true). The sync
+   * stops asking for the rest of a run once the store refused them.
    */
-  includeShippingAddress?: boolean
+  includeAddresses?: boolean
 }
 
 interface OrdersData {
@@ -454,12 +466,12 @@ interface OrdersData {
   }
 }
 
-function toOrdersPage(data: OrdersData, shippingAddressWithheld: boolean): OrdersPage {
+function toOrdersPage(data: OrdersData, addressesWithheld: boolean): OrdersPage {
   return {
     orders: data.orders.nodes,
     hasNextPage: data.orders.pageInfo.hasNextPage,
     endCursor: data.orders.pageInfo.endCursor,
-    shippingAddressWithheld,
+    addressesWithheld,
   }
 }
 
@@ -469,12 +481,12 @@ function toOrdersPage(data: OrdersData, shippingAddressWithheld: boolean): Order
  * stable across same-second ties, so no offset fallback is needed (unlike the
  * WooCommerce client).
  *
- * A withheld shipping address never fails the page. The documented answer
- * (null field plus a field-scoped error) is tolerated in place. Should the
- * store instead refuse the whole query with ACCESS_DENIED, the page is asked
- * once more without the address: only if that also fails is read_orders
- * itself missing, and the error propagates (classified as revoked) exactly as
- * before the address was added. Without this, adding one optional field
+ * A withheld address never fails the page. The documented answer (null field
+ * plus a field-scoped error) is tolerated in place. Should the store instead
+ * refuse the whole query with ACCESS_DENIED, the page is asked once more
+ * without the addresses: only if that also fails is read_orders itself
+ * missing, and the error propagates (classified as revoked) exactly as
+ * before the addresses were added. Without this, adding one optional field
  * could flip a working connection to revoked and wipe its credentials.
  */
 export async function listOrdersPage(
@@ -486,12 +498,8 @@ export async function listOrdersPage(
     after: options.after,
     query: `updated_at:>='${options.updatedAtMin}'`,
   }
-  if (options.includeShippingAddress === false) {
-    const data = await shopifyGraphQL<OrdersData>(
-      session,
-      ORDERS_QUERY_WITHOUT_SHIPPING_ADDRESS,
-      variables,
-    )
+  if (options.includeAddresses === false) {
+    const data = await shopifyGraphQL<OrdersData>(session, ORDERS_QUERY_WITHOUT_ADDRESSES, variables)
     return toOrdersPage(data, false)
   }
 
@@ -500,16 +508,12 @@ export async function listOrdersPage(
       session,
       ORDERS_QUERY,
       variables,
-      ['shippingAddress'],
+      ADDRESS_FIELDS,
     )
     return toOrdersPage(data, optionalFieldErrors.length > 0)
   } catch (error) {
     if (!(error instanceof ShopifyApiError) || error.code !== ACCESS_DENIED_CODE) throw error
-    const data = await shopifyGraphQL<OrdersData>(
-      session,
-      ORDERS_QUERY_WITHOUT_SHIPPING_ADDRESS,
-      variables,
-    )
+    const data = await shopifyGraphQL<OrdersData>(session, ORDERS_QUERY_WITHOUT_ADDRESSES, variables)
     return toOrdersPage(data, true)
   }
 }

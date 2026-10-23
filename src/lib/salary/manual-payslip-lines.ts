@@ -18,11 +18,19 @@
  * Textrad is a row of words only (text-rows.ts): no amount, no quantity, no
  * flags. It explains the payslip and never reaches the pay.
  *
- * Kostförmån is the one benefit offered here: meals that vary month to month
- * (late dinners at the office) cannot sit on the employee as a fixed monthly
- * value. The row is the same benefit_meals row the employee's standing
- * benefit derives, so the engine taxes it without paying it out and the AGI
- * reports it in FK015, both by type (benefit-payments.ts).
+ * Kostförmån and Övrig förmån are the benefits offered here (crm#1349):
+ * meals that vary month to month (late dinners at the office), or a one-off
+ * benefit, cannot sit on the employee as a fixed monthly value. The row is
+ * the same benefit_meals / benefit_other row the employee's standing benefit
+ * derives, so the engine taxes it and puts it in the avgiftsunderlag without
+ * paying it out, the verifikat books no line for it (salary-entries.ts), and
+ * the AGI reports it in FK012 with the other benefits, all by type
+ * (benefit-payments.ts). A kostförmån is entered per måltid: the dialog
+ * prices the chosen meal at Skatteverket's schablon for the run's year,
+ * read from the payroll config the calculation froze on the run
+ * (mealBenefitSchablonFromRunParams), so the values have one source.
+ * Bilförmån, bostad, cykel and friskvård stay on the employee: they are
+ * standing monthly values with their own valuation rules.
  *
  * Utlägg are deliberately absent: an expense claim reaches the payslip
  * through "Lägg till utlägg" on the run page, linked to the claim
@@ -54,6 +62,7 @@ export type ManualPayslipLineType =
   | 'other'
   | 'correction'
   | 'benefit_meals'
+  | 'benefit_other'
   | 'gross_deduction_other'
   | 'net_deduction_advance'
   | 'net_deduction_other'
@@ -154,6 +163,7 @@ export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLine
   other: { label: 'Övrigt', flags: WAGE, sign: 'addition' },
   correction: { label: 'Korrigering', flags: WAGE, sign: 'signed' },
   benefit_meals: { label: 'Kostförmån', flags: BENEFIT, sign: 'addition', unit: 'maltider' },
+  benefit_other: { label: 'Övrig förmån', flags: BENEFIT, sign: 'addition' },
   gross_deduction_other: { label: 'Bruttolöneavdrag', flags: GROSS_DEDUCTION, sign: 'deduction' },
   net_deduction_advance: { label: 'Avdrag förskott', flags: NET_DEDUCTION, sign: 'deduction' },
   net_deduction_other: { label: 'Nettolöneavdrag', flags: NET_DEDUCTION, sign: 'deduction' },
@@ -167,9 +177,63 @@ export function isManualPayslipLineType(type: string): type is ManualPayslipLine
   return Object.prototype.hasOwnProperty.call(MANUAL_PAYSLIP_LINE_SPECS, type)
 }
 
+/**
+ * Which meal a kostförmån row prices (swedish-payroll references/benefits.md,
+ * Kostförmån): lunch eller middag and frukost per måltid, helt fri kost (at
+ * least three meals) per dag. Lunch or dinner first: the common case.
+ */
+export const MEAL_BENEFIT_KINDS = ['lunch_middag', 'frukost', 'heldag'] as const
+export type MealBenefitKind = (typeof MEAL_BENEFIT_KINDS)[number]
+
+/** Swedish default description per meal (stored data stays Swedish). */
+const MEAL_BENEFIT_DESCRIPTIONS: Record<MealBenefitKind, string> = {
+  lunch_middag: 'Kostförmån, lunch eller middag',
+  frukost: 'Kostförmån, frukost',
+  heldag: 'Kostförmån, helt fri kost',
+}
+
+/** What "Antal" counts for the meal: måltider, or days of helt fri kost. */
+export function mealBenefitUnit(kind: MealBenefitKind): 'maltider' | 'dagar' {
+  return kind === 'heldag' ? 'dagar' : 'maltider'
+}
+
+export interface MealBenefitSchablon {
+  /** The income year the values are for (the run's payroll config year). */
+  year?: number
+  perKind: Partial<Record<MealBenefitKind, number>>
+}
+
+/**
+ * Skatteverket's förmånsvärde per meal for the run's year, read from the
+ * payroll config the calculation stored on the run (salary_payroll_config
+ * kostforman_lunch / kostforman_frukost / kostforman_heldag, serialised as
+ * camelCase; the snake_case row shape is accepted too). Nothing here restates
+ * the amounts. Empty when the run has not been calculated: the operator then
+ * types the à-pris.
+ */
+export function mealBenefitSchablonFromRunParams(params: Record<string, unknown> | null | undefined): MealBenefitSchablon {
+  if (!params) return { perKind: {} }
+  const num = (...keys: string[]): number | undefined => {
+    for (const k of keys) {
+      const v = params[k]
+      if (typeof v === 'number' && Number.isFinite(v) && v > 0) return v
+    }
+    return undefined
+  }
+  const perKind: Partial<Record<MealBenefitKind, number>> = {}
+  const lunch = num('kostformanLunch', 'kostforman_lunch')
+  const breakfast = num('kostformanFrukost', 'kostforman_frukost')
+  const fullDay = num('kostformanHeldag', 'kostforman_heldag')
+  if (lunch !== undefined) perKind.lunch_middag = lunch
+  if (breakfast !== undefined) perKind.frukost = breakfast
+  if (fullDay !== undefined) perKind.heldag = fullDay
+  const year = num('configYear', 'config_year')
+  return year !== undefined ? { year, perKind } : { perKind }
+}
+
 export interface ManualLineInput {
   item_type: ManualPayslipLineType
-  /** Empty = the type's Swedish label. */
+  /** Empty = the type's Swedish label (a kostförmån: its meal's description). */
   description?: string | null
   quantity?: number | null
   unit_price?: number | null
@@ -177,6 +241,8 @@ export interface ManualLineInput {
   amount?: number | null
   /** Vacation line only: which days are taken (vacation-category.ts). */
   vacation_category?: VacationCategory | null
+  /** Kostförmån only: which meal the row prices; names the default description. */
+  meal_kind?: MealBenefitKind | null
 }
 
 export interface ManualLineBody extends ManualLineFlags {
@@ -248,7 +314,7 @@ export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineC
 
   const amount =
     spec.sign === 'deduction' ? -magnitude : spec.sign === 'addition' ? magnitude : roundOre(raw)
-  const description = (input.description ?? '').trim() || spec.label
+  const description = (input.description ?? '').trim() || defaultDescription(input, spec)
   const body: ManualLineBody = {
     item_type: input.item_type,
     description,
@@ -283,6 +349,13 @@ function buildVacationLine(input: ManualLineInput, spec: ManualLineSpec): Manual
   if (unitPrice !== undefined) body.unit_price = unitPrice
   if (input.vacation_category) body.vacation_category = input.vacation_category
   return { ok: true, body }
+}
+
+function defaultDescription(input: ManualLineInput, spec: ManualLineSpec): string {
+  if (input.item_type === 'benefit_meals' && input.meal_kind && MEAL_BENEFIT_DESCRIPTIONS[input.meal_kind]) {
+    return MEAL_BENEFIT_DESCRIPTIONS[input.meal_kind]
+  }
+  return spec.label
 }
 
 function capFor(type: ManualPayslipLineType, caps: ManualLineCaps): number | undefined {

@@ -8,6 +8,7 @@ import {
 import {
   JournalEntryNotBalancedError,
   CannotCorrectNonPostedError,
+  MeaninglessCorrectionError,
 } from '@/lib/bookkeeping/errors'
 
 const mockCreateClient = vi.fn()
@@ -33,6 +34,7 @@ vi.mock('@/lib/core/bookkeeping/storno-service', () => ({
   correctEntry: (...args: unknown[]) => mockCorrectEntry(...args),
 }))
 
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { POST } from '../route'
 
 describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
@@ -201,5 +203,84 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('CANNOT_CORRECT_NON_POSTED')
+  })
+
+  describe('a second reversal and the rättelse date (crm#1397, crm#1368)', () => {
+    const swapped = [
+      { account_number: '6570', debit_amount: 0, credit_amount: 100 },
+      { account_number: '1930', debit_amount: 100, credit_amount: 0 },
+    ]
+    const ok = () => {
+      mockCorrectEntry.mockResolvedValue({
+        reversal: makeJournalEntry({ id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' }),
+        corrected: makeJournalEntry({ id: 'corrected-1', correction_of_id: 'entry-1', source_type: 'correction' }),
+      })
+    }
+
+    it('answers 400 negates_original with the Swedish way out when the engine refuses a second reversal', async () => {
+      mockCorrectEntry.mockRejectedValue(new MeaninglessCorrectionError('negates_original'))
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', {
+        method: 'POST',
+        body: { lines: swapped },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; message: string; details?: { reason?: string } }
+      }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('MEANINGLESS_CORRECTION')
+      expect(body.error.details?.reason).toBe('negates_original')
+      // What the app shows for the envelope (getErrorMessage reads the reason).
+      expect(getErrorMessage(body)).toContain('Återför (storno)')
+    })
+
+    it('hands sides_swapped to correctEntry as sidesSwapped', async () => {
+      ok()
+      const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', {
+        method: 'POST',
+        body: { lines: swapped, sides_swapped: true },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+
+      expect(response.status).toBe(200)
+      expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', swapped, {
+        description: undefined,
+        sidesSwapped: true,
+      })
+    })
+
+    it('hands entry_date to correctEntry as the rättelse date', async () => {
+      ok()
+      const lines = [
+        { account_number: '6570', debit_amount: 100, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 100 },
+      ]
+      const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', {
+        method: 'POST',
+        body: { lines, entry_date: '2026-07-27' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+
+      expect(response.status).toBe(200)
+      expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines, {
+        description: undefined,
+        newEntryDate: '2026-07-27',
+      })
+    })
+
+    it('returns 400 for an entry_date that is not a date', async () => {
+      const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', {
+        method: 'POST',
+        body: { lines: swapped, entry_date: '27/07/2026' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+      const { status, body } = await parseJsonResponse<{ error: string }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error).toContain('entry_date')
+      expect(mockCorrectEntry).not.toHaveBeenCalled()
+    })
   })
 })

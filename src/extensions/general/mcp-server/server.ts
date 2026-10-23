@@ -119,7 +119,7 @@ import {
   supplierInvoiceTotalsGap,
   type PrintedLineAmount,
 } from '@/lib/bookkeeping/supplier-invoice-line-totals'
-import { getErrorEntry } from '@/lib/errors/structured-errors'
+import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
 import { errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
@@ -174,6 +174,8 @@ import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stage
 import { supplierPaymentTermsDays } from '@/lib/supplier-invoices/due-date'
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { eventBus } from '@/lib/events/bus'
+import type { EventPayload } from '@/lib/events/types'
+import { agentFeedbackRecipient, isRelayWorthy } from '@/lib/events/handlers/agent-feedback-relay-handler'
 import {
   explainVatTreatment,
   getVatRules,
@@ -216,9 +218,8 @@ import { listForCompany as listCashAccountsForCompany, resolveDefaultCashAccount
 import {
   normalizeReroutedPersonalNumber,
   orgNumberHoldsPersonalNumber,
-  orgNumberIsPersonalIdentifier,
 } from '@/lib/invariants/personal-number-shape'
-import { isMaskedPersonalNumber, maskCustomerPersonalNumber } from '@/lib/customers/mask-personal-number'
+import { agentCustomerIdentifiers, isMaskedPersonalNumber } from '@/lib/customers/mask-personal-number'
 import {
   encryptCustomerPersonalNumber,
   maskStoredCustomerPersonalNumber,
@@ -443,6 +444,7 @@ import {
 } from '@/lib/import/opening-balance/existing'
 import { assertNoOpeningBalance } from '@/lib/import/opening-balance/existing'
 import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
+import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import {
   checkVoucherGapExplanation,
   listVoucherGaps,
@@ -484,6 +486,7 @@ import { sanitizeDeliveryRecipientStatuses } from '@/lib/invoices/delivery-recip
 import { listRotRutCandidates, createRotRutPayoutRequest, archiveRotRutPayoutFile } from '@/lib/invoices/rot-rut-service'
 import { getPayoutOreRounding } from '@/lib/invoices/rot-rut-receivable'
 import { getPayoutRecognition } from '@/lib/invoices/rot-rut-payout-recognition'
+import { twoStepPayoutShape } from '@/lib/invoices/rot-rut-link-voucher'
 import { importRotRutBeslutFile } from '@/lib/invoices/rot-rut-beslut-import'
 import { computeRefusedShares } from '@/lib/invoices/rot-rut-refused-shares'
 import {
@@ -559,8 +562,9 @@ import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
 import { buildReportDataStatus } from '@/lib/reports/data-status'
 import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
-import { CorrectionChainTooDeepError } from '@/lib/bookkeeping/errors'
+import { CorrectionChainTooDeepError, MeaninglessCorrectionError } from '@/lib/bookkeeping/errors'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
+import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
 import { businessAccount, categorizeArgsFor, reverseChargeBoxDispute, reverseChargeBoxNumber, whyTextSv } from '@/lib/bookkeeping/proposal'
@@ -633,6 +637,7 @@ import { DOCUMENT_DETAIL_PARTS, parseDocumentDetailParts, readDocumentDetail } f
 import { readTransactionWithVouchers } from '@/lib/transactions/read-with-vouchers'
 import { createArkivTools } from './arkiv-tools'
 import { createPurchaseCategoryTools } from './purchase-category-tools'
+import { createFeedTools } from './feed-tools'
 import { createOperationTools, toolOutputSchema } from './operation-tools'
 import { ALL_OPERATIONS, OPERATIONS } from '@/lib/operations/registry'
 import { startPackageForTool } from '@/lib/modules/package-doors'
@@ -1486,17 +1491,19 @@ function splitCategorizeVatTreatment(value: unknown): {
 
 /**
  * Where a categorize preview's reverse-charge basis lands, read off the lines
- * the approval will post: the box, and whether the caller chose it or the
- * EU-services default did. Undefined when the lines carry no fiktiv moms.
+ * the approval will post: the box, and whether the caller chose it, the
+ * underlag's seller gave it (#94) or the EU-services default did. Undefined
+ * when the lines carry no fiktiv moms.
  */
 function reverseChargeBasisSummary(
   vatLines: Array<{ account_number: string; debit_amount: number }>,
   reverseChargeKind: ReverseChargeKind | undefined,
   costAccount: string,
+  source: 'vat_treatment' | 'underlag' = 'vat_treatment',
 ): Record<string, unknown> | undefined {
   if (!vatLines.some((l) => ['2614', '2624', '2634'].includes(l.account_number))) return undefined
   const kind = reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND
-  const kindSource = reverseChargeKind ? 'vat_treatment' : 'default'
+  const kindSource = reverseChargeKind ? source : 'default'
   const basisLine = vatLines.find((l) => l.debit_amount > 0 && isReverseChargeBasisAccount(l.account_number))
   if (!basisLine) {
     return {
@@ -1514,7 +1521,8 @@ function reverseChargeBasisSummary(
     basis_account: basisLine.account_number,
     ruta,
     note: reverseChargeKind
-      ? `Basis ${basisLine.account_number} D / 4598 K reports the purchase in ${ruta}.`
+      ? `Basis ${basisLine.account_number} D / 4598 K reports the purchase in ${ruta}` +
+        (source === 'underlag' ? ", the box the seller country on the underlag gives." : '.')
       : `Seller country not stated, so the basis defaults to EU services (${basisLine.account_number}, ${ruta}). ` +
         'Re-stage with vat_treatment reverse_charge_non_eu_services (ruta 22) or reverse_charge_eu_goods (ruta 20) if the underlag says otherwise.',
   }
@@ -2430,6 +2438,7 @@ function skattekontoBuiltEntry(
       account: suggestion.account,
       label: suggestion.label ?? row.transaktionstext,
       ...(suggestion.ore_rounding ? { oreRounding: suggestion.ore_rounding } : {}),
+      ...(suggestion.rot_rut_payout ? { rotRutPayout: suggestion.rot_rut_payout.leg } : {}),
     },
     skattekontoAccount,
   )
@@ -6188,6 +6197,9 @@ export const tools: McpTool[] = [
     },
   },
 
+  // Stripe, Shopify, WooCommerce and Zettle feeds: status and backfill (crm#1385).
+  ...createFeedTools({ readOnly: ANNOTATIONS_READ_ONLY, writeOpenWorld: ANNOTATIONS_WRITE_OPEN_WORLD }),
+
   {
     name: 'gnubok_connect_skatteverket',
     keywords: ['skatteverket', 'koppla skatteverket', 'deklarationsombud'],
@@ -6844,25 +6856,34 @@ export const tools: McpTool[] = [
       }
       feedbackRateLimit.set(rateKey, now)
 
+      const payload: EventPayload<'agent.feedback'> = {
+        context,
+        sentiment,
+        suggestion,
+        toolName,
+        skillSlug,
+        sessionId: actor?.sessionId ?? null,
+        actorType: actor?.type ?? 'api_key',
+        actorId: actor?.id ?? null,
+        actorLabel: actor?.label ?? null,
+        userId,
+        companyId,
+      }
       emitAfterResponse(() => eventBus
-        .emit({
-          type: 'agent.feedback',
-          payload: {
-            context,
-            sentiment,
-            suggestion,
-            toolName,
-            skillSlug,
-            sessionId: actor?.sessionId ?? null,
-            actorType: actor?.type ?? 'api_key',
-            actorId: actor?.id ?? null,
-            actorLabel: actor?.label ?? null,
-            userId,
-            companyId,
-          },
-        })
+        .emit({ type: 'agent.feedback', payload })
         .catch((err) => console.error('[mcp] agent.feedback emit failed:', err)))
 
+      // A relayed report becomes a support ticket answered by e-mail to the
+      // user this connection acts as (the relay's replyTo), so a person who
+      // never heard of the report got our reply out of the blue (crm#1336).
+      // The result tells the agent to say so; the description stays as it
+      // is, since it ships in every tools/list.
+      if (agentFeedbackRecipient() !== null && isRelayWorthy(payload)) {
+        return {
+          recorded: true,
+          message: 'Sent to the Accounted team as a support ticket. Tell the user now that you reported this: the team may reply by e-mail to the address of the Accounted user this connection belongs to.',
+        }
+      }
       return {
         recorded: true,
         message: 'Thanks. Feedback recorded for product-team triage; it is read and has led to fixes. Include ids and expected vs actual so it can be verified.',
@@ -8084,7 +8105,7 @@ export const tools: McpTool[] = [
       properties: {
         transaction_id: { type: 'string', description: 'UUID of the transaction to categorize' },
         category: { type: 'string', description: 'Transaction category', enum: [...VALID_CATEGORIES] },
-        vat_treatment: { type: 'string', description: 'Default standard_25. reverse_charge ONLY when the underlag shows the seller charged NO VAT (foreign VAT debited is not). It books the basis too: _eu_services ruta 21, _non_eu_services 22, _eu_goods 20; plain = EU services.', enum: [...CATEGORIZE_VAT_TREATMENTS] },
+        vat_treatment: { type: 'string', description: 'Default standard_25. reverse_charge ONLY when the underlag shows the seller charged NO VAT (foreign VAT debited is not). Books the basis: _eu_services ruta 21, _non_eu_services 22, _eu_goods 20; plain: seller on underlag.', enum: [...CATEGORIZE_VAT_TREATMENTS] },
         vat_amount: { type: 'number', exclusiveMinimum: 0, description: 'The underlag\'s exact moms (> 0) when it differs from rate × belopp: e.g. dricks carries no VAT. In the transaction\'s currency, like belopp; booked in SEK at its exchange rate. Requires a rate-based vat_treatment. Swedish moms only: foreign VAT is never deductible. For a 0-moms document use vat_treatment="exempt".' },
         account_override: { type: 'string', pattern: '^\\d{4}$', description: 'Books the business side (debit when money goes out, credit when money comes in) on this kontoplan account instead of the category default: the ONLY way to reach company-custom accounts (e.g. VMB). category is still required: it decides direction and VAT; the override only replaces its default account. Must exist and be active (gnubok_list_accounts; create via gnubok_create_account). VMB purchases/sales carry no deductible moms: use vat_treatment "exempt". Without an explicit vat_treatment (or vat_amount) the override books GROSS with no auto-VAT line: a moms leg is never guessed onto a custom account. Class-2 overrides outside 2610-2649 always drop auto-VAT. Not valid with category "private". State the actual affärshändelse in notes (BFL 5 kap).' },
         notes: { type: 'string', description: 'Audit-trail context appended to the verifikation description. For category=representation use this to record deltagare + syfte ("Anna Andersson (Acme AB), kundmöte om Y"). For project work, include the project ref. Keep under 200 chars; pure metadata, not a re-description of the transaction.' },
@@ -8179,15 +8200,18 @@ export const tools: McpTool[] = [
           accountOverride,
           allowDuplicate: args.allow_duplicate === true,
         }),
-        { dryRun: true, onBooked: 'refuse', invoiceMatchIntercept: false },
+        { dryRun: true, onBooked: 'refuse', invoiceMatchIntercept: false, reverseChargeBoxParam: 'vat_treatment' },
       )
       if (!outcome.ok) throw categorizeStagingRefusal(outcome, args.transaction_id as string)
       if (!outcome.dryRun) throw new Error('categorize: unexpected booking on a dry run')
       const { preview } = outcome
       const tx = preview.transaction
       const mapping = preview.mappingResult
+      // The box the approval books: the one sent, or the one the underlag's
+      // seller gave (#94), staged so the commit books the same.
+      const stagedKind = reverseChargeKind ?? preview.reverse_charge_kind
       const reverseCharge = tx.amount < 0
-        ? reverseChargeBasisSummary(mapping.vat_lines, reverseChargeKind, mapping.debit_account)
+        ? reverseChargeBasisSummary(mapping.vat_lines, stagedKind, mapping.debit_account, reverseChargeKind ? 'vat_treatment' : 'underlag')
         : undefined
       const result = {
         category: preview.category,
@@ -8236,7 +8260,7 @@ export const tools: McpTool[] = [
           transaction_id: args.transaction_id,
           category,
           vat_treatment: vatTreatment ?? null,
-          ...(reverseChargeKind ? { reverse_charge_kind: reverseChargeKind } : {}),
+          ...(stagedKind ? { reverse_charge_kind: stagedKind } : {}),
           vat_amount: vatAmount ?? null,
           account_override: accountOverride ?? null,
           notes: typeof args.notes === 'string' && args.notes.trim().length > 0
@@ -8368,6 +8392,7 @@ export const tools: McpTool[] = [
         name: string
         customer_type: string
         org_number: string | null
+        vat_number: string | null
         personal_number: string | null
       }
       let rows: ListedCustomer[]
@@ -8386,29 +8411,20 @@ export const tools: McpTool[] = [
       }
       rows.sort((a, b) => a.name.localeCompare(b.name, 'sv') || a.id.localeCompare(b.id))
 
-      // GDPR art. 5.1 c, same rule as the v1 list: a natural person's
-      // identity number never leaves this tool raw. personal_number is stored
-      // as ciphertext and is exposed only as personal_number_masked
-      // (********-1234). An org_number that IS a personnummer is nulled and
-      // masked the same way: that covers a Swedish enskild firma (its org
-      // number is the owner's personnummer) and the legacy individual rows
-      // written before the write paths started moving it into personal_number.
-      // gnubok_get_customer, the deliberate drill-in to one record, returns
-      // the org_number in full (as v1 GET /customers/{id} does) and the
-      // personal_number masked.
+      // GDPR art. 5.1 c, the rule gnubok_get_customer applies too
+      // (agentCustomerIdentifiers): a natural person's identity number never
+      // leaves this tool raw. personal_number is stored as ciphertext and is
+      // exposed only as personal_number_masked (********-1234). An org_number
+      // that IS a personnummer is nulled and masked the same way, and a VAT
+      // number built on one is nulled: that covers a Swedish enskild firma
+      // (its org number is the owner's personnummer) and the legacy rows
+      // that carry one in org_number under another customer type.
       const customers = rows.map(({ personal_number, ...customer }) => {
-        const orgNumberIsPersonal = orgNumberIsPersonalIdentifier(
-          customer.customer_type,
-          customer.org_number,
-        )
-        if (customer.customer_type !== 'individual' && !orgNumberIsPersonal) return customer
-        return {
-          ...customer,
-          org_number: orgNumberIsPersonal ? null : customer.org_number,
-          personal_number_masked:
-            maskStoredCustomerPersonalNumber(personal_number)
-            ?? (orgNumberIsPersonal ? maskCustomerPersonalNumber(customer.org_number) : null),
-        }
+        const identifiers = agentCustomerIdentifiers(customer, maskStoredCustomerPersonalNumber(personal_number))
+        const masksNothing =
+          identifiers.org_number === customer.org_number && identifiers.vat_number === customer.vat_number
+        if (customer.customer_type !== 'individual' && masksNothing) return customer
+        return { ...customer, ...identifiers }
       })
 
       return { customers, count: customers.length }
@@ -8452,8 +8468,10 @@ export const tools: McpTool[] = [
           tool: 'gnubok_list_customers',
         })
       }
+      // personal_number is already the display form (readCustomerRecord), and
+      // an enskild firma's org and VAT numbers are masked as in the list.
       const { id, personal_number, ...record } = data
-      return { customer_id: id, ...record, personal_number_masked: personal_number }
+      return { customer_id: id, ...record, ...agentCustomerIdentifiers(record, personal_number) }
     },
   },
 
@@ -15227,8 +15245,10 @@ export const tools: McpTool[] = [
       // Nothing on the account holds the event, yet a bank verifikat may book
       // it without the skattekonto (PH 171). Same check as the commit path,
       // on the counter line the preview below shows.
+      // A rot/rut set-off booked as its begäran's payout has no single
+      // counter line; its open begäran is the duplicate guard, as at commit.
       const counter =
-        twins.length === 0 && !cover
+        twins.length === 0 && !cover && !enriched.booking_suggestion.rot_rut_payout
           ? counterLineOf(skattekontoBuiltEntry(tx, enriched.booking_suggestion, skattekontoAccount), skattekontoAccount)
           : null
       const direct = counter
@@ -15411,7 +15431,7 @@ export const tools: McpTool[] = [
       const counterById = new Map<string, SkattekontoCounterLine>()
       for (const r of enriched) {
         if (r.journal_entry_id || r.is_ignored || r.status !== 'booked' || !r.booking_suggestion) continue
-        if ((twinsByRow.get(r.id)?.length ?? 0) > 0 || holdOf(r.id)) continue
+        if ((twinsByRow.get(r.id)?.length ?? 0) > 0 || holdOf(r.id) || r.booking_suggestion.rot_rut_payout) continue
         const counter = counterLineOf(skattekontoBuiltEntry(r, r.booking_suggestion, skattekontoAccount), skattekontoAccount)
         if (counter) counterById.set(r.id, counter)
       }
@@ -16363,7 +16383,7 @@ export const tools: McpTool[] = [
               `Extracted invoice has no due date and its invoice date "${invoiceDate}" is not an ISO date (YYYY-MM-DD), so no default can be derived. `
               + 'Re-stage with invoice_date_override and/or due_date_override, or fix extracted_data via gnubok_set_inbox_extracted_data.',
             ),
-            { code: 'SI_CREATE_INVALID_INPUT' },
+            { code: 'SI_CREATE_INVALID_INPUT', reason: 'due_date_underivable' },
           )
         }
         dueDate = addDaysIso(invoiceDate, paymentTermsDays)
@@ -16392,6 +16412,7 @@ export const tools: McpTool[] = [
           ),
           {
             code: 'SI_CREATE_INVALID_INPUT',
+            reason: 'total_missing',
             remediation: {
               description:
                 'Set totals.total (with subtotal and vat) from the underlag on the inbox item, then retry gnubok_create_supplier_invoice_from_inbox.',
@@ -16412,6 +16433,7 @@ export const tools: McpTool[] = [
           ),
           {
             code: 'SI_CREATE_INVALID_INPUT',
+            reason: 'lines_missing',
             remediation: {
               description:
                 'Set lineItems on the inbox item from the underlag, then retry gnubok_create_supplier_invoice_from_inbox.',
@@ -16476,7 +16498,13 @@ export const tools: McpTool[] = [
       // without it keeps the exact params a company grant knows.
       const reverseChargeKindArg = args.reverse_charge_kind as SupplierInvoiceReverseChargeKind | undefined
       const reverseChargeKind = resolveSupplierInvoiceReverseChargeKind(supplierType, reverseCharge, reverseChargeKindArg)
-      if (!reverseChargeKind.ok) throw new Error(String(reverseChargeKind.details?.reason ?? 'reverse_charge_kind is not valid here'))
+      if (!reverseChargeKind.ok) {
+        const reason = reverseChargeKind.details?.reason
+        throw Object.assign(
+          new Error(siCreateInvalidInputMessages(reverseChargeKind.details)?.message_en ?? 'reverse_charge_kind is not valid here'),
+          { code: reverseChargeKind.code, reason },
+        )
+      }
       // Omvänd skattskyldighet: the buyer self-assesses the VAT (2614/2645
       // in the registration entry) and the seller must not charge any. When
       // the underlag still carries VAT (feedback seq 366701: a foreign SaaS
@@ -16499,17 +16527,23 @@ export const tools: McpTool[] = [
       // at all: the executor gates it on supplierInvoiceBooksOnRegistration,
       // so the preview reads the booking moment from the same columns (feedback
       // seq 930807: the preview promised a verifikat to a deferring company).
-      const { data: vatSettings } = await supabase
+      const settingsRead = await supabase
         .from('company_settings')
         .select('vat_registered, accounting_method, defer_invoice_booking')
         .eq('company_id', companyId)
         .maybeSingle()
-      const companySettings = vatSettings as {
-        vat_registered?: boolean | null
-        accounting_method?: string | null
-        defer_invoice_booking?: boolean | null
-      } | null
-      const vatIsCost = sellerVatIsCost(companySettings?.vat_registered, reverseCharge)
+      // Fail closed (accounted#58, #96): a failed read refuses the staging.
+      // It used to stage from a null row, which invoiceBookingMoment reads as
+      // faktureringsmetoden, so a kontantmetod company's preview promised a
+      // registration verifikat the executor (which refuses the same read)
+      // never posts, and a non-registered company's preview showed the
+      // seller's moms as deductible.
+      const accountingMethod = requireAccountingMethod(settingsRead)
+      const companySettings = {
+        ...(settingsRead.data as { vat_registered?: boolean | null; defer_invoice_booking?: boolean | null }),
+        accounting_method: accountingMethod,
+      }
+      const vatIsCost = sellerVatIsCost(companySettings.vat_registered, reverseCharge)
       // Kontantmetoden books an EU goods acquisition at registration (ML
       // 7 kap. 26 §): the executor's per-invoice rule, read the same way.
       const bookingMoment = supplierInvoiceBookingMoment(
@@ -16533,6 +16567,7 @@ export const tools: McpTool[] = [
           ),
           {
             code: 'SI_CREATE_INVALID_INPUT',
+            reason: 'vat_treatment_unstated',
             remediation: {
               description: 'Read the underlag, then retry gnubok_create_supplier_invoice_from_inbox with vat_treatment_override.',
               tool: 'gnubok_create_supplier_invoice_from_inbox',
@@ -17095,7 +17130,7 @@ export const tools: McpTool[] = [
         next: {
           // Kontantmetoden has no attest step: pointing its agent at the
           // attest tool sent it after a step the app never shows (crm#1156).
-          description: companyAttestsSupplierInvoices(companySettings?.accounting_method)
+          description: companyAttestsSupplierInvoices(accountingMethod)
             ? 'After approval, attest via gnubok_approve_supplier_invoice and pay via the bank flow.'
             : 'After approval, pay it via the bank flow: kontantmetoden has no attest step, and the purchase is booked when the outgoing bank transaction is matched to the invoice.',
           tool: 'gnubok_get_inbox_item',
@@ -21273,7 +21308,7 @@ export const tools: McpTool[] = [
     title: 'Link Existing Rot/Rut Payout Voucher',
     catalogVisibility: 'search',
     description:
-      'Link ROT/RUT begäran to a payout voucher already booked by hand (credits 1513; öre rounding allowed). Books nothing, marks the begäran settled. For an unbooked bank row use gnubok_settle_rot_rut_payout instead. Stages.',
+      'Link ROT/RUT begäran to a payout voucher already booked by hand (credits 1513, or under kontantmetoden revenue and moms; öre rounding allowed). Books nothing, marks the begäran settled. For an unbooked bank row use gnubok_settle_rot_rut_payout instead. Stages.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -21325,12 +21360,17 @@ export const tools: McpTool[] = [
       let bankAmount = 0
       let receivableCredit = 0
       const rotRutReceivable = resolveAccountRole(PINNED_JURISDICTION, 'rot_rut_receivable')
-      for (const line of (voucher.lines ?? []) as Array<{ account_number: string; debit_amount: number; credit_amount: number }>) {
+      const voucherLines = (voucher.lines ?? []) as Array<{ account_number: string; debit_amount: number; credit_amount: number }>
+      for (const line of voucherLines) {
         const net = Number(line.debit_amount) - Number(line.credit_amount)
         if (line.account_number === rotRutReceivable) receivableCredit -= net
         else if (line.account_number.startsWith('19')) bankAmount += net
       }
       const expectedTotal = roundOre(requests.reduce((sum, r) => sum + expectedRotRutPayoutAmount(r), 0))
+      // Kontantmetodens two steps: the share booked as revenue and moms, when
+      // 1513 does not cover the begäran (the RPC judges it at approval).
+      const twoStep = receivableCredit < expectedTotal - 0.005 ? twoStepPayoutShape(voucherLines) : null
+      const shareCredit = twoStep?.share ?? 0
       const voucherLabel = `${voucher.voucher_series}${voucher.voucher_number}`
 
       return stage({
@@ -21346,8 +21386,9 @@ export const tools: McpTool[] = [
           entry_date: voucher.entry_date,
           bank_amount: roundOre(bankAmount),
           voucher_1513_credit: roundOre(receivableCredit),
+          ...(shareCredit > 0 ? { share_credit: shareCredit } : {}),
           expected_total: expectedTotal,
-          rounding: roundOre(receivableCredit - expectedTotal),
+          rounding: roundOre(receivableCredit + shareCredit - expectedTotal),
           requests: requests.map((r) => ({
             request_id: r.id,
             name: r.name,
@@ -24396,7 +24437,7 @@ export const tools: McpTool[] = [
         },
         lines: {
           type: 'array',
-          description: 'Replacement lines (≥ 2, balanced). Use the same accounts as the original where unchanged.',
+          description: 'The verifikat as it should be (≥ 2 lines, balanced).',
           items: {
             type: 'object',
             properties: {
@@ -24424,6 +24465,8 @@ export const tools: McpTool[] = [
           type: 'boolean',
           description: 'Override the chain-depth guard (refuses at 3+ rättelse levels: book ONE net-effect correction instead). True only when another layer is intended.',
         },
+        // Bare: the negates_original refusal says when to send it (crm#1397).
+        sides_swapped: { type: 'boolean' },
       },
       required: ['entry_id', 'lines'],
     },
@@ -24433,6 +24476,7 @@ export const tools: McpTool[] = [
       const entryRef = args.entry_id as string
       const rawLines = args.lines as Array<Record<string, unknown>> | undefined
       const allowDeepChain = args.allow_deep_chain === true
+      const sidesSwapped = args.sides_swapped === true
       // The corrected entry's text, as v1 and the app take it (#1031): an
       // agent fixing a verifikat whose text was the error could only echo it.
       // Blank or absent keeps correctEntry's "Rättelse: <original text>".
@@ -24499,6 +24543,7 @@ export const tools: McpTool[] = [
         fiscal_period_id: string
         correction_of_id: string | null
         reverses_id: string | null
+        source_type: string | null
         lines: Array<{
           account_number: string
           debit_amount: number | string
@@ -24516,7 +24561,7 @@ export const tools: McpTool[] = [
       const { data, error: origErr } = await supabase
         .from('journal_entries')
         .select(
-          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, ' +
+          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, source_type, ' +
           'lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, dimensions, cost_center, project)'
         )
         .eq('id', entryId)
@@ -24546,6 +24591,10 @@ export const tools: McpTool[] = [
       // unlock refuses (crm#1290).
       await assertStornoTarget(supabase, companyId, original)
 
+      // Importmoms keeps its ruta 50 base in the corrected lines (#94): the
+      // rule correctEntry runs at commit, refused here before staging.
+      await assertCorrectedImportVatBase(supabase, companyId, original.source_type, lines)
+
       // Chain-depth guard at staging time so the agent reconsiders NOW, not at
       // approval. The executor (commitCorrectEntry → correctEntry) re-checks.
       if (!allowDeepChain) {
@@ -24556,6 +24605,12 @@ export const tools: McpTool[] = [
       }
 
       const originalLines = original.lines || []
+
+      // A second reversal is refused at staging, not at approval: the storno
+      // already reverses the original (crm#1397). correctEntry re-checks.
+      if (!sidesSwapped && negatesOriginal(lines, originalLines)) {
+        throw new MeaninglessCorrectionError('negates_original')
+      }
 
       return stage({
         supabase,
@@ -24568,6 +24623,7 @@ export const tools: McpTool[] = [
           lines,
           ...(description ? { description } : {}),
           ...(allowDeepChain ? { allow_deep_chain: true } : {}),
+          ...(sidesSwapped ? { sides_swapped: true } : {}),
         },
         preview: {
           original: {

@@ -66,6 +66,7 @@ registerEndpoint({
     'Already-categorized fast path: if the transaction already has a journal_entry_id, only flags get updated. The JE is immutable post-commit.',
     'account_override must exist and be active in the chart of accounts (else TX_CATEGORIZE_INVALID_ACCOUNT). It books the business side gross unless you also pass vat_treatment or vat_amount: the category default VAT is never carried onto an arbitrary account.',
     'vat_amount replaces the rate-based VAT line with the underlag\'s actual moms (e.g. dricks); it needs a rate-based treatment, else TX_CATEGORIZE_INVALID_VAT_AMOUNT.',
+    'vat_treatment reverse_charge without reverse_charge_kind takes the box (20, 21 or 22) from the seller country on the row\'s underlag and the category; when they cannot tell it, 400 TX_CATEGORIZE_REVERSE_CHARGE_BOX_UNKNOWN (details.reason): send reverse_charge_kind. Never ruta 21 by default.',
   ],
   example: {
     request: { is_business: true, category: 'expense_office' },
@@ -111,6 +112,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       dryRun: ctx.dryRun,
       onBooked: 'update_flags',
       forceVia: 'api_force',
+      reverseChargeBoxParam: 'reverse_charge_kind',
       log: ctx.log,
     })
 

@@ -208,7 +208,7 @@ export async function convertInboxItemToSupplierInvoice(
     return {
       ok: false,
       code: 'SI_CREATE_INVALID_INPUT',
-      details: { reason: 'periodisering requires faktureringsmetoden (accrual)' },
+      details: { reason: 'accrual_requires_accrual_method' },
     }
   }
 

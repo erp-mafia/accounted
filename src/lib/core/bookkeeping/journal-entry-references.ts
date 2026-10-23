@@ -269,8 +269,9 @@ export async function getJournalEntryUnderlagReferences(
  * verifikation for the sale, and the payment row identifies the inbetalning.
  * This is the TS mirror of the customer arm in the verifikat_without_documents
  * / transactions_without_documents RPCs (migration 20260906135702, #2298):
- * every TS surface (journal-list filter, documents/counts, transactions list)
- * must reach the same verdict as the dashboard badge and the MCP tools.
+ * every TS surface (documents/counts, the transactions list) must reach the
+ * same verdict as the dashboard badge, the MCP tools and the journal list's
+ * filter (the list_verifikat_missing_underlag RPC, crm#1390).
  *
  * Values are invoice ids per journal entry id, direct link first and then
  * payment rows in id order, deduplicated. Only entries with at least one link

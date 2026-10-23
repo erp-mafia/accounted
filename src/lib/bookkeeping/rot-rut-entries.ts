@@ -106,27 +106,23 @@ function payoutDescription(label: string, names: string[]): string {
   return `Utbetalning ${label} från Skatteverket (${names.join(', ')})`
 }
 
-export async function createRotRutPayoutSetEntry(
-  supabase: SupabaseClient,
-  companyId: string,
-  userId: string,
-  params: {
-    paymentDate: string
-    /** BAS 19xx account the payout landed on. Defaults to 1930. */
-    bankAccount?: string
-    /** One leg per begäran the transfer settles; at least one. */
-    legs: RotRutPayoutLeg[]
-  },
-  posting?: () => RotRutPostingContext,
-): Promise<JournalEntry> {
+/**
+ * The payout voucher's lines, pure: what createRotRutPayoutSetEntry books,
+ * and what a set-off on the skattekonto books (the payout received there
+ * instead of the bank, skattekonto-booking.ts: `bankAccount` is then the
+ * skattekonto account). The first line is the money in. Throws on a leg the
+ * voucher cannot carry (bad öre rounding, a recognition its lines do not
+ * add up to).
+ */
+export function buildRotRutPayoutLines(params: {
+  /** The account the payout landed on. Defaults to 1930. */
+  bankAccount?: string
+  /** One leg per begäran the transfer settles; at least one. */
+  legs: RotRutPayoutLeg[]
+}): { description: string; total: number; lines: CreateJournalEntryLineInput[]; recognisedVatSek: number } {
   if (params.legs.length === 0) {
     throw new Error('A rot/rut payout voucher needs at least one begäran')
   }
-  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, params.paymentDate)
-  if (!fiscalPeriodId) {
-    throw new Error(`No open fiscal period found for payment date ${params.paymentDate}`)
-  }
-
   const legs = params.legs.map((leg) => ({
     ...leg,
     amount: roundOre(leg.amount),
@@ -163,45 +159,71 @@ export async function createRotRutPayoutSetEntry(
     legs.map((leg) => leg.requestName),
   )
 
+  const lines: CreateJournalEntryLineInput[] = [
+    {
+      account_number: bankAccount,
+      debit_amount: total,
+      credit_amount: 0,
+      line_description: description,
+    },
+    ...legs
+      .filter((leg) => leg.oreRounding > 0)
+      .map((leg) => ({
+        account_number: ORE_ROUNDING_ACCOUNT,
+        debit_amount: leg.oreRounding,
+        credit_amount: 0,
+        line_description: `Öresavrundning ${deductionLabel([leg])} (${leg.requestName})`,
+      })),
+    ...legs
+      .map((leg) => ({
+        account_number: '1513',
+        debit_amount: 0,
+        credit_amount: roundOre(leg.amount - roundOre(leg.recognition?.amount ?? 0) + leg.oreRounding),
+        // A single begäran keeps the voucher text on both legs (as before);
+        // a bundle names its own begäran on each 1513 leg.
+        line_description:
+          legs.length === 1
+            ? description
+            : payoutDescription(deductionLabel([leg]), [leg.requestName]),
+      }))
+      .filter((line) => line.credit_amount > 0),
+    ...legs.flatMap((leg) => leg.recognition?.lines ?? []),
+  ]
+  const recognisedVatSek = installmentOutputVat(legs.flatMap((leg) => leg.recognition?.lines ?? []))
+  return { description, total, lines, recognisedVatSek }
+}
+
+export async function createRotRutPayoutSetEntry(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  params: {
+    paymentDate: string
+    /** BAS 19xx account the payout landed on. Defaults to 1930. */
+    bankAccount?: string
+    /** One leg per begäran the transfer settles; at least one. */
+    legs: RotRutPayoutLeg[]
+  },
+  posting?: () => RotRutPostingContext,
+): Promise<JournalEntry> {
+  if (params.legs.length === 0) {
+    throw new Error('A rot/rut payout voucher needs at least one begäran')
+  }
+  const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, params.paymentDate)
+  if (!fiscalPeriodId) {
+    throw new Error(`No open fiscal period found for payment date ${params.paymentDate}`)
+  }
+
+  const { description, total, lines, recognisedVatSek } = buildRotRutPayoutLines(params)
   const input: CreateJournalEntryInput = {
     fiscal_period_id: fiscalPeriodId,
     entry_date: params.paymentDate,
     description,
     source_type: 'rot_rut_payout',
-    source_id: legs[0].requestId,
-    lines: [
-      {
-        account_number: bankAccount,
-        debit_amount: total,
-        credit_amount: 0,
-        line_description: description,
-      },
-      ...legs
-        .filter((leg) => leg.oreRounding > 0)
-        .map((leg) => ({
-          account_number: ORE_ROUNDING_ACCOUNT,
-          debit_amount: leg.oreRounding,
-          credit_amount: 0,
-          line_description: `Öresavrundning ${deductionLabel([leg])} (${leg.requestName})`,
-        })),
-      ...legs
-        .map((leg) => ({
-          account_number: '1513',
-          debit_amount: 0,
-          credit_amount: roundOre(leg.amount - roundOre(leg.recognition?.amount ?? 0) + leg.oreRounding),
-          // A single begäran keeps the voucher text on both legs (as before);
-          // a bundle names its own begäran on each 1513 leg.
-          line_description:
-            legs.length === 1
-              ? description
-              : payoutDescription(deductionLabel([leg]), [leg.requestName]),
-        }))
-        .filter((line) => line.credit_amount > 0),
-      ...legs.flatMap((leg) => leg.recognition?.lines ?? []),
-    ],
+    source_id: params.legs[0].requestId,
+    lines,
   }
 
-  const recognisedVatSek = installmentOutputVat(legs.flatMap((leg) => leg.recognition?.lines ?? []))
   return postingPort.postJournalEntry({
     supabase,
     companyId,

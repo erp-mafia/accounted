@@ -22,7 +22,9 @@
  * its payout clears 1513 as always). A payment verifikat dated before the
  * payout's räkenskapsår also keeps the 1513 path: the share was an unpaid
  * fordran at that year's end, which the year-end carry books on 1513
- * (kontantmetod-cutoff), so the payout clears it there.
+ * (kontantmetod-cutoff), so the payout clears it there. A credited invoice
+ * keeps the 1513 path too: its kreditfaktura reversed what the ledger held,
+ * so what Skatteverket pays on it afterwards is owed back, not a sale.
  *
  * Reads only, client-safe (the payout dialog previews with it).
  */
@@ -58,6 +60,7 @@ type InvoiceRow = Pick<
   Invoice,
   'id' | 'invoice_number' | 'currency' | 'exchange_rate' | 'vat_treatment' | 'delivery_country' | 'journal_entry_id'
 > & {
+  status?: string | null
   subtotal: number
   vat_amount: number
   total: number
@@ -134,34 +137,22 @@ async function invoicesWithUnbookedShare(
   return { ok: true, ids }
 }
 
-/**
- * Whether a kreditfaktura of this kontantmetod invoice reverses only the
- * customer's share: its payment booked the first step alone and no payout
- * has booked Skatteverket's share yet (no settled begäran holds it), so the
- * share's revenue, moms and 1513 are not in the ledger to reverse. Once a
- * payout booked the share, the credit reverses it all and its 1513 credit is
- * what the company owes Skatteverket back. The caller checks that the company
- * is on kontantmetoden.
- */
-export async function isDeductionShareUnbooked(
+/** The first day of the räkenskapsår holding `date`, null when none does. */
+async function periodStartOf(
   supabase: SupabaseClient,
   companyId: string,
-  invoice: { id: string; journal_entry_id?: string | null },
-): Promise<{ ok: true; unbooked: boolean } | { ok: false; error: unknown }> {
-  const evidence = await invoicesWithUnbookedShare(supabase, companyId, [invoice], null)
-  if (!evidence.ok) return evidence
-  if (!evidence.ids.has(invoice.id)) return { ok: true, unbooked: false }
+  date: string,
+): Promise<{ ok: true; start: string | null } | { ok: false; error: unknown }> {
   const { data, error } = await supabase
-    .from('rot_rut_payout_request_items')
-    .select('invoice_id, request:rot_rut_payout_requests(status, settlement_journal_entry_id)')
-    .eq('invoice_id', invoice.id)
+    .from('fiscal_periods')
+    .select('period_start')
+    .eq('company_id', companyId)
+    .lte('period_start', date)
+    .gte('period_end', date)
+    .order('period_start', { ascending: false })
+    .limit(1)
   if (error) return { ok: false, error }
-  const settled = ((data ?? []) as Array<Record<string, unknown>>).some((row) => {
-    const value = Array.isArray(row.request) ? row.request[0] : row.request
-    const request = value as { status?: string; settlement_journal_entry_id?: string | null } | null
-    return !!request?.settlement_journal_entry_id && !['cancelled', 'rejected'].includes(request.status ?? '')
-  })
-  return { ok: true, unbooked: !settled }
+  return { ok: true, start: ((data ?? []) as Array<{ period_start: string }>)[0]?.period_start ?? null }
 }
 
 /**
@@ -225,21 +216,14 @@ export async function getPayoutRecognition(
   const [invoicesRead, periodRead] = await Promise.all([
     supabase
       .from('invoices')
-      .select('id, invoice_number, currency, exchange_rate, vat_treatment, delivery_country, default_dimensions, journal_entry_id, subtotal, vat_amount, total, items:invoice_items(*)')
+      .select('id, status, invoice_number, currency, exchange_rate, vat_treatment, delivery_country, default_dimensions, journal_entry_id, subtotal, vat_amount, total, items:invoice_items(*)')
       .eq('company_id', companyId)
       .in('id', invoiceIds),
-    supabase
-      .from('fiscal_periods')
-      .select('period_start')
-      .eq('company_id', companyId)
-      .lte('period_start', paymentDate)
-      .gte('period_end', paymentDate)
-      .order('period_start', { ascending: false })
-      .limit(1),
+    periodStartOf(supabase, companyId, paymentDate),
   ])
   if (invoicesRead.error) return { ok: false, error: invoicesRead.error }
-  if (periodRead.error) return { ok: false, error: periodRead.error }
-  const periodStart = ((periodRead.data ?? []) as Array<{ period_start: string }>)[0]?.period_start
+  if (!periodRead.ok) return periodRead
+  const periodStart = periodRead.start
   // No räkenskapsår for the date: the voucher cannot post either.
   if (!periodStart) return { ok: true, recognition: null }
 
@@ -247,7 +231,7 @@ export async function getPayoutRecognition(
   const evidence = await invoicesWithUnbookedShare(supabase, companyId, invoices, periodStart)
   if (!evidence.ok) return evidence
   const deferred = invoices.filter((invoice) => {
-    if (!evidence.ids.has(invoice.id)) return false
+    if (!evidence.ids.has(invoice.id) || invoice.status === 'credited') return false
     const items = [...(invoice.items ?? [])].sort((a, b) => Number(a.sort_order ?? 0) - Number(b.sort_order ?? 0))
     invoice.items = items
     return splitDeductionShare(items, invoice.currency) !== null
@@ -291,4 +275,104 @@ export async function getPayoutRecognition(
     ok: true,
     recognition: { amount: sumOre(recognised.map((inv) => inv.paid)), lines, invoices: recognised },
   }
+}
+
+export type DeductionShareBookedResult =
+  | { ok: true; bookedSek: number | null }
+  | { ok: false; code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN'; details: Record<string, unknown> }
+  | { ok: false; error: unknown }
+
+/**
+ * How much of Skatteverket's share of a kontantmetod invoice the ledger holds
+ * as försäljning and moms, for its kreditfaktura: the credit reverses what
+ * was booked, never more (ML 2023:200 7 kap. 16 §: under bokslutsmetoden the
+ * share's moms is reported only when its payout arrives). The caller checks
+ * that the company is on kontantmetoden.
+ *
+ *   - null: the share is not on the two steps, so the ledger holds it whole
+ *     (revenue, moms and 1513): one step at payment, a registration or
+ *     year-end carry linked to the invoice, or a payment dated before the
+ *     räkenskapsår of its payout (the payout cleared 1513), or, with no
+ *     payout, before the credit's räkenskapsår (that year end carries the
+ *     share onto 1513). The credit reverses it all, as on any ROT/RUT
+ *     invoice.
+ *   - 0: on the two steps and no payout booked, the begäran still pending
+ *     or none: the credit reverses the customer's share alone. A payout that
+ *     arrives later is owed back (getPayoutRecognition keeps it on 1513).
+ *   - more: what the payout booked on this invoice, by the payout's own rule
+ *     (paidPerInvoice: the whole share when paid in full, the beslut's amount
+ *     when partly approved). The credit reverses that part of the share and
+ *     credits 1513 with it: what the company owes Skatteverket back. The
+ *     refused rest was never booked as Skatteverket's.
+ *
+ * A partly approved begäran over several invoices whose beslut names no
+ * per-invoice amounts answers ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN: never
+ * guessed.
+ */
+export async function getDeductionShareBookedByPayout(
+  supabase: SupabaseClient,
+  companyId: string,
+  invoice: { id: string; journal_entry_id?: string | null },
+  creditDate: string,
+): Promise<DeductionShareBookedResult> {
+  if (invoice.journal_entry_id) return { ok: true, bookedSek: null }
+  const { data, error } = await supabase
+    .from('rot_rut_payout_request_items')
+    .select('invoice_id, request:rot_rut_payout_requests(id, status, requested_total, decided_total, settlement_journal_entry_id)')
+    .eq('invoice_id', invoice.id)
+  if (error) return { ok: false, error }
+  type SettledRequest = {
+    id: string
+    status: string
+    requested_total: number | string
+    decided_total: number | string | null
+    settlement_journal_entry_id: string
+  }
+  // One active begäran per invoice (enforce_single_active_rot_rut_request),
+  // and settled means it points at its payout verifikat.
+  const settled = ((data ?? []) as Array<Record<string, unknown>>)
+    .map((row) => (Array.isArray(row.request) ? row.request[0] : row.request) as Partial<SettledRequest> | null)
+    .find(
+      (request): request is SettledRequest =>
+        !!request?.settlement_journal_entry_id && !['cancelled', 'rejected'].includes(request.status ?? ''),
+    )
+
+  // The räkenskapsår the share is judged in: its payout's, else the credit's.
+  let decisionDate = creditDate
+  if (settled) {
+    const { data: entries, error: entryError } = await supabase
+      .from('journal_entries')
+      .select('id, entry_date')
+      .eq('company_id', companyId)
+      .eq('id', settled.settlement_journal_entry_id)
+    if (entryError) return { ok: false, error: entryError }
+    const payout = ((entries ?? []) as Array<{ id: string; entry_date: string }>).find(
+      (entry) => entry.id === settled.settlement_journal_entry_id,
+    )
+    if (payout) decisionDate = payout.entry_date
+  }
+  const period = await periodStartOf(supabase, companyId, decisionDate)
+  if (!period.ok) return period
+  const evidence = await invoicesWithUnbookedShare(supabase, companyId, [invoice], period.start)
+  if (!evidence.ok) return evidence
+  if (!evidence.ids.has(invoice.id)) return { ok: true, bookedSek: null }
+  if (!settled) return { ok: true, bookedSek: 0 }
+
+  const { data: itemData, error: itemsError } = await supabase
+    .from('rot_rut_payout_request_items')
+    .select('invoice_id, requested_amount, decided_amount')
+    .eq('request_id', settled.id)
+  if (itemsError) return { ok: false, error: itemsError }
+  const items = (itemData ?? []) as RequestItemRow[]
+  // What the settle and the link record as paid (decided_total, else the request).
+  const paidAmount = roundOre(Number(settled.decided_total ?? settled.requested_total))
+  const paid = items.length > 0 ? paidPerInvoice(items, roundOre(Number(settled.requested_total)), paidAmount) : null
+  if (!paid) {
+    return {
+      ok: false,
+      code: 'ROT_RUT_SETTLE_DEDUCTION_SPLIT_UNKNOWN',
+      details: { request_id: settled.id, invoice_id: invoice.id, reason: 'per_invoice_amounts_unknown' },
+    }
+  }
+  return { ok: true, bookedSek: roundOre(Math.max(0, paid.get(invoice.id) ?? 0)) }
 }
