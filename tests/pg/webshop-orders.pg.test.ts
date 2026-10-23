@@ -14,6 +14,10 @@ import { seedCompany, insertDraftJournalEntry } from './fixtures'
  *      accept status/refund-summary updates.
  *   4. journal_entries.source_type accepts 'webshop_order'.
  *   5. webshop_store_settings RLS + upsert key.
+ *   6. webshop_store_settings.country_account_rules
+ *      (20261023065754_webshop_store_settings_country_account_rules): an
+ *      empty array by default, members can set it, and only an array is
+ *      accepted.
  */
 
 // Rows persist across pg-real runs; unique external ids per run.
@@ -501,5 +505,37 @@ describe('webshop_orders invoice link release (crm#56)', () => {
       ]),
     ).rejects.toThrow(/the link is immutable/)
     expect(await orderInvoiceId(orderId)).toBe(first)
+  })
+
+  it('country_account_rules defaults to an empty array and only takes an array', async () => {
+    const { userId, companyId } = await seedCompany()
+    const storeScope = `butik-${randomUUID()}.myshopify.com`
+
+    const { rows } = await getPool().query(
+      `INSERT INTO public.webshop_store_settings (company_id, user_id, platform, store_scope)
+       VALUES ($1, $2, 'shopify', $3)
+       RETURNING country_account_rules`,
+      [companyId, userId, storeScope],
+    )
+    expect(rows[0].country_account_rules).toEqual([])
+
+    await withUserContext(userId, async (client) => {
+      const updated = await client.query(
+        `UPDATE public.webshop_store_settings
+           SET country_account_rules = '[{"country":"EU","vat_rate":null,"mode":"accounts","revenue_account":"3106","vat_account":"2670"}]'::jsonb
+         WHERE company_id = $1 AND store_scope = $2`,
+        [companyId, storeScope],
+      )
+      expect(updated.rowCount).toBe(1)
+    })
+
+    await expect(
+      getPool().query(
+        `UPDATE public.webshop_store_settings
+           SET country_account_rules = '{"EU":"3106"}'::jsonb
+         WHERE company_id = $1 AND store_scope = $2`,
+        [companyId, storeScope],
+      ),
+    ).rejects.toMatchObject({ code: '23514' })
   })
 })

@@ -42,7 +42,8 @@ import {
   orderBookingDescription,
   resolveBookingWarnings,
   resolvePaymentAccount,
-  unsupportedVatRates,
+  routeOrder,
+  unsupportedSwedishRates,
 } from './booking-lines'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -57,8 +58,8 @@ function typedFailure(err: unknown): Failure {
 
 const WARNING_TEXT: Record<string, { sv: string; en: string }> = {
   country_outside_sweden: {
-    sv: 'Ordern har ett land utanför Sverige. Välj konton efter hur försäljningen beskattas (OSS, export eller VOEC); de föreslagna kontona är för svensk försäljning.',
-    en: 'The order has a country outside Sweden. Choose accounts by how the sale is taxed (OSS, export or VOEC); the suggested accounts are for Swedish sales.',
+    sv: 'Ordern har ett land utanför Sverige som butiken inte har valt konton för. Välj konton efter hur försäljningen beskattas (OSS, export eller VOEC); de föreslagna kontona är för svensk försäljning.',
+    en: 'The order has a country outside Sweden that the store has not chosen accounts for. Choose accounts by how the sale is taxed (OSS, export or VOEC); the suggested accounts are for Swedish sales.',
   },
   // The booking dialog's own texts (messages webshop_orders.warning_*).
   zero_rate_foreign: {
@@ -99,10 +100,19 @@ export function webshopOrderWarnings(
 ): OperationWarning[] {
   const out: OperationWarning[] = []
   const country = order.customer_country?.toUpperCase()
-  if (country && country !== 'SE') out.push(warning('country_outside_sweden'))
-  for (const code of resolveBookingWarnings(order)) out.push(warning(code))
+  // The store's country rules answer the question for the buckets they
+  // cover; the hint stays for the rest, and for platforms they do not apply to.
+  const routing = routeOrder(order, settings)
+  if (country && country !== 'SE' && (routing.country === null || routing.unroutedRates.length > 0)) {
+    out.push(warning('country_outside_sweden'))
+  }
+  for (const code of resolveBookingWarnings(order, settings)) {
+    // Same advisory as country_outside_sweden above, under the code agents
+    // already know.
+    if (code !== 'country_not_routed') out.push(warning(code))
+  }
   if (order.vat_breakdown.length === 0) out.push(warning('vat_breakdown_missing'))
-  else if (unsupportedVatRates(order.vat_breakdown).length > 0) out.push(warning('unsupported_vat_rate'))
+  else if (unsupportedSwedishRates(routing).length > 0) out.push(warning('unsupported_vat_rate'))
   if (order.row_type === 'order' && resolvePaymentAccount(order, settings).invoiceMode) {
     out.push(warning('invoice_mode_method'))
   }

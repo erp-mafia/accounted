@@ -217,12 +217,12 @@ export const webshopOrdersGet = defineOperation({
   docs: {
     summary: 'One webshop order row with its line items and the booking the Orders page would prefill.',
     description:
-      'Everything GET /webshop-orders returns for the row plus its line items and suggestion: the entry date (paid date, else order date), the open fiscal period covering it, the description, the payment account from the store\'s payment-method mapping (1686 when unmapped), and balanced lines with Swedish revenue and VAT accounts per rate. warnings lists what the suggestion cannot know, e.g. a country outside Sweden. Read-only.',
+      'Everything GET /webshop-orders returns for the row plus its line items and suggestion: the entry date (paid date, else order date), the open fiscal period covering it, the description, the payment account from the store\'s payment-method mapping (1686 when unmapped), and balanced lines with revenue and VAT per rate: on the store\'s accounts for the order\'s destination country when the store has set them, otherwise on the Swedish accounts. warnings lists what the suggestion cannot know, e.g. a country outside Sweden that no store rule covers. Read-only.',
     useWhen: 'Before booking an order, to start from the dialog\'s lines and change the accounts that the country or VAT rate calls for.',
     doNotUseFor: 'Listing orders (GET /webshop-orders) or booking (POST /webshop-orders/{orderId}/book).',
     pitfalls: [
       COUNTRY_PITFALL,
-      'The suggested lines always use Swedish accounts (3001-3004, 2611-2631): for an OSS, export or VOEC sale choose the accounts yourself. The account choice is the caller\'s.',
+      'For a Shopify order shipped outside Sweden the suggested lines use the store\'s accounts for that country and VAT rate when the store has set them (Settings > Connections > Shopify), e.g. 3106/2670 for OSS. Otherwise they use Swedish accounts (3001-3004, 2611-2631): for an OSS, export or VOEC sale choose the accounts yourself. The account choice is the caller\'s.',
       'suggestion.lines is null while a non-SEK order has no exchange rate; booking resolves the rate once more and refuses with WEBSHOP_ORDER_FX_UNRESOLVED if it still cannot.',
     ],
     example: {

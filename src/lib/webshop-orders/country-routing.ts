@@ -1,0 +1,200 @@
+import { isEuMemberCountry } from '@/lib/vat/eu-countries'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import type { WebshopCountryAccountRule, WebshopVatBreakdownLine } from '@/types'
+
+/**
+ * Account rules by destination country for webshop orders shipped outside
+ * Sweden (webshop_store_settings.country_account_rules).
+ *
+ * Why this exists: the line builder used to pick accounts from the VAT rate
+ * alone, so a Danish or Norwegian order at 25 % booked as Swedish sales on
+ * 3001 and Swedish output VAT on 2611 (rutor 05 and 10), and the bulk sweep
+ * only stopped rates that are not Swedish. Shopify rows carry the destination
+ * country (crm#1032); these rules turn country plus rate into the accounts.
+ *
+ * One resolver for every door: buildOrderBookingLines() reads it, so the
+ * single dialog prefill, the bulk sweep and the MCP/v1 suggestion all book an
+ * order the same way. Shopify only: WooCommerce rows store the BILLING
+ * country, which does not say where the goods went.
+ */
+
+/** Catch-all scope for every EU country without its own rule. */
+export const COUNTRY_SCOPE_EU = 'EU'
+/** Catch-all scope for every country outside the EU without its own rule. */
+export const COUNTRY_SCOPE_NON_EU = 'NON_EU'
+
+/** OSS sales (SE: BAS 2026 3106 Försäljning varor till annat EU-land, momspliktig). */
+export const OSS_REVENUE_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'oss_sales')
+/** OSS output VAT (SE: BAS 2026 2670 Utgående moms på försäljning inom EU, OSS). */
+export const OSS_VAT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'oss_output_vat')
+/** Export of goods (SE: BAS 2026 3105 Försäljning varor till land utanför EU, ruta 36). */
+export const EXPORT_REVENUE_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'export_goods_sales')
+
+/**
+ * The accounts the presets name. The settings route adds a missing one to the
+ * chart (3106 with VAT code OSS, so the momsdeklaration leaves it out), the
+ * same way ensureWebshopPrefillAccounts repairs the Swedish prefill set.
+ */
+export const COUNTRY_PRESET_ACCOUNTS: readonly string[] = [
+  OSS_REVENUE_ACCOUNT,
+  OSS_VAT_ACCOUNT,
+  EXPORT_REVENUE_ACCOUNT,
+]
+
+/**
+ * "We report OSS": EU orders with VAT book on 3106/2670, outside the
+ * momsdeklaration; VAT-free orders outside the EU book as export on 3105.
+ * Norway through VOEC has no preset: its VAT is a debt to Norway on an
+ * account the company picks (no default until our accountant confirms one).
+ */
+export const OSS_PRESET_RULES: readonly WebshopCountryAccountRule[] = [
+  {
+    country: COUNTRY_SCOPE_EU,
+    vat_rate: null,
+    mode: 'accounts',
+    revenue_account: OSS_REVENUE_ACCOUNT,
+    vat_account: OSS_VAT_ACCOUNT,
+  },
+  {
+    country: COUNTRY_SCOPE_NON_EU,
+    vat_rate: 0,
+    mode: 'accounts',
+    revenue_account: EXPORT_REVENUE_ACCOUNT,
+    vat_account: null,
+  },
+]
+
+/**
+ * "We charge Swedish VAT on EU sales" (below the distance-selling threshold):
+ * EU orders book like Swedish sales; VAT-free orders outside the EU as export.
+ */
+export const NO_OSS_PRESET_RULES: readonly WebshopCountryAccountRule[] = [
+  { country: COUNTRY_SCOPE_EU, vat_rate: null, mode: 'swedish' },
+  {
+    country: COUNTRY_SCOPE_NON_EU,
+    vat_rate: 0,
+    mode: 'accounts',
+    revenue_account: EXPORT_REVENUE_ACCOUNT,
+    vat_account: null,
+  },
+]
+
+/** The Swedish VAT rates a 'swedish' rule may name (percent). */
+export const SWEDISH_RULE_RATES: readonly number[] = [25, 12, 6, 0]
+
+/** Rates are stored as percentages with at most two decimals (25.5). */
+export function sameVatRate(a: number, b: number): boolean {
+  return Math.abs(a - b) < 0.005
+}
+
+/** Whether the rule covers buckets that carry VAT (any rate, or one above 0 %). */
+export function ruleCoversVat(rule: Pick<WebshopCountryAccountRule, 'vat_rate'>): boolean {
+  return rule.vat_rate === null || rule.vat_rate > 0
+}
+
+/** The catch-all scope a country falls under when it has no rule of its own. */
+export function countryScopeOf(country: string): string {
+  return isEuMemberCountry(country) ? COUNTRY_SCOPE_EU : COUNTRY_SCOPE_NON_EU
+}
+
+/** Whether a rule's country is an EU country or the EU catch-all. */
+export function isEuRuleCountry(country: string): boolean {
+  return country === COUNTRY_SCOPE_EU || (country !== COUNTRY_SCOPE_NON_EU && isEuMemberCountry(country))
+}
+
+/**
+ * The order fields the rules read. Both optional: an order without them is
+ * simply never routed.
+ */
+export interface RoutableOrder {
+  platform?: string | null
+  customer_country?: string | null
+}
+
+/**
+ * The destination country the rules key on, or null when they do not apply:
+ * a Shopify row (whose column is the shipping country) going to a known
+ * country outside Sweden. Orders to Sweden, without a country, or from
+ * another platform keep the Swedish booking.
+ */
+export function routedCountryOf(order: RoutableOrder): string | null {
+  if (order.platform !== 'shopify') return null
+  const country = order.customer_country?.trim().toUpperCase()
+  if (!country || country === 'SE') return null
+  return country
+}
+
+/**
+ * The rule for one VAT bucket of an order shipped to `country`: the country's
+ * own rule for that exact rate, then its rule for every rate with VAT, then
+ * the same two steps on the EU / NON_EU catch-all. Null when nothing covers
+ * it. A rule for "every rate" never covers a 0 % bucket: a VAT-free sale
+ * abroad (EU B2B, export) is a different treatment and needs its own rule.
+ */
+export function resolveCountryRule(
+  rules: readonly WebshopCountryAccountRule[],
+  country: string,
+  rate: number,
+): WebshopCountryAccountRule | null {
+  for (const scope of [country, countryScopeOf(country)]) {
+    const scoped = rules.filter((rule) => rule.country === scope)
+    const exact = scoped.find((rule) => rule.vat_rate !== null && sameVatRate(rule.vat_rate, rate))
+    if (exact) return exact
+    if (rate > 0) {
+      const anyRate = scoped.find((rule) => rule.vat_rate === null)
+      if (anyRate) return anyRate
+    }
+  }
+  return null
+}
+
+export interface BucketRoute {
+  bucket: WebshopVatBreakdownLine
+  /**
+   * The rule that books this bucket. Null means the Swedish accounts: an
+   * order the rules do not apply to, or a bucket no rule covers.
+   */
+  rule: WebshopCountryAccountRule | null
+}
+
+export interface OrderRouting {
+  /** The destination the rules applied to; null when they do not apply. */
+  country: string | null
+  buckets: BucketRoute[]
+  /**
+   * Rates of the buckets no rule covers on an order the rules apply to. The
+   * bulk sweep refuses such an order; the single dialog prefills those
+   * buckets on the Swedish accounts for the user to change.
+   */
+  unroutedRates: number[]
+}
+
+/**
+ * Route every VAT bucket of an order through the store's country rules. A
+ * rule without a VAT account does not cover a bucket that carries tax (a 0 %
+ * rule meeting a bucket with VAT on it), so that bucket stays unrouted
+ * rather than losing its VAT line.
+ */
+export function routeOrderBuckets(
+  order: RoutableOrder,
+  breakdown: readonly WebshopVatBreakdownLine[],
+  rules: readonly WebshopCountryAccountRule[] | null | undefined,
+): OrderRouting {
+  const country = routedCountryOf(order)
+  if (!country) {
+    return { country: null, buckets: breakdown.map((bucket) => ({ bucket, rule: null })), unroutedRates: [] }
+  }
+  const unrouted = new Set<number>()
+  const buckets = breakdown.map((bucket) => {
+    let rule = resolveCountryRule(rules ?? [], country, bucket.rate)
+    if (rule && rule.mode === 'accounts' && !rule.vat_account && bucket.tax !== 0) rule = null
+    if (!rule) unrouted.add(bucket.rate)
+    return { bucket, rule }
+  })
+  return { country, buckets, unroutedRates: Array.from(unrouted).sort((a, b) => a - b) }
+}
+
+/** Whether a routed bucket books on the Swedish accounts (and the bulk revenue template). */
+export function usesSwedishAccounts(route: BucketRoute): boolean {
+  return route.rule === null || route.rule.mode === 'swedish'
+}

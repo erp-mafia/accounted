@@ -5,6 +5,12 @@ import type {
   WebshopStoreSettings,
   WebshopVatBreakdownLine,
 } from '@/types'
+import {
+  routeOrderBuckets,
+  usesSwedishAccounts,
+  type OrderRouting,
+  type RoutableOrder,
+} from './country-routing'
 
 /**
  * Pure builder for the journal lines that PREFILL the order booking dialog.
@@ -18,6 +24,11 @@ import type {
  *   Credit 2611                              100.00   VAT per rate
  * Refund rows mirror (debit revenue/VAT, credit the payment account).
  * A rounding residual goes to 3740 Öresavrundning so the entry balances.
+ *
+ * A Shopify order shipped outside Sweden books each VAT bucket on the store's
+ * country rules (country-routing.ts) instead, e.g. 3106/2670 for an OSS sale;
+ * a bucket no rule covers keeps the Swedish accounts here, which only the
+ * single dialog may show (as an editable prefill).
  *
  * Non-SEK orders book in SEK via the row's stored exchange_rate (rate date =
  * paid date, captured at sync); every line carries the currency metadata trio
@@ -143,11 +154,45 @@ export function unsupportedVatRates(breakdown: WebshopVatBreakdownLine[]): numbe
   return Array.from(bad).sort((a, b) => a - b)
 }
 
-export type BookingWarning = 'zero_rate_foreign' | 'foreign_vat'
+/**
+ * The breakdown an order books from: the store's own per-rate split, or the
+ * ratio-inferred single bucket when the store sent none.
+ */
+export function bookingBreakdown(
+  order: Pick<WebshopOrder, 'vat_breakdown' | 'total' | 'total_tax'>,
+): WebshopVatBreakdownLine[] {
+  return order.vat_breakdown.length > 0
+    ? order.vat_breakdown
+    : fallbackVatBreakdown(order.total, order.total_tax)
+}
+
+/** Route an order's VAT buckets through its store's country rules. */
+export function routeOrder(
+  order: RoutableOrder & Pick<WebshopOrder, 'vat_breakdown' | 'total' | 'total_tax'>,
+  settings: Pick<WebshopStoreSettings, 'country_account_rules'> | null | undefined,
+): OrderRouting {
+  return routeOrderBuckets(order, bookingBreakdown(order), settings?.country_account_rules)
+}
+
+/**
+ * unsupportedVatRates() for the buckets that book on the Swedish accounts:
+ * a bucket a country rule books on its own accounts may carry any rate
+ * (19 % to Germany through OSS), the rest must be a Swedish rate.
+ */
+export function unsupportedSwedishRates(routing: OrderRouting): number[] {
+  return unsupportedVatRates(
+    routing.buckets.filter(usesSwedishAccounts).map((route) => route.bucket),
+  )
+}
+
+export type BookingWarning = 'country_not_routed' | 'zero_rate_foreign' | 'foreign_vat'
 
 /**
  * Advisory (never blocking, per the soft-guard rule) compliance hints for
  * the booking dialog:
+ * - country_not_routed: a Shopify order shipped outside Sweden with a VAT
+ *   bucket the store's country rules do not cover, so the prefill books it
+ *   on the Swedish accounts (crm#1032). First, since it outranks the rest.
  * - zero_rate_foreign: a 0%-rate amount on an order with a known non-SE
  *   billing country. The prefill's 3004 (ruta 42) is only right for
  *   domestic momsfri sales; export/EU sales belong on 31xx/33xx accounts.
@@ -156,13 +201,17 @@ export type BookingWarning = 'zero_rate_foreign' | 'foreign_vat'
  *   threshold (OSS) — the store's tax setup decides, the user must check.
  */
 export function resolveBookingWarnings(
-  order: Pick<
-    WebshopOrder,
-    'currency' | 'total_tax' | 'vat_breakdown' | 'customer_country'
-  >,
+  order: RoutableOrder &
+    Pick<WebshopOrder, 'currency' | 'total_tax' | 'vat_breakdown' | 'customer_country'>,
+  settings?: Pick<WebshopStoreSettings, 'country_account_rules'> | null,
 ): BookingWarning[] {
+  // Buckets a country rule books on its own accounts are not the Swedish
+  // prefill these hints are about.
+  const routing = routeOrderBuckets(order, order.vat_breakdown, settings?.country_account_rules)
+  const swedishBuckets = routing.buckets.filter(usesSwedishAccounts).map((route) => route.bucket)
   const warnings: BookingWarning[] = []
-  const hasZeroRateAmount = order.vat_breakdown.some(
+  if (routing.unroutedRates.length > 0) warnings.push('country_not_routed')
+  const hasZeroRateAmount = swedishBuckets.some(
     (b) => b.rate === 0 && b.net !== 0,
   )
   if (
@@ -172,7 +221,11 @@ export function resolveBookingWarnings(
   ) {
     warnings.push('zero_rate_foreign')
   }
-  if (order.currency.toUpperCase() !== 'SEK' && order.total_tax !== 0) {
+  if (
+    order.currency.toUpperCase() !== 'SEK' &&
+    order.total_tax !== 0 &&
+    (order.vat_breakdown.length === 0 || swedishBuckets.some((b) => b.tax !== 0))
+  ) {
     warnings.push('foreign_vat')
   }
   return warnings
@@ -211,7 +264,8 @@ export interface OrderBookingLinesInput {
     | 'total_sek'
     | 'exchange_rate'
     | 'vat_breakdown'
-  >
+  > &
+    RoutableOrder
   settings?: WebshopStoreSettings | null
   /** Explicit override of the payment counter-account (dialog edit). */
   paymentAccount?: string
@@ -219,6 +273,8 @@ export interface OrderBookingLinesInput {
    * Revenue template: revenue account per Swedish VAT rate. A rate not in
    * the map falls back to DEFAULT_REVENUE_ACCOUNT_BY_RATE. Only the revenue
    * side is templated; output VAT accounts are always derived from the rate.
+   * Applies to buckets on the Swedish accounts only, never to one a country
+   * rule books.
    */
   revenueAccounts?: Partial<Record<number, string>>
 }
@@ -246,10 +302,7 @@ export function buildOrderBookingLines({
   const isRefund = order.row_type === 'refund'
   const grossAbs = round(Math.abs(grossSek))
 
-  const breakdown =
-    order.vat_breakdown.length > 0
-      ? order.vat_breakdown
-      : fallbackVatBreakdown(order.total, order.total_tax)
+  const routing = routeOrder(order, settings)
 
   const toSek = (amount: number) => round(Math.abs(amount) * rate)
 
@@ -300,7 +353,14 @@ export function buildOrderBookingLines({
     lines.push(line(account, sekAbs, side, amountAbs))
     counterSum = round(counterSum + (signedOriginal > 0 ? sekAbs : -sekAbs))
   }
-  for (const bucket of breakdown) {
+  for (const { bucket, rule } of routing.buckets) {
+    if (rule && rule.mode === 'accounts') {
+      pushSigned(rule.revenue_account, round(bucket.net))
+      // routeOrderBuckets never routes a bucket with tax to a rule without
+      // a VAT account, so a missing one here means the bucket has no tax.
+      if (rule.vat_account) pushSigned(rule.vat_account, round(bucket.tax))
+      continue
+    }
     const revenueAccount =
       revenueAccounts?.[bucket.rate] ??
       REVENUE_ACCOUNT_BY_RATE[bucket.rate] ??

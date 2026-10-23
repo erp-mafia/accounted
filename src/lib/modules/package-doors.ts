@@ -637,6 +637,7 @@ const POS_AND_WEBSHOP: PackageDoors = {
     'POST /api/webshop-orders/:id/book',
     'DELETE /api/webshop-orders/:id/mark-booked',
     'POST /api/webshop-orders/:id/mark-booked',
+    'POST /api/webshop-orders/:id/underlag',
     'POST /api/webshop-orders/bulk-book',
     'PUT /api/webshop-orders/settings',
     'op:pos-sales.day-book',

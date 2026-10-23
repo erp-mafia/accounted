@@ -194,6 +194,38 @@ export default function OrdersPage() {
     [load, t, toast, errorLocale],
   )
 
+  // A booked order whose verifikat lacks its orderunderlag (archiving never
+  // fails a booking) gets it here. Idempotent: a verifikat that already has
+  // one answers already_attached and nothing is filed twice.
+  const createUnderlag = useCallback(
+    async (order: WebshopOrder) => {
+      try {
+        const res = await fetch(`/api/webshop-orders/${order.id}/underlag`, { method: 'POST' })
+        const json = (await res.json().catch(() => null)) as {
+          data?: { already_attached: boolean }
+        } | null
+        if (!res.ok || !json?.data) {
+          toast({
+            title: t('underlag_create_failed'),
+            description: getErrorMessage(json, {
+              context: 'transaction',
+              statusCode: res.status,
+              locale: errorLocale,
+            }),
+            variant: 'destructive',
+          })
+          return
+        }
+        toast({
+          title: json.data.already_attached ? t('underlag_already_attached') : t('underlag_attached'),
+        })
+      } catch {
+        toast({ title: t('underlag_create_failed'), variant: 'destructive' })
+      }
+    },
+    [t, toast, errorLocale],
+  )
+
   const selectableIds = visibleRows
     .filter((o) => isBulkBookable(o, canWrite))
     .map((o) => o.id)
@@ -333,6 +365,7 @@ export default function OrdersPage() {
                   onInvoice={() => setInvoicingOrder(order)}
                   onMarkBooked={() => setMarkingOrder(order)}
                   onUnmark={() => void unmarkOrder(order)}
+                  onCreateUnderlag={() => void createUnderlag(order)}
                   t={t}
                 />
               ))}
@@ -448,6 +481,7 @@ function OrderRow({
   onInvoice,
   onMarkBooked,
   onUnmark,
+  onCreateUnderlag,
   t,
 }: {
   order: WebshopOrder
@@ -460,6 +494,7 @@ function OrderRow({
   onInvoice: () => void
   onMarkBooked: () => void
   onUnmark: () => void
+  onCreateUnderlag: () => void
   t: ReturnType<typeof useTranslations<'webshop_orders'>>
 }) {
   const locale = useLocale() === 'en' ? 'en' : 'sv'
@@ -585,7 +620,7 @@ function OrderRow({
               {t('action_create_invoice')}
             </Button>
           ) : null}
-          {(invoiceViaMenu || markable || unmarkable) && (
+          {(invoiceViaMenu || markable || unmarkable || booked) && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button
@@ -612,6 +647,20 @@ function OrderRow({
                 {unmarkable && (
                   <DropdownMenuItem onSelect={onUnmark}>
                     {t('action_unmark_booked')}
+                  </DropdownMenuItem>
+                )}
+                {/* Booked: the verifikat holds the orderunderlag; the
+                    second item files it when it is missing. */}
+                {booked && (
+                  <DropdownMenuItem asChild>
+                    <Link href={`/bookkeeping/${order.journal_entry_id}`}>
+                      {t('action_open_entry')}
+                    </Link>
+                  </DropdownMenuItem>
+                )}
+                {booked && canWrite && (
+                  <DropdownMenuItem onSelect={onCreateUnderlag}>
+                    {t('action_create_underlag')}
                   </DropdownMenuItem>
                 )}
               </DropdownMenuContent>

@@ -1085,9 +1085,11 @@ describe('POST /api/webshop-orders/bulk-book', () => {
       expect(body.data.booked_count).toBe(1)
     })
 
-    it('checks a Shopify row against its destination (shipping) country (crm#1032)', async () => {
-      // Shopify rows carry where the goods go, which is what the goods boxes
-      // follow: shipped to Norway is a ruta 36 export, shipped to Germany is not.
+    it('sends a Shopify row shipped abroad to the country rules, never the 0% template (crm#1032)', async () => {
+      // The template slot is for orders on the Swedish accounts. A Shopify row
+      // carries where the goods go, and an order shipped outside Sweden books
+      // only through the store's country rules, so without one it is refused
+      // before the template's context check could book it on 3105.
       const shopify = {
         platform: 'shopify',
         store_scope: 'minbutik.myshopify.com',
@@ -1097,21 +1099,14 @@ describe('POST /api/webshop-orders/bulk-book', () => {
         zeroRateOrder(ORDER_1, 'NO', shopify),
         EXPORT_GOODS,
         '3105',
-        true,
-      )
-      expect(toNorway.body.data.booked_count).toBe(1)
-
-      reset()
-      const toGermany = await runOne(
-        zeroRateOrder(ORDER_1, 'DE', shopify),
-        EXPORT_GOODS,
-        '3105',
         false,
       )
-      expect(toGermany.body.data.results[0].error?.code).toBe(
-        'WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH',
-      )
-      expect(toGermany.body.data.results[0].error?.details?.customer_country).toBe('DE')
+      expect(toNorway.body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_COUNTRY_NOT_ROUTED')
+      expect(toNorway.body.data.results[0].error?.details).toEqual({
+        customer_country: 'NO',
+        rates: [0],
+      })
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
     })
 
     it('ignores the rate-0 template when the order has no 0% bucket', async () => {
@@ -1201,6 +1196,214 @@ describe('POST /api/webshop-orders/bulk-book', () => {
       })
       expect(body.data.results[1]).toMatchObject({ order_id: ORDER_2, success: true })
       expect(mockCreateDraftEntry).toHaveBeenCalledTimes(1)
+    })
+  })
+
+  describe('country rules for Shopify orders shipped abroad (crm#1032)', () => {
+    const SHOP = 'minbutik.myshopify.com'
+    const shopifyOrder = (overrides: Record<string, unknown> = {}) =>
+      makeOrderRow({
+        platform: 'shopify',
+        store_scope: SHOP,
+        external_id: `shopify_${SHOP}_order_1042`,
+        order_number: '#1042',
+        payment_method: 'shopify_payments',
+        payment_method_title: 'Shopify Payments',
+        ...overrides,
+      })
+    const storeSettings = (country_account_rules: unknown[]) => ({
+      id: 'settings-1',
+      company_id: 'company-1',
+      user_id: 'user-1',
+      platform: 'shopify',
+      store_scope: SHOP,
+      payment_method_account_map: {},
+      country_account_rules,
+    })
+    const OSS_RULES = [
+      { country: 'EU', vat_rate: null, mode: 'accounts', revenue_account: '3106', vat_account: '2670' },
+      { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+    ]
+    const VOEC_RULE = {
+      country: 'NO',
+      vat_rate: 25,
+      mode: 'accounts',
+      revenue_account: '3105',
+      vat_account: '2890',
+    }
+
+    async function runRouted(
+      order: Record<string, unknown>,
+      rules: unknown[],
+      claim: boolean,
+    ) {
+      enqueue({ data: [order] })
+      enqueue({ data: rules.length > 0 ? [storeSettings(rules)] : [] }) // store settings
+      if (claim) enqueue({ data: [{ id: order.id }] })
+      return parseJsonResponse<BulkResponse>(await postBulk({ order_ids: [order.id] }))
+    }
+
+    function bookedLines() {
+      const input = mockCreateDraftEntry.mock.calls[0][3] as {
+        lines: { account_number: string; debit_amount: number; credit_amount: number }[]
+      }
+      return input.lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])
+    }
+
+    it('refuses a Danish order at a Swedish-looking 25 % without a rule instead of booking 3001/2611', async () => {
+      const { status, body } = await runRouted(shopifyOrder({ customer_country: 'DK' }), [], false)
+      expect(status).toBe(200)
+      expect(body.data.failed_count).toBe(1)
+      expect(body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_COUNTRY_NOT_ROUTED')
+      expect(body.data.results[0].error?.details).toEqual({ customer_country: 'DK', rates: [25] })
+      expect(body.data.results[0].error?.message).toContain('Inställningar > Kopplingar > Shopify')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('books a Danish order on the OSS accounts when the store reports OSS', async () => {
+      const { body } = await runRouted(shopifyOrder({ customer_country: 'DK' }), OSS_RULES, true)
+      expect(body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 500, 0],
+        ['3106', 0, 400],
+        ['2670', 0, 100],
+      ])
+    })
+
+    it('books a German 19 % order through the EU rule although the rate is not Swedish', async () => {
+      const order = shopifyOrder({
+        customer_country: 'DE',
+        total: 476,
+        total_sek: 476,
+        total_tax: 76,
+        vat_breakdown: [{ rate: 19, net: 400, tax: 76 }],
+      })
+      const { body } = await runRouted(order, OSS_RULES, true)
+      expect(body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 476, 0],
+        ['3106', 0, 400],
+        ['2670', 0, 76],
+      ])
+    })
+
+    it('books a Norwegian VOEC order on the store\'s own VAT account and a VAT-free one as export', async () => {
+      const voec = await runRouted(shopifyOrder({ customer_country: 'NO' }), [...OSS_RULES, VOEC_RULE], true)
+      expect(voec.body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 500, 0],
+        ['3105', 0, 400],
+        ['2890', 0, 100],
+      ])
+
+      reset()
+      mockCreateDraftEntry.mockClear()
+      const vatFree = shopifyOrder({
+        customer_country: 'US',
+        total_tax: 0,
+        vat_breakdown: [{ rate: 0, net: 500, tax: 0 }],
+      })
+      const exported = await runRouted(vatFree, OSS_RULES, true)
+      expect(exported.body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 500, 0],
+        ['3105', 0, 500],
+      ])
+    })
+
+    it('refuses a Norwegian 25 % order when only the 0 % catch-all exists', async () => {
+      // "Every rate with VAT" and "0 %" are different treatments: the export
+      // rule must not swallow a VOEC order and drop its VAT line.
+      const { body } = await runRouted(shopifyOrder({ customer_country: 'NO' }), OSS_RULES, false)
+      expect(body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_COUNTRY_NOT_ROUTED')
+      expect(body.data.results[0].error?.details).toEqual({ customer_country: 'NO', rates: [25] })
+    })
+
+    it('books an EU order on the Swedish accounts when the store charges Swedish VAT', async () => {
+      const rules = [{ country: 'EU', vat_rate: null, mode: 'swedish' }]
+      const { body } = await runRouted(shopifyOrder({ customer_country: 'DK' }), rules, true)
+      expect(body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 500, 0],
+        ['3001', 0, 400],
+        ['2611', 0, 100],
+      ])
+    })
+
+    it('still refuses a foreign rate that a Swedish-VAT rule would put on the 25 % accounts', async () => {
+      const rules = [{ country: 'EU', vat_rate: null, mode: 'swedish' }]
+      const order = shopifyOrder({
+        customer_country: 'DE',
+        total: 476,
+        total_sek: 476,
+        total_tax: 76,
+        vat_breakdown: [{ rate: 19, net: 400, tax: 76 }],
+      })
+      const { body } = await runRouted(order, rules, false)
+      expect(body.data.results[0].error?.code).toBe('WEBSHOP_ORDER_UNSUPPORTED_VAT_RATE')
+      expect(mockCreateDraftEntry).not.toHaveBeenCalled()
+    })
+
+    it('mirrors a refund to Denmark on the OSS accounts', async () => {
+      const refund = shopifyOrder({
+        customer_country: 'DK',
+        row_type: 'refund',
+        total: -500,
+        total_sek: -500,
+        total_tax: -100,
+        // Refund buckets are stored as magnitudes; the row type sets the side.
+        vat_breakdown: [{ rate: 25, net: 400, tax: 100 }],
+      })
+      const { body } = await runRouted(refund, OSS_RULES, true)
+      expect(body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 0, 500],
+        ['3106', 400, 0],
+        ['2670', 100, 0],
+      ])
+    })
+
+    it('keeps the 25 % template on Swedish orders in the same store', async () => {
+      enqueue({ data: [shopifyOrder({ customer_country: 'SE' })] })
+      enqueue({ data: [storeSettings(OSS_RULES)] })
+      enqueue({
+        data: [
+          {
+            account_number: '3011',
+            account_name: 'Försäljning webbshop 25 % moms',
+            is_active: true,
+            default_vat_rate: null,
+            default_vat_treatment: null,
+          },
+        ],
+      }) // chart check
+      enqueue({ data: [{ id: ORDER_1 }] })
+      const { body } = await parseJsonResponse<BulkResponse>(
+        await postBulk({ order_ids: [ORDER_1], revenue_accounts: { '25': '3011' } }),
+      )
+      expect(body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 500, 0],
+        ['3011', 0, 400],
+        ['2611', 0, 100],
+      ])
+    })
+
+    it('leaves a WooCommerce order with a foreign billing country on today\'s booking', async () => {
+      // WooCommerce stores the billing country, which does not say where the
+      // goods went; the rules and their guard are Shopify only.
+      enqueue({ data: [makeOrderRow({ customer_country: 'DK' })] })
+      enqueue({ data: [] }) // store settings
+      enqueue({ data: [{ id: ORDER_1 }] })
+      const { body } = await parseJsonResponse<BulkResponse>(
+        await postBulk({ order_ids: [ORDER_1] }),
+      )
+      expect(body.data.booked_count).toBe(1)
+      expect(bookedLines()).toEqual([
+        ['1686', 500, 0],
+        ['3001', 0, 400],
+        ['2611', 0, 100],
+      ])
     })
   })
 })

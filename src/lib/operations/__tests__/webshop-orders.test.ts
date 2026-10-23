@@ -171,6 +171,20 @@ describe('webshopOrderWarnings', () => {
     expect(codes(order({ vat_breakdown: [] }))).toEqual(['vat_breakdown_missing'])
   })
 
+  it('drops the outside-Sweden hints for buckets the store\'s country rules book (crm#1032)', () => {
+    const settings = {
+      payment_method_account_map: {},
+      country_account_rules: [
+        { country: 'EU', vat_rate: null, mode: 'accounts', revenue_account: '3106', vat_account: '2670' },
+      ],
+    } as unknown as WebshopStoreSettings
+    expect(
+      codes(order({ customer_country: 'DE', vat_breakdown: [{ rate: 19, net: 100, tax: 19 }] }), settings),
+    ).toEqual([])
+    // Norway is outside the EU rule: the hint stays.
+    expect(codes(order({ customer_country: 'NO' }), settings)).toEqual(['country_outside_sweden'])
+  })
+
   it('flags a payment method the store routes to the invoice flow', () => {
     const settings = {
       payment_method_account_map: { shopify_payments: { mode: 'invoice' } },

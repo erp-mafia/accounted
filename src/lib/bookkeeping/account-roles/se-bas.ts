@@ -47,4 +47,10 @@ export const SE_BAS_ACCOUNT_ROLES: Readonly<Record<AccountRole, string>> = Objec
   input_vat_reverse_charge_domestic: '2647',
   /** 1513 Kundfordringar: delad faktura (ROT/RUT, SE-only). */
   rot_rut_receivable: '1513',
+  /** 3106 Försäljning varor till annat EU-land, momspliktig. */
+  oss_sales: '3106',
+  /** 2670 Utgående moms på försäljning inom EU, OSS. */
+  oss_output_vat: '2670',
+  /** 3105 Försäljning varor till land utanför EU. */
+  export_goods_sales: '3105',
 })

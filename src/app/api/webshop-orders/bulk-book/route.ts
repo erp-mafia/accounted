@@ -10,11 +10,13 @@ import {
   buildOrderBookingLines,
   orderBookingDescription,
   resolvePaymentAccount,
-  unsupportedVatRates,
+  routeOrder,
+  unsupportedSwedishRates,
   DEFAULT_REVENUE_ACCOUNT_BY_RATE,
   ROUNDING_ACCOUNT,
   WEBSHOP_PREFILL_ACCOUNTS,
 } from '@/lib/webshop-orders/booking-lines'
+import { usesSwedishAccounts } from '@/lib/webshop-orders/country-routing'
 import {
   resolveEffectiveVatRate,
   resolveRevenueVatBox,
@@ -111,7 +113,10 @@ function failureFromError(err: unknown): BulkBookFailure {
  * The sweep has no reviewing user, so it only books orders whose lines are
  * DERIVED, never guessed: rows with an empty vat_breakdown (ratio-inferred
  * fallback), invoice-mode payment methods, or a 3740 residual above öre
- * scale are refused per order and pointed at the single-order dialog.
+ * scale are refused per order and pointed at the single-order dialog. So is
+ * a Shopify order shipped outside Sweden that the store's country rules do
+ * not fully cover (lib/webshop-orders/country-routing.ts): its buckets would
+ * otherwise book as Swedish sales and Swedish output VAT.
  *
  * Partial failure is expected and reported per order: one refused row (period
  * locked, raced booking, unresolved FX, review-needed) never aborts the rest
@@ -376,11 +381,32 @@ export const POST = withRouteContext(
         continue
       }
 
-      // A bucket with a non-Swedish rate (e.g. a German 19% OSS bucket the
-      // sync stored raw) would silently fall back to the 25% accounts and
-      // book foreign VAT as Swedish utgaende moms. Only the single dialog
-      // may show that as an editable prefill (skeptic finding).
-      const badRates = unsupportedVatRates(order.vat_breakdown)
+      // Destination outside Sweden (crm#1032): the store's country rules
+      // must cover every VAT bucket. A Danish or Norwegian order at 25 % used
+      // to pass the rate guard below and book as Swedish sales on 3001 and
+      // Swedish output VAT on 2611 (rutor 05 and 10); now it waits for a rule
+      // or the single dialog, where the user sees the lines.
+      const settings = settingsFor(order)
+      const routing = routeOrder(order, settings)
+      if (routing.unroutedRates.length > 0) {
+        results.push({
+          order_id: id,
+          order_number: order.order_number,
+          success: false,
+          error: failureFromCode('WEBSHOP_ORDER_COUNTRY_NOT_ROUTED', {
+            customer_country: routing.country,
+            rates: routing.unroutedRates,
+          }),
+        })
+        continue
+      }
+
+      // A bucket on the Swedish accounts with a non-Swedish rate (e.g. a
+      // German 19% OSS bucket no country rule books) would silently fall back
+      // to the 25% accounts and book foreign VAT as Swedish utgaende moms.
+      // Only the single dialog may show that as an editable prefill (skeptic
+      // finding). A bucket a country rule books may carry any rate.
+      const badRates = unsupportedSwedishRates(routing)
       if (badRates.length > 0) {
         results.push({
           order_id: id,
@@ -395,9 +421,11 @@ export const POST = withRouteContext(
 
       if (zeroRateAccount && order.customer_country) {
         const country = order.customer_country.toUpperCase()
-        const hasZeroRateAmount = order.vat_breakdown.some(
-          (b) => b.rate === 0 && b.net !== 0,
-        )
+        // Only the buckets the template books: a 0 % bucket a country rule
+        // routes (export on 3105) never reaches the 0 % template account.
+        const hasZeroRateAmount = routing.buckets
+          .filter(usesSwedishAccounts)
+          .some(({ bucket }) => bucket.rate === 0 && bucket.net !== 0)
         if (hasZeroRateAmount && zeroRateContextContradicted(country)) {
           results.push({
             order_id: id,
@@ -413,7 +441,6 @@ export const POST = withRouteContext(
         }
       }
 
-      const settings = settingsFor(order)
       // The store's own mapping routes this payment method through the
       // invoice flow. Booking it directly would both post a wrong clearing
       // leg and permanently foreclose Skapa faktura for the order (the claim

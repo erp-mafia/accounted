@@ -29,6 +29,18 @@ describe('bookedEntryOf', () => {
     expect(bookedEntryOf(answer)).toEqual({ id: 'je-3', voucher_series: 'A', voucher_number: 7 })
   })
 
+  it('carries the webshop door\'s underlag_archived flag when the door answers it', () => {
+    expect(
+      bookedEntryOf({ data: { id: 'je-5', voucher_series: 'A', voucher_number: 9 }, journal_entry_id: 'je-5', underlag_archived: false }),
+    ).toEqual({ id: 'je-5', voucher_series: 'A', voucher_number: 9, underlag_archived: false })
+    expect(bookedEntryOf({ journal_entry_id: 'je-6', underlag_archived: true })).toEqual({
+      id: 'je-6',
+      underlag_archived: true,
+    })
+    // A door that does not say leaves the flag out rather than guessing.
+    expect(bookedEntryOf({ data: { id: 'je-7' } })).not.toHaveProperty('underlag_archived')
+  })
+
   it('falls back to a top-level journal_entry_id', () => {
     expect(bookedEntryOf({ journal_entry_id: 'je-4' })).toEqual({ id: 'je-4' })
   })

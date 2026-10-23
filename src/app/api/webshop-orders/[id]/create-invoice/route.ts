@@ -21,8 +21,8 @@ const EU_COUNTRY_CODES = new Set(EU_COUNTRIES.map((c) => c.code))
  * missing country defaults to domestic; the draft review and the customer
  * card remain the gate where the user corrects the classification.
  */
-function customerTypeFromOrder(order: WebshopOrder): CustomerType {
-  if (!order.customer_company) return 'individual'
+function customerTypeFromOrder(company: string | null, order: WebshopOrder): CustomerType {
+  if (!company) return 'individual'
   const country = order.customer_country?.toUpperCase()
   if (!country || country === 'SE') return 'swedish_business'
   return EU_COUNTRY_CODES.has(country) ? 'eu_business' : 'non_eu_business'
@@ -48,6 +48,18 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     const validation = await validateBody(request, CreateInvoiceFromWebshopOrderSchema)
     if (!validation.success) return validation.response
     const { customer_id } = validation.data
+    // The customer the user confirmed in the dialog (a Shopify order row
+    // carries no names, so the dialog fetches them from the store on demand).
+    // It replaces the row's billing snapshot, and only when this route
+    // creates the customer: an explicit customer_id ignores it.
+    const confirmed = customer_id ? undefined : validation.data.customer
+    const snapshot = confirmed
+      ? {
+          name: confirmed.name ?? null,
+          company: confirmed.company ?? null,
+          email: confirmed.email ?? null,
+        }
+      : null
 
     const { data: order, error: fetchError } = await supabase
       .from('webshop_orders')
@@ -110,7 +122,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
 
     // Resolve the customer: explicit id, else match by email within the
-    // company, else create from the order's billing snapshot. The orgnr is
+    // company, else create from the billing snapshot (the one the user
+    // confirmed in the dialog, otherwise the order row's). The orgnr is
     // best-effort scraped data and is deliberately NOT written to a customer
     // the user did not review; the dialog shows it as a review hint.
     let customer: Customer | null = null
@@ -129,18 +142,21 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       }
       customer = data
     } else {
-      if (order.customer_email) {
+      const billingCompany = snapshot ? snapshot.company : order.customer_company
+      const billingName = snapshot ? snapshot.name : order.customer_name
+      const billingEmail = snapshot ? snapshot.email : order.customer_email
+      if (billingEmail) {
         const { data } = await supabase
           .from('customers')
           .select('*')
           .eq('company_id', companyId)
-          .ilike('email', order.customer_email)
+          .ilike('email', billingEmail)
           .limit(1)
           .maybeSingle<Customer>()
         customer = data ?? null
       }
       if (!customer) {
-        const name = order.customer_company || order.customer_name
+        const name = billingCompany || billingName
         if (!name) {
           return errorResponseFromCode('WEBSHOP_ORDER_CREATE_INVOICE_MISSING_CUSTOMER', log, {
             requestId,
@@ -157,14 +173,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
             company_id: companyId,
             user_id: user.id,
             name,
-            customer_type: customerTypeFromOrder(order),
+            customer_type: customerTypeFromOrder(billingCompany, order),
             // The billing country the type above was classified from; without
             // it the column default SE would contradict an EU or non-EU type
             // and the customer card could not be saved without a country pick.
             country: normalizeCountryCode(order.customer_country)
               ?? (order.customer_country ? order.customer_country.toUpperCase() : 'SE'),
-            contact_person: order.customer_company ? order.customer_name : null,
-            email: order.customer_email,
+            contact_person: billingCompany ? billingName : null,
+            email: billingEmail,
           })
           .select('*')
           .single<Customer>()
@@ -247,7 +263,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       currency: order.currency.toUpperCase() as Currency,
       // The card's Fakturareferens (crm#1200) wins over the buyer's name, as
       // in the web editor over the contact person.
-      your_reference: customerInvoiceReference(customer) ?? order.customer_name ?? undefined,
+      your_reference:
+        customerInvoiceReference(customer) ?? (snapshot ? snapshot.name : order.customer_name) ?? undefined,
       notes: `Webshoporder ${order.order_number} (${order.store_label || order.store_scope})`,
       items,
     }

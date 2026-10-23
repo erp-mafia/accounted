@@ -95,6 +95,24 @@ export function resolveRevenueVatBox(row: VatAccountClassificationRow): MomsBox 
   return ACCOUNT_TO_BOX[row.account_number] ?? null
 }
 
+/**
+ * The momsdeklaration box a revenue (class 3) account's sales actually land
+ * in, the way fetchDynamicVatAccounts reaches it: a configured treatment's box
+ * (null for OSS), else the static BAS box, else ruta 05 when the account
+ * resolves to a taxable Swedish rate (the unconfigured branch, number and
+ * name inference included). Null when the declaration does not read the
+ * account. The webshop country rules use it to keep a sale taxed abroad out
+ * of ruta 05.
+ */
+export function resolveRevenueDeclarationBox(row: VatAccountClassificationRow): MomsBox | null {
+  if (isAccountVatTreatment(row.default_vat_treatment)) return resolveRevenueVatBox(row)
+  const staticBox = ACCOUNT_TO_BOX[row.account_number]
+  if (staticBox) return staticBox
+  if (RUTA_05_EXCLUDED_ACCOUNTS.has(row.account_number)) return null
+  const rate = resolveEffectiveVatRate(row)
+  return rate !== null && TAXABLE_RATES.includes(rate) ? '05' : null
+}
+
 export interface DynamicVatAccounts {
   accounts: string[]
   mappingByAccount: Map<string, AccountVatRutaMapping>

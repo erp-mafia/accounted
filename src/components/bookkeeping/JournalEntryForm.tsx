@@ -49,7 +49,7 @@ import { cn, formatCurrency } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { roundOre, formatAmountInput } from '@/lib/money'
 import { buildVoucherSeriesOptions, formatVoucher, resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
-import { bookedEntryOf } from '@/lib/bookkeeping/booking-answer'
+import { bookedEntryOf, type BookedEntry } from '@/lib/bookkeeping/booking-answer'
 import { resolveFxLineSlot } from '@/lib/bookkeeping/fx-line-slot'
 import { resolveVoucherEnter, type VoucherEnterAction } from '@/lib/bookkeeping/voucher-enter-key'
 import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -93,7 +93,8 @@ export interface FormLine {
 
 interface Props {
   onCreated?: () => void
-  onEntryCreated?: (entryId: string) => void
+  /** Called with the new entry's id and what the booking door answered about it. */
+  onEntryCreated?: (entryId: string, booked: BookedEntry) => void
   initialLines?: FormLine[]
   initialDate?: string
   initialDescription?: string
@@ -1250,7 +1251,7 @@ export default function JournalEntryForm({
       setForeignAmount('')
       onCreated?.()
       if (journalEntryId) {
-        onEntryCreated?.(journalEntryId)
+        onEntryCreated?.(journalEntryId, booked)
       }
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
@@ -1349,7 +1350,7 @@ export default function JournalEntryForm({
       setForeignAmount('')
       onCreated?.()
       if (journalEntryId) {
-        onEntryCreated?.(journalEntryId)
+        onEntryCreated?.(journalEntryId, booked)
       }
     } catch (err) {
       if (err instanceof Error && err.message === 'cancelled') {
