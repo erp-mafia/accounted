@@ -73,6 +73,7 @@
 /* ── the sentence, Ändra and the rows behind it ───────────────────── */
 .imp-sec { margin: 20px auto 0; max-width: 560px; }
 .imp-k { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: hsl(var(--muted-foreground)); margin: 0 0 10px; }
+.imp-sec .jny-attn { margin: 10px 0 0; text-align: center; }
 .imp-line { max-width: 560px; margin: 18px auto 0; font-size: 13px; line-height: 1.65; color: hsl(var(--muted-foreground)); text-align: center; }
 /* on the bank step every block sits in the accounts' own column */
 .bank-stage .imp-line, .bank-stage .opts, .bank-stage .imp-info { max-width: 400px; }
