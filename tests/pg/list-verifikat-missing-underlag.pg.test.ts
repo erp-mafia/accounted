@@ -23,7 +23,9 @@ import {
  *     complete in the requested order;
  *   - an amount sort orders by display_amount, the amount the list shows;
  *   - the order allowlist refuses anything else, and the tenant guard refuses
- *     a company the caller is no member of.
+ *     a company the caller is no member of;
+ *   - a document or a waiver of another company backs nothing, in both
+ *     functions (20261023093920, 20261023093930).
  */
 
 type ListResult = { ok: boolean; code?: string; total_count?: number; ids?: string[] }
@@ -197,6 +199,40 @@ describe('list_verifikat_missing_underlag', () => {
     for (const excluded of [withDoc, waived, docExempt, draft, foreign]) {
       expect(res.ids).not.toContain(excluded)
     }
+  })
+
+  it("treats another company's document or waiver as no underlag, in both functions", async () => {
+    // 20261023093920 and 20261023093930: a file or a waiver of another
+    // company is not this company's underlag. a1 and a2 stay missing, so the
+    // totals the other cases expect are unchanged.
+    const other = await seedCompany()
+    await getPool().query(
+      `INSERT INTO public.document_attachments
+         (id, user_id, company_id, journal_entry_id, file_name, mime_type,
+          file_size_bytes, storage_path, sha256_hash, upload_source)
+       VALUES ($1, $2, $3, $4, 'annat-bolag.pdf', 'application/pdf', 1024, $5, $6, 'file_upload')`,
+      [
+        randomUUID(),
+        other.userId,
+        other.companyId,
+        a1,
+        `documents/${other.companyId}/annat-bolag.pdf`,
+        randomUUID().replace(/-/g, '').padEnd(64, '0'),
+      ],
+    )
+    await getPool().query(
+      `INSERT INTO public.journal_entry_no_doc_required (journal_entry_id, company_id, user_id, reason)
+       VALUES ($1, $2, $3, 'annat bolag')`,
+      [a2, other.companyId, other.userId],
+    )
+
+    const res = await list({ companyId })
+    const badge = await badgeSet(companyId)
+    expect(res.ids).toEqual(expect.arrayContaining([a1, a2]))
+    expect(badge.ids).toEqual(expect.arrayContaining([a1, a2]))
+    expect([...(res.ids ?? [])].sort()).toEqual([...badge.ids].sort())
+    expect(res.total_count).toBe(4)
+    expect(badge.total).toBe(4)
   })
 
   it('narrows by fiscal year, series and date range', async () => {

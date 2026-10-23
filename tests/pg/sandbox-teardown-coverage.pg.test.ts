@@ -93,6 +93,8 @@ const CONDITIONAL_DELETE_GUARDS: Record<string, string> = {
     'refuses only while the company row exists; the teardown reaches arrivals through the companies cascade, after that row is gone',
   arrival_outputs_append_only:
     'refuses only while the arrival exists; outputs go through the arrivals cascade, after the arrival is gone',
+  ledger_days_on_entry_delete:
+    'never refuses: it subtracts the deleted verifikat\'s lines from ledger_account_days and returns OLD; its shared lock waits only for a summary build',
   company_grants_immutable:
     'refuses a DELETE only while the company row exists; the teardown removes grants through the ON DELETE CASCADE of DELETE FROM companies, when that row is already gone',
 }
