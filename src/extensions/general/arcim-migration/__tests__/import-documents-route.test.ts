@@ -362,3 +362,56 @@ describe('POST /submit-token Björn Lundén error mapping', () => {
     expect(body.error.message_en).toContain('found no company')
   })
 })
+
+describe('POST /submit-token asks for the credentials the catalog names', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  function credentialsRequest(body: Record<string, unknown>) {
+    return createMockRequest(
+      'http://localhost/api/extensions/ext/arcim-migration/submit-token',
+      { method: 'POST', body: { consentId: 'consent-1', ...body } },
+    )
+  }
+
+  it('connects Björn Lundén with the company key alone, on our client credentials', async () => {
+    ;(submitProviderToken as Mock).mockResolvedValue({ success: true, consentId: 'consent-1' })
+
+    const response = await submitTokenHandler(
+      credentialsRequest({ provider: 'bjornlunden', apiToken: '', companyId: '1f0e2d3c-4b5a-4968-8776-655443322110' }),
+      buildContext(),
+    )
+
+    expect(response.status).toBe(200)
+    expect(submitProviderToken).toHaveBeenCalledWith(
+      'consent-1',
+      'bjornlunden',
+      'client_credentials',
+      '1f0e2d3c-4b5a-4968-8776-655443322110',
+      'company-1',
+    )
+  })
+
+  it('refuses Björn Lundén without the company key before calling BL', async () => {
+    const response = await submitTokenHandler(credentialsRequest({ provider: 'bjornlunden' }), buildContext())
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PROVIDER_COMPANY_ID_REQUIRED')
+    expect(submitProviderToken).not.toHaveBeenCalled()
+  })
+
+  it('refuses Bokio without its integration token', async () => {
+    const response = await submitTokenHandler(
+      credentialsRequest({ provider: 'bokio', companyId: '9b408943-7a1e-47ac-85a7-ac52b2c210d3' }),
+      buildContext(),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('PROVIDER_TOKEN_REQUIRED')
+    expect(submitProviderToken).not.toHaveBeenCalled()
+  })
+})

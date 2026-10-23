@@ -62,6 +62,7 @@ import { fortnoxVatCodeToTreatment } from '@/lib/providers/fortnox/vat-codes'
 import { loadMappings, generateImportPreview, findOverlappingPeriodImports } from '@/lib/import/sie-import'
 import { buildMappingTargets } from './lib/mapping-targets'
 import type { ProviderName } from '@/lib/providers/types'
+import { missingTokenCredential } from '@/lib/providers/catalog'
 import type { ProviderPreviewCounts } from '@/lib/providers/preview-counts'
 import { FORTNOX_DOCUMENT_SCOPES_APPROVED } from '@/lib/providers/fortnox/oauth'
 import {
@@ -621,18 +622,16 @@ export const arcimMigrationExtension: Extension = {
           })
         }
 
-        // BL uses server-side client credentials: only needs companyId
-        if (provider !== 'bjornlunden' && !apiToken) {
+        // The catalog names what each provider needs (BL: the company key
+        // only, Accounted holds the client credentials). Both connect forms
+        // read the same rule, so neither can ask for something this refuses.
+        const missingCredential = missingTokenCredential(provider, { apiToken, companyId: providerCompanyId })
+        if (missingCredential === 'secret') {
           return errorResponseFromCode('PROVIDER_TOKEN_REQUIRED', moduleLog, {
             details: { provider },
           })
         }
-
-        // Briox needs the account ID (the /token clientid param) alongside
-        // the application token; Bokio/BL need their company GUID. WINT
-        // reuses the field for the login mail (paired with the password in
-        // apiToken; both are exchanged for tokens and never stored).
-        if ((provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox' || provider === 'wint') && !providerCompanyId) {
+        if (missingCredential === 'companyId') {
           return errorResponseFromCode('PROVIDER_COMPANY_ID_REQUIRED', moduleLog, {
             details: { provider },
           })

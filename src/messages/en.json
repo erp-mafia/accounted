@@ -12880,6 +12880,7 @@
     "reg_skip": "Skip the registers",
     "reg_connecting": "Connecting to {provider} …",
     "tok_company": "Company ID at {provider}",
+    "tok_bl_key": "Company key (User-Key)",
     "tok_token": "API key from {provider}",
     "tok_connect": "Connect",
     "provider_title": "Fetching from the old system",

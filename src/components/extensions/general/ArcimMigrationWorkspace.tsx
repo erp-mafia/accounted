@@ -66,7 +66,7 @@ import {
   type ArcimDocumentImportState,
   type ArcimUnreachableDocumentSource,
 } from './arcim-document-import-flow'
-import { MIGRATION_PROVIDERS } from '@/lib/providers/catalog'
+import { MIGRATION_PROVIDERS, missingTokenCredential, tokenCredentials } from '@/lib/providers/catalog'
 import type { ProviderName } from '@/lib/providers/types'
 import {
   trackMigrationConnectClicked,
@@ -991,10 +991,10 @@ function ConnectStep({
   // WINT has no API keys: the "token" is the user's WINT login (e-post +
   // lösenord), exchanged server-side for ett tokenpar; lösenordet sparas aldrig.
   const isWintLogin = provider === 'wint'
-  const needsApiToken = !isClientCredentials
-  // Briox: the account ID is the `clientid` half of the token exchange;
-  // WINT reuses the same field for the login e-mail.
-  const needsCompanyId = provider === 'bokio' || provider === 'bjornlunden' || provider === 'briox' || provider === 'wint'
+  // The fields come from the catalog rule /submit-token checks. Briox: the
+  // account ID is the `clientid` half of the token exchange; WINT reuses the
+  // company field for the login e-mail.
+  const { secret: needsApiToken, companyId: needsCompanyId } = tokenCredentials(provider)
   const companyIdLabel = provider === 'briox'
     ? 'Konto-ID'
     : provider === 'bjornlunden'
@@ -1029,9 +1029,7 @@ function ConnectStep({
         ? `Skapa din applikationstoken i Briox under Admin \u2192 Anv\u00e4ndare \u2192 kugghjulet vid din anv\u00e4ndare \u2192 Applikationstoken. Ditt konto-ID \u00e4r det l\u00e5nga numret inom parentes bredvid f\u00f6retagsnamnet under "Ditt konto" i menyn till h\u00f6ger.`
         : `Du hittar din applikationstoken i ${providerName} under Administration \u2192 Integrationer.`
 
-  const canSubmit = isClientCredentials
-    ? !!companyId
-    : !!(apiToken && (!needsCompanyId || companyId))
+  const canSubmit = missingTokenCredential(provider, { apiToken, companyId }) === null
 
   return (
     <div className="stagger-enter space-y-8">

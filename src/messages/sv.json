@@ -12880,6 +12880,7 @@
     "reg_skip": "Hoppa över registren",
     "reg_connecting": "Ansluter till {provider} …",
     "tok_company": "Företags-ID hos {provider}",
+    "tok_bl_key": "Företagsnyckel (User-Key)",
     "tok_token": "API-nyckel från {provider}",
     "tok_connect": "Anslut",
     "provider_title": "Hämtar från det gamla systemet",
