@@ -7,6 +7,7 @@ import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/bu
 import { customerInvoiceReference } from '@/lib/customers/invoice-reference'
 import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { EU_COUNTRIES } from '@/lib/vat/eu-countries'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 import type { Currency, Customer, CustomerType, Invoice, WebshopOrder } from '@/types'
@@ -146,14 +147,20 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       const billingName = snapshot ? snapshot.name : order.customer_name
       const billingEmail = snapshot ? snapshot.email : order.customer_email
       if (billingEmail) {
+        // A case-insensitive exact match. ILIKE reads `_` and `%` as
+        // wildcards, so they are escaped: unescaped, a_b@x.se matched
+        // axb@x.se and put this order on another person's customer. What
+        // escaping cannot cover (PostgREST reads `*` as `%`, the needle is
+        // capped at 200 characters) the equality check below does.
         const { data } = await supabase
           .from('customers')
           .select('*')
           .eq('company_id', companyId)
-          .ilike('email', billingEmail)
+          .ilike('email', escapeLikePattern(billingEmail))
           .limit(1)
           .maybeSingle<Customer>()
-        customer = data ?? null
+        customer =
+          data && data.email?.toLowerCase() === billingEmail.toLowerCase() ? data : null
       }
       if (!customer) {
         const name = billingCompany || billingName

@@ -8982,6 +8982,7 @@
     "invoice_customer_email": "Email (optional)",
     "invoice_customer_fetching": "Fetching the customer from Shopify…",
     "invoice_customer_withheld": "The store does not share the customer's name with Accounted. Enter the customer here or choose an existing one.",
+    "invoice_customer_unavailable": "Couldn't fetch the customer details from Shopify. Enter the customer here or choose an existing one.",
     "invoice_customer_required": "Enter the customer's name or company.",
     "invoice_customer_email_invalid": "Enter a valid email address.",
     "invoice_orgnr_hint": "Org. no. from the store: {orgnr}. Verify before sending the invoice.",

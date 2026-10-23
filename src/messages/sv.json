@@ -8982,6 +8982,7 @@
     "invoice_customer_email": "E-post (valfritt)",
     "invoice_customer_fetching": "Hämtar kunduppgifter från Shopify…",
     "invoice_customer_withheld": "Butiken delar inte kundens namn med Accounted. Fyll i kunden här eller välj en befintlig.",
+    "invoice_customer_unavailable": "Kunde inte hämta kunduppgifterna från Shopify. Fyll i kunden här eller välj en befintlig.",
     "invoice_customer_required": "Ange kundens namn eller företag.",
     "invoice_customer_email_invalid": "Ange en giltig e-postadress.",
     "invoice_orgnr_hint": "Org.nr från butiken: {orgnr}. Kontrollera innan fakturan skickas.",
