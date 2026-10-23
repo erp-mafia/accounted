@@ -11,14 +11,16 @@ import {
 } from '@/lib/analytics/properties'
 
 /**
- * Starts PostHog for a person who consented, and attaches them and their
- * active company to it.
+ * Starts PostHog for a signed-in person who has not switched analytics off,
+ * and attaches them, and their active company when there is one, to it.
  *
- * Mounted from app/(dashboard)/layout.tsx, which is the only place that has
- * the auth user, the resolved company and the stored consent in one render,
- * and gated there on `!isSandbox` so demo companies never pollute funnels or
- * get surveyed. Without consent (`analyticsConsent` false or not given yet)
- * this does nothing at all: PostHog is never started (lib/analytics/client.ts).
+ * Mounted from app/(dashboard)/layout.tsx, which has the auth user, the
+ * resolved company and the stored choice in one render, gated there on
+ * `!isSandbox` so demo companies never pollute funnels or get surveyed; and
+ * from app/(onboarding)/layout.tsx without a company, so the company journey
+ * and the other signed-in screens before the dashboard are measured too.
+ * With analytics switched off (`analyticsConsent` false) this does nothing
+ * at all: PostHog is never started (lib/analytics/client.ts).
  *
  * identify() runs on every dashboard load rather than only at login, per
  * PostHog's guidance: with `persistence: 'memory'` nothing survives a hard
@@ -35,7 +37,8 @@ export default function AnalyticsIdentify({
   analyticsConsent,
 }: {
   user: AnalyticsUserInput
-  company: AnalyticsCompanyInput
+  /** The active company. Absent before the person has one (the onboarding layout). */
+  company?: AnalyticsCompanyInput
   /** Server-computed HMAC of userId (lib/analytics/identity-hash.ts). Null
    *  when POSTHOG_SECRET_API_KEY is unset, which is normal off hosted. */
   identityHash?: string | null
@@ -52,7 +55,7 @@ export default function AnalyticsIdentify({
     paysSalaries,
     trialEndsAt,
     capabilities,
-  } = company
+  } = company ?? ({} as Partial<AnalyticsCompanyInput>)
 
   // The dashboard layout rebuilds the props objects (and the capabilities
   // array) on every render, so depending on them directly would re-fire
@@ -71,6 +74,7 @@ export default function AnalyticsIdentify({
     if (identityHash) posthog.setIdentity(userId, identityHash)
 
     posthog.identify(userId, buildPersonProperties({ userId, email, fullName, role }))
+    if (!companyId || !companyName) return
     posthog.group(
       'company',
       companyId,

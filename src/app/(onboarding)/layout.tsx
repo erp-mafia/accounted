@@ -8,6 +8,8 @@ import { AllMessagesProvider } from '@/components/providers/AllMessagesProvider'
 import { ACCOUNT_DELETION_HREF } from '@/lib/company/no-company-routes'
 import { LegalAcceptanceGate } from '@/components/legal/LegalAcceptanceGate'
 import { readAcceptanceState } from '@/lib/legal/acceptance'
+import AnalyticsIdentify from '@/components/AnalyticsIdentify'
+import { computeIdentityHash } from '@/lib/analytics/identity-hash'
 
 type MembershipCompany = { archived_at: string | null }
 
@@ -56,6 +58,16 @@ export default async function OnboardingLayout({
     <AllMessagesProvider>
     <div className="min-h-dvh bg-background flex items-center justify-center">
       {user && <SessionTimeoutController />}
+      {/* Analytics runs for a signed-in person unless they switched it off,
+          the dashboard's rule (founder decision 2026-10-22), so the company
+          journey is measured too. No company to group by here yet. */}
+      {user && acceptance && (
+        <AnalyticsIdentify
+          user={{ userId: user.id, email: user.email }}
+          identityHash={computeIdentityHash(user.id)}
+          analyticsConsent={acceptance.analyticsConsent !== false}
+        />
+      )}
       <OnboardingBackdrop />
 
       <div className="relative z-10 w-full max-w-lg px-5">
