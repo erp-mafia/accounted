@@ -12935,6 +12935,7 @@
     "v_vat_all": "Alla intäktskonton har momskod",
     "vat_set_now": "Sätt dem nu",
     "vat_or_later": "eller senare i kontoplanen.",
+    "vat_pick_failed": "Momskoden för {account} sparades inte. Försök igen.",
     "v_overdue": "{count, plural, one {# kundfaktura är förfallen} other {# kundfakturor är förfallna}}",
     "v_vat_owed": "Moms att betala just nu: {amount} på 26xx",
     "v_vat_receivable": "Moms att få tillbaka just nu: {amount} på 26xx",
