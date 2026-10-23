@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
@@ -98,12 +99,19 @@ export default function CreateInvoiceFromOrderDialog({
   const [customerId, setCustomerId] = useState('')
   const [draft, setDraft] = useState<CustomerDraft>(EMPTY_DRAFT)
   const [lookup, setLookup] = useState<ContactLookup>('idle')
+  // Bumped by the retry action after a failed lookup: fetches again without
+  // clearing what the user typed meanwhile.
+  const [lookupAttempt, setLookupAttempt] = useState(0)
+
+  useEffect(() => {
+    if (!open || !confirmCustomer) return
+    setCustomerId('')
+    setDraft(EMPTY_DRAFT)
+  }, [open, confirmCustomer, order.id])
 
   useEffect(() => {
     if (!open || !confirmCustomer) return
     let cancelled = false
-    setCustomerId('')
-    setDraft(EMPTY_DRAFT)
     setLookup('loading')
     fetch(`/api/extensions/ext/shopify/orders/${order.id}/customer`)
       .then(async (res) => (res.ok ? ((await res.json()) as ShopifyContactAnswer) : null))
@@ -113,11 +121,12 @@ export default function CreateInvoiceFromOrderDialog({
           setLookup('unavailable')
           return
         }
-        setDraft({
-          name: answer.name ?? '',
-          company: answer.company ?? '',
-          email: answer.email ?? '',
-        })
+        // On a retry, a field the store leaves empty keeps what the user typed.
+        setDraft((typed) => ({
+          name: answer.name ?? typed.name,
+          company: answer.company ?? typed.company,
+          email: answer.email ?? typed.email,
+        }))
         setLookup(answer.withheld.includes('name') && !answer.name && !answer.company ? 'withheld' : 'ready')
       })
       .catch(() => {
@@ -126,7 +135,7 @@ export default function CreateInvoiceFromOrderDialog({
     return () => {
       cancelled = true
     }
-  }, [open, confirmCustomer, order.id])
+  }, [open, confirmCustomer, order.id, lookupAttempt])
 
   const customerLabel =
     order.customer_company || order.customer_name || t('invoice_no_customer')
@@ -196,6 +205,7 @@ export default function CreateInvoiceFromOrderDialog({
               draft={draft}
               onDraftChange={setDraft}
               lookup={lookup}
+              onRetryLookup={() => setLookupAttempt((n) => n + 1)}
               missingName={draftMissingName}
               invalidEmail={draftEmailInvalid}
             />
@@ -261,6 +271,7 @@ interface OrderInvoiceCustomerFieldsProps {
   draft: CustomerDraft
   onDraftChange: (draft: CustomerDraft) => void
   lookup: ContactLookup
+  onRetryLookup: () => void
   missingName: boolean
   invalidEmail: boolean
 }
@@ -275,14 +286,17 @@ function OrderInvoiceCustomerFields({
   draft,
   onDraftChange,
   lookup,
+  onRetryLookup,
   missingName,
   invalidEmail,
 }: OrderInvoiceCustomerFieldsProps) {
   const t = useTranslations('webshop_orders')
+  const tc = useTranslations('common')
   const { customers, isLoading } = useCustomers()
   const fetching = lookup === 'loading'
-  // The withheld line already asks for the customer; no second hint then.
-  const showRequired = missingName && !fetching && lookup !== 'withheld'
+  // The withheld and unavailable lines already ask for the customer; no
+  // second hint then.
+  const showRequired = missingName && !fetching && lookup !== 'withheld' && lookup !== 'unavailable'
   const set = (field: keyof CustomerDraft) => (e: React.ChangeEvent<HTMLInputElement>) =>
     onDraftChange({ ...draft, [field]: e.target.value })
 
@@ -308,8 +322,11 @@ function OrderInvoiceCustomerFields({
           {fetching && (
             <p className="text-[12.5px] text-muted-foreground">{t('invoice_customer_fetching')}</p>
           )}
-          {lookup === 'withheld' && (
-            <p className="attn text-[12.5px]">{t('invoice_customer_withheld')}</p>
+          {lookup === 'withheld' && <AttnLine>{t('invoice_customer_withheld')}</AttnLine>}
+          {lookup === 'unavailable' && (
+            <AttnLine action={{ label: tc('retry'), onClick: onRetryLookup }}>
+              {t('invoice_customer_unavailable')}
+            </AttnLine>
           )}
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="min-w-0 space-y-1">

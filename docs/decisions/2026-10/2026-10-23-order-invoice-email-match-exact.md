@@ -1,0 +1,1 @@
+[2026-10-23] crm#1032 Order invoice email match: LIKE wildcards escaped and the returned email compared in code, since PostgREST reads `*` as `%` and cannot escape it. A failed Shopify contact lookup shows one localized line with retry, not the route's Swedish-only error.
