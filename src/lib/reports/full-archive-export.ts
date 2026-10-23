@@ -1421,6 +1421,11 @@ export const ARCHIVE_COVERED_ELSEWHERE_TABLES: Record<string, string> = {
  * a portable räkenskapsinformation backup.
  */
 export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
+  ledger_account_days: 'sums of the journal per account and day, derived by triggers and rebuilt from it; the journal itself is exported',
+  ledger_dimension_days: 'the same sums per dimension value, derived from the journal lines exported here',
+  ledger_account_days_companies: 'which companies the derived ledger sums are built for; no accounting content',
+  ledger_account_entries: 'which verifikat have lines on which account, derived by triggers from the journal exported here',
+  ledger_dimension_entries: 'the same per dimension value, derived from the journal lines exported here',
   bokio_supplier_completion_work: 'opt-in provider recovery scheduling and leases; no accounting content',
   bokio_supplier_completion_entries: 'retry receipts; completed invoices, source identities and processing history are exported separately',
   invoice_completion_work: 'provider scan cursors and scheduling leases; no accounting content',

@@ -70,9 +70,11 @@ async function insertPostedJournalEntry(params: {
 }
 
 // Historical NULL/sign contradictions must remain readable, but the current
-// writer correctly refuses creating them. Clone only the current read RPC and
-// its transaction input into this connection's temporary namespace. Journal,
-// cash and tenant checks continue reading the ordinary valid fixture rows.
+// writer correctly refuses creating them. Clone only the current read RPC
+// (since 20261023094100 a wrapper over the candidate narrowing and the
+// predicate) and its transaction input into this connection's temporary
+// namespace. Journal, cash and tenant checks continue reading the ordinary
+// valid fixture rows.
 async function withHistoricalBankLink(
   params: { companyId: string; userId: string; journalEntryId: string; amount: number; date: string; cashAccountId: null },
   read: (client: PoolClient) => Promise<void>,
@@ -83,15 +85,31 @@ async function withHistoricalBankLink(
     await client.query('BEGIN')
     await client.query(`CREATE TEMP TABLE historical_transactions ON COMMIT DROP AS
       SELECT id, company_id, journal_entry_id, cash_account_id, amount FROM public.transactions WHERE false`)
-    const { rows } = await client.query<{ definition: string }>(
-      "SELECT pg_get_functiondef('public.get_account_gl_lines_for_matching(uuid,text,date,date,boolean)'::regprocedure) AS definition")
-    const definition = rows[0].definition
-    expect(definition.match(/FUNCTION public\.get_account_gl_lines_for_matching\(/g)).toHaveLength(1)
-    // Four link reads, plus the 1:N slice remainder (20261006121002).
-    expect(definition.match(/public\.transactions\b/g)).toHaveLength(5)
-    await client.query(definition
-      .replace('FUNCTION public.get_account_gl_lines_for_matching(', 'FUNCTION pg_temp.get_account_gl_lines_for_matching(')
-      .replaceAll('public.transactions', 'pg_temp.historical_transactions'))
+    const definitionOf = async (signature: string) => {
+      const { rows } = await client.query<{ definition: string }>(
+        'SELECT pg_get_functiondef($1::regprocedure) AS definition', [signature])
+      return rows[0].definition
+    }
+    const entries = await definitionOf('public.bank_account_candidate_entries(uuid,text,date,date,boolean)')
+    const lines = await definitionOf('public.bank_account_candidate_lines(uuid,text,date,date,boolean,uuid[])')
+    const wrapper = await definitionOf('public.get_account_gl_lines_for_matching(uuid,text,date,date,boolean)')
+    // The pointer narrowing reads the bank rows once; the predicate's four
+    // link reads plus the 1:N slice remainder (20261006121002) the rest.
+    expect(entries.match(/public\.transactions\b/g)).toHaveLength(1)
+    expect(lines.match(/public\.transactions\b/g)).toHaveLength(5)
+    expect(wrapper.match(/public\.transactions\b/g)).toBeNull()
+    expect(wrapper.match(/public\.bank_account_candidate_(entries|lines)\(/g)).toHaveLength(2)
+    for (const [name, definition] of [
+      ['bank_account_candidate_entries', entries],
+      ['bank_account_candidate_lines', lines],
+      ['get_account_gl_lines_for_matching', wrapper],
+    ] as const) {
+      expect(definition.match(new RegExp(`FUNCTION public\\.${name}\\(`, 'g'))).toHaveLength(1)
+      await client.query(definition
+        .replace(`FUNCTION public.${name}(`, `FUNCTION pg_temp.${name}(`)
+        .replaceAll('public.bank_account_candidate_', 'pg_temp.bank_account_candidate_')
+        .replaceAll('public.transactions', 'pg_temp.historical_transactions'))
+    }
     await client.query(`INSERT INTO pg_temp.historical_transactions(id, company_id, journal_entry_id, cash_account_id, amount)
       VALUES ($1, $2, $3, NULL, $4)`, [randomUUID(), params.companyId, params.journalEntryId, params.amount])
     await read(client)
