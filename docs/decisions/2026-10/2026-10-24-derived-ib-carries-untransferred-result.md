@@ -1,0 +1,1 @@
+[2026-10-24] A derived IB reads a year that ended without a booked resultatavslut as closed: its result opens next year on the form's closing account (2099/2010/2069), as a source system's #IB does. Chosen over booking closings into old years (116 closed elsewhere); needs no writes.

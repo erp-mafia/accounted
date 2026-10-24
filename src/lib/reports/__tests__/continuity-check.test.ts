@@ -279,6 +279,70 @@ describe('validateBalanceContinuity', () => {
     expect(result.discrepancies).toEqual([])
   })
 
+  // A year that ended without a booked resultatavslut opens the next year with
+  // its result on the form's closing account (prior_opening_balance_lines).
+  const unclosedPreviousYear = (entityType: string, ibRows: Array<{ account_number: string; debit: number; credit: number }>) => ({
+    fiscal_periods: [
+      { data: { id: 'p2', name: 'FY2025', period_start: '2025-01-01', previous_period_id: 'p1', opening_balance_entry_id: null } },
+      { data: { id: 'p1', name: 'FY2024', period_end: '2024-12-31' } },
+      { data: { period_start: '2024-01-01', opening_balance_entry_id: null } },
+    ],
+    // FY2024 earned 1000 and was never closed.
+    'rpc:get_trial_balance_aggregates': [
+      {
+        data: [
+          { bucket: 'period', account_number: '1930', debit: 1000, credit: 0 },
+          { bucket: 'period', account_number: '3001', debit: 0, credit: 1000 },
+        ],
+      },
+    ],
+    // FY2024's own (empty) IB first, then FY2025's derived IB.
+    'rpc:compute_prior_opening_balances': [{ data: [] }, { data: ibRows }],
+    companies: [{ data: { entity_type: entityType } }],
+    chart_of_accounts: [
+      {
+        data: [
+          { account_number: '1930', account_name: 'Företagskonto', account_class: 1 },
+          { account_number: '3001', account_name: 'Försäljning', account_class: 3 },
+        ],
+      },
+    ],
+  })
+
+  it('reads the previous year as closed: a result left on its result accounts opens on 2099', async () => {
+    mockResults = unclosedPreviousYear('aktiebolag', [
+      { account_number: '1930', debit: 1000, credit: 0 },
+      { account_number: '2099', debit: 0, credit: 1000 },
+    ])
+
+    const result = await validateBalanceContinuity(supabase, 'company-1', 'p2')
+
+    expect(result.valid).toBe(true)
+    expect(result.discrepancies).toEqual([])
+  })
+
+  it("an enskild firma's unbooked result opens on 2010", async () => {
+    mockResults = unclosedPreviousYear('enskild_firma', [
+      { account_number: '1930', debit: 1000, credit: 0 },
+      { account_number: '2010', debit: 0, credit: 1000 },
+    ])
+
+    const result = await validateBalanceContinuity(supabase, 'company-1', 'p2')
+
+    expect(result.valid).toBe(true)
+  })
+
+  it('still flags an opening balance that leaves the unbooked result out', async () => {
+    mockResults = unclosedPreviousYear('aktiebolag', [{ account_number: '1930', debit: 1000, credit: 0 }])
+
+    const result = await validateBalanceContinuity(supabase, 'company-1', 'p2')
+
+    expect(result.valid).toBe(false)
+    expect(result.discrepancies).toEqual([
+      { account_number: '2099', account_name: 'Årets resultat', previous_ub_net: -1000, current_ib_net: 0, difference: -1000 },
+    ])
+  })
+
   it('throws when period not found', async () => {
     mockResults = {
       fiscal_periods: [

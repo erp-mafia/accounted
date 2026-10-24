@@ -454,6 +454,43 @@ describe('ledger_account_days: readers equal their line-level paths', () => {
     const fullYear = summary[`tb ${w.periodId} exclude-all-year-end null-null ob=${w.ibId} dims=null`] as unknown[]
     expect(fullYear.length).toBeGreaterThan(5)
     expect(summary[`dimpnl ${w.periodId} 1 null-null`]).not.toEqual([])
+    // Both paths leave the resultatavslut by shape (voucher 6, it zeroes
+    // 3001) out of 'exclude-all-year-end' and keep it in 'include'
+    // (20261024140100); the 8990 omföring stays.
+    const row = (key: string, account: string) =>
+      (summary[key] as Array<{ account_number: string; debit: number; credit: number }>)
+        .find((r) => r.account_number === account)
+    expect(row(`tb ${w.periodId} exclude-all-year-end null-null ob=${w.ibId} dims=null`, '3001'))
+      .toMatchObject({ debit: 0.5, credit: 1000.5 })
+    expect(row(`tb ${w.periodId} include null-null ob=${w.ibId} dims=null`, '3001'))
+      .toMatchObject({ debit: 1000.5, credit: 1000.5 })
+    expect(row(`tb ${w.periodId} exclude-all-year-end null-null ob=${w.ibId} dims=null`, '8990'))
+      .toMatchObject({ debit: 40, credit: 0 })
+  })
+
+  it('subtracts an excluded entry once even when the id is passed twice', async () => {
+    const w = await world()
+    const { rows: [entry] } = await getPool().query<{ id: string }>(
+      `SELECT id FROM public.journal_entries WHERE company_id = $1 AND fiscal_period_id = $2 AND voucher_number = 3 AND voucher_series = 'A'`,
+      [w.companyId, w.periodId],
+    )
+    const sums = async (ids: string[]) => {
+      const { rows } = await getPool().query(
+        `SELECT account_number, sum(debit)::float8 AS debit, sum(credit)::float8 AS credit, sum(line_count)::int AS n
+           FROM public.ledger_period_account_days($1, $2, $3::uuid[])
+          GROUP BY account_number ORDER BY account_number`,
+        [w.companyId, w.periodId, ids],
+      )
+      return rows
+    }
+    expect(await sums([entry.id, entry.id])).toEqual(await sums([entry.id]))
+    const { rows: dims } = await getPool().query(
+      `SELECT count(*)::int AS rows, sum(line_count)::int AS n
+         FROM public.ledger_period_dimension_days($1, $2, '6', NULL, $3::uuid[])`,
+      [w.companyId, w.periodId, [entry.id, entry.id]],
+    )
+    // Voucher 3 is the only line on dimension 6: stored once, subtracted once.
+    expect(dims[0].n).toBe(0)
   })
 
   it('latest_posted_vouchers is the max per series of the posted window', async () => {

@@ -5,7 +5,6 @@ vi.mock('../trial-balance', () => ({
 }))
 
 vi.mock('../imbalance-diagnosis', () => ({
-  findUntransferredResults: vi.fn(),
   buildImbalanceDiagnosis: vi.fn(),
 }))
 
@@ -18,7 +17,7 @@ vi.mock('../latest-vouchers', () => ({
 
 import { generateBalansrapport } from '../balansrapport'
 import { generateTrialBalance } from '../trial-balance'
-import { findUntransferredResults, buildImbalanceDiagnosis } from '../imbalance-diagnosis'
+import { buildImbalanceDiagnosis } from '../imbalance-diagnosis'
 import { getLatestPostedVouchers } from '../latest-vouchers'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { roundOre } from '@/lib/money'
@@ -31,7 +30,6 @@ import type {
 } from '@/types'
 
 const mockTrialBalance = vi.mocked(generateTrialBalance)
-const mockFindUntransferred = vi.mocked(findUntransferredResults)
 const mockBuildDiagnosis = vi.mocked(buildImbalanceDiagnosis)
 const mockLatestVouchers = vi.mocked(getLatestPostedVouchers)
 
@@ -312,26 +310,13 @@ describe('generateBalansrapport', () => {
       isBalanced: false,
     })
 
-    const culprit = {
-      fiscal_period_id: 'p2',
-      period_name: 'Räkenskapsår 2024/2025',
-      pl_net: 97,
-    }
-    const diagnosis = {
-      differens: 97,
-      untransferred_results: [culprit],
-      message: 'Differensen beror på att resultatet för Räkenskapsår 2024/2025 …',
-    }
-    mockFindUntransferred.mockResolvedValue([culprit])
+    const diagnosis = { differens: 97, message: 'Balansrapporten balanserar inte (differens 97,00 kr).' }
     mockBuildDiagnosis.mockReturnValue(diagnosis)
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-3')
 
-    expect(mockFindUntransferred).toHaveBeenCalledWith(q.supabase, 'company-1', {
-      beforePeriodStart: '2025-03-01',
-    })
-    expect(mockBuildDiagnosis).toHaveBeenCalledWith([culprit], 97)
+    expect(mockBuildDiagnosis).toHaveBeenCalledWith(97)
     expect(report.imbalance_diagnosis).toEqual(diagnosis)
   })
 
@@ -350,7 +335,7 @@ describe('generateBalansrapport', () => {
     const report = await generateBalansrapport(q.supabase as any, 'company-1', 'period-1')
 
     expect(report.imbalance_diagnosis).toBeUndefined()
-    expect(mockFindUntransferred).not.toHaveBeenCalled()
+    expect(mockBuildDiagnosis).not.toHaveBeenCalled()
   })
 
   it('ignores P&L accounts (class 3-8)', async () => {

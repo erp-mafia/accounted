@@ -2624,11 +2624,11 @@ export interface BalanceSheetSection {
 }
 
 /**
- * A non-latest fiscal year whose P&L (class 3-8) does not net to zero —
- * its result was never transferred to equity (omföring av årets resultat
- * saknas). Every later period that derives its opening balance from prior
- * class 1-2 lines inherits exactly this residual as a balance-sheet
- * differens.
+ * A non-latest fiscal year whose P&L (class 3-8) does not net to zero: its
+ * result was never booked into equity (omföring av årets resultat saknas).
+ * The next derived opening balance carries it on the form's closing account
+ * (prior_opening_balance_lines), so it no longer shows as a balance-sheet
+ * differens; the SIE import names these years.
  */
 export interface UntransferredResult {
   fiscal_period_id: string
@@ -2639,12 +2639,10 @@ export interface UntransferredResult {
 
 /**
  * Server-built explanation for an unbalanced balance report. The message is
- * Swedish (user-facing domain messages are Swedish) and names the exact
- * fiscal years whose results were never moved to equity.
+ * Swedish (user-facing domain messages are Swedish).
  */
 export interface BalanceImbalanceDiagnosis {
   differens: number
-  untransferred_results: UntransferredResult[]
   message: string
 }
 
@@ -2792,10 +2790,11 @@ export interface SIEExportOptions {
   org_number: string | null
   program_name?: string
   /**
-   * When true, omit year-end closing verifikat (source_type = 'year_end')
-   * from #VER and from #RES/#UB calculations. Use when handing the file
-   * to systems (e.g. eDeklarera) that do their own closing: including
-   * our closing entry would zero out the P&L accounts.
+   * When true, omit year-end closing verifikat (source_type = 'year_end',
+   * and a resultatavslut booked in a previous system or by hand: the
+   * 'exclude-all-year-end' set) from #VER and from #RES/#UB calculations.
+   * Use when handing the file to systems (e.g. eDeklarera) that do their
+   * own closing: including a closing entry would zero out the P&L accounts.
    */
   exclude_year_end_closing?: boolean
 }

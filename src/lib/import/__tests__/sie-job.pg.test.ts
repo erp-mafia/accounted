@@ -230,7 +230,9 @@ describe('SIE database execution protocol', () => {
     await post('2027-01-01','opening_balance',[[accounts[0],'1930',500,0],[equity,'2091',0,500]])
     await client.query('SET LOCAL ROLE service_role')
     const rows=(await client.query("SELECT account_number,debit::float8 AS debit,credit::float8 AS credit FROM compute_prior_opening_balances($1,'2028-01-01') ORDER BY account_number",[company])).rows
-    expect(rows).toEqual([{account_number:'1930',debit:510,credit:0},{account_number:'2091',debit:0,credit:500}])
+    // 2027 earned 10 and was never closed: the derived IB carries it on 2099
+    // (20261024140000), so the opening balance balances.
+    expect(rows).toEqual([{account_number:'1930',debit:510,credit:0},{account_number:'2091',debit:0,credit:500},{account_number:'2099',debit:0,credit:10}])
   })
   it('keeps reset preview and execution fail-closed for retained import history, including after storno',async()=>{
     await finishOne()

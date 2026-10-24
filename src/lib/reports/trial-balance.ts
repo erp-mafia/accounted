@@ -63,8 +63,11 @@ export type ClosingEntryMode =
    */
   | 'exclude-final'
   /**
-   * Drop every source_type 'year_end' entry and its storno/correction chain.
-   * The operational-report convention: pre-bokslut activity only.
+   * Drop every source_type 'year_end' entry and its storno/correction chain,
+   * and a resultatavslut booked in a previous system or by hand that zeroes
+   * the result accounts it books (year_end_chain_entry_ids, migration
+   * 20261024140100). The operational-report convention: pre-bokslut
+   * activity only.
    */
   | 'exclude-all-year-end'
 
@@ -142,10 +145,10 @@ async function fetchActivityViaRpc(scope: ActivityScope): Promise<PeriodActivity
 }
 
 /**
- * The company's reversed year_end entries: the roots whose storno and
- * correction chain 'exclude-all-year-end' drops with them. Company-wide on
- * purpose, like the RPC's ye_reversed: a storno in this period can reverse a
- * year-end entry of another period.
+ * The company's reversed year_end entries: the roots of the storno and
+ * correction chain that 'exclude-all-year-end' drops with them (the set
+ * itself is fetchYearEndEntryIds). Company-wide on purpose: a storno in this
+ * period can reverse a year-end entry of another period.
  */
 export async function fetchReversedYearEndEntryIds(
   supabase: SupabaseClient,
@@ -165,26 +168,39 @@ export async function fetchReversedYearEndEntryIds(
 }
 
 /**
- * 'exclude-all-year-end' as filters on a journal_entries query: every
- * source_type 'year_end' entry, and every entry that reverses or corrects
- * one of `reversedYearEndIds` (fetchReversedYearEndEntryIds). It is the JS
- * twin of the RPC's 'exclude-all-year-end' branch (get_trial_balance_
- * aggregates, migration 20260924202408). The dimension P&L's tagged-line
- * pass (dimension-pnl.ts) and the SIE export's exclude_year_end_closing
- * (sie-export.ts) apply it from here, so the rule has exactly two
- * definitions, this one and the RPC's, and they change together.
+ * The entries of one fiscal period that 'exclude-all-year-end' leaves out,
+ * from the year_end_chain_entry_ids SQL function: every source_type
+ * 'year_end' entry, the storno and correction of a reversed one, and a
+ * resultatavslut booked in a previous system or by hand that zeroes the
+ * result accounts it books. get_trial_balance_aggregates,
+ * get_kpi_report_aggregates and get_dimension_pnl_buckets read the same
+ * function, so the rule has one definition; JS paths that read journal lines
+ * themselves (monthly breakdown with a dimension filter, the cash-flow tax
+ * check, the SIE export's exclude_year_end_closing, the measure drill-down)
+ * leave these ids out instead of restating it.
+ */
+export async function fetchYearEndEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<string[]> {
+  const { data, error } = await supabase.rpc('year_end_chain_entry_ids', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+  })
+  if (error) throw dbError(error, 'year_end_chain_entry_ids failed')
+  return Array.isArray(data) ? data.map(String) : []
+}
+
+/**
+ * 'exclude-all-year-end' as a filter on a journal_entries query: leave out
+ * `yearEndEntryIds`, the period's set from fetchYearEndEntryIds.
  */
 export function excludeYearEndChain(
   query: EntryLinesQuery,
-  reversedYearEndIds: readonly string[],
+  yearEndEntryIds: readonly string[],
 ): EntryLinesQuery {
-  let q = query.neq('source_type', 'year_end')
-  if (reversedYearEndIds.length > 0) {
-    const idList = `(${reversedYearEndIds.join(',')})`
-    q = q.or(`reverses_id.is.null,reverses_id.not.in.${idList}`)
-    q = q.or(`correction_of_id.is.null,correction_of_id.not.in.${idList}`)
-  }
-  return q
+  return yearEndEntryIds.length > 0 ? query.not('id', 'in', `(${yearEndEntryIds.join(',')})`) : query
 }
 
 /** The chart columns a trial balance labels its rows with. */

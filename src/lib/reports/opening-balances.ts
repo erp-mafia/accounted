@@ -98,8 +98,11 @@ export async function getOpeningBalances(
     // one row per account. P&L accounts (class 3-8) reset to zero at each
     // year transition: their balances are absorbed into årets resultat
     // (2099) and rolled into equity, so carrying them forward as IB would
-    // violate BFNAR 2013:2. Filtering them in SQL keeps the payload small
-    // and the round-trip count at one regardless of history size.
+    // violate BFNAR 2013:2. A year that ended without a booked resultatavslut
+    // is read as closed: the RPC carries its result on the form's closing
+    // account (2099, enskild firma 2010, ideell förening 2069). Filtering in
+    // SQL keeps the payload small and the round-trip count at one regardless
+    // of history size.
     const { data: priorRows, error } = await supabase.rpc('compute_prior_opening_balances', {
       p_company_id: companyId,
       p_period_start: period.period_start,

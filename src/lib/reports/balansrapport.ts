@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
-import { findUntransferredResults, buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import { buildImbalanceDiagnosis } from './imbalance-diagnosis'
 import { computedResult } from './balance-sheet'
 import { getLatestPostedVouchers } from './latest-vouchers'
 import { roundOre, sumOre } from '@/lib/money'
@@ -148,29 +148,19 @@ export async function generateBalansrapport(
   // Beräknat resultat: the running-year result, read from the result accounts
   // as the Balansräkning reads its Årets resultat (computedResult). With both
   // classes debit-positive, assets + eq_liab equal it only while the
-  // saldobalans balances. When the opening balance does not (usually an
-  // earlier year's result never moved to equity), the gap is the differens,
-  // reported apart: the residual used to be shown as this year's result.
-  // After year-end close posts the result into 2099, both read 0.
+  // saldobalans balances. When the opening balance does not, the gap is the
+  // differens, reported apart: the residual used to be shown as this year's
+  // result. After year-end close posts the result into 2099, both read 0.
   const beraknatResultat = computedResult(trialBalance.rows)
   const differens = roundOre(totalAssetsUb + totalEquityLiabilitiesUb - beraknatResultat)
 
   // An unbalanced trial balance here means the opening balance itself is
-  // broken — double-entry guarantees period activity balances. Explain why
-  // (usually a prior year's untransferred result) instead of leaving a bare
-  // "Balanserar ej". Best-effort: a diagnosis failure never breaks the report.
-  let imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined
-  if (!trialBalance.isBalanced) {
-    const differens = roundOre(trialBalance.totalDebit - trialBalance.totalCredit)
-    try {
-      const untransferred = await findUntransferredResults(supabase, companyId, {
-        beforePeriodStart: period.period_start,
-      })
-      imbalanceDiagnosis = buildImbalanceDiagnosis(untransferred, differens) ?? undefined
-    } catch {
-      // Best-effort diagnosis only.
-    }
-  }
+  // broken: double-entry guarantees period activity balances. An earlier
+  // year's untransferred result no longer causes it (the derived opening
+  // balance carries it), so the diagnosis only names the differens.
+  const imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined = trialBalance.isBalanced
+    ? undefined
+    : buildImbalanceDiagnosis(roundOre(trialBalance.totalDebit - trialBalance.totalCredit)) ?? undefined
 
   // Reconciliation aid for the header: which vouchers are actually in here.
   // The balansrapport accumulates from the fiscal year start, so the window has

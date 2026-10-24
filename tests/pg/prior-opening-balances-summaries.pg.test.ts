@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto'
 import type { PoolClient } from 'pg'
 import { describe, expect, it } from 'vitest'
 import { getPool } from '@/tests/pg/setup'
@@ -90,6 +91,45 @@ async function post(
   return { id, lineIds }
 }
 
+/**
+ * A posted entry dated outside its fiscal year, as prod's history holds. The
+ * date rule (20261024140200) refuses new ones, so this one is seeded with it
+ * off, inside one transaction that no other session sees.
+ */
+async function postMisdated(w: World, params: { date: string; period: string; lines: Line[] }): Promise<void> {
+  voucher += 1
+  const id = randomUUID()
+  const client = await getPool().connect()
+  try {
+    await client.query('BEGIN')
+    await client.query('ALTER TABLE public.journal_entries DISABLE TRIGGER zz_enforce_entry_date_in_fiscal_period')
+    await client.query(
+      `INSERT INTO public.journal_entries
+         (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series, entry_date, description, source_type, status)
+       VALUES ($1, $2, $3, $4, $5, 'A', $6, 'Test entry', 'manual', 'draft')`,
+      [id, w.userId, w.companyId, w.periods[params.period], voucher, params.date],
+    )
+    for (const [i, line] of params.lines.entries()) {
+      await client.query(
+        `INSERT INTO public.journal_entry_lines
+           (journal_entry_id, account_number, debit_amount, credit_amount, sort_order, dimensions)
+         VALUES ($1, $2, $3, $4, $5, $6::jsonb)`,
+        [id, line.account, line.debit ?? 0, line.credit ?? 0, i, JSON.stringify(line.dims ?? {})],
+      )
+    }
+    await client.query(`UPDATE public.journal_entries SET status = 'posted' WHERE id = $1`, [id])
+    // The deferred balance check must fire before the table can be altered again.
+    await client.query('SET CONSTRAINTS ALL IMMEDIATE')
+    await client.query('ALTER TABLE public.journal_entries ENABLE TRIGGER zz_enforce_entry_date_in_fiscal_period')
+    await client.query('COMMIT')
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => {})
+    throw error
+  } finally {
+    client.release()
+  }
+}
+
 async function storno(w: World, original: { id: string }, lines: Line[], date: string): Promise<{ id: string; lineIds: string[] }> {
   const mirrored = lines.map((l) => ({ account: l.account, debit: l.credit, credit: l.debit, dims: l.dims }))
   const reversal = await post(w, { date, lines: mirrored, sourceType: 'storno', reversesId: original.id })
@@ -152,7 +192,7 @@ async function world(): Promise<World> {
   const across = await post(w, { date: '2025-12-20', lines: acrossLines })
   await storno(w, across, acrossLines, '2026-01-05')
   // Booked in FY2026 but dated in 2025; a zero-amount line; a draft and a cancelled entry.
-  await post(w, { date: '2025-12-31', period: '2026', lines: [{ account: '1510', debit: 30 }, { account: '2440', credit: 30 }] })
+  await postMisdated(w, { date: '2025-12-31', period: '2026', lines: [{ account: '1510', debit: 30 }, { account: '2440', credit: 30 }] })
   await post(w, { date: '2025-07-01', lines: [{ account: '1940', debit: 0, credit: 0 }, { account: '1930', debit: 10 }, { account: '2081', credit: 10 }] })
   await post(w, { date: '2025-08-01', status: 'draft', lines: [{ account: '1930', debit: 9 }, { account: '2081', credit: 9 }] })
   await post(w, { date: '2025-08-02', status: 'cancelled', lines: [{ account: '1930', debit: 8 }, { account: '2081', credit: 8 }] })
@@ -213,12 +253,16 @@ describe('compute_prior_opening_balances on the summaries', () => {
     expect(summary).toEqual(lines)
 
     // The fixture means what it says: 1229's IB is dropped (booked before
-    // it), 2099's kept, the later 1930 IB and the reversed 1940 IB ignored.
+    // it), the later 1930 IB and the reversed 1940 IB ignored. FY2023 earned
+    // 500 and was never closed: it is read as closed onto 2099 on 2023-12-31
+    // (20261024140000), which also drops 2099's later IB line, as a booked
+    // closing would. The IB balances.
     expect(summary['2025-01-01 null']).toEqual([
-      '1229 0 50', '1510 500 0', '1930 1300.5 0', '2081 0 1250.5', '2099 999 0',
+      '1229 0 50', '1510 500 0', '1930 1300.5 0', '2081 0 1250.5', '2099 0 500',
     ])
-    // Across the start: the original is reversed, so it is left out.
-    expect(summary['2026-01-01 {"6":"P2"}']).toEqual(['2099 999 0'])
+    // Across the start: the original is reversed, so it is left out; the
+    // project's 2099 IB line went with the closing, and the closing is untagged.
+    expect(summary['2026-01-01 {"6":"P2"}']).toEqual([])
     expect(summary['2026-01-01 {"6":"P1"}']).toEqual(['1930 250.5 0'])
   })
 

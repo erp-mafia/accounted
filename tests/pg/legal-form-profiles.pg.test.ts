@@ -28,6 +28,16 @@ describe('legal form profiles: SQL agrees with the registry', () => {
     expect(res.rows[0].list).toEqual([...ENTITY_TYPES])
   })
 
+  it("result_closing_account() is each profile's closing account", async () => {
+    for (const form of ENTITY_TYPES) {
+      const res = await getPool().query<{ account: string | null }>(
+        `SELECT public.result_closing_account($1::text) AS account`,
+        [form],
+      )
+      expect(res.rows[0].account, form).toBe(LEGAL_FORMS[form].equity.closing)
+    }
+  })
+
   for (const form of ENTITY_TYPES) {
     it(`${form}: the seeded chart carries the profile's closing and settlement accounts`, async () => {
       const userId = await insertAuthUser()

@@ -126,13 +126,12 @@ function makeClient(fixture: Fixture) {
       in: vi.fn((key: string, values: unknown[]) => {
         filters.set(key, values); predicates.push(row => values.includes(row[key])); return builder
       }),
-      // excludeYearEndChain's PostgREST filters: `col.is.null,col.not.in.(a,b)`.
-      or: vi.fn((expr: string) => {
-        const match = /^(\w+)\.is\.null,\1\.not\.in\.\((.*)\)$/.exec(expr)
-        if (!match) throw new Error(`Unexpected or(): ${expr}`)
-        const [, key, list] = match
-        const ids = list.split(',')
-        predicates.push(row => row[key] == null || !ids.includes(String(row[key])))
+      // excludeYearEndChain's PostgREST filter: `id=not.in.(a,b)`.
+      not: vi.fn((key: string, operator: string, list: string) => {
+        const match = /^\((.*)\)$/.exec(list)
+        if (operator !== 'in' || !match) throw new Error(`Unexpected not(): ${key} ${operator} ${list}`)
+        const ids = match[1].split(',')
+        predicates.push(row => !ids.includes(String(row[key])))
         return builder
       }),
       order: vi.fn(() => builder),
@@ -148,6 +147,17 @@ function makeClient(fixture: Fixture) {
       expect(args.p_period_start).toBe(period.period_start)
       return { data: aggregate(fixture.opening ?? []), error: null }
     }
+    // The 'exclude-all-year-end' set: on these fixtures (no resultatavslut
+    // shapes) the period's year_end entries and the storno/rättelse of a
+    // reversed one, as year_end_chain_entry_ids returns them.
+    const reversedYearEnd = new Set(entries.filter(e => e.source_type === 'year_end' && e.status === 'reversed').map(e => e.id))
+    const yearEndIds = entries.filter(e => e.fiscal_period_id === 'period-1' && ['posted', 'reversed'].includes(e.status)
+      && (e.source_type === 'year_end' || reversedYearEnd.has(e.reverses_id ?? '') || reversedYearEnd.has(e.correction_of_id ?? '')))
+      .map(e => e.id)
+    if (name === 'year_end_chain_entry_ids') {
+      expect(args).toEqual({ p_company_id: 'company-1', p_fiscal_period_id: 'period-1' })
+      return { data: yearEndIds, error: null }
+    }
     if (name !== 'get_trial_balance_aggregates') throw new Error(`Unexpected RPC: ${name}`)
     expect(args).toEqual({
       p_company_id: 'company-1', p_fiscal_period_id: 'period-1',
@@ -155,12 +165,10 @@ function makeClient(fixture: Fixture) {
       p_exclude_entry_id: period.opening_balance_entry_id, p_dimensions: null,
     })
     // This simulates the inspected SQL predicate; it is not a SQL execution.
-    const excluded = new Set(entries.filter(e => e.source_type === 'year_end' && e.status === 'reversed').map(e => e.id))
     const included = fixture.entries.filter((_, i) => {
       const e = entries[i]
       return e.fiscal_period_id === 'period-1' && ['posted', 'reversed'].includes(e.status)
-        && e.id !== period.opening_balance_entry_id && e.source_type !== 'year_end'
-        && !excluded.has(e.reverses_id ?? '') && !excluded.has(e.correction_of_id ?? '')
+        && e.id !== period.opening_balance_entry_id && !yearEndIds.includes(e.id)
     })
     return { data: aggregate(included.flatMap(e => e.lines)).map(row => ({ bucket: 'period', ...row })), error: null }
   })

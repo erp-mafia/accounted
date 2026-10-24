@@ -21,7 +21,10 @@
  *     closed_externally;
  *   - 'exclude-all-year-end' drops every year_end entry plus stornos and
  *     corrections of REVERSED year-end entries, company-wide, and keeps
- *     stornos of ordinary reversed entries;
+ *     stornos of ordinary reversed entries; since 20261024140100 it also
+ *     drops a resultatavslut booked outside the year-end run that zeroes
+ *     the result accounts it books (year_end_chain_entry_ids), on both the
+ *     summary and the line-level path;
  *   - a from/to range buckets [period_start, from) as 'rollforward' and
  *     [from, to] as 'period', and drops entries after to;
  *   - p_dimensions is jsonb containment on the line;
@@ -685,6 +688,42 @@ async function resultClosingIds(companyId: string, fiscalPeriodId: string): Prom
   return rows[0].ids
 }
 
+async function yearEndIds(companyId: string, fiscalPeriodId: string): Promise<string[]> {
+  const { rows } = await getPool().query<{ ids: string[] }>(
+    `SELECT public.year_end_chain_entry_ids($1, $2) AS ids`,
+    [companyId, fiscalPeriodId],
+  )
+  return rows[0].ids
+}
+
+/**
+ * The RPC on the summary path (a company starts built) or, with `raw`, on the
+ * line-level path: the built marker is removed inside a rolled-back
+ * transaction, as ledger-account-days.pg.test.ts does.
+ */
+async function callRpcOnPath(
+  raw: boolean,
+  companyId: string,
+  fiscalPeriodId: string,
+  mode: ClosingMode,
+  opts: CallOptions = {},
+): Promise<AggRow[]> {
+  if (!raw) return callRpc(companyId, fiscalPeriodId, mode, opts)
+  const client = await getPool().connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(`DELETE FROM public.ledger_account_days_companies WHERE company_id = $1`, [companyId])
+    const { rows } = await client.query<{ payload: AggRow[] }>(
+      CALL_SQL,
+      callParams(companyId, fiscalPeriodId, mode, opts),
+    )
+    return rows[0].payload
+  } finally {
+    await client.query('ROLLBACK').catch(() => {})
+    client.release()
+  }
+}
+
 /** A migrated year: activity, then the previous system's resultatavslut. */
 async function seedMigratedYear() {
   const ctx = await seedCompany()
@@ -866,15 +905,21 @@ describe('result_closing_entry_ids and exclude-final on a migrated year', () => 
     expect(await resultClosingIds(ctx.companyId, ctx.fiscalPeriodId)).toEqual([ctx.closingEntryId])
   })
 
-  it("leaves 'include' and 'exclude-all-year-end' unchanged on a migrated year", async () => {
+  it("'exclude-all-year-end' leaves the imported resultatavslut out too, on both paths; 'include' keeps it", async () => {
     const ctx = await seedMigratedYear()
-    const operational = bucket(
-      await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'exclude-all-year-end'),
-      'period',
-    )
-    // The operational convention filters by source_type only (DECISIONS
-    // 2026-09-09): the imported omföring stays there.
-    expect(operational.get('3001')).toEqual({ debit: 10000, credit: 10000 })
+    for (const raw of [false, true]) {
+      const operational = bucket(
+        await callRpcOnPath(raw, ctx.companyId, ctx.fiscalPeriodId, 'exclude-all-year-end'),
+        'period',
+      )
+      // The year before its resultatavslut (20261024140100), as for our own.
+      expect(operational.get('3001')).toEqual({ debit: 0, credit: 10000 })
+      expect(operational.get('5010')).toEqual({ debit: 4000, credit: 0 })
+      expect(operational.has('2099')).toBe(false)
+      const full = bucket(await callRpcOnPath(raw, ctx.companyId, ctx.fiscalPeriodId, 'include'), 'period')
+      expect(full.get('3001')).toEqual({ debit: 10000, credit: 10000 })
+    }
+    expect(await yearEndIds(ctx.companyId, ctx.fiscalPeriodId)).toEqual([ctx.importedClosingId])
   })
 
   it("a member's own last-day voucher against 2099 cannot hide a cost: the result still equals booked 2099", async () => {
@@ -955,5 +1000,152 @@ describe('result_closing_entry_ids and exclude-final on a migrated year', () => 
       return rows[0].ids
     })
     expect(asMember).toEqual([ctx.importedClosingId])
+  })
+})
+
+// ── 'exclude-all-year-end' and a resultatavslut booked outside the run ───
+// year_end_chain_entry_ids (20261024140100): besides the year_end chain, an
+// entry of result_closing_entry_ids that books a result account outside
+// 8990-8999 and leaves every such account it books at zero for the year.
+
+/** Revenue 1 000 and a cost of 200 during the year. */
+async function seedActivity() {
+  const ctx = await seedCompany()
+  await insertJournalEntry({
+    ...ctx, voucherNumber: 1, entryDate: '2026-03-01',
+    lines: [
+      { account: '1930', debit: 800, credit: 0 },
+      { account: '3001', debit: 0, credit: 1000 },
+      { account: '6212', debit: 200, credit: 0 },
+    ],
+  })
+  return ctx
+}
+
+describe("year_end_chain_entry_ids: a resultatavslut booked outside the year-end run", () => {
+  it('drops a resultatavslut split over two vouchers, on both paths', async () => {
+    const ctx = await seedActivity()
+    const revenue = await insertJournalEntry({
+      ...ctx, voucherNumber: 2, sourceType: 'import', entryDate: '2026-12-31',
+      lines: [
+        { account: '3001', debit: 1000, credit: 0 },
+        { account: '2099', debit: 0, credit: 1000 },
+      ],
+    })
+    const expense = await insertJournalEntry({
+      ...ctx, voucherNumber: 3, sourceType: 'manual', entryDate: '2026-12-31',
+      lines: [
+        { account: '6212', debit: 0, credit: 200 },
+        { account: '2099', debit: 200, credit: 0 },
+      ],
+    })
+
+    expect((await yearEndIds(ctx.companyId, ctx.fiscalPeriodId)).sort()).toEqual([revenue, expense].sort())
+    for (const raw of [false, true]) {
+      const tb = bucket(await callRpcOnPath(raw, ctx.companyId, ctx.fiscalPeriodId, 'exclude-all-year-end'), 'period')
+      expect(tb.get('3001')).toEqual({ debit: 0, credit: 1000 })
+      expect(tb.get('6212')).toEqual({ debit: 200, credit: 0 })
+      expect(tb.has('2099')).toBe(false)
+    }
+  })
+
+  it('keeps an öre rounding against 2099 and a pure 8999 omföring (the Resultatrapport lists 8999)', async () => {
+    const ctx = await seedActivity()
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 2, sourceType: 'import', entryDate: '2026-12-31',
+      lines: [
+        { account: '3740', debit: 0, credit: 0.37 },
+        { account: '2099', debit: 0.37, credit: 0 },
+      ],
+    })
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 3, sourceType: 'import', entryDate: '2026-12-31',
+      lines: [
+        { account: '8999', debit: 800.37, credit: 0 },
+        { account: '2099', debit: 0, credit: 800.37 },
+      ],
+    })
+
+    expect(await yearEndIds(ctx.companyId, ctx.fiscalPeriodId)).toEqual([])
+    for (const raw of [false, true]) {
+      const tb = bucket(await callRpcOnPath(raw, ctx.companyId, ctx.fiscalPeriodId, 'exclude-all-year-end'), 'period')
+      expect(tb.get('3740')).toEqual({ debit: 0, credit: 0.37 })
+      expect(tb.get('8999')).toEqual({ debit: 800.37, credit: 0 })
+      expect(tb.get('2099')).toEqual({ debit: 0.37, credit: 800.37 })
+    }
+  })
+
+  it('keeps a voucher that books the result a second time, and one that moves part of an account', async () => {
+    const ctx = await seedActivity()
+    // Same sign as the year's revenue: 3001 ends at 2 000, not 0.
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 2, sourceType: 'import', entryDate: '2026-12-31',
+      lines: [
+        { account: '3001', debit: 0, credit: 1000 },
+        { account: '2099', debit: 1000, credit: 0 },
+      ],
+    })
+    // Moves 50 of the 200 cost into equity: 6212 ends at 150.
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 3, sourceType: 'manual', entryDate: '2026-12-31',
+      lines: [
+        { account: '6212', debit: 0, credit: 50 },
+        { account: '2099', debit: 50, credit: 0 },
+      ],
+    })
+
+    expect(await yearEndIds(ctx.companyId, ctx.fiscalPeriodId)).toEqual([])
+    const tb = bucket(await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'exclude-all-year-end'), 'period')
+    expect(tb.get('3001')).toEqual({ debit: 0, credit: 2000 })
+    expect(tb.get('6212')).toEqual({ debit: 200, credit: 50 })
+  })
+
+  it('keeps a resultatavslut that is reversed, together with its storno', async () => {
+    const ctx = await seedMigratedYear()
+    await getPool().query(`UPDATE public.journal_entries SET status = 'reversed' WHERE id = $1`, [
+      ctx.importedClosingId,
+    ])
+    await insertJournalEntry({
+      ...ctx, voucherNumber: 4, sourceType: 'storno', entryDate: '2026-12-31',
+      reversesId: ctx.importedClosingId,
+      lines: [
+        { account: '3001', debit: 0, credit: 10000 },
+        { account: '5010', debit: 4000, credit: 0 },
+        { account: '2099', debit: 6000, credit: 0 },
+      ],
+    })
+
+    expect(await yearEndIds(ctx.companyId, ctx.fiscalPeriodId)).toEqual([])
+    const tb = bucket(await callRpc(ctx.companyId, ctx.fiscalPeriodId, 'exclude-all-year-end'), 'period')
+    expect(tb.get('3001')).toEqual({ debit: 10000, credit: 20000 })
+  })
+
+  it('returns exactly the year_end chain for our own year-end run', async () => {
+    const ctx = await seedFullScenario()
+    const { rows } = await getPool().query<{ id: string }>(
+      `SELECT e.id FROM public.journal_entries e
+        WHERE e.fiscal_period_id = $1
+          AND (e.source_type = 'year_end'
+               OR e.reverses_id IN (SELECT id FROM public.journal_entries WHERE source_type = 'year_end' AND status = 'reversed')
+               OR e.correction_of_id IN (SELECT id FROM public.journal_entries WHERE source_type = 'year_end' AND status = 'reversed'))
+        ORDER BY e.id`,
+      [ctx.fiscalPeriodId],
+    )
+    expect(rows.length).toBe(5)
+    expect(await yearEndIds(ctx.companyId, ctx.fiscalPeriodId)).toEqual(rows.map((r) => r.id))
+  })
+
+  it('is SECURITY INVOKER: a non-member gets an empty set, a member the resultatavslut', async () => {
+    const ctx = await seedMigratedYear()
+    const read = (userId: string) =>
+      withUserContext(userId, async (client) => {
+        const { rows } = await client.query<{ ids: string[] }>(
+          `SELECT public.year_end_chain_entry_ids($1, $2) AS ids`,
+          [ctx.companyId, ctx.fiscalPeriodId],
+        )
+        return rows[0].ids
+      })
+    expect(await read(await insertAuthUser())).toEqual([])
+    expect(await read(ctx.userId)).toEqual([ctx.importedClosingId])
   })
 })

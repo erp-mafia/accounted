@@ -1435,7 +1435,7 @@ export function validateSIEFile(parsed: ParsedSIEFile): ValidationResult {
     if (Math.abs(plResidual) > 0.01) {
       warnings.push(
         `Räkenskapsåret är avslutat men filen saknar omföring av årets resultat (${Math.abs(plResidual).toFixed(2)} kr ligger kvar på resultatkonton). ` +
-        `Om senare räkenskapsår importeras kommer balansräkningen att visa en differens på ${Math.abs(plResidual).toFixed(2)} kr tills omföringen bokförs.`
+        'Året efter öppnar ändå med resultatet i eget kapital.'
       )
     }
   }

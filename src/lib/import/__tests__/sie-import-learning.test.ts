@@ -63,7 +63,7 @@ describe('diagnoseUntransferredResults', () => {
     expect(diagnosis.warnings).toHaveLength(1)
     expect(diagnosis.warnings[0]).toMatch(/^Resultatet för Räkenskapsår 2024 \(.+\) har inte förts om till eget kapital/)
     expect(diagnosis.notices).toEqual([
-      { code: 'sie_untransferred_result', severity: 'action', params: { period: 'Räkenskapsår 2024', amount: expect.any(String) } },
+      { code: 'sie_untransferred_result', severity: 'notice', params: { period: 'Räkenskapsår 2024', amount: expect.any(String) } },
     ])
   })
 

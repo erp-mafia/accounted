@@ -7,7 +7,8 @@
  * filters instead: it implements the slice of PostgREST the reports use over
  * plain arrays, plus JS ports of the ledger RPCs the reports call
  * (get_trial_balance_aggregates, result_closing_entry_ids,
- * compute_prior_opening_balances), so one set of books can be read by any
+ * year_end_chain_entry_ids, compute_prior_opening_balances), so one set of
+ * books can be read by any
  * implementation and the outputs compared byte for byte.
  *
  * Every awaited read is counted per table (`rpc:<name>` for RPCs), which is
@@ -123,6 +124,13 @@ export function createLedgerFakeDb(seed: LedgerFakeDbSeed) {
         filters.push((row) => values.includes(row[column]))
         return builder
       },
+      not: (column: string, operator: string, value: string) => {
+        const list = operator === 'in' ? value.match(/^\((.*)\)$/) : null
+        if (!list) throw new Error(`ledger-fake-db: unsupported not() ${column} ${operator} ${value}`)
+        const values = list[1].split(',')
+        filters.push((row) => row[column] != null && !values.includes(String(row[column])))
+        return builder
+      },
       lt: (column: string, value: unknown) => {
         filters.push((row) => row[column] != null && compare(row[column], value) < 0)
         return builder
@@ -225,7 +233,50 @@ export function createLedgerFakeDb(seed: LedgerFakeDbSeed) {
     return [...ids].sort()
   }
 
-  /** Port of get_trial_balance_aggregates (migration 20260924202408). */
+  /**
+   * Port of year_end_chain_entry_ids (migration 20261024140100): the year_end
+   * entries of the period, the storno/correction of a reversed one, and a
+   * resultatavslut by shape (resultClosingEntryIds) that books a result
+   * account outside 8990-8999 and leaves every such account at zero.
+   */
+  function yearEndChainEntryIds(companyId: unknown, periodId: unknown): string[] {
+    const entries = entriesOf(companyId)
+    const yeReversed = new Set(
+      entries.filter((e) => e.source_type === 'year_end' && e.status === 'reversed').map((e) => e.id),
+    )
+    const inPeriod = entries.filter(
+      (e) => e.fiscal_period_id === periodId && (e.status === 'posted' || e.status === 'reversed'),
+    )
+    const ids = new Set(
+      inPeriod
+        .filter(
+          (e) =>
+            e.source_type === 'year_end' ||
+            (e.reverses_id != null && yeReversed.has(e.reverses_id)) ||
+            (e.correction_of_id != null && yeReversed.has(e.correction_of_id)),
+        )
+        .map((e) => String(e.id)),
+    )
+    const isRegularResult = (account: string) => account >= '3' && account < '8990'
+    const byEntry = linesByEntry()
+    const balanceOf = (account: string) => {
+      let net = 0
+      for (const entry of inPeriod) {
+        for (const line of byEntry.get(entry.id) ?? []) {
+          if (String(line.account_number) === account) net += num(line.credit_amount) - num(line.debit_amount)
+        }
+      }
+      return net
+    }
+    for (const id of resultClosingEntryIds(companyId, periodId)) {
+      if (ids.has(id)) continue
+      const accounts = (byEntry.get(id) ?? []).map((line) => String(line.account_number)).filter(isRegularResult)
+      if (accounts.length > 0 && accounts.every((account) => Math.abs(balanceOf(account)) < 0.005)) ids.add(id)
+    }
+    return [...ids].sort()
+  }
+
+  /** Port of get_trial_balance_aggregates (migration 20261024140100). */
   function trialBalanceAggregates(args: Record<string, unknown>) {
     const companyId = args.p_company_id
     const period = periodOf(companyId, args.p_fiscal_period_id)
@@ -246,11 +297,9 @@ export function createLedgerFakeDb(seed: LedgerFakeDbSeed) {
       }
       excluded = new Set(resultClosingEntryIds(companyId, args.p_fiscal_period_id))
     }
-    const yeReversed = new Set(
-      entriesOf(companyId)
-        .filter((e) => e.source_type === 'year_end' && e.status === 'reversed')
-        .map((e) => e.id),
-    )
+    if (mode === 'exclude-all-year-end') {
+      for (const id of yearEndChainEntryIds(companyId, args.p_fiscal_period_id)) excluded.add(id)
+    }
     const rollStart =
       fromDate && period && fromDate > String(period.period_start) ? String(period.period_start) : null
     const buckets = new Map<unknown, string>()
@@ -258,14 +307,6 @@ export function createLedgerFakeDb(seed: LedgerFakeDbSeed) {
       if (entry.fiscal_period_id !== args.p_fiscal_period_id) continue
       if (entry.status !== 'posted' && entry.status !== 'reversed') continue
       if (args.p_exclude_entry_id && entry.id === args.p_exclude_entry_id) continue
-      if (
-        mode === 'exclude-all-year-end' &&
-        (entry.source_type === 'year_end' ||
-          (entry.reverses_id != null && yeReversed.has(entry.reverses_id)) ||
-          (entry.correction_of_id != null && yeReversed.has(entry.correction_of_id)))
-      ) {
-        continue
-      }
       if (excluded.has(String(entry.id))) continue
       const date = String(entry.entry_date)
       let bucket: string | null = null
@@ -333,6 +374,8 @@ export function createLedgerFakeDb(seed: LedgerFakeDbSeed) {
         return trialBalanceAggregates(args)
       case 'result_closing_entry_ids':
         return { data: resultClosingEntryIds(args.p_company_id, args.p_fiscal_period_id), error: null }
+      case 'year_end_chain_entry_ids':
+        return { data: yearEndChainEntryIds(args.p_company_id, args.p_fiscal_period_id), error: null }
       case 'compute_prior_opening_balances':
         return priorOpeningBalances(args)
       default:

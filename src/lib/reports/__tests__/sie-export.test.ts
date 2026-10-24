@@ -1120,11 +1120,11 @@ describe('generateSIEExport: exclude_year_end_closing with an undone bokslut', (
       b.eq = (col: string, val: unknown) => add((r) => !has(r, col) || r[col] === val)
       b.neq = (col: string, val: unknown) => add((r) => !has(r, col) || r[col] !== val)
       b.in = (col: string, vals: unknown[]) => add((r) => !has(r, col) || vals.includes(r[col]))
-      b.or = (expr: string) => {
-        const m = /^(\w+)\.is\.null,\1\.not\.in\.\((.*)\)$/.exec(expr)
-        if (!m) throw new Error(`unsupported or(): ${expr}`)
-        const ids = m[2].split(',')
-        return add((r) => r[m[1]] == null || !ids.includes(String(r[m[1]])))
+      b.not = (col: string, operator: string, list: string) => {
+        const m = /^\((.*)\)$/.exec(list)
+        if (operator !== 'in' || !m) throw new Error(`unsupported not(): ${col} ${operator} ${list}`)
+        const ids = m[1].split(',')
+        return add((r) => !ids.includes(String(r[col])))
       }
       b.single = async () => ({
         data: table === 'fiscal_periods' && !priorYearRead
@@ -1141,9 +1141,19 @@ describe('generateSIEExport: exclude_year_end_closing with an undone bokslut', (
       }
       return b
     }
+    // year_end_chain_entry_ids on these books: the bokslut J1 (reversed) and
+    // its storno J2.
+    const yearEndIds = ['e-ye', 'e-ye-storno']
     return {
       from: vi.fn((table: string) => builder(table)),
-      rpc: vi.fn(async (name: string) => (name === 'acquire_sie_period_read' ? { data: 'read-lease', error: null } : { data: [], error: null })),
+      rpc: vi.fn(async (name: string, args?: Record<string, unknown>) => {
+        if (name === 'acquire_sie_period_read') return { data: 'read-lease', error: null }
+        if (name === 'year_end_chain_entry_ids') {
+          expect(args).toEqual({ p_company_id: 'company-1', p_fiscal_period_id: 'period-2025' })
+          return { data: yearEndIds, error: null }
+        }
+        return { data: [], error: null }
+      }),
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } as any
   }

@@ -7,7 +7,7 @@ import { formatOrgNumber } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { getOpeningBalances } from './opening-balances'
-import { excludeYearEndChain, fetchReversedYearEndEntryIds, generateTrialBalance } from './trial-balance'
+import { excludeYearEndChain, fetchYearEndEntryIds, generateTrialBalance } from './trial-balance'
 import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
 import type { SIEExportOptions, JournalEntry, JournalEntryLine, BASAccount } from '@/types'
 
@@ -101,12 +101,13 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
   // journal-register.ts.
   //
   // exclude_year_end_closing drops the year-end entries the way the trial
-  // balance's 'exclude-all-year-end' does (excludeYearEndChain): every
+  // balance's 'exclude-all-year-end' does (fetchYearEndEntryIds): every
   // source_type 'year_end' entry plus the storno and correction of a reversed
-  // one. Dropping the reversed bokslut alone kept its storno, so an undone
-  // bokslut read as its own negation in #VER, #UB and #RES.
-  const reversedYearEndIds = options.exclude_year_end_closing
-    ? await fetchReversedYearEndEntryIds(supabase, companyId)
+  // one, and a resultatavslut booked in a previous system or by hand.
+  // Dropping the reversed bokslut alone kept its storno, so an undone bokslut
+  // read as its own negation in #VER, #UB and #RES.
+  const yearEndEntryIds = options.exclude_year_end_closing
+    ? await fetchYearEndEntryIds(supabase, companyId, options.fiscal_period_id)
     : []
   const entries = await fetchAllRows<JournalEntry>(({ from, to }) => {
     let q = supabase
@@ -117,7 +118,7 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
       .in('status', ['posted', 'reversed'])
 
     if (options.exclude_year_end_closing) {
-      q = excludeYearEndChain(q, reversedYearEndIds)
+      q = excludeYearEndChain(q, yearEndEntryIds)
     }
 
     // Stable TOTAL order: voucher_series + voucher_number is unique per
@@ -369,7 +370,9 @@ async function generateSIEExportSnapshot(supabase: SupabaseClient,companyId: str
  * - movements: the 'include' trial balance's period activity, which is every
  *   posted or reversed entry of the year except its IB entry, closing
  *   included. #UB -1 = IB + these, which is exactly what the next year opened
- *   from, so #UB -1 equals #IB 0 when the years are continuous.
+ *   from, so #UB -1 equals #IB 0 when the years are continuous. A year left
+ *   unclosed is the exception: #IB 0 carries its result on the closing
+ *   account (2099), as a source system's own export does.
  * - resultMovements: the same without the resultatavslut, as resolved by
  *   result_closing_entry_ids (the linked closing_entry_id plus any closing
  *   booked by hand or in a previous system). That is the statutory

@@ -46,7 +46,8 @@ export interface UntransferredDiagnosis {
 
 /**
  * Untransferred prior-year results, scoped to periods before the imported
- * year: only those can leak into its opening balance, and an unscoped walk
+ * year: only those reach its opening balance (carried on the form's closing
+ * account, prior_opening_balance_lines), and an unscoped walk
  * repeated the same culprit under every year of a multi-year migration
  * (#2462). Checked against the ledger, not the file, so it also catches gaps
  * left by separate per-year imports.
@@ -65,10 +66,10 @@ export async function diagnoseUntransferredResults(
     return {
       results,
       warnings: results.map((culprit) =>
-        `Resultatet för ${culprit.period_name} (${sek(culprit.pl_net)}) har inte förts om till eget kapital: ` +
-        'senare års balansräkning visar en differens tills omföringen bokförs i det året.'),
+        `Resultatet för ${culprit.period_name} (${sek(culprit.pl_net)}) har inte förts om till eget kapital i det året. ` +
+        'Året efter öppnar ändå med resultatet i eget kapital.'),
       notices: results.map((culprit) =>
-        makeNotice('sie_untransferred_result', 'action', { period: culprit.period_name, amount: sek(culprit.pl_net) })),
+        makeNotice('sie_untransferred_result', 'notice', { period: culprit.period_name, amount: sek(culprit.pl_net) })),
     }
   } catch (err) {
     log.warn('untransferred-results check failed; the import is unaffected', {
