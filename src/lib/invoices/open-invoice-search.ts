@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
@@ -73,7 +73,7 @@ async function rowsOf<T>(query: PromiseLike<{ data: unknown; error: { message: s
  * (no proformas, no credit notes), not yet fully settled.
  */
 export async function searchOpenInvoices<T extends PickerRow>(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   term: string,
 ): Promise<T[]> {
@@ -124,7 +124,7 @@ export async function searchOpenInvoices<T extends PickerRow>(
  * (registered ones included: both take a payment before attest).
  */
 export async function searchOpenSupplierInvoices<T extends PickerRow>(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   term: string,
 ): Promise<T[]> {
@@ -184,7 +184,7 @@ export interface OpenInvoicesForMatch<T> {
  * lib/invoices/invoice-matching).
  */
 export async function loadOpenInvoicesForMatch<T extends MatchRow>(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   kind: OpenInvoiceKind,
   term: string,
@@ -213,7 +213,7 @@ const IN_READ_CHUNK = 100
  * never becomes one oversized query string.
  */
 async function idsWithPaymentVoucher(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   kind: OpenInvoiceKind,
   ids: readonly string[],
@@ -350,7 +350,7 @@ function supplierPasteInvoice(row: SupplierPasteRow, state: PasteInvoiceState): 
  * counts as paid.
  */
 export async function loadInvoicesForPaste(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   kind: OpenInvoiceKind,
   references: readonly PastedReference[],

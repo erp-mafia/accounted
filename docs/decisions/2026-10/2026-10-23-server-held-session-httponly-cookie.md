@@ -1,0 +1,1 @@
+[2026-10-23] The session is server-held (CASA 2.3.1/2.3.2): HttpOnly cookie, Secure on https; the browser client has no auth and reads with in-memory tokens from /api/auth/session-token: proxying every PostgREST and Realtime call through Next.js instead would have changed every direct read.

@@ -3,7 +3,13 @@
 import { useTranslations } from 'next-intl'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import {
+  fetchMfaStatus,
+  fetchSessionUser,
+  isInsufficientAal,
+  unenrollFactor,
+  verifiedTotpFactor,
+} from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react'
@@ -38,22 +44,17 @@ export function SecuritySettings() {
   const [hasPassword, setHasPassword] = useState<boolean | null>(null)
   const { toast } = useToast()
   const router = useRouter()
-  const supabase = createClient()
 
   useEffect(() => {
     async function loadStatus() {
-      const [{ data: factors }, { data: userData }] = await Promise.all([
-        supabase.auth.mfa.listFactors(),
-        supabase.auth.getUser(),
-      ])
-      const verifiedFactor = factors?.totp?.find(f => f.status === 'verified')
+      const [mfaStatus, user] = await Promise.all([fetchMfaStatus(), fetchSessionUser()])
+      const verifiedFactor = verifiedTotpFactor(mfaStatus)
       setHasMfa(!!verifiedFactor)
       setMfaFactorId(verifiedFactor?.id ?? null)
-      setHasPassword(userData?.user ? userHasPassword(userData.user) : null)
+      setHasPassword(user ? userHasPassword(user) : null)
       setIsLoadingMfa(false)
     }
     loadStatus()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   const handleChangePassword = async (e: React.FormEvent<HTMLFormElement>) => {
@@ -135,12 +136,12 @@ export function SecuritySettings() {
     setIsUnenrolling(true)
 
     try {
-      const { error } = await supabase.auth.mfa.unenroll({ factorId: mfaFactorId })
+      const { error } = await unenrollFactor(mfaFactorId)
 
       if (error) {
         // mfa.unenroll requires AAL2: for BankID-linked users at AAL1 (the
         // shouldEnforceMfa skip path), this is the only way to step up.
-        if (error.message?.includes('AAL2')) {
+        if (isInsufficientAal(error)) {
           router.push(
             `/mfa/verify?returnTo=${encodeURIComponent('/settings/account')}`,
           )

@@ -1,9 +1,8 @@
 'use client'
 
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
 import { Sparkles, ArrowRight } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -23,20 +22,13 @@ export default function SandboxAgentPreview({
 }: {
   agentName: string | null
 }) {
-  const router = useRouter()
   const name = agentName?.trim() || 'din assistent'
 
   async function handleCreateAccount() {
-    const supabase = createClient()
-    // Sign-out is best-effort: a transient Supabase failure shouldn't
-    // strand the user on a dead button; navigate to /register either way
-    // and let the registration flow re-init auth state.
-    try {
-      await supabase.auth.signOut()
-    } catch {
-      // Intentionally swallowed: see comment above.
-    }
-    router.push('/register')
+    // Sign-out is best-effort: a transient failure shouldn't strand the user
+    // on a dead button; navigate to /register either way and let the
+    // registration flow re-init auth state.
+    await signOutAndNavigate('/register')
   }
 
   return (

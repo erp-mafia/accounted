@@ -11,6 +11,14 @@ import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { resolveLandingDestination } from '@/lib/company/landing-server'
 import { acceptPendingTeamInviteByToken } from '@/lib/company/pending-invites'
+import {
+  expiredCookieOptions,
+  httpOnlyCookieOptions,
+  requestProtocolFromHeaders,
+  shouldUseSecureCookies,
+  supabaseAuthCookieOptions,
+} from '@/lib/supabase/cookie-options'
+import { authForwardingFetch, clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
 
 /**
  * The one `next` destination this callback honours for a fresh session: the
@@ -255,11 +263,19 @@ async function completeCallback(
   // Collect cookies that Supabase sets during auth so we can
   // explicitly forward them on the redirect response.
   const pendingCookies: { name: string; value: string; options: Record<string, unknown> }[] = []
+  const requestProtocol =
+    requestProtocolFromHeaders(request.headers) ?? new URL(request.url).protocol
+  // The code exchange and OTP verify carry the end user's IP when IP address
+  // forwarding is configured (lib/supabase/auth-forwarding.ts).
+  const forwardingFetch = authForwardingFetch(clientIpFromHeaders(request.headers))
 
   const supabase = createServerClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
     {
+      ...(forwardingFetch ? { global: { fetch: forwardingFetch } } : {}),
+      // HttpOnly, Secure over TLS: lib/supabase/cookie-options.ts.
+      cookieOptions: supabaseAuthCookieOptions(requestProtocol),
       cookies: {
         getAll() {
           return request.cookies.getAll()
@@ -384,12 +400,14 @@ async function completeCallback(
       const inviteTokenMatch = next.match(/^\/invite\/([A-Za-z0-9_-]+)$/)
       if (inviteTokenMatch) {
         // Mirrors buildInviteCookie in app/invite/[token]/page.tsx: readable
-        // by the client auth surfaces (not httpOnly), lifetime matching the
-        // 7-day invite TTL that the server re-checks on every acceptance.
+        // by the client auth surfaces (not httpOnly: consumeInviteCookie
+        // reads it and posts it to /api/team/accept), lifetime matching the
+        // 7-day invite TTL that the server re-checks on every acceptance. An
+        // invitation token bound to the invitee's address, not a session.
         response.cookies.set(INVITE_COOKIE_NAME, inviteTokenMatch[1], {
           path: '/',
           httpOnly: false,
-          secure: process.env.NODE_ENV === 'production',
+          secure: shouldUseSecureCookies(requestProtocol),
           sameSite: 'lax',
           maxAge: 7 * 24 * 60 * 60,
         })
@@ -471,14 +489,12 @@ async function completeCallback(
             for (const { name, value, options } of pendingCookies) {
               response.cookies.set({ name, value, ...options })
             }
-            response.cookies.set('gnubok-company-id', invite.company_id, {
-              path: '/',
-              httpOnly: true,
-              secure: process.env.NODE_ENV === 'production',
-              sameSite: 'lax',
-              maxAge: 60 * 60 * 24 * 365,
-            })
-            response.cookies.delete('gnubok-invite-token')
+            response.cookies.set(
+              'gnubok-company-id',
+              invite.company_id,
+              httpOnlyCookieOptions(60 * 60 * 24 * 365, requestProtocol),
+            )
+            response.cookies.set(INVITE_COOKIE_NAME, '', expiredCookieOptions(requestProtocol))
             return response
           }
         } catch (err) {
@@ -579,7 +595,7 @@ async function completeCallback(
     // would only 409). The company-invite success path returns earlier and
     // clears the cookie itself.
     if (inviteConsumed) {
-      response.cookies.delete('gnubok-invite-token')
+      response.cookies.set(INVITE_COOKIE_NAME, '', expiredCookieOptions(requestProtocol))
     }
     return response
   }

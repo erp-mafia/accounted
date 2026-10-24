@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import {
   OPEN_ROT_RUT_PAYOUT_STATUSES,
   type RotRutPayoutRequestCandidate,
@@ -13,7 +13,7 @@ import {
  * is. Non-fatal: any error yields an empty pool and matching is skipped.
  */
 export async function loadOpenRotRutPayoutRequests(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<RotRutPayoutRequestCandidate[]> {
   try {

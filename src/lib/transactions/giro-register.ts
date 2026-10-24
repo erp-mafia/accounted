@@ -8,13 +8,13 @@
  * empty, so the rows simply show what the bank sent: a missing reading is
  * never an error.
  */
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { buildGiroRegister, type GiroRegister, type GiroRegisterSource } from './giro-counterparty'
 
 type GiroFields = { bankgiro: string | null; plusgiro: string | null }
 
-export async function loadGiroRegister(supabase: SupabaseClient, companyId: string): Promise<GiroRegister> {
+export async function loadGiroRegister(supabase: SupabaseDataClient, companyId: string): Promise<GiroRegister> {
   const [settings, cashAccounts, suppliers] = await Promise.all([
     supabase
       .from('company_settings')

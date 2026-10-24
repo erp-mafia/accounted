@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import {
   OPEN_ROT_RUT_PAYOUT_STATUSES,
   type RotRutPayoutRequestCandidate,
@@ -26,7 +26,7 @@ type OpenRequestRow = RotRutPayoutRequestCandidate & {
  * error, for the caller to log: neither surface stops rendering on it.
  */
 export async function loadOpenRotRutPayoutRequests(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<{ requests: OpenRotRutPayoutRequest[]; error: { message: string } | null }> {
   const { data, error } = await supabase

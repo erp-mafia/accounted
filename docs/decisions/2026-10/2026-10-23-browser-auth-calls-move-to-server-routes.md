@@ -1,0 +1,1 @@
+[2026-10-23] Every browser supabase.auth call moved to /api/auth/*; the session-setting routes demand JSON and refuse Sec-Fetch-Site cross-site, with per-network and per-address limits: once the server sets the cookie, a cross-site form post could sign a victim into another account.

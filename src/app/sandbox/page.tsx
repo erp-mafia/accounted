@@ -4,7 +4,11 @@ import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { createClient } from '@/lib/supabase/client'
+import {
+  fetchSessionUser,
+  signInAnonymously,
+  signOut,
+} from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -29,14 +33,13 @@ export default function SandboxPage() {
   const turnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
   const router = useRouter()
-  const supabase = createClient()
   const tAuth = useTranslations('auth')
 
   useEffect(() => {
-    supabase.auth.getUser().then(({ data: { user } }) => {
+    fetchSessionUser().then((user) => {
       setIsLoggedIn(user !== null && !user.is_anonymous)
     })
-  }, [supabase.auth])
+  }, [])
 
   const handleStartSandbox = async () => {
     if (isTurnstileSubmissionBlocked(captchaToken)) {
@@ -51,9 +54,8 @@ export default function SandboxPage() {
     setIsLoading(true)
 
     try {
-      const { error } = await supabase.auth.signInAnonymously({
-        options: captchaTokenOptions(captchaToken),
-      })
+      // The server signs in anonymously and sets the HttpOnly session cookie.
+      const { error } = await signInAnonymously(captchaTokenOptions(captchaToken).captchaToken ?? null)
       if (error) {
         toast({
           title: 'Kunde inte starta sandlådan',
@@ -67,7 +69,7 @@ export default function SandboxPage() {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         // Clean up the orphaned anonymous session so the user can retry cleanly
-        await supabase.auth.signOut()
+        await signOut()
         toast({
           title: 'Kunde inte skapa demodata',
           description: 'Försök igen om en stund.',

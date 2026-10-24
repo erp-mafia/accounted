@@ -14,7 +14,7 @@ import {
   type ProvenanceOptions,
 } from '@/lib/intake/arrival-display'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
-import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { cn, formatDateLong, formatDateTime } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
@@ -83,21 +83,19 @@ function useDocumentArrivals(documentId: string | null, generation = 0): Arrival
 }
 
 /**
- * The signed-in user's id, read from the local session (no network): only
- * to say "Uppladdad av dig" for the user's own uploads.
+ * The signed-in user's id, asked of the server (the browser holds no
+ * session): only to say "Uppladdad av dig" for the user's own uploads.
  */
 function useCurrentUserId(): string | null {
   const [userId, setUserId] = useState<string | null>(null)
   useEffect(() => {
     let cancelled = false
-    createClient()
-      .auth.getSession()
-      .then(
-        ({ data }) => {
-          if (!cancelled) setUserId(data.session?.user?.id ?? null)
-        },
-        () => {},
-      )
+    fetchSessionUser().then(
+      (user) => {
+        if (!cancelled) setUserId(user?.id ?? null)
+      },
+      () => {},
+    )
     return () => {
       cancelled = true
     }

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, useRef } from 'react'
 import { NavLink } from './NavLink'
-import { usePathname, useRouter, useSearchParams } from 'next/navigation'
+import { usePathname, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
@@ -22,9 +22,7 @@ import { getBranding } from '@/lib/branding/service'
 import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
-import { resetAnalyticsIdentity } from '@/lib/analytics/reset'
 import { SupportLink } from '@/components/ui/support-link'
-import { clearSupportDraft } from '@/lib/support/draft'
 import CompanySwitcher from '@/components/dashboard/CompanySwitcher'
 import UserMenu from '@/components/dashboard/UserMenu'
 import SubscriptionTouchpoint from '@/components/billing/SubscriptionTouchpoint'
@@ -37,7 +35,7 @@ import type { EntityType } from '@/types'
 import type { CapabilitySurface } from '@/lib/modules/capabilities'
 import { gateNavTree, passesNavGates, type NavGateContext } from '@/lib/navigation/nav-gates'
 import { SidebarV2 } from './SidebarV2'
-import { scrubAuthCookies } from '@/lib/auth/browser-session-cookies'
+import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { NAV_V2_COMPANY, NAV_V2_TOP, claimedRowActive, type NavGateFlags, type NavV2Item } from './nav-v2'
 import { cockpitNavItems, navItems, type GroupKey, type NavItem, type NavLabelKey } from './nav-phone'
 import { useNavRowClaim } from './nav-row-claim'
@@ -125,7 +123,6 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
 export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
-  const router = useRouter()
   const supabase = useRealtimeSupabase()
   const { company, capabilities, byraTeam } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
@@ -204,15 +201,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
   }
 
   const handleLogout = async () => {
-    resetAnalyticsIdentity()
-    // An unsent support draft belongs to this user; never leave it in the tab.
-    clearSupportDraft()
-    await supabase.auth.signOut()
-    // signOut only expires the Path=/ host-only auth cookie; a duplicate
-    // written under another Path or Domain would survive and keep the
-    // browser signed out of its own reads after the next login (PH 99).
-    scrubAuthCookies(document, window.location)
-    router.push(isSandbox ? '/sandbox' : '/login')
+    // The server revokes the session and deletes the HttpOnly cookie; the
+    // helper then clears what the browser held (token, storage including an
+    // unsent support draft, analytics identity, stray legacy auth cookies)
+    // and leaves with a full page load.
+    await signOutAndNavigate(isSandbox ? '/sandbox' : '/login')
   }
 
   const isActive = (href: string) => {
