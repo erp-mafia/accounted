@@ -51,7 +51,8 @@
       "lib/transactions/ingest.ts -> lib/composition/ingest-matchers",
       "lib/transactions/ingest.ts -> lib/composition/open-invoices",
       "lib/transactions/parts-apply.ts -> lib/composition/open-invoices",
-      "lib/transactions/propose.ts -> lib/composition/assistant-reads"
+      "lib/transactions/propose.ts -> lib/composition/assistant-reads",
+      "lib/transactions/propose.ts -> lib/composition/clearing-proposals"
     ],
     "imports": [
       "lib/composition/assistant-reads.ts -> lib/agent/categorize/bank-reads",
@@ -59,6 +60,7 @@
       "lib/composition/async-event-consumers.ts -> lib/webhooks/handler",
       "lib/composition/bank-line-suggestions.ts -> lib/transactions/direct-booking",
       "lib/composition/bank-line-suggestions.ts -> lib/transactions/propose",
+      "lib/composition/clearing-proposals.ts -> lib/pos-sales/payout-proposals",
       "lib/composition/closing-reconciliation.ts -> lib/reconciliation/attachments-store",
       "lib/composition/closing-reconciliation.ts -> lib/reconciliation/manual-reconciliation",
       "lib/composition/closing-reconciliation.ts -> lib/reconciliation/service",

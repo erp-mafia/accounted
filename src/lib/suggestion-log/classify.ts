@@ -24,7 +24,7 @@ import type { EntityType, LinePatternEntry, VatTreatment } from '@/types'
 
 export type DecisionOutcome = 'accepted' | 'changed' | 'manual' | 'dismissed'
 
-export type SuggestionLogSource = 'assistant' | 'rule' | 'catalog' | 'counterparty_template' | 'recent'
+export type SuggestionLogSource = 'assistant' | 'rule' | 'catalog' | 'counterparty_template' | 'recent' | 'clearing'
 
 export interface LoggedSuggestion {
   source: SuggestionLogSource
@@ -99,6 +99,7 @@ const SOURCE: Record<ProposalSource, SuggestionLogSource | null> = {
   counterparty: 'counterparty_template',
   assistant: 'assistant',
   manual: null,
+  clearing: 'clearing',
 }
 
 function sameBooking(a: ProposalBooking, b: ProposalBooking): boolean {

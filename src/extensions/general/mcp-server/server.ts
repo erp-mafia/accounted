@@ -11748,13 +11748,6 @@ export const tools: McpTool[] = [
         }
       }
 
-      // Honest absence beats fabricated confidence: mark transactions where
-      // NO source produced a suggestion so agents investigate instead of
-      // pattern-matching on unrelated rows (P2-1).
-      const noSignal = transactions
-        .filter((tx) => (suggestions[tx.id]?.length ?? 0) === 0 && !counterpartyResult[tx.id])
-        .map((tx) => tx.id)
-
       // The same proposals the app shows a person, with the arguments this
       // agent books them with: one recommendation, the same evidence, the
       // same booking (lib/transactions/propose.ts, lib/bookkeeping/proposal.ts).
@@ -11799,6 +11792,20 @@ export const tools: McpTool[] = [
             }
           })
       }
+
+      // Honest absence beats fabricated confidence: mark transactions where
+      // NO source produced a suggestion so agents investigate instead of
+      // pattern-matching on unrelated rows (P2-1). A row the till's record
+      // explains (a clearing proposal) has a signal even when no category
+      // source matched it.
+      const noSignal = transactions
+        .filter(
+          (tx) =>
+            (suggestions[tx.id]?.length ?? 0) === 0 &&
+            !counterpartyResult[tx.id] &&
+            !(proposed[tx.id] ?? []).some((p) => p.source === 'clearing'),
+        )
+        .map((tx) => tx.id)
 
       return {
         suggestions,

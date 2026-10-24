@@ -540,7 +540,8 @@ export default function TemplatePicker({
   }, [suggestedTemplates])
   const resolvedSuggestions = useMemo(() => {
     if (!suggestedTemplates) return []
-    return suggestedTemplates.filter(s => !isCounterpartyTemplateId(s.template_id) && s.source !== 'assistant')
+    // A clearing proposal is no template: the row and its review carry it.
+    return suggestedTemplates.filter(s => !isCounterpartyTemplateId(s.template_id) && s.source !== 'assistant' && s.source !== 'clearing')
   }, [suggestedTemplates])
   const hasCounterparty = counterpartySuggestions.length > 0 && !!onSelectCounterparty
   const hasSuggestions = resolvedSuggestions.length > 0

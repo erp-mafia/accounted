@@ -358,6 +358,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_pos_sales_days: 'transactions:read',
   gnubok_get_pos_sales_day: 'transactions:read',
   gnubok_book_pos_sales_day: 'bookkeeping:write',
+  gnubok_get_pos_clearing_balance: 'transactions:read',
   gnubok_list_webshop_orders: 'transactions:read',
   gnubok_get_webshop_order: 'transactions:read',
   gnubok_book_webshop_order: 'bookkeeping:write',

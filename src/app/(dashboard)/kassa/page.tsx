@@ -12,6 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { EmptyState } from '@/components/ui/empty-state'
+import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -20,7 +21,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { usePosHealthText } from '@/components/pos-sales/reason-text'
-import { tenderAmount, type PosConnectionJson, type PosDayJson } from '@/components/pos-sales/types'
+import { tenderAmount, type PosClearingBalanceJson, type PosConnectionJson, type PosDayJson } from '@/components/pos-sales/types'
 
 const PosDayDialog = dynamic(() => import('@/components/pos-sales/PosDayDialog'), { ssr: false })
 
@@ -50,6 +51,7 @@ export default function PosSalesPage() {
   const [page, setPage] = useState(0)
   const [openDayId, setOpenDayId] = useState<string | null>(null)
   const [fetching, setFetching] = useState(false)
+  const [clearing, setClearing] = useState<PosClearingBalanceJson | null>(null)
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -81,6 +83,26 @@ export default function PosSalesPage() {
     void load()
   }, [load])
 
+  // The card and Swish not yet in the bank: company-wide, so it does not
+  // follow the filters. A failed read only hides the line.
+  const loadClearing = useCallback(async () => {
+    try {
+      const res = await fetch('/api/pos-sales/clearing-balance')
+      if (!res.ok) {
+        setClearing(null)
+        return
+      }
+      const json = (await res.json()) as { data: PosClearingBalanceJson }
+      setClearing(json.data)
+    } catch {
+      setClearing(null)
+    }
+  }, [])
+
+  useEffect(() => {
+    void loadClearing()
+  }, [loadClearing])
+
   const activeConnections = useMemo(() => (connections ?? []).filter((c) => c.status === 'active'), [connections])
   const venueNames = useMemo(() => new Map((connections ?? []).map((c) => [c.id, c.venue_name])), [connections])
   const stuck = activeConnections.find((c) => c.health === 'action_required') ?? null
@@ -111,6 +133,7 @@ export default function PosSalesPage() {
         toast({ title: fetched > 0 ? t('fetch_done', { count: fetched }) : t('fetch_nothing') })
       }
       void load()
+      void loadClearing()
     } catch {
       toast({ title: t('fetch_failed'), variant: 'destructive' })
     } finally {
@@ -161,6 +184,7 @@ export default function PosSalesPage() {
             triggerLabel={filters.find((f) => f.id === filter)?.label ?? t('filter_all')}
             ariaLabel={t('col_status')}
           />
+          {clearing ? <ClearingLine balance={clearing} t={t} /> : null}
           {multiVenue ? (
             <div className="ml-auto">
               <ContextPicker
@@ -312,10 +336,36 @@ export default function PosSalesPage() {
           onBooked={() => {
             setOpenDayId(null)
             void load()
+            void loadClearing()
           }}
         />
       ) : null}
     </div>
+  )
+}
+
+/**
+ * The card and Swish money not yet in the bank, as one muted line beside the
+ * filter: the clearing account's balance, and the days not booked yet that
+ * the ledger cannot see, so a month-end check is one look. Hidden when no
+ * kind clears on an account, or nothing could be read.
+ */
+function ClearingLine({ balance, t }: { balance: PosClearingBalanceJson; t: ReturnType<typeof useTranslations<'pos_sales'>> }) {
+  if (balance.accounts.length === 0) return null
+  const accounts = balance.accounts.join(', ')
+  const parts: string[] = []
+  if (balance.ledger_balance !== null) {
+    parts.push(t('clearing_ledger', { amount: formatCurrency(balance.ledger_balance), accounts }))
+  }
+  if (balance.unbooked_days > 0) {
+    const values = { count: balance.unbooked_days, amount: formatCurrency(balance.unbooked_amount) }
+    parts.push(parts.length > 0 ? t('clearing_unbooked_plus', values) : t('clearing_unbooked', values))
+  }
+  if (parts.length === 0) return null
+  return (
+    <InfoTooltip content={t('clearing_help', { accounts })} className="ml-2" align="start">
+      <span className="text-[12.5px] text-muted-foreground tabular-nums">{parts.join(', ')}</span>
+    </InfoTooltip>
   )
 }
 

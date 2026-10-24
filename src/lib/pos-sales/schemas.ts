@@ -33,3 +33,7 @@ export const PosFetchBodySchema = z.object({
   connection_id: z.string().uuid().optional(),
   business_dates: z.array(isoDate).min(1).max(6).optional(),
 })
+
+export const PosClearingBalanceQuerySchema = z.object({
+  as_of: isoDate.optional(),
+})
