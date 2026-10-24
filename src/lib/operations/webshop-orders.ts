@@ -1,13 +1,13 @@
 /**
  * Webshop orders (Shopify, WooCommerce, Zettle): the synced order and refund
- * rows, one order with the booking the dialog would prefill, and booking one
- * order with the caller's own lines. Rules live in lib/webshop-orders/; the
- * dashboard's booking route calls the same bookWebshopOrder(), so a booking
- * from an agent gets the order link and the orderunderlag exactly like one
- * from the Orders page.
+ * rows, one order with the booking the dialog would prefill, booking one
+ * order with the caller's own lines, and the OSS underlag the booked orders
+ * add up to. Rules live in lib/webshop-orders/; the dashboard's booking route
+ * calls the same bookWebshopOrder(), so a booking from an agent gets the
+ * order link and the orderunderlag exactly like one from the Orders page.
  */
 import { z } from 'zod'
-import { BookWebshopOrderSchema } from '@/lib/api/schemas'
+import { BookWebshopOrderSchema, OssUnderlagQuerySchema } from '@/lib/api/schemas'
 import { isoDateSchema } from '@/lib/invariants/zod'
 import { buildOrderBookingLines } from '@/lib/webshop-orders/booking-lines'
 import { webshopOrderBookingStatus } from '@/lib/webshop-orders/booking-status'
@@ -17,6 +17,7 @@ import { defineOperation } from './types'
 // Loaded on first use: the booking pulls in the engine and the PDF renderer,
 // which the registry's importers do not otherwise need.
 const service = () => import('@/lib/webshop-orders/service')
+const ossUnderlag = () => import('@/lib/webshop-orders/oss-underlag')
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
 
@@ -409,4 +410,115 @@ export const webshopOrdersBook = defineOperation({
     },
   },
   run: async (ctx, input, { dryRun }) => (await service()).bookWebshopOrderWithLines(ctx, input, { dryRun }),
+})
+
+// ---------------------------------------------------------------------------
+// OSS underlag
+// ---------------------------------------------------------------------------
+
+const QuarterRef = z.object({ year: z.number(), quarter: z.number(), label: z.string() })
+
+const OssWarning = Warning.extend({ order_numbers: z.array(z.string()) })
+
+export const webshopOrdersOssUnderlag = defineOperation({
+  id: 'webshop-orders.oss-underlag',
+  kind: 'read',
+  scope: 'reports:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'Underlag for the OSS declaration (unionsordningen): a quarter\'s webshop sales to consumers in other EU countries, per country and VAT rate, in euro.',
+    description:
+      'Adds up the webshop orders booked on the OSS accounts (VAT code oss, the OSS output VAT account, or accounts a Shopify country rule names for OSS) in a calendar quarter: per destination country and VAT rate the sales without VAT and the VAT, in euro at the ECB rate for the last day of the quarter (the next publication day when the ECB published none) and in kronor as booked. Refunds of an earlier quarter\'s sales are corrections of that quarter (country, quarter, VAT). unaccounted lists the OSS-account verifikat that book no order (manual vouchers, stornos), and warnings the orders missing from the underlag. Read-only; nothing is filed.',
+    useWhen: 'Before filing the quarterly OSS declaration in Skatteverket\'s e-tjänst, or to check what the OSS accounts hold per country.',
+    doNotUseFor: 'The Swedish momsdeklaration (OSS sales are outside it), EU sales taxed in Sweden below the distance-selling threshold, or invoices (they carry Swedish VAT only).',
+    pitfalls: [
+      'Only booked orders count, in the quarter of the verifikat that books them: book the quarter\'s orders first (warnings unbooked_orders).',
+      'Euro amounts are null until the ECB has published the rate for the last day of the quarter (warnings rate_unavailable); the kronor amounts are final.',
+      'The VAT is declared with two decimals, never rounded. A nil_return quarter still needs a declaration.',
+      'A correction uses the ECB rate of the quarter it corrects, so a full refund takes back exactly what was declared.',
+    ],
+    example: {
+      request: { year: 2026, quarter: 3 },
+      response: {
+        data: {
+          period: { year: 2026, quarter: 3, start: '2026-07-01', end: '2026-09-30', label: 'Q3 2026', deadline: '2026-10-31' },
+          rows: [{ country: 'DE', vat_rate: 19, net_eur: 88.26, vat_eur: 16.77, net_sek: 1000, vat_sek: 190, order_count: 1 }],
+          corrections: [],
+          totals: { net_eur: 88.26, vat_eur: 16.77, corrections_vat_eur: 0, net_sek: 1000, vat_sek: 190, corrections_vat_sek: 0 },
+          rates: [{ currency: 'SEK', for_date: '2026-09-30', rate: 11.331, rate_date: '2026-09-30', unavailable: false }],
+          ledger_vat_sek: 190,
+          unaccounted: [],
+          warnings: [],
+          nil_return: false,
+        },
+        meta: META,
+      },
+    },
+  },
+  input: OssUnderlagQuerySchema,
+  output: z.object({
+    period: QuarterRef.extend({ start: z.string(), end: z.string(), deadline: z.string() }),
+    rows: z.array(
+      z.object({
+        country: z.string(),
+        vat_rate: z.number(),
+        net_eur: z.number().nullable(),
+        vat_eur: z.number().nullable(),
+        net_sek: z.number(),
+        vat_sek: z.number(),
+        order_count: z.number(),
+      }),
+    ),
+    corrections: z.array(
+      z.object({
+        country: z.string(),
+        period: QuarterRef,
+        vat_eur: z.number().nullable(),
+        vat_sek: z.number(),
+        refund_count: z.number(),
+      }),
+    ),
+    totals: z.object({
+      net_eur: z.number().nullable(),
+      vat_eur: z.number().nullable(),
+      corrections_vat_eur: z.number().nullable(),
+      net_sek: z.number(),
+      vat_sek: z.number(),
+      corrections_vat_sek: z.number(),
+    }),
+    rates: z.array(
+      z.object({
+        currency: z.string(),
+        for_date: z.string(),
+        rate: z.number().nullable(),
+        rate_date: z.string().nullable(),
+        unavailable: z.boolean(),
+      }),
+    ),
+    ledger_vat_sek: z.number(),
+    unaccounted: z.array(
+      z.object({
+        journal_entry_id: z.string().uuid(),
+        voucher_series: z.string().nullable(),
+        voucher_number: z.number(),
+        entry_date: z.string(),
+        description: z.string(),
+        net_sek: z.number(),
+        vat_sek: z.number(),
+      }),
+    ),
+    warnings: z.array(OssWarning),
+    nil_return: z.boolean(),
+  }),
+  errorCodes: ['OSS_UNDERLAG_FAILED'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/webshop-orders/oss-underlag' },
+  mcp: {
+    name: 'gnubok_get_oss_underlag',
+    title: 'OSS Underlag (One Stop Shop, Unionsordningen)',
+    description:
+      "Underlag for the quarterly OSS declaration: webshop sales to consumers in other EU countries per country and VAT rate, in euro at the ECB rate, corrections of earlier quarters, and the OSS vouchers it does not cover. Read-only; to type into Skatteverket's e-tjänst.",
+    keywords: ['oss', 'one stop shop', 'unionsordningen', 'oss-deklaration', 'distansförsäljning', 'eu-moms', 'utländsk moms', 'shopify', 'e-handel'],
+  },
+  run: async (ctx, input) => (await ossUnderlag()).getOssUnderlag(ctx, input),
 })

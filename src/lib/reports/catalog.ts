@@ -248,6 +248,17 @@ export const REPORT_CATALOG: ReportDescriptor[] = [
     params: 'calendar',
   },
   {
+    // Built from the webshop orders booked on the OSS accounts
+    // (lib/webshop-orders/oss-underlag.ts); the view owns its quarter picker.
+    slug: 'oss-underlag',
+    labelKey: 'name_oss_underlag',
+    descKey: 'desc_oss_underlag',
+    category: 'tax_vat',
+    params: 'calendar',
+    exports: ['xlsx'],
+    searchTerms: 'oss one stop shop unionsordningen distansförsäljning eu-moms utländsk moms',
+  },
+  {
     slug: 'ne-declaration',
     labelKey: 'name_ne_declaration',
     descKey: 'desc_ne_declaration',

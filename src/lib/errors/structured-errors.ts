@@ -8929,6 +8929,12 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en: 'The orders could not be read. Try again.',
     retryable: true,
   },
+  OSS_UNDERLAG_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Underlaget till OSS-deklarationen kunde inte tas fram. Försök igen.',
+    message_en: 'The OSS declaration underlag could not be built. Try again.',
+    retryable: true,
+  },
   WEBSHOP_ORDER_BOOKING_FAILED: {
     httpStatus: 500,
     message_sv: 'Ordern kunde inte bokföras. Inget verifikat skapades.',

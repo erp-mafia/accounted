@@ -47,6 +47,10 @@ const PeriodiskSammanstallningView = dynamic(() =>
   import('./PeriodiskSammanstallningView').then((module) => ({ default: module.PeriodiskSammanstallningView })),
   { loading: ReportBodyLoading },
 )
+const OssUnderlagView = dynamic(() =>
+  import('./OssUnderlagView').then((module) => ({ default: module.OssUnderlagView })),
+  { loading: ReportBodyLoading },
+)
 const INK2DeclarationView = dynamic(() =>
   import('./INK2DeclarationView').then((module) => ({ default: module.INK2DeclarationView })),
   { loading: ReportBodyLoading },
@@ -317,6 +321,8 @@ function FocusedView({
       return <VatDeclarationView pageTitle={reportName} />
     case 'periodisk-sammanstallning':
       return <PeriodiskSammanstallningView />
+    case 'oss-underlag':
+      return <OssUnderlagView />
     case 'ne-declaration':
       return isEnskildFirma ? <NEDeclarationView periodId={periodId} /> : null
     case 'ink2-declaration':

@@ -362,6 +362,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_webshop_orders: 'transactions:read',
   gnubok_get_webshop_order: 'transactions:read',
   gnubok_book_webshop_order: 'bookkeeping:write',
+  gnubok_get_oss_underlag: 'reports:read',
   // Collections (served while COLLECTIONS_ENABLED is set).
   gnubok_list_collection_candidates: 'invoices:read',
   gnubok_get_collection_case: 'invoices:read',
