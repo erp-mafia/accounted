@@ -92,6 +92,11 @@ const READ_RPCS = new Set([
   'get_vat_declaration_totals',
   'result_closing_entry_ids',
   'year_end_chain_entry_ids',
+  // The huvudbok and the Balansrapport header read through these since !822.
+  'get_ledger_line_counts',
+  'get_general_ledger_lines',
+  'get_general_ledger_account_page',
+  'latest_posted_vouchers',
 ])
 
 const WRITE_METHODS = new Set(['insert', 'update', 'upsert', 'delete'])
