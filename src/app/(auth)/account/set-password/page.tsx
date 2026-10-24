@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { createClient } from '@/lib/supabase/client'
+import { fetchSessionUser } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -26,7 +26,6 @@ function SetPasswordContent() {
   const { toast } = useToast()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const supabase = createClient()
 
   const returnTo = safeReturnTo(searchParams.get('returnTo'), '/settings/account')
 
@@ -34,9 +33,7 @@ function SetPasswordContent() {
   useEffect(() => {
     let cancelled = false
     ;(async () => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser()
+      const user = await fetchSessionUser()
       if (cancelled) return
       if (!user) {
         router.replace('/login')

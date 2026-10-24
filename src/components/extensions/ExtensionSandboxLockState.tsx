@@ -1,12 +1,11 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
-import { createClient } from '@/lib/supabase/client'
+import { reloadTo, signOut } from '@/lib/auth/session-client'
 import { resolveIcon } from '@/lib/extensions/icon-resolver'
 
 interface ExtensionSandboxLockStateProps {
@@ -42,14 +41,15 @@ export function ExtensionSandboxLockState({
   ctaLabel,
 }: ExtensionSandboxLockStateProps) {
   const [isLeaving, setIsLeaving] = useState(false)
-  const router = useRouter()
   const t = useTranslations('extensions')
   const { toast } = useToast()
 
   async function handleCreateAccount() {
     setIsLeaving(true)
-    const supabase = createClient()
-    const { error } = await supabase.auth.signOut()
+    // An error here means the server could not be reached, so the anonymous
+    // session cookie is still in place (a refused revocation still deletes
+    // it, and answers without an error).
+    const { error } = await signOut()
     if (error) {
       // Navigating anyway would land on /register with the anonymous session
       // still live, which registers INTO the sandbox: the exact outcome the
@@ -62,7 +62,8 @@ export function ExtensionSandboxLockState({
       setIsLeaving(false)
       return
     }
-    router.push('/register')
+    // Full page load: nothing from the sandbox session stays in memory.
+    reloadTo('/register')
   }
 
   const Icon = iconName ? resolveIcon(iconName) : undefined

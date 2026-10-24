@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { BOOKS_GATE_COOKIE } from '@/lib/onboarding/books-gate'
+import { expiredCookieOptions } from '@/lib/supabase/cookie-options'
 
 /**
  * POST /api/onboarding/books/exit
@@ -67,13 +68,7 @@ export const POST = withRouteContext(
     }
 
     const response = NextResponse.json({ data: { outcome: body.outcome, path: body.path ?? null } })
-    response.cookies.set(BOOKS_GATE_COOKIE, '', {
-      path: '/',
-      httpOnly: true,
-      sameSite: 'lax',
-      secure: process.env.NODE_ENV === 'production',
-      maxAge: 0,
-    })
+    response.cookies.set(BOOKS_GATE_COOKIE, '', expiredCookieOptions())
     return response
   },
   { requireWrite: true },

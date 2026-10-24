@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isBankRangeAccount } from '@/lib/transactions/booking-duplicate-detection'
 
@@ -49,7 +49,7 @@ import { isBankRangeAccount } from '@/lib/transactions/booking-duplicate-detecti
  * the company has no completed migration: callers render no marker.
  */
 export async function fetchMigrationCoverageEnd(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
 ): Promise<string | null> {
   const { data: completedImport } = await supabase
@@ -135,7 +135,7 @@ type OpenRow = PreMigrationRow & { cash_account_id: string | null }
  * a guess.
  */
 export async function fetchOpenPreMigrationRows(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   coverageEnd: string,
 ): Promise<PreMigrationRowGroup[]> {

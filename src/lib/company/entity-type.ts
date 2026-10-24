@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import type { EntityType } from '@/types'
 import { flagEnabled } from '@/lib/env/public-flags'
 import { LEGAL_FORMS, PLANNED_LEGAL_FORMS } from '@/lib/company/forms'
@@ -91,7 +91,7 @@ export function byEntityType<T>(entityType: EntityType, arms: Record<EntityType,
  * is read. Never defaults: a wrong form books to the wrong equity account.
  */
 export async function resolveCompanyEntityType(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   hint?: unknown,
 ): Promise<EntityType> {

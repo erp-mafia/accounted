@@ -6,7 +6,7 @@ import Image from 'next/image'
 import { useSearchParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { createClient } from '@/lib/supabase/client'
+import { verifyOtp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -100,7 +100,6 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
   const emailInputRef = useRef<HTMLInputElement>(null)
   const turnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
-  const supabase = createClient()
   const bankIdEnabled = isBankIdEnabled()
   // Per-request brand merged over getBranding() defaults (WL-12): identical
   // values on default hosts, brand values on branded hosts.
@@ -255,14 +254,15 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         return
       }
 
-      // Exchange token hash for Supabase session
-      const { error } = await supabase.auth.verifyOtp({
+      // Exchange token hash for a session: the server sets the HttpOnly
+      // session cookie (and records the BankID sign-in method).
+      const { error } = await verifyOtp({
         token_hash: json.data.tokenHash,
-        type: json.data.type as 'magiclink',
+        type: 'magiclink',
       })
 
       if (error) {
-        console.error('[register] BankID verifyOtp failed', error.message)
+        console.error('[register] BankID verifyOtp failed', error.code ?? error.status)
         setFormError({
           kind: 'unknown',
           message: getErrorMessage(error, { context: 'auth', locale: errorLocale }),

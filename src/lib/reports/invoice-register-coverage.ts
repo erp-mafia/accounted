@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
@@ -105,7 +105,7 @@ interface CoverageRpcResult {
  * inside it. Null when the read failed: unknown, never "complete".
  */
 async function readCoverage(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   today: string,
   fiscalPeriodId?: string,
@@ -122,7 +122,7 @@ async function readCoverage(
 }
 
 export async function fetchInvoiceRegisterCoverage(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   options: { today?: string } = {},
 ): Promise<InvoiceRegisterCoverage> {
@@ -145,7 +145,7 @@ export async function fetchInvoiceRegisterCoverage(
  * explanation is the safe degrade: the red badge stands unqualified).
  */
 export async function hasPreRegisterArInPeriod(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   fiscalPeriodId: string,
 ): Promise<boolean> {

@@ -1,4 +1,4 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 
 /** Rows one picker request returns, with or without a search term. */
@@ -25,7 +25,7 @@ export interface UnmatchedOutgoingTransaction {
  * default view. `capped` says the answer came back full.
  */
 export async function searchUnmatchedOutgoingTransactions(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   term: string,
 ): Promise<{ rows: UnmatchedOutgoingTransaction[]; capped: boolean }> {

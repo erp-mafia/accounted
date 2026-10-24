@@ -28,7 +28,7 @@
  *
  * Reads only, client-safe (the payout dialog previews with it).
  */
-import type { SupabaseClient } from '@supabase/supabase-js'
+import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import type { CreateJournalEntryLineInput, EntityType, Invoice, InvoiceItem } from '@/types'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
 import { buildDeductionRecognitionLines, splitDeductionShare } from '@/lib/bookkeeping/invoice-lines'
@@ -85,7 +85,7 @@ const CASH_PAYMENT_SOURCE = 'invoice_cash_payment'
  * with `notBefore` none dated before it.
  */
 async function invoicesWithUnbookedShare(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   invoices: ReadonlyArray<{ id: string; journal_entry_id?: string | null }>,
   notBefore: string | null,
@@ -139,7 +139,7 @@ async function invoicesWithUnbookedShare(
 
 /** The first day of the räkenskapsår holding `date`, null when none does. */
 async function periodStartOf(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   date: string,
 ): Promise<{ ok: true; start: string | null } | { ok: false; error: unknown }> {
@@ -182,7 +182,7 @@ function paidPerInvoice(
 }
 
 export async function getPayoutRecognition(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   request: { id: string; requested_total: number | string },
   paidAmount: number,
@@ -310,7 +310,7 @@ export type DeductionShareBookedResult =
  * guessed.
  */
 export async function getDeductionShareBookedByPayout(
-  supabase: SupabaseClient,
+  supabase: SupabaseDataClient,
   companyId: string,
   invoice: { id: string; journal_entry_id?: string | null },
   creditDate: string,

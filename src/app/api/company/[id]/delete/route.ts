@@ -5,6 +5,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { validateBody } from '@/lib/api/validate'
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { expiredCookieOptions } from '@/lib/supabase/cookie-options'
 import { getMailSearchService } from '@/lib/mail-search/service'
 import { getActiveCompanyId } from '@/lib/company/active-company'
 import { getStripe } from '@/lib/stripe/client'
@@ -328,10 +329,7 @@ export async function POST(
 
   const cookieCompanyId = request.headers.get('cookie')?.match(/gnubok-company-id=([^;]+)/)?.[1]
   if (cookieCompanyId === companyId) {
-    response.cookies.set('gnubok-company-id', '', {
-      path: '/',
-      maxAge: 0,
-    })
+    response.cookies.set('gnubok-company-id', '', expiredCookieOptions())
   }
 
   return response

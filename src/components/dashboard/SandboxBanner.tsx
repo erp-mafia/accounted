@@ -1,20 +1,16 @@
 'use client'
 
 import { useState } from 'react'
-import { useRouter } from 'next/navigation'
 import { X } from 'lucide-react'
-import { createClient } from '@/lib/supabase/client'
+import { signOutAndNavigate } from '@/lib/auth/session-client'
 
 export function SandboxBanner() {
   const [dismissed, setDismissed] = useState(false)
-  const router = useRouter()
 
   if (dismissed) return null
 
   async function handleCreateAccount() {
-    const supabase = createClient()
-    await supabase.auth.signOut()
-    router.push('/register')
+    await signOutAndNavigate('/register')
   }
 
   // Primary-on-secondary, not a solid amber bar: the sandbox notice is
