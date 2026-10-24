@@ -116,12 +116,16 @@ function verifyScopeBinding(scopeParam: string, signature: string): boolean {
   return crypto.timingSafeEqual(expectedBuf, presentedBuf)
 }
 
-// The login and step-up redirects are built on the same base as the iss this
-// route returns (resolveDiscoveryBaseUrl), never on request.url's origin.
-// Behind a reverse proxy the standalone Next.js server sees its own bind
-// address in request.url (http://0.0.0.0:3000 by default), so an
-// origin-relative redirect sends the browser to an unreachable host and the
-// connector's OAuth popup dies on the first unauthenticated hit.
+/**
+ * Redirect an unauthenticated visitor to /login, returning here afterwards.
+ *
+ * The login and step-up redirects are built on the same base as the iss this
+ * route returns (resolveDiscoveryBaseUrl), never on request.url's origin.
+ * Behind a reverse proxy the standalone Next.js server sees its own bind
+ * address in request.url (http://0.0.0.0:3000 by default), so an
+ * origin-relative redirect sends the browser to an unreachable host and the
+ * connector's OAuth popup dies on the first unauthenticated hit.
+ */
 function buildLoginRedirect(request: Request): Response {
   const url = new URL(request.url)
   const next = `${url.pathname}${url.search}`

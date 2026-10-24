@@ -1592,8 +1592,10 @@ describe('login and MFA redirects behind a reverse proxy', () => {
     state: 'xyz',
   }
 
-  // What a standalone Next.js server behind Nginx/Traefik sees: its own bind
-  // address in request.url, the public host only in the Host header.
+  /**
+   * What a standalone Next.js server behind Nginx/Traefik sees: its own bind
+   * address in request.url, the public host only in the Host header.
+   */
   function proxiedRequest(init?: RequestInit): Request {
     const url = new URL(buildAuthorizeUrl(authorizeParams))
     url.protocol = 'http:'
