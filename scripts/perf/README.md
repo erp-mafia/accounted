@@ -67,6 +67,7 @@ Interactions to record every time: `/transactions` soft navigation; open Bokför
 | Date | Change | Proxy page p50/p90 | Proxy api p50/p90 | Route auth+company p50 | Notes |
 |---|---|---|---|---|---|
 | 2026-08-26 | Route wrapper only (proxy unmeasured) | n/a | n/a | 44 ms (auth 3, company 41) | 100-call sample; handler p50 38 ms, total p50 96 ms, p90 274 ms |
+| 2026-10-24 | Reports on the ledger summaries (!821, !822), opening balances on them (!845), huvudbok page boundary (!848) | ~52/75 ms (100-line sample) | 35/83 ms (n=62, /api/reports) | 30 ms (auth 3, company 27; document.counts n=94) | Prod EXPLAIN as the largest company's user (154 000 verifikat): compute_prior_opening_balances 7 310 ms before, 32 ms warm / 225 ms cold after; a huvudbok page of 2440 2 613 ms cold before, 23 ms warm after. Vercel function p50 the week before: trial-balance 167, kpi 284, balansrapport 315, resultatrapport 341 ms; Hem (/index) 47 ms, p95 904. Speed Insights p75 LCP: Hem 1.8 s, /reports/[slug] 2.5 s. Posting (commit_journal_entry, edge logs) p50 20 -> 22, p95 35 -> 44 ms. |
 
 ## Report benchmark (`scripts/perf/bench`)
 
