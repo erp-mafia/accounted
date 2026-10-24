@@ -133,7 +133,8 @@ export function validatePayslipLineContent(
  * A vacation row (item_type 'vacation') records the days taken in quantity,
  * which the vacation ledger counts. Its amount is what this payslip pays or
  * deducts for them (a semestertillägg, a semesterlöneavdrag): optional, and
- * 0 when left out, as long as the row carries days. A row with neither days
+ * 0 when left out, as long as the row carries days; the calculation then
+ * prices the days itself (vacation-days-pay.ts). A row with neither days
  * nor an amount says nothing and is refused.
  */
 export function validateVacationRow(line: TextRowShape): LineContentIssue | null {

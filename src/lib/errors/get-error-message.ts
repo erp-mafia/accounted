@@ -712,6 +712,19 @@ export function getErrorMessage(
         return [getErrorEntry(structured.code)?.message_en ?? '', ...named].join(' ').trim()
       }
 
+      // Vacation days the calculation cannot price (issue #85): both
+      // sentences are composed where the run is refused and name each
+      // employee and what to do, so an English UI gets the English one, not
+      // the registry's generic line.
+      if (
+        locale === 'en' &&
+        structured.code === 'SALARY_RUN_VACATION_PAY_UNDETERMINED' &&
+        typeof structured.message_en === 'string' &&
+        structured.message_en.trim()
+      ) {
+        return structured.message_en
+      }
+
       // For English UI, return the registry's English message for any known
       // code instead of falling through to the Swedish branches below (which
       // ignored locale: English users were shown Swedish prose). The Swedish

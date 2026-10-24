@@ -36,8 +36,15 @@ export interface AgentToolError {
  * PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE names why the account cannot pay
  * (details.reason: account_disabled, not_sek, iban_missing, bank_unknown),
  * which the message alone cannot tell apart (crm#1314).
+ * SALARY_RUN_VACATION_PAY_UNDETERMINED names each employee whose vacation
+ * days cannot be priced, with the reason in English (issue #85).
  */
-const CODES_WITH_DETAILS = new Set(['PREVIEW_STALE', 'TRANSACTION_ALREADY_STAGED', 'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE'])
+const CODES_WITH_DETAILS = new Set([
+  'PREVIEW_STALE',
+  'TRANSACTION_ALREADY_STAGED',
+  'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE',
+  'SALARY_RUN_VACATION_PAY_UNDETERMINED',
+])
 
 /**
  * Convert a thrown error into the structured tool-error envelope the agent

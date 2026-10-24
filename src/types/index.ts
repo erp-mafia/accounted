@@ -4905,8 +4905,10 @@ export interface SalaryLineItem {
   /** Engångsskatt percentage (migration 20260919120200); null = taxed by the monthly table. */
   one_off_tax_percent?: number | null
   /** Engine provenance (migration 20260919120000): 'vacation_compensation' on the
-   *  semesterersättning row run-calculation derives; null on manual rows. */
-  calculation_source?: 'vacation_compensation' | null
+   *  semesterersättning row run-calculation derives, 'vacation_pay' on the
+   *  vacation rows it derives from vacation days taken (migration
+   *  20261023142500); null on manual rows. */
+  calculation_source?: 'vacation_compensation' | 'vacation_pay' | null
   /** Which vacation pool a vacation line draws from (migration 20260919130100);
    *  null = paid. Only on item_type 'vacation'. */
   vacation_category?: 'paid' | 'extra_paid' | 'saved' | 'unpaid' | 'advance' | null

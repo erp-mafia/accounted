@@ -9,7 +9,9 @@ import {
   DERIVED_PREMIUM_TYPES,
   isCalculatedLine,
   isCalculatedLineType,
+  isDerivedVacationPayLine,
   VACATION_COMPENSATION_SOURCE,
+  VACATION_PAY_SOURCE,
 } from '../calculated-line-items'
 
 describe('isCalculatedLineType', () => {
@@ -33,6 +35,14 @@ describe('isCalculatedLine', () => {
     expect(isCalculatedLine({ item_type: 'net_deduction_union', source_recurring_line_id: 'r-1' })).toBe(true)
     expect(isCalculatedLine({ item_type: 'semesterersattning', calculation_source: VACATION_COMPENSATION_SOURCE })).toBe(true)
     expect(isCalculatedLine({ item_type: 'oresavrundning' })).toBe(true)
+  })
+
+  it('owns the vacation rows priced from vacation days (#85), never the operator\'s own vacation line', () => {
+    expect(isCalculatedLine({ item_type: 'vacation', calculation_source: VACATION_PAY_SOURCE })).toBe(true)
+    expect(isDerivedVacationPayLine({ item_type: 'vacation', calculation_source: 'vacation_pay' })).toBe(true)
+    // The days themselves are a manual line: the operator edits them.
+    expect(isCalculatedLine({ item_type: 'vacation', calculation_source: null })).toBe(false)
+    expect(isDerivedVacationPayLine({ item_type: 'other', calculation_source: 'vacation_pay' })).toBe(false)
   })
 
   it('is false for a manual line, including a hand-entered semesterersättning', () => {

@@ -37,6 +37,8 @@ export const POST = withRouteContext(
         requestId,
         details: result.details,
         status: result.status,
+        ...(result.messageSv ? { messageSv: result.messageSv } : {}),
+        ...(result.messageEn ? { messageEn: result.messageEn } : {}),
       })
     }
 

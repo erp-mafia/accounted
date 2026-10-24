@@ -971,6 +971,50 @@ describe('salary entries: kostnadsersättning (#2331)', () => {
   })
 })
 
+describe('salary entries: pay derived from vacation days (#85)', () => {
+  it('books the semesterlön on 7285 and takes the semesterlöneavdrag off the salary account; the voucher balances', () => {
+    // Procentregeln, 5 days: 40 000 - 9 523,80 + 11 520 = 41 996,20 kr gross.
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 41996.2,
+        tax_withheld: 12000,
+        net_salary: 29996.2,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 40000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          // The operator's days, 0 kr.
+          { item_type: 'vacation', amount: 0, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'vacation', amount: -9523.8, account_number: null, is_net_deduction: false, is_gross_deduction: true },
+          { item_type: 'vacation', amount: 11520, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    const { salaryLines } = buildSalaryRunEntryLines(run, 'Lön 2026-07', '1930')
+    expect(salaryLines.find((l) => l.account_number === '7285')?.debit_amount).toBe(11520)
+    // 40 000 - 9 523,80: the days the semesterlön replaces leave the salary account.
+    expect(salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(30476.2)
+    const debit = salaryLines.reduce((s, l) => s + l.debit_amount, 0)
+    const credit = salaryLines.reduce((s, l) => s + l.credit_amount, 0)
+    expect(roundOre(debit - credit)).toBe(0)
+  })
+
+  it('books a sammalöneregeln semestertillägg on 7285 next to the full salary on 7210', () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 40860,
+        tax_withheld: 12000,
+        net_salary: 28860,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 40000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'vacation', amount: 860, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    const { salaryLines } = buildSalaryRunEntryLines(run, 'Lön 2026-07', '1930')
+    expect(salaryLines.find((l) => l.account_number === '7285')?.debit_amount).toBe(860)
+    expect(salaryLines.find((l) => l.account_number === '7210')?.debit_amount).toBe(40000)
+  })
+})
+
 describe('salary entries: one line builder for booking and preview (feedback seq 384229)', () => {
   const benefitCar = {
     item_type: 'benefit_car',

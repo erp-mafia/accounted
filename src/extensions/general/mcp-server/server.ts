@@ -123,6 +123,7 @@ import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/struct
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
 import { errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
+import { userFacing } from '@/lib/errors/user-facing'
 import {
   badArgument,
   codedRefusal,
@@ -18522,11 +18523,14 @@ export const tools: McpTool[] = [
       })
       if (!result.ok) {
         // Carry the helper's code so the dispatch reports it by name (a
-        // missing tax table or year's rates) instead of UNKNOWN_ERROR.
-        throw Object.assign(new Error(`Salary calculation failed: ${result.code}`), {
+        // missing tax table or year's rates) instead of UNKNOWN_ERROR. A
+        // refusal that names the employees and the fix (unpriceable vacation
+        // days) keeps its own sentence.
+        const failure = Object.assign(new Error(result.messageSv ?? `Salary calculation failed: ${result.code}`), {
           code: result.code,
           details: result.details,
         })
+        throw result.messageSv ? userFacing(failure, result.code) : failure
       }
       return {
         salary_run_id: id,

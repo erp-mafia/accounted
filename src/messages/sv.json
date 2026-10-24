@@ -10639,7 +10639,7 @@
     "add_line_invalid": "Ange ett belopp, eller antal och à-pris.",
     "add_line_invalid_text": "Skriv en text på högst {max} tecken.",
     "add_line_above_cap": "Skattefritt är högst {cap} per {unit} det här året. Lägg den del som överstiger som {taxable}.",
-    "add_line_hint_vacation": "Antal är semesterdagarna som tas ut. De räknas av från semestersaldot men ändrar inte lönen: semestertillägg, semesterlön eller semesterlöneavdrag anger du som à-pris per dag eller som belopp (minus drar från lönen).",
+    "add_line_hint_vacation": "Antal är semesterdagarna som tas ut. De räknas av från semestersaldot, och utan belopp räknar lönekörningen fram vad dagarna ger enligt den anställdes semesterregel: semestertillägg, semesterlöneavdrag och semesterlön, eller avdrag för obetalda dagar. Ange à-pris eller belopp bara när avtalet räknar annorlunda; då betalas beloppet som det står (minus drar från lönen).",
     "add_line_invalid_vacation": "Ange antal semesterdagar.",
     "add_line_vacation_category": "Dagarna tas från",
     "add_line_vacation_category_paid": "Betalda dagar",

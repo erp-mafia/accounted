@@ -207,6 +207,38 @@ describe('POST /salary-runs/:id/calculate', () => {
     expect(body.error.code).toBe('SALARY_RUN_TAX_TABLE_MISSING')
   })
 
+  it('a vacation-pay refusal keeps its sentence and its per-employee issues (#85)', async () => {
+    const draftRun = { id: RUN_ID, status: 'draft', period_year: 2026, period_month: 7, payment_date: '2026-07-25' }
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: draftRun, error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+    const issues = [{ employee: 'Vera Testsson', message: 'sv text', message_en: 'en text' }]
+    mocks.runSalaryCalculation.mockResolvedValue({
+      ok: false,
+      code: 'SALARY_RUN_VACATION_PAY_UNDETERMINED',
+      details: { reason: 'vacation_pay_undetermined', issues },
+      messageSv: 'Vera Testsson: sv text',
+      messageEn: 'Vera Testsson: en text',
+    })
+
+    const res = await calculate(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/calculate`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_VACATION_PAY_UNDETERMINED')
+    expect(JSON.stringify(body.error)).toContain('Vera Testsson: en text')
+    expect(body.error.details.issues).toEqual(issues)
+  })
+
   it('returns a dry-run preview without invoking the helper', async () => {
     mockServiceClient.mockReturnValue(
       createTableMockSupabase({

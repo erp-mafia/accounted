@@ -6482,14 +6482,34 @@ const SALARY: Record<string, StructuredErrorEntry> = {
   SALARY_LINE_CALCULATED: {
     httpStatus: 400,
     message_sv:
-      'Raden räknas fram av lönekörningen och skrivs om vid varje beräkning. Ändra underlaget i stället: frånvaron, de arbetade timmarna, förmånen eller den återkommande raden. En engångsrad för övertid eller OB läggs som Övertid eller Övrigt.',
+      'Raden räknas fram av lönekörningen och skrivs om vid varje beräkning. Ändra underlaget i stället: frånvaron, de arbetade timmarna, förmånen, den återkommande raden eller semesterdagarna på semesterraden. En engångsrad för övertid eller OB läggs som Övertid eller Övrigt.',
     message_en:
-      'This payslip line is derived by the salary calculation and rewritten on every calculation. Change its source instead: the absence, the worked hours and premium rules, the benefit or the recurring line. Put a one-off overtime or OB amount on item_type overtime or other.',
+      'This payslip line is derived by the salary calculation and rewritten on every calculation. Change its source instead: the absence, the worked hours and premium rules, the benefit, the recurring line or the days on the vacation line (an amount on that line replaces the derived vacation pay). Put a one-off overtime or OB amount on item_type overtime or other.',
     remediation: {
       description:
         'Absence: gnubok_register_absence / gnubok_delete_absence. Hours: gnubok_set_worked_days. Förmåner: gnubok_update_employee_benefit. Recurring lines: gnubok_update_employee_recurring_line. A one-off amount: gnubok_add_payslip_line with item_type overtime or other. Then gnubok_calculate_salary_run.',
     },
     retryable: false,
+  },
+  // lib/salary/vacation-days-pay.ts (issue #85): a vacation line without an
+  // amount whose days the law and the data cannot price (procentregeln
+  // without a whole base year in Accounted, hourly pay on sammalöneregeln,
+  // hourly förskott, vacation pay already paid as semesterersättning). The
+  // thrower's sentences name each employee and the fix; details.issues
+  // carries them per employee in both languages.
+  SALARY_RUN_VACATION_PAY_UNDETERMINED: {
+    httpStatus: 400,
+    message_sv:
+      'Semesterlönen för de uttagna semesterdagarna kan inte räknas fram. Ange beloppet på semesterraden eller ändra dagarnas kategori, och beräkna om.',
+    message_en:
+      'The pay for the vacation days taken cannot be calculated. Put the amount on the vacation line or change the days\' category, then calculate again.',
+    remediation: {
+      description:
+        'Read details.issues (employee, message_en). Either put the amount on the vacation line yourself (gnubok_update_payslip_line with amount, or quantity and unit_price: a line with an amount is paid as entered and never re-derived), change the vacation_category (unpaid or advance) when the days are not paid days, or fix the employee (salary_type, vacation_rule) the message names. Then gnubok_calculate_salary_run. Never estimate a procentregeln base: ask the user for the semesterlön.',
+      tool: 'gnubok_update_payslip_line',
+    },
+    retryable: false,
+    thrown_message_sv: true,
   },
   SALARY_RUN_EMPLOYEE_DUPLICATE: {
     httpStatus: 409,

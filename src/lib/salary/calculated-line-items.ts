@@ -18,6 +18,16 @@ import type { SalaryLineItemType, ShiftPremiumItemType } from '@/types'
 export const VACATION_COMPENSATION_SOURCE = 'vacation_compensation'
 
 /**
+ * Provenance of the vacation rows the calculation derives from vacation days
+ * taken (lib/salary/vacation-days-pay.ts, issue #85): the semestertillägg,
+ * the semesterlön and semesterlöneavdrag, and the deduction for obetalda
+ * dagar. Always on item_type 'vacation' (the DB CHECK of migration
+ * 20261023142500), with no quantity: the days are on the operator's own
+ * vacation line, which the vacation ledger counts.
+ */
+export const VACATION_PAY_SOURCE = 'vacation_pay'
+
+/**
  * True for the semesterersättning row the engine itself derived. Two rows
  * carry the provenance, never on the same payslip: the per-run
  * semesterersättning under vacation_rule 'semesterersattning', and under
@@ -30,6 +40,14 @@ export function isAutomaticVacationLine(line: {
   calculation_source?: unknown
 }): boolean {
   return line.item_type === 'semesterersattning' && line.calculation_source === VACATION_COMPENSATION_SOURCE
+}
+
+/** True for a vacation row the engine derived from the days on a vacation line. */
+export function isDerivedVacationPayLine(line: {
+  item_type?: unknown
+  calculation_source?: unknown
+}): boolean {
+  return line.item_type === 'vacation' && line.calculation_source === VACATION_PAY_SOURCE
 }
 
 /** Item types the calculator derives from per-day absence records. */
@@ -73,7 +91,7 @@ export function isCalculatedLineType(itemType: unknown): boolean {
 /**
  * A line the calculation deletes and writes again on every run: a calculated
  * type, a förmån or recurring-line row, the engine's own semesterersättning
- * row, or the öresavrundning row. Editing or deleting one by hand is undone by
+ * row, a vacation row derived from vacation days, or the öresavrundning row. Editing or deleting one by hand is undone by
  * the next calculation, which every run needs before it can be booked; the
  * change belongs in the source (absence, worked hours and premium rules, the
  * förmån, the recurring line). run-calculation.ts reads its manual lines as
@@ -90,6 +108,7 @@ export function isCalculatedLine(line: {
     Boolean(line.source_benefit_id) ||
     Boolean(line.source_recurring_line_id) ||
     isAutomaticVacationLine(line) ||
+    isDerivedVacationPayLine(line) ||
     line.item_type === 'oresavrundning'
   )
 }

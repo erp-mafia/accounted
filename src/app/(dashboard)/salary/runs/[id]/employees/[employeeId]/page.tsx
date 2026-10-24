@@ -90,7 +90,15 @@ interface DetailResponse {
  */
 function isRemovableLine(li: LineRow): boolean {
   if (li.source_expense_claim_id) return true
-  return isManualPayslipLineType(li.item_type) && !li.source_recurring_line_id && !li.source_benefit_id
+  // calculation_source marks an engine row, such as the semestertillägg the
+  // calculation derives from a vacation line's days (#85): the vacation line
+  // itself stays removable.
+  return (
+    isManualPayslipLineType(li.item_type) &&
+    !li.source_recurring_line_id &&
+    !li.source_benefit_id &&
+    !li.calculation_source
+  )
 }
 
 export default function SalaryRunEmployeeDetailPage({

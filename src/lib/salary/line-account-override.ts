@@ -27,7 +27,9 @@ export type LineAccountOverride = 'none' | 'class_7' | 'any'
 
 // Utlägg, the rounding row and the text row. A vacation row is a pay row:
 // no register writes it, and the amount it carries (a semestertillägg, a
-// semesterlöneavdrag) posts on its own account (crm#1331).
+// semesterlöneavdrag) posts on its own account (crm#1331). The vacation rows
+// the calculation derives from the days are not edited by hand at all
+// (calculated-line-items.ts, VACATION_PAY_SOURCE).
 const NO_OVERRIDE_TYPES = new Set(['expense_reimbursement', 'oresavrundning', 'text'])
 
 export function lineAccountOverride(itemType: string): LineAccountOverride {
