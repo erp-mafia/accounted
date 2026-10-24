@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 370 endpoints.
+  pagination, scopes), and all 371 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -218,7 +218,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 370 operations. Paths are shown without
+API version `2026-05-12`, 371 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (22)
@@ -460,7 +460,7 @@ POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consu
 POST /companies/{companyId}/inbox-items/{id}/unmatch-transaction : Release an inbox item's bank transaction match [scope:documents:write risk:low idempotent dry-run reversible]
 ```
 
-### Banking (63)
+### Banking (64)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -528,6 +528,7 @@ POST /companies/{companyId}/transactions/ingest : Bulk-ingest transactions (up t
 GET /companies/{companyId}/webshop-orders : The order and refund rows synced from the company's webshops, newest first [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/webshop-orders/{orderId} : One webshop order row with its line items and the booking the Orders page would prefill [scope:transactions:read risk:low idempotent]
 POST /companies/{companyId}/webshop-orders/{orderId}/book : Book one webshop order or refund with your own lines, linked to the order with its orderunderlag [scope:bookkeeping:write risk:high idempotent dry-run]
+GET /companies/{companyId}/webshop-orders/oss-underlag : Underlag for the OSS declaration (unionsordningen): a quarter's webshop sales to consumers in other EU countries, per country and VAT rate, in euro [scope:reports:read risk:low idempotent]
 ```
 
 ### Employees (27)

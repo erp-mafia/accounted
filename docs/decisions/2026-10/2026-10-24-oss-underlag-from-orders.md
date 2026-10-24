@@ -1,0 +1,1 @@
+[2026-10-24] crm#1429 The OSS underlag splits country and rate from the Shopify order rows booked on OSS accounts, in euro at the ECB rate of the quarter's last day; a refund of an earlier quarter corrects that quarter at that quarter's rate, so a full refund takes back exactly what was declared.

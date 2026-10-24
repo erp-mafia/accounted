@@ -2674,6 +2674,12 @@ export const WebshopOrdersListQuerySchema = z.object({
   offset: z.coerce.number().int().min(0).optional(),
 })
 
+/** A calendar quarter of the OSS underlag; the OSS scheme started 1 July 2021. */
+export const OssUnderlagQuerySchema = z.object({
+  year: z.coerce.number().int().min(2021).max(2100).describe('Calendar year; the OSS scheme started 1 July 2021.'),
+  quarter: z.coerce.number().int().min(1).max(4).describe('Calendar quarter, 1-4.'),
+})
+
 export const BookWebshopOrderSchema = z.object({
   fiscal_period_id: uuid,
   entry_date: isoDate,

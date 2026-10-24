@@ -5110,3 +5110,106 @@ Example response `200`:
   }
 }
 ```
+
+---
+
+### `GET /api/v1/companies/{companyId}/webshop-orders/oss-underlag`
+
+**Underlag for the OSS declaration (unionsordningen): a quarter's webshop sales to consumers in other EU countries, per country and VAT rate, in euro.**
+`scope:reports:read · risk:low · idempotent`
+
+Adds up the webshop orders booked on the OSS accounts (VAT code oss, the OSS output VAT account, or accounts a Shopify country rule names for OSS) in a calendar quarter: per destination country and VAT rate the sales without VAT and the VAT, in euro at the ECB rate for the last day of the quarter (the next publication day when the ECB published none) and in kronor as booked. Refunds of an earlier quarter's sales are corrections of that quarter (country, quarter, VAT). unaccounted lists the OSS-account verifikat that book no order (manual vouchers, stornos), and warnings the orders missing from the underlag. Read-only; nothing is filed.
+
+**Use when:** Before filing the quarterly OSS declaration in Skatteverket's e-tjänst, or to check what the OSS accounts hold per country.
+**Do not use for:** The Swedish momsdeklaration (OSS sales are outside it), EU sales taxed in Sweden below the distance-selling threshold, or invoices (they carry Swedish VAT only).
+
+**Pitfalls:**
+- Only booked orders count, in the quarter of the verifikat that books them: book the quarter's orders first (warnings unbooked_orders).
+- Euro amounts are null until the ECB has published the rate for the last day of the quarter (warnings rate_unavailable); the kronor amounts are final.
+- The VAT is declared with two decimals, never rounded. A nil_return quarter still needs a declaration.
+- A correction uses the ECB rate of the quarter it corrects, so a full refund takes back exactly what was declared.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `year` | query | `number` | yes | Calendar year; the OSS scheme started 1 July 2021. |
+| `quarter` | query | `number` | yes | Calendar quarter, 1-4. |
+
+Response `200`:
+```ts
+{
+  data: {
+    period: { year: number, quarter: number, label: string, start: string, end: string, deadline: string },
+    rows: { country: string, vat_rate: number, net_eur: number | null, vat_eur: number | null, net_sek: number, vat_sek: number, order_count: number }[],
+    corrections: { country: string, period: { year: number, quarter: number, label: string }, vat_eur: number | null, vat_sek: number, refund_count: number }[],
+    totals: { net_eur: number | null, vat_eur: number | null, corrections_vat_eur: number | null, net_sek: number, vat_sek: number, corrections_vat_sek: number },
+    rates: { currency: string, for_date: string, rate: number | null, rate_date: string | null, unavailable: boolean }[],
+    ledger_vat_sek: number,
+    unaccounted: { journal_entry_id: string, voucher_series: string | null, voucher_number: number, entry_date: string, description: string, net_sek: number, vat_sek: number }[],
+    warnings: { code: string, message_sv: string, message_en: string, order_numbers: string[] }[],
+    nil_return: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "period": {
+      "year": 2026,
+      "quarter": 3,
+      "start": "2026-07-01",
+      "end": "2026-09-30",
+      "label": "Q3 2026",
+      "deadline": "2026-10-31"
+    },
+    "rows": [
+      {
+        "country": "DE",
+        "vat_rate": 19,
+        "net_eur": 88.26,
+        "vat_eur": 16.77,
+        "net_sek": 1000,
+        "vat_sek": 190,
+        "order_count": 1
+      }
+    ],
+    "corrections": [],
+    "totals": {
+      "net_eur": 88.26,
+      "vat_eur": 16.77,
+      "corrections_vat_eur": 0,
+      "net_sek": 1000,
+      "vat_sek": 190,
+      "corrections_vat_sek": 0
+    },
+    "rates": [
+      {
+        "currency": "SEK",
+        "for_date": "2026-09-30",
+        "rate": 11.331,
+        "rate_date": "2026-09-30",
+        "unavailable": false
+      }
+    ],
+    "ledger_vat_sek": 190,
+    "unaccounted": [],
+    "warnings": [],
+    "nil_return": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```

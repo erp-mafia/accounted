@@ -1,0 +1,311 @@
+'use client'
+
+import { useEffect, useMemo, useState } from 'react'
+import Link from 'next/link'
+import { useLocale, useTranslations } from 'next-intl'
+import { AlertCircle } from 'lucide-react'
+import { AttnLine } from '@/components/ui/attn-line'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Skeleton } from '@/components/ui/skeleton'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { TOOLBAR_FIELD_CLASS } from '@/components/ui/toolbar-search'
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableFooter,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from '@/components/ui/table'
+import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
+import { useFormat } from '@/lib/hooks/use-format'
+import { cn, formatCurrency, formatDate } from '@/lib/utils'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import type { OssUnderlag } from '@/lib/webshop-orders/oss-underlag'
+
+/**
+ * Underlag for the quarterly OSS declaration: the quarter's webshop sales to
+ * consumers in other EU countries per country and VAT rate, in euro, to type
+ * into Skatteverket's e-tjänst. Every OSS-account verifikat the underlag does
+ * not cover is listed under it, so a gap is never silent.
+ */
+
+const QUARTERS = [1, 2, 3, 4]
+
+/** The last finished quarter: the one a declaration is due for. */
+function lastClosedQuarter(now: Date): { year: number; quarter: number } {
+  const current = Math.floor(now.getMonth() / 3) + 1
+  return current === 1 ? { year: now.getFullYear() - 1, quarter: 4 } : { year: now.getFullYear(), quarter: current - 1 }
+}
+
+/** Euro as declared: always two decimals, 9,00 and never 9 (the VAT is never rounded). */
+function eur(amount: number | null): string {
+  return amount === null ? '-' : formatCurrency(amount, 'EUR', { minimumFractionDigits: 2 })
+}
+
+export function OssUnderlagView() {
+  const t = useTranslations('oss_underlag')
+  const locale = useLocale()
+  const { formatDateLong } = useFormat()
+  const initial = lastClosedQuarter(new Date())
+  const [year, setYear] = useState(initial.year)
+  const [quarter, setQuarter] = useState(initial.quarter)
+
+  // Fetch outcome tagged with the key it was requested under, so a stale
+  // response never paints over the current picker state.
+  const [result, setResult] = useState<{ key: string; data?: OssUnderlag; error?: string } | null>(null)
+
+  const query = `year=${year}&quarter=${quarter}`
+  useEffect(() => {
+    let cancelled = false
+    fetch(`/api/webshop-orders/oss-underlag?${query}`)
+      .then(async (res) => {
+        const json = await res.json().catch(() => ({}))
+        if (cancelled) return
+        if (!res.ok) {
+          setResult({ key: query, error: getErrorMessage(json, { statusCode: res.status, locale: locale as ErrorLocale }) })
+          return
+        }
+        setResult({ key: query, data: json.data as OssUnderlag })
+      })
+      .catch(() => {
+        if (!cancelled) setResult({ key: query, error: t('load_failed') })
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [query, locale, t])
+
+  const countryName = useMemo(() => {
+    const names = new Intl.DisplayNames([locale === 'en' ? 'en' : 'sv'], { type: 'region' })
+    return (code: string) => `${names.of(code) ?? code} (${code})`
+  }, [locale])
+  const percent = useMemo(() => new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'sv-SE'), [locale])
+  const rateFormat = useMemo(
+    () => new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'sv-SE', { maximumFractionDigits: 6 }),
+    [locale],
+  )
+
+  const yearOptions = Array.from({ length: 5 }, (_, i) => new Date().getFullYear() - i).filter((y) => y >= 2021)
+  const upToDate = result !== null && result.key === query
+  const report = upToDate ? result.data ?? null : null
+  const error = upToDate ? result.error ?? null : null
+  const message = (w: { message_sv: string; message_en: string }) => (locale === 'en' ? w.message_en : w.message_sv)
+  const incomplete = !!report && (report.unaccounted.length > 0 || report.warnings.some((w) => w.code !== 'rate_unavailable'))
+
+  return (
+    <div className="space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        <Select value={String(year)} onValueChange={(v) => setYear(Number(v))}>
+          <SelectTrigger className={cn(TOOLBAR_FIELD_CLASS, 'w-auto gap-1.5')} aria-label={t('year_label')}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {yearOptions.map((y) => (
+              <SelectItem key={y} value={String(y)}>
+                {y}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <Select value={String(quarter)} onValueChange={(v) => setQuarter(Number(v))}>
+          <SelectTrigger className={cn(TOOLBAR_FIELD_CLASS, 'w-auto gap-1.5')} aria-label={t('quarter_label')}>
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {QUARTERS.map((q) => (
+              <SelectItem key={q} value={String(q)}>
+                {t(`quarter_${q}`)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+        <ReportExportMenu items={[{ format: 'xlsx', href: `/api/webshop-orders/oss-underlag/xlsx?${query}` }]} />
+      </div>
+
+      {!upToDate ? (
+        <div className="space-y-3" aria-busy>
+          <Skeleton className="h-4 w-1/3" />
+          <Skeleton className="h-40 w-full" />
+        </div>
+      ) : error || !report ? (
+        <Card>
+          <CardContent className="py-8 text-center text-sm text-destructive">
+            <AlertCircle className="mx-auto mb-2 h-6 w-6" />
+            {error ?? t('load_failed')}
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-6 animate-fade-in">
+          {incomplete && <AttnLine>{t('attn_incomplete')}</AttnLine>}
+
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{t('sales_eur')}</div>
+              <div className="font-display text-xl tabular-nums">{eur(report.totals.net_eur)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{t('vat_eur')}</div>
+              <div className="font-display text-xl tabular-nums">{eur(report.totals.vat_eur)}</div>
+            </div>
+            <div>
+              <div className="text-[11px] uppercase tracking-wider text-muted-foreground">{t('corrections_eur')}</div>
+              <div className="font-display text-xl tabular-nums">{eur(report.totals.corrections_vat_eur)}</div>
+            </div>
+          </div>
+          <p className="text-[13px] text-muted-foreground">
+            {report.nil_return
+              ? t('nil_return', { date: formatDateLong(report.period.deadline) })
+              : t('deadline', { date: formatDateLong(report.period.deadline) })}
+          </p>
+
+          {report.rows.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t('heading_rows')}</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('col_country')}</TableHead>
+                      <TableHead className="text-right">{t('col_rate')}</TableHead>
+                      <TableHead className="text-right">{t('col_net_eur')}</TableHead>
+                      <TableHead className="text-right">{t('col_vat_eur')}</TableHead>
+                      <TableHead className="text-right">{t('col_vat_sek')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className="stagger-enter">
+                    {report.rows.map((row) => (
+                      <TableRow key={`${row.country}-${row.vat_rate}`}>
+                        <TableCell>{countryName(row.country)}</TableCell>
+                        <TableCell className="text-right tabular-nums whitespace-nowrap">{percent.format(row.vat_rate)}&nbsp;%</TableCell>
+                        <TableCell className="text-right tabular-nums">{eur(row.net_eur)}</TableCell>
+                        <TableCell className="text-right tabular-nums">{eur(row.vat_eur)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(row.vat_sek)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                  <TableFooter>
+                    <TableRow>
+                      <TableCell colSpan={2} className="font-medium">{t('total')}</TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">{eur(report.totals.net_eur)}</TableCell>
+                      <TableCell className="text-right tabular-nums font-medium">{eur(report.totals.vat_eur)}</TableCell>
+                      <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(report.totals.vat_sek)}</TableCell>
+                    </TableRow>
+                  </TableFooter>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
+          {report.corrections.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t('heading_corrections')}</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('col_country')}</TableHead>
+                      <TableHead>{t('col_period')}</TableHead>
+                      <TableHead className="text-right">{t('col_vat_eur')}</TableHead>
+                      <TableHead className="text-right">{t('col_vat_sek')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className="stagger-enter">
+                    {report.corrections.map((correction) => (
+                      <TableRow key={`${correction.country}-${correction.period.label}`}>
+                        <TableCell>{countryName(correction.country)}</TableCell>
+                        <TableCell className="tabular-nums">{correction.period.label}</TableCell>
+                        <TableCell className="text-right tabular-nums">{eur(correction.vat_eur)}</TableCell>
+                        <TableCell className="text-right tabular-nums text-muted-foreground">{formatCurrency(correction.vat_sek)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
+          {report.warnings.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t('heading_warnings')}</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-[13px]">
+                {report.warnings.map((w) => (
+                  <div key={w.code}>
+                    <p>{message(w)}</p>
+                    {w.order_numbers.length > 0 && (
+                      <p className="mt-1 text-[12.5px] text-muted-foreground tabular-nums">
+                        {t('orders_label', { numbers: w.order_numbers.join(', ') })}
+                      </p>
+                    )}
+                  </div>
+                ))}
+              </CardContent>
+            </Card>
+          )}
+
+          {report.unaccounted.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">{t('heading_unaccounted')}</CardTitle>
+              </CardHeader>
+              <CardContent className="p-0">
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('col_voucher')}</TableHead>
+                      <TableHead>{t('col_date')}</TableHead>
+                      <TableHead>{t('col_description')}</TableHead>
+                      <TableHead className="text-right">{t('col_vat_sek')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody className="stagger-enter">
+                    {report.unaccounted.map((voucher) => (
+                      <TableRow key={voucher.journal_entry_id}>
+                        <TableCell className="tabular-nums">
+                          <Link href={`/bookkeeping/${voucher.journal_entry_id}`} className="underline-offset-4 hover:underline">
+                            {formatVoucher(voucher)}
+                          </Link>
+                        </TableCell>
+                        <TableCell className="tabular-nums">{formatDate(voucher.entry_date)}</TableCell>
+                        <TableCell className="max-w-64 truncate">{voucher.description}</TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(voucher.vat_sek)}</TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </CardContent>
+            </Card>
+          )}
+
+          <div className="space-y-1 text-[12.5px] text-muted-foreground">
+            {report.rates.map((rate) =>
+              rate.rate !== null && rate.rate_date ? (
+                <p key={`${rate.currency}-${rate.for_date}`} className="tabular-nums">
+                  {t('rate_line', { rate: rateFormat.format(rate.rate), currency: rate.currency, date: formatDate(rate.rate_date) })}
+                </p>
+              ) : (
+                <p key={`${rate.currency}-${rate.for_date}`} className="tabular-nums">
+                  {t('rate_missing', { currency: rate.currency, date: formatDate(rate.for_date) })}
+                </p>
+              ),
+            )}
+            <p className="tabular-nums">
+              {t('ledger_line', {
+                ledger: formatCurrency(report.ledger_vat_sek),
+                underlag: formatCurrency(report.totals.vat_sek + report.totals.corrections_vat_sek),
+              })}
+            </p>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
