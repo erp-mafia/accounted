@@ -237,14 +237,15 @@ export function pointWindow(popup: Window | null, url: string) {
 /**
  * Listen for the provider popup's message. Put the window openProviderWindow
  * returned in the returned ref: only that window's messages are heard.
+ * `cancelled`: the customer pressed cancel at the provider (access_denied).
  */
 export function useProviderMessage(
   onSuccess: (consentId: string) => void,
-  onError: (reason: string) => void,
+  onError: (reason: string, cancelled: boolean) => void,
 ): RefObject<Window | null> {
-  return useOAuthPopup<{ type?: string; consentId?: string; reason?: string }>((data) => {
+  return useOAuthPopup<{ type?: string; consentId?: string; reason?: string; cancelled?: unknown }>((data) => {
     if (data?.type === 'arcim-oauth-success' && data.consentId) onSuccess(data.consentId)
-    else if (data?.type === 'arcim-oauth-error') onError(typeof data.reason === 'string' && data.reason ? data.reason : 'OAuth')
+    else if (data?.type === 'arcim-oauth-error') onError(typeof data.reason === 'string' && data.reason ? data.reason : 'OAuth', data.cancelled === true)
   })
 }
 

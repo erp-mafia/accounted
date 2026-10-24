@@ -27,6 +27,8 @@ import {
   providerSubmitToken, takeReturnedConsentId, useProviderMessage, type ProviderPreview, type ProviderSieData,
 } from '../lib/provider'
 import type { BooksCtx } from '../context'
+import { trackMigrationConnectClicked, trackMigrationConnectFinished, type MigrationConnectOutcome } from '@/components/extensions/general/arcim-connect-track'
+import { watchArcimOAuthPopup } from '@/components/extensions/general/arcim-document-import-flow'
 import { Button } from '@/components/ui/button'
 
 type Phase = 'connect' | 'connecting' | 'token' | 'loading' | 'preview' | 'importing' | 'imported'
@@ -128,18 +130,37 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     }
   }, [locale])
 
+  // The connect being measured, the Import page's funnel
+  // (migration_connect_clicked and _finished): most connects start here.
+  const attempt = useRef<string | null>(null)
+  const stopWatch = useRef<(() => void) | null>(null)
+  const finishAttempt = useCallback((outcome: MigrationConnectOutcome) => {
+    stopWatch.current?.()
+    stopWatch.current = null
+    const provider = attempt.current
+    attempt.current = null
+    if (provider) trackMigrationConnectFinished(provider, outcome)
+  }, [])
+
   // A full-page round trip brought a consentId in the URL.
   const returned = useRef(false)
   useEffect(() => {
     if (returned.current) return
     returned.current = true
     const cId = takeReturnedConsentId()
-    if (cId) void loadPreview(cId)
-  }, [loadPreview])
+    if (!cId) return
+    // The click was measured before the page left for the provider.
+    if (providerId) trackMigrationConnectFinished(providerId, 'success')
+    void loadPreview(cId)
+  }, [loadPreview, providerId])
 
   const popupRef = useProviderMessage(
-    (cId) => void loadPreview(cId),
-    (reason) => { setError(getErrorMessage(reason, { locale })); setPhase('connect') },
+    (cId) => { finishAttempt('success'); void loadPreview(cId) },
+    (reason, cancelled) => {
+      finishAttempt(cancelled ? 'cancelled' : 'provider_error')
+      setError(getErrorMessage(reason, { locale }))
+      setPhase('connect')
+    },
   )
 
   // The login popup belongs to this step. Leaving it (SIE instead, Tillbaka)
@@ -159,6 +180,8 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
     setError(null)
     setActivating(false)
     setPhase('connecting')
+    attempt.current = providerId
+    trackMigrationConnectClicked(providerId)
     const popup = openProviderWindow()
     popupRef.current = popup
     login.current.popup = popup
@@ -166,22 +189,42 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       const r = await providerConnect(providerId)
       if (login.current.left) return
       setConsentId(r.consentId)
-      if (r.alreadyConnected) { popup?.close(); void loadPreview(r.consentId); return }
-      if (r.authType === 'oauth' && r.authUrl) { pointWindow(popup, r.authUrl); return }
+      if (r.alreadyConnected) { popup?.close(); finishAttempt('success'); void loadPreview(r.consentId); return }
+      if (r.authType === 'oauth' && r.authUrl) { pointWindow(popup, r.authUrl); watchLogin(popup); return }
       // Björn Lundén: Lundify activates the integration and hands the company
       // key back through the same callback and message as a provider login.
-      if (r.activationUrl) { setActivating(true); pointWindow(popup, r.activationUrl); return }
+      if (r.activationUrl) { setActivating(true); pointWindow(popup, r.activationUrl); watchLogin(popup); return }
       popup?.close()
       setPhase('token')
     } catch (err) {
       popup?.close()
+      finishAttempt('provider_error')
       setError(getErrorMessage(err, { locale }))
       setPhase('connect')
     }
   }
 
+  // A login window shut before it answered: Fortnox's licence page, for one,
+  // sends nothing back, and the step used to wait on it for good. The popup
+  // posts its answer and then closes, so a close waits 3 s for a late answer,
+  // as on the Import page.
+  function watchLogin(popup: Window | null) {
+    if (!popup) return
+    stopWatch.current?.()
+    stopWatch.current = watchArcimOAuthPopup(popup, () => {
+      stopWatch.current = null
+      finishAttempt('window_closed')
+      if (login.current.left) return
+      setActivating(false)
+      setError(t('provider_window_closed', { provider: provName }))
+      setPhase('connect')
+    }, 500, 3000)
+  }
+
   // Activated in Lundify already: the key is typed in and the window shut.
   function enterKeyByHand() {
+    stopWatch.current?.()
+    stopWatch.current = null
     login.current.popup?.close()
     setActivating(false)
     setPhase('token')
@@ -190,10 +233,17 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   async function submitToken() {
     if (!consentId || !providerId) return
     setPhase('connecting')
+    // A retry after a refused key is a press of its own.
+    if (!attempt.current) {
+      attempt.current = providerId
+      trackMigrationConnectClicked(providerId)
+    }
     try {
       await providerSubmitToken(consentId, providerId, tokenA, tokenB)
+      finishAttempt('success')
       void loadPreview(consentId)
     } catch (err) {
+      finishAttempt('provider_error')
       setError(getErrorMessage(err, { locale }))
       setPhase('token')
     }
