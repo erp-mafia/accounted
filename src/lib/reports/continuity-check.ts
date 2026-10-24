@@ -2,12 +2,16 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { ContinuityCheckResult, ContinuityDiscrepancy } from '@/types'
 import { generateTrialBalance } from './trial-balance'
 import { getOpeningBalances } from './opening-balances'
+import { computedResult } from './balance-sheet'
 import { resolvePreviousFiscalPeriod } from '@/lib/core/bookkeeping/period-service'
+import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 
 /**
  * Validate that a fiscal period's opening balances (IB) match the previous
- * period's closing balances (UB) for all balance sheet accounts (class 1-2).
+ * period's closing balances (UB) for all balance sheet accounts (class 1-2),
+ * the previous year read as closed: a result still on its result accounts
+ * belongs on the form's closing account.
  *
  * Uses the same data paths as the actual reports: generateTrialBalance() for
  * UB and getOpeningBalances() for IB, so a passing check proves the reports
@@ -72,6 +76,20 @@ export async function validateBalanceContinuity(
         previousUB.set(row.account_number, { net, name: row.account_name })
       }
     }
+  }
+
+  // A year that ended without a booked resultatavslut is carried into the
+  // next opening balance on the form's closing account (2099, enskild firma
+  // 2010, ideell förening 2069; prior_opening_balance_lines). That account
+  // opens on its UB plus the result still on the result accounts, which is 0
+  // once the year is closed.
+  const untransferred = computedResult(trialRows)
+  if (Math.abs(untransferred) >= ORE_TOLERANCE) {
+    const { closing, closingName } = resultClosingAccounts(await resolveCompanyEntityType(supabase, companyId))
+    const carried = previousUB.get(closing)
+    const net = roundOre((carried?.net ?? 0) - untransferred)
+    if (Math.abs(net) >= ORE_TOLERANCE) previousUB.set(closing, { net, name: carried?.name ?? closingName })
+    else previousUB.delete(closing)
   }
 
   // Current period IB

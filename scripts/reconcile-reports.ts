@@ -58,11 +58,7 @@ config({ path: arg('env-file') ?? '.env.local' })
 import { mkdirSync, existsSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { createClient, type SupabaseClient } from '@supabase/supabase-js'
-import {
-  generateTrialBalance,
-  fetchTrialBalanceChart,
-  fetchReversedYearEndEntryIds,
-} from '../src/lib/reports/trial-balance'
+import { generateTrialBalance, fetchTrialBalanceChart } from '../src/lib/reports/trial-balance'
 import { generateGeneralLedger } from '../src/lib/reports/general-ledger'
 import { balanceSheetFromTrialBalance } from '../src/lib/reports/balance-sheet'
 import { generateIncomeStatement } from '../src/lib/reports/income-statement'
@@ -82,6 +78,7 @@ import { resolvePreviousFiscalPeriod } from '../src/lib/core/bookkeeping/period-
 import { fetchLinesByEntryIds } from '../src/lib/bookkeeping/entry-lines'
 import { fetchAllRows } from '../src/lib/supabase/fetch-all'
 import { roundOre } from '../src/lib/money'
+import { isEntityType, resultClosingAccounts } from '../src/lib/company/entity-type'
 import { isAretsResultatAccount } from '../src/lib/bookkeeping/bas-data/result-accounts'
 import { isDeclarationVatAccount } from '../src/lib/vat/moms-box-mapping'
 import type { TrialBalanceRow, VatPeriodType } from '../src/types'
@@ -94,6 +91,7 @@ const READ_RPCS = new Set([
   'compute_prior_opening_balances',
   'get_vat_declaration_totals',
   'result_closing_entry_ids',
+  'year_end_chain_entry_ids',
 ])
 
 const WRITE_METHODS = new Set(['insert', 'update', 'upsert', 'delete'])
@@ -261,12 +259,6 @@ async function reconcileCompany(sb: SupabaseClient, company: CompanyMeta): Promi
   const linesByPeriod = new Map<string, Line[]>()
   const periodSummaries: CompanyResult['periods'] = []
 
-  // Year-end chain, as 'exclude-all-year-end' defines it: every year_end
-  // entry, and every entry that reverses or corrects a reversed one.
-  const reversedYearEnd = await fetchReversedYearEndEntryIds(sb, company.id)
-  const yearEndChain = new Set<string>()
-  for (const row of await fetchChainChildren(sb, company.id, reversedYearEnd)) yearEndChain.add(row.id)
-
   const ibEntries = await fetchAllRows<IbEntry>(({ from, to }) =>
     sb.from('journal_entries').select('id, status, entry_date, fiscal_period_id, created_at, created_via, import_batch_id')
       .eq('company_id', company.id).eq('source_type', 'opening_balance')
@@ -276,7 +268,7 @@ async function reconcileCompany(sb: SupabaseClient, company: CompanyMeta): Promi
   for (const p of periods) {
     const label = `${p.name} (${p.period_start}..${p.period_end})`
     try {
-      await reconcilePeriod(sb, company, p, label, chart, yearEndChain, ibEntries, tbByPeriod, linesByPeriod, findings)
+      await reconcilePeriod(sb, company, p, label, chart, ibEntries, tbByPeriod, linesByPeriod, findings)
     } catch (err) {
       findings.push({
         period_id: p.id, period: label, check: 'report_error', cause: 'report_threw', amount: 0,
@@ -362,7 +354,6 @@ async function reconcilePeriod(
   p: PeriodRow,
   label: string,
   chart: Awaited<ReturnType<typeof fetchTrialBalanceChart>>,
-  yearEndChain: Set<string>,
   ibEntries: IbEntry[],
   tbByPeriod: Map<string, TrialBalanceRow[]>,
   linesByPeriod: Map<string, Line[]>,
@@ -418,10 +409,16 @@ async function reconcilePeriod(
   const bs = await balanceSheetFromTrialBalance(sb, company.id, p.id, tb.rows)
   const bsDiff = r2(bs.total_assets - bs.total_equity_liabilities)
   if (off(ubImbalance) || off(bsDiff)) {
-    // A derived IB (no IB verifikat) sums class 1-2 history only, so every
-    // earlier year whose result never reached equity leaves exactly its
-    // result as the IB's debet - kredit: bsDiff = sum of those results.
-    const untransferred = bs.imbalance_diagnosis?.untransferred_results ?? []
+    // Earlier years whose result is still on their result accounts. The
+    // derived IB carries those on the closing account
+    // (prior_opening_balance_lines), so a match here means the carry missed
+    // them: lines dated outside every fiscal year.
+    const untransferred: Array<{ period_id: string; pl_net: number }> = []
+    for (const [periodId, rows] of tbByPeriod) {
+      if (periodId === p.id) continue
+      const plNet = r2(rows.filter((r) => r.account_class >= 3 && r.account_class <= 8).reduce((s, r) => s + r.closing_credit - r.closing_debit, 0))
+      if (off(plNet)) untransferred.push({ period_id: periodId, pl_net: plNet })
+    }
     const untransferredSum = r2(untransferred.reduce((s, u) => s + u.pl_net, 0))
     // The derived IB keeps the earliest IB verifikat per ACCOUNT unless the
     // account has activity before it, so an IB verifikat on top of history
@@ -537,7 +534,15 @@ async function reconcilePeriod(
     if (error) throw new Error(`result_closing_entry_ids: ${error.message}`)
     for (const id of (data ?? []) as string[]) closingIds.add(id)
   }
-  const inYearEndChain = (l: Line) => l.s === 'year_end' || yearEndChain.has(l.e)
+  // What 'exclude-all-year-end' leaves out, read from the one definition the
+  // reports use: the year_end chain plus a resultatavslut booked elsewhere.
+  const yearEnd = new Set<string>()
+  {
+    const { data, error } = await sb.rpc('year_end_chain_entry_ids', { p_company_id: company.id, p_fiscal_period_id: p.id })
+    if (error) throw new Error(`year_end_chain_entry_ids: ${error.message}`)
+    for (const id of (data ?? []) as string[]) yearEnd.add(id)
+  }
+  const inYearEndChain = (l: Line) => yearEnd.has(l.e)
 
   // is_vs_ledger: per class 3-8 account (8999 excluded, as the report does),
   // IB + movement outside the year-end chain, in the report's sign.
@@ -767,6 +772,12 @@ async function checkContinuity(
     const d = firstDigit(r.account_number)
     if (d === '1' || d === '2') ub.set(r.account_number, net)
     else prevResult -= net
+  }
+  // A year left unclosed opens the next on the form's closing account
+  // (prior_opening_balance_lines): read it as closed, as the app's check does.
+  if (off(prevResult) && isEntityType(company.entity_type)) {
+    const { closing } = resultClosingAccounts(company.entity_type)
+    ub.set(closing, r2((ub.get(closing) ?? 0) - prevResult))
   }
 
   const diffs: Array<{ account: string; prev_ub: number; ib: number; diff: number }> = []

@@ -6,6 +6,7 @@
 import { toHandle } from '@/lib/handles'
 import { roundOre } from '@/lib/money'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
+import { fetchYearEndEntryIds } from '@/lib/reports/trial-balance'
 import type { MeasureContext, MeasureJournalLine, MeasurePage } from './types'
 
 /** Default and largest page of a drill-down list. */
@@ -42,10 +43,10 @@ function compareLines(a: MeasureJournalLine, b: MeasureJournalLine): number {
 
 /**
  * The huvudbok of `accounts` over a range inside one fiscal period, from
- * generateGeneralLedger. `excludeYearEnd` drops the bokslut entries
- * (source_type 'year_end'), the income statement's operational convention;
- * a storno of one is not recognised here, which the caller's tie-out then
- * reports instead of hiding.
+ * generateGeneralLedger. `excludeYearEnd` drops the entries the income
+ * statement's operational convention leaves out ('exclude-all-year-end',
+ * fetchYearEndEntryIds): the bokslut entries, the storno chain of an undone
+ * one and a resultatavslut booked in a previous system or by hand.
  */
 export async function ledgerForAccounts(
   ctx: MeasureContext,
@@ -58,6 +59,9 @@ export async function ledgerForAccounts(
   const result = new Map<string, AccountLedger>()
   if (wanted.size === 0) return result
   const sorted = [...wanted].sort()
+  const yearEnd = new Set(
+    options.excludeYearEnd ? await fetchYearEndEntryIds(ctx.supabase, ctx.companyId, fiscalPeriodId) : [],
+  )
   const gl = await generateGeneralLedger(
     ctx.supabase,
     ctx.companyId,
@@ -69,7 +73,7 @@ export async function ledgerForAccounts(
   for (const account of gl.accounts) {
     if (!wanted.has(account.account_number)) continue
     const lines = account.lines
-      .filter((line) => !(options.excludeYearEnd && line.source_type === 'year_end'))
+      .filter((line) => !yearEnd.has(line.journal_entry_id))
       .map(
         (line): MeasureJournalLine => ({
           journal_entry_id: line.journal_entry_id,

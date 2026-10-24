@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TrialBalanceRow } from '@/types'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
-import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
+import { excludeYearEndChain, fetchYearEndEntryIds } from './trial-balance'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 
 // BAS current income tax, including prior-year adjustments and refunds.
@@ -62,9 +62,9 @@ async function nonIncomeTaxTransfer(
   fiscalPeriodId: string,
   openingEntryId: string | null,
 ): Promise<number> {
-  // The trial balance's 'exclude-all-year-end' rule (excludeYearEndChain),
-  // the same entry set as the account totals this corrects.
-  const reversedYearEndIds = await fetchReversedYearEndEntryIds(supabase, companyId)
+  // The trial balance's 'exclude-all-year-end' set (fetchYearEndEntryIds),
+  // the same entries as the account totals this corrects.
+  const yearEndEntryIds = await fetchYearEndEntryIds(supabase, companyId, fiscalPeriodId)
   const lines = await fetchEntryLines<TaxLine>({
     supabase,
     attachEntriesAs: null,
@@ -73,7 +73,7 @@ async function nonIncomeTaxTransfer(
       const scoped = excludeYearEndChain(
         query.eq('company_id', companyId).eq('fiscal_period_id', fiscalPeriodId)
           .in('status', ['posted', 'reversed']),
-        reversedYearEndIds,
+        yearEndEntryIds,
       )
       return openingEntryId ? scoped.neq('id', openingEntryId) : scoped
     },

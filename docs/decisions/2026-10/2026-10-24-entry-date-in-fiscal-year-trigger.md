@@ -1,0 +1,1 @@
+[2026-10-24] A verifikat's date must lie inside its fiscal year, enforced in the DB on insert, re-date, period move and posting, and on fiscal year re-dates: the rule lived only in app code. A storno mirroring its original's date and year is exempt, so old misdated imports stay undoable.

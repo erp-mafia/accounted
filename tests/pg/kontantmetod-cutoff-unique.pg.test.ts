@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs'
 import { describe, expect, it } from 'vitest'
 import { getPool, runAsServiceRole, withUserContext } from './setup'
-import { insertPostedJournalEntry, seedCompany } from './fixtures'
+import { insertFiscalPeriod, insertPostedJournalEntry, seedCompany } from './fixtures'
 
 describe('kontantmetod cut-off live marker uniqueness', () => {
   it('allows exactly one of two concurrent live markers', async () => {
@@ -237,8 +237,17 @@ describe('kontantmetod cut-off markers', () => {
         { accountNumber: '3001', debitAmount: 0, creditAmount: 1000 },
       ],
     })
+    // The vändning was booked on the next year's first day, in that year.
+    const nextYearId = await insertFiscalPeriod({
+      userId: seeded.userId,
+      companyId: seeded.companyId,
+      name: '2027',
+      periodStart: '2027-01-01',
+      periodEnd: '2027-12-31',
+    })
     const reversalId = await insertPostedJournalEntry({
       ...common,
+      fiscalPeriodId: nextYearId,
       voucherNumber: 161,
       entryDate: '2027-01-01',
       description: 'Vändning',
@@ -293,8 +302,16 @@ describe('kontantmetod cut-off markers', () => {
         { accountNumber: '5410', debitAmount: 1000, creditAmount: 0 },
       ],
     })
+    const nextYearId = await insertFiscalPeriod({
+      userId: seeded.userId,
+      companyId: seeded.companyId,
+      name: '2027',
+      periodStart: '2027-01-01',
+      periodEnd: '2027-12-31',
+    })
     const reversalId = await insertPostedJournalEntry({
       ...common,
+      fiscalPeriodId: nextYearId,
       voucherNumber: 171,
       entryDate: '2027-01-01',
       description: 'Vändning leverantörsskulder',

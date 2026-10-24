@@ -1,6 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
-import { findUntransferredResults, buildImbalanceDiagnosis } from './imbalance-diagnosis'
+import { buildImbalanceDiagnosis } from './imbalance-diagnosis'
 import { roundOre } from '@/lib/money'
 import type {
   BalanceImbalanceDiagnosis,
@@ -110,28 +110,11 @@ export async function balanceSheetFromTrialBalance(
   const totalEquityLiabilities =
     Math.round(equityLiabilitySections.reduce((sum, s) => sum + s.subtotal, 0) * 100) / 100
 
-  // Explain a broken balance instead of leaving a bare differens. The usual
-  // cause after multi-year migrations is a prior year whose result was never
-  // transferred to equity (see imbalance-diagnosis.ts). Only runs on the
-  // unbalanced path and must never break the report itself.
-  let imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined
+  // Name a broken balance instead of leaving a bare differens. An earlier
+  // year's untransferred result no longer causes one: the derived opening
+  // balance carries it (prior_opening_balance_lines).
   const differens = Math.round((totalAssets - totalEquityLiabilities) * 100) / 100
-  if (Math.abs(differens) >= 0.01) {
-    try {
-      const { data: period } = await supabase
-        .from('fiscal_periods')
-        .select('period_start')
-        .eq('id', fiscalPeriodId)
-        .eq('company_id', companyId)
-        .single()
-      const untransferred = await findUntransferredResults(supabase, companyId, {
-        beforePeriodStart: period?.period_start,
-      })
-      imbalanceDiagnosis = buildImbalanceDiagnosis(untransferred, differens) ?? undefined
-    } catch {
-      // Best-effort diagnosis only — the report still renders without it.
-    }
-  }
+  const imbalanceDiagnosis: BalanceImbalanceDiagnosis | undefined = buildImbalanceDiagnosis(differens) ?? undefined
 
   return {
     asset_sections: assetSections.filter((s) => s.rows.length > 0),

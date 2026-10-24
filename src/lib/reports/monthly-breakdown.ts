@@ -3,7 +3,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { dbError } from '@/lib/errors/db-error'
 import { roundOre } from '@/lib/money'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
-import { excludeYearEndChain, fetchReversedYearEndEntryIds } from './trial-balance'
+import { excludeYearEndChain, fetchYearEndEntryIds } from './trial-balance'
 
 export interface MonthlyBreakdownMonth {
   label: string
@@ -170,11 +170,10 @@ export async function generateMonthlyBreakdown(
     )
   }
 
-  // Year-end exclusion, the trial balance's 'exclude-all-year-end' rule
-  // (excludeYearEndChain), the same set as tb_ex_ye_entries in
-  // get_kpi_report_aggregates. The reversed year-end ids are company-wide:
-  // a storno in this period can reverse a year-end entry of another period.
-  const reversedYearEndIds = await fetchReversedYearEndEntryIds(supabase, companyId)
+  // Year-end exclusion, the trial balance's 'exclude-all-year-end' set
+  // (fetchYearEndEntryIds), the same set as tb_ex_ye_entries in
+  // get_kpi_report_aggregates: both read year_end_chain_entry_ids.
+  const yearEndEntryIds = await fetchYearEndEntryIds(supabase, companyId, fiscalPeriodId)
 
   // Get all posted and reversed journal entry lines for this period with their
   // entry dates, via the two-step entry-lines fetch (lib/bookkeeping/entry-lines.ts).
@@ -191,7 +190,7 @@ export async function generateMonthlyBreakdown(
           .eq('company_id', companyId)
           // posted + reversed: the same set as tb_ex_ye_entries in the RPC.
           .in('status', ['posted', 'reversed']),
-        reversedYearEndIds,
+        yearEndEntryIds,
       ),
     filterLines:
       options?.dimensions && Object.keys(options.dimensions).length > 0

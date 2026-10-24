@@ -360,6 +360,16 @@ export function createFakeLedger(data: FakeLedgerData, failures: FakeFailures = 
           source_type: entry.source_type,
         }))
     },
+    // The 'exclude-all-year-end' set, simplified like the trial balance
+    // above: the period's year_end entries (no fixture undoes a bokslut or
+    // books a resultatavslut outside the year-end run).
+    year_end_chain_entry_ids(args) {
+      return entries
+        .filter((e) => e.fiscal_period_id === args.p_fiscal_period_id && e.source_type === 'year_end'
+          && LEDGER_STATUSES.has(e.status))
+        .map((e) => e.id)
+        .sort()
+    },
     // The continuation-import fallback, simplified: balance-sheet accounts
     // (class 1-2) summed over every ledger entry before the period. The real
     // RPC also floors at an earlier IB verifikat; no fixture needs that here.

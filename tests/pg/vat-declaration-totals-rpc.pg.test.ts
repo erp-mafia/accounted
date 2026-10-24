@@ -204,13 +204,20 @@ describe('get_vat_declaration_totals RPC', () => {
 
   it('excludes draft entries and entries outside the period', async () => {
     const ctx = await seedCompany()
+    const previousYear = await insertFiscalPeriod({
+      userId: ctx.userId,
+      companyId: ctx.companyId,
+      name: '2025',
+      periodStart: '2025-01-01',
+      periodEnd: '2025-12-31',
+    })
 
     await insertJournalEntry({
       ...ctx, voucherNumber: 1, status: 'draft',
       lines: [{ account: '2611', debit: 0, credit: 999 }],
     })
     await insertJournalEntry({
-      ...ctx, voucherNumber: 2, entryDate: '2025-12-31',
+      ...ctx, fiscalPeriodId: previousYear, voucherNumber: 2, entryDate: '2025-12-31',
       lines: [
         { account: '2611', debit: 0, credit: 777 },
         { account: VAT_FIXTURE_BALANCING_ACCOUNT, debit: 777, credit: 0 },

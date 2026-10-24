@@ -2008,7 +2008,7 @@ function untransferredResultSentences(results: ImportResult[]): string[] {
       if (seen.has(u.fiscal_period_id)) continue
       seen.set(
         u.fiscal_period_id,
-        `${u.period_name}: årets resultat på ${u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK är inte omfört till eget kapital, senare års balansräkning visar en differens tills omföringen bokförs (konto 8999 mot t.ex. 2099).`
+        `${u.period_name}: årets resultat på ${u.pl_net.toLocaleString('sv-SE', { minimumFractionDigits: 2 })} SEK är inte omfört till eget kapital i det året; året efter öppnar ändå med resultatet i eget kapital.`
       )
     }
   }

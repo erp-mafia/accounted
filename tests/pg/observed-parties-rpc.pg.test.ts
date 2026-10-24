@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { getPool, withUserContext } from './setup'
-import { insertPostedJournalEntry, insertTransaction, seedCompany } from './fixtures'
+import { insertFiscalPeriod, insertPostedJournalEntry, insertTransaction, seedCompany } from './fixtures'
 import { ledgerKey } from '@/lib/parties/ledger-key'
 import { LEDGER_KEY_CASES } from '@/lib/parties/__tests__/ledger-key.test'
 
@@ -140,9 +140,10 @@ describe('get_observed_parties (pg)', () => {
   it('returns every key named in p_keys whatever its rank, with the stats the ranking gives it (accounted#16)', async () => {
     const c = await seedCompany()
     const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId, sourceType: 'import' }
+    const previousYear = await insertFiscalPeriod({ userId: c.userId, companyId: c.companyId, name: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31' })
     await insertPostedJournalEntry({ ...base, entryDate: '2026-01-10', description: 'Levfakt Beijer Byggmaterial AB (2089)', lines: expense('4000', 1000) })
     await insertPostedJournalEntry({ ...base, entryDate: '2026-02-10', description: 'Telia Sverige AB', lines: expense('6212', 500) })
-    await insertPostedJournalEntry({ ...base, entryDate: '2025-03-01', description: 'Kundfaktura Acme Konsult AB', lines: [
+    await insertPostedJournalEntry({ ...base, fiscalPeriodId: previousYear, entryDate: '2025-03-01', description: 'Kundfaktura Acme Konsult AB', lines: [
       { accountNumber: '1510', debitAmount: 125, creditAmount: 0 },
       { accountNumber: '3011', debitAmount: 0, creditAmount: 100 },
       { accountNumber: '2611', debitAmount: 0, creditAmount: 25 },
@@ -232,7 +233,8 @@ describe('get_observed_parties (pg)', () => {
   it('excludes storno, opening-balance, year-end and VAT-settlement vouchers, and honours the window', async () => {
     const c = await seedCompany()
     const base = { userId: c.userId, companyId: c.companyId, fiscalPeriodId: c.fiscalPeriodId }
-    await insertPostedJournalEntry({ ...base, sourceType: 'import', entryDate: '2025-06-01', description: 'Telia Sverige AB', lines: expense('6212', 100) })
+    const previousYear = await insertFiscalPeriod({ userId: c.userId, companyId: c.companyId, name: '2025', periodStart: '2025-01-01', periodEnd: '2025-12-31' })
+    await insertPostedJournalEntry({ ...base, fiscalPeriodId: previousYear, sourceType: 'import', entryDate: '2025-06-01', description: 'Telia Sverige AB', lines: expense('6212', 100) })
     await insertPostedJournalEntry({ ...base, sourceType: 'import', entryDate: '2026-06-01', description: 'Telia Sverige AB', lines: expense('6212', 100) })
     await insertPostedJournalEntry({ ...base, sourceType: 'storno', entryDate: '2026-06-02', description: 'Telia Sverige AB', lines: expense('6212', 100) })
     await insertPostedJournalEntry({ ...base, sourceType: 'opening_balance', entryDate: '2026-01-01', description: 'Ingående balans', lines: expense('4000', 100) })

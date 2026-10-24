@@ -72,6 +72,8 @@ async function insertJournalEntry(params: Ctx & {
   status?: 'draft' | 'posted' | 'reversed'
   entryDate: string
   lines: Array<{ account: string; debit: number; credit: number }>
+  /** Dated outside its own fiscal period, as only rows from before 20261024140200 can be. */
+  misdated?: boolean
 }): Promise<string> {
   const id = randomUUID()
   const status = params.status ?? 'posted'
@@ -80,6 +82,9 @@ async function insertJournalEntry(params: Ctx & {
   // fine for a read-side RPC that only aggregates lines.
   try {
     await client.query('BEGIN')
+    if (params.misdated) {
+      await client.query('ALTER TABLE public.journal_entries DISABLE TRIGGER zz_enforce_entry_date_in_fiscal_period')
+    }
     await client.query(
       `INSERT INTO public.journal_entries
          (id, user_id, company_id, fiscal_period_id, voucher_number, voucher_series,
@@ -97,6 +102,11 @@ async function insertJournalEntry(params: Ctx & {
     }
     if (status === 'posted') {
       await client.query('SET CONSTRAINTS check_balance_on_posted_insert IMMEDIATE')
+    }
+    if (params.misdated) {
+      // ALTER TABLE refuses a table with pending trigger events.
+      await client.query('SET CONSTRAINTS ALL IMMEDIATE')
+      await client.query('ALTER TABLE public.journal_entries ENABLE TRIGGER zz_enforce_entry_date_in_fiscal_period')
     }
     await client.query('COMMIT')
     return id
@@ -262,9 +272,10 @@ describe('get_onboarding_books_summary', () => {
   })
 
   it('counts balances, but no period figures, for entries dated outside every period', async () => {
+    // Only a row from before 20261024140200 can be dated outside its year.
     const ctx = await seedCompany()
     const fp = await period(ctx, 2026)
-    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp, entryDate: '2023-06-01', lines: sale(1000) })
+    await insertJournalEntry({ ...ctx, fiscalPeriodId: fp, entryDate: '2023-06-01', lines: sale(1000), misdated: true })
     expect(await callRpc(ctx.companyId)).toEqual({ ...EMPTY, vat_balance: 250 })
   })
 

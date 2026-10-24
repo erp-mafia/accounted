@@ -47,6 +47,9 @@ function makeClient(entries: Entry[], opening: Line[]) {
     if (name === 'get_trial_balance_aggregates') {
       return { data: aggregate(entries.flat()).map((row) => ({ bucket: 'period', ...row })), error: null }
     }
+    // The tax bridge's evidence read leaves out the 'exclude-all-year-end'
+    // set; these ledgers have no year-end entries.
+    if (name === 'year_end_chain_entry_ids') return { data: [], error: null }
     throw new Error(`Unexpected RPC: ${name}`)
   })
   return { from, rpc } as unknown as Parameters<typeof generateKassaflodesanalys>[0]
