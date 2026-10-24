@@ -107,7 +107,7 @@ export default function PrivacyPolicyPage() {
               'Metadata om anrop från API-nycklar och agenter: verktygsnamn, felkod, svarstid, användar-, nyckel- och sessions-ID. Aldrig verktygens indata eller resultat',
               'Hålla API:t och MCP-servern tillförlitliga: felfrekvens per verktyg och kanal',
               'Berättigat intresse (art. 6.1 f): driftsäkerhet',
-              '180 dagar',
+              '180 dagar. Därefter finns bara anonyma antal per dag kvar, utan användare, företag, nycklar eller sessioner',
             ],
             [
               'Tekniska felrapporter från appen och servern, med användar-ID',

@@ -30,7 +30,7 @@ async function timeoutAfterHook(path:string) {
 }
 
 describe('pre-request statement timeout hook',()=>{
-  it.each(['/rpc/import_sie_chunk','/rpc/reconcile_sie_import'])('raises %s to 30s',async(path)=>{
+  it.each(['/rpc/import_sie_chunk','/rpc/reconcile_sie_import','/rpc/rollup_agent_telemetry'])('raises %s to 30s',async(path)=>{
     expect(await timeoutAfterHook(path)).toBe('30s')
   })
   it.each(['/rpc/import_sie_journal_entries','/rpc/replace_sie_import','/rpc/undo_sie_import','/rpc/undo_sie_import_chunk','/journal_entries',''])(
