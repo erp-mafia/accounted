@@ -32,6 +32,7 @@ vi.mock('@/lib/salary/create-run', async () => {
 })
 
 import { tools } from '../server'
+import { toToolError } from '../tool-result'
 
 const createSalaryRun = tools.find((t) => t.name === 'gnubok_create_salary_run')!
 const calculateSalaryRun = tools.find((t) => t.name === 'gnubok_calculate_salary_run')!
@@ -67,6 +68,36 @@ describe('gnubok_calculate_salary_run', () => {
     await expect(
       calculateSalaryRun.execute({ salary_run_id: 'run-x' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
     ).rejects.toThrow(/SALARY_RUN_NOT_FOUND/)
+  })
+
+  it('a vacation-pay refusal reaches the agent with its own sentence, the per-employee issues and a remediation (#85)', async () => {
+    const issues = [
+      {
+        employee: 'Vera Testsson',
+        message: 'semesterlönen enligt procentregeln är 12 % av lönen under intjänandeåret 2025/2026',
+        message_en: 'procentregeln semesterlön is 12 % of the pay of the earning year 2025/2026',
+      },
+    ]
+    mockRunSalaryCalculation.mockResolvedValue({
+      ok: false,
+      code: 'SALARY_RUN_VACATION_PAY_UNDETERMINED',
+      details: { reason: 'vacation_pay_undetermined', issues },
+      messageSv: `Vera Testsson: ${issues[0].message}`,
+      messageEn: `Vera Testsson: ${issues[0].message_en}`,
+    })
+    const { supabase } = createQueuedMockSupabase()
+    let thrown: unknown
+    try {
+      await calculateSalaryRun.execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+    } catch (err) {
+      thrown = err
+    }
+    const error = toToolError(thrown, { toolName: 'gnubok_calculate_salary_run' }).error
+    expect(error.code).toBe('SALARY_RUN_VACATION_PAY_UNDETERMINED')
+    expect(error.retryable).toBe(false)
+    expect(error.message_sv).toBe(`Vera Testsson: ${issues[0].message}`)
+    expect(error.details).toEqual({ reason: 'vacation_pay_undetermined', issues })
+    expect(error.remediation?.tool).toBe('gnubok_update_payslip_line')
   })
 })
 

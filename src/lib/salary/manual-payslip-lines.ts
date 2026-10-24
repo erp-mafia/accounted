@@ -41,10 +41,12 @@
  * which the vacation ledger counts (vacation-ledger.ts, converted to paid days
  * at fewer than five workdays a week), and vacation_category says which days
  * they are. It is not a calculated type: no absence register writes it, so
- * the operator enters it here, as through the API. The days alone pay
- * nothing: the calculation derives no semestertillägg, semesterlöneavdrag or
- * semesterlön from them. What this payslip pays or deducts for the days goes
- * on the line as quantity x à-pris or an amount, with its sign.
+ * the operator enters it here, as through the API. Days without an amount
+ * are priced by the calculation (lib/salary/vacation-days-pay.ts, #85): the
+ * semestertillägg under sammalöneregeln, the semesterlöneavdrag and the
+ * semesterlön under procentregeln, a deduction for obetalda dagar, each on a
+ * row of its own. Quantity x à-pris or an amount on the line replaces that:
+ * the line is then paid as entered, with its sign.
  */
 import { roundOre } from '@/lib/money'
 import type { SalaryLineItemType } from '@/types'
@@ -331,7 +333,8 @@ export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineC
  * optionally, what this payslip pays or deducts for them as quantity x
  * à-pris or an amount, kept with the sign typed (a semestertillägg is
  * positive, a semesterlöneavdrag negative). The days alone are stored at
- * 0 kr, the shape validatePayslipLineContent accepts from every door.
+ * 0 kr, the shape validatePayslipLineContent accepts from every door, and
+ * the calculation prices them (vacation-days-pay.ts).
  */
 function buildVacationLine(input: ManualLineInput, spec: ManualLineSpec): ManualLineBuild {
   const quantity = finite(input.quantity)

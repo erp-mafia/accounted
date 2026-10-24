@@ -10630,7 +10630,7 @@
     "add_line_invalid": "Enter an amount, or a quantity and a unit price.",
     "add_line_invalid_text": "Enter a text of at most {max} characters.",
     "add_line_above_cap": "Tax-free is at most {cap} per {unit} this year. Put the part above it as {taxable}.",
-    "add_line_hint_vacation": "Quantity is the vacation days taken. They come off the vacation balance but do not change the pay: enter a vacation supplement, vacation pay or vacation pay deduction as the unit price per day or as the amount (minus reduces the pay).",
+    "add_line_hint_vacation": "Quantity is the vacation days taken. They come off the vacation balance, and without an amount the salary run works out what the days give under the employee's vacation rule: the vacation supplement, the vacation pay deduction and vacation pay, or a deduction for unpaid days. Enter a unit price or amount only when the agreement calculates differently; the amount is then paid as entered (minus reduces the pay).",
     "add_line_invalid_vacation": "Enter the number of vacation days.",
     "add_line_vacation_category": "Days taken from",
     "add_line_vacation_category_paid": "Paid days",
