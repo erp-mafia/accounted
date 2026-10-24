@@ -2,9 +2,10 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Landmark } from 'lucide-react'
+import { Landmark, MoreHorizontal } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsRow, SettingsRowEnd, SettingsRowNote } from '@/components/settings/SettingsRows'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -46,12 +47,13 @@ interface OpenPaymentsConnectionRowProps {
  * One Open Payments connection as a flat hairline row: the bank, where it
  * stands (muted when fine, the one ochre sentence when its last sync failed,
  * the bank no longer accepts it, or it needs a renewal inside 14 days;
- * connectionRowState, status before date), and the two actions, Förnya and
- * Koppla bort. A row signed at the bank whose accounts were never chosen
- * (the person left the account step, often after the BankID app on a phone)
- * reads nothing until they are: it says so and offers Välj konton, which
- * reopens the flow on that connection at the account choice, instead of
- * Förnya.
+ * connectionRowState, status before date), and its actions: Förnya as the
+ * one button, Koppla bort behind the row's menu, so the state and the actions
+ * share one line and every bank row ends on the same edge. A row signed at
+ * the bank whose accounts were never chosen (the person left the account
+ * step, often after the BankID app on a phone) reads nothing until they are:
+ * it says so and offers Välj konton, which reopens the flow on that
+ * connection at the account choice, instead of Förnya.
  */
 export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRenew = true }: OpenPaymentsConnectionRowProps) {
   const t = useTranslations('settings_connections')
@@ -103,7 +105,7 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
           </span>
         }
       >
-        <SettingsRowNote className={cn(attention ? 'text-attn' : 'text-foreground')}>{stateText}</SettingsRowNote>
+        <SettingsRowNote fill className={cn(attention ? 'text-attn' : 'text-foreground')}>{stateText}</SettingsRowNote>
         {canWrite && (
           <SettingsRowEnd>
             {canRenew && awaitingAccounts && (
@@ -116,9 +118,18 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
                 {t('renew')}
               </Button>
             )}
-            <Button variant="ghost" size="sm" className="text-muted-foreground hover:text-foreground" onClick={() => setConfirmOpen(true)}>
-              {t('disconnect')}
-            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
+                  <MoreHorizontal className="h-[15px] w-[15px]" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem className="text-destructive focus:text-destructive" onSelect={() => setConfirmOpen(true)}>
+                  {t('disconnect')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           </SettingsRowEnd>
         )}
       </SettingsRow>
