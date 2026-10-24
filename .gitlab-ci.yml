@@ -10,6 +10,10 @@
 workflow:
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+    # The report benchmark (perf-reports below): its schedule, and a run by
+    # hand from Run pipeline in the web UI. No other job runs in either.
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $PERF_REPORTS == "1"
+    - if: $CI_PIPELINE_SOURCE == "web"
     # A branch with an open merge request already gets the MR pipeline.
     - if: $CI_COMMIT_BRANCH && $CI_OPEN_MERGE_REQUESTS
       when: never
@@ -308,6 +312,59 @@ tool-pg:
       done
       curl -sf -o /dev/null "$TOOL_PG_REST_URL/"
     - npm run test:tools
+
+# The report benchmark (scripts/perf/README.md, "Report benchmark"): every
+# migration replayed into Postgres 17 with prod's shared_buffers and work_mem,
+# a synthetic company the size of the largest in production seeded, then
+# every report RPC and the posting path timed warm and under mixed load. Fails
+# when a p95 is over its budget in scripts/perf/bench/budgets.json. Runs in a
+# scheduled pipeline when PERF_REPORTS is 1, and as a manual job in a pipeline
+# started from Run pipeline; never in merge request or main pipelines. The
+# project allows no pipeline variables (minimum role no_one_allowed), so a
+# schedule cannot carry PERF_REPORTS itself: it is a project CI/CD variable,
+# and deleting it pauses the schedule's benchmark. About 9 minutes on the
+# shared runner, so it stays interruptible.
+perf-reports:
+  stage: pg
+  extends: .npm
+  needs: []
+  interruptible: true
+  timeout: 30m
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "schedule" && $PERF_REPORTS == "1"
+    - if: $CI_PIPELINE_SOURCE == "web"
+      when: manual
+  services:
+    - name: supabase/postgres:17.6.1.136
+      alias: postgres
+      # Prod's settings (Supabase Large: shared_buffers, work_mem,
+      # max_connections); the image ships 128MB for both caches.
+      # effective_cache_size assumes three quarters of the compute's 8 GB.
+      # Dynamic shared memory in files: a service container's /dev/shm is
+      # 64 MB, which parallel queries outgrow under load.
+      command: ["postgres", "-D", "/etc/postgresql", "-c", "shared_buffers=2GB", "-c", "work_mem=12MB",
+                "-c", "max_connections=160", "-c", "effective_cache_size=6GB",
+                "-c", "dynamic_shared_memory_type=mmap"]
+      variables:
+        POSTGRES_PASSWORD: postgres
+  variables:
+    PGHOST: postgres
+    PGPASSWORD: postgres
+    BENCH_DATABASE_URL: postgresql://postgres:postgres@postgres:5432/postgres
+  script:
+    - apt-get update -qq && apt-get install -y -qq --no-install-recommends postgresql-client >/dev/null
+    - npm ci --prefer-offline --no-audit --fund=false
+    - sh scripts/perf/bench/setup-db.sh
+    # Both modes run even when the first is over budget, so one run shows both.
+    - |
+      status=0
+      npx tsx scripts/perf/bench/run.ts --mode warm --check --out perf-warm.json || status=1
+      npx tsx scripts/perf/bench/run.ts --mode mixed --check --out perf-mixed.json || status=1
+      exit $status
+  artifacts:
+    when: always
+    paths: [perf-warm.json, perf-mixed.json]
+    expire_in: 90 days
 
 # Production migrations on every merge to main, as Supabase's GitHub
 # integration did (it applied out-of-order versions too, hence --include-all).

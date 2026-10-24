@@ -1,0 +1,224 @@
+{
+  "$comment": [
+    "p95 budgets in ms per case (cases.ts) and mode, checked by run.ts --check; the CI job perf-reports fails when a p95 is over its budget.",
+    "Set on 2026-10-24 from the worst p95 of every run on the current code: eight warm runs (five local on a 2 CPU / 8 GB container, three in CI, two of those beside a full merge request pipeline) and six mixed (three local, three CI). For compute_prior_opening_balances and the huvudbok account page only the runs after !845 and the page-boundary change count.",
+    "warm: twice the worst p95 (at least 10 ms) while that stays within the 100 ms DB target; 100 ms when 1.5 times the worst still fits under it; otherwise 1.5 times the worst, rounded up to 10 ms, and the case carries a note.",
+    "mixed: twice the worst mixed p95, at least 20 ms, rounded up to 10 ms. Mixed has no absolute target: it catches calls that slow down under concurrent postings and builds.",
+    "The 100 ms DB target: 200 ms p95 end to end, less the auth proxy and route wrapper (50-90 ms in production).",
+    "A change that makes a call legitimately slower raises its budget in the same merge request, with before and after numbers."
+  ],
+  "targetMs": 100,
+  "cases": {
+    "request.resolve_active_company": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "hem.capability_grant_rows": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "hem.nav_flags": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "hem.verifikat_without_documents": {
+      "warm": 460,
+      "mixed": 830,
+      "note": "Over the 100 ms target: supplier_invoices_with_document joins document_attachments by id with no company filter, so the planner scans every company's documents; it grows with the whole database, not the company."
+    },
+    "hem.collection_open_invoice_ids": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "hem.collection_attention_case_ids": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "hem.peppol_failed_invoice_ids": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "bookkeeping.list_verifikat_missing_underlag": {
+      "warm": 720,
+      "mixed": 1350,
+      "note": "Over the 100 ms target: the same id joins without a company filter (document_attachments, supplier_invoice_payments, invoices) scan every company's rows."
+    },
+    "tb.ytd.include": {
+      "warm": 50,
+      "mixed": 140
+    },
+    "tb.ytd.exclude_all_year_end": {
+      "warm": 60,
+      "mixed": 60
+    },
+    "tb.prior_ytd.exclude_all_year_end": {
+      "warm": 65,
+      "mixed": 150
+    },
+    "tb.year.include": {
+      "warm": 45,
+      "mixed": 90
+    },
+    "tb.year.exclude_all_year_end": {
+      "warm": 65,
+      "mixed": 120
+    },
+    "tb.year.exclude_final": {
+      "warm": 60,
+      "mixed": 130
+    },
+    "tb.closed_year.include": {
+      "warm": 60,
+      "mixed": 140
+    },
+    "tb.closed_year.exclude_final": {
+      "warm": 55,
+      "mixed": 150
+    },
+    "tb.closed_year.to_balance_day": {
+      "warm": 45,
+      "mixed": 70
+    },
+    "opening_balances.prior_years": {
+      "warm": 45,
+      "mixed": 160
+    },
+    "latest_vouchers.resultatrapport": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "latest_vouchers.balansrapport": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "kpi.aggregates": {
+      "warm": 100,
+      "mixed": 210
+    },
+    "monthly_breakdown.aggregates": {
+      "warm": 100,
+      "mixed": 190
+    },
+    "kpi.paid_invoice_days": {
+      "warm": 60,
+      "mixed": 170
+    },
+    "kpi.supplier_invoices": {
+      "warm": 65,
+      "mixed": 140
+    },
+    "dimension_pnl.buckets": {
+      "warm": 100,
+      "mixed": 120
+    },
+    "huvudbok.line_counts": {
+      "warm": 40,
+      "mixed": 50
+    },
+    "huvudbok.account_page": {
+      "warm": 45,
+      "mixed": 330
+    },
+    "huvudbok.account_page.later": {
+      "warm": 60,
+      "mixed": 50
+    },
+    "huvudbok.drilldown_lines": {
+      "warm": 100,
+      "mixed": 200
+    },
+    "grundbok.page": {
+      "warm": 100,
+      "mixed": 170
+    },
+    "grundbok.page.later": {
+      "warm": 75,
+      "mixed": 150
+    },
+    "grundbok.totals": {
+      "warm": 75,
+      "mixed": 160
+    },
+    "ar.ledger_invoices": {
+      "warm": 75,
+      "mixed": 140
+    },
+    "ar.register_coverage": {
+      "warm": 60,
+      "mixed": 150
+    },
+    "ar.register_coverage.period": {
+      "warm": 65,
+      "mixed": 160
+    },
+    "ap.ledger_invoices": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "vat.declaration_totals": {
+      "warm": 65,
+      "mixed": 160
+    },
+    "vat.settlement_window": {
+      "warm": 55,
+      "mixed": 180
+    },
+    "vat.ruta_source_lines": {
+      "warm": 100,
+      "mixed": 190
+    },
+    "vat.rc_basis_gaps": {
+      "warm": 35,
+      "mixed": 30
+    },
+    "ps.eu_sales_entries": {
+      "warm": 35,
+      "mixed": 90
+    },
+    "audit.sources.month": {
+      "warm": 140,
+      "mixed": 220,
+      "note": "Near the target: 43 ms on a quiet host, up to 91 ms on a busy runner, so the budget sits above it."
+    },
+    "audit.decisions.month": {
+      "warm": 10,
+      "mixed": 20
+    },
+    "audit.sources.year": {
+      "warm": 1560,
+      "note": "The whole-year behandlingshistorik, over the target by decision (the report opens on the month, docs/decisions/2026-10/2026-10-23-behandlingshistorik-opens-on-month.md)."
+    },
+    "reconciliation.facts.month": {
+      "warm": 270,
+      "mixed": 670,
+      "note": "Over the 100 ms DB target (under 200 ms end to end in !822); kept from getting slower."
+    },
+    "reconciliation.facts.ytd": {
+      "warm": 380,
+      "mixed": 850,
+      "note": "Over the 100 ms DB target; kept from getting slower."
+    },
+    "reconciliation.items.month": {
+      "warm": 250,
+      "mixed": 590,
+      "note": "Over the 100 ms DB target; kept from getting slower."
+    },
+    "reconciliation.unexplained_bank_legs": {
+      "warm": 100,
+      "mixed": 210
+    },
+    "yearend.bank_facts": {
+      "warm": 350,
+      "mixed": 810,
+      "note": "Over the 100 ms DB target: a whole closed year of 1930; kept from getting slower."
+    },
+    "yearend.voucher_gaps": {
+      "warm": 85,
+      "mixed": 170
+    },
+    "post.commit_journal_entry": {
+      "warm": 70,
+      "mixed": 150
+    }
+  }
+}
