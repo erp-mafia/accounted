@@ -12898,6 +12898,7 @@
     "provider_sie_instead_note": "A SIE file brings the vouchers. You upload the receipts afterwards, and the invoices stay in {provider}.",
     "provider_sie_instead_note_generic": "A SIE file brings the vouchers. You upload the receipts afterwards, and the invoices stay in the old system.",
     "provider_connecting": "Connecting to {provider} …",
+    "provider_window_closed": "The {provider} window closed before the connection was done. Try again. If {provider} showed a page about a licence or permissions, uploading a SIE file works just as well.",
     "provider_reading": "Reading {provider} …",
     "provider_connected": "{provider} is connected.",
     "provider_sentence": "We fetch <b>{years, plural, one {one fiscal year} other {# fiscal years}}</b>",

@@ -12898,6 +12898,7 @@
     "provider_sie_instead_note": "Med en SIE-fil kommer verifikaten med, underlagen laddar du upp efteråt och fakturorna stannar i {provider}.",
     "provider_sie_instead_note_generic": "Med en SIE-fil kommer verifikaten med, underlagen laddar du upp efteråt och fakturorna stannar i det gamla systemet.",
     "provider_connecting": "Ansluter till {provider} …",
+    "provider_window_closed": "Fönstret hos {provider} stängdes innan anslutningen blev klar. Försök igen. Visade {provider} en sida om licens eller behörighet går det lika bra att ladda upp en SIE-fil.",
     "provider_reading": "Läser av {provider} …",
     "provider_connected": "{provider} är ansluten.",
     "provider_sentence": "Vi hämtar <b>{years, plural, one {ett räkenskapsår} other {# räkenskapsår}}</b>",
