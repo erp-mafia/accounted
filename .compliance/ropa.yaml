@@ -467,6 +467,45 @@ processing_activities:
       - error_message_truncated_500_chars
       - no_tool_args_or_results_persisted
 
+  - id: mcp.telemetry_rollup
+    name: Anonyma dagsräkningar av agent-telemetri
+    purpose: >-
+      Behålla mönstret i hur agenter använder tjänsten efter att
+      mcp.telemetry-raderna raderats: antal anrop per dag, verktyg, skill,
+      agentprodukt, aktörstyp, utfall och felkod, svarstider (median och
+      95:e percentil), vilket verktyg som följde vilket inom en session,
+      samt hur många sessioner och företag ett antal avser. Skrivs av
+      rollup_agent_telemetry från städjobbet innan det raderar. Inget
+      användar-, företags-, nyckel- eller sessions-ID, ingen fritext:
+      kanalmarkören reduceras till en fast lista över agentprodukter,
+      verktygsnamn som servern inte kände igen till '(unknown_tool)',
+      egna skills till '(own)'. Resultatet är inte personuppgifter.
+    lawful_basis: art_6_1_f   # the anonymisation step; the output is not personal data
+    special_category_basis: null
+    controller: accounted
+    processor: null
+    data_subjects:
+      - business_owner
+    data_categories: []           # anonymous output; input is mcp.telemetry
+    recipients:
+      - name: Supabase
+        country: EU
+        role: processor
+    international_transfers:
+      applicable: false
+      mechanism: null
+      note: EU-only processor; no third-country transfer.
+    retention:
+      duration: indefinite
+      basis: anonymous_aggregate
+      stored_in:
+        - agent_telemetry_daily
+        - agent_tool_transitions_daily
+        - agent_telemetry_rollup_days
+    security_measures:
+      - service_role_only_reads_and_writes
+      - no_identifiers_or_free_text_persisted
+
   - id: mcp.company_customer_tools
     name: MCP-verktyg för företagsinställningar och kunder
     purpose: >-
