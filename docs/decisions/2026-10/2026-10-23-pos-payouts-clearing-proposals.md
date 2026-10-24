@@ -1,0 +1,1 @@
+[2026-10-23] Bank rows that are the till's card and Swish money get a proposal against the tender account (1686) as a new bank-row proposal source, clearing, read live from pos_sales_days and never booked from the row: an ingest hint column needs a migration and misses days fetched after the row.

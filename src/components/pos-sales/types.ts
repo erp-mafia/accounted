@@ -99,3 +99,13 @@ export interface PosDayDetailJson {
 export function tenderAmount(day: Pick<PosDayJson, 'tenders'>, kind: PosTenderKind): number {
   return day.tenders.filter((t) => t.kind === kind).reduce((sum, t) => sum + t.amount, 0)
 }
+
+/** GET /api/pos-sales/clearing-balance (lib/pos-sales/clearing-balance.ts). */
+export interface PosClearingBalanceJson {
+  as_of: string
+  accounts: string[]
+  ledger_balance: number | null
+  fiscal_period_id: string | null
+  unbooked_days: number
+  unbooked_amount: number
+}

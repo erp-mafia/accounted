@@ -1028,8 +1028,11 @@ export default function QuickReviewDialog({
               // person set or picked stands, and so does the proposal they
               // went back to after the document's read was taken once: the
               // line offers the pick instead of taking it over theirs. A
-              // proposal opened in the read's box is not one nobody chose.
-              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead && !boxDispute}
+              // proposal opened in the read's box is not one nobody chose,
+              // and neither is a clearing: the till's record says the money
+              // is already booked, so a read that books it as revenue only
+              // offers its pick.
+              autoApply={!isTemplateBooking && !isPersonChoice(proposal) && !docRead && !boxDispute && proposal.source !== 'clearing'}
               onProposal={setAiProposal}
               onTake={takeAssistantPick}
             />

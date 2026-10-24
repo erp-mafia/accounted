@@ -1377,6 +1377,69 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/pos-sales/clearing-balance`
+
+**The till's card and Swish money not yet in the bank: the clearing account balance and the days not booked yet.**
+`scope:transactions:read · risk:low · idempotent`
+
+accounts: the accounts the connections book card and Swish to (1686 by default; a kind mapped to a bank account clears nothing). ledger_balance: debit minus credit on them as of as_of (default today), read as the balance sheet reads it, ingående balans included; null when no fiscal year covers as_of. unbooked_days and unbooked_amount: the days up to as_of not booked yet and their card and Swish, tips included, which the ledger does not hold yet. With every day booked and every payout booked against the account, ledger_balance is the money still on its way; a negative or growing figure is a payout booked as sales or a day booked twice. Read-only.
+
+**Use when:** A month-end check of the till's card and Swish against the bank, or before booking payouts against 1686.
+**Do not use for:** Which bank row is which payout (gnubok_suggest_categories proposes those), or the days themselves (GET /pos-sales/days).
+
+**Pitfalls:**
+- Two venues on one account share one ledger_balance: the ledger cannot tell them apart.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `as_of` | query | `string` | no | The date the balance is read as of; today when left out. |
+
+Response `200`:
+```ts
+{
+  data: {
+    as_of: string,
+    accounts: string[],
+    ledger_balance: number | null,
+    fiscal_period_id: string | null,
+    unbooked_days: number,
+    unbooked_amount: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "as_of": "2026-09-30",
+    "accounts": [
+      "1686"
+    ],
+    "ledger_balance": 14250.5,
+    "fiscal_period_id": "4f2d…",
+    "unbooked_days": 2,
+    "unbooked_amount": 31480
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/pos-sales/connections`
 
 **The point-of-sale venues the company has connected, with their health and account mapping.**

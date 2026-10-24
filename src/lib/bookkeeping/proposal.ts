@@ -35,7 +35,34 @@ import type {
  *
  * Client-safe: pure data and pure functions over the static catalog.
  */
-export type ProposalSource = 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant' | 'manual'
+export type ProposalSource = 'rule' | 'recent' | 'catalog' | 'counterparty' | 'assistant' | 'manual' | 'clearing'
+
+/**
+ * What a clearing proposal (source 'clearing') rests on: another block's own
+ * record that this money was already booked onto a clearing account, so the
+ * bank row clears that account instead of being booked as revenue again
+ * (lib/transactions/clearing-proposals.ts). Today the till: card and Swish
+ * on the day voucher (lib/pos-sales/payout-match.ts).
+ */
+export interface ClearingEvidence {
+  /** The block whose record it is. */
+  channel: 'pos'
+  /** How the money was paid. */
+  kind: 'swish' | 'card'
+  /**
+   * receipt: one Swish receipt, to the öre; days: the card tender of one to
+   * three business days; balance: the open card balance up to a day.
+   */
+  fit: 'receipt' | 'days' | 'balance'
+  /** The clearing account the row books against. */
+  account: string
+  /** The business days the money was taken on, ascending (fit balance: every day it pays off). */
+  business_dates: string[]
+  /** fit receipt: the receipt number as printed. */
+  receipt_number?: string
+  /** What the record says arrives: the receipt, the days' card tender, the open balance. */
+  expected_amount: number
+}
 
 export type ProposalBooking =
   /** A catalog template: the server books the template's lines (entity-resolved). */
@@ -95,6 +122,8 @@ export interface BookingProposal {
    * read's box with the proposal's one click away.
    */
   read_reverse_charge_kind?: ReverseChargeKind
+  /** Source 'clearing': the record behind it. Never booked without a review. */
+  clearing?: ClearingEvidence
 }
 
 /** The leg that is not the bank: what the chip, the assistant and Claude call "the account". */
@@ -457,8 +486,10 @@ export function templateBehind(p: BookingProposal): BookingTemplate | undefined 
 }
 
 /** The i18n key (tx_quick_review) and values for the one-line why. */
-export function whyKeyFor(p: BookingProposal): { key: string; values?: Record<string, number> } {
+export function whyKeyFor(p: BookingProposal): { key: string; values?: Record<string, string | number> } {
   switch (p.source) {
+    case 'clearing':
+      return clearingWhyKey(p)
     case 'rule':
       return { key: 'rec_why_rule' }
     case 'counterparty':
@@ -561,6 +592,38 @@ export function categorizeArgsFor(
     : null
 }
 
+function clearingWhyKey(p: BookingProposal): { key: string; values?: Record<string, string | number> } {
+  const e = p.clearing
+  if (!e) return { key: 'rec_why_manual' }
+  const dates = e.business_dates
+  const last = dates[dates.length - 1] ?? ''
+  if (e.fit === 'receipt') {
+    return { key: 'rec_why_clearing_receipt', values: { receipt: e.receipt_number ?? '', date: last, account: e.account } }
+  }
+  if (e.fit === 'days') {
+    return { key: 'rec_why_clearing_days', values: { count: dates.length, first: dates[0] ?? '', last, account: e.account } }
+  }
+  return { key: 'rec_why_clearing_balance', values: { date: last, account: e.account } }
+}
+
+/**
+ * A clearing proposal's reason in Swedish: what the record says and why the
+ * row books against the clearing account. The proposal's description, the
+ * MCP tool's why and the assistant's candidate reason.
+ */
+export function clearingReasonSv(e: ClearingEvidence): string {
+  const dates = e.business_dates
+  const first = dates[0] ?? ''
+  const last = dates[dates.length - 1] ?? ''
+  const what =
+    e.fit === 'receipt'
+      ? `Swish-betalning som stämmer på öret med kvitto ${e.receipt_number ?? ''} i kassan ${last}`
+      : e.fit === 'days'
+        ? `Kortutbetalning som motsvarar kortförsäljningen i kassan ${dates.length > 1 ? `${first} till ${last}` : first}`
+        : `Kortutbetalning som motsvarar kortpengarna från kassan som inte kommit in på banken, till och med ${last}`
+  return `${what}. Försäljningen bokförs i dagskassan, så raden bokförs mot ${e.account} och inte som intäkt igen, annars räknas försäljningen två gånger.`
+}
+
 /** The why in Swedish, for surfaces without the UI's message catalog (the MCP tool). */
 export function whyTextSv(p: BookingProposal): string {
   const why = sourceWhySv(p)
@@ -571,6 +634,8 @@ export function whyTextSv(p: BookingProposal): string {
 
 function sourceWhySv(p: BookingProposal): string {
   switch (p.source) {
+    case 'clearing':
+      return p.clearing ? clearingReasonSv(p.clearing) : 'Pengar som redan är bokförda på ett avräkningskonto'
     case 'rule':
       return 'Enligt företagets regel'
     case 'counterparty': {

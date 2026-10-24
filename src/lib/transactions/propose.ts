@@ -9,10 +9,13 @@ import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-acco
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import type { AssistantRead } from '@/lib/agent/categorize/read'
 import { ASSISTANT_READS } from '@/lib/composition/assistant-reads'
+import { CLEARING_PROPOSERS } from '@/lib/composition/clearing-proposals'
+import { createLogger } from '@/lib/logger'
 import { proposalFromTemplate, reverseChargeBoxesOf, slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { ASSISTANT_LIKELY, COUNTERPART_SEEN_FOR_DIRECT } from './direct-booking'
+import { proposeClearings } from './clearing-proposals'
 import type { Transaction, EntityType, CategorizationTemplate, MappingRule } from '@/types'
 
 /**
@@ -31,6 +34,10 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * carries the read's box, which sends it to a review (disputeReverseChargeBox).
  * A payment to Skatteverket is the exception to all of it: it leads with the
  * skattekonto, and no learned counterpart is offered for it (leadWithSkattekonto).
+ * Money another block already booked onto a clearing account (the till's
+ * card and Swish on 1686) leads above everything, since any other booking
+ * of it counts the revenue twice (leadWithClearing); it never books from
+ * the row.
  */
 /**
  * The rules behind a bank line's suggestions, recorded with every decision
@@ -39,7 +46,9 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * same row changes on purpose: a source added or dropped, the order, the
  * contest or box-dispute rules.
  */
-export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.2'
+export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.3'
+
+const log = createLogger('transactions/propose')
 
 export interface Proposed {
   proposals: Record<string, BookingProposal[]>
@@ -194,7 +203,25 @@ export async function proposeForTransactions(
     proposals[tx.id] = leadWithSkattekonto(proposals[tx.id] ?? [], tx)
   }
 
+  // Best effort, like the reads: the list never waits on a failed proposer.
+  const clearings = await proposeClearings(supabase, companyId, transactions, CLEARING_PROPOSERS, log).catch(
+    () => new Map<string, BookingProposal>(),
+  )
+  for (const [txId, clearing] of clearings) {
+    proposals[txId] = leadWithClearing(proposals[txId] ?? [], clearing)
+  }
+
   return { proposals, assistant_reads }
+}
+
+/**
+ * A clearing proposal (lib/transactions/clearing-proposals.ts) leads the
+ * row's list: the money is already booked onto the clearing account, so a
+ * learned counterpart, the catalog or the assistant booking it as revenue
+ * would count it twice. The others stay below it for the picker.
+ */
+export function leadWithClearing(list: BookingProposal[], clearing: BookingProposal): BookingProposal[] {
+  return [clearing, ...list.filter((p) => p.template_id !== clearing.template_id)]
 }
 
 /**

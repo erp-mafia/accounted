@@ -8,7 +8,7 @@
 import { z } from 'zod'
 import { POS_TENDER_KINDS } from '@accounted/connect-contract'
 import { accountNumberSchema, isoDateSchema } from '@/lib/invariants/zod'
-import { posSalesSettingsPatchSchema } from '@/lib/pos-sales/settings'
+import { DEFAULT_POS_SALES_SETTINGS, posSalesSettingsPatchSchema } from '@/lib/pos-sales/settings'
 import type { PosConnectionView } from '@/lib/pos-sales/service'
 import type { PosSalesDaySummaryRow } from '@/lib/pos-sales/types'
 import { defineOperation } from './types'
@@ -17,6 +17,7 @@ import { defineOperation } from './types'
 // the Connect transport, which the registry's importers do not otherwise need.
 const service = () => import('@/lib/pos-sales/service')
 const booking = () => import('@/lib/pos-sales/book-day')
+const clearing = () => import('@/lib/pos-sales/clearing-balance')
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
 
@@ -634,6 +635,55 @@ export const posSalesDayBook = defineOperation({
     },
   },
   run: async (ctx, input, { dryRun }) => (await booking()).bookPosSalesDay(ctx, input, { dryRun }),
+})
+
+export const posSalesClearingBalance = defineOperation({
+  id: 'pos-sales.clearing-balance',
+  kind: 'read',
+  scope: 'transactions:read',
+  risk: 'low',
+  reversible: false,
+  docs: {
+    summary: 'The till\'s card and Swish money not yet in the bank: the clearing account balance and the days not booked yet.',
+    description:
+      'accounts: the accounts the connections book card and Swish to (1686 by default; a kind mapped to a bank account clears nothing). ledger_balance: debit minus credit on them as of as_of (default today), read as the balance sheet reads it, ingående balans included; null when no fiscal year covers as_of. unbooked_days and unbooked_amount: the days up to as_of not booked yet and their card and Swish, tips included, which the ledger does not hold yet. With every day booked and every payout booked against the account, ledger_balance is the money still on its way; a negative or growing figure is a payout booked as sales or a day booked twice. Read-only.',
+    useWhen: 'A month-end check of the till\'s card and Swish against the bank, or before booking payouts against 1686.',
+    doNotUseFor: 'Which bank row is which payout (gnubok_suggest_categories proposes those), or the days themselves (GET /pos-sales/days).',
+    pitfalls: ['Two venues on one account share one ledger_balance: the ledger cannot tell them apart.'],
+    example: {
+      request: { as_of: '2026-09-30' },
+      response: {
+        data: {
+          as_of: '2026-09-30',
+          accounts: [DEFAULT_POS_SALES_SETTINGS.tender_accounts.card],
+          ledger_balance: 14250.5,
+          fiscal_period_id: '4f2d…',
+          unbooked_days: 2,
+          unbooked_amount: 31480,
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({ as_of: isoDate.optional().describe('The date the balance is read as of; today when left out.') }),
+  output: z.object({
+    as_of: z.string(),
+    accounts: z.array(z.string()),
+    ledger_balance: z.number().nullable(),
+    fiscal_period_id: z.string().uuid().nullable(),
+    unbooked_days: z.number(),
+    unbooked_amount: z.number(),
+  }),
+  errorCodes: ['POS_CONNECTION_NOT_FOUND', 'POS_READ_FAILED'],
+  http: { method: 'GET', path: '/api/v1/companies/:companyId/pos-sales/clearing-balance' },
+  mcp: {
+    name: 'gnubok_get_pos_clearing_balance',
+    title: 'Get POS Clearing Balance (1686)',
+    description:
+      'Card and Swish from the till not yet in the bank: the clearing account balance (1686 by default) as of a date, and the card and Swish of the days not booked yet. Use for the month-end check of payouts against the till.',
+    keywords: ['avräkningskonto', 'avräkning kort', 'kortinlösen', 'swish', 'kassa', 'utbetalning', 'pos'],
+  },
+  run: async (ctx, input) => (await clearing()).getPosClearingBalance(ctx, input),
 })
 
 export const posSalesFetch = defineOperation({

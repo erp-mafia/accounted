@@ -326,6 +326,7 @@ import '@/app/api/v1/companies/[companyId]/pos-sales/venues/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/days/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/days/[dayId]/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/days/[dayId]/book/route'
+import '@/app/api/v1/companies/[companyId]/pos-sales/clearing-balance/route'
 import '@/app/api/v1/companies/[companyId]/pos-sales/fetch/route'
 // Webshop orders (Shopify, WooCommerce, Zettle): lib/operations/webshop-orders.ts
 import '@/app/api/v1/companies/[companyId]/webshop-orders/route'

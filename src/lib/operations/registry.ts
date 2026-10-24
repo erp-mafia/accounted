@@ -225,6 +225,7 @@ import {
   skatteverketAgiValidateIndividuppgift,
 } from './skatteverket-helpers'
 import {
+  posSalesClearingBalance,
   posSalesConnect,
   posSalesConnectionsList,
   posSalesDayBook,
@@ -466,6 +467,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   posSalesDaysList,
   posSalesDayGet,
   posSalesDayBook,
+  posSalesClearingBalance,
   posSalesFetch,
   // webshop-orders (Shopify, WooCommerce, Zettle): read the synced rows, book one with the caller's lines
   webshopOrdersList,

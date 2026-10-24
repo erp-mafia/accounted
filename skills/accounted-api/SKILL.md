@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 369 endpoints.
+  pagination, scopes), and all 370 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -218,7 +218,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 369 operations. Paths are shown without
+API version `2026-05-12`, 370 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (22)
@@ -460,7 +460,7 @@ POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consu
 POST /companies/{companyId}/inbox-items/{id}/unmatch-transaction : Release an inbox item's bank transaction match [scope:documents:write risk:low idempotent dry-run reversible]
 ```
 
-### Banking (62)
+### Banking (63)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -484,6 +484,7 @@ POST /companies/{companyId}/imports/sie/{id}/resume : Resume an interrupted SIE 
 POST /companies/{companyId}/imports/sie/{id}/undo : Undo an SIE import by batch storno: every entry it posted is reversed, nothing is deleted [scope:bookkeeping:write risk:high idempotent dry-run]
 POST /companies/{companyId}/imports/sie/upload : Reserve a direct SIE upload [scope:bookkeeping:write risk:low reversible]
 POST /companies/{companyId}/imports/skattekonto-file : Import a skattekontoutdrag file (Skatteverket tax account statement) into the skattekonto rows [scope:transactions:write risk:medium idempotent dry-run]
+GET /companies/{companyId}/pos-sales/clearing-balance : The till's card and Swish money not yet in the bank: the clearing account balance and the days not booked yet [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/pos-sales/connections : The point-of-sale venues the company has connected, with their health and account mapping [scope:transactions:read risk:low idempotent]
 POST /companies/{companyId}/pos-sales/connections : Connect a point-of-sale venue, so its business days are fetched every morning [scope:companies:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/pos-sales/connections/{connectionId}/disconnect : Stop fetching a point-of-sale venue's days [scope:companies:write risk:medium idempotent dry-run reversible]
