@@ -132,27 +132,34 @@ export function SettingsRow({
       ? cloneElement(child, { className: cn('ml-auto', child.props.className) })
       : child,
   )
+  // The two columns come from the row's own width, not the viewport's: the
+  // settings content shares the screen with the nav, the settings rail and a
+  // docked assistant, so at a viewport breakpoint the 400px control column
+  // squeezed the label to nothing and the two ran into each other. Below
+  // 640px (the control column, the gap and a ~13rem label) the row stacks.
   return (
-    <div
-      className={cn(
-        'grid grid-cols-1 gap-2 py-3 md:min-h-[60px] md:grid-cols-[minmax(0,1fr)_minmax(0,var(--settings-control-w))] md:gap-x-8',
-        align === 'center' ? 'md:items-center' : 'md:items-baseline',
-        !borderless && 'border-b border-border',
-        className,
-      )}
-    >
-      <div className="flex min-w-0 items-center gap-2">
-        {htmlFor ? (
-          <label htmlFor={htmlFor} data-ph-unmask="" className={labelClass}>
-            {label}
-          </label>
-        ) : (
-          <span data-ph-unmask="" className={labelClass}>{label}</span>
+    <div className="@container">
+      <div
+        className={cn(
+          'grid grid-cols-1 gap-2 py-3 @min-[640px]:min-h-[60px] @min-[640px]:grid-cols-[minmax(0,1fr)_minmax(0,var(--settings-control-w))] @min-[640px]:gap-x-8',
+          align === 'center' ? '@min-[640px]:items-center' : '@min-[640px]:items-baseline',
+          !borderless && 'border-b border-border',
+          className,
         )}
-        {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
-      </div>
-      <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
-        {content}
+      >
+        <div className="flex min-w-0 items-center gap-2">
+          {htmlFor ? (
+            <label htmlFor={htmlFor} data-ph-unmask="" className={labelClass}>
+              {label}
+            </label>
+          ) : (
+            <span data-ph-unmask="" className={labelClass}>{label}</span>
+          )}
+          {help ? <HelpPopover className="shrink-0">{help}</HelpPopover> : null}
+        </div>
+        <div className="flex min-w-0 flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
+          {content}
+        </div>
       </div>
     </div>
   )
@@ -163,9 +170,13 @@ export function SettingsRowEnd({ children, className }: { children: React.ReactN
   return <div className={cn('ml-auto flex shrink-0 items-center gap-3', className)}>{children}</div>
 }
 
-/** Muted secondary text inside a row. */
-export function SettingsRowNote({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <span className={cn('text-[12.5px] text-muted-foreground', className)}>{children}</span>
+/**
+ * Muted secondary text inside a row. `fill` is for a state beside the row's
+ * actions: it takes the room left of them and wraps there, so a long state
+ * never pushes the buttons onto a line of their own below it.
+ */
+export function SettingsRowNote({ children, className, fill = false }: { children: React.ReactNode; className?: string; fill?: boolean }) {
+  return <span className={cn('text-[12.5px] text-muted-foreground', fill && 'min-w-0 flex-1 basis-0', className)}>{children}</span>
 }
 
 /**

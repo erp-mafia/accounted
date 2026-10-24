@@ -313,7 +313,7 @@ export function ConnectionsSettingsContent() {
         help={opts.help}
       >
         {opts.state ? (
-          <SettingsRowNote className={opts.attention ? 'text-attn' : opts.connected ? 'text-foreground' : undefined}>
+          <SettingsRowNote fill className={opts.attention ? 'text-attn' : opts.connected ? 'text-foreground' : undefined}>
             {opts.state}
           </SettingsRowNote>
         ) : null}
@@ -398,6 +398,24 @@ export function ConnectionsSettingsContent() {
                   : connection.status === 'error'
                     ? t('sync_failed')
                     : t('connected')
+          // One button per row and the rest behind its menu, so the state,
+          // the button and the menu share one line in the control column and
+          // every bank row ends on the same edge. With no switch or import to
+          // offer, Hantera is the button.
+          const primaryAction = uncoveredStopped ? (
+            <Button size="sm" asChild>
+              <Link href="/import?mode=bank">{t('import_statements')}</Link>
+            </Button>
+          ) : replacedStopped || uncovered ? null : (
+            <Button
+              size="sm"
+              onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
+            >
+              {t('switch_connection')}
+            </Button>
+          )
+          // The signatory link is the byrå's path, always in the menu.
+          const offersSignatoryLink = canInvite && !uncovered
           return (
             <div key={connection.id}>
               {row({
@@ -411,23 +429,12 @@ export function ConnectionsSettingsContent() {
                 attention: pendingSwitch || (stoppedFeed && !replacedStopped) || connection.status === 'error',
                 actions: (
                   <>
-                    <Button variant="outline" size="sm" asChild>
-                      <Link href="/settings/banking">{t('manage')}</Link>
-                    </Button>
-                    {uncoveredStopped ? (
-                      <Button size="sm" asChild>
-                        <Link href="/import?mode=bank">{t('import_statements')}</Link>
-                      </Button>
-                    ) : replacedStopped || uncovered ? null : (
-                      <Button
-                        size="sm"
-                        onClick={() => bankFlow.open('switch', { bank: { bic: '', name: connection.bank_name ?? '' }, replaceConnectionId: connection.id, deadline: switchDeadline })}
-                      >
-                        {t('switch_connection')}
+                    {primaryAction ?? (
+                      <Button variant="outline" size="sm" asChild>
+                        <Link href="/settings/banking">{t('manage')}</Link>
                       </Button>
                     )}
-                    {/* The signatory link is the byrå's path; it sits behind the row's menu so three buttons never clip the primary one. */}
-                    {canInvite && !uncovered && (
+                    {(primaryAction || offersSignatoryLink) && (
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
@@ -435,9 +442,16 @@ export function ConnectionsSettingsContent() {
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
-                          <DropdownMenuItem onSelect={() => signatoryLink.open({ bank: { bic: null, name: connection.bank_name }, replaceConnectionId: connection.id })}>
-                            {t('send_signatory_link')}
-                          </DropdownMenuItem>
+                          {primaryAction && (
+                            <DropdownMenuItem asChild>
+                              <Link href="/settings/banking">{t('manage')}</Link>
+                            </DropdownMenuItem>
+                          )}
+                          {offersSignatoryLink && (
+                            <DropdownMenuItem onSelect={() => signatoryLink.open({ bank: { bic: null, name: connection.bank_name }, replaceConnectionId: connection.id })}>
+                              {t('send_signatory_link')}
+                            </DropdownMenuItem>
+                          )}
                         </DropdownMenuContent>
                       </DropdownMenu>
                     )}
