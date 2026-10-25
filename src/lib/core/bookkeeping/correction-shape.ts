@@ -4,21 +4,19 @@
  * pre-check before staging or a dry run give the same verdict.
  */
 
+import { roundOre } from '@/lib/money'
+
 interface LineAmounts {
   account_number: string
   debit_amount?: number | string | null
   credit_amount?: number | string | null
 }
 
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
-
 function netPerAccount(lines: LineAmounts[]): Map<string, number> {
   const nets = new Map<string, number>()
   for (const line of lines) {
-    const delta = round2(Number(line.debit_amount) || 0) - round2(Number(line.credit_amount) || 0)
-    nets.set(line.account_number, round2((nets.get(line.account_number) || 0) + delta))
+    const delta = roundOre(Number(line.debit_amount) || 0) - roundOre(Number(line.credit_amount) || 0)
+    nets.set(line.account_number, roundOre((nets.get(line.account_number) || 0) + delta))
   }
   return nets
 }
