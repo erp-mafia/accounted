@@ -5,7 +5,7 @@ vi.mock('@/lib/entitlements/has-capability', () => ({ hasCapability: vi.fn() }))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { setBankFeedConnectForTests, type BankFeedConnect } from '../connect'
-import { bankFeedPilot, bankFeedPilotAdmits, openBankFeedDoor } from '../door'
+import { bankFeedPilot, bankFeedPilotAdmits, openBankFeedDoor, startingGrants } from '../door'
 
 const COMPANY = '11111111-1111-4111-8111-111111111111'
 const supabase = {} as SupabaseClient
@@ -16,6 +16,7 @@ beforeEach(() => {
   entitled.mockReset()
   setBankFeedConnectForTests(fake)
   vi.stubEnv('OPENPAYMENTS_READING_COMPANY_IDS', '')
+  vi.stubEnv('OPENPAYMENTS_READING_TRIALS', '')
 })
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -30,6 +31,13 @@ describe('bankFeedPilot', () => {
     expect(bankFeedPilot({ OPENPAYMENTS_READING_COMPANY_IDS: '*' })).toBe('all')
     const listed = bankFeedPilot({ OPENPAYMENTS_READING_COMPANY_IDS: 'co-2, co-1 ,co-3' })
     expect([...(listed as Set<string>)]).toEqual(['co-2', 'co-1', 'co-3'])
+  })
+
+  it('counts the seeded trial only when OPENPAYMENTS_READING_TRIALS is exactly true', () => {
+    expect(startingGrants({})).toEqual({ excludeTrial: true })
+    expect(startingGrants({ OPENPAYMENTS_READING_TRIALS: 'false' })).toEqual({ excludeTrial: true })
+    expect(startingGrants({ OPENPAYMENTS_READING_TRIALS: '1' })).toEqual({ excludeTrial: true })
+    expect(startingGrants({ OPENPAYMENTS_READING_TRIALS: ' true ' })).toEqual({})
   })
 
   it('answers the cron without the plan check', () => {
@@ -69,5 +77,15 @@ describe('openBankFeedDoor', () => {
     expect(await openBankFeedDoor({ supabase, companyId: COMPANY })).toEqual({ ok: false, reason: 'subscription' })
     expect(entitled).toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync', { excludeTrial: true })
     expect(entitled).not.toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync')
+  })
+
+  it('with * and OPENPAYMENTS_READING_TRIALS=true lets the seeded trial in, and an expired trial gets the subscription answer', async () => {
+    vi.stubEnv('OPENPAYMENTS_READING_COMPANY_IDS', '*')
+    vi.stubEnv('OPENPAYMENTS_READING_TRIALS', 'true')
+    entitled.mockResolvedValueOnce(true).mockResolvedValueOnce(false)
+    expect(await openBankFeedDoor({ supabase, companyId: COMPANY })).toEqual({ ok: true, connect: fake })
+    expect(await openBankFeedDoor({ supabase, companyId: COMPANY })).toEqual({ ok: false, reason: 'subscription' })
+    expect(entitled).toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync', {})
+    expect(entitled).not.toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync', { excludeTrial: true })
   })
 })

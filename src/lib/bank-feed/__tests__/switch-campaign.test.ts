@@ -245,6 +245,9 @@ describe('admittedCompanyIds and switchStatesForCompanies', () => {
     expect(capability.batch.mock.calls[0][2]).toBe('bank_sync')
     expect(capability.batch.mock.calls[0][3]).toEqual({ excludeTrial: true })
     expect(await admittedCompanyIds(supabase, ['a'], {})).toEqual(new Set())
+    // With OPENPAYMENTS_READING_TRIALS=true the trial counts, like the door, so a trial on Enable Banking is invited too.
+    await admittedCompanyIds(supabase, ['a'], { OPENPAYMENTS_READING_COMPANY_IDS: '*', OPENPAYMENTS_READING_TRIALS: 'true' })
+    expect(capability.batch.mock.calls[1][3]).toEqual({})
   })
 
   it('admits nobody without a connector', async () => {
