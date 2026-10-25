@@ -17,16 +17,23 @@ import { isOutboxNotDeployed } from '@/lib/events/outbox-dispatcher'
  *
  * Retention is declared in .compliance/ropa.yaml (id: mcp.telemetry).
  *
- * Before the telemetry purge, whole days of it are rolled into anonymous
- * daily counts that are kept (rollup_agent_telemetry, ropa id
- * mcp.telemetry_rollup). A failed rollup skips the purge.
- *
- * Then the event outbox (event_outbox, event_deliveries): finished events
- * after 7 days, events with a dead delivery after 30 (prune_event_outbox).
+ * The steps are independent, so one failing does not stop the others, and the
+ * run answers with an error when any of them failed:
+ * 1. Roll whole days of telemetry into anonymous daily counts that are kept
+ *    (rollup_agent_telemetry, ropa id mcp.telemetry_rollup). First, so
+ *    nothing before it can keep a day from being counted.
+ * 2. Delivery events past 30 days (prune_delivery_events, which never reads
+ *    the telemetry rows).
+ * 3. Everything past 180 days, only when step 1 succeeded: a telemetry day is
+ *    never purged before it is counted.
+ * 4. The event outbox (event_outbox, event_deliveries): finished events after
+ *    7 days, events with a dead delivery after 30 (prune_event_outbox).
  */
 const DELIVERY_RETENTION_DAYS = 30
 const TELEMETRY_RETENTION_DAYS = 180
 const ROLLUP_MAX_CALLS = 7
+const DELIVERY_BATCH = 20_000
+const DELIVERY_MAX_BATCHES = 10
 
 export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) => {
   const supabase = createServiceClient()
@@ -36,56 +43,63 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
   const telemetryCutoff = new Date()
   telemetryCutoff.setDate(telemetryCutoff.getDate() - TELEMETRY_RETENTION_DAYS)
 
-  // Pass 1: delivery events past 30 days. Telemetry (mcp.*, agent.*) is
-  // excluded here and swept by the 180-day pass below.
-  const { error: deliveryError, count: deliveryCount } = await supabase
-    .from('event_log')
-    .delete({ count: 'exact' })
-    .lt('created_at', deliveryCutoff.toISOString())
-    .not('event_type', 'like', 'mcp.%')
-    .not('event_type', 'like', 'agent.%')
-
-  if (deliveryError) {
-    ctx.log.error('event log delivery cleanup failed', deliveryError)
-    return errorResponse(deliveryError, ctx.log, { requestId: ctx.requestId })
-  }
-
-  // Roll whole days of agent telemetry into the anonymous daily tables before
-  // pass 2 can purge them (rollup_agent_telemetry). One day per call keeps
-  // each call inside its 30 s budget; the loop catches up after missed nights.
-  // 181 days: the 180-day cutoff plus the day the last purge may have cut
-  // into, which must not be rolled from a partial set of rows.
+  // 1. One day per call keeps each call inside its 30 s budget; the loop
+  // catches up after missed nights. 181 days: the 180-day cutoff plus the day
+  // the last purge may have cut into, which must not be rolled from a partial
+  // set of rows.
   const rollupSince = new Date()
   rollupSince.setDate(rollupSince.getDate() - TELEMETRY_RETENTION_DAYS - 1)
   let rolledUpDays = 0
+  let rollupError: unknown = null
   for (let call = 0; call < ROLLUP_MAX_CALLS; call++) {
-    const { data: rolled, error: rollupError } = await supabase.rpc('rollup_agent_telemetry', {
+    const { data: rolled, error } = await supabase.rpc('rollup_agent_telemetry', {
       p_since: rollupSince.toISOString(),
       p_max_days: 1,
     })
-    if (rollupError) {
-      // Fail closed: a telemetry day is never purged before it is counted.
-      ctx.log.error('agent telemetry rollup failed; telemetry purge skipped', rollupError)
-      return errorResponse(rollupError, ctx.log, { requestId: ctx.requestId })
+    if (error) {
+      rollupError = error
+      ctx.log.error('agent telemetry rollup failed; telemetry purge skipped', error)
+      break
     }
     const n = typeof rolled === 'number' ? rolled : 0
     rolledUpDays += n
     if (n === 0) break
   }
 
-  // Pass 2: everything past 180 days, catches the telemetry rows pass 1 skipped.
-  const { error: telemetryError, count: telemetryCount } = await supabase
-    .from('event_log')
-    .delete({ count: 'exact' })
-    .lt('created_at', telemetryCutoff.toISOString())
-
-  if (telemetryError) {
-    ctx.log.error('event log telemetry cleanup failed', telemetryError)
-    return errorResponse(telemetryError, ctx.log, { requestId: ctx.requestId })
+  // 2. Batches until one comes back short.
+  let deletedDelivery = 0
+  let deliveryError: unknown = null
+  for (let batch = 0; batch < DELIVERY_MAX_BATCHES; batch++) {
+    const { data: pruned, error } = await supabase.rpc('prune_delivery_events', {
+      p_before: deliveryCutoff.toISOString(),
+      p_limit: DELIVERY_BATCH,
+    })
+    if (error) {
+      deliveryError = error
+      ctx.log.error('event log delivery cleanup failed', error)
+      break
+    }
+    const n = typeof pruned === 'number' ? pruned : 0
+    deletedDelivery += n
+    if (n < DELIVERY_BATCH) break
   }
 
-  const deletedDelivery = deliveryCount ?? 0
-  const deletedTelemetry = telemetryCount ?? 0
+  // 3. Everything past 180 days, catches the telemetry rows step 2 skipped.
+  let deletedTelemetry = 0
+  let telemetryError: unknown = null
+  if (!rollupError) {
+    const { error, count } = await supabase
+      .from('event_log')
+      .delete({ count: 'exact' })
+      .lt('created_at', telemetryCutoff.toISOString())
+    if (error) {
+      telemetryError = error
+      ctx.log.error('event log telemetry cleanup failed', error)
+    } else {
+      deletedTelemetry = count ?? 0
+    }
+  }
+
   const deleted = deletedDelivery + deletedTelemetry
   ctx.log.info('event log cleanup summary', {
     deleted,
@@ -96,11 +110,11 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
     telemetryCutoff: telemetryCutoff.toISOString(),
   })
 
-  // Pass 3: the event outbox, whatever EVENT_OUTBOX_MODE is: rows written
-  // while shadow mode was on must still age out after it is switched off
-  // (raw payloads). With the mode never on it deletes nothing. Best effort:
-  // it never fails the event_log cleanup above, and a database the outbox
-  // migration has not reached yet answers PGRST202, which is a skip.
+  // 4. The event outbox, whatever EVENT_OUTBOX_MODE is: rows written while
+  // shadow mode was on must still age out after it is switched off (raw
+  // payloads). With the mode never on it deletes nothing. Best effort: it
+  // never fails the run, and a database the outbox migration has not reached
+  // yet answers PGRST202, which is a skip.
   let prunedOutbox = 0
   const { data: pruned, error: pruneError } = await supabase.rpc('prune_event_outbox')
   if (pruneError) {
@@ -110,6 +124,9 @@ export const GET = withCronContext('cron.events_cleanup', async (_request, ctx) 
     prunedOutbox = typeof pruned === 'number' ? pruned : 0
     ctx.log.info('event outbox prune summary', { prunedOutbox })
   }
+
+  const failure = rollupError ?? deliveryError ?? telemetryError
+  if (failure) return errorResponse(failure, ctx.log, { requestId: ctx.requestId })
 
   return NextResponse.json({ success: true, deleted, deletedDelivery, deletedTelemetry, rolledUpDays, prunedOutbox })
 })
