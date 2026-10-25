@@ -72,8 +72,8 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
 
-import { handleMcpRequest } from '../server'
-import { resetUnattendedForTests, unattendedScope, unattendedScopes } from '../unattended'
+import { handleMcpRequest, taskIntentSlug } from '../server'
+import { resetUnattendedForTests, unattendedMarks, unattendedScopes } from '../unattended'
 import { getRedis } from '@/lib/auth/rate-limit-http'
 
 function mcpToolCall(name: string, args: Record<string, unknown> = {}, sessionId?: string): Request {
@@ -170,19 +170,19 @@ describe('MCP unattended-session guard', () => {
     }
   })
 
-  it('scopes the mark to the session when there is one, else the key', () => {
-    expect(unattendedScope('s1', 'k1')).toMatchObject({ scope: 'session:s1' })
-    expect(unattendedScope(null, 'k1')).toMatchObject({ scope: 'key:k1' })
-    expect(unattendedScope(null, null)).toBeNull()
+  it('marks the session when there is one, and the key', () => {
+    expect(unattendedMarks('s1', 'k1').map((m) => m.scope)).toEqual(['session:s1', 'key:k1'])
+    expect(unattendedMarks(null, 'k1').map((m) => m.scope)).toEqual(['key:k1'])
+    expect(unattendedMarks(null, null)).toEqual([])
     expect(unattendedScopes('s1', 'k1')).toEqual(['session:s1', 'key:k1'])
   })
 
-  it('leaves other sessions, and calls without a session id, alone', async () => {
+  it('holds the key as well, so a run that reconnects into a new session stays held', async () => {
     await kindOf(mcpToolCall('gnubok_get_task', { kind: 'agent:bookkeep', client: 'claude', unattended: true }, 'routine-run-2'))
-    const other = await kindOf(mcpToolCall('gnubok_approve_pending_operation', { operation_id: '11111111-1111-4111-8111-111111111112' }, 'someone-at-the-desk'))
-    expect(other.kind).not.toBe('unattended_write_blocked')
+    const reconnected = await kindOf(mcpToolCall('gnubok_approve_pending_operation', { operation_id: '11111111-1111-4111-8111-111111111112' }, 'routine-run-2-after-reconnect'))
+    expect(reconnected.kind).toBe('unattended_write_blocked')
     const none = await kindOf(mcpToolCall('gnubok_approve_pending_operation', { operation_id: '11111111-1111-4111-8111-111111111112' }))
-    expect(none.kind).not.toBe('unattended_write_blocked')
+    expect(none.kind).toBe('unattended_write_blocked')
   })
 
   it('still lets an unattended session read and stage', async () => {
@@ -197,5 +197,15 @@ describe('MCP unattended-session guard', () => {
     await kindOf(mcpToolCall('gnubok_get_task', { kind: 'agent:bookkeep', client: 'claude' }, 'desk-run'))
     const approve = await kindOf(mcpToolCall('gnubok_approve_pending_operation', { operation_id: '11111111-1111-4111-8111-111111111112' }, 'desk-run'))
     expect(approve.kind).not.toBe('unattended_write_blocked')
+  })
+})
+
+describe('get_task intent telemetry', () => {
+  it('names what the agent set out to do from the fixed task list, never an own agent\'s id', () => {
+    expect(taskIntentSlug('vat')).toBe('task/vat')
+    expect(taskIntentSlug('month-close')).toBe('task/month-close')
+    expect(taskIntentSlug('skill:modifier/holding-ab')).toBe('skill/modifier/holding-ab')
+    expect(taskIntentSlug('agent:bookkeep')).toBe('agent/bookkeep')
+    expect(taskIntentSlug('agent:own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa')).toBe('agent/own')
   })
 })

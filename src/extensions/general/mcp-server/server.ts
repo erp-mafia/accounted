@@ -1,6 +1,6 @@
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA } from './sie-import-status'
 import { MIGRATION_PROVIDER_IDS } from '@/lib/providers/catalog'
-import { isAnyUnattended, markUnattended, unattendedScope, unattendedScopes } from './unattended'
+import { isAnyUnattended, markUnattended, unattendedMarks, unattendedScopes } from './unattended'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { ACCOUNTING_TASK_INPUT_SCHEMA, getAccountingTask } from './accounting-task'
 import {
@@ -6371,6 +6371,10 @@ export const tools: McpTool[] = [
       if (actor && 'analysis' in task) {
         await emitSkillLoaded({ slug: task.analysis.slug, tier: task.analysis.tier, bodyHash: skillBodyHash(task.analysis.body), version: task.analysis.version ?? undefined, actor, userId, companyId: task.company_id })
       }
+      // What the agent set out to do, from the fixed task list: the closest
+      // thing to an intent the server can record without storing what the
+      // agent or the user typed.
+      if (actor) emitWorkflowStarted({ slug: taskIntentSlug(task.kind), actor, userId, companyId: task.company_id })
       return task
     },
   },
@@ -27381,6 +27385,19 @@ async function emitSkillLoaded(payload: {
     .catch((err) => console.error('[mcp] skill_loaded emit failed:', err))
 }
 
+/**
+ * The workflow_started slug for a get_task kind, prefixed so it never reads
+ * as a skill slug that load_skill reported: task/vat, skill/<slug>,
+ * agent/<slug>. An own agent's id is dropped (agent/own): it is the
+ * company's, not the product's.
+ */
+export function taskIntentSlug(kind: string): string {
+  if (kind.startsWith('skill:')) return `skill/${kind.slice('skill:'.length)}`
+  if (kind.startsWith('agent:own/')) return 'agent/own'
+  if (kind.startsWith('agent:')) return `agent/${kind.slice('agent:'.length)}`
+  return `task/${kind}`
+}
+
 /** Fire-and-forget telemetry for workflow lifecycle. */
 function emitWorkflowStarted(payload: {
   slug: string
@@ -27901,13 +27918,21 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           })
         )
       }
+      // Handshake-era clients keep a session id the server assigns here and
+      // send it back as Mcp-Session-Id on every later request (Streamable
+      // HTTP, Session Management). No prod call carried one before: the server
+      // never assigned any. It stays stateless: the id is never required,
+      // looked up or refused, only used to group one conversation's calls
+      // (telemetry, skill provenance on staged operations, unattended marks).
+      // A client that brought its own keeps it.
       return NextResponse.json(
         jsonRpc(id ?? null, {
           protocolVersion: negotiatedVersion,
           capabilities: SERVER_CAPABILITIES,
           serverInfo: SERVER_INFO_BY_NAMESPACE[toolNamespace],
           instructions,
-        })
+        }),
+        sessionId ? undefined : { headers: { 'Mcp-Session-Id': randomUUID() } }
       )
     }
 
@@ -28447,14 +28472,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       // A scheduled routine reads and stages, never commits (unattended.ts).
-      // get_task with unattended: true marks the run (its session, or without
-      // one its key); any later write that does not merely stage (an approval,
+      // get_task with unattended: true marks the run (its session and its
+      // key); any later write that does not merely stage (an approval,
       // a direct commit) is refused here, whatever the AI was told by what it
       // read. A mark that cannot be written refuses the run instead of letting
       // it start unguarded.
       if (toolName === 'gnubok_get_task' && (toolArgs as Record<string, unknown>).unattended === true) {
-        const mark = unattendedScope(sessionId, actor?.id ?? null)
-        const marked = mark ? await markUnattended(mark.scope, mark.ttl).then(() => true, (err) => {
+        const marks = unattendedMarks(sessionId, actor?.id ?? null)
+        const marked = marks.length > 0 ? await Promise.all(marks.map((m) => markUnattended(m.scope, m.ttl))).then(() => true, (err) => {
           log.warn('Could not mark an unattended MCP run', { error: err instanceof Error ? err.message : String(err) })
           return false
         }) : false
