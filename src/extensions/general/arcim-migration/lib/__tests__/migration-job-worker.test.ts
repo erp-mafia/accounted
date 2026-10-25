@@ -21,9 +21,12 @@ vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchMigrationPage: mo
   fetchCompanyInfoDirect: mocks.probe }))
 vi.mock('@/lib/invoices/link-migrated-registration-vouchers', () => ({ linkMigratedRegistrationVouchers: mocks.link }))
 vi.mock('@/lib/invoices/bulk-reconcile-supplier-vouchers', () => ({ reconcileSupplierInvoiceVouchers: mocks.reconcile }))
+// The phone rides along only when the record has one, so every other row stays { name }.
+type MappedParty = { party: { name: string; contact?: { telephone?: string } } }
+const mappedParty = (dto: MappedParty) => ({ name: dto.party.name, ...(dto.party.contact?.telephone ? { phone: dto.party.contact.telephone } : {}) })
 vi.mock('../entity-mapper', () => ({
-  mapCustomer: (dto: { party: { name: string } }) => ({ name: dto.party.name }),
-  mapSupplier: (dto: { party: { name: string } }) => ({ name: dto.party.name }),
+  mapCustomer: (dto: MappedParty) => mappedParty(dto),
+  mapSupplier: (dto: MappedParty) => mappedParty(dto),
   buildFxRateIndex: vi.fn().mockResolvedValue(new Map()),
   mapSalesInvoice: vi.fn(() => ({ invoice: { subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
   mapSupplierInvoice: vi.fn(() => ({ invoice: { supplier_invoice_number: 'S-1', subtotal: 100, vat_amount: 25, total_sek: 125 }, items: [{ line_total: 100, vat_amount: 25 }] })),
@@ -36,11 +39,14 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
     resources: ['customers'], resource_index: 1, next_page: 1, phase: 'discover', state: 'queued',
     account_key: '5560000000', attempt: 0, failures: 0, fiscal_year_scope: null, ...overrides } as ProviderMigrationJob
   type Row = { id: string; resource: string; source_id: string; payload: string; state: string; target_id?: string; receipt?: unknown }
+  // Card updates, as written: the enrichment of matched cards (crm#1436).
+  const updates: { table: string; payload: Record<string, unknown> }[] = []
+  let failUpdates = false
   const rows: Row[] = []
   // The company's customer register and the job's source map, read by the
   // customer match before each commit (crm#1294).
-  const register: { customers: Record<string, unknown>[]; migration_source_records: Record<string, unknown>[] } = {
-    customers: [], migration_source_records: [],
+  const register: { customers: Record<string, unknown>[]; suppliers: Record<string, unknown>[]; migration_source_records: Record<string, unknown>[] } = {
+    customers: [], suppliers: [], migration_source_records: [],
   }
   // As the RPCs: a register's last page, or its refusal, moves the cursor to
   // the next register, and past the last one discovery ends.
@@ -87,23 +93,36 @@ function database(overrides: Partial<ProviderMigrationJob> = {}) {
   })
   const supabase = { rpc, from: (table: string) => {
     let state: string | undefined; let limit = Infinity
+    let payload: Record<string, unknown> | undefined
     const filters: Record<string, unknown> = {}
     const within: Record<string, unknown[]> = {}
+    const empty: string[] = []
     const registerRows = () => (register[table as keyof typeof register] ?? []).filter(row =>
       Object.entries(filters).every(([key, value]) => !(key in row) || row[key] === value)
-      && Object.entries(within).every(([key, values]) => values.includes(row[key])))
+      && Object.entries(within).every(([key, values]) => values.includes(row[key]))
+      && empty.every(key => !(key in row) || row[key] === null))
+    // As PostgREST: the update writes the rows its filters leave, and answers the first.
+    const updated = () => {
+      if (failUpdates) return { data: null, error: { code: '23514', message: 'check violated: Kund AB 08-123 45 67' } }
+      updates.push({ table, payload: payload! })
+      const hit = registerRows()
+      for (const row of hit) for (const [key, value] of Object.entries(payload!)) if (value !== undefined) row[key] = value
+      return { data: hit[0] ? { id: hit[0].id } : null, error: null }
+    }
     const chain = { select: () => chain, eq: (key: string, value: unknown) => {
       filters[key] = value; if (key === 'state') state = value as string; return chain
     },
-      in: (key: string, values: unknown[]) => { within[key] = values; return chain }, is: () => chain, lt: () => chain, range: () => chain,
+      update: (value: Record<string, unknown>) => { payload = value; return chain },
+      in: (key: string, values: unknown[]) => { within[key] = values; return chain },
+      is: (key: string, value: unknown) => { if (value === null) empty.push(key); return chain }, lt: () => chain, range: () => chain,
       order: () => chain, limit: (value: number) => { limit = value; return chain }, single: () => chain, maybeSingle: () => chain,
-      then: (resolve: (data: unknown) => void) => resolve({ data: table === 'migration_jobs'
+      then: (resolve: (data: unknown) => void) => resolve(payload ? updated() : { data: table === 'migration_jobs'
         ? Object.entries(filters).every(([key, value]) => job[key as keyof ProviderMigrationJob] === value) ? { ...job } : null
         : table in register ? registerRows()
         : rows.filter(r => r.state === state).slice(0, limit), error: null }) }
     return chain
   } } as unknown as SupabaseClient
-  return { supabase, rpc, job, rows, register }
+  return { supabase, rpc, job, rows, register, updates, failUpdates: () => { failUpdates = true } }
 }
 const customer = (id: number) => ({ id: `customer-${id}`, active: true, party: { name: `Customer ${id}` } })
 
@@ -476,6 +495,62 @@ describe('Fortnox customers take their terms from the detail form (crm#1245)', (
     expect(committed(db)).toEqual([])
     expect(db.rows.map(row => row.state)).toEqual(['pending'])
     expect(db.job.state).toBe('queued')
+  })
+})
+
+describe('a register record committed onto an existing card fills what the card lacks (crm#1436)', () => {
+  const listed = (id: string, phone?: string) => ({ id, customerNumber: id, active: true,
+    party: { name: 'Kund AB', ...(phone ? { contact: { telephone: phone } } : {}) }, _raw: { CustomerNumber: id } })
+  const card = (overrides: Record<string, unknown> = {}) => ({
+    id: 'card-1', company_id: 'company', name: 'Kund AB', org_number: null, customer_type: 'swedish_business',
+    contact_person: null, invoice_email_cc_addresses: null, invoice_email_bcc_addresses: null,
+    email: null, phone: null, address_line1: null, address_line2: null, postal_code: null, city: null,
+    country: 'SE', vat_number: null, notes: null, ...overrides,
+  })
+  // The commit resolves the record onto the card it already maps to.
+  const committedOnto = (db: ReturnType<typeof database>, resource: string, phone: string) =>
+    db.rows.push({ id: 'c1', source_id: '1001', resource, state: 'pending', target_id: 'card-1', ...sealMigrationPayload(listed('1001', phone)) })
+
+  it('fills the phone of the invoice stub the customer record lands on', async () => {
+    const db = database({ phase: 'import', resources: ['customers'] })
+    db.register.customers.push(card())
+    committedOnto(db, 'customers', '08-123 45 67')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+    expect(db.register.customers[0]).toMatchObject({ phone: '08-123 45 67' })
+    expect(db.updates).toEqual([{ table: 'customers', payload: expect.objectContaining({ phone: '08-123 45 67' }) }])
+  })
+
+  it('never replaces a phone the card already has', async () => {
+    const db = database({ phase: 'import', resources: ['customers'] })
+    db.register.customers.push(card({ phone: '070-999 99 99' }))
+    committedOnto(db, 'customers', '08-123 45 67')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.register.customers[0]).toMatchObject({ phone: '070-999 99 99' })
+    expect(db.updates).toEqual([])
+  })
+
+  it('fills a supplier card the same way', async () => {
+    const db = database({ phase: 'import', resources: ['suppliers'] })
+    db.register.suppliers.push({ id: 'card-1', company_id: 'company', name: 'Kund AB', org_number: null, email: null, phone: null,
+      address_line1: null, address_line2: null, postal_code: null, city: null, country: 'SE', vat_number: null,
+      bankgiro: null, plusgiro: null, bank_account: null, notes: null })
+    committedOnto(db, 'suppliers', '031-12 34 56')
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.register.suppliers[0]).toMatchObject({ phone: '031-12 34 56' })
+  })
+
+  it('keeps the committed import when the fill fails, and logs no customer data', async () => {
+    const db = database({ phase: 'import', resources: ['customers'] })
+    db.register.customers.push(card())
+    committedOnto(db, 'customers', '08-123 45 67')
+    db.failUpdates()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.rows.map(row => row.state)).toEqual(['done'])
+    expect(db.job.state).not.toBe('retry_wait')
+    const warned = mocks.warn.mock.calls.find(([message]) => message === 'matched cards left without the register details')!
+    expect(warned[1]).toMatchObject({ jobId: 'job', filled: 0, dbCode: '23514' })
+    expect(JSON.stringify(warned[1])).not.toMatch(/Kund AB|08-123|check violated/)
   })
 })
 

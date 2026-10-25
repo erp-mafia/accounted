@@ -13870,6 +13870,7 @@ export const tools: McpTool[] = [
         invoice_id: { type: 'string', description: 'UUID of the invoice to mark paid' },
         journal_entry_id: { type: 'string', description: 'UUID of the existing posted verifikat to link' },
         notes: { type: 'string', description: 'Optional note stored on the invoice_payments row' },
+        amount: { type: 'number', description: 'This invoice\'s share of the verifikat' },
       },
       required: ['invoice_id', 'journal_entry_id'],
     },
@@ -13881,6 +13882,12 @@ export const tools: McpTool[] = [
       const notes = (args.notes as string | undefined) ?? undefined
       if (!invoiceId) throw badArgument('invoice_id', 'invoice_id is required')
       if (!journalEntryId) throw badArgument('journal_entry_id', 'journal_entry_id is required')
+      // No host validates inputSchema at runtime: a share that is not a number
+      // must not reach the validator as "no share stated".
+      if (args.amount != null && typeof args.amount !== 'number') {
+        throw codedError('VALIDATION_ERROR', 'amount must be a number (the share of the verifikat that is this invoice\'s)')
+      }
+      const amount = (args.amount as number | null | undefined) ?? undefined
 
       const { data: invoice, error: invErr } = await supabase
         .from('invoices')
@@ -13905,6 +13912,7 @@ export const tools: McpTool[] = [
         companyId,
         invoice as never,
         journalEntryId,
+        amount,
       )
       if (!validation.ok) throw voucherLinkRefusal(validation)
 
@@ -13918,14 +13926,19 @@ export const tools: McpTool[] = [
       const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
         ? `${validation.voucher.voucher_series}-${validation.voucher.voucher_number}`
         : journalEntryId.slice(0, 8)
+      // A stated share is named in the title: the approver is settling part
+      // of a verifikat, not the whole of it.
+      const shareNote = amount != null ? ` (${validation.paymentAmount} ${invoice.currency} av verifikatet)` : ''
 
       return stage({
         supabase,
         companyId,
         userId,
         type: 'link_invoice_voucher',
-        title: `Länka verifikat ${voucherLabel} → faktura ${invoice.invoice_number ?? invoiceId.slice(0, 8)}`,
-        params: { invoice_id: invoiceId, journal_entry_id: journalEntryId, notes },
+        title: `Länka verifikat ${voucherLabel} → faktura ${invoice.invoice_number ?? invoiceId.slice(0, 8)}${shareNote}`,
+        params: amount != null
+          ? { invoice_id: invoiceId, journal_entry_id: journalEntryId, notes, amount }
+          : { invoice_id: invoiceId, journal_entry_id: journalEntryId, notes },
         preview: {
           invoice_number: invoice.invoice_number,
           invoice_currency: invoice.currency,
@@ -13937,6 +13950,11 @@ export const tools: McpTool[] = [
           payment_amount: validation.paymentAmount,
           will_be_fully_paid: validation.isFullyPaid,
           remaining_after: validation.remainingAfter,
+          // What the verifikat keeps for its other invoices; left out when the
+          // link uses all of it, which is the ordinary case.
+          ...(validation.voucherRemainingAfter > 0
+            ? { voucher_remaining_after: validation.voucherRemainingAfter }
+            : {}),
           customer_name: (invoice.customer as unknown as { name?: string } | null)?.name ?? null,
           // The sale verifikat approval books first (defer_invoice_booking).
           ...saleFirstPreview(salePlan),
@@ -18690,6 +18708,25 @@ export const tools: McpTool[] = [
             tool: 'gnubok_book_salary_run',
             args: { salary_run_id: id },
           },
+        )
+      }
+
+      // The company data generation requires (organisationsnummer and the
+      // kontaktperson), judged here exactly as generation judges it: missing
+      // telefon used to surface only after someone approved the staged
+      // generation (crm#1435). The commit path passes no user email either.
+      const { findAgiCompanyDataGap } = await import('@/lib/salary/agi/generate-declaration')
+      const gap = await findAgiCompanyDataGap(supabase, companyId, userId, null)
+      if (gap) {
+        throw userFacing(
+          Object.assign(new Error(gap.message), {
+            remediation: {
+              description:
+                'Fill in what the message names (telefon and e-post with tax_contact_phone / tax_contact_email or phone / email), then stage gnubok_generate_agi again.',
+              tool: 'gnubok_update_company_settings',
+            },
+          }),
+          'AGI_INCOMPLETE_DATA',
         )
       }
 

@@ -3,6 +3,7 @@ import {
   effectiveInvoiceStatus,
   filterInvoicesByReportedStatus,
   filterOverdueInvoices,
+  filterOwedInvoices,
   invoiceDaysOverdue,
   isInvoiceOverdue,
   type OverdueInvoiceInput,
@@ -130,6 +131,19 @@ describe('effectiveInvoiceStatus', () => {
   })
 })
 
+describe('filterOwedInvoices', () => {
+  it('narrows to owed fakturor with money left, credit notes out, any due date (crm#1435)', () => {
+    const query = recordingQuery()
+    filterOwedInvoices(query)
+    expect(query.calls).toEqual([
+      ['in', 'status', ['sent', 'overdue', 'partially_paid']],
+      ['eq', 'document_type', 'invoice'],
+      ['is', 'credited_invoice_id', null],
+      ['gt', 'remaining_amount', 0],
+    ])
+  })
+})
+
 describe('filterOverdueInvoices', () => {
   it('narrows to the rows isInvoiceOverdue accepts', () => {
     const query = recordingQuery()
@@ -138,9 +152,33 @@ describe('filterOverdueInvoices', () => {
       ['in', 'status', ['sent', 'overdue', 'partially_paid']],
       ['eq', 'document_type', 'invoice'],
       ['is', 'credited_invoice_id', null],
-      ['lt', 'due_date', TODAY],
       ['gt', 'remaining_amount', 0],
+      ['lt', 'due_date', TODAY],
     ])
+  })
+
+  it('keeps a sent credit note with nothing remaining out, a real overdue invoice in (crm#1435)', () => {
+    // The two rows the Viktiga datum note used to count, filtered the way
+    // Postgres applies the recorded calls.
+    const rows = [
+      invoice({ status: 'sent', due_date: '2026-10-01', remaining_amount: 0, credited_invoice_id: 'orig' }),
+      invoice({ status: 'sent', due_date: '2026-10-01', remaining_amount: 1250 }),
+    ]
+    const query = recordingQuery()
+    filterOverdueInvoices(query, TODAY)
+    const kept = rows.filter((row) =>
+      query.calls.every(([op, column, value]) => {
+        const cell = (row as unknown as Record<string, unknown>)[column as string] ?? null
+        if (op === 'in') return (value as string[]).includes(cell as string)
+        if (op === 'eq') return cell === value
+        if (op === 'is') return cell === value
+        if (op === 'gt') return typeof cell === 'number' && cell > (value as number)
+        if (op === 'lt') return typeof cell === 'string' && cell < (value as string)
+        return true
+      }),
+    )
+    expect(kept).toEqual([rows[1]])
+    expect(rows.map((row) => isInvoiceOverdue(row, TODAY))).toEqual([false, true])
   })
 
   it('refuses a date that is not YYYY-MM-DD', () => {

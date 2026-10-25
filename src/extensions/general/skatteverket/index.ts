@@ -334,7 +334,7 @@ function readAuthFailureResponse(reason: 'no_token' | 'needs_reconsent'): NextRe
     return NextResponse.json(
       {
         error:
-          'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning gäller bara ca 1 timme, så detta är normalt. Anslut igen med BankID.',
+          'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning räcker i ungefär tio timmar, så detta är normalt. Anslut igen med BankID.',
         code: 'SESSION_EXPIRED',
       },
       { status: 401 },

@@ -9,6 +9,7 @@ import {
   arcimDocumentImportReducer,
   arcimDocumentReconnectPlan,
   documentImportProgress,
+  documentImportRunNote,
   documentOAuthProblemFromReason,
   parseArcimDocumentResumeMarker,
   mergeArcimDocumentImportResults,
@@ -573,6 +574,97 @@ describe('resumable import (one server slice per call)', () => {
     expect(fetcher).toHaveBeenCalledTimes(1)
   })
 
+  it('tries a slice again after a transient server failure and completes the sweep (crm#1409)', async () => {
+    // A deploy reloading the database schema answered one slice with a 500:
+    // that used to stop a 3 475-file sweep at 1 897.
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, result: result({ dryRun: false, scanned: 20, linked: 20, total: 30, partial: true, nextCursor: 'file-20' }) }),
+      )
+      .mockResolvedValueOnce(new Response('Internal Server Error', { status: 500 }))
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, result: result({ dryRun: false, scanned: 10, linked: 10, total: 30 }) }),
+      )
+    const wait = vi.fn().mockResolvedValue(undefined)
+
+    const final = await runArcimDocumentImportToCompletion('consent-1', {
+      fetcher,
+      wait,
+      retryDelaysMs: [1, 2, 3],
+    })
+
+    expect(fetcher).toHaveBeenCalledTimes(4)
+    const cursors = fetcher.mock.calls.map((call) => JSON.parse((call[1] as RequestInit).body as string).cursor)
+    // The failed slice is asked for again with the same cursor.
+    expect(cursors).toEqual([undefined, 'file-20', 'file-20', 'file-20'])
+    expect(wait.mock.calls.map((call) => call[0])).toEqual([1, 2])
+    expect(final).toMatchObject({ scanned: 30, linked: 30, total: 30, partial: false })
+  })
+
+  it('stops once the retries are spent, keeping the error for the user', async () => {
+    const fetcher = vi
+      .fn()
+      .mockResolvedValueOnce(
+        jsonResponse({ success: true, result: result({ dryRun: false, scanned: 20, total: 30, partial: true, nextCursor: 'file-20' }) }),
+      )
+      .mockImplementation(async () => jsonResponse({ error: { code: 'PROVIDER_IMPORT_DOCUMENTS_FAILED', requestId: 'req-1' } }, 502))
+    const wait = vi.fn().mockResolvedValue(undefined)
+
+    await expect(
+      runArcimDocumentImportToCompletion('consent-1', { fetcher, wait, retryDelaysMs: [1, 2] }),
+    ).rejects.toMatchObject({ status: 502, problem: { code: 'PROVIDER_IMPORT_DOCUMENTS_FAILED' } })
+    expect(fetcher).toHaveBeenCalledTimes(4)
+    expect(wait).toHaveBeenCalledTimes(2)
+  })
+
+  it('never retries a refusal: a missing permission is an answer, not a blink', async () => {
+    const fetcher = vi
+      .fn()
+      .mockImplementation(async () => jsonResponse({ error: { code: PROVIDER_DOCUMENT_SCOPES_REQUIRED } }, 403))
+    const wait = vi.fn().mockResolvedValue(undefined)
+
+    await expect(
+      runArcimDocumentImportToCompletion('consent-1', { fetcher, wait, retryDelaysMs: [1, 2] }),
+    ).rejects.toMatchObject({ status: 403, problem: { reconnectRequired: true } })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(wait).not.toHaveBeenCalled()
+  })
+
+  it('continues a stopped run after its last handled file, keeping its totals', async () => {
+    const stopped = result({ dryRun: false, scanned: 1897, linked: 1897, unmatched: 0, total: 3475, partial: true, nextCursor: 'file-1897' })
+    const fetcher = vi.fn().mockResolvedValueOnce(
+      jsonResponse({ success: true, result: result({ dryRun: false, scanned: 1578, linked: 1577, unmatched: 1, total: 3475 }) }),
+    )
+
+    const final = await runArcimDocumentImportToCompletion('consent-1', { fetcher, resumeFrom: stopped })
+
+    expect(JSON.parse((fetcher.mock.calls[0][1] as RequestInit).body as string)).toEqual({
+      consentId: 'consent-1',
+      dryRun: false,
+      cursor: 'file-1897',
+    })
+    expect(final).toMatchObject({ scanned: 3475, linked: 3474, unmatched: 1, total: 3475, partial: false })
+  })
+
+  it('starts from the top when the earlier run cannot be continued', async () => {
+    const fetcher = vi.fn().mockImplementation(async () =>
+      jsonResponse({ success: true, result: result({ dryRun: false, scanned: 7, linked: 7, total: 7 }) }),
+    )
+
+    // A finished run and a dry-run preview carry no cursor to continue from.
+    await runArcimDocumentImportToCompletion('consent-1', { fetcher, resumeFrom: result({ dryRun: false }) })
+    await runArcimDocumentImportToCompletion('consent-1', {
+      fetcher,
+      resumeFrom: result({ dryRun: true, partial: true, nextCursor: 'file-3' }),
+    })
+
+    for (const call of fetcher.mock.calls) {
+      expect(JSON.parse((call[1] as RequestInit).body as string)).toEqual({ consentId: 'consent-1', dryRun: false })
+    }
+  })
+
   it('keeps the import phase while recording running totals, then completes with the honest total', () => {
     const importing = arcimDocumentImportReducer(
       { phase: 'offered', provider: 'fortnox', found: 40, result: result({ dryRun: true, total: 40 }), problem: null },
@@ -631,11 +723,78 @@ describe('document import progress', () => {
     expect(documentImportProgress(retrying)).toEqual({ done: 0, total: 658 })
   })
 
+  it('counts on from the stopped totals when the retry continues that run', () => {
+    const problem = { code: null, requestId: null, reconnectRequired: false }
+    const failed = arcimDocumentImportReducer(
+      {
+        phase: 'importing',
+        provider: 'fortnox',
+        found: 658,
+        result: result({ dryRun: false, scanned: 277, total: 658, partial: true, nextCursor: 'file-277' }),
+        problem: null,
+      },
+      { type: 'import-failed', problem },
+    )
+    const resuming = arcimDocumentImportReducer(failed, { type: 'import-started', resumeFrom: failed.result })
+
+    expect(documentImportProgress(resuming)).toEqual({ done: 277, total: 658 })
+  })
+
   it('counts nothing without a known total or outside the import', () => {
     // An import resumed after a full-page OAuth redirect has no discovery count.
     const resumed = arcimDocumentImportReducer(INITIAL_ARCIM_DOCUMENT_IMPORT_STATE, { type: 'import-started' })
 
     expect(documentImportProgress(resumed)).toBeNull()
     expect(documentImportProgress(offered)).toBeNull()
+  })
+})
+
+describe('the latest run under its connection (crm#1410)', () => {
+  const run = {
+    provider: 'fortnox',
+    startedAt: '2026-10-22T08:53:31Z',
+    updatedAt: '2026-10-22T09:20:11Z',
+    complete: true,
+    total: 3003,
+    scanned: 3003,
+    linked: 0,
+    skipped: 2971,
+    unmatched: 27,
+    failed: 0,
+    locked: 5,
+    lockedPeriods: ['2020/2021'],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: null,
+    stalled: false,
+  }
+
+  it('says how many are on their verifikat after a re-run that found nothing new, and what is left', () => {
+    // A re-run links nothing new: what is there counts, not what this run added.
+    expect(documentImportRunNote(run)).toEqual({
+      kind: 'complete',
+      date: '2026-10-22T09:20:11Z',
+      present: 2971,
+      total: 3003,
+      unmatched: 27,
+      locked: 5,
+      lockedYears: '2020/2021',
+      failed: 0,
+      unreachable: false,
+    })
+  })
+
+  it('tells a run that stopped from one still moving (crm#1409)', () => {
+    const unfinished = { ...run, complete: false, scanned: 1897, total: 3475, nextCursor: 'file-1897' }
+
+    expect(documentImportRunNote({ ...unfinished, stalled: true })).toEqual({
+      kind: 'stopped', date: '2026-10-22T09:20:11Z', scanned: 1897, total: 3475,
+    })
+    expect(documentImportRunNote(unfinished)).toMatchObject({ kind: 'running', scanned: 1897 })
+  })
+
+  it('says nothing before any run was recorded', () => {
+    expect(documentImportRunNote(null)).toBeNull()
+    expect(documentImportRunNote(undefined)).toBeNull()
   })
 })

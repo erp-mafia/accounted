@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import { readSIEFileOpeningBalance } from '@/lib/import/opening-balance/sie-file'
+import { previousYearHasBookkeeping, readSIEFileOpeningBalance } from '@/lib/import/opening-balance/sie-file'
 import { setOpeningBalances } from '@/lib/import/opening-balance/service'
 import { sessionFailureResponse } from '@/lib/operations/session'
 
@@ -14,20 +14,37 @@ const BookSchema = z.object({ reviewToken: z.uuid() }).strict()
  * GET: the ingående balanser the year's own SIE file stated, which its
  * continuation import did not book (lib/import/opening-balance/sie-file.ts).
  * The review dialog previews them when the year has no IB verifikat.
+ * `previous_year_booked` says the year before holds bokföring again (it was
+ * imported anew after the undo that raised the review): the year's IB follows
+ * it, so the dialog offers no booking and POST refuses one (PH 193).
  */
 export const GET = withRouteContext<Params>('period.opening_balance.sie_file', async (_request, ctx, { params }) => {
   const { id } = await params
   if (!z.uuid().safeParse(id).success) {
     return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId })
   }
-  const file = await readSIEFileOpeningBalance(ctx.supabase, ctx.companyId!, id)
+  const { data: period, error: periodError } = await ctx.supabase
+    .from('fiscal_periods')
+    .select('period_start')
+    .eq('id', id)
+    .eq('company_id', ctx.companyId!)
+    .maybeSingle()
+  if (periodError) throw periodError
+  if (!period) return NextResponse.json({ data: null })
+
+  const [file, previousYearBooked] = await Promise.all([
+    readSIEFileOpeningBalance(ctx.supabase, ctx.companyId!, id),
+    previousYearHasBookkeeping(ctx.supabase, ctx.companyId!, period.period_start),
+  ])
+  if (!file && !previousYearBooked) return NextResponse.json({ data: null })
   return NextResponse.json({
-    data: file && {
-      import_id: file.importId,
-      filename: file.filename,
-      lines: file.lines,
-      total_debit: file.totalDebit,
-      total_credit: file.totalCredit,
+    data: {
+      import_id: file?.importId ?? null,
+      filename: file?.filename ?? null,
+      lines: file?.lines ?? [],
+      total_debit: file?.totalDebit ?? 0,
+      total_credit: file?.totalCredit ?? 0,
+      previous_year_booked: previousYearBooked,
     },
   })
 })
@@ -50,7 +67,7 @@ export const POST = withRouteContext<Params>(
 
     const { data: period, error: periodError } = await ctx.supabase
       .from('fiscal_periods')
-      .select('id, opening_balance_entry_id, opening_balance_review_token')
+      .select('id, period_start, opening_balance_entry_id, opening_balance_review_token')
       .eq('id', id)
       .eq('company_id', ctx.companyId!)
       .maybeSingle()
@@ -58,6 +75,12 @@ export const POST = withRouteContext<Params>(
     if (!period) return errorResponseFromCode('OB_PERIOD_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     if (period.opening_balance_review_token !== reviewToken || period.opening_balance_entry_id) {
       return errorResponseFromCode('OB_REVIEW_CHANGED', ctx.log, { requestId: ctx.requestId })
+    }
+    // The review predates a new import of the year before: the year opens on
+    // that year's utgående balanser again, and a second IB from the file
+    // would break the continuity the import itself kept (prior_activity).
+    if (await previousYearHasBookkeeping(ctx.supabase, ctx.companyId!, period.period_start)) {
+      return errorResponseFromCode('OB_PREVIOUS_YEAR_BOOKED', ctx.log, { requestId: ctx.requestId })
     }
 
     const file = await readSIEFileOpeningBalance(ctx.supabase, ctx.companyId!, id)

@@ -628,6 +628,90 @@ describe('importProviderDocuments', () => {
 
       expect(result).toMatchObject({ linked: 1, skipped: 1, locked: 0, lockedPeriods: [] })
     })
+
+    describe('a year locked after an earlier run reached it (crm#1410)', () => {
+      // The earlier run put file-a on je-2023 while the year was open; the
+      // year was klarmarkerat afterwards. Its stored hash is the content the
+      // Fortnox mock serves.
+      const OWN_FILE: ExistingAttachment = {
+        id: 'doc-own', sha256_hash: 'sha-FORTNOX-PDF', journal_entry_id: 'je-2023', upload_source: 'api',
+      }
+      const LOCKED_BROKEN_YEAR = { ...BROKEN_YEAR, is_closed: true, locked_at: '2026-10-21T20:13:00Z' }
+
+      beforeEach(() => {
+        mockArchivedForOwnEntry.mockImplementation(async (_company, row) => row.id === 'doc-own')
+      })
+
+      it('counts a file already on its verifikat as already there, not as locked', async () => {
+        const supabase = wireFortnox({
+          ...TWO_YEARS,
+          periods: [LOCKED_BROKEN_YEAR, OPEN_YEAR],
+          existingAttachments: [OWN_FILE],
+        })
+
+        const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+        expect(result).toMatchObject({ scanned: 2, linked: 1, skipped: 1, locked: 0, lockedPeriods: [] })
+        // The locked verifikat's file is read only to compare its content; it
+        // is never written again.
+        expect(mockUpload).toHaveBeenCalledTimes(1)
+        expect(mockUpload.mock.calls[0][4]).toMatchObject({ journal_entry_id: 'je-2024' })
+      })
+
+      it('still reports a file that never reached the verifikat as locked', async () => {
+        const supabase = wireFortnox({
+          ...TWO_YEARS,
+          periods: [LOCKED_BROKEN_YEAR, OPEN_YEAR],
+          existingAttachments: [{ ...OWN_FILE, sha256_hash: 'sha-another-file' }],
+        })
+
+        const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+        expect(result).toMatchObject({ linked: 1, skipped: 0, locked: 1, lockedPeriods: ['2022/2023'] })
+        expect(mockUpload).toHaveBeenCalledTimes(1)
+      })
+
+      it('keeps a file locked when its content cannot be read', async () => {
+        const supabase = wireFortnox({
+          ...TWO_YEARS,
+          periods: [LOCKED_BROKEN_YEAR, OPEN_YEAR],
+          existingAttachments: [OWN_FILE],
+        })
+        mockDownloadFortnoxArchiveFile.mockRejectedValueOnce(new Error('socket hang up'))
+
+        const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+        expect(result).toMatchObject({ linked: 1, locked: 1, failed: 0 })
+      })
+
+      it('takes them as already there in the dry run, without a download', async () => {
+        const supabase = wireFortnox({
+          ...TWO_YEARS,
+          periods: [LOCKED_BROKEN_YEAR, OPEN_YEAR],
+          existingAttachments: [OWN_FILE],
+        })
+
+        const result = await importProviderDocuments({
+          supabase, companyId: COMPANY, userId: USER, consentId: 'c1', dryRun: true,
+        })
+
+        expect(result).toMatchObject({ dryRun: true, linked: 1, skipped: 1, locked: 0 })
+        expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalled()
+      })
+
+      it('still reports a locked verifikat without files from this import as locked, without a download', async () => {
+        const supabase = wireFortnox({
+          ...TWO_YEARS,
+          periods: [LOCKED_BROKEN_YEAR, OPEN_YEAR],
+          existingAttachments: [{ ...OWN_FILE, journal_entry_id: 'je-2024' }],
+        })
+
+        const result = await importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
+
+        expect(result).toMatchObject({ locked: 1, lockedPeriods: ['2022/2023'] })
+        expect(mockDownloadFortnoxArchiveFile).not.toHaveBeenCalledWith(expect.anything(), 'fortnox-token', 'file-a')
+      })
+    })
   })
 
   it('keeps a dotted Bokio description as a basename and appends the effective extension', async () => {

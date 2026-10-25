@@ -315,6 +315,8 @@ describe('validateVoucherForInvoiceLink', () => {
         { account_number: '1510', debit_amount: 0, credit_amount: 1000, currency: 'SEK' },
       ],
     })
+    // The rows on the voucher: only this invoice's own (capacity skips it).
+    enqueue({ data: [{ invoice_id: invoice.id, amount: 1000, currency: 'SEK' }] })
     enqueue({ data: [{ id: 'pmt-1' }] })
     const result = await validateVoucherForInvoiceLink(
       supabase as never,

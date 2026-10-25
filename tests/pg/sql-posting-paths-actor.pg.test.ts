@@ -253,7 +253,7 @@ describe('signatures, grants and comments', () => {
   it.each([
     ['match_batch_allocate', 'match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,uuid[],text)', 'samlingsverifikat'],
     ['create_expense_payout_batch', 'create_expense_payout_batch(uuid,uuid[],date,text,text,uuid,uuid,text,text,uuid[],text)', 'reimbursement transfer'],
-    ['link_invoice_to_voucher', 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,text,text,uuid[],text)', 'customer invoice as its payment'],
+    ['link_invoice_to_voucher', 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'customer invoice as its payment'],
     ['link_supplier_invoice_to_voucher', 'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'OPEN supplier invoice'],
   ])('%s has one signature, executable by authenticated and service_role only, comment kept', async (name, signature, phrase) => {
     const { rows } = await getPool().query(

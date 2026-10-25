@@ -61,8 +61,13 @@ export function enabledAccounts(accounts: readonly PolledAccount[], selection: S
   return accounts.filter((a) => selection[a.uid]?.enabled)
 }
 
-/** Why the selection cannot be activated yet, or null when it can. */
-export function selectionBlocker(accounts: readonly PolledAccount[], selection: SelectionMap): 'none_enabled' | 'ledger_missing' | null {
+/**
+ * Why the selection cannot be activated yet, or null when it can.
+ * `no_accounts`: the bank signed the consent but listed no account (crm#1445),
+ * so there is nothing to choose and Välj minst ett konto would be a dead end.
+ */
+export function selectionBlocker(accounts: readonly PolledAccount[], selection: SelectionMap): 'no_accounts' | 'none_enabled' | 'ledger_missing' | null {
+  if (accounts.length === 0) return 'no_accounts'
   const enabled = enabledAccounts(accounts, selection)
   if (enabled.length === 0) return 'none_enabled'
   if (enabled.some((a) => !selection[a.uid]?.ledger)) return 'ledger_missing'

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { displayBankName, flowReducer, openFlow, pollingActive, redirectInFlight, signingApproach, stepAfterActivation, type FlowState } from '../connect-flow-reducer'
 import type { BankIdChallenge, ConnectionAttempt, ConnectionPoll, ConnectionView, OpenPaymentsBankDetails, PolledAccount } from '../open-payments-client'
+import { selectionBlocker } from '../account-selection'
 
 const SWEDBANK = { bic: 'SWEDSESS', name: 'Swedbank' }
 const SPARBANK = { id: '08999', name: 'Sparbanken Nord' }
@@ -163,6 +164,16 @@ describe('a bank that signs on its own page', () => {
     expect(pollingActive(pending)).toBe(true)
     const valid = flowReducer(pending, { type: 'polled', poll: poll({ state: 'valid', method: 'redirect', accounts: [account()] }) })
     expect(valid.step).toBe('accounts')
+  })
+
+  it('a redirect return whose consent lists no account still ends the wait at the accounts step, which says so (crm#1445)', () => {
+    const back = openFlow('resume', { connectionId: 'c-1', returned: { result: 'ok', code: null } })
+    const valid = flowReducer(back, { type: 'polled', poll: poll({ state: 'valid', method: 'redirect', accounts: [] }) })
+    expect(valid.step).toBe('accounts')
+    expect(valid.accounts).toEqual([])
+    expect(valid.selection).toEqual({})
+    expect(selectionBlocker(valid.accounts, valid.selection)).toBe('no_accounts')
+    expect(pollingActive(valid)).toBe(false)
   })
 
   it('an error return shows the bank\'s code with a restart that leaves for the bank again', () => {

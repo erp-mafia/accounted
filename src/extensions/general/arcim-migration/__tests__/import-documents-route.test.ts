@@ -242,6 +242,74 @@ describe('POST /import-documents', () => {
   })
 })
 
+describe('POST /import-documents keeps the run outcome (crm#1410)', () => {
+  const realSlice = {
+    provider: 'fortnox',
+    scanned: 40,
+    linked: 39,
+    skipped: 0,
+    unmatched: 1,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    dryRun: false,
+    unmatchedSamples: [],
+    total: 3003,
+    partial: true,
+    nextCursor: 'file-40',
+    unreachableSources: [],
+  }
+
+  function contextWithSettings(set = vi.fn().mockResolvedValue(undefined)) {
+    const ctx = buildContext()
+    ;(ctx as unknown as { settings: unknown }).settings = {
+      get: vi.fn().mockResolvedValue(null),
+      set,
+      clear: vi.fn(),
+    }
+    return { ctx, set }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('stores the summary of a real slice for the page to show later', async () => {
+    ;(importProviderDocuments as Mock).mockResolvedValue(realSlice)
+    const { ctx, set } = contextWithSettings()
+
+    const response = await handler(request(false), ctx)
+
+    expect(response.status).toBe(200)
+    expect(set).toHaveBeenCalledWith(
+      'document_import_run',
+      expect.objectContaining({ provider: 'fortnox', scanned: 40, linked: 39, total: 3003, complete: false, nextCursor: 'file-40' }),
+    )
+  })
+
+  it('stores nothing for discovery', async () => {
+    ;(importProviderDocuments as Mock).mockResolvedValue({ ...realSlice, dryRun: true })
+    const { ctx, set } = contextWithSettings()
+
+    await handler(request(true), ctx)
+
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('answers the slice even when the summary cannot be stored', async () => {
+    ;(importProviderDocuments as Mock).mockResolvedValue(realSlice)
+    const { ctx } = contextWithSettings(vi.fn().mockRejectedValue(new Error('extension_data set failed')))
+
+    const { status, body } = await parseJsonResponse<{ success: boolean; result: { linked: number } }>(
+      await handler(request(false), ctx),
+    )
+
+    expect(status).toBe(200)
+    expect(body).toMatchObject({ success: true, result: { linked: 39 } })
+  })
+})
+
 describe('POST /submit-token Bokio error mapping', () => {
   beforeEach(() => {
     vi.clearAllMocks()

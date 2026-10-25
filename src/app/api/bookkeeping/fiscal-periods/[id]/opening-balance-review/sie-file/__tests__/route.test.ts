@@ -4,7 +4,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const queued = createQueuedMockSupabase()
 const { supabase } = queued
-const auth = vi.fn(), isAdmin = vi.fn(), readFile = vi.fn(), setBalances = vi.fn()
+const auth = vi.fn(), isAdmin = vi.fn(), readFile = vi.fn(), previousBooked = vi.fn(), setBalances = vi.fn()
 vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: (...args: unknown[]) => auth(...args) }))
 vi.mock('@/lib/auth/require-write', async (importOriginal) => ({
@@ -15,7 +15,10 @@ vi.mock('@/lib/company/context', () => ({
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
   requireCompanyId: vi.fn().mockResolvedValue('company-1'),
 }))
-vi.mock('@/lib/import/opening-balance/sie-file', () => ({ readSIEFileOpeningBalance: (...args: unknown[]) => readFile(...args) }))
+vi.mock('@/lib/import/opening-balance/sie-file', () => ({
+  readSIEFileOpeningBalance: (...args: unknown[]) => readFile(...args),
+  previousYearHasBookkeeping: (...args: unknown[]) => previousBooked(...args),
+}))
 vi.mock('@/lib/import/opening-balance/service', () => ({ setOpeningBalances: (...args: unknown[]) => setBalances(...args) }))
 import { GET, POST } from '../route'
 
@@ -34,13 +37,15 @@ const get = () => GET(new Request('https://example.test/sie-file'), params)
 const post = (body: unknown = { reviewToken: token }, routeParams = params) => POST(new Request('https://example.test/sie-file', {
   method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body),
 }), routeParams)
-const openReview = () => queued.enqueue({ data: { id, opening_balance_entry_id: null, opening_balance_review_token: token } })
+const openReview = () => queued.enqueue({ data: { id, period_start: '2019-01-01', opening_balance_entry_id: null, opening_balance_review_token: token } })
+const year = () => queued.enqueue({ data: { period_start: '2019-01-01' } })
 
 beforeEach(() => {
   vi.clearAllMocks(); queued.reset()
   auth.mockResolvedValue({ user: { id: 'actor-1' }, supabase })
   isAdmin.mockResolvedValue(true)
   readFile.mockResolvedValue(file)
+  previousBooked.mockResolvedValue(false)
   setBalances.mockResolvedValue({ ok: true, created: true, data: {
     journal_entry_id: entry, voucher_series: 'A', voucher_number: 1, fiscal_period_id: id,
     entry_date: '2019-01-01', lines_created: 2, total_debit: 100, total_credit: 100,
@@ -58,16 +63,36 @@ describe('GET the IB stored from the year\'s SIE file', () => {
     expect(readFile).not.toHaveBeenCalled()
   })
   it('previews the stored lines of the active company only', async () => {
+    year()
     const response = await get()
     expect(response.status).toBe(200)
     expect(await response.json()).toEqual({ data: {
       import_id: 'import-1', filename: '2019.SE', lines: file.lines, total_debit: 100, total_credit: 100,
+      previous_year_booked: false,
     } })
     expect(readFile).toHaveBeenCalledWith(supabase, 'company-1', id)
+    expect(previousBooked).toHaveBeenCalledWith(supabase, 'company-1', '2019-01-01')
+    expect(queued.findCalls('fiscal_periods', 'eq')).toEqual([['id', id], ['company_id', 'company-1']])
   })
   it('answers null when no import stored an IB for the year', async () => {
+    year()
     readFile.mockResolvedValue(null)
     expect(await (await get()).json()).toEqual({ data: null })
+  })
+  it('answers null for a year outside the company without reading the file', async () => {
+    queued.enqueue({ data: null })
+    expect(await (await get()).json()).toEqual({ data: null })
+    expect(readFile).not.toHaveBeenCalled()
+  })
+  it('says when the year before is booked again, with or without a stored IB (PH 193)', async () => {
+    year()
+    previousBooked.mockResolvedValue(true)
+    expect((await (await get()).json()).data.previous_year_booked).toBe(true)
+    year()
+    readFile.mockResolvedValue(null)
+    expect(await (await get()).json()).toEqual({ data: {
+      import_id: null, filename: null, lines: [], total_debit: 0, total_credit: 0, previous_year_booked: true,
+    } })
   })
 })
 
@@ -104,6 +129,16 @@ describe('POST books the stored IB and signs off the review (crm#1099)', () => {
     expect(response.status).toBe(409)
     expect((await response.json()).error.code).toBe('OB_REVIEW_CHANGED')
     expect(setBalances).not.toHaveBeenCalled()
+  })
+  it('refuses with 409 once the year before is imported again, booking nothing (PH 193)', async () => {
+    openReview()
+    previousBooked.mockResolvedValue(true)
+    const response = await post()
+    expect(response.status).toBe(409)
+    expect((await response.json()).error.code).toBe('OB_PREVIOUS_YEAR_BOOKED')
+    expect(previousBooked).toHaveBeenCalledWith(supabase, 'company-1', '2019-01-01')
+    expect(setBalances).not.toHaveBeenCalled()
+    expect(supabase.rpc).not.toHaveBeenCalled()
   })
   it('answers 404 when no import stored an IB for the year', async () => {
     openReview()

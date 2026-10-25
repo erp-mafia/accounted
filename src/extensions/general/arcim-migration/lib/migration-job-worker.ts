@@ -19,6 +19,14 @@ import { mapCustomer, mapSupplier, mapSalesInvoice, mapSupplierInvoice, buildFxR
 import { bokioSupplierSource } from './bokio-supplier-source'
 import { invoiceWithinScope } from './invoice-scope'
 import { adoptExistingCustomers, customerRegisterFacts, salesInvoicePartyFacts, type PartyCandidate } from './customer-match'
+import {
+  buildCustomerMetadataEnrichment,
+  buildSupplierEnrichment,
+  writeCustomerEnrichment,
+  writeSupplierEnrichment,
+  type ExistingCustomerMetadata,
+  type ExistingSupplierDetails,
+} from './customer-metadata'
 
 const log = createLogger('provider-migration-worker')
 const BATCH_SIZE = 10
@@ -398,11 +406,92 @@ async function supplierPairingFacts(supabase: SupabaseClient, job: ProviderMigra
   return (data as SupplierPairingFacts | null) ?? null
 }
 
+type PartyResource = 'customers' | 'suppliers'
+type CustomerCardDetails = ExistingCustomerMetadata & { id: string }
+type SupplierCardDetails = ExistingSupplierDetails & { id: string }
+
+/**
+ * Fill in what a register record knows and the card it was committed onto
+ * lacks (crm#1436). The commit resolves a record onto a card that already
+ * existed (an invoice stub, an earlier import, a hand-made card) without
+ * writing the record to it, so such a card kept none of the phone, e-mail
+ * and address a new card gets. Only a column the card has as NULL is filled
+ * (buildCustomerMetadataEnrichment); a value it has is never replaced, so a
+ * re-run moves nothing. The records are committed already: a failure here
+ * is logged and leaves the cards as they were.
+ */
+export async function enrichCommittedParties(supabase: SupabaseClient, job: ProviderMigrationJob,
+  records: Record<string, unknown>[], partyChunkIds: ReadonlyMap<string, PartyResource>, deadline: number): Promise<void> {
+  const rows = new Map<string, Record<string, unknown>>()
+  for (const record of records) {
+    if (record.row && partyChunkIds.has(record.id as string)) rows.set(record.id as string, record.row as Record<string, unknown>)
+  }
+  if (rows.size === 0) return
+  let filled = 0
+  let changed = 0
+  const dbError = (error: { message: string; code?: string }) => Object.assign(new Error(error.message), { code: error.code })
+  try {
+    const { data, error } = await withinMigrationDeadline(supabase.from('migration_job_chunks').select('id, target_id')
+      .eq('job_id', job.id).eq('state', 'done').in('id', [...rows.keys()]), deadline)
+    if (error) throw dbError(error)
+    const targets = new Map<string, string>()
+    for (const chunk of (data ?? []) as { id: string; target_id: string | null }[]) {
+      if (chunk.target_id && rows.has(chunk.id)) targets.set(chunk.id, chunk.target_id)
+    }
+    const idsOf = (resource: PartyResource) => [...new Set([...targets].filter(([id]) => partyChunkIds.get(id) === resource).map(([, target]) => target))]
+    const customerIds = idsOf('customers')
+    const supplierIds = idsOf('suppliers')
+    const customers = new Map<string, CustomerCardDetails>()
+    const suppliers = new Map<string, SupplierCardDetails>()
+    if (customerIds.length > 0) {
+      const read = await withinMigrationDeadline(supabase.from('customers')
+        .select('id, org_number, customer_type, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, notes')
+        .eq('company_id', job.company_id).in('id', customerIds), deadline)
+      if (read.error) throw dbError(read.error)
+      for (const card of (read.data ?? []) as CustomerCardDetails[]) customers.set(card.id, card)
+    }
+    if (supplierIds.length > 0) {
+      const read = await withinMigrationDeadline(supabase.from('suppliers')
+        .select('id, org_number, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, notes')
+        .eq('company_id', job.company_id).in('id', supplierIds), deadline)
+      if (read.error) throw dbError(read.error)
+      for (const card of (read.data ?? []) as SupplierCardDetails[]) suppliers.set(card.id, card)
+    }
+    // Two records committed onto one card in a batch: the first one fills it.
+    const seen = new Set<string>()
+    for (const [chunkId, target] of targets) {
+      if (seen.has(target)) continue
+      seen.add(target)
+      const row = rows.get(chunkId)!
+      let outcome: Awaited<ReturnType<typeof writeCustomerEnrichment>> | null = null
+      if (partyChunkIds.get(chunkId) === 'customers') {
+        const card = customers.get(target)
+        const changes = card ? buildCustomerMetadataEnrichment(card, row) : null
+        if (changes) outcome = await withinMigrationDeadline(writeCustomerEnrichment(supabase, job.company_id, target, changes), deadline)
+      } else {
+        const card = suppliers.get(target)
+        const changes = card ? buildSupplierEnrichment(card, row) : null
+        if (changes) outcome = await withinMigrationDeadline(writeSupplierEnrichment(supabase, job.company_id, target, changes), deadline)
+      }
+      if (outcome?.error) throw dbError(outcome.error)
+      if (outcome?.data) filled++
+      else if (outcome) changed++
+    }
+  } catch (error) {
+    log.warn('matched cards left without the register details', { jobId: job.id, filled, changed,
+      code: failureCode(error), ...failureDetails(error) })
+    return
+  }
+  if (filled > 0 || changed > 0) log.info('matched cards filled from the register', { jobId: job.id, filled, changed })
+}
+
 async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[],
   connection: ResolvedConsent, deadline: number): Promise<void> {
   let batch: Record<string, unknown>[] = []
   let bytes = 0
   const parties = new Map<string, PartyCandidate>()
+  const partyChunkIds = new Map<string, PartyResource>()
+  for (const c of chunks) if (c.resource === 'customers' || c.resource === 'suppliers') partyChunkIds.set(c.id, c.resource)
   const commit = async () => {
     if (!batch.length) return
     // A customer the company already has a card for is mapped onto that card
@@ -413,7 +502,9 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
     })
     await adoptExistingCustomers(supabase, job, written, promise => withinMigrationDeadline(promise, deadline))
     await migrationRpc(supabase, job, 'commit_provider_migration_records', { p_records: batch }, deadline)
+    const committed = batch
     batch = []; bytes = 0
+    await enrichCommittedParties(supabase, job, committed, partyChunkIds, deadline)
   }
   try {
     for (const c of chunks) {

@@ -223,3 +223,118 @@ describe('setTransactionIgnored: suggestion_log', () => {
     expect(vi.mocked(recordDecisions)).not.toHaveBeenCalled()
   })
 })
+
+describe('setTransactionIgnored: a hand-made row whose verifikat books no bank line (PH 214)', () => {
+  // A sale typed in as a transaction and booked on the clearing account
+  // (debit 1580, credit 3001/2611) before the bank-anchor guard: nothing on 1930.
+  const saleRow = {
+    ...unbookedRow,
+    journal_entry_id: 'je-sale',
+    reconciliation_method: null,
+    cash_account_id: null,
+    currency: 'SEK',
+    amount: 4277,
+    bank_connection_id: null,
+    import_source: null,
+    invoice_id: null,
+    supplier_invoice_id: null,
+  }
+
+  /** The stale-anchor reads: settlement 1930, the verifikat posted, its lines on 1930 as given, no other anchor. */
+  function enqueueStaleReads(
+    enqueue: (r: { data?: unknown; error?: unknown }) => void,
+    linesOn1930: unknown[] = [],
+  ) {
+    enqueue({ data: [{ ledger_account: '1930' }] }) // the only enabled SEK cash account
+    enqueue({ data: [{ id: 'je-sale', status: 'posted' }] })
+    enqueue({ data: linesOn1930 })
+    if (linesOn1930.length === 0) enqueueNoAnchors(enqueue)
+  }
+
+  it('drops the link and ignores the row in one compare-and-set write, logged as unmatched; the verifikat is untouched', async () => {
+    const { supabase, enqueue, findCalls, calls } = createQueuedMockSupabase()
+    enqueue({ data: saleRow })
+    enqueueStaleReads(enqueue)
+    enqueue({ data: [{ id: TX_ID }] }) // the update
+    enqueue({ data: null }) // payment_match_log insert
+
+    const outcome = await setTransactionIgnored(supabase as never, 'company-1', TX_ID, true, { userId: 'user-1' })
+
+    expect(outcome).toEqual({ ok: true, transaction_id: TX_ID, is_ignored: true, changed: true, dry_run: false })
+    expect(findCalls('transactions', 'update')).toEqual([
+      [{ is_ignored: true, journal_entry_id: null, reconciliation_method: null, is_business: null }],
+    ])
+    const eqArgs = calls.filter((c) => c.table === 'transactions' && c.method === 'eq').map((c) => c.args)
+    expect(eqArgs).toContainEqual(['journal_entry_id', 'je-sale'])
+    expect(eqArgs).toContainEqual(['company_id', 'company-1'])
+    expect(findCalls('payment_match_log', 'insert')).toEqual([
+      [
+        expect.objectContaining({
+          user_id: 'user-1',
+          transaction_id: TX_ID,
+          action: 'unmatched',
+          previous_state: expect.objectContaining({ journal_entry_id: 'je-sale' }),
+        }),
+      ],
+    ])
+    // No verifikat is written or changed.
+    expect(findCalls('journal_entries', 'update')).toEqual([])
+    expect(findCalls('journal_entry_lines', 'update')).toEqual([])
+  })
+
+  it('still refuses a normal booking: the verifikat debits the bank account', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: saleRow })
+    enqueueStaleReads(enqueue, [{ journal_entry_id: 'je-sale', account_number: '1930', debit_amount: 4277, credit_amount: 0 }])
+
+    const outcome = await setTransactionIgnored(supabase as never, 'company-1', TX_ID, true, { userId: 'user-1' })
+
+    expect(outcome).toEqual({ ok: false, code: 'TX_IGNORE_ALREADY_BOOKED', status: 409 })
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('still refuses a bank-feed row of the same shape: money moved there, the verifikat is what to correct', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { ...saleRow, bank_connection_id: 'conn-1' } })
+
+    const outcome = await setTransactionIgnored(supabase as never, 'company-1', TX_ID, true, { userId: 'user-1' })
+
+    expect(outcome).toEqual({ ok: false, code: 'TX_IGNORE_ALREADY_BOOKED', status: 409 })
+    expect(findCalls('journal_entries', 'select')).toEqual([])
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('still refuses when no person is named to record the unlink for', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: saleRow })
+
+    const outcome = await setTransactionIgnored(supabase as never, 'company-1', TX_ID, true)
+
+    expect(outcome).toEqual({ ok: false, code: 'TX_IGNORE_ALREADY_BOOKED', status: 409 })
+    expect(findCalls('journal_entries', 'select')).toEqual([])
+  })
+
+  it('a dry run reports the change and writes nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: saleRow })
+    enqueueStaleReads(enqueue)
+
+    const outcome = await setTransactionIgnored(supabase as never, 'company-1', TX_ID, true, { userId: 'user-1', dryRun: true })
+
+    expect(outcome).toMatchObject({ ok: true, is_ignored: true, changed: true, dry_run: true })
+    expect(findCalls('transactions', 'update')).toEqual([])
+    expect(findCalls('payment_match_log', 'insert')).toEqual([])
+  })
+
+  it('refuses when the pointer changed under it (a concurrent link or storno wins)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: saleRow })
+    enqueueStaleReads(enqueue)
+    enqueue({ data: [] }) // the compare-and-set matched no row
+
+    const outcome = await setTransactionIgnored(supabase as never, 'company-1', TX_ID, true, { userId: 'user-1' })
+
+    expect(outcome).toEqual({ ok: false, code: 'TX_IGNORE_ALREADY_BOOKED', status: 409 })
+    expect(findCalls('payment_match_log', 'insert')).toEqual([])
+  })
+})

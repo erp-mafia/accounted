@@ -508,7 +508,7 @@ describe('the six SQL posting functions: signature, security, grants and comment
   it.each([
     ['bulk_book_transactions', 'bulk_book_transactions(uuid[],uuid,jsonb,uuid,uuid,text,text,text,uuid[],text)', 'samlingsverifikation'],
     ['match_batch_allocate', 'match_batch_allocate(uuid,jsonb,uuid,uuid,text,text,uuid[],text)', 'samlingsverifikat'],
-    ['link_invoice_to_voucher', 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,text,text,uuid[],text)', 'customer invoice as its payment'],
+    ['link_invoice_to_voucher', 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)', 'customer invoice as its payment'],
     [
       'link_supplier_invoice_to_voucher',
       'link_supplier_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)',

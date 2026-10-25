@@ -17,6 +17,11 @@ import { linkInvoiceToVoucher } from '@/lib/invoices/voucher-matching'
  *
  * A deferring company's unbooked invoice (defer_invoice_booking) gets its
  * sale booked first by the Bokför step (lib/invoices/sale-first.ts).
+ *
+ * `amount` states the share of the voucher that is this invoice's when the
+ * voucher settles several invoices; the rest of it stays available
+ * (`voucher_remaining`). Without it a voucher that has more left than the
+ * invoice needs is refused with LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING.
  */
 export const POST = withRouteContext(
   'invoice.link_to_voucher',
@@ -30,7 +35,7 @@ export const POST = withRouteContext(
       operation: 'invoice.link_to_voucher',
     })
     if (!validation.success) return validation.response
-    const { journal_entry_id, notes } = validation.data
+    const { journal_entry_id, notes, amount } = validation.data
 
     // Only a faktura carries a receivable to settle: proformas, delivery notes
     // and quotes are refused before the RPC (which validates status, not
@@ -57,6 +62,7 @@ export const POST = withRouteContext(
       invoiceId: id,
       journalEntryId: journal_entry_id,
       notes,
+      amount,
     })
 
     if (!outcome.ok) {
@@ -74,6 +80,7 @@ export const POST = withRouteContext(
         payment_amount: outcome.result.paymentAmount,
         payment_id: outcome.result.paymentId,
         journal_entry_id: outcome.result.journalEntryId,
+        voucher_remaining: outcome.result.voucherRemaining,
         reconciled_transaction_id: outcome.result.reconciledTransactionId,
         // The sale verifikat this link booked first (defer_invoice_booking).
         ...(outcome.result.saleJournalEntryId ? { sale_journal_entry_id: outcome.result.saleJournalEntryId } : {}),

@@ -48,7 +48,7 @@ const CAPABILITY_BLOCKED: SkvActionFailure = {
 
 /** Same sentences the extension's read routes answer (readAuthFailureResponse in index.ts). */
 const NEEDS_RECONSENT_SV =
-  'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning gäller bara ca 1 timme, så detta är normalt. Anslut igen med BankID.'
+  'Anslutningen mot Skatteverket har gått ut. Skatteverkets inloggning räcker i ungefär tio timmar, så detta är normalt. Anslut igen med BankID.'
 const NOT_CONNECTED_SV = 'Inte ansluten till Skatteverket.'
 
 async function gate(supabase: SupabaseClient, companyId: string): Promise<SkvActionFailure | null> {

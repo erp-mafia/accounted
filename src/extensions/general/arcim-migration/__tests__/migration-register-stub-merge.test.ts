@@ -156,3 +156,103 @@ describe('executeMigration: register rows fold onto the invoice stubs that stood
     expect(results.suppliers).toMatchObject({ total: 1, imported: 0, skipped: 1, skipReasons: { duplicate: 1 } })
   })
 })
+
+/** A register record that says how to reach the customer (crm#1436). */
+function contactParty(name: string, orgNumber: string) {
+  return {
+    ...orgParty(name, orgNumber),
+    postalAddress: { streetName: 'Storgatan 1', postalZone: '111 22', cityName: 'Stockholm', countryCode: 'SE' },
+    contact: { email: 'faktura@kund.example', telephone: '08-123 45 67' },
+  }
+}
+
+/** A stub as the sales-invoice step leaves it: no way to reach the customer. */
+function bareStub(id: string, name: string, overrides: Record<string, unknown> = {}) {
+  return {
+    ...customerStub(id, name),
+    customer_type: 'swedish_business',
+    email: null, phone: null, address_line1: null, address_line2: null, postal_code: null, city: null,
+    country: 'SE', vat_number: null, notes: null,
+    ...overrides,
+  }
+}
+
+describe('executeMigration: a matched card gets the register\'s phone, e-mail and address (crm#1436)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    mFetchAll.mockResolvedValue([])
+  })
+
+  it('fills them on the invoice stub the register customer folds onto', async () => {
+    const { supabase, calls, findCall, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'cust-stub' } })
+    mFetchAll.mockResolvedValue([bareStub('cust-stub', 'Kund AB')])
+    mCustomers.mockResolvedValue([{ ...registerCustomer('Kund AB', '5566778899'), party: contactParty('Kund AB', '5566778899') }])
+
+    const results = await executeMigration(options(supabase, { importCustomers: true }))
+
+    expect(mInsert).not.toHaveBeenCalled()
+    expect(findCall('customers', 'update')?.[0]).toMatchObject({
+      org_number: '5566778899', phone: '08-123 45 67', email: 'faktura@kund.example',
+      address_line1: 'Storgatan 1', postal_code: '111 22', city: 'Stockholm',
+    })
+    // Written only while the card still has none of them.
+    const guards = calls.filter((c) => c.table === 'customers' && c.method === 'is').map((c) => c.args[0])
+    expect(guards).toEqual(expect.arrayContaining(['org_number', 'phone', 'email', 'address_line1', 'city']))
+    expect(results.customers).toMatchObject({ total: 1, imported: 0, updated: 1 })
+  })
+
+  it('never overwrites a phone number the user typed on the card', async () => {
+    const { supabase, findCall, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'cust-typed' } })
+    mFetchAll.mockResolvedValue([bareStub('cust-typed', 'Kund AB', { org_number: '5566778899', phone: '070-999 99 99' })])
+    mCustomers.mockResolvedValue([{ ...registerCustomer('Kund AB', '5566778899'), party: contactParty('Kund AB', '5566778899') }])
+
+    await executeMigration(options(supabase, { importCustomers: true }))
+
+    const update = findCall('customers', 'update')?.[0] as Record<string, unknown>
+    expect(update.phone).toBeUndefined()
+    expect(update).toMatchObject({ email: 'faktura@kund.example', city: 'Stockholm' })
+  })
+
+  it('counts a card the user filled in meanwhile as left alone, not as a failure', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null })
+    mFetchAll.mockResolvedValue([bareStub('cust-stub', 'Kund AB')])
+    mCustomers.mockResolvedValue([{ ...registerCustomer('Kund AB', '5566778899'), party: contactParty('Kund AB', '5566778899') }])
+
+    const results = await executeMigration(options(supabase, { importCustomers: true }))
+
+    expect(results.customers).toMatchObject({ updated: 0, skipped: 1, skipReasons: { duplicate: 1 } })
+  })
+
+  it('still writes a new card with its phone, e-mail and address', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+    mCustomers.mockResolvedValue([{ ...registerCustomer('Ny Kund AB', '5566778899'), party: contactParty('Ny Kund AB', '5566778899') }])
+
+    const results = await executeMigration(options(supabase, { importCustomers: true }))
+
+    expect(mInsert.mock.calls[0][2][0]).toMatchObject({
+      name: 'Ny Kund AB', phone: '08-123 45 67', email: 'faktura@kund.example', address_line1: 'Storgatan 1', city: 'Stockholm',
+    })
+    expect(findCall('customers', 'update')).toBeUndefined()
+    expect(results.customers).toMatchObject({ imported: 1, updated: 0 })
+  })
+
+  it('fills the supplier stub the register supplier folds onto, after its org number', async () => {
+    const { supabase, findCalls } = createQueuedMockSupabase()
+    mFetchAll.mockResolvedValue([{
+      id: 'sup-stub', org_number: null, name: 'Lev AB', email: null, phone: null, address_line1: null, address_line2: null,
+      postal_code: null, city: null, country: 'SE', vat_number: null, bankgiro: null, plusgiro: null, bank_account: null, notes: null,
+    }])
+    mSuppliers.mockResolvedValue([{ ...registerSupplier('Lev AB', '5566778899'), party: contactParty('Lev AB', '5566778899'), bankGiro: '123-4567' }])
+
+    await executeMigration(options(supabase, { importSuppliers: true }))
+
+    const updates = findCalls('suppliers', 'update').map((args) => args[0])
+    expect(updates[0]).toEqual({ org_number: '5566778899' })
+    expect(updates[1]).toMatchObject({ phone: '08-123 45 67', email: 'faktura@kund.example', city: 'Stockholm', bankgiro: '123-4567' })
+    // The org number is the step's own write, never a second time here.
+    expect((updates[1] as Record<string, unknown>).org_number).toBeUndefined()
+  })
+})

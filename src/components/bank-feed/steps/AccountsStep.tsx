@@ -34,6 +34,17 @@ export function AccountsStep({ state, dispatch, onActivate, closeButton }: Accou
   const chartNames = useMemo(() => Object.fromEntries(chart.map((a) => [a.account_number, a.account_name])), [chart])
   const blocker = selectionBlocker(state.accounts, state.selection)
 
+  // The bank signed but listed no account: say so, and leave only Avbryt,
+  // which ends the consent. An empty list under Välj minst ett konto was a dead end.
+  if (blocker === 'no_accounts') {
+    return (
+      <div className="space-y-4">
+        <AttnLine>{t('no_accounts')}</AttnLine>
+        <DialogFooter>{closeButton}</DialogFooter>
+      </div>
+    )
+  }
+
   return (
     <div className="space-y-4">
       <p className="text-[13px] leading-relaxed text-muted-foreground">{t('accounts_intro')}</p>

@@ -217,6 +217,20 @@ const ERROR_PATTERN_MAP: [RegExp, string | null][] = [
     'Verifikationen kan inte raderas eftersom andra verifikationer (t.ex. storno eller rättelse) refererar till den.',
   ],
   [
+    // retain_sie_batch_entry (migration 20260911140532): a verifikation an
+    // SIE import posted leaves the ledger only with its whole import, by
+    // storno. PH 212: the raw English reached the user, naming no way out.
+    /SIE batch entries cannot be deleted/i,
+    'Verifikationen kommer från en SIE-import och kan inte raderas en och en. Ångra hela importen under Bokföring > Importera/Exportera > Importhistorik: alla verifikationer i importen makuleras då med storno, och filen kan importeras igen.',
+  ],
+  [
+    // retain_sie_undo_reversal (migration 20261026003000): deleting a storno
+    // of an undone SIE import would make the import's verifikationer active
+    // again while the import stays undone.
+    /undone SIE import cannot be restored/i,
+    'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företag > Allmänt > Riskzon.',
+  ],
+  [
     /timed out after \d+m?s/i,
     'Anslutningen mot tjänsten tog för lång tid. Försök igen.',
   ],

@@ -13,7 +13,7 @@ describe('focusDecision', () => {
     expect(d.editorEscape).toBe(true)
   })
 
-  it('keeps "Inte ett underlag" for an unpaid invoice as a quiet link once it falls off the three', () => {
+  it('keeps the removal (Ta bort ur Inkorgen) for an unpaid invoice as a quiet link once it falls off the three', () => {
     const d = focusDecision(makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice' }) }))
     expect(d.actions).not.toContain('not_underlag')
     expect(d.quietActions).toEqual(['not_underlag'])

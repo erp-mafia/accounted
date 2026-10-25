@@ -8,6 +8,7 @@ import {
   openAmountByEntry,
   type UnlinkedGLLine,
 } from './bank-reconciliation'
+import { findStaleBankAnchors, type StaleAnchorRow } from '@/lib/transactions/stale-bank-anchor'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import { proposeCoveringSets } from './covering-set-candidate'
 import {
@@ -238,6 +239,32 @@ async function attachEntries(
     p.voucher_number = meta.voucher_number
     p.description = meta.description
   }
+}
+
+/**
+ * A matched row booked from itself offers no action (PH 194), except a row the
+ * user created whose verifikat books no bank line: it is no movement on the
+ * bank, and ignoring it is its way out (PH 214,
+ * lib/transactions/stale-bank-anchor.ts). Read after the page is cut, for its
+ * matched rows only; a failed read offers nothing new.
+ */
+async function offerIgnoreOnStaleAnchors(
+  supabase: SupabaseClient,
+  companyId: string,
+  items: ReconciliationItem[],
+): Promise<void> {
+  const ids = items
+    .filter((i) => i.item_type === 'transaction' && i.bucket === 'matched' && i.actions.length === 0 && i.linked_journal_entry_id)
+    .map((i) => i.item_id)
+  if (ids.length === 0) return
+  const { data, error } = await supabase
+    .from('transactions')
+    .select('id, journal_entry_id, cash_account_id, currency, amount, bank_connection_id, import_source, invoice_id, supplier_invoice_id')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  if (error || !data) return
+  const stale = await findStaleBankAnchors(supabase, companyId, data as unknown as StaleAnchorRow[])
+  for (const it of items) if (stale.has(it.item_id)) it.actions = ['ignore']
 }
 
 /**
@@ -664,6 +691,7 @@ export async function listAccountItems(
       items,
       items.flatMap((i) => (i.proposal && persistedProposals.has(i.proposal) ? [i.proposal] : [])),
     )
+    await offerIgnoreOnStaleAnchors(supabase, companyId, items)
     const hasMore = offset + limit < total
     return {
       items,

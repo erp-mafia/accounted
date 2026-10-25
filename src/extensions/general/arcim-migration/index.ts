@@ -46,6 +46,11 @@ import {
   FortnoxDocumentScopesRequiredError,
   importProviderDocuments,
 } from './lib/import-documents'
+import {
+  documentImportRunStatus,
+  readDocumentImportRun,
+  recordDocumentImportSlice,
+} from './lib/document-import-run'
 import { fetchFortnoxAssetPreview } from './lib/import-assets'
 import { reconcileSupplierInvoiceVouchers } from '@/lib/invoices/bulk-reconcile-supplier-vouchers'
 import { relinkRegistrationVouchers } from './lib/relink-registration-vouchers'
@@ -388,6 +393,13 @@ export const arcimMigrationExtension: Extension = {
             supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
             findUnfinishedConnect(createServiceClient(), companyId),
           ])
+          // What the latest underlag run found, linked and left, so the
+          // connections list can answer "did everything come in?" after a
+          // reload (crm#1410). Display only: a failed read shows nothing.
+          const latestDocumentRun = ctx.settings
+            ? await readDocumentImportRun(ctx.settings).catch(() => null)
+            : null
+          const latestDocumentImport = latestDocumentRun ? documentImportRunStatus(latestDocumentRun) : null
 
           return NextResponse.json({
             consents: consents.map(c => ({
@@ -401,6 +413,7 @@ export const arcimMigrationExtension: Extension = {
             hasCompletedSieImport: latestCompletedSieImport != null,
             latestCompletedSieImport: latestCompletedSieImport ?? null,
             unfinishedConnect,
+            latestDocumentImport,
             entityCounts: {
               customers: customerCount ?? 0,
               suppliers: supplierCount ?? 0,
@@ -2085,6 +2098,16 @@ export const arcimMigrationExtension: Extension = {
             partial: result.partial,
             nextCursor: result.nextCursor,
           })
+          // Keep the run's outcome past this tab (crm#1410). Best effort:
+          // the files are linked either way, so a failed write never fails
+          // the slice.
+          if (!dryRun && ctx.settings) {
+            await recordDocumentImportSlice(ctx.settings, result, cursor).catch((recordError) =>
+              log.warn('arcim import-documents run summary not stored', {
+                reason: recordError instanceof Error ? recordError.message : 'unknown',
+              }),
+            )
+          }
           return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {
           // "400 Bad Request" alone told us nothing when a live Fortnox

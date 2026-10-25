@@ -98,6 +98,7 @@ function enqueueValidLink(enqueue: (r: { data?: unknown; error?: unknown }) => v
       { account_number: '1510', debit_amount: 0, credit_amount: credit, currency: 'SEK' },
     ],
   })
+  enqueue({ data: [] }) // invoice_payments rows on the voucher (capacity)
   enqueue({ data: [] }) // invoice_payments already-linked lookup
 }
 

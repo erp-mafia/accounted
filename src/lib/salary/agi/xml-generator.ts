@@ -240,7 +240,29 @@ export class AGIIncompleteDataError extends Error {
   }
 }
 
-function assertRequiredCompanyData(company: AGICompanyData): void {
+/**
+ * Where each required field is filled in, by the labels the settings pages
+ * show. The kontaktperson for skatteärenden (Moms och skatt) is what the AGI
+ * files with; telefon and e-post fall back to the company's own (Allmänt).
+ */
+const COMPANY_FIELD_PLACES: Readonly<Record<string, string>> = {
+  organisationsnummer: 'organisationsnummer under Inställningar → Allmänt',
+  'kontaktperson (namn)': 'namn under Inställningar → Moms och skatt → Kontaktperson för skatteärenden',
+  telefon:
+    'telefon under Inställningar → Moms och skatt → Kontaktperson för skatteärenden (eller Telefon under Inställningar → Allmänt)',
+  'e-post':
+    'e-post under Inställningar → Moms och skatt → Kontaktperson för skatteärenden (eller E-post under Inställningar → Allmänt)',
+}
+
+/**
+ * The company data an AGI cannot be filed without, as the error naming each
+ * missing field and where to fill it in; null when nothing is missing.
+ * Generation throws it; the staging doors answer it before anyone is asked
+ * to approve a generation that would fail (crm#1435).
+ */
+export function findMissingCompanyData(
+  company: Pick<AGICompanyData, 'orgNumber' | 'contactName' | 'contactPhone' | 'contactEmail'>,
+): AGIIncompleteDataError | null {
   const missing: string[] = []
   // Skatteverket's IDENTITET type requires either 10 digits (AB orgnr, we prefix
   // with "16") or 12 digits (personnummer for enskild firma). Any other shape is
@@ -254,13 +276,17 @@ function assertRequiredCompanyData(company: AGICompanyData): void {
   if (!company.contactPhone.trim()) missing.push('telefon')
   if (!company.contactEmail.trim()) missing.push('e-post')
 
-  if (missing.length > 0) {
-    throw new AGIIncompleteDataError(
-      `AGI kan inte genereras, följande uppgifter saknas: ${missing.join(', ')}. ` +
-        'Fyll i dem under Inställningar → Företag och Inställningar → Lön.',
-      missing
-    )
-  }
+  if (missing.length === 0) return null
+  return new AGIIncompleteDataError(
+    `AGI kan inte genereras, följande uppgifter saknas: ${missing.join(', ')}. ` +
+      `Fyll i ${missing.map((field) => COMPANY_FIELD_PLACES[field]).join('; ')}.`,
+    missing
+  )
+}
+
+function assertRequiredCompanyData(company: AGICompanyData): void {
+  const missing = findMissingCompanyData(company)
+  if (missing) throw missing
 }
 
 /**

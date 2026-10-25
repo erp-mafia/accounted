@@ -190,9 +190,13 @@ const glossaryTerms: GlossaryTerm[] = [
   },
   {
     term: 'Eget utlägg',
-    simpleTerm: 'Betalat privat för bolagets räkning',
+    simpleTerm: 'Kvitto du betalat med egna pengar',
+    // The path names the buttons as they read today (inkorg.action_expense,
+    // inbox_workspace.payer_*, supplier_invoices.register_invoice, nav.*):
+    // __tests__/help-utlagg-path.test.ts pins each one, so a renamed button
+    // fails a test instead of leaving a dead instruction here (PH 201).
     definition:
-      'När du som ägare lägger ut pengar privat för en kostnad som bolaget ska stå för. Registrera under Leverantörsfakturor → Ny, kryssa i "Jag har betalat detta privat". Verifikatet bokförs då direkt mot skuld till ägare (2893 för AB, 2018 för EF) istället för via leverantörsskuld. När bolaget senare ersätter dig kategoriserar du den utgående banktransaktionen mot samma konto.',
+      'När du betalar en kostnad för företaget med egna pengar, till exempel med ditt privata kort. Ladda upp kvittot i Inkorgen och öppna det. Under Vem betalade? väljer du Privat, som utlägg och sedan Jag, privat (eller En anställd). Är det en faktura du har betalat privat: Inköp → Leverantörsfakturor → Registrera faktura, och välj Jag, privat under Vem betalade?. I ett aktiebolag bokförs kostnaden och momsen mot företagets skuld till dig (2893), och utbetalningen väntar i Att göra. I en enskild firma är det en egen insättning (2018): du och firman är samma person, så det finns inget att betala ut. När företaget betalar tillbaka väljer du Matcha mot utlägg på den utgående transaktionen. Sidan Utlägg under Inköp visas när det första utlägget finns.',
     category: 'bokföring',
     relatedTerms: ['Aktiebolag', 'Enskild firma'],
   },

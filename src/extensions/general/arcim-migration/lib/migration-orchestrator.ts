@@ -53,8 +53,13 @@ import { supplierPayableEffectSek } from '@/lib/supplier-invoices/credit-note'
 import { ORE_TOLERANCE } from '@/lib/money'
 import {
   buildCustomerMetadataEnrichment,
+  buildSupplierEnrichment,
+  writeCustomerEnrichment,
+  writeSupplierEnrichment,
   type CustomerMetadataEnrichment,
   type ExistingCustomerMetadata,
+  type ExistingSupplierDetails,
+  type SupplierEnrichment,
 } from './customer-metadata'
 import { insertWithPerRowFallback } from './insert-fallback'
 import { importProviderAssets, FortnoxAssetScopesRequiredError } from './import-assets'
@@ -539,7 +544,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           ({ from, to }) =>
             supabase
               .from('customers')
-              .select('id, org_number, name, customer_type, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses')
+              .select('id, org_number, name, customer_type, contact_person, invoice_email_cc_addresses, invoice_email_bcc_addresses, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, notes')
               .eq('company_id', companyId)
               // Stable order: .range() pages past 1 000 rows are only
               // reliable with a total order.
@@ -676,31 +681,19 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         // that actually have new provider metadata, with bounded concurrency,
         // so enrichment neither overwrites edits nor serializes the migration.
         for (const batch of chunk(pendingEnrichments, ENRICHMENT_CONCURRENCY)) {
-          const outcomes = await Promise.all(batch.map(async ({ id, changes }) => {
-            const { data, error } = await supabase
-              .from('customers')
-              // Object literal, not the record itself: absent keys serialize
-              // away, and the phantom-column guard can resolve the columns.
-              .update({
-                contact_person: changes.contact_person,
-                invoice_email_cc_addresses: changes.invoice_email_cc_addresses,
-                invoice_email_bcc_addresses: changes.invoice_email_bcc_addresses,
-                org_number: changes.org_number,
-              })
-              .eq('id', id)
-              .eq('company_id', companyId)
-              .select('id')
-              .maybeSingle()
-            return { data, error }
-          }))
+          const outcomes = await Promise.all(batch.map(({ id, changes }) =>
+            writeCustomerEnrichment(supabase, companyId, id, changes)))
 
           for (const outcome of outcomes) {
-            if (outcome.error || !outcome.data) {
-              if (outcome.error) {
-                console.error('[migration] Customer metadata enrichment failed:', outcome.error.message)
-                errorSample ??= outcome.error.message
-              }
+            if (outcome.error) {
+              console.error('[migration] Customer metadata enrichment failed:', outcome.error.message)
+              errorSample ??= outcome.error.message
               skipReasons.failed = (skipReasons.failed ?? 0) + 1
+              skipped++
+            } else if (!outcome.data) {
+              // The card got one of these values since it was read: the
+              // user's value stays, as on any other matched card.
+              skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
               skipped++
             } else {
               updated++
@@ -746,15 +739,21 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         if (suppliers.length > 0) runState.grantProven = true
 
         const supplierSnapshotAt = registerDeltaCursor()
-        const existingSuppliers = await fetchAllRows<{ id: string; org_number: string | null; name: string | null }>(
+        type ExistingSupplier = ExistingSupplierDetails & {
+          id: string
+          org_number: string | null
+          name: string | null
+        }
+        const existingSuppliers = await fetchAllRows<ExistingSupplier>(
           ({ from, to }) =>
             supabase
               .from('suppliers')
-              .select('id, org_number, name')
+              .select('id, org_number, name, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, notes')
               .eq('company_id', companyId)
               .order('id', { ascending: true })
               .range(from, to)
         )
+        const existingSupplierById = new Map(existingSuppliers.map((row) => [row.id, row]))
         const supplierOrgNumberById = new Map(existingSuppliers.map((row) => [row.id, row.org_number]))
         for (const row of existingSuppliers) {
           if (row.org_number) orgNumberToSupplierId.set(orgMapKey(row.org_number), row.id)
@@ -763,6 +762,8 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
         supplierRegisterLoaded = true
         // Org-less stubs the register now names: written after the inserts.
         const pendingSupplierOrgNumbers: { id: string; org_number: string }[] = []
+        // The details a matched card is missing (crm#1436), after those.
+        const pendingSupplierEnrichments: { id: string; changes: SupplierEnrichment }[] = []
 
         let imported = 0
         let skipped = 0
@@ -804,6 +805,12 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               supplierOrgNumberById.set(existingSupplierId, key)
               orgNumberToSupplierId.set(key, existingSupplierId)
             }
+            const existingSupplier = existingSupplierById.get(existingSupplierId)
+            // The org number has its own fill above, so it is left out here.
+            const changes = existingSupplier
+              ? buildSupplierEnrichment({ ...existingSupplier, org_number: undefined }, mapSupplier(supplier, userId, companyId))
+              : null
+            if (changes) pendingSupplierEnrichments.push({ id: existingSupplierId, changes })
             skipReasons.duplicate = (skipReasons.duplicate ?? 0) + 1
             skipped++
             continue
@@ -882,6 +889,16 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
               .eq('company_id', companyId)
             if (error) {
               console.error('[migration] Supplier org number enrichment failed:', error.message)
+              errorSample ??= error.message
+            }
+          }))
+        }
+
+        for (const batch of chunk(pendingSupplierEnrichments, ENRICHMENT_CONCURRENCY)) {
+          await Promise.all(batch.map(async ({ id, changes }) => {
+            const { error } = await writeSupplierEnrichment(supabase, companyId, id, changes)
+            if (error) {
+              console.error('[migration] Supplier details enrichment failed:', error.message)
               errorSample ??= error.message
             }
           }))

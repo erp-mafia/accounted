@@ -30,6 +30,8 @@ import { formatCurrency } from '@/lib/utils'
 import type { Deadline } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOverdueInvoices } from '@/lib/invoices/overdue'
+import { summarizeOverdueInvoices, type OverdueSummaryRow } from '@/lib/worklist/overdue-summary'
 
 const supabase = createClient()
 
@@ -116,44 +118,34 @@ export default function DeadlinesPage() {
             .order('id', { ascending: true })
             .range(from, to),
         ),
-        fetchAllRows<{ total_sek: number | null; total: number | null; currency: string | null }>(({ from, to }) =>
-          supabase
-            .from('invoices')
-            .select('total_sek, total, currency')
-            .eq('company_id', companyId)
-            // The open statuses, and only those the CHECK actually allows
-            // (draft, sent, paid, partially_paid, overdue, cancelled,
-            // credited): draft is not owed yet, paid/cancelled/credited are
-            // settled. There is no 'unpaid' status; this filter used to name
-            // one, so every invoice the reminder run had already flipped to
-            // 'overdue' fell out of the total silently. partially_paid is
-            // deliberately absent: the sum below is the invoice total, not
-            // remaining_amount, so counting one would report money already
-            // received as still owed, and the action link lands on the
-            // invoices tab that lists exactly sent + overdue.
-            .in('status', ['sent', 'overdue'])
-            // Only fakturor are owed: proformas, delivery notes and quotes
-            // carry a date but no receivable.
-            .eq('document_type', 'invoice')
-            .lt('due_date', today)
+        // The one overdue rule (lib/invoices/overdue.ts), never a copy of it:
+        // a hand-written query here missed the credit-note and open-remainder
+        // filters, so a credited kreditfaktura counted as an overdue invoice
+        // with its negative total (crm#1435).
+        fetchAllRows<OverdueSummaryRow>(({ from, to }) =>
+          filterOverdueInvoices(
+            supabase
+              .from('invoices')
+              .select('due_date, total, total_sek, remaining_amount, currency')
+              .eq('company_id', companyId),
+            today,
+          )
             .order('id', { ascending: true })
             .range(from, to),
         ),
       ])
 
-      // Non-SEK invoices without a stored SEK conversion (rate fetch failed at
-      // creation) are excluded from the SEK sum rather than mixed in raw, and
-      // surfaced as a count in the attn line instead.
-      let overdueTotal = 0
-      let unconvertedCount = 0
-      for (const inv of overdueRows) {
-        if (inv.total_sek != null) overdueTotal += inv.total_sek
-        else if (!inv.currency || inv.currency === 'SEK') overdueTotal += inv.total || 0
-        else unconvertedCount++
-      }
+      // What is still owed, in SEK, the same figure as the Att göra row: a
+      // partly paid invoice adds its remainder, and a foreign-currency one
+      // with no stored SEK amount is counted in the attn line instead.
+      const overdue = summarizeOverdueInvoices(overdueRows, today)
 
       setDeadlines(deadlineRows)
-      setOverdueInvoices({ count: overdueRows.length, total: overdueTotal, unconverted: unconvertedCount })
+      setOverdueInvoices({
+        count: overdue?.count ?? 0,
+        total: overdue?.remaining_sek ?? 0,
+        unconverted: overdue?.unconverted_count ?? 0,
+      })
       return true
     } catch {
       toast({
@@ -536,7 +528,7 @@ export default function DeadlinesPage() {
         </AttnLine>
       ) : overdueInvoices.count > 0 ? (
         <AttnLine
-          action={{ label: t('overdue_invoices_action'), href: '/invoices?status=unpaid' }}
+          action={{ label: t('overdue_invoices_action'), href: '/invoices?status=overdue' }}
         >
           {t('overdue_invoices', { count: overdueInvoices.count })} ·{' '}
           {formatCurrency(overdueInvoices.total)}

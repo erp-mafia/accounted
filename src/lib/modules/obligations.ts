@@ -26,6 +26,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { filterOwedInvoices } from '@/lib/invoices/overdue'
 import { OPEN_ROT_RUT_PAYOUT_STATUSES } from '@/lib/invoices/rot-rut-payout-matching'
 import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
@@ -309,9 +310,9 @@ const PROBES: Readonly<Record<ObligationCode, Probe>> = {
     exists('active_bank_connection', ctx, 'bank_connections', (q) => q.in('status', ['active', 'pending_selection', 'error'])),
   // Kundfakturor: a receivable still open, invoices still generated, cases
   // still open, Skatteverket's share of a ROT/RUT invoice still to arrive.
-  unpaid_customer_invoices: (ctx) =>
-    exists('unpaid_customer_invoices', ctx, 'invoices', (q) =>
-      q.eq('document_type', 'invoice').in('status', ['sent', 'overdue', 'partially_paid'])),
+  // The receivable is the shared owed rule: a sent credit note with nothing
+  // remaining is not one and must not keep the package open (crm#1435).
+  unpaid_customer_invoices: (ctx) => exists('unpaid_customer_invoices', ctx, 'invoices', filterOwedInvoices),
   active_recurring_invoices: (ctx) =>
     exists('active_recurring_invoices', ctx, 'recurring_invoice_schedules', (q) => q.eq('status', 'active')),
   open_collection_cases: (ctx) => exists('open_collection_cases', ctx, 'collection_cases', (q) => q.eq('is_open', true)),

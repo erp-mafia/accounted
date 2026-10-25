@@ -26,6 +26,17 @@
  * Both the web API route and the MCP commit handler call into the same
  * `linkInvoiceToVoucher()` function (→ link_invoice_to_voucher RPC) so
  * behaviour stays in lockstep.
+ *
+ * One verifikat may settle several invoices (a bankgiro bundle, or a
+ * kundförlust booked for several invoices in one verifikat), never for more
+ * than its settlement side holds: payment rows that already point at it for
+ * other invoices have used part of it (migration 20261026007000, crm#1434,
+ * the mirror of the supplier side's 20261011153000). A link may state
+ * `amount`: this invoice's share of the verifikat, in the invoice's currency,
+ * bounded by the invoice's remainder and by what the verifikat has left.
+ * Without a stated share nothing is split on a guess: what the verifikat has
+ * left must fit inside the invoice's remainder
+ * (LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING otherwise).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
@@ -201,6 +212,8 @@ export type ValidateResult =
       remainingAfter: number
       isFullyPaid: boolean
       paymentAmount: number
+      /** What the voucher keeps for other invoices after this link. */
+      voucherRemainingAfter: number
     }
   | {
       ok: false
@@ -214,22 +227,45 @@ export type VoucherLinkErrorCode =
   | 'LINK_VOUCHER_NOT_POSTED'
   | 'LINK_VOUCHER_NO_AR_CREDIT'
   | 'LINK_VOUCHER_ALREADY_LINKED'
+  | 'LINK_VOUCHER_FULLY_ALLOCATED'
   | 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING'
+  | 'LINK_VOUCHER_AMOUNT_EXCEEDS_VOUCHER'
+  | 'LINK_VOUCHER_AMOUNT_INVALID'
   | 'LINK_VOUCHER_CURRENCY_MISMATCH'
   | 'LINK_VOUCHER_INVOICE_FULLY_PAID'
   | 'LINK_VOUCHER_DB_ERROR'
 
+/** A payment row that already points at the voucher, whichever invoice it
+ *  belongs to: what it used of the settlement side. */
+interface VoucherPaymentRow {
+  invoice_id: string
+  amount: number | string | null
+  currency: string | null
+}
+
 /**
- * Validate that a journal entry can be linked as payment for an invoice.
- * Used by both the staging path (MCP tool) and the commit path (web route +
- * MCP commit handler) so the guards stay identical.
+ * Validate that a journal entry can be linked as payment for an invoice,
+ * with the RPC's guards in the RPC's order. Used by both the staging path
+ * (MCP tool) and the commit path (web route + MCP commit handler) so the
+ * guards stay identical; the RPC stays the authority.
+ *
+ * `amount` is the stated share of the voucher that is this invoice's, in the
+ * invoice's currency (see the module header); omitted, what the voucher has
+ * left must fit inside the invoice's remainder.
  */
 export async function validateVoucherForInvoiceLink(
   supabase: SupabaseClient,
   companyId: string,
   invoice: Invoice & { customer?: Customer },
-  journalEntryId: string
+  journalEntryId: string,
+  amount?: number | null,
 ): Promise<ValidateResult> {
+  // A stated share is a positive amount to the öre, judged first as in the RPC.
+  const statedAmount = amount == null ? null : roundOre(amount)
+  if (statedAmount !== null && !(Number.isFinite(statedAmount) && statedAmount > 0)) {
+    return { ok: false, code: 'LINK_VOUCHER_AMOUNT_INVALID', details: { amount } }
+  }
+
   const remainingAmount = computeRemaining(invoice)
   if (remainingAmount <= AMOUNT_TOLERANCE) {
     return { ok: false, code: 'LINK_VOUCHER_INVOICE_FULLY_PAID' }
@@ -312,6 +348,23 @@ export async function validateVoucherForInvoiceLink(
   }
   arCreditTotal = roundOre(arCreditTotal)
 
+  if (unconvertibleLineCurrency !== undefined && statedAmount !== null) {
+    // A stated share needs the voucher's side in the invoice's currency. The
+    // fallback below reads a kronor voucher as the settlement of the
+    // invoice's WHOLE remainder and the RPC books the kursdifferens from
+    // that; the kronor behind a part of it are not in the books, so a share
+    // would book a kursdifferens on a guess. Answered before the fallback, as
+    // in the RPC.
+    return {
+      ok: false,
+      code: 'LINK_VOUCHER_CURRENCY_MISMATCH',
+      details: {
+        invoice_currency: invoice.currency,
+        line_currency: unconvertibleLineCurrency,
+        reason: 'amount_needs_invoice_currency',
+      },
+    }
+  }
   if (unconvertibleLineCurrency !== undefined) {
     // SEK-booked settlement fallback, the RPC gate itself (sekBookedSettlement,
     // shared with the supplier side and the candidate search): zero readable
@@ -347,6 +400,7 @@ export async function validateVoucherForInvoiceLink(
     // exceeds-remaining guard sees an equal amount.
     arCreditTotal = roundOre(remainingAmount)
   }
+  const sekFallback = unconvertibleLineCurrency !== undefined
 
   if (arCreditTotal <= 0) {
     return { ok: false, code: 'LINK_VOUCHER_NO_AR_CREDIT' }
@@ -366,11 +420,64 @@ export async function validateVoucherForInvoiceLink(
     }
   }
 
-  if (arCreditTotal > remainingAmount + AMOUNT_TOLERANCE) {
+  // Capacity of the settlement side, on both sides as in the RPC: rows for
+  // OTHER invoices have used part of it; this invoice's own row is the
+  // already-linked guard's.
+  const sideKey = settlement.side === 'bank_debit' ? 'bank_debit' : 'ar_credit'
+  const { data: paymentRows } = await supabase
+    .from('invoice_payments')
+    .select('invoice_id, amount, currency')
+    .eq('company_id', companyId)
+    .eq('journal_entry_id', journalEntryId)
+  const otherRows = ((paymentRows ?? []) as VoucherPaymentRow[]).filter((r) => r.invoice_id !== invoice.id)
+  if (sekFallback && otherRows.length > 0) {
+    return { ok: false, code: 'LINK_VOUCHER_FULLY_ALLOCATED', details: { linked_rows: otherRows.length } }
+  }
+  if (otherRows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) {
     return {
       ok: false,
-      code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
-      details: { ar_credit: arCreditTotal, remaining: roundOre(remainingAmount) },
+      code: 'LINK_VOUCHER_CURRENCY_MISMATCH',
+      details: { invoice_currency: invoice.currency, reason: 'voucher_settles_other_currency' },
+    }
+  }
+  const used = roundOre(otherRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
+  const sideTotal = arCreditTotal
+  if (arCreditTotal - used <= AMOUNT_TOLERANCE) {
+    return {
+      ok: false,
+      code: 'LINK_VOUCHER_FULLY_ALLOCATED',
+      details: { [sideKey]: sideTotal, already_linked: used },
+    }
+  }
+  // From here on arCreditTotal is what the voucher has LEFT.
+  arCreditTotal = roundOre(arCreditTotal - used)
+
+  if (statedAmount === null) {
+    // No stated share: nothing is split on a guess. What the voucher has left
+    // must fit inside the invoice's remainder.
+    if (arCreditTotal > remainingAmount + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
+        details: { ar_credit: arCreditTotal, remaining: roundOre(remainingAmount) },
+      }
+    }
+  } else {
+    // A stated share: bounded by the invoice's remainder and by what the
+    // voucher has left. The rest of the voucher stays available.
+    if (statedAmount > remainingAmount + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
+        details: { amount: statedAmount, remaining: roundOre(remainingAmount) },
+      }
+    }
+    if (statedAmount > arCreditTotal + AMOUNT_TOLERANCE) {
+      return {
+        ok: false,
+        code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_VOUCHER',
+        details: { amount: statedAmount, available: arCreditTotal, [sideKey]: sideTotal, already_linked: used },
+      }
     }
   }
 
@@ -387,7 +494,7 @@ export async function validateVoucherForInvoiceLink(
     return { ok: false, code: 'LINK_VOUCHER_ALREADY_LINKED' }
   }
 
-  const paymentAmount = Math.min(arCreditTotal, roundOre(remainingAmount))
+  const paymentAmount = Math.min(statedAmount ?? arCreditTotal, arCreditTotal, roundOre(remainingAmount))
   const remainingAfter = Math.max(0, roundOre(remainingAmount - paymentAmount))
   const isFullyPaid = remainingAfter <= AMOUNT_TOLERANCE
 
@@ -399,6 +506,7 @@ export async function validateVoucherForInvoiceLink(
     remainingAfter,
     isFullyPaid,
     paymentAmount,
+    voucherRemainingAfter: roundOre(arCreditTotal - paymentAmount),
   }
 }
 
@@ -406,6 +514,9 @@ export interface LinkInvoiceToVoucherParams {
   invoiceId: string
   journalEntryId: string
   notes?: string
+  /** The share of the verifikat that is this invoice's, in the invoice's
+   *  currency, when the verifikat settles several invoices. */
+  amount?: number
 }
 
 export interface LinkInvoiceToVoucherResult {
@@ -421,6 +532,9 @@ export interface LinkInvoiceToVoucherResult {
   reconciledTransactionId: string | null
   /** The sale verifikat this link booked first (defer_invoice_booking), else null. */
   saleJournalEntryId: string | null
+  /** What the verifikat keeps for other invoices after this link; null from
+   *  a database without migration 20261026007000. */
+  voucherRemaining: number | null
 }
 
 /** jsonb payload returned by the link_invoice_to_voucher RPC on success. */
@@ -434,6 +548,7 @@ interface RpcLinkInvoiceOk {
   journal_entry_id: string
   currency: string
   payment_date: string
+  voucher_remaining?: number | null
 }
 
 /** jsonb payload returned by the link_invoice_to_voucher RPC on guard failure. */
@@ -512,6 +627,7 @@ export async function linkInvoiceToVoucher(
         invoiceId: params.invoiceId,
         journalEntryId: params.journalEntryId,
         notes: params.notes ?? null,
+        amount: params.amount ?? null,
         ...(businessEvents ? { businessEvents } : {}),
       },
     ],
@@ -620,6 +736,7 @@ export async function linkInvoiceToVoucher(
       journalEntryId: params.journalEntryId,
       reconciledTransactionId,
       saleJournalEntryId: sale.journalEntryId,
+      voucherRemaining: rpc.voucher_remaining ?? null,
     },
   }
 }
@@ -654,7 +771,7 @@ async function bookSaleBeforeVoucherLink(
   if (!row) return { ok: true, journalEntryId: null }
 
   const invoice = row as unknown as Invoice & { customer?: Customer }
-  const validation = await validateVoucherForInvoiceLink(supabase, companyId, invoice, params.journalEntryId)
+  const validation = await validateVoucherForInvoiceLink(supabase, companyId, invoice, params.journalEntryId, params.amount)
   if (!validation.ok) return { ok: false, code: validation.code, details: validation.details }
 
   const booked = await bookSaleBeforeSettlement(opCtx, plan)
@@ -668,15 +785,18 @@ async function bookSaleBeforeVoucherLink(
  * The payment event of a voucher link, for the kursdifferens verifikat the
  * RPC posts when a foreign-currency invoice is settled by a plain-kronor
  * verifikat at another rate. None for an invoice in the ledger currency
- * (the RPC posts nothing of its own) or when the invoice or verifikat is not
- * there (the RPC refuses as before). A read error throws: the port logs it
- * under shadow and stops the link under strict.
+ * (the RPC posts nothing of its own), for a link that states its share (the
+ * RPC settles a share without that fallback, so it posts nothing of its own)
+ * or when the invoice or verifikat is not there (the RPC refuses as before).
+ * A read error throws: the port logs it under shadow and stops the link
+ * under strict.
  */
 async function customerVoucherLinkEvents(
   supabase: SupabaseClient,
   companyId: string,
   params: LinkInvoiceToVoucherParams,
 ): Promise<BusinessEventDraft[]> {
+  if (params.amount != null) return []
   const { data: invoiceRow, error: invoiceError } = await supabase
     .from('invoices')
     .select('id, customer_id, currency, total, paid_amount, remaining_amount')

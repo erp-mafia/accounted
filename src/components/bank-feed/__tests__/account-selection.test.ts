@@ -80,6 +80,11 @@ describe('selectionBlocker', () => {
     expect(selectionBlocker(accounts, initialSelection(accounts))).toBe('ledger_missing')
     expect(selectionBlocker(accounts, setLedger(initialSelection(accounts), 'a', '1930'))).toBeNull()
   })
+
+  it('names a consent the bank signed without listing any account, not an unticked box (crm#1445)', () => {
+    expect(selectionBlocker([], {})).toBe('no_accounts')
+    expect(selectionBlocker([], initialSelection([]))).toBe('no_accounts')
+  })
 })
 
 describe('selectionPayload', () => {

@@ -1009,7 +1009,7 @@ describe('skatteverket_connection health block', () => {
       source: 'user',
     })
     expect(result.skatteverket_connection?.message).toContain('BankID')
-    expect(result.skatteverket_connection?.message).toContain('ca 1 timme')
+    expect(result.skatteverket_connection?.message).toContain('tio timmar')
   })
 
   it('declares the block in the outputSchema as optional (never required)', () => {

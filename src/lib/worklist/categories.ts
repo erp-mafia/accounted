@@ -17,7 +17,7 @@ import { loadOpenRotRutPayoutRequests } from '@/lib/invoices/rot-rut-payout-cand
 import { matchTransactionsToRotRutPayoutSets } from '@/lib/invoices/rot-rut-payout-set-matching'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
-import { roundOre, sumOre } from '@/lib/money'
+import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import {
   groupExpenseClaimsByPerson,
@@ -30,7 +30,8 @@ import {
 import { matchRowsToInvoiceCombinations, type CombinationInvoice } from '@/lib/transactions/invoice-combination'
 import { BANKGIRO_SPLIT_METHOD } from '@/lib/transactions/part-suggestions'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import { filterOverdueInvoices, invoiceDaysOverdue } from '@/lib/invoices/overdue'
+import { filterOverdueInvoices } from '@/lib/invoices/overdue'
+import { summarizeOverdueInvoices } from './overdue-summary'
 import { PAYMENT_STATUSES_TO_BOOK, SETTLEMENT_STATUSES_TO_BOOK } from '@/lib/collections/settlements-ui'
 import { COLLECTIONS_BATCH_TYPE, collectionWorkCounts, type BatchItem, type BatchRemoval } from '@/lib/collections/batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
@@ -607,42 +608,9 @@ export async function listOverdueInvoiceRows(
   return held.size > 0 ? rows.filter((row) => !held.has(row.id)) : rows
 }
 
-/**
- * The grouped row's facts from the overdue rows (pure). A SEK invoice adds
- * its remaining_amount; one in another currency adds the same share of its
- * stored total_sek (the rate it was booked at), or, without one, is counted
- * in unconverted_count instead of mixing currencies into the sum.
- */
-export function summarizeOverdueInvoices(
-  rows: ReadonlyArray<Pick<OverdueInvoiceRow, 'due_date' | 'total' | 'total_sek' | 'remaining_amount' | 'currency'>>,
-  today: string = todayIsoStockholm(),
-): OverdueInvoicesDue | null {
-  if (rows.length === 0) return null
-  const amounts: number[] = []
-  let unconverted = 0
-  let oldest = rows[0].due_date
-  for (const row of rows) {
-    if (row.due_date < oldest) oldest = row.due_date
-    const remaining = Number(row.remaining_amount ?? row.total ?? 0)
-    if (!row.currency || row.currency === 'SEK') {
-      amounts.push(remaining)
-      continue
-    }
-    const total = Number(row.total ?? 0)
-    if (row.total_sek == null || total === 0) {
-      unconverted++
-      continue
-    }
-    amounts.push((Number(row.total_sek) * remaining) / total)
-  }
-  return {
-    count: rows.length,
-    remaining_sek: sumOre(amounts),
-    unconverted_count: unconverted,
-    oldest_due_date: oldest,
-    oldest_days_overdue: invoiceDaysOverdue(oldest, today),
-  }
-}
+// The grouped row's facts (pure): its own module so the Viktiga datum page
+// can read the same figure in the browser (crm#1435).
+export { summarizeOverdueInvoices }
 
 /**
  * The company's overdue customer invoices as one Att göra item (see
