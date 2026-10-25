@@ -143,8 +143,28 @@ export function qrPathInPoints(vector: { path: string; size: number }): string {
   return vector.path.replace(/-?\d+(?:\.\d+)?/g, (n) => String(Math.round(Number(n) * scale * 1000) / 1000))
 }
 
-/** The payment area's three columns: amount, rows (or a status), and the QR slot. */
+/** The payment area's three columns: amount, rows (under or in place of a status), and the QR slot. */
 function renderPaymentArea(area: PdfPaymentArea, styles: PdfStyles, lang: PdfLang): ReactNode {
+  const rows = area.rows.map((row) => (
+    <View key={row.key} style={styles.areaRow}>
+      <Text style={styles.areaRowLabel} hyphenationCallback={wrapDescriptionWords}>{row.label}</Text>
+      {row.href ? (
+        // The text in its own Text: the area is laid out by a
+        // `render` callback, where react-pdf drops a bare string
+        // child of a Link and prints only the empty link box.
+        <Link src={row.href} style={[styles.areaRowValue, styles.areaRowLink]}>
+          <Text>{row.value}</Text>
+        </Link>
+      ) : (
+        <Text
+          style={row.emphasis ? styles.areaRowValueStrong : styles.areaRowValue}
+          hyphenationCallback={wrapDescriptionWords}
+        >
+          {row.value}
+        </Text>
+      )}
+    </View>
+  ))
   return (
     <View style={styles.paymentArea}>
       <View style={styles.areaLeft}>
@@ -169,28 +189,11 @@ function renderPaymentArea(area: PdfPaymentArea, styles: PdfStyles, lang: PdfLan
                 {area.status.text}
               </Text>
             )}
+            {/* Cancelled and credited carry no rows; Autogiro's payer number sits under its heading. */}
+            {rows.length > 0 && <View style={styles.areaStatusRows}>{rows}</View>}
           </>
         ) : (
-          area.rows.map((row) => (
-            <View key={row.key} style={styles.areaRow}>
-              <Text style={styles.areaRowLabel} hyphenationCallback={wrapDescriptionWords}>{row.label}</Text>
-              {row.href ? (
-                // The text in its own Text: the area is laid out by a
-                // `render` callback, where react-pdf drops a bare string
-                // child of a Link and prints only the empty link box.
-                <Link src={row.href} style={[styles.areaRowValue, styles.areaRowLink]}>
-                  <Text>{row.value}</Text>
-                </Link>
-              ) : (
-                <Text
-                  style={row.emphasis ? styles.areaRowValueStrong : styles.areaRowValue}
-                  hyphenationCallback={wrapDescriptionWords}
-                >
-                  {row.value}
-                </Text>
-              )}
-            </View>
-          ))
+          rows
         )}
       </View>
       <View style={styles.areaSlot}>

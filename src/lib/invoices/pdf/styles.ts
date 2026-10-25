@@ -538,6 +538,10 @@ export function createStyles(branding?: InvoiceBranding) {
       color: b.accentColor,
       marginTop: 4,
     },
+    /** The rows under a status heading (the Autogiro payer number). */
+    areaStatusRows: {
+      marginTop: 6,
+    },
     areaSlot: {
       width: PAYMENT_QR_PT,
     },

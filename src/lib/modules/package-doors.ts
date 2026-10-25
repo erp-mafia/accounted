@@ -258,6 +258,16 @@ const CUSTOMER_INVOICES: PackageDoors = {
     'POST /api/invoices/:id/collection/actions',
     'POST /api/invoices/:id/collection/forwards',
     'POST /api/invoices/:id/collection/possible-payments',
+    // Autogiro: the agreement and mandates are registers; a debit file and a
+    // report collect or settle invoices already issued.
+    'PUT /api/invoices/autogiro/settings',
+    'POST /api/invoices/autogiro/mandates',
+    'PATCH /api/invoices/autogiro/mandates/:id',
+    'POST /api/invoices/autogiro/mandates/:id/cancel',
+    'POST /api/invoices/autogiro/debit-files',
+    'POST /api/invoices/autogiro/debit-files/:id/withdraw',
+    'POST /api/invoices/autogiro/reports',
+    'POST /api/invoices/autogiro/settle',
     // A kundförlust decision on an invoice already issued.
     'POST /api/invoices/:id/customer-loss',
     'POST /api/invoices/:id/finalize',

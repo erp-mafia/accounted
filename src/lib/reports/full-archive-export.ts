@@ -1128,6 +1128,14 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
     file: 'digital_mailbox_dispatches.json',
     orderBy: 'created_at',
   },
+  // Autogiro: the agreement, the mandates (customer and payer number, never
+  // the payer's account), each debit of an invoice with Bankgirot's outcome,
+  // and the files written for and read from Bankgirot (content only where it
+  // carries no personal data).
+  { name: 'autogiro_settings', file: 'autogiro_settings.json', orderBy: 'created_at', pageKey: 'company_id' },
+  { name: 'autogiro_mandates', file: 'autogiro_mandates.json', orderBy: 'created_at' },
+  { name: 'autogiro_debits', file: 'autogiro_debits.json', orderBy: 'debit_date' },
+  { name: 'autogiro_files', file: 'autogiro_files.json', orderBy: 'created_at' },
   { name: 'recurring_invoice_schedules', file: 'recurring_invoice_schedules.json' },
   // Supplier invoicing
   { name: 'supplier_invoices', file: 'supplier_invoices.json', orderBy: 'invoice_date' },

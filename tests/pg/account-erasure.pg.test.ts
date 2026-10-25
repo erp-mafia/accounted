@@ -240,6 +240,9 @@ const RETAINED = new Set([
   'digital_mailbox_connections.receive_connected_by',
   'digital_mailbox_connections.send_activated_by',
   'digital_mailbox_dispatches.sent_by',
+  // Autogiro: who wrote each file for Bankgirot or read each report. The
+  // company's record of which debits it asked its bank for, and on whose word.
+  'autogiro_files.created_by',
   // Collection cases: who handed the invoice over and who decided each step
   // (pause, withdraw, approve). The company's record of what it demanded of
   // its customer and on whose word.

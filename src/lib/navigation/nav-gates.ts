@@ -34,6 +34,8 @@ export interface NavGateContext {
   agentsEnabled: boolean
   /** The company is in the new Inkorg page's rollout (lib/inkorg/flag.ts). */
   inkorgV2Enabled: boolean
+  /** The company is in the Autogiro rollout (lib/invoices/autogiro/flag.ts). */
+  autogiroEnabled: boolean
   capabilities: readonly string[]
   hiddenNavHrefs: ReadonlySet<string>
 }
@@ -80,6 +82,9 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   // hides for the same companies: the inbox has one place either way.
   if (item.requiresInkorgV2 && !ctx.inkorgV2Enabled) return false
   if (item.hiddenWithInkorgV2 && ctx.inkorgV2Enabled) return false
+  // Autogiro rolls out per company; outside it the page shows only what the
+  // company already holds, so the menu does not advertise it.
+  if (item.requiresAutogiro && !ctx.autogiroEnabled) return false
   // Paywalled surfaces (e.g. the AI-only Dokumentinkorg) are hidden unless
   // the active company holds the capability. The page + API gates enforce
   // the paywall; this keeps the sidebar from advertising a dead workspace.

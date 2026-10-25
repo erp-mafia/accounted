@@ -90,6 +90,9 @@ interface DashboardNavProps {
   // Whether the company is in the new Inkorg page's rollout (INKORG_V2_COMPANY_IDS): Inkorg
   // at the top, Underlag out of Inköp. Computed by the layout.
   inkorgV2Enabled?: boolean
+  // Whether the company is in the Autogiro rollout (AUTOGIRO_COMPANY_IDS): the
+  // Autogiro row under Fakturering. Computed by the layout.
+  autogiroEnabled?: boolean
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -120,7 +123,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const supabase = useRealtimeSupabase()
@@ -366,6 +369,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     arkivEnabled,
     agentsEnabled,
     inkorgV2Enabled,
+    autogiroEnabled,
     capabilities,
     hiddenNavHrefs,
   }

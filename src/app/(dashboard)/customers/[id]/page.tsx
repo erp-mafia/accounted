@@ -31,6 +31,7 @@ import type { Customer, CustomerType, CreateCustomerInput, InvoiceStatus } from 
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { CustomerCollectionsExclusion } from '@/components/collections/CustomerCollectionsExclusion'
+import { CustomerAutogiroSection } from '@/components/invoices/autogiro/CustomerAutogiroSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { CounterpartyRoleLink } from '@/components/parties/CounterpartyRoleLink'
 import { fromRegistry, addressRowsFromRegistry, listSv } from '@/lib/parties/registry-summary'
@@ -461,6 +462,8 @@ export default function CustomerDetailPage({
         canWrite={canWrite}
         onSaved={(excluded) => setCustomer((current) => (current ? { ...current, collections_excluded: excluded } : current))}
       />
+
+      <CustomerAutogiroSection customerId={customer.id} canWrite={canWrite} />
 
       {customer.notes && (
         <DetailSection kicker={t('section_notes')}>

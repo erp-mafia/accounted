@@ -4,7 +4,11 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
-import { buildInvoicePaymentRows } from '@/lib/invoices/payment-rows'
+import {
+  buildInvoicePaymentRows,
+  INVOICE_AUTOGIRO_TEXT,
+  invoiceAutogiroPayerNumber,
+} from '@/lib/invoices/payment-rows'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
 type EmailLang = 'sv' | 'en'
@@ -309,7 +313,8 @@ export interface InvoiceEmailPaymentRow {
  * another on the faktura. The last row is the reference the customer copies
  * into the bank: the OCR reference exactly when the PDF prints one, else the
  * invoice number as a plain message. The payment link is left out here: the
- * invoice email shows it as its own "Betala online" button and line.
+ * invoice email shows it as its own "Betala online" button and line. An
+ * Autogiro invoice has the payer number as its one row (see autogiroNotice).
  */
 export function invoiceEmailPaymentRows(
   company: CompanySettings,
@@ -319,6 +324,17 @@ export function invoiceEmailPaymentRows(
   return buildInvoicePaymentRows({ company, invoice, lang })
     .filter((row) => row.key !== 'payment_link')
     .map(({ label, value, emphasis }) => (emphasis ? { label, value, emphasis } : { label, value }))
+}
+
+/**
+ * The Autogiro heading and sentence for an invoice Bankgirot debits, as the
+ * PDF prints them, or null when the customer pays it (or the document asks
+ * for no payment). It replaces the payment heading and the pay-online link:
+ * the email never also asks the customer to pay by hand.
+ */
+function autogiroNotice(invoice: Invoice, lang: EmailLang, hidePayment: boolean): { heading: string; notice: string } | null {
+  if (hidePayment || !invoiceAutogiroPayerNumber(invoice)) return null
+  return INVOICE_AUTOGIRO_TEXT[lang]
 }
 
 /**
@@ -339,6 +355,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
   // pay-online button; its expiry replaces the due date.
   const isQuote = docType === 'quote'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma || isQuote
+  const autogiro = autogiroNotice(invoice, lang, hidePayment)
   const firstName = customerGreetingName(customer)
   const custom = resolveCustomTexts(data, lang)
   const copyNotice = copyNoticeFor(data, lang)
@@ -418,7 +435,7 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     <!-- Pay-online button: only when the user pasted a payment link on this
          invoice. The URL is schema-validated (https-only) but still escaped
          for the attribute context: a URL may legally contain quotes. -->
-    ${!hidePayment && invoice.payment_link_url ? `
+    ${!hidePayment && !autogiro && invoice.payment_link_url ? `
     <div style="margin-bottom: 30px; text-align: center;">
       <a href="${escapeHtml(invoice.payment_link_url)}" style="display: inline-block; background: ${primaryColor}; color: #ffffff; text-decoration: none; padding: 12px 32px; border-radius: 6px; font-size: 16px; font-weight: 600;">
         ${L.payOnline}
@@ -430,8 +447,9 @@ export function generateInvoiceEmailHtml(data: InvoiceEmailData): string {
     ${!hidePayment ? `
     <div style="margin-bottom: 30px;">
       <h2 style="margin: 0 0 15px 0; font-size: 16px; font-weight: 600; color: ${primaryColor};">
-        ${L.paymentHeading}
-      </h2>
+        ${autogiro ? autogiro.heading : L.paymentHeading}
+      </h2>${autogiro ? `
+      <p style="margin: 0 0 10px 0;">${escapeHtml(autogiro.notice)}</p>` : ''}
       <table style="width: 100%; border-collapse: collapse;">
         ${invoiceEmailPaymentRows(company, invoice, lang).map((row) => `
         <tr>
@@ -484,6 +502,7 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   const isProforma = docType === 'proforma'
   const isQuote = docType === 'quote'
   const hidePayment = isCreditNote || isDeliveryNote || isProforma || isQuote
+  const autogiro = autogiroNotice(invoice, lang, hidePayment)
   const firstName = customerGreetingName(customer)
   const custom = resolveCustomTexts(data, lang)
   const copyNotice = copyNoticeFor(data, lang)
@@ -513,8 +532,9 @@ export function generateInvoiceEmailText(data: InvoiceEmailData): string {
   text += `---\n\n`
 
   if (!hidePayment) {
-    text += `${L.paymentHeading}:\n`
-    if (invoice.payment_link_url) text += `${L.payOnline}: ${invoice.payment_link_url}\n`
+    text += `${autogiro ? autogiro.heading : L.paymentHeading}:\n`
+    if (autogiro) text += `${autogiro.notice}\n`
+    else if (invoice.payment_link_url) text += `${L.payOnline}: ${invoice.payment_link_url}\n`
     for (const row of invoiceEmailPaymentRows(company, invoice, lang)) text += `${row.label} ${row.value}\n`
     text += `\n`
   }

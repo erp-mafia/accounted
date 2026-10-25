@@ -352,3 +352,46 @@ describe('invoice PDF: payment QR geometry', () => {
     expect(buffer.subarray(0, 5).toString('latin1')).toBe('%PDF-')
   })
 })
+
+describe('invoice PDF: an Autogiro invoice', () => {
+  const autogiroInvoice = sentInvoice({ autogiro_payer_number: '556677', payment_link_url: 'https://pay.example.test/x' })
+  const business = makeCustomer({ language: 'sv', customer_type: 'swedish_business' })
+
+  it('draws no code and prints the Autogiro heading, the sentence and the payer number instead of payment rows', async () => {
+    const paymentQr = await qrFor(autogiroInvoice, qrCompany(), business)
+    expect(paymentQr).toBeNull()
+    const tree = render(autogiroInvoice, qrCompany(), { paymentQr })
+    expect(codes(tree)).toHaveLength(0)
+    const texts = treeTextLeaves(paymentArea(tree))
+    const heading = texts.indexOf('Autogiro')
+    const sentence = texts.indexOf('Beloppet dras från ditt konto via Autogiro på förfallodagen.')
+    const label = texts.indexOf('Betalarnummer')
+    expect(heading).toBeGreaterThan(-1)
+    expect(sentence).toBeGreaterThan(heading)
+    expect(label).toBeGreaterThan(sentence)
+    expect(texts).toContain('556677')
+    // The amount and the due date still print.
+    expect(texts).toContain('Att betala')
+    expect(texts).toContain('Förfallodatum')
+    for (const manual of ['Bankgiro', 'OCR/Referens', 'Meddelande', 'Betala online', 'Swish']) {
+      expect(texts, manual).not.toContain(manual)
+    }
+    expect(texts.join('\n')).not.toContain('Skanna')
+  })
+
+  it('fits the block inside the fixed payment area, and the real PDF carries the words', { timeout: 30_000 }, async () => {
+    const pages = await layOut(render(autogiroInvoice, qrCompany()))
+    expect(pages).toHaveLength(1)
+    const area = findArea(pages[0])
+    expect(area).toBeTruthy()
+    for (const { node, bottom } of extents(area!)) {
+      expect(bottom, `"${textOf(node).slice(0, 30)}" spills out of the payment area`).toBeLessThanOrEqual(PAYMENT_AREA_HEIGHT_PT + 0.5)
+    }
+    const buffer = await renderToBuffer(render(autogiroInvoice, qrCompany()))
+    const { getDocumentProxy, extractText } = await import('unpdf')
+    const { text } = await extractText(await getDocumentProxy(new Uint8Array(buffer)), { mergePages: true })
+    expect(text).toContain('Autogiro')
+    expect(text).toContain('556677')
+    expect(text).not.toContain('5050-1055')
+  })
+})

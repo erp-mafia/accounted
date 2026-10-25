@@ -91,6 +91,11 @@ describe('matchDepositsToRows', () => {
     expect(matches).toEqual([{ status: 'no_row' }])
   })
 
+  it('takes a row that says Autogiro: an Autogiro deposit comes through the same bankgiro', () => {
+    const autogiro = row({ id: 'tx-autogiro', date: '2026-09-16', amount: 750, description: 'AUTOGIRO INSÄTTNING' })
+    expect(matchDepositsToRows(deposits().slice(2, 3), [autogiro], REGISTER)).toEqual([{ status: 'matched', row: autogiro }])
+  })
+
   it('takes no row further than three days from the payment date', () => {
     const late = row({ id: 'tx-late', date: '2026-09-20', amount: 750, description: 'BANKGIRO INBET' })
     expect(matchDepositsToRows(deposits().slice(2, 3), [late], REGISTER)).toEqual([{ status: 'no_row' }])

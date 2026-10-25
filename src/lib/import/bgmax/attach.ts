@@ -21,8 +21,10 @@
  *   - the amount is the deposit's to the öre, the currency the deposit's;
  *   - the row is a Bankgirot deposit: readGiroCounterparty reads it as a
  *     deposit through the file's own bankgiro, or its text says bankgiro
- *     ("Bankgiro inbetalning", "BANKGIRO INBET", "Insättning Bankgirot")
- *     without naming another giro; a row read as another bankgiro is never it;
+ *     ("Bankgiro inbetalning", "BANKGIRO INBET", "Insättning Bankgirot") or
+ *     Autogiro (an Autogiro deposit, src/lib/invoices/autogiro, is credited
+ *     through the same bankgiro) without naming another giro; a row read as
+ *     another bankgiro is never it;
  *   - the booking date is the payment date, or within DATE_WINDOW_DAYS of it;
  *   - the deposit serial number, when the bank prints it on the row, equals
  *     the file's.
@@ -84,7 +86,7 @@ export function paymentToPart(payment: BgMaxPayment, currency: string): BankTran
 // ── Which row is the deposit (pure) ─────────────────────────────────────
 
 /** The bank's own words for a bankgiro deposit, where it prints no number or names the payer. */
-const BANKGIRO_WORDING = /bank\s*giro|\bbg\b|bggirering|^bi\s+\d/i
+const BANKGIRO_WORDING = /bank\s*giro|\bbg\b|bggirering|^bi\s+\d|autogiro/i
 
 function bankText(row: GiroRow): string {
   return (row.original_description || row.description || '').trim()

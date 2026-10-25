@@ -289,7 +289,11 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // store of the Kivra/Billo connection row: upsertConnection spreads and
 // updateConnection writes a typed ConnectionPatch that the connect, sync and
 // webhook paths each build for their own state change. Its reads select '*'.
-const UNRESOLVED_CEILING = 438
+// 439 (2026-10-23): +1 for lib/invoices/autogiro/service.ts createDebitFile,
+// which inserts one autogiro_debits row per invoice of the file in one
+// request, built by a map: the one-live-debit index must refuse the whole
+// file at once, before any file row exists.
+const UNRESOLVED_CEILING = 439
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

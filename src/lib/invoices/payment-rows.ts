@@ -16,6 +16,11 @@
  * with the invoice number. It always prints: when the method rows exceed the
  * budget, the lowest-priority method rows are the ones left out.
  *
+ * An Autogiro invoice (invoices.autogiro_payer_number set) asks for no
+ * payment at all: Bankgirot debits the payer, so its one row is the payer
+ * number and nothing the customer could pay to prints (INVOICE_AUTOGIRO_TEXT
+ * is the sentence that goes with it).
+ *
  * The caller passes the company with the invoice's payee already applied
  * (companyWithInvoicePaymentAccount): this module reads the flat bank fields.
  *
@@ -51,6 +56,7 @@ export type InvoicePaymentRowKey =
   | 'payment_link'
   | 'ocr'
   | 'message'
+  | 'autogiro'
 
 export interface InvoicePaymentRow {
   key: InvoicePaymentRowKey
@@ -79,6 +85,7 @@ export const INVOICE_PAYMENT_ROW_LABELS: Record<Lang, Record<InvoicePaymentRowKe
     // never the bare invoice number.
     ocr: 'OCR/Referens:',
     message: 'Meddelande:',
+    autogiro: 'Betalarnummer:',
   },
   en: {
     bankgiro: 'Bankgiro:',
@@ -93,6 +100,25 @@ export const INVOICE_PAYMENT_ROW_LABELS: Record<Lang, Record<InvoicePaymentRowKe
     payment_link: 'Pay online:',
     ocr: 'Reference:',
     message: 'Reference:',
+    autogiro: 'Payer number:',
+  },
+}
+
+/**
+ * What an Autogiro invoice says instead of asking to be paid. Bankgirot lets
+ * an ordinary invoice be the payer's notice of the debit only when it says
+ * the amount is debited by Autogiro (Bg Autogiro Användarmanual 3.2.2), so the
+ * PDF payment area and the invoice email both print this with the payer
+ * number row.
+ */
+export const INVOICE_AUTOGIRO_TEXT: Record<Lang, { heading: string; notice: string }> = {
+  sv: {
+    heading: 'Autogiro',
+    notice: 'Beloppet dras från ditt konto via Autogiro på förfallodagen.',
+  },
+  en: {
+    heading: 'Autogiro',
+    notice: 'The amount is debited from your account by Autogiro on the due date.',
   },
 }
 
@@ -118,11 +144,18 @@ export interface InvoicePaymentRowsInvoice {
   invoice_number?: string | null
   currency?: string | null
   payment_link_url?: string | null
+  /** Set when Bankgirot debits the invoice (frozen at issue); null or absent when the customer pays it. */
+  autogiro_payer_number?: string | null
 }
 
 function clean(value: string | null | undefined): string | null {
   const trimmed = value?.trim()
   return trimmed ? trimmed : null
+}
+
+/** The payer number an Autogiro invoice is debited on, or null for an invoice the customer pays. */
+export function invoiceAutogiroPayerNumber(invoice: Pick<InvoicePaymentRowsInvoice, 'autogiro_payer_number'>): string | null {
+  return clean(invoice.autogiro_payer_number)
 }
 
 /** Whether the invoice prints a Swish row: a number is set and the company shows it. */
@@ -168,7 +201,8 @@ export function formatIbanForDisplay(value: string | null): string | null {
  * The rows a customer can pay with on their own: an account or number to pay
  * to, or the online payment link. BIC and the routing rows only qualify an
  * account, and the reference rows (OCR, Meddelande) say what to write with
- * the payment, so none of them makes an invoice payable.
+ * the payment, so none of them makes an invoice payable. The Autogiro row
+ * counts: the debit pays the invoice.
  */
 export const PAYABLE_PAYMENT_ROW_KEYS: ReadonlySet<InvoicePaymentRowKey> = new Set<InvoicePaymentRowKey>([
   'bankgiro',
@@ -177,6 +211,7 @@ export const PAYABLE_PAYMENT_ROW_KEYS: ReadonlySet<InvoicePaymentRowKey> = new S
   'swish',
   'iban',
   'payment_link',
+  'autogiro',
 ])
 
 /**
@@ -198,6 +233,11 @@ export function buildInvoicePaymentRows({
   lang: Lang
 }): InvoicePaymentRow[] {
   const L = INVOICE_PAYMENT_ROW_LABELS[lang]
+  // Debited by Autogiro: the payer number is the only row, so the invoice
+  // never also asks the customer to pay it by hand.
+  const payerNumber = invoiceAutogiroPayerNumber(invoice)
+  if (payerNumber) return [{ key: 'autogiro', label: L.autogiro, value: payerNumber, emphasis: true }]
+
   const methods: InvoicePaymentRow[] = []
   const push = (key: InvoicePaymentRowKey, value: string | null) => {
     if (value) methods.push({ key, label: L[key], value })
