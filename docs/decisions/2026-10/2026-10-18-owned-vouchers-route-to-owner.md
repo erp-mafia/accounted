@@ -1,0 +1,1 @@
+[2026-10-18] Vouchers owned by an invoice, credit note, accrual schedule, asset or salary run send Vänd and Rätta to their owner (Kreditera, Ändra periodisering); payment vouchers keep Vänd with its hook (Jakob). Kreditera is not gated on the registration voucher's status: bulk reversals make it no signal.

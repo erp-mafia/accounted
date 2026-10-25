@@ -6297,7 +6297,7 @@
     "partial_payment_title": "Partial payment registered",
     "amount_registered_description": "{amount} registered",
     "credit_confirm_title": "Register credit note",
-    "credit_confirm_description": "A credit note is created that reverses the original invoice. This action cannot be undone.",
+    "credit_confirm_description": "The invoice is credited with today's date: a credit note is registered and a verifikat reverses the invoice's bookkeeping. You can undo this with Undo credit on the invoice.",
     "credit_confirm_label": "Register credit note",
     "credit_failed_title": "Credit failed",
     "credit_success_title": "Credit note registered",

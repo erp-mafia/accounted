@@ -58,6 +58,7 @@ import { createLogger } from '@/lib/logger'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
+import { liveEntryOf } from '@/lib/core/bookkeeping/correction-chain'
 import { accrualDissolutionBusinessEvent, accrualStornoBusinessEvent } from './business-events'
 
 const log = createLogger('bookkeeping.accruals')
@@ -692,10 +693,86 @@ export async function dissolveScheduleNow(
   return { journalEntryId: entry.id, amount }
 }
 
+type FiscalYearBounds = { period_start: string; period_end: string }
+
+type PostedInstallmentRow = {
+  id: string
+  journal_entry_id: string | null
+  journal_entry?: { fiscal_period?: FiscalYearBounds | null } | null
+}
+
+function isAlreadyReversed(error: unknown): boolean {
+  return (
+    error instanceof EntryAlreadyReversedError ||
+    (error instanceof CannotReverseNonPostedError && error.currentStatus === 'reversed')
+  )
+}
+
+/**
+ * The credit date when it lies inside the verifikat's own fiscal year, else
+ * undefined: a storno is numbered and booked in its original's year
+ * (storno-target.ts), so it then takes the verifikat's own date.
+ */
+function reversalDateWithin(year: FiscalYearBounds | null | undefined, reversalDate?: string): string | undefined {
+  return reversalDate && year && reversalDate >= year.period_start && reversalDate <= year.period_end
+    ? reversalDate
+    : undefined
+}
+
+/**
+ * Storno a posted month's dissolution for a credit. True when a storno was
+ * booked, false when nothing was left to reverse. Throws when a storno fails.
+ *
+ * A dissolution that is already stornoed was undone by an earlier (partially
+ * failed) cancel run, which is fine (an idempotent re-credit), or by a
+ * rättelse. correctEntry posts the corrected month as a new 'correction'
+ * verifikat while the installment keeps pointing at the original, so the
+ * books still carry the month: its live correction is stornoed in its place,
+ * or the credit leaves it standing on the interim account and on the cost or
+ * revenue account.
+ */
+async function stornoInstallmentDissolution(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  schedule: ScheduleRow,
+  entryId: string,
+  ownYear: FiscalYearBounds | null | undefined,
+  reversalDate?: string,
+): Promise<boolean> {
+  try {
+    await stornoDissolution(supabase, companyId, userId, schedule, entryId, 'user_created', reversalDateWithin(ownYear, reversalDate))
+    return true
+  } catch (error) {
+    if (!isAlreadyReversed(error)) throw error
+  }
+
+  const live = await liveEntryOf(supabase, companyId, entryId)
+  if ('exhausted' in live) throw new Error('rättelsekedjan är för lång för att följas')
+  if ('none' in live) return false
+
+  const { data: liveEntry, error: liveError } = await supabase
+    .from('journal_entries')
+    .select('fiscal_period:fiscal_periods!journal_entries_fiscal_period_id_fkey(period_start, period_end)')
+    .eq('company_id', companyId)
+    .eq('id', live.id)
+    .maybeSingle()
+  if (liveError) throw new Error(`Failed to load the corrected dissolution: ${liveError.message}`)
+  const liveYear = (liveEntry as { fiscal_period?: FiscalYearBounds | null } | null)?.fiscal_period
+  try {
+    await stornoDissolution(supabase, companyId, userId, schedule, live.id, 'user_created', reversalDateWithin(liveYear, reversalDate))
+    return true
+  } catch (error) {
+    if (isAlreadyReversed(error)) return false
+    throw error
+  }
+}
+
 /**
  * Cancel all schedules belonging to a credited/cancelled invoice:
  * pending installments are cancelled, already-posted dissolutions are
- * reversed (storno), and the schedule is marked cancelled. The caller's
+ * reversed (storno; a corrected one through its live correction,
+ * stornoInstallmentDissolution), and the schedule is marked cancelled. The caller's
  * credit-note entry reverses the interim account at its full original
  * amount, so the net of origin + dissolutions + stornos + credit is zero.
  *
@@ -767,31 +844,15 @@ export async function cancelSchedulesForSource(
       .eq('status', 'posted')
 
     let scheduleFailures = 0
-    for (const installment of (postedData ?? []) as unknown as Array<{
-      id: string
-      journal_entry_id: string | null
-      journal_entry?: { fiscal_period?: { period_start: string; period_end: string } | null } | null
-    }>) {
+    for (const installment of (postedData ?? []) as unknown as PostedInstallmentRow[]) {
       if (!installment.journal_entry_id) continue
-      const ownYear = installment.journal_entry?.fiscal_period
-      const reversalDate =
-        options.reversalDate && ownYear &&
-        options.reversalDate >= ownYear.period_start && options.reversalDate <= ownYear.period_end
-          ? options.reversalDate
-          : undefined
       try {
-        await stornoDissolution(supabase, companyId, userId, schedule, installment.journal_entry_id, 'user_created', reversalDate)
-        reversedEntries++
+        const reversed = await stornoInstallmentDissolution(
+          supabase, companyId, userId, schedule, installment.journal_entry_id,
+          installment.journal_entry?.fiscal_period, options.reversalDate,
+        )
+        if (reversed) reversedEntries++
       } catch (error) {
-        // A dissolution stornoed by an earlier (partially failed) cancel run
-        // is fine: idempotent re-credit, treated as success.
-        if (
-          error instanceof EntryAlreadyReversedError ||
-          (error instanceof CannotReverseNonPostedError &&
-            error.currentStatus === 'reversed')
-        ) {
-          continue
-        }
         scheduleFailures++
         const message = getErrorMessage(error)
         log.warn('could not reverse accrual dissolution during cancel', {
