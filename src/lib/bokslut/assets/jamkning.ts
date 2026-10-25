@@ -7,6 +7,7 @@
  * deducted at acquisition.
  */
 
+import { roundOre } from '@/lib/money'
 import type { AssetCategory, AssetJamkningDirection, VatTreatment } from '@/types'
 
 export type JamkningDirection = AssetJamkningDirection
@@ -90,14 +91,14 @@ export function assessJamkning(input: JamkningAssessmentInput): JamkningAssessme
     return noAdjustment(base, 'change_below_five_points', newDeductionPercent)
   }
 
-  const rawAmount = round2(
+  const rawAmount = roundOre(
     input.originalInputVat * (Math.abs(change) / 100) * (remainingYears / totalYears),
   )
   let amount = rawAmount
   let capped = false
 
   if (!realProperty && change > 0 && treatmentRetainsDeduction(input.vatTreatment)) {
-    const cap = round2(Math.max(0, Number(input.netProceeds ?? 0)) * 0.25)
+    const cap = roundOre(Math.max(0, Number(input.netProceeds ?? 0)) * 0.25)
     if (amount > cap) {
       amount = cap
       capped = true
@@ -191,8 +192,4 @@ function isoYear(value: string): number {
 
 function clampPercent(value: number): number {
   return Math.min(100, Math.max(0, value))
-}
-
-function round2(value: number): number {
-  return Math.round(value * 100) / 100
 }

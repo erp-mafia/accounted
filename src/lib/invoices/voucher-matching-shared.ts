@@ -8,6 +8,7 @@
  * kontantmetoden), which payment rows already use a voucher, and the invoice's
  * own references differ, and each side passes those in.
  */
+import { roundOre } from '@/lib/money'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
@@ -64,10 +65,6 @@ export interface FiscalPeriodRow {
 
 /** SQL-side filter for posted, non-storno, non-opening entries. */
 export const EXCLUDED_SOURCE_TYPES = ['opening_balance', 'storno']
-
-export function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
 
 /**
  * The amount band a bank-side (19xx) candidate search is pre-filtered to. On
@@ -151,8 +148,8 @@ export function sekBookedSettlement(
     rate > 0 &&
     rate < 100000
   if (!eligible) return { eligible: false, reason: 'not_eligible' }
-  const sekTotal = round2(sekSideTotal)
-  const bookedSek = round2(remainingAmount * rate)
+  const sekTotal = roundOre(sekSideTotal)
+  const bookedSek = roundOre(remainingAmount * rate)
   if (Math.abs(sekTotal - bookedSek) > bookedSek * 0.1) {
     return { eligible: false, reason: 'fx_deviation_too_large', sekTotal, bookedSek }
   }
@@ -303,7 +300,7 @@ export async function collectSettlementVouchers(
       if (!fallback?.eligible) continue
       byEntry.set(entryId, {
         entry: voucher.entry,
-        amount: round2(fallback.sekTotal / fxRate),
+        amount: roundOre(fallback.sekTotal / fxRate),
         lineCurrency: null,
         sekBooked: { sekTotal: fallback.sekTotal },
       })

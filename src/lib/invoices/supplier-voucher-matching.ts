@@ -61,7 +61,6 @@ import {
   collectSettlementVouchers,
   lockedPeriodIds,
   rankVoucherCandidates,
-  round2,
   scoreVoucherCandidate,
   sekBookedReason,
   sekBookedSettlement,
@@ -69,6 +68,7 @@ import {
   type VoucherRow,
   type VoucherScoreContext,
 } from './voucher-matching-shared'
+import { roundOre } from '@/lib/money'
 
 const log = createLogger('supplier-voucher-matching')
 
@@ -238,14 +238,14 @@ export async function findMatchingVouchersForSupplierInvoice(
       voucher_number: entry.voucher_number,
       entry_date: entry.entry_date,
       description: entry.description,
-      ap_debit_amount: round2(amount),
+      ap_debit_amount: roundOre(amount),
       settlement_side: settlement.side,
       currency: invoice.currency,
       ap_line_currency: lineCurrency,
       period_locked: lockedPeriods.has(entry.fiscal_period_id),
       confidence: scored.confidence,
       match_reason: sekBooked ? sekBookedReason(scored.match_reason, sekBooked.sekTotal) : scored.match_reason,
-      ...(hasMoreThanNeeded ? { link_amount: round2(remainingAmount) } : {}),
+      ...(hasMoreThanNeeded ? { link_amount: roundOre(remainingAmount) } : {}),
     })
   }
   return rankVoucherCandidates(candidates, limit)
@@ -308,7 +308,7 @@ export async function validateVoucherForSupplierInvoiceLink(
   amount?: number | null,
 ): Promise<ValidateSupplierVoucherResult> {
   // A stated share is a positive amount to the öre, judged first as in the RPC.
-  const statedAmount = amount == null ? null : round2(amount)
+  const statedAmount = amount == null ? null : roundOre(amount)
   if (statedAmount !== null && !(Number.isFinite(statedAmount) && statedAmount > 0)) {
     return { ok: false, code: 'LINK_SI_VOUCHER_AMOUNT_INVALID', details: { amount } }
   }
@@ -398,7 +398,7 @@ export async function validateVoucherForSupplierInvoiceLink(
     apDebitTotal += debit
     if (!lineCurrency) lineCurrency = line.currency
   }
-  apDebitTotal = round2(apDebitTotal)
+  apDebitTotal = roundOre(apDebitTotal)
 
   if (unconvertibleLineCurrency !== undefined && statedAmount !== null) {
     // A stated share needs the voucher's side in the invoice's currency. The
@@ -445,7 +445,7 @@ export async function validateVoucherForSupplierInvoiceLink(
     // Full-remaining settlement, exactly as the RPC computes it. lineCurrency
     // is null here (no readable line), so the label guard below passes and the
     // exceeds-remaining guard sees an equal amount.
-    apDebitTotal = round2(remainingAmount)
+    apDebitTotal = roundOre(remainingAmount)
   }
   const sekFallback = unconvertibleLineCurrency !== undefined
 
@@ -492,7 +492,7 @@ export async function validateVoucherForSupplierInvoiceLink(
       },
     }
   }
-  const used = round2(rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
+  const used = roundOre(rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
   const sideTotal = apDebitTotal
   if (apDebitTotal - used <= AMOUNT_TOLERANCE) {
     return {
@@ -502,7 +502,7 @@ export async function validateVoucherForSupplierInvoiceLink(
     }
   }
   // From here on apDebitTotal is what the voucher has LEFT.
-  apDebitTotal = round2(apDebitTotal - used)
+  apDebitTotal = roundOre(apDebitTotal - used)
 
   if (statedAmount === null) {
     // No stated share: nothing is split on a guess. What the voucher has left
@@ -511,7 +511,7 @@ export async function validateVoucherForSupplierInvoiceLink(
       return {
         ok: false,
         code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
-        details: { [sideKey]: apDebitTotal, remaining: round2(remainingAmount) },
+        details: { [sideKey]: apDebitTotal, remaining: roundOre(remainingAmount) },
       }
     }
   } else {
@@ -521,7 +521,7 @@ export async function validateVoucherForSupplierInvoiceLink(
       return {
         ok: false,
         code: 'LINK_SI_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
-        details: { amount: statedAmount, remaining: round2(remainingAmount) },
+        details: { amount: statedAmount, remaining: roundOre(remainingAmount) },
       }
     }
     if (statedAmount > apDebitTotal + AMOUNT_TOLERANCE) {
@@ -549,8 +549,8 @@ export async function validateVoucherForSupplierInvoiceLink(
     return { ok: false, code: 'LINK_SI_VOUCHER_ALREADY_LINKED' }
   }
 
-  const paymentAmount = Math.min(statedAmount ?? apDebitTotal, apDebitTotal, round2(remainingAmount))
-  const remainingAfter = Math.max(0, round2(remainingAmount - paymentAmount))
+  const paymentAmount = Math.min(statedAmount ?? apDebitTotal, apDebitTotal, roundOre(remainingAmount))
+  const remainingAfter = Math.max(0, roundOre(remainingAmount - paymentAmount))
   const isFullyPaid = remainingAfter <= AMOUNT_TOLERANCE
 
   return {
@@ -562,7 +562,7 @@ export async function validateVoucherForSupplierInvoiceLink(
     remainingAfter,
     isFullyPaid,
     paymentAmount,
-    voucherRemainingAfter: round2(apDebitTotal - paymentAmount),
+    voucherRemainingAfter: roundOre(apDebitTotal - paymentAmount),
   }
 }
 
@@ -898,8 +898,8 @@ function voucherCapacity(
 ): number | null {
   if (voucherRows.some((r) => r.supplier_invoice_id === invoiceId)) return null
   if (voucherRows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) return null
-  const used = round2(voucherRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
-  const left = round2(sideTotal - used)
+  const used = roundOre(voucherRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
+  const left = roundOre(sideTotal - used)
   return left > AMOUNT_TOLERANCE ? left : null
 }
 
@@ -960,5 +960,5 @@ function computeRemaining(invoice: SupplierInvoice): number {
     return Math.max(0, invoice.remaining_amount)
   }
   const paid = invoice.paid_amount ?? 0
-  return Math.max(0, round2(invoice.total - paid))
+  return Math.max(0, roundOre(invoice.total - paid))
 }

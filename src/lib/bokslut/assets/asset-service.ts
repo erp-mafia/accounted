@@ -741,7 +741,7 @@ export function buildAssetDisposalPlan(args: {
   const currentPosted = posted.find(
     (schedule) => schedule.fiscal_period_id === fiscalPeriod.id,
   )
-  const priorAccumulated = round2(
+  const priorAccumulated = roundOre(
     posted
       .filter((schedule) => {
         const start = periodStartById.get(schedule.fiscal_period_id)
@@ -767,23 +767,23 @@ export function buildAssetDisposalPlan(args: {
   // same 12x9 balance (it arrived with the imported ledger), so the disposal
   // clears it together with what Accounted booked.
   const openingAmount = openingDepreciationOf(asset)?.amount ?? 0
-  const accumulatedDepreciation = round2(
+  const accumulatedDepreciation = roundOre(
     openingAmount +
       priorAccumulated +
       (currentPosted ? Number(currentPosted.planned_depreciation) : requiredCurrent),
   )
-  const acquisitionCost = round2(Number(asset.acquisition_cost))
-  const proceedsGross = input.disposal_type === 'scrap' ? 0 : round2(input.disposed_proceeds)
+  const acquisitionCost = roundOre(Number(asset.acquisition_cost))
+  const proceedsGross = input.disposal_type === 'scrap' ? 0 : roundOre(input.disposed_proceeds)
   const vatTreatment = input.disposal_type === 'sale' ? input.vat_treatment ?? null : null
   if (input.disposal_type === 'sale' && proceedsGross > 0 && !vatTreatment) {
     throw new Error('Momsbehandling krävs vid försäljning.')
   }
-  const proceedsVat = round2(
+  const proceedsVat = roundOre(
     vatTreatment === 'standard_25' ? proceedsGross * (0.25 / 1.25) : 0,
   )
-  const proceedsNet = round2(proceedsGross - proceedsVat)
-  const netBookValue = round2(acquisitionCost - accumulatedDepreciation)
-  const gainOrLoss = round2(proceedsNet - netBookValue)
+  const proceedsNet = roundOre(proceedsGross - proceedsVat)
+  const netBookValue = roundOre(acquisitionCost - accumulatedDepreciation)
+  const gainOrLoss = roundOre(proceedsNet - netBookValue)
 
   if (input.disposal_type === 'business_transfer' && !input.business_transfer_confirmed) {
     throw new AssetBusinessTransferConfirmationRequiredError()
@@ -1050,7 +1050,7 @@ export async function disposeAsset(
     Array.isArray(asset.k3_components) && asset.k3_components.length > 0
   const componentNotes = hasComponents
     ? `K3-komponenter: ${(asset.k3_components ?? [])
-        .map((c) => `${c.name} (${round2(Number(c.cost))} kr / ${c.useful_life_months} mån)`)
+        .map((c) => `${c.name} (${roundOre(Number(c.cost))} kr / ${c.useful_life_months} mån)`)
         .join('; ')}`
     : null
 
@@ -1152,10 +1152,6 @@ function outputVatAccountFor(treatment: VatTreatment): string | null {
     case 'exempt':
       return null
   }
-}
-
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
 }
 
 function disposalAccounts(category: AssetCategory): { gain: string; loss: string } {

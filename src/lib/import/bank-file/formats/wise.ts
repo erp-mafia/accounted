@@ -30,12 +30,7 @@ import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFi
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
-import { parseSwedishAmount } from '@/lib/money'
-
-/** Money rule: round to two decimals without toFixed. */
-function round2(n: number): number {
-  return Math.round(n * 100) / 100
-}
+import { parseSwedishAmount, roundOre } from '@/lib/money'
 
 
 /** Wise datetimes are "YYYY-MM-DD HH:MM:SS"; keep the date part only. */
@@ -191,7 +186,7 @@ export const wiseFormat: BankFileFormat = {
         [counterparty, note].filter(Boolean).join(' - ') || reference || category || 'Wise-transaktion'
 
       // Signed movement: OUT leaves the balance (negative), IN enters it.
-      const amount = round2(isOut ? -Math.abs(rawAmount) : Math.abs(rawAmount))
+      const amount = roundOre(isOut ? -Math.abs(rawAmount) : Math.abs(rawAmount))
 
       transactions.push({
         date,
@@ -230,7 +225,7 @@ export const wiseFormat: BankFileFormat = {
         transactions.push({
           date,
           description: `Wise avgift${counterparty ? ` (${counterparty})` : ''}`,
-          amount: round2(-Math.abs(fee)),
+          amount: roundOre(-Math.abs(fee)),
           currency: feeCurrency,
           balance: null,
           reference: reference || null,
@@ -253,8 +248,8 @@ export const wiseFormat: BankFileFormat = {
         total_rows: lines.length - 1,
         parsed_rows: transactions.length,
         skipped_rows: skippedRows,
-        total_income: round2(transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
-        total_expenses: round2(transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0)),
+        total_income: roundOre(transactions.filter((t) => t.amount > 0).reduce((s, t) => s + t.amount, 0)),
+        total_expenses: roundOre(transactions.filter((t) => t.amount < 0).reduce((s, t) => s + t.amount, 0)),
       },
     }
   },

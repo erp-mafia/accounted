@@ -49,7 +49,6 @@ import {
   collectSettlementVouchers,
   lockedPeriodIds,
   rankVoucherCandidates,
-  round2,
   scoreVoucherCandidate,
   sekBookedReason,
   sekBookedSettlement,
@@ -57,6 +56,7 @@ import {
   type VoucherRow,
   type VoucherScoreContext,
 } from './voucher-matching-shared'
+import { roundOre } from '@/lib/money'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { resolveInvoiceSettlementSide } from './invoice-settlement-side'
 import {
@@ -181,7 +181,7 @@ export async function findMatchingVouchersForInvoice(
       voucher_number: entry.voucher_number,
       entry_date: entry.entry_date,
       description: entry.description,
-      ar_credit_amount: round2(amount),
+      ar_credit_amount: roundOre(amount),
       currency: invoice.currency,
       ar_line_currency: lineCurrency,
       period_locked: lockedPeriods.has(entry.fiscal_period_id),
@@ -310,7 +310,7 @@ export async function validateVoucherForInvoiceLink(
     arCreditTotal += matched
     if (!lineCurrency) lineCurrency = line.currency
   }
-  arCreditTotal = round2(arCreditTotal)
+  arCreditTotal = roundOre(arCreditTotal)
 
   if (unconvertibleLineCurrency !== undefined) {
     // SEK-booked settlement fallback, the RPC gate itself (sekBookedSettlement,
@@ -345,7 +345,7 @@ export async function validateVoucherForInvoiceLink(
     // Full-remaining settlement, exactly as the RPC computes it. lineCurrency
     // is null here (no readable line), so the label guard below passes and the
     // exceeds-remaining guard sees an equal amount.
-    arCreditTotal = round2(remainingAmount)
+    arCreditTotal = roundOre(remainingAmount)
   }
 
   if (arCreditTotal <= 0) {
@@ -370,7 +370,7 @@ export async function validateVoucherForInvoiceLink(
     return {
       ok: false,
       code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING',
-      details: { ar_credit: arCreditTotal, remaining: round2(remainingAmount) },
+      details: { ar_credit: arCreditTotal, remaining: roundOre(remainingAmount) },
     }
   }
 
@@ -387,8 +387,8 @@ export async function validateVoucherForInvoiceLink(
     return { ok: false, code: 'LINK_VOUCHER_ALREADY_LINKED' }
   }
 
-  const paymentAmount = Math.min(arCreditTotal, round2(remainingAmount))
-  const remainingAfter = Math.max(0, round2(remainingAmount - paymentAmount))
+  const paymentAmount = Math.min(arCreditTotal, roundOre(remainingAmount))
+  const remainingAfter = Math.max(0, roundOre(remainingAmount - paymentAmount))
   const isFullyPaid = remainingAfter <= AMOUNT_TOLERANCE
 
   return {
@@ -714,5 +714,5 @@ function computeRemaining(invoice: Invoice): number {
     return invoice.remaining_amount
   }
   const paid = invoice.paid_amount ?? 0
-  return Math.max(0, round2(invoice.total - paid))
+  return Math.max(0, roundOre(invoice.total - paid))
 }
