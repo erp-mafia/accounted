@@ -1,0 +1,1 @@
+[2026-10-18] The five local naive öre-rounding copies (storno-service, voucher-matching-shared, asset-service, jämkning, Wise import) now call roundOre: one implementation; only exact-half products (FX, percentages) change, by one öre, to the value roundOre already gives everywhere else.
