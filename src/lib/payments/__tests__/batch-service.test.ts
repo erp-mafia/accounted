@@ -21,6 +21,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import {
+  batchFileBytes,
   createSupplierPaymentBatch,
   previewSupplierPaymentBatch,
   renderSupplierPaymentBatchFile,
@@ -42,6 +43,9 @@ const settingsRow = {
   clearing_number: null,
   bank_name: null,
 }
+
+/** A Svea Bank company: its file upload takes Bankgirot's LB file and no pain.001 (crm#1424). */
+const SVEA_SETTINGS = { ...settingsRow, iban: 'SE4496600000000012345678', bic: 'SVEASESS' }
 
 /** The two ids Swedbank assigns, in the formats its MIG 2.0 states. */
 const SWEDBANK_IDS = {
@@ -320,8 +324,57 @@ describe('previewSupplierPaymentBatch', () => {
     )
 
     expect(preview.debtor_ok).toBe(true)
+    expect(preview.format).toBe('pain001')
     expect(preview.eligible.map((line) => line.payee.type)).toEqual(['bankgiro', 'plusgiro', 'bank_account'])
     expect(preview.excluded).toEqual([])
+  })
+
+  // crm#1424: Svea Bank answers a pain.001 upload "Content is neither BgLon or LbFile".
+  it('makes a Svea Bank company an LB file, paying bankgiro and plusgiro payees and leaving the bank-account payee out', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: invoicesToEveryPayeeType() },
+      { data: [] },
+      { data: companyRow },
+      { data: SVEA_SETTINGS },
+    ])
+
+    const preview = await previewSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      { ids: ['inv-bg', 'inv-pg', 'inv-acct'] },
+    )
+
+    expect(preview.format).toBe('bg_lb')
+    expect(preview.debtor_ok).toBe(true)
+    expect(preview.eligible.map((line) => [line.id, line.payee.type])).toEqual([['inv-bg', 'bankgiro'], ['inv-pg', 'plusgiro']])
+    expect(preview.excluded).toEqual([{ id: 'inv-acct', reason: 'lb_bank_account_payee' }])
+  })
+
+  it.each(['SVEASES1', 'sveases1xxx', 'SVEASESSXXX'])('knows Svea Bank by its SWIFT BIC and Open Payments\' alike: %s', async (bic) => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([{ data: [invoiceRow()] }, { data: [] }, { data: companyRow }, { data: { ...SVEA_SETTINGS, bic } }])
+
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['inv-1'] })
+
+    expect(preview.format).toBe('bg_lb')
+  })
+
+  it('asks a Svea Bank company without a bankgiro for one, since its LB file is sent from it', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: companyRow },
+      { data: { ...SVEA_SETTINGS, bankgiro: null } },
+    ])
+
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['inv-1'] })
+
+    expect(preview.format).toBe('bg_lb')
+    expect(preview.debtor_ok).toBe(false)
+    expect(preview.debtor_missing).toBe('bankgiro')
+    expect(preview.eligible.map((line) => line.id)).toEqual(['inv-1'])
   })
 })
 
@@ -346,7 +399,6 @@ describe('createSupplierPaymentBatch', () => {
     ])
 
     const result = await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
-      format: 'pain001',
       items: [{ supplier_invoice_id: 'inv-1' }],
     })
 
@@ -370,7 +422,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result).toEqual({ ok: true, batch: batchRow() })
@@ -447,7 +499,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result).toEqual({
@@ -475,7 +527,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: null }, // attest policy: none
       { data: { ok: false, code: 'amount_exceeds_remaining', details: [{ id: 'inv-1' }] } },
     ])
-    const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
+    const input = { items: [{ supplier_invoice_id: 'inv-1' }] }
 
     const ineligible = await createSupplierPaymentBatch(
       mock.supabase as unknown as SupabaseClient,
@@ -525,7 +577,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     // The client contract is unchanged: a generic create_failed, nothing else.
@@ -573,7 +625,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
     expect(result).toEqual({ ok: false, code: 'create_failed' })
 
@@ -614,7 +666,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result).toEqual({ ok: false, code: 'create_failed' })
@@ -646,7 +698,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: null }, // attest policy: none
       { data: null },
     ])
-    const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
+    const input = { items: [{ supplier_invoice_id: 'inv-1' }] }
 
     const unknown = await createSupplierPaymentBatch(
       mock.supabase as unknown as SupabaseClient,
@@ -701,7 +753,7 @@ describe('createSupplierPaymentBatch', () => {
       { data: null }, // attest policy: none
       { data: { ok: false, code: 'already_batched', details: [{ id: 'inv-1', batch_id: 'b' }] } },
     ])
-    const input = { format: 'pain001' as const, items: [{ supplier_invoice_id: 'inv-1' }] }
+    const input = { items: [{ supplier_invoice_id: 'inv-1' }] }
 
     const created = await createSupplierPaymentBatch(
       mock.supabase as unknown as SupabaseClient,
@@ -736,7 +788,6 @@ describe('createSupplierPaymentBatch', () => {
       COMPANY_ID,
       USER_ID,
       {
-        format: 'pain001',
         items: [{ supplier_invoice_id: 'inv-1' }, { supplier_invoice_id: 'inv-2' }],
       },
     )
@@ -762,7 +813,6 @@ describe('createSupplierPaymentBatch', () => {
     ])
 
     const result = await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
-      format: 'pain001',
       items: [{ supplier_invoice_id: 'inv-1' }],
     })
 
@@ -785,7 +835,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1', amount: 800 }] },
+      { items: [{ supplier_invoice_id: 'inv-1', amount: 800 }] },
     )
 
     expect(result).toEqual({
@@ -814,7 +864,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result).toEqual({
@@ -845,7 +895,6 @@ describe('createSupplierPaymentBatch', () => {
       COMPANY_ID,
       USER_ID,
       {
-        format: 'pain001',
         items: [{ supplier_invoice_id: 'inv-1' }],
         confirm_already_batched: true,
       },
@@ -869,7 +918,6 @@ describe('createSupplierPaymentBatch', () => {
 
     await expect(
       createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
-        format: 'pain001',
         items: [{ supplier_invoice_id: 'inv-1' }],
       }),
     ).rejects.toBeTruthy()
@@ -884,7 +932,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'iban' })
@@ -907,7 +955,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result.ok).toBe(true)
@@ -928,7 +976,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'org_number' })
@@ -946,7 +994,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'bic' })
@@ -970,7 +1018,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result.ok).toBe(true)
@@ -1009,7 +1057,7 @@ describe('createSupplierPaymentBatch', () => {
         mock.supabase as unknown as SupabaseClient,
         COMPANY_ID,
         USER_ID,
-        { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+        { items: [{ supplier_invoice_id: 'inv-1' }] },
       )
 
       expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'swedbank_ids' })
@@ -1025,7 +1073,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'swedbank_ids' })
@@ -1047,7 +1095,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result.ok).toBe(true)
@@ -1095,7 +1143,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: ids.map((id) => ({ supplier_invoice_id: id })) },
+      { items: ids.map((id) => ({ supplier_invoice_id: id })) },
     )
 
     expect(result).toEqual({
@@ -1106,6 +1154,54 @@ describe('createSupplierPaymentBatch', () => {
         .map((id) => ({ id, reason: 'swedbank_iso2_giro_payee' })),
     })
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('creates a Svea Bank company\'s batch as an LB file through the same RPC', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: SVEA_SETTINGS },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
+      { data: { ok: true, batch: batchRow({ format: 'bg_lb' }) } },
+    ])
+
+    const result = await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+      items: [{ supplier_invoice_id: 'inv-1' }],
+    })
+
+    expect(result).toMatchObject({ ok: true, batch: { format: 'bg_lb' } })
+    const [, args] = mock.supabase.rpc.mock.calls[0] as [string, Record<string, unknown>]
+    expect(args).toMatchObject({ p_format: 'bg_lb', p_debtor_snapshot: { bic: 'SVEASESS', bankgiro: '9912346' } })
+  })
+
+  it('refuses a bank-account payee in a Svea Bank LB file, and a Svea Bank company without a bankgiro, before the RPC', async () => {
+    const mixed = createQueuedMockSupabase()
+    mixed.enqueueMany([
+      { data: companyRow },
+      { data: SVEA_SETTINGS },
+      { data: invoicesToEveryPayeeType() },
+      { data: [] },
+      { data: [] },
+      { data: null },
+    ])
+    expect(
+      await createSupplierPaymentBatch(mixed.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+        items: ['inv-bg', 'inv-acct'].map((id) => ({ supplier_invoice_id: id })),
+      }),
+    ).toEqual({ ok: false, code: 'ineligible', details: [{ id: 'inv-acct', reason: 'lb_bank_account_payee' }] })
+    expect(mixed.supabase.rpc).not.toHaveBeenCalled()
+
+    const noBankgiro = createQueuedMockSupabase()
+    noBankgiro.enqueueMany([{ data: companyRow }, { data: { ...SVEA_SETTINGS, bankgiro: '' } }])
+    expect(
+      await createSupplierPaymentBatch(noBankgiro.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+        items: [{ supplier_invoice_id: 'inv-1' }],
+      }),
+    ).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'bankgiro' })
+    expect(noBankgiro.supabase.rpc).not.toHaveBeenCalled()
   })
 
   it('leaves the Swedbank ids out of another bank\'s snapshot, even when they are still saved', async () => {
@@ -1124,7 +1220,7 @@ describe('createSupplierPaymentBatch', () => {
       mock.supabase as unknown as SupabaseClient,
       COMPANY_ID,
       USER_ID,
-      { format: 'pain001', items: [{ supplier_invoice_id: 'inv-1' }] },
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
     expect(result.ok).toBe(true)
@@ -1191,7 +1287,58 @@ describe('renderSupplierPaymentBatchFile', () => {
   })
 
   it('refuses a format the renderer does not support', () => {
-    expect(() => renderSupplierPaymentBatchFile(batchRow({ format: 'bg_lb' }), [])).toThrow()
+    expect(() => renderSupplierPaymentBatchFile(batchRow({ format: 'xml' }), [])).toThrow('Filformatet stöds inte')
+  })
+
+  it('renders a stored LB batch from its rows alone: ISO 8859-1 text from the company bankgiro, written on the creation day', () => {
+    const batch = batchRow({
+      format: 'bg_lb',
+      // 23:30 UTC on 2026-08-10 is already 2026-08-11 in Stockholm: the write date.
+      created_at: '2026-08-10T23:30:00Z',
+      debtor_snapshot: { name: 'Testbolaget AB', org_number: '556677-8899', iban: 'SE4496600000000012345678', bic: 'SVEASESS', bankgiro: '9912346', city: null },
+    })
+    const item = (overrides: Partial<SupplierPaymentBatchItem>): SupplierPaymentBatchItem => ({
+      id: 'item-1',
+      batch_id: batch.id,
+      company_id: COMPANY_ID,
+      supplier_invoice_id: 'inv-1',
+      amount: 737.5,
+      payment_date: '2026-08-15',
+      payee_type: 'bankgiro',
+      payee_bankgiro: '50501055',
+      payee_plusgiro: null,
+      payee_clearing: null,
+      payee_account: null,
+      payee_name: 'Åkeri Öst AB',
+      payee_city: null,
+      reference_type: 'ocr',
+      reference: '55601234566',
+      created_at: '2026-08-10T23:30:00Z',
+      ...overrides,
+    })
+    const items = [item({}), item({ id: 'item-2', supplier_invoice_id: 'inv-2', payee_type: 'plusgiro', payee_bankgiro: null, payee_plusgiro: '1234566', reference_type: 'invoice_number', reference: 'F-118', amount: 100 })]
+
+    const first = renderSupplierPaymentBatchFile(batch, items)
+
+    expect(first.content).toBe(renderSupplierPaymentBatchFile(batch, items).content)
+    expect(first.contentType).toBe('text/plain; charset=iso-8859-1')
+    expect(first.charset).toBe('iso-8859-1')
+    expect(first.filename).toBe('betalfil_20260810_b0000000.txt')
+    const lines = first.content.split('\r\n').filter((line) => line)
+    expect(lines.map((line) => line.slice(0, 2))).toEqual(['11', '14', '54', '29'])
+    expect(lines[0].slice(2, 18)).toBe('0009912346260811')
+    expect(lines[1].slice(2, 37)).toBe('0050501055' + '55601234566'.padEnd(25, ' '))
+    expect(lines[2].slice(2, 37)).toBe('0001234566' + 'F-118'.padEnd(25, ' '))
+    expect(lines[3].slice(12, 32)).toBe('00000002' + '000000083750')
+    // The bytes the bank takes: å, ö as one ISO 8859-1 byte each.
+    const bytes = batchFileBytes(first)
+    expect(bytes.length).toBe(first.content.length)
+    expect(bytes.includes(0xc5)).toBe(true)
+  })
+
+  it('refuses to render an LB batch that has no sender bankgiro', () => {
+    const batch = batchRow({ format: 'bg_lb' })
+    expect(() => renderSupplierPaymentBatchFile(batch, [])).toThrow('bankgironummer')
   })
 
   it('re-renders a stored Danske Bank batch with the IBAN debit, MsgId unchanged', () => {

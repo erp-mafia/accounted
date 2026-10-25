@@ -982,7 +982,7 @@ export const paymentsAvailability = defineOperation({
     description:
       'Answers available (a payment provider serves this installation, the company is on a paid plan and it is not a sandbox), ' +
       'why not when it is false (reason: no_provider, not_in_pilot, subscription, sandbox), the provider, and the company\'s bank accounts with ' +
-      'payable true or a reason (account_disabled, not_sek, iban_missing, bank_unknown). signer_known says whether the calling ' +
+      'payable true or a reason (account_disabled, not_sek, iban_missing, bank_unknown, bank_not_supported: the payment provider does not pay from this bank, Svea Bank today). signer_known says whether the calling ' +
       'person has a BankID login on file, so signing needs no typed personnummer. IBANs are masked.',
     useWhen: 'Before preparing a bank payment: pick a payable cash_account_id.',
     doNotUseFor: 'Payment files, which need no provider (GET /supplier-payment-batches/preview).',
@@ -1016,7 +1016,7 @@ export const paymentsAvailability = defineOperation({
         iban: z.string().nullable().describe('Masked to country, check digits and the last four.'),
         bank_name: z.string().nullable().describe('The bank behind the account, as its connection reports it.'),
         payable: z.boolean(),
-        reason: z.enum(['account_disabled', 'not_sek', 'iban_missing', 'bank_unknown']).nullable(),
+        reason: z.enum(['account_disabled', 'not_sek', 'iban_missing', 'bank_unknown', 'bank_not_supported']).nullable(),
       }),
     ),
     signer_known: z.boolean(),

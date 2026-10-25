@@ -56,9 +56,10 @@ const SETTLED_EPSILON = 0.005
 const LIST_PAGE_SIZE = 50
 const BATCH_API_MAX_LIMIT = 100
 
-function batchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at'>): string {
+/** The name to save under should the response name none; the server's (supplierPaymentBatchFilename) comes first. */
+function batchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at' | 'format'>): string {
   const datePart = batch.created_at.slice(0, 10).replace(/-/g, '')
-  return `betalfil_${datePart}_${batch.id.replace(/-/g, '').slice(0, 8)}.xml`
+  return `betalfil_${datePart}_${batch.id.replace(/-/g, '').slice(0, 8)}.${batch.format === 'bg_lb' ? 'txt' : 'xml'}`
 }
 
 export default function PaymentFilesPage() {
@@ -126,13 +127,14 @@ export default function PaymentFilesPage() {
     setDetail(body.data as BatchDetail)
   }, [])
 
-  async function handleDownload(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at'>) {
+  async function handleDownload(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at' | 'format'>) {
     if (downloadingId) return
     setDownloadingId(batch.id)
     try {
       const result = await downloadFile({
         url: `/api/supplier-invoices/payment-batches/${batch.id}/file`,
         filename: batchFilename(batch),
+        preferServerFilename: true,
         locale,
       })
       if (!result.ok) {

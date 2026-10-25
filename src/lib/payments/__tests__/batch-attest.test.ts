@@ -67,7 +67,6 @@ describe('payment file under the attest policy', () => {
   it('create: refuses the invoice that waits for attest before the RPC', async () => {
     const mock = db(POLICY_ON)
     const result = await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, 'user-1', {
-      format: 'pain001',
       items: [{ supplier_invoice_id: 'unattested' }],
     })
     expect(result).toEqual({ ok: false, code: 'ineligible', details: [{ id: 'unattested', reason: 'attest_required' }] })
@@ -81,7 +80,6 @@ describe('payment file under the attest policy', () => {
     await expect(previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, { ids: ['unattested'] })).rejects.toBe(failed)
     await expect(
       createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, 'user-1', {
-        format: 'pain001',
         items: [{ supplier_invoice_id: 'unattested' }],
       }),
     ).rejects.toBe(failed)
@@ -111,7 +109,6 @@ describe('payment file: the unattested warning follows the attest rule', () => {
     ])
 
     const planned = await planSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, {
-      format: 'pain001',
       items: [{ supplier_invoice_id: 'unattested' }],
     })
     expect(planned.ok && planned.plan.warnings).toEqual([[]])
@@ -126,7 +123,6 @@ describe('payment file: the unattested warning follows the attest rule', () => {
         ['attested', []],
       ])
       const planned = await planSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, {
-        format: 'pain001',
         items: [{ supplier_invoice_id: 'unattested' }],
       })
       expect(planned.ok && planned.plan.warnings, String(method)).toEqual([['unattested']])

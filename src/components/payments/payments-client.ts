@@ -22,7 +22,7 @@ export interface PayableAccount {
   /** The bank behind the account, for its mark and the signing step. */
   bank_name: string | null
   payable: boolean
-  reason: 'account_disabled' | 'not_sek' | 'iban_missing' | 'bank_unknown' | null
+  reason: 'account_disabled' | 'not_sek' | 'iban_missing' | 'bank_unknown' | 'bank_not_supported' | null
   /** private for the owner's personal agreement (no verification asked at signing), else corporate. Absent from servers before it. */
   account_context?: PaymentAccountContext
 }

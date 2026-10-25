@@ -17,7 +17,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { normalizeIban } from '@/lib/cash-accounts/ledger-slots'
 import { isValidIban } from '@/lib/payments/payment-details'
-import { lookupBicByBankName, lookupBicByClearing } from '@/lib/payments/bank-account'
+import { lookupBicByBankName, lookupBicByClearing, SVEA_BANK_BICS } from '@/lib/payments/bank-account'
 
 export interface DebtorAccountSource {
   iban: string | null
@@ -63,7 +63,18 @@ export function paymentAccountContext(psuType: string | null | undefined): 'corp
 
 export type DebtorResolution =
   | { ok: true; debtor: DebtorSnapshot }
-  | { ok: false; reason: 'account_disabled' | 'not_sek' | 'iban_missing' | 'bank_unknown' }
+  | { ok: false; reason: 'account_disabled' | 'not_sek' | 'iban_missing' | 'bank_unknown' | 'bank_not_supported' }
+
+/**
+ * Banks, by 8-character BIC, that the payment provider does not pay from.
+ * Svea Bank (2026-10-25, crm#1424): Open Payments hides it from its bank
+ * catalogue, so the bank lookup that comes before every payment answers 404
+ * PRODUCT_UNKNOWN and the person met the refusal only after approving.
+ * Connect carries Svea by hand for reading, not for payments, and payments
+ * from it are unconfirmed. An account at such a bank is refused here, so
+ * every list says why and no prepare starts.
+ */
+const PAYMENT_PROVIDER_UNREACHED_BICS: ReadonlySet<string> = SVEA_BANK_BICS
 
 /** BIC for a Swedish IBAN from its bank code, or null when the code is not confidently known. */
 export function bicFromSwedishIban(iban: string): string | null {
@@ -87,6 +98,7 @@ export function resolveDebtor(account: DebtorAccountSource, connection: DebtorCo
   const bankName = connection?.bank_name ?? null
   const bic = connectionBic(connection) ?? bicFromSwedishIban(iban) ?? lookupBicByBankName(bankName)
   if (!bic) return { ok: false, reason: 'bank_unknown' }
+  if (PAYMENT_PROVIDER_UNREACHED_BICS.has(bic.slice(0, 8))) return { ok: false, reason: 'bank_not_supported' }
   return {
     ok: true,
     debtor: {

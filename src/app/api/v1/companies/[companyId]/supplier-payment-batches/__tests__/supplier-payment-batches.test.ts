@@ -134,6 +134,9 @@ const SWEDBANK_ISO2 = {
   swedbank_corporate_pay_id: '123456789CPO0001',
 }
 
+/** A Svea Bank company with a bankgiro: its bank takes only Bankgirot's LB file (crm#1424). */
+const SVEA = { iban: 'SE4496600000000012345678', bic: 'SVEASESS', bankgiro: '991-2346' }
+
 function invoiceRow(overrides: Record<string, unknown> = {}) {
   return {
     id: INVOICE_A,
@@ -302,6 +305,24 @@ describe('POST /supplier-payment-batches/preview', () => {
     expect(body.data.excluded).toEqual([{ supplier_invoice_id: INVOICE_A, reason: 'swedbank_iso2_giro_payee' }])
     expect(body.data).toMatchObject({ debtor_ok: true, debtor_missing: null })
   })
+
+  it('names the LB file a Svea Bank company gets, and the bankgiro it needs for one', async () => {
+    const preview = async (settings: Record<string, unknown>) => {
+      mockServiceClient.mockReturnValue(
+        makeClient({
+          company_members: MEMBER,
+          supplier_invoices: { data: [invoiceRow()], error: null },
+          supplier_payment_batch_items: { data: [], error: null },
+          companies: COMPANY,
+          company_settings: { data: { ...SETTINGS.data, ...settings }, error: null },
+        }),
+      )
+      return (await (await post({ supplier_invoice_ids: [INVOICE_A] })).json()).data
+    }
+    expect(await preview(SVEA)).toMatchObject({ format: 'bg_lb', debtor_ok: true, debtor_missing: null, excluded: [] })
+    expect(await preview({ ...SVEA, bankgiro: null })).toMatchObject({ format: 'bg_lb', debtor_ok: false, debtor_missing: 'bankgiro' })
+    expect(await preview({})).toMatchObject({ format: 'pain001' })
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────
@@ -435,6 +456,36 @@ describe('POST /supplier-payment-batches', () => {
     expect(body.error.details.reason).toContain('Swedbanks ISO 2.0-avtal betalar bara till bankkonton')
     expect(body.error.details.reason).toContain('ISO 1.0-avtal för leverantörsbetalningar')
     expect(wrote(client)).toBe(false)
+  })
+
+  it('writes an LB file for a Svea Bank company whatever format the caller names, and refuses its bank-account payee saying why', async () => {
+    const client = eligibleClient({
+      company_settings: { data: { ...SETTINGS.data, ...SVEA }, error: null },
+      rpc: { data: { ok: true, batch: batchRow({ format: 'bg_lb' }) }, error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ format: 'pain001', items: [{ supplier_invoice_id: INVOICE_A }] })
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data).toMatchObject({ format: 'bg_lb', file: { filename: 'betalfil_20260810_b1111111.txt' } })
+    const [, args] = routeRpcCalls(client.rpc)[0] as [string, Record<string, unknown>]
+    expect(args).toMatchObject({ p_format: 'bg_lb' })
+
+    const accountPayee = eligibleClient({
+      company_settings: { data: { ...SETTINGS.data, ...SVEA }, error: null },
+      supplier_invoices: {
+        data: [invoiceRow({ supplier: { ...invoiceRow().supplier, bankgiro: null, clearing_number: '6000', account_number: '123456789' } })],
+        error: null,
+      },
+    })
+    mockServiceClient.mockReturnValue(accountPayee)
+    const refused = await post({ items: [{ supplier_invoice_id: INVOICE_A }] })
+    expect(refused.status).toBe(400)
+    const refusal = await refused.json()
+    expect(refusal.error.code).toBe('SI_BATCH_INELIGIBLE_INVOICE')
+    expect(refusal.error.details.invoices).toEqual([{ id: INVOICE_A, reason: 'lb_bank_account_payee' }])
+    expect(refusal.error.details.reason).toContain('tar bara emot Bankgirots LB-fil')
+    expect(wrote(accountPayee)).toBe(false)
   })
 
   it('400 SI_BATCH_AMOUNT_EXCEEDS_REMAINING above the remaining amount', async () => {
@@ -727,9 +778,35 @@ describe('GET /supplier-payment-batches/:id/file', () => {
       download_count: 3,
     })
     expect(body.data.content).toContain('<MsgId>ACCOUNTED-5566778899-BB1111111</MsgId>')
+    expect(body.data.charset).toBe('utf-8')
     expect(body.data.sha256).toMatch(/^[0-9a-f]{64}$/)
     const stamp = client.calls.find((c) => c.table === 'supplier_payment_batches' && c.method === 'update')
     expect(stamp?.args[0]).toMatchObject({ download_count: 3 })
+  })
+
+  it('answers a Svea Bank batch\'s LB file as ISO 8859-1 text, its sha256 over those bytes', async () => {
+    const batch = batchRow({
+      format: 'bg_lb',
+      debtor_snapshot: { name: 'Testbolaget AB', org_number: '556677-8899', iban: SVEA.iban, bic: SVEA.bic, bankgiro: '9912346', city: null },
+    })
+    mockServiceClient.mockReturnValue(
+      makeClient({
+        company_members: MEMBER,
+        supplier_payment_batches: [{ data: batch, error: null }, { data: null, error: null }],
+        supplier_payment_batch_items: { data: [itemRow({ payee_name: 'Åkeri Öst AB' })], error: null },
+      }),
+    )
+    const body = await (await get()).json()
+    expect(body.data).toMatchObject({
+      format: 'bg_lb',
+      filename: 'betalfil_20260810_b1111111.txt',
+      content_type: 'text/plain',
+      charset: 'iso-8859-1',
+    })
+    expect(body.data.content.split('\r\n')[1]).toMatch(/^140050501055CD3014794407 {13}000000073750260815/)
+    const { createHash } = await import('node:crypto')
+    expect(body.data.sha256).toBe(createHash('sha256').update(Buffer.from(body.data.content, 'latin1')).digest('hex'))
+    expect(body.data.sha256).not.toBe(createHash('sha256').update(body.data.content, 'utf8').digest('hex'))
   })
 })
 

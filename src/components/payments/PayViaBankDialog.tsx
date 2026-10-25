@@ -207,6 +207,9 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
 
   const payableAccounts = useMemo(() => availability?.accounts.filter((a) => a.payable) ?? [], [availability])
   const account = payableAccounts.find((a) => a.id === accountId) ?? null
+  // With no payable account, a bank the provider does not pay from is named
+  // instead of the IBAN requirement it already meets (crm#1424).
+  const unsupportedBank = availability?.accounts.find((a) => a.reason === 'bank_not_supported' && a.bank_name)?.bank_name ?? null
   // The company's verification, where a payment from this account needs it:
   // said here, on the first screen, with the step that starts it.
   const readiness = availability && account ? paymentReadinessFor(availability, account) : null
@@ -354,7 +357,7 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
             ) : !availability.available ? (
               <AttnLine>{t('unavailable')}</AttnLine>
             ) : payableAccounts.length === 0 ? (
-              <AttnLine>{t('account_none')}</AttnLine>
+              <AttnLine>{unsupportedBank ? t('account_none_bank_not_supported', { bank: unsupportedBank }) : t('account_none')}</AttnLine>
             ) : (
               <>
                 {verificationLine}

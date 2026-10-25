@@ -27,7 +27,8 @@
  * 12 wide and every payable account fits it.
  *
  * Encoding: ISO 8859-1 (Latin-1). Line endings: CRLF. Every record is exactly
- * 80 characters.
+ * 80 characters. The records every LB file shares (TK11, TK29) and the field
+ * writers live in lib/payments/bg-lb.ts, beside the supplier payment file.
  *
  * Per BFL 7 kap. 1 § the generated file is räkenskapsinformation (underlag)
  * linked to the salary journal entry, subject to 7-year retention.
@@ -35,7 +36,16 @@
 
 import { luhnCheckDigit } from '@/lib/bankgiro/luhn'
 import { payeeAccountParts } from '@/lib/payments/bank-account'
-import { todayIsoStockholm } from '@/lib/dates/iso'
+import {
+  assertRecordWidths,
+  closingRecord,
+  openingRecord,
+  pad,
+  padNumber,
+  padText,
+  stripBgFormat,
+  toYyMmDd,
+} from '@/lib/payments/bg-lb'
 
 export interface BgLbCompanyData {
   name: string
@@ -228,31 +238,6 @@ export function generateBankgiroPaymentBgLb(
 // ============================================================
 
 /**
- * TK11 öppningspost.
- *   Pos 1-2:   "11"
- *   Pos 3-12:  Sender bankgiro (10 digits, right-justified, zero-filled)
- *   Pos 13-18: Write date YYMMDD (the day the file was created)
- *   Pos 19-40: "LEVERANTÖRSBETALNINGAR" (22 chars)
- *   Pos 41-46: Payment date YYMMDD, applies to the whole section
- *   Pos 47-59: Blank (13)
- *   Pos 60-62: Currency "SEK"
- *   Pos 63-80: Blank (18)
- */
-function openingRecord(senderBg: string, paymentDateYyMmDd: string): string {
-  const todayYyMmDd = toYyMmDd(todayIsoStockholm())
-  return (
-    '11' +
-    padNumber(senderBg, 10) +
-    todayYyMmDd +
-    padText('LEVERANTÖRSBETALNINGAR', 22) +
-    paymentDateYyMmDd +
-    pad('', 13) +
-    'SEK' +
-    pad('', 18)
-  )
-}
-
-/**
  * TK40 kontonummerpost, immediately before the TK14 it belongs to.
  *   Pos 1-2:   "40"
  *   Pos 3-6:   "0000"
@@ -309,26 +294,6 @@ function paymentRecord(
   )
 }
 
-/**
- * TK29 slutsummapost.
- *   Pos 1-2:   "29"
- *   Pos 3-12:  Sender bankgiro (10 digits)
- *   Pos 13-20: Number of payment records (TK14) in the section (8 digits)
- *   Pos 21-32: Total amount in öre (12 digits)
- *   Pos 33:    Minus sign for a negative total, otherwise blank
- *   Pos 34-80: Blank (47)
- */
-function closingRecord(senderBg: string, paymentCount: number, totalAmountOre: number): string {
-  return (
-    '29' +
-    padNumber(senderBg, 10) +
-    padNumber(String(paymentCount), 8) +
-    padNumber(String(totalAmountOre), 12) +
-    ' ' +
-    pad('', 47)
-  )
-}
-
 // ============================================================
 // Helpers
 // ============================================================
@@ -342,54 +307,4 @@ function payeeUtbetalningsnummer(emp: BgLbEmployee): string {
       `${emp.name}: saknar ett giltigt specifikationsnummer (1-${PAYEE_NUMBER_MAX}), som utbetalningsnumret i LB-filen bygger på.`
     )
   }
-}
-
-function assertRecordWidths(records: string[]): void {
-  for (let i = 0; i < records.length; i++) {
-    if (records[i].length !== 80) {
-      throw new Error(
-        `Bankgirot LB-fil: post ${i + 1} har fel längd ${records[i].length} (förväntat 80)`
-      )
-    }
-  }
-}
-
-/** Strip dashes/spaces from a Bankgiro number. */
-function stripBgFormat(bg: string): string {
-  return bg.replace(/[-\s]/g, '')
-}
-
-/** Convert YYYY-MM-DD to YYMMDD. */
-function toYyMmDd(isoDate: string): string {
-  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(isoDate)
-  if (!m) throw new Error(`Ogiltigt datum: ${isoDate}`)
-  return m[1].slice(2) + m[2] + m[3]
-}
-
-/** Right-justify with zero-padding (for numeric fields). The value itself is
- *  never echoed: it can be a bank account number, and the message reaches
- *  toasts, API responses and logs. */
-function padNumber(value: string, length: number): string {
-  const digits = value.replace(/\D/g, '')
-  if (digits.length > length) {
-    throw new Error(`Numeriskt fält för långt (${digits.length} > ${length})`)
-  }
-  return digits.padStart(length, '0')
-}
-
-/** Left-justify with space-padding, then truncate to length (for text fields).
- *  Bankgirot uses ISO 8859-1; keep å/ä/ö but strip anything outside that range. */
-function padText(value: string, length: number): string {
-  const sanitized = value
-    .replace(/[\r\n\t]/g, ' ')
-    // Strip characters outside ISO 8859-1 printable range to avoid encoding errors.
-    .replace(/[^\x20-\x7E\xA0-\xFF]/g, '?')
-    .slice(0, length)
-  return sanitized.padEnd(length, ' ')
-}
-
-/** Plain padding to length (for fixed literals and blank fields). */
-function pad(value: string, length: number): string {
-  if (value.length > length) return value.slice(0, length)
-  return value.padEnd(length, ' ')
 }
