@@ -74,10 +74,12 @@ describe('gnubok_get_task', () => {
       company_knowledge: { name: 'Arcim', org_number: null, onboarding_summary: null, facts: [], remembered: [], documents: { total: 0, look_up: [] } },
     })
     await tool.execute({ kind: 'agent:quarterly-vat-review', client: 'claude' }, 'company-a', 'user-1', db() as never, actor)
-    const slugs = emit.mock.calls.map(([event]) => (event as { payload: { slug: string; companyId: string } }).payload)
-    expect(slugs).toEqual([
-      expect.objectContaining({ slug: 'quarterly-vat-review', companyId: 'company-a' }),
-      expect.objectContaining({ slug: 'horizontal/swedish-vat', companyId: 'company-a' }),
+    const events = emit.mock.calls.map(([event]) => event as { type: string; payload: { slug: string; companyId: string } })
+    expect(events.map((e) => ({ type: e.type, ...e.payload }))).toEqual([
+      expect.objectContaining({ type: 'mcp.skill_loaded', slug: 'quarterly-vat-review', companyId: 'company-a' }),
+      expect.objectContaining({ type: 'mcp.skill_loaded', slug: 'horizontal/swedish-vat', companyId: 'company-a' }),
+      // What the agent set out to do, from the fixed task list.
+      expect.objectContaining({ type: 'mcp.workflow_started', slug: 'agent/quarterly-vat-review', companyId: 'company-a' }),
     ])
   })
 })

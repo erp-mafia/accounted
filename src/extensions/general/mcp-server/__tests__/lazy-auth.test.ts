@@ -93,6 +93,33 @@ describe('MCP lazy authentication', () => {
     expect(mocks.validateApiKey).not.toHaveBeenCalled()
   })
 
+  it('assigns a session id at initialize, a new one per connection, and keeps a client\'s own', async () => {
+    const first = await handleMcpRequest(rpc('initialize', { protocolVersion: '2025-06-18' }))
+    const second = await handleMcpRequest(rpc('initialize', { protocolVersion: '2025-06-18' }))
+    const a = first.headers.get('Mcp-Session-Id')
+    const b = second.headers.get('Mcp-Session-Id')
+    expect(a).toMatch(/^[A-Za-z0-9_-]{1,128}$/)
+    expect(b).toMatch(/^[A-Za-z0-9_-]{1,128}$/)
+    expect(a).not.toBe(b)
+
+    const own = await handleMcpRequest(new Request(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'clients-own-session' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 8, method: 'initialize', params: { protocolVersion: '2025-06-18' } }),
+    }))
+    expect(own.status).toBe(200)
+    expect(own.headers.get('Mcp-Session-Id')).toBeNull()
+  })
+
+  it('never refuses a session id it does not know: the server keeps no sessions', async () => {
+    const response = await handleMcpRequest(new Request(ENDPOINT, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Mcp-Session-Id': 'from-a-server-instance-that-is-gone' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 9, method: 'tools/list' }),
+    }))
+    expect(response.status).toBe(200)
+  })
+
   it('the discovery instructions explain every callable_via value, and no longer say the bridge refuses writes', async () => {
     // Feedback seq 372962: "writes must be named directly" read as if any
     // client could. Until issue #2800 the honest answer was "a search-only

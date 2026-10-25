@@ -430,7 +430,11 @@ processing_activities:
       felmeddelande max 500 tecken, latens, aktör, session, frivillig
       distributionskanal-markör, t.ex. 'openclaw' via X-Gnubok-Client-header
       eller ?client=-parameter, sanerad mot allow-list och aldrig använd för
-      auktorisation) och varje skill-laddning loggar slug/tier till event_log.
+      auktorisation) och varje skill-laddning loggar slug/tier till event_log,
+      liksom vilken uppgift ur den fasta listan en agent startar med
+      get_task (t.ex. task/vat, aldrig ett eget agent-id). Sessions-id:t
+      tilldelas av servern vid initialize och används bara för att gruppera
+      ett samtals anrop, aldrig för behörighet.
       Syftet är tillförlitlighetsanalys av agentgränssnittet: felfrekvens per
       verktyg, adoption per distributionskanal, korrelation mellan laddade
       skills och efterföljande fel, samt agenters egenrapporterade feedback

@@ -299,10 +299,10 @@ export type CoreEvent =
     }}
   // Workflow lifecycle: agents declare "I'm starting month-end-close" via
   // gnubok_load_skill (or implicitly by following a skill's recommended tool
-  // sequence). Phase 3A captures these to measure how often a workflow is
-  // started.
+  // sequence), or start a task with gnubok_get_task. Phase 3A captures these
+  // to measure how often a workflow is started.
   | { type: 'mcp.workflow_started'; payload: {
-      slug: string                                  // e.g. 'month-end-close'
+      slug: string                                  // load_skill: 'month-end-close'; get_task: 'task/vat', 'skill/<slug>', 'agent/<slug>', 'agent/own'
       sessionId: string | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null
