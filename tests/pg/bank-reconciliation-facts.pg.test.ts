@@ -181,12 +181,12 @@ function bankRow(
 }
 
 /** A bank row linked to a verifikat through transaction_voucher_links (the 1:N door). */
-async function junction(b: Books, transactionId: string, entryId: string, amount: number) {
+async function junction(b: Books, transactionId: string, entryId: string, amount: number, role = 'bank_line') {
   await getPool().query(
     `INSERT INTO public.transaction_voucher_links
        (id, user_id, company_id, transaction_id, journal_entry_id, allocated_amount, role)
-     VALUES ($1, $2, $3, $4, $5, $6, 'bank_line')`,
-    [randomUUID(), b.userId, b.companyId, transactionId, entryId, amount],
+     VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+    [randomUUID(), b.userId, b.companyId, transactionId, entryId, amount, role],
   )
 }
 
@@ -248,13 +248,19 @@ const PREVIOUS_RPCS = readFileSync(
   'utf8',
 )
 
+/** get_bank_reconciliation_facts before its link anchor became a join (20261025083000). */
+const PREVIOUS_FACTS = readFileSync(
+  join(__dirname, '../../supabase/migrations/20261023094100_bank_reconciliation_facts.sql'),
+  'utf8',
+)
+
 /** A previous body of `name`, as a pg_temp function for this session. */
-function previousFunction(name: string): string {
+function previousFunction(name: string, source = PREVIOUS_RPCS): string {
   const header = new RegExp(`CREATE (?:OR REPLACE )?FUNCTION public\\.${name}\\(`)
-  const match = header.exec(PREVIOUS_RPCS)
-  if (!match) throw new Error(`${name} not found in 20261006121002`)
-  const end = PREVIOUS_RPCS.indexOf('$$;', PREVIOUS_RPCS.indexOf('AS $$', match.index)) + 3
-  return PREVIOUS_RPCS.slice(match.index, end).replace(header, `CREATE FUNCTION pg_temp.previous_${name}(`)
+  const match = header.exec(source)
+  if (!match) throw new Error(`${name} not found in its previous migration`)
+  const end = source.indexOf('$$;', source.indexOf('AS $$', match.index)) + 3
+  return source.slice(match.index, end).replace(header, `CREATE FUNCTION pg_temp.previous_${name}(`)
 }
 
 /** Both candidate RPCs, now and before, over one window: the same rows. */
@@ -275,6 +281,39 @@ async function expectCandidateRpcsUnchanged(b: Books, from: string | null, to: s
       const before = await client.query(sql('pg_temp', `previous_${fn}`), [b.companyId, from, to])
       expect(now.rows, `${fn}${extra}`).toEqual(before.rows)
       expect(now.rows.length).toBeGreaterThan(0)
+    }
+  } finally {
+    await client.query('ROLLBACK').catch(() => {})
+    client.release()
+  }
+}
+
+/**
+ * get_bank_reconciliation_facts now and before 20261025083000, scoped to the
+ * cash account and unscoped, over each window, with the ledger summaries built
+ * and not: the same answer.
+ */
+async function expectFactsUnchanged(b: Books, windows: Array<[string | null, string | null]>) {
+  const client = await getPool().connect()
+  try {
+    await client.query('BEGIN')
+    await client.query(previousFunction('get_bank_reconciliation_facts', PREVIOUS_FACTS))
+    for (const indexed of [true, false]) {
+      if (!indexed) {
+        await client.query('DELETE FROM public.ledger_account_days_companies WHERE company_id = $1', [b.companyId])
+      }
+      for (const cash of [b.cash, null]) {
+        for (const [from, to] of windows) {
+          const sql = (fn: string) =>
+            `SELECT ${fn}($1, '1930', 'SEK', $2::uuid, true, $3::date, $4::date) AS facts`
+          const args = [b.companyId, cash, from, to]
+          const now = await client.query(sql('public.get_bank_reconciliation_facts'), args)
+          const before = await client.query(sql('pg_temp.previous_get_bank_reconciliation_facts'), args)
+          expect(now.rows[0].facts, `${indexed ? 'indexed' : 'journal'} ${cash ? 'scoped' : 'unscoped'} ${from}..${to}`).toEqual(
+            before.rows[0].facts,
+          )
+        }
+      }
     }
   } finally {
     await client.query('ROLLBACK').catch(() => {})
@@ -423,6 +462,50 @@ describe('getReconciliationStatus over get_bank_reconciliation_facts', () => {
       gl_1930_period_movement: -800,
       difference: 0,
     })
+    await expectFactsUnchanged(b, [
+      [null, null],
+      ['2026-02-01', '2026-02-28'],
+      ['2026-03-01', '2026-12-31'],
+    ])
+  })
+
+  it('counts a row linked to several verifikat on the latest of them, its pointer among them', async () => {
+    const b = await books()
+    // Two links, the later verifikat in March: the row counts in March.
+    const february = await onBank(b, '2026-02-25', 300)
+    const march = await onBank(b, '2026-03-03', 200)
+    const split = await bankRow(b, '2026-02-20', 500)
+    await junction(b, split, february, 300)
+    await junction(b, split, march, 200)
+    // A pointer in March and a link in April: the later one.
+    const pointed = await onBank(b, '2026-03-12', 400)
+    const april = await onBank(b, '2026-04-02', 100)
+    await junction(b, await bankRow(b, '2026-03-10', 500, { entry: pointed }), april, 100)
+    // Linked only to a verifikat with no line on the account (a clearing
+    // link; a bank_line link needs one): its own date.
+    const elsewhere = await verifikat(b, '2026-04-20', [
+      { account: '1910', debit: 50 },
+      { account: '3001', credit: 50 },
+    ])
+    await junction(b, await bankRow(b, '2026-03-15', 50), elsewhere, 50, 'clearing')
+    // A stornerad verifikat still anchors the row linked to it.
+    const reversed = await onBank(b, '2026-05-05', 70, { status: 'reversed' })
+    await junction(b, await bankRow(b, '2026-04-28', 70), reversed, 70)
+
+    const bankIn = async (from: string, to: string) => (await bothPaths(b, () => facts(b, from, to))).bank
+    expect(await bankIn('2026-02-01', '2026-02-28')).toMatchObject({ count: 0, total: 0 })
+    expect(await bankIn('2026-03-01', '2026-03-31')).toMatchObject({ count: 2, total: 550, matched_count: 2 })
+    expect(await bankIn('2026-04-01', '2026-04-30')).toMatchObject({ count: 1, total: 500, matched_count: 1 })
+    expect(await bankIn('2026-05-01', '2026-05-31')).toMatchObject({ count: 1, total: 70, matched_count: 1 })
+    await expectFactsUnchanged(b, [
+      [null, null],
+      ['2026-01-01', '2026-12-31'],
+      ['2026-02-01', '2026-02-28'],
+      ['2026-03-01', '2026-03-31'],
+      ['2026-04-01', '2026-04-30'],
+      ['2026-05-01', null],
+      [null, '2026-03-31'],
+    ])
   })
 
   it('still drops an unlinked row dated before the opening balance floor', async () => {
