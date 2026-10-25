@@ -208,7 +208,9 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
       // EmailInvoice is the delivery address. Email is the general contact
       // fallback and must not override an invoice-specific address.
       email: nonEmptyString(address?.['EmailInvoice']) ?? nonEmptyString(address?.['Email']),
-      telephone: nonEmptyString(address?.['Phone1']),
+      // The single record names it Phone1; the customer and supplier lists
+      // name the same number Phone (crm#1436).
+      telephone: nonEmptyString(address?.['Phone1']) ?? nonEmptyString(address?.['Phone']),
     },
   };
 }
