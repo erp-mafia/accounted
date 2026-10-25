@@ -114,6 +114,9 @@ export const ENGINE_HELPERS = {
       "compensation of a verifikat the same request just created, through the database-gated " +
       'cancel_orphaned_entry RPC: nothing is posted or numbered (the cancelled header keeps its number), ' +
       'and the port has no door for it',
+    releaseBankRowsOfReversedEntry:
+      'releases the bank rows a reversed verifikat still anchors back to Att bokföra: writes ' +
+      'transactions and transaction_voucher_links only, nothing is posted or numbered',
   },
   'lib/core/bookkeeping/storno-service': {},
   'lib/bookkeeping/journal-entry-batch': {},

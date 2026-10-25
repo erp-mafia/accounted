@@ -49,6 +49,9 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
   // The gated cleanup door (cancel_orphaned_entry RPC). Consumes no queued
   // result: rollbacks no longer issue client-side UPDATE/DELETE statements.
   cancelOrphanedEntry: vi.fn(async () => ({ error: null })),
+  // The storno's bank release (has its own tests in engine.test.ts). Consumes
+  // no queued result.
+  releaseBankRowsOfReversedEntry: vi.fn(async () => undefined),
 }))
 
 // The storno target check has its own tests (storno-target.test.ts); here it
@@ -84,7 +87,12 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
 
 import { correctEntry } from '../storno-service'
 import { CORRECTION_COLUMN_POLICY } from '../correction-column-policy'
-import { validateBalance, commitStornoOrCorrectionDraft, cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
+import {
+  validateBalance,
+  commitStornoOrCorrectionDraft,
+  cancelOrphanedEntry,
+  releaseBankRowsOfReversedEntry,
+} from '@/lib/bookkeeping/engine'
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -817,6 +825,8 @@ describe('correctEntry', () => {
       expect(pointer).toHaveLength(1)
       expect(pointer[0]!.payload).toEqual({ journal_entry_id: 'corrected-1' })
       expect(result.transactionRelinkError).toBeUndefined()
+      // Everything moved: nothing is left on the original to release.
+      expect(releaseBankRowsOfReversedEntry).not.toHaveBeenCalled()
     })
 
     it('surfaces a junction relink failure on the result instead of throwing (correction chain stays traceable)', async () => {
@@ -827,6 +837,7 @@ describe('correctEntry', () => {
 
       expect(result.corrected.id).toBe('corrected-1')
       expect(result.transactionRelinkError).toBe('permission denied for table transaction_voucher_links')
+      expect(releaseBankRowsOfReversedEntry).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1')
     })
 
     it('surfaces a pointer relink failure the same way and still attempts the junction relink', async () => {
@@ -837,6 +848,25 @@ describe('correctEntry', () => {
 
       expect(result.transactionRelinkError).toBe('pointer relink failed')
       expect(updatesOn(supabase, 'transaction_voucher_links')).toHaveLength(1)
+    })
+
+    it('releases the bank row back to Att bokföra when the correction no longer books its bank leg (crm#1433)', async () => {
+      // A purchase booked from the bank row (cost / 1930) corrected into a
+      // supplier invoice (cost / 2440): guard_cash_transaction_binding refuses
+      // to anchor the row on a verifikat without its bank leg. Before, the row
+      // stayed on the reversed original, read as booked, and could be neither
+      // unlinked nor stornoed.
+      setupResults()
+      results[9] = {
+        data: null,
+        error: { message: 'BANK_ANCHOR_SETTLEMENT_CHANGED', code: 'PT409' },
+      }
+      const supabase = makeClient()
+      const result = await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      expect(result.corrected.id).toBe('corrected-1')
+      expect(releaseBankRowsOfReversedEntry).toHaveBeenCalledTimes(1)
+      expect(releaseBankRowsOfReversedEntry).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1')
     })
   })
 })

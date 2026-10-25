@@ -7,7 +7,12 @@ import type {
   JournalEntry,
   JournalEntryLine,
 } from '@/types'
-import { validateBalance, cancelOrphanedEntry, commitStornoOrCorrectionDraft } from '@/lib/bookkeeping/engine'
+import {
+  validateBalance,
+  cancelOrphanedEntry,
+  commitStornoOrCorrectionDraft,
+  releaseBankRowsOfReversedEntry,
+} from '@/lib/bookkeeping/engine'
 import { linkBusinessEventToDraft, type BusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { amountInCurrencyToStore, buildStornoLines } from '@/lib/bookkeeping/line-side'
 import {
@@ -660,6 +665,16 @@ export async function correctEntry(
     originalEntryId,
     correctedEntry!.id
   )
+  // A correction that moves the bank leg (to 2440 for a purchase rebooked as
+  // a supplier invoice, or to another bank account) leaves the bank row
+  // nothing to anchor: guard_cash_transaction_binding refuses the move. Left
+  // on the reversed original, the row read as booked and could be neither
+  // unlinked nor stornoed (crm#1433). It is released the way a storno
+  // releases it, back to Att bokföra, to be matched to the verifikat that now
+  // books the payment.
+  if (transactionRelinkError) {
+    await releaseBankRowsOfReversedEntry(supabase, companyId, originalEntryId)
+  }
   const documentRelinkError = await relinkDocumentsToEntry(
     supabase,
     userId,
