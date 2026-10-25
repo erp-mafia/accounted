@@ -820,7 +820,7 @@ describe('generateAGIXml: Frånvarouppgift', () => {
     expect(idx16).toBeLessThan(idx20)
   })
 
-  it('emits required fields per Frånvarouppgift (AgRegistreradId, RedovisningsPeriod, FranvaroDatum, BetalningsmottagarId, Specifikationsnummer, FranvaroChoice)', () => {
+  it('emits required fields per Frånvarouppgift (AgRegistreradId, RedovisningsPeriod, FranvaroDatum, BetalningsmottagarId, Specifikationsnummer, FranvaroTyp)', () => {
     const xml = generateAGIXml(
       company,
       [{
@@ -836,8 +836,43 @@ describe('generateAGIXml: Frånvarouppgift', () => {
     expect(block).toContain('faltkod="821"') // FranvaroDatum
     expect(block).toContain('faltkod="215"') // BetalningsmottagarId
     expect(block).toContain('faltkod="822"') // FranvaroSpecifikationsnummer
-    expect(block).toContain('<gem:FranvaroChoice>')
-    expect(block).toContain('faltkod="823"') // FranvaroTyp inside choice
+    expect(block).toContain('faltkod="823"') // FranvaroTyp
+  })
+
+  // PH 217: Skatteverket rejected every file with frånvaro ("Det angivna
+  // elementnamnet FranvaroChoice är inte giltigt"). Franvarouppgift is an
+  // xs:all in komponent schema 1.1 (arbetsgivardeklaration_component_1.1.xsd):
+  // FranvaroTyp and the timmar field are direct children, there is no
+  // wrapper element. The expected blocks mirror Skatteverket's example
+  // files 17 and 18 (Bilaga Exempelfiler 1.1.18.1).
+  it('emits FranvaroTyp as a direct child, never inside a FranvaroChoice wrapper (PH 217)', () => {
+    const xml = generateAGIXml(company, employeesWithAbsence, totals)
+    expect(xml).not.toContain('FranvaroChoice')
+
+    const blocks = xml.match(/ {2}<gem:Franvarouppgift>\n[\s\S]*?\n {2}<\/gem:Franvarouppgift>/g) ?? []
+    expect(blocks).toHaveLength(3)
+    expect(blocks[0]).toBe([
+      '  <gem:Franvarouppgift>',
+      '    <gem:AgRegistreradId faltkod="201">165561234567</gem:AgRegistreradId>',
+      '    <gem:RedovisningsPeriod faltkod="006">202604</gem:RedovisningsPeriod>',
+      '    <gem:FranvaroDatum faltkod="821">2026-04-15</gem:FranvaroDatum>',
+      '    <gem:BetalningsmottagarId faltkod="215">199001011234</gem:BetalningsmottagarId>',
+      '    <gem:FranvaroSpecifikationsnummer faltkod="822">1</gem:FranvaroSpecifikationsnummer>',
+      '    <gem:FranvaroTyp faltkod="823">TILLFALLIG_FORALDRAPENNING</gem:FranvaroTyp>',
+      '    <gem:FranvaroTimmarTFP faltkod="825">8</gem:FranvaroTimmarTFP>',
+      '  </gem:Franvarouppgift>',
+    ].join('\n'))
+    expect(blocks[2]).toBe([
+      '  <gem:Franvarouppgift>',
+      '    <gem:AgRegistreradId faltkod="201">165561234567</gem:AgRegistreradId>',
+      '    <gem:RedovisningsPeriod faltkod="006">202604</gem:RedovisningsPeriod>',
+      '    <gem:FranvaroDatum faltkod="821">2026-04-20</gem:FranvaroDatum>',
+      '    <gem:BetalningsmottagarId faltkod="215">198506159876</gem:BetalningsmottagarId>',
+      '    <gem:FranvaroSpecifikationsnummer faltkod="822">1</gem:FranvaroSpecifikationsnummer>',
+      '    <gem:FranvaroTyp faltkod="823">FORALDRAPENNING</gem:FranvaroTyp>',
+      '    <gem:FranvaroTimmarFP faltkod="827">8</gem:FranvaroTimmarFP>',
+      '  </gem:Franvarouppgift>',
+    ].join('\n'))
   })
 
   it('omits the section entirely when no employee has absenceEvents', () => {

@@ -10367,6 +10367,8 @@
     "stale_draft_to_sign": "to sign the correct amounts.",
     "incorrect_data_title": "Incorrect underlag — the granskningsunderlag could not be signed",
     "incorrect_data_description": "Skatteverket rejected the underlag. Open the error report for details.",
+    "underlag_rejected_title": "Skatteverket rejected the AGI underlag",
+    "underlag_rejected_description": "Nothing has been filed. Fix the errors and click Submit to Skatteverket again; the AGI file is then generated anew from current data.",
     "open_error_report": "Open error report at Skatteverket",
     "download_xml_button": "Download AGI file",
     "download_xml_title": "Download the AGI file (XML) for manual filing with Skatteverket",

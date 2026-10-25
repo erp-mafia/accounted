@@ -145,6 +145,49 @@ describe('submitAgiChain', () => {
     expect(agiSkapaGranskningsunderlag).not.toHaveBeenCalled()
   })
 
+  // PH 217: the period record kept saying underlag_submitted after a refusal
+  // at kontroll, so the panel offered "Skapa granskningsunderlag" for an
+  // underlag Skatteverket had refused.
+  it('records the refusal at kontroll in the period record, with Skatteverket\'s first message masked', async () => {
+    const { supabase } = createQueuedMockSupabase()
+    vi.mocked(agiGetKontrollresultat).mockResolvedValue({
+      ok: true,
+      data: {
+        status: 'DONE_REJECTED',
+        kontrollrapport: {
+          bearbetningsfel: [],
+          valideringsfel: [{ felmeddelande: 'Det angivna elementnamnet är inte giltigt för 190001010000' }],
+          redovisningsperioder: [],
+        },
+      },
+    } as never)
+
+    await submitAgiChain(supabase as never, 'user-1', 'company-1', settings, 'run-1')
+
+    const writes = vi.mocked((settings as unknown as { set: ReturnType<typeof vi.fn> }).set).mock.calls
+    expect(writes.map(([key]) => key)).toEqual(['agi_submission_202606', 'agi_submission_202606'])
+    expect(JSON.parse(writes[0][1] as string)).toMatchObject({ status: 'underlag_submitted', inlamningId: 42 })
+    expect(JSON.parse(writes[1][1] as string)).toMatchObject({
+      status: 'underlag_rejected',
+      arbetsgivare: '165560000000',
+      period: '202606',
+      salaryRunId: 'run-1',
+      inlamningId: 42,
+      meddelande: 'Det angivna elementnamnet är inte giltigt för 19000101-XXXX',
+    })
+  })
+
+  it('leaves the period record at underlag_submitted when kontroll accepts, until the signing link replaces it', async () => {
+    const { supabase } = createQueuedMockSupabase()
+
+    const result = await submitAgiUnderlag(supabase as never, 'user-1', 'company-1', settings, 'run-1')
+
+    expect(result.ok).toBe(true)
+    const writes = vi.mocked((settings as unknown as { set: ReturnType<typeof vi.fn> }).set).mock.calls
+    expect(writes).toHaveLength(1)
+    expect(JSON.parse(writes[0][1] as string)).toMatchObject({ status: 'underlag_submitted', salaryRunId: 'run-1' })
+  })
+
   it('refuses incorrect data at granskning without flipping the declaration', async () => {
     const { supabase, findCall } = createQueuedMockSupabase()
     vi.mocked(agiSkapaGranskningsunderlag).mockResolvedValue({
