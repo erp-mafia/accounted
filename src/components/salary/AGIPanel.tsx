@@ -1198,6 +1198,19 @@ export function AGIPanel(props: AGIPanelProps) {
           </div>
         )}
 
+        {/* Refused at kontroll (or at granskning without a felrapport link):
+            nothing landed at Skatteverket, so the way on is a new
+            submission, which regenerates the AGI file first (PH 217). */}
+        {!submission?.signeringslank && underlagRejected && (
+          <div className="text-sm">
+            <p className="font-medium text-destructive">{t('underlag_rejected_title')}</p>
+            {submission?.meddelande && (
+              <p className="mt-1 text-xs text-muted-foreground">{submission.meddelande}</p>
+            )}
+            <p className="mt-1 text-xs text-muted-foreground">{t('underlag_rejected_description')}</p>
+          </div>
+        )}
+
         {/* Skatteverket's kontrollresultat findings: one line per finding,
             severity carried by the text tone (terracotta for STOPP, ochre
             for ärende/warning), no box. */}

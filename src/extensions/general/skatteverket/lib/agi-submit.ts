@@ -178,6 +178,21 @@ export async function submitAgiUnderlag(
     // reader sees which fields were refused, not only that they were.
     const kontrollrapport = summarizeAgiKontrollrapport(kontroll.data)
     const firstError = firstAgiKontrollMessage(kontrollrapport)
+    // The period record has said underlag_submitted since the POST above.
+    // Left there, the panel offered the granskningsunderlag step for an
+    // underlag Skatteverket refused (PH 217): record the refusal instead.
+    await settings.set(
+      `agi_submission_${period}`,
+      JSON.stringify({
+        status: 'underlag_rejected',
+        arbetsgivare,
+        period,
+        salaryRunId,
+        inlamningId,
+        meddelande: firstError,
+        updatedAt: new Date().toISOString(),
+      }),
+    )
     return {
       ok: false,
       code: 'AGI_KONTROLL_REJECTED',

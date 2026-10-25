@@ -29,8 +29,12 @@ import { escapeXml } from '@/lib/xml/escape'
  * "Frånvarouppgift i samband med Arbetsgivardeklaration" technical doc:
  *   - One <gem:Franvarouppgift> per (employee, date, specifikationsnummer)
  *   - Sibling of <gem:Blankett>, top-level under <Skatteverket>
- *   - FranvaroChoice contains FranvaroTyp (TILLFALLIG_FORALDRAPENNING for VAB,
- *     FORALDRAPENNING for parental leave): the borttag flow is not used.
+ *   - FranvaroTyp (FK823) is a direct child of Franvarouppgift:
+ *     TILLFALLIG_FORALDRAPENNING for VAB, FORALDRAPENNING for parental
+ *     leave. The komponent schema declares Franvarouppgift as an xs:all
+ *     with no wrapper element; Skatteverket rejects a <FranvaroChoice>
+ *     ("elementnamnet FranvaroChoice är inte giltigt", PH 217). The
+ *     borttag flow (FK820) is not used.
  *   - Hours emitted via FranvaroTimmarTFP (FK825) for VAB or FranvaroTimmarFP
  *     (FK827) for parental. The procent variants (824/826) are not used:
  *     Accounted tracks hours, not percent.
@@ -691,15 +695,15 @@ export function generateAGIXml(
         const hoursFaltkod = isVab ? '825' : '827'
 
         lines.push('  <gem:Franvarouppgift>')
-        // Element order follows the spec example file (SKV 4785 doc, section 4).
+        // Franvarouppgift is an xs:all in the komponent schema 1.1, so every
+        // field is a direct child (no wrapper element). The order follows
+        // Skatteverket's example files 17 and 18 (Bilaga Exempelfiler).
         lines.push(`    <gem:AgRegistreradId faltkod="201">${orgIdentitet}</gem:AgRegistreradId>`)
         lines.push(`    <gem:RedovisningsPeriod faltkod="006">${period}</gem:RedovisningsPeriod>`)
         lines.push(`    <gem:FranvaroDatum faltkod="821">${event.date}</gem:FranvaroDatum>`)
         lines.push(`    <gem:BetalningsmottagarId faltkod="215">${pnr}</gem:BetalningsmottagarId>`)
         lines.push(`    <gem:FranvaroSpecifikationsnummer faltkod="822">${specNumber}</gem:FranvaroSpecifikationsnummer>`)
-        lines.push('    <gem:FranvaroChoice>')
-        lines.push(`      <gem:FranvaroTyp faltkod="823">${franvaroTyp}</gem:FranvaroTyp>`)
-        lines.push('    </gem:FranvaroChoice>')
+        lines.push(`    <gem:FranvaroTyp faltkod="823">${franvaroTyp}</gem:FranvaroTyp>`)
         lines.push(`    <gem:${hoursElement} faltkod="${hoursFaltkod}">${formatHours(event.hours)}</gem:${hoursElement}>`)
         lines.push('  </gem:Franvarouppgift>')
       })
