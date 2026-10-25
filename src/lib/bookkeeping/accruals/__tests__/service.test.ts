@@ -685,6 +685,10 @@ describe('cancelSchedulesForSource', () => {
           { id: 'inst-2', journal_entry_id: 'je-feb' },
         ],
       },
+      { data: { id: 'je-jan', status: 'reversed' } }, // live walk: jan stornoed
+      { data: [] }, // ... with no correction
+      { data: { id: 'je-feb', status: 'reversed' } }, // live walk: feb stornoed
+      { data: [] }, // ... with no correction
       { data: null }, // schedule -> cancelled
     ])
 
@@ -696,6 +700,74 @@ describe('cancelSchedulesForSource', () => {
     )
 
     expect(result).toEqual({ cancelledSchedules: 1, reversedEntries: 0, failedReversals: 0 })
+    expect(mockReverseEntry).toHaveBeenCalledTimes(2)
+  })
+
+  // A rättelse (correctEntry) stornoes the dissolution and posts the
+  // corrected month as a new 'correction' verifikat; the installment keeps
+  // pointing at the original. Crediting the invoice must storno the
+  // correction too, or it stays on the interim and the cost account.
+  it('stornoes the live correction of a dissolution corrected before the credit', async () => {
+    mockReverseEntry
+      .mockRejectedValueOnce(new EntryAlreadyReversedError())
+      .mockResolvedValueOnce({ id: 'je-storno-corr' } as never)
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeSchedule()] },
+      { data: null }, // pending -> cancelled
+      {
+        data: [
+          {
+            id: 'inst-sep',
+            journal_entry_id: 'je-sep',
+            journal_entry: { fiscal_period: { period_start: '2026-01-01', period_end: '2026-12-31' } },
+          },
+        ],
+      },
+      { data: { id: 'je-sep', status: 'reversed' } }, // live walk: the original
+      { data: [{ id: 'je-sep-corr' }] }, // its correction
+      { data: { id: 'je-sep-corr', status: 'posted' } }, // live
+      { data: { fiscal_period: { period_start: '2026-01-01', period_end: '2026-12-31' } } }, // correction's year
+      { data: null }, // schedule -> cancelled
+    ])
+
+    const result = await cancelSchedulesForSource(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      { supplierInvoiceId: 'si-1' },
+      { reversalDate: '2026-10-14' },
+    )
+
+    expect(result).toEqual({ cancelledSchedules: 1, reversedEntries: 1, failedReversals: 0 })
+    expect(mockReverseEntry).toHaveBeenNthCalledWith(2, expect.anything(), COMPANY, USER, 'je-sep-corr', '2026-10-14')
+  })
+
+  it('leaves the schedule active when the correction of a dissolution cannot be stornoed', async () => {
+    mockReverseEntry
+      .mockRejectedValueOnce(new EntryAlreadyReversedError())
+      .mockRejectedValueOnce(new Error('Bokföringen är låst'))
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeSchedule()] },
+      { data: null }, // pending -> cancelled
+      { data: [{ id: 'inst-sep', journal_entry_id: 'je-sep' }] },
+      { data: { id: 'je-sep', status: 'reversed' } },
+      { data: [{ id: 'je-sep-corr' }] },
+      { data: { id: 'je-sep-corr', status: 'posted' } },
+      { data: { fiscal_period: null } },
+      { data: null }, // last_error update on the stuck installment
+      // No schedule -> cancelled: the correction still carries the month.
+    ])
+
+    const result = await cancelSchedulesForSource(
+      supabase as unknown as SupabaseClient,
+      COMPANY,
+      USER,
+      { supplierInvoiceId: 'si-1' },
+    )
+
+    expect(result).toEqual({ cancelledSchedules: 0, reversedEntries: 0, failedReversals: 1 })
   })
 
   it('requires a source id', async () => {

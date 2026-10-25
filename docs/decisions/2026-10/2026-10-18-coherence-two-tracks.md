@@ -1,0 +1,1 @@
+[2026-10-18] The coherence work runs as two parallel tracks in separate merge requests: the ledger ownership rule (parents act on the live voucher, every source type declares its storno policy) and one shared posting view (one line model, one view, one editor, dryRun previews) (Jakob).

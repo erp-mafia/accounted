@@ -44,7 +44,7 @@
  * buildSupplierInvoicePaymentLines.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { MAX_CHAIN_WALK } from '@/lib/core/bookkeeping/correction-chain'
+import { liveEntryOf, MAX_CHAIN_WALK, type LiveEntry } from '@/lib/core/bookkeeping/correction-chain'
 import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { dbError } from '@/lib/errors/db-error'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
@@ -154,58 +154,6 @@ export type SupplierInvoiceRemainingSek =
   | { ok: true; remainingSek: number }
   | { ok: false; reason: SupplierPaymentSekUnresolvedReason }
 
-type LiveEntry = { id: string } | { none: true } | { exhausted: true }
-
-/**
- * Follow a verifikat through storno corrections (correctEntry links the
- * replacement by correction_of_id) to the one that is posted now. `none` when
- * there is no single live one; `exhausted` when the walk would take more hops
- * than `budget` has left (shared by every walk of one resolution). Used for
- * the registration and for payment vouchers: correctEntry leaves
- * supplier_invoice_payments pointing at the reversed original, while its
- * correction carries the 244x debit.
- */
-async function liveEntryId(
-  supabase: SupabaseClient,
-  companyId: string,
-  entryId: string,
-  budget: { hops: number },
-): Promise<LiveEntry> {
-  const seen = new Set<string>()
-  let currentId = entryId
-  for (let hop = 0; hop <= MAX_CHAIN_WALK; hop++) {
-    if (seen.has(currentId)) return { none: true }
-    seen.add(currentId)
-    if (budget.hops <= 0) return { exhausted: true }
-    budget.hops--
-
-    const { data: entry, error } = await supabase
-      .from('journal_entries')
-      .select('id, status')
-      .eq('company_id', companyId)
-      .eq('id', currentId)
-      .maybeSingle()
-    if (error) throw dbError(error, 'supplier payment SEK: live voucher')
-    const row = entry as { id: string; status: string } | null
-    if (!row) return { none: true }
-    if (row.status === 'posted') return { id: row.id }
-    if (row.status !== 'reversed') return { none: true }
-
-    const { data: corrections, error: correctionError } = await supabase
-      .from('journal_entries')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('correction_of_id', row.id)
-      .in('status', ['posted', 'reversed'])
-      .limit(2)
-    if (correctionError) throw dbError(correctionError, 'supplier payment SEK: voucher correction')
-    const next = (corrections ?? []) as Array<{ id: string }>
-    if (next.length !== 1) return { none: true }
-    currentId = next[0].id
-  }
-  return { none: true }
-}
-
 /**
  * The SEK this invoice still carries on 244x, read off its linked vouchers:
  * the live registration's 244x credit minus the 244x debits of the invoice's
@@ -222,7 +170,7 @@ export async function loadSupplierInvoiceRemainingSek(
   const registrationId = invoice.registration_journal_entry_id
   const budget = { hops: CHAIN_HOP_BUDGET }
 
-  const liveRegistration = await liveEntryId(supabase, companyId, registrationId, budget)
+  const liveRegistration = await liveEntryOf(supabase, companyId, registrationId, budget)
   if ('exhausted' in liveRegistration) return { ok: false, reason: 'ledger_history_too_long' }
   if ('none' in liveRegistration) return { ok: false, reason: 'registration_voucher_not_live' }
   const liveId = liveRegistration.id
@@ -276,7 +224,7 @@ export async function loadSupplierInvoiceRemainingSek(
     )
     const posted = new Set(entries.filter((e) => e.status === 'posted').map((e) => e.id))
     for (const id of ids) {
-      const live: LiveEntry = posted.has(id) ? { id } : await liveEntryId(supabase, companyId, id, budget)
+      const live: LiveEntry = posted.has(id) ? { id } : await liveEntryOf(supabase, companyId, id, budget)
       if ('exhausted' in live) return { ok: false, reason: 'ledger_history_too_long' }
       if ('none' in live) return { ok: false, reason: 'payment_voucher_not_posted' }
       if (live.id === liveId) return { ok: false, reason: 'payment_history_mismatch' }

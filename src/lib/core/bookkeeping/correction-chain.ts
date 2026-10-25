@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { dbError } from '@/lib/errors/db-error'
 
 /**
  * Correction-chain depth walker.
@@ -87,4 +88,59 @@ export async function correctionChainDepth(
       : null
 
   return { depth, rootVoucher }
+}
+
+export type LiveEntry = { id: string } | { none: true } | { exhausted: true }
+
+/**
+ * Follow a verifikat forwards through storno corrections (correctEntry links
+ * the replacement by correction_of_id) to the one that is posted now. `none`
+ * when there is no single live one (stornoed without a replacement, never
+ * posted, or missing); `exhausted` when the walk would take more hops than
+ * `budget` has left (shared by every walk of one resolution).
+ *
+ * A register that stores a voucher id (a supplier payment row, an accrual
+ * installment) keeps pointing at the original after a rättelse, while the
+ * books carry the correction: a caller acting on the register's voucher acts
+ * on this one.
+ */
+export async function liveEntryOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryId: string,
+  budget: { hops: number } = { hops: MAX_CHAIN_WALK + 1 },
+): Promise<LiveEntry> {
+  const seen = new Set<string>()
+  let currentId = entryId
+  for (let hop = 0; hop <= MAX_CHAIN_WALK; hop++) {
+    if (seen.has(currentId)) return { none: true }
+    seen.add(currentId)
+    if (budget.hops <= 0) return { exhausted: true }
+    budget.hops--
+
+    const { data: entry, error } = await supabase
+      .from('journal_entries')
+      .select('id, status')
+      .eq('company_id', companyId)
+      .eq('id', currentId)
+      .maybeSingle()
+    if (error) throw dbError(error, 'correction chain: live voucher')
+    const row = entry as { id: string; status: string } | null
+    if (!row) return { none: true }
+    if (row.status === 'posted') return { id: row.id }
+    if (row.status !== 'reversed') return { none: true }
+
+    const { data: corrections, error: correctionError } = await supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('correction_of_id', row.id)
+      .in('status', ['posted', 'reversed'])
+      .limit(2)
+    if (correctionError) throw dbError(correctionError, 'correction chain: voucher correction')
+    const next = (corrections ?? []) as Array<{ id: string }>
+    if (next.length !== 1) return { none: true }
+    currentId = next[0].id
+  }
+  return { none: true }
 }
