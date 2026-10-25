@@ -220,16 +220,13 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
           completedRef.current = true
           cleanup()
-          if (resumedRef.current) {
-            // We only probed on the chance a flow existed. It does not, so
-            // quietly offer the start button.
-            setStatus('idle')
-          } else {
-            // This tab watched its own order die. Say so: silently reverting to
-            // the start button reads as "it just did nothing".
-            setStatus('failed')
-            setErrorMessage('BankID-sessionen löpte ut. Försök igen.')
-          }
+          // Say so in both cases: silently reverting to the start button reads
+          // as "it just did nothing". A resumed flow gets here only after the
+          // person tapped Fortsätt on the confirm card (the mount probe never
+          // polls through this branch), so the dead order was theirs too, and
+          // a quiet revert left them cycling resume card, BankID, start button.
+          setStatus('failed')
+          setErrorMessage(t(resumedRef.current ? 'bankid_resumed_expired' : 'bankid_session_expired'))
           setSession(null)
           setActiveFlowId(null)
           return
@@ -379,7 +376,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
         pollInFlightRef.current = false
       }
     }, 2000)
-  }, [cleanup, mode])
+  }, [cleanup, mode, t])
 
   const startSession = useCallback(async () => {
     // Collapse double-clicks: one billable TIC session per intent.
