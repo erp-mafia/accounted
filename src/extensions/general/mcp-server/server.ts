@@ -27436,6 +27436,19 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       status: 401,
       headers: { 'WWW-Authenticate': wwwAuth },
     })
+  // A token was presented and refused (revoked, superseded, unknown). The
+  // same challenge plus RFC 6750 3.1 `error="invalid_token"` says the
+  // credential itself is dead, so the client refreshes or, when the grant is
+  // gone, restarts authorization from the resource metadata and shows its
+  // reconnect prompt (crm#1043). A tokenless request carries no error code:
+  // RFC 6750 omits it when the request had no authentication at all.
+  const invalidToken = () =>
+    new Response('Unauthorized', {
+      status: 401,
+      headers: {
+        'WWW-Authenticate': `${wwwAuth}, error="invalid_token", error_description="The access token is revoked, expired or unknown"`,
+      },
+    })
 
   // ── Parse JSON-RPC ──
   // Parsed before auth: with lazy authentication (issue #1814) the method and
@@ -27523,7 +27536,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       if (authResult.code) {
         return errorResponseFromCode(authResult.code, log, { reason: authResult.error })
       }
-      return unauthorized()
+      return invalidToken()
     }
     ;({
       userId,

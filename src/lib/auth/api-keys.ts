@@ -112,6 +112,44 @@ export function isRefreshToken(token: string): boolean {
   return token.startsWith(REFRESH_TOKEN_PREFIX)
 }
 
+/**
+ * The access key and refresh token a refresh token rotates into (crm#1043).
+ *
+ * Derived from the presented token instead of drawn at random, so the same
+ * refresh token always rotates into the same pair: a client that retries a
+ * refresh (a lost response, two concurrent refreshes, a successor it failed
+ * to persist) gets back exactly what the first answer handed out, and
+ * whichever of the identical answers it keeps works. Whether a replay is
+ * answered at all is decided by rotate_mcp_refresh_token; this only makes the
+ * answer stable.
+ *
+ * HMAC-SHA256 under a purpose-scoped derivation of the server-only
+ * service-role secret (the oauth-flow-crypto pattern): the successor of a
+ * stolen refresh token cannot be computed without that secret, and whoever
+ * holds the secret already controls the database. Nothing reversible is
+ * stored: the row keeps only the SHA-256 of each token, as before.
+ */
+export function deriveRotatedCredentials(presentedRefreshToken: string): {
+  refresh: { token: string; hash: string }
+  key: { key: string; hash: string; prefix: string }
+} {
+  const secret = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!secret) throw new Error('SUPABASE_SERVICE_ROLE_KEY is required')
+  const hmacKey = crypto
+    .createHash('sha256')
+    .update('mcp-oauth-refresh-successor:v1:' + secret)
+    .digest()
+  const derive = (label: string) =>
+    crypto.createHmac('sha256', hmacKey).update(`${label}:${presentedRefreshToken}`).digest('base64url')
+  const refreshToken = `${REFRESH_TOKEN_PREFIX}${derive('refresh')}`
+  const key = `${KEY_PREFIX}${derive('access')}`
+  return {
+    refresh: { token: refreshToken, hash: hashRefreshToken(refreshToken) },
+    // Same prefix length generateApiKey stores for the settings UI.
+    key: { key, hash: hashApiKey(key), prefix: key.slice(0, KEY_PREFIX.length + 8) },
+  }
+}
+
 export function extractBearerToken(request: Request): string | null {
   const authHeader = request.headers.get('authorization')
   if (!authHeader?.startsWith('Bearer ')) return null

@@ -13,9 +13,11 @@ import { getPool } from '@/tests/pg/setup'
  *     never matches a revoked key, and increments the rate-limit counter on the
  *     resolved row even when matched via the grace hash.
  *   - rotate_mcp_refresh_token: 'rotated' demotes the consumed pair to previous_*;
- *     presenting the previous refresh token within grace 'replayed's (re-issues
- *     + slides the window); reuse AFTER grace is 'reuse_revoked' and sets
- *     revoked_at (RFC 9700 §4.14.2); unknown → 'invalid'; revoked grant → 'revoked'.
+ *     presenting the previous refresh token 'replayed's; unknown → 'invalid';
+ *     revoked grant → 'revoked'. Since crm#1043 (migration 20261025084800) a
+ *     replay of the previous token is honoured whatever the clock says and
+ *     reuse is detected by generation instead: the full contract lives in
+ *     mcp-oauth-refresh-idempotent-replay.pg.test.ts.
  *
  * Inserts go through the pool (superuser, RLS-bypassing): this is an RPC /
  * schema behaviour test, not an RLS test. Hashes are opaque text the RPCs
@@ -193,7 +195,9 @@ describe('api_keys rotation grace (issue #710)', () => {
       expect(row.key_hash).toBe(k2)
       expect(row.previous_refresh_token_hash).toBe(r1)
       expect(row.previous_key_hash).toBe(k1)
-      expect(new Date(row.previous_refresh_expires_at).getTime()).toBeGreaterThan(Date.now())
+      // Only the access key has a grace window; the previous refresh token's
+      // standing follows from the grant's state (crm#1043).
+      expect(row.previous_refresh_expires_at).toBeNull()
       expect(new Date(row.previous_key_expires_at).getTime()).toBeGreaterThan(Date.now())
 
       // The just-superseded access key still validates within grace.
@@ -228,26 +232,22 @@ describe('api_keys rotation grace (issue #710)', () => {
       expect(row.revoked_at).toBeNull()
     })
 
-    it('treats reuse of a previous refresh token AFTER the grace window as a breach and revokes the grant', async () => {
+    it('no longer treats a late replay of the previous refresh token as a breach (crm#1043)', async () => {
       const { userId, companyId } = await seedCompany()
       const r1 = h('r1')
       const k1 = h('k1')
       const id = await insertKey(userId, companyId, { key_hash: k1, refresh_token_hash: r1 })
       expect((await rotate(r1, h('r2'), h('k2'))).outcome).toBe('rotated')
 
-      // Force the previous-refresh grace to have expired.
+      // Long past the old 120 s window: this used to revoke the grant.
       await getPool().query(
         `UPDATE public.api_keys SET previous_refresh_expires_at = now() - interval '1 second' WHERE id = $1`,
         [id],
       )
 
       const res = await rotate(r1, h('r3'), h('k3'))
-      expect(res.outcome).toBe('reuse_revoked')
-
-      const row = await rowById(id)
-      expect(row.revoked_at).not.toBeNull()
-      // The whole grant family is dead: neither current nor previous validates.
-      expect(await validate(row.key_hash)).toHaveLength(0)
+      expect(res.outcome).toBe('replayed')
+      expect((await rowById(id)).revoked_at).toBeNull()
     })
 
     it("returns 'invalid' for an unknown refresh token", async () => {
