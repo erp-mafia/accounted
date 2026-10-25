@@ -900,7 +900,7 @@ Example response `200`:
 **Whether the company can pay through its bank from Accounted, and from which accounts.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Answers available (a payment provider serves this installation, the company is on a paid plan and it is not a sandbox), why not when it is false (reason: no_provider, not_in_pilot, subscription, sandbox), the provider, and the company's bank accounts with payable true or a reason (account_disabled, not_sek, iban_missing, bank_unknown). signer_known says whether the calling person has a BankID login on file, so signing needs no typed personnummer. IBANs are masked.
+Answers available (a payment provider serves this installation, the company is on a paid plan and it is not a sandbox), why not when it is false (reason: no_provider, not_in_pilot, subscription, sandbox), the provider, and the company's bank accounts with payable true or a reason (account_disabled, not_sek, iban_missing, bank_unknown, bank_not_supported: the payment provider does not pay from this bank, Svea Bank today). signer_known says whether the calling person has a BankID login on file, so signing needs no typed personnummer. IBANs are masked.
 
 **Use when:** Before preparing a bank payment: pick a payable cash_account_id.
 **Do not use for:** Payment files, which need no provider (GET /supplier-payment-batches/preview).
@@ -920,7 +920,7 @@ Response `200`:
     available: boolean,
     reason: "no_provider" | "not_in_pilot" | "subscription" | "sandbox" | null,
     provider: string | null,
-    accounts: { cash_account_id: string, name: string | null, ledger_account: string, iban: string | null, bank_name: string | null, payable: boolean, reason: "account_disabled" | "not_sek" | "iban_missing" | "bank_unknown" | null }[],
+    accounts: { cash_account_id: string, name: string | null, ledger_account: string, iban: string | null, bank_name: string | null, payable: boolean, reason: "account_disabled" | "not_sek" | "iban_missing" | "bank_unknown" | "bank_not_supported" | null }[],
     signer_known: boolean
   },
   meta: {
@@ -2869,7 +2869,7 @@ Response `200`:
 ```ts
 {
   data: {
-    supplier_payment_batches: { supplier_payment_batch_id: string, handle?: string, format: "pain001", status: "created" | "cancelled", currency: string, total_amount: number, item_count: number, settled_count: number, msg_id: string, file_generated_at: string | null, download_count: number, created_at: string, cancelled_at: string | null, supplier_invoice_ids: string[] }[],
+    supplier_payment_batches: { supplier_payment_batch_id: string, handle?: string, format: "pain001" | "bg_lb", status: "created" | "cancelled", currency: string, total_amount: number, item_count: number, settled_count: number, msg_id: string, file_generated_at: string | null, download_count: number, created_at: string, cancelled_at: string | null, supplier_invoice_ids: string[] }[],
     next_cursor: string | null
   },
   meta: {
@@ -2921,10 +2921,10 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/supplier-payment-batches`
 
-**Create a supplier payment file (betalfil, pain.001) for one or more supplier invoices.**
+**Create a supplier payment file (betalfil: pain.001, or an LB file for Svea Bank) for one or more supplier invoices.**
 `scope:suppliers:write · risk:high · idempotent · dry-run`
 
-Creates a payment batch: an immutable snapshot of one credit transfer per invoice (amount, payment date, the supplier's bankgiro / plusgiro / bank account, OCR or invoice-number reference) and the company's own bank details as debtor, with a pain.001 MsgId fixed at creation. Every invoice is re-read and re-checked inside one transaction, so an invoice settled or already batched meanwhile is refused. Books nothing and marks nothing paid. Download the XML with GET /supplier-payment-batches/{id}/file and upload it in the bank, where the payments are signed; afterwards settle each invoice with mark-paid or bank matching. Idempotent. Dry-runnable.
+Creates a payment batch: an immutable snapshot of one credit transfer per invoice (amount, payment date, the supplier's bankgiro / plusgiro / bank account, OCR or invoice-number reference) and the company's own bank details as debtor, with a pain.001 MsgId fixed at creation. The file takes the form the company's bank accepts (format: pain001, or bg_lb, Bankgirot's LB file, for Svea Bank, which takes no pain.001). Every invoice is re-read and re-checked inside one transaction, so an invoice settled or already batched meanwhile is refused. Books nothing and marks nothing paid. Download the file with GET /supplier-payment-batches/{id}/file and upload it in the bank, where the payments are signed; afterwards settle each invoice with mark-paid or bank matching. Idempotent. Dry-runnable.
 
 **Use when:** The user wants to pay approved supplier invoices through their bank's file upload (typically the weekly or monthly payment run).
 **Do not use for:** Marking invoices paid (POST /supplier-invoices/{id}/mark-paid), paying salaries (salary-runs/{id}/payment-file) or sending anything to the bank: this only produces the file.
@@ -2932,9 +2932,9 @@ Creates a payment batch: an immutable snapshot of one credit transfer per invoic
 **Pitfalls:**
 - Money leaves the company's account once the file is uploaded and signed in the bank: preview first (POST /supplier-payment-batches/preview) and check amounts and payees.
 - An invoice already in an active batch answers 409 SI_BATCH_DUPLICATE_INVOICE with details.invoices; resend with confirm_already_batched true only when paying it twice is intended, otherwise cancel the old batch.
-- Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic, org_number or swedbank_ids (company settings; swedbank_ids means a Swedbank company lacks swedbank_signer_id or swedbank_corporate_pay_id).
+- Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic, org_number, swedbank_ids or bankgiro (company settings; swedbank_ids means a Swedbank company lacks swedbank_signer_id or swedbank_corporate_pay_id, bankgiro that a Svea Bank company lacks the bankgiro its LB file is sent from).
 - An ineligible invoice fails the whole request with 400 SI_BATCH_INELIGIBLE_INVOICE and a reason per invoice; amount above the remaining amount answers 400 SI_BATCH_AMOUNT_EXCEEDS_REMAINING.
-- A Swedbank company (swedbank_signer_id set, or swedbank_ids missing) can only pay bank accounts in a file: a bankgiro or plusgiro payee is ineligible with reason swedbank_iso2_giro_payee. Leave those invoices out (the preview already does) and create the batch with the rest.
+- A Swedbank company (swedbank_signer_id set, or swedbank_ids missing) can only pay bank accounts in a file: a bankgiro or plusgiro payee is ineligible with reason swedbank_iso2_giro_payee. A Svea Bank company's LB file pays bankgiro and plusgiro only: a bank-account payee is ineligible with reason lb_bank_account_payee. Leave those invoices out (the preview already does) and create the batch with the rest.
 - A payment_date in the past is moved to today (banks reject passed execution dates). Only SEK invoices; at most 100 per batch.
 - Between two requests (dry run, then create) a supplier's bank details can change: pass expected_payees from the dry run's items (payee.fingerprint, amount) and create answers 409 SI_BATCH_PAYEE_CHANGED instead of paying a changed account. A staged MCP create is pinned this way automatically.
 
@@ -2947,7 +2947,7 @@ Creates a payment batch: an immutable snapshot of one credit transfer per invoic
 Request body:
 ```ts
 {
-  format?: "pain001",
+  format?: "pain001" | "bg_lb",
   items: { supplier_invoice_id: string, amount?: number, payment_date?: string }[],
   confirm_already_batched?: boolean,
   expected_payees?: { supplier_invoice_id: string, payee_fingerprint: string, amount: number }[]
@@ -2976,7 +2976,7 @@ Response `200`:
     supplier_payment_batch_id: string,
     handle?: string,
     msg_id: string,
-    format: "pain001",
+    format: "pain001" | "bg_lb",
     status: "created",
     currency: string,
     total_amount: number,
@@ -3027,10 +3027,10 @@ Example response `200`:
 **Read one supplier payment batch (betalfil) with its lines and live settlement.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Returns the batch, the company bank details it debits (as snapshotted at creation), and one line per invoice: amount, payment date, payee, reference, and the invoice's live status and remaining amount. file names the download filename and the v1 path that serves the XML (available only while the batch is not cancelled).
+Returns the batch, the company bank details it debits (as snapshotted at creation), and one line per invoice: amount, payment date, payee, reference, and the invoice's live status and remaining amount. file names the download filename, its content type and the v1 path that serves the file (available only while the batch is not cancelled).
 
 **Use when:** Checking what a betalfil pays, or which of its invoices are settled.
-**Do not use for:** Getting the XML itself: GET /supplier-payment-batches/{id}/file.
+**Do not use for:** Getting the file itself: GET /supplier-payment-batches/{id}/file.
 
 **Pitfalls:**
 - The payee and amount per line are the snapshot the file pays, even if the supplier's details changed since.
@@ -3046,7 +3046,7 @@ Response `200`:
   data: {
     supplier_payment_batch_id: string,
     handle?: string,
-    format: "pain001",
+    format: "pain001" | "bg_lb",
     status: "created" | "cancelled",
     currency: string,
     total_amount: number,
@@ -3060,7 +3060,7 @@ Response `200`:
     supplier_invoice_ids: string[],
     debtor: { name: string, iban: string, bic: string },
     items: { supplier_payment_batch_item_id: string, supplier_invoice_id: string, supplier_invoice_number: string | null, arrival_number: number | null, amount: number, payment_date: string, payee_name: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, invoice_status: string | null, remaining_amount: number | null, settled: boolean }[],
-    file: { filename: string, content_type: "application/xml", available: boolean, download: string }
+    file: { filename: string, content_type: "application/xml" | "text/plain", available: boolean, download: string }
   },
   meta: {
     request_id: string,
@@ -3193,16 +3193,16 @@ Example response `200`:
 
 ### `GET /api/v1/companies/{companyId}/supplier-payment-batches/{id}/file`
 
-**Download the pain.001 payment file of a supplier payment batch.**
+**Download the payment file (pain.001, or the LB file for Svea Bank) of a supplier payment batch.**
 `scope:suppliers:write · risk:low · idempotent`
 
-Returns the batch's XML payment file inline as `content` (a UTF-8 string), with filename, content_type and sha256, in the same shape as the salary payment file. The file regenerates from the stored batch, so every download is byte-identical (same MsgId) and the bank's duplicate detection works. Each call records the download on the batch (file_generated_at, download_count). Upload the file in the bank's file channel, where the payments are signed; nothing is sent to the bank by this call and nothing is booked.
+Returns the batch's payment file inline as `content` (a string), with filename, content_type, charset and sha256, in the same shape as the salary payment file: pain.001 XML written as UTF-8, or Bankgirot's LB file (format bg_lb, text/plain) written as ISO 8859-1. The file regenerates from the stored batch, so every download is byte-identical (same MsgId) and the bank's duplicate detection works. Each call records the download on the batch (file_generated_at, download_count). Upload the file in the bank's file channel, where the payments are signed; nothing is sent to the bank by this call and nothing is booked.
 
 **Use when:** The batch is created and the user (or their payment operator) needs the file to upload in the bank.
 **Do not use for:** Creating the batch (POST /supplier-payment-batches) or marking invoices paid (mark-paid after the bank executed).
 
 **Pitfalls:**
-- Write `content` to `filename` as UTF-8, exactly as returned; do not re-indent or re-encode the XML.
+- Write `content` to `filename` in `charset` (UTF-8 for pain001, ISO 8859-1 for bg_lb with its CRLF line endings), exactly as returned; do not re-indent or re-encode the file.
 - A cancelled batch answers 409 SI_BATCH_CANCELLED: its file is never served again.
 - Uploading the same file twice is caught by most banks through the MsgId, but not all: check download_count and the bank before re-uploading.
 - Needs suppliers:write although it is a GET: the file is a payment instruction and the download is recorded.
@@ -3217,9 +3217,10 @@ Response `200`:
 {
   data: {
     supplier_payment_batch_id: string,
-    format: "pain001",
+    format: "pain001" | "bg_lb",
     filename: string,
-    content_type: "application/xml",
+    content_type: "application/xml" | "text/plain",
+    charset: "utf-8" | "iso-8859-1",
     content: string,
     sha256: string,
     msg_id: string,
@@ -3248,6 +3249,7 @@ Example response `200`:
     "format": "pain001",
     "filename": "betalfil_20260925_5b0c1a2f.xml",
     "content_type": "application/xml",
+    "charset": "utf-8",
     "content": "<?xml version=\"1.0\" encoding=\"UTF-8\"?><Document xmlns=\"urn:iso:std:iso:20022:tech:xsd:pain.001.001.03\">…",
     "sha256": "3f9a…",
     "msg_id": "ACCOUNTED-5566778899-B5B0C1A2F",
@@ -3270,14 +3272,14 @@ Example response `200`:
 **Check which supplier invoices can go into a payment file (betalfil), with amounts, payees and warnings.**
 `scope:suppliers:read · risk:low · idempotent`
 
-Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, or today when it has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; and whether the company's own bank details (IBAN, BIC, org number: the pain.001 debtor) are complete. Reads only; creates nothing.
+Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, or today when it has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; the file form the company's bank takes (format: pain001, or bg_lb for Svea Bank); and whether the company's own bank details (IBAN, BIC, org number, and the bankgiro an LB file is sent from) are complete. Reads only; creates nothing.
 
 **Use when:** Before creating a payment batch, to see what would be paid and what blocks it.
 **Do not use for:** Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).
 
 **Pitfalls:**
-- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), payee_unconfirmed / payee_rejected (the invoice states bank details the supplier card lacks and a person has not approved them, or rejected them: a person decides in Accounted under Att göra; gnubok_confirm_supplier_payee stages the approval), attest_required (the attest policy of the company requires attest for the invoice and it has not been given: an attester approves it first), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank).
-- debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic, org_number, or swedbank_ids: a Swedbank company's swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without).
+- Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier's bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), payee_unconfirmed / payee_rejected (the invoice states bank details the supplier card lacks and a person has not approved them, or rejected them: a person decides in Accounted under Att göra; gnubok_confirm_supplier_payee stages the approval), attest_required (the attest policy of the company requires attest for the invoice and it has not been given: an attester approves it first), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank), lb_bank_account_payee (the company's bank takes only an LB file, which here pays to bankgiro and plusgiro only: a supplier paid to a bank account is left out; pay it in the internet bank).
+- debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic, org_number, swedbank_ids: a Swedbank company's swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without, or bankgiro: the company's bankgiro, which an LB file is sent from).
 - already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.
 - Only SEK invoices; at most 100 per call.
 
@@ -3287,7 +3289,7 @@ Evaluates the given supplier invoices exactly as create will: eligible lines wit
 
 Request body:
 ```ts
-{ format?: "pain001", supplier_invoice_ids: string[] }
+{ format?: "pain001" | "bg_lb", supplier_invoice_ids: string[] }
 ```
 
 Example request:
@@ -3304,11 +3306,12 @@ Response `200`:
 {
   data: {
     eligible: { supplier_invoice_id: string, supplier_name: string, supplier_invoice_number: string | null, amount: number, payment_date: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, warnings: ("unattested" | "already_batched" | "ocr_invalid" | "payee_city_missing")[], active_supplier_payment_batch_id: string | null }[],
-    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "payee_unconfirmed" | "payee_rejected" | "not_found" | "in_bank_payment" | "swedbank_iso2_giro_payee" }[],
+    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "payee_unconfirmed" | "payee_rejected" | "not_found" | "in_bank_payment" | "swedbank_iso2_giro_payee" | "lb_bank_account_payee" }[],
+    format: "pain001" | "bg_lb",
     total_amount: number,
     currency: "SEK",
     debtor_ok: boolean,
-    debtor_missing: "iban" | "bic" | "org_number" | "swedbank_ids" | null
+    debtor_missing: "iban" | "bic" | "org_number" | "swedbank_ids" | "bankgiro" | null
   },
   meta: {
     request_id: string,
@@ -3348,6 +3351,7 @@ Example response `200`:
       }
     ],
     "excluded": [],
+    "format": "pain001",
     "total_amount": 737.5,
     "currency": "SEK",
     "debtor_ok": true,

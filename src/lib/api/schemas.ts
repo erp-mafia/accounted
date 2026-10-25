@@ -2161,12 +2161,10 @@ export const SupplierInvoiceItemAccountSchema = z.object({
 // Supplier payment batch (betalfil) schemas
 // ============================================================
 
-// v1 gates the API to pain001; the DB CHECK also allows 'bg_lb' so a future
-// format lands without a migration.
-const supplierPaymentBatchFormat = z.enum(['pain001'])
-
+// No format: the company's bank decides the file form (pain.001, or the LB
+// file for a bank that takes no pain.001; batchFileFormat). An old client's
+// `format` is stripped like any unknown key.
 export const PreviewSupplierPaymentBatchSchema = z.object({
-  format: supplierPaymentBatchFormat,
   ids: z.array(z.string().uuid()).min(1).max(100),
 })
 
@@ -2179,7 +2177,6 @@ export const SupplierPaymentBatchItemInputSchema = z.object({
 })
 
 export const CreateSupplierPaymentBatchSchema = z.object({
-  format: supplierPaymentBatchFormat,
   items: z.array(SupplierPaymentBatchItemInputSchema).min(1).max(100),
   confirm_already_batched: z.boolean().optional(),
 })

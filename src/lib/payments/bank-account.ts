@@ -374,6 +374,13 @@ const BANK_NAME_BIC: ReadonlyArray<{ match: string; bic: string }> = [
   { match: 'seb', bic: 'ESSESESS' },
 ]
 
+/**
+ * Svea Bank by 8-character BIC: SVEASES1 is its SWIFT code, SVEASESS the one
+ * Open Payments addresses it by and stores on its connections. Companies
+ * have saved both. Not in the tables above: a BIC is never derived for it.
+ */
+export const SVEA_BANK_BICS: ReadonlySet<string> = new Set(['SVEASES1', 'SVEASESS'])
+
 export function lookupBicByBankName(nameRaw: string | null | undefined): string | null {
   const name = (nameRaw ?? '').trim().toLowerCase()
   if (!name) return null

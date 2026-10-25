@@ -17,6 +17,10 @@
  * alone: msg_id and created_at are fixed at creation, so every download of a
  * batch is byte-identical and bank-side duplicate detection (keyed on MsgId)
  * works. Generating or downloading a file books nothing and settles nothing.
+ *
+ * The file takes the form the paying bank accepts: ISO 20022 pain.001, or
+ * Bankgirot's LB file for a bank that takes no pain.001 (Svea Bank,
+ * crm#1424). The company's bank decides it, never the caller.
  */
 
 import { createHash } from 'node:crypto'
@@ -30,6 +34,7 @@ import {
   lookupBicByClearing,
   lookupBicByBankName,
   normalizeBankNumber,
+  SVEA_BANK_BICS,
 } from '@/lib/payments/bank-account'
 import {
   evaluateInvoiceForBatch,
@@ -44,7 +49,9 @@ import { isOpenPaymentOrder, OPEN_PAYMENT_ORDER_CANDIDATE_STATUSES } from './ord
 import { generateSupplierPain001, type SupplierPain001Payment } from './pain001-supplier'
 import { resolveSwedbankFileIds, swedbankIso2PaysPayee } from './swedbank'
 import { PAYMENT_ATTEST_GATE } from '@/lib/composition/payment-attest-gate'
-import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
+import { todayIsoStockholm } from '@/lib/dates/iso'
+import { generateSupplierBgLb, type BgLbSupplierPayment } from './bg-lb'
+import type { SupplierPaymentBatch, SupplierPaymentBatchFormat, SupplierPaymentBatchItem } from '@/types'
 
 const log = createLogger('payments/batch-service')
 
@@ -78,7 +85,7 @@ export interface BatchDebtor {
   org_number: string
   iban: string
   bic: string
-  /** Company bankgiro digits; a debit account only where the debtor's bank takes one. */
+  /** Company bankgiro digits; a debit account only where the debtor's bank takes one, and the sender of an LB file. */
   bankgiro: string | null
   /** Company town; Dbtr/PstlAdr/TwnNm (mandatory from Nov 2026 when present). */
   city: string | null
@@ -103,18 +110,66 @@ export type DebtorResolution =
   | { ok: false; missing: DebtorMissing }
 
 /**
+ * What a supplier payment file cannot be made without: the debtor settings,
+ * or bankgiro: the debtor's bank takes only an LB file, which is sent from
+ * the company's bankgiro number.
+ */
+export type FileDebtorMissing = DebtorMissing | 'bankgiro'
+
+/** The debtor of a supplier payment file and the form its bank takes (resolveFileDebtor). */
+export type FileDebtorResolution =
+  | { ok: true; debtor: BatchDebtor; format: SupplierPaymentBatchFormat }
+  | { ok: false; missing: FileDebtorMissing }
+
+/**
+ * Banks, by 8-character BIC, whose file upload takes Bankgirot's LB file and
+ * no pain.001. Svea Bank answers a pain.001 upload with "Content is neither
+ * BgLon or LbFile" (crm#1424).
+ */
+const LB_FILE_BICS: ReadonlySet<string> = SVEA_BANK_BICS
+
+/** The file form the debtor's bank takes. */
+export function batchFileFormat(bic: string): SupplierPaymentBatchFormat {
+  return LB_FILE_BICS.has(bic.replace(/\s/g, '').toUpperCase().slice(0, 8)) ? 'bg_lb' : 'pain001'
+}
+
+/** The form a file for this debtor takes, also when its resolution stopped at the bankgiro an LB file needs. */
+export function resolutionFormat(resolution: FileDebtorResolution): SupplierPaymentBatchFormat {
+  if (resolution.ok) return resolution.format
+  return resolution.missing === 'bankgiro' ? 'bg_lb' : 'pain001'
+}
+
+/**
  * Whether a new file for this debtor takes Swedbank's ISO 2.0 form: a
  * Swedbank debtor with both ids, or one that lacks them (it can get no other
  * form; resolveSwedbankFileIds). Such a file pays to bank accounts only
  * (swedbankIso2PaysPayee, crm#1156).
  */
-export function paysThroughSwedbankIso2(resolution: DebtorResolution): boolean {
+export function paysThroughSwedbankIso2(resolution: DebtorResolution | FileDebtorResolution): boolean {
   if (!resolution.ok) return resolution.missing === 'swedbank_ids'
   return Boolean(resolution.debtor.swedbank_signer_id && resolution.debtor.swedbank_corporate_pay_id)
 }
 
 /** Why an invoice is left out because the debtor's Swedbank ISO 2.0 agreement does not pay to its payee. */
 export const SWEDBANK_ISO2_GIRO_PAYEE = 'swedbank_iso2_giro_payee' as const
+
+/**
+ * Why an invoice is left out of an LB file: it pays to a bank account, which
+ * an LB file reaches only through an utbetalningsnummer kept per supplier
+ * (TK40), not built here. Every batch line so far paid a bankgiro or
+ * PlusGiro number.
+ */
+export const LB_BANK_ACCOUNT_PAYEE = 'lb_bank_account_payee' as const
+
+/** Why the file this debtor's bank takes cannot carry the payee, or null when it can. */
+function payeeOutsideFile(
+  resolution: FileDebtorResolution,
+  payeeType: SupplierPayee['type'],
+): typeof SWEDBANK_ISO2_GIRO_PAYEE | typeof LB_BANK_ACCOUNT_PAYEE | null {
+  if (paysThroughSwedbankIso2(resolution) && !swedbankIso2PaysPayee(payeeType)) return SWEDBANK_ISO2_GIRO_PAYEE
+  if (resolutionFormat(resolution) === 'bg_lb' && payeeType === 'bank_account') return LB_BANK_ACCOUNT_PAYEE
+  return null
+}
 
 /**
  * Resolve the paying company (pain.001 debtor) from settings, mirroring the
@@ -178,6 +233,20 @@ export async function resolveBatchDebtor(
         : {}),
     },
   }
+}
+
+/**
+ * The debtor of a supplier payment file and the form its bank takes. An LB
+ * file is sent from the company's bankgiro, so a debtor whose bank takes
+ * only that file has no file without one. The tax payment file reads
+ * resolveBatchDebtor alone: its form is the person's choice.
+ */
+export async function resolveFileDebtor(supabase: SupabaseClient, companyId: string): Promise<FileDebtorResolution> {
+  const resolution = await resolveBatchDebtor(supabase, companyId)
+  if (!resolution.ok) return resolution
+  const format = batchFileFormat(resolution.debtor.bic)
+  if (format === 'bg_lb' && !resolution.debtor.bankgiro) return { ok: false, missing: 'bankgiro' }
+  return { ...resolution, format }
 }
 
 /**
@@ -263,14 +332,16 @@ export interface BatchPreviewLine {
 }
 
 export interface BatchPreview {
+  /** The file form the company's bank takes (batchFileFormat). */
+  format: SupplierPaymentBatchFormat
   eligible: BatchPreviewLine[]
   excluded: Array<{
     id: string
-    reason: BatchExclusionReason | 'not_found' | 'in_bank_payment' | typeof SWEDBANK_ISO2_GIRO_PAYEE
+    reason: BatchExclusionReason | 'not_found' | 'in_bank_payment' | typeof SWEDBANK_ISO2_GIRO_PAYEE | typeof LB_BANK_ACCOUNT_PAYEE
   }>
   total: number
   debtor_ok: boolean
-  debtor_missing?: DebtorMissing
+  debtor_missing?: FileDebtorMissing
 }
 
 export async function previewSupplierPaymentBatch(
@@ -290,14 +361,13 @@ export async function previewSupplierPaymentBatch(
       .eq('company_id', companyId)
       .in('id', input.ids),
     loadActiveBatchMap(supabase, companyId),
-    resolveBatchDebtor(supabase, companyId),
+    resolveFileDebtor(supabase, companyId),
     loadInvoicesInBankPayment(supabase, companyId, input.ids),
     PAYMENT_ATTEST_GATE.blockedInvoiceIds(supabase, companyId, input.ids),
   ])
 
   const rows = (invoices ?? []) as unknown as InvoiceRow[]
   const byId = new Map(rows.map((row) => [row.id, row]))
-  const swedbankIso2 = paysThroughSwedbankIso2(debtorResolution)
   const [payeeHolds, companyAttests] = await Promise.all([
     loadBatchPayeeHolds(supabase, companyId, rows),
     companyAttestsFor(supabase, companyId, rows),
@@ -326,9 +396,10 @@ export async function previewSupplierPaymentBatch(
       excluded.push({ id, reason: evaluation.reason })
       continue
     }
-    // Left out, not refused: the bank-account payees still make a file.
-    if (swedbankIso2 && !swedbankIso2PaysPayee(evaluation.payee.type)) {
-      excluded.push({ id, reason: SWEDBANK_ISO2_GIRO_PAYEE })
+    // Left out, not refused: the payees the bank's file form carries still make a file.
+    const outside = payeeOutsideFile(debtorResolution, evaluation.payee.type)
+    if (outside) {
+      excluded.push({ id, reason: outside })
       continue
     }
     eligible.push({
@@ -347,6 +418,7 @@ export async function previewSupplierPaymentBatch(
   const total = sumOre(eligible.map((line) => line.amount))
 
   return {
+    format: resolutionFormat(debtorResolution),
     eligible,
     excluded,
     total,
@@ -374,7 +446,6 @@ export interface ExpectedBatchPayee {
 }
 
 export interface CreateBatchInput {
-  format: 'pain001'
   items: CreateBatchItemInput[]
   confirm_already_batched?: boolean
   /**
@@ -403,7 +474,7 @@ export function payeeFingerprint(payee: SupplierPayee): string {
 
 export type CreateBatchResult =
   | { ok: true; batch: SupplierPaymentBatch }
-  | { ok: false; code: 'debtor_incomplete'; missing: DebtorMissing }
+  | { ok: false; code: 'debtor_incomplete'; missing: FileDebtorMissing }
   | { ok: false; code: 'ineligible'; details: Array<{ id: string; reason: string }> }
   | { ok: false; code: 'amount_exceeds_remaining'; details: Array<{ id: string }> }
   | { ok: false; code: 'invalid_amount'; details: Array<{ id: string }> }
@@ -424,6 +495,8 @@ type CreateBatchRpcResult =
 export type PlannedBatchItem = Omit<SupplierPaymentBatchItem, 'id' | 'batch_id' | 'created_at'>
 
 export interface SupplierPaymentBatchPlan {
+  /** The file form the company's bank takes. */
+  format: SupplierPaymentBatchFormat
   debtor: BatchDebtor
   items: PlannedBatchItem[]
   /** Parallel to items: the non-blocking warnings each line carries. */
@@ -449,12 +522,11 @@ export async function planSupplierPaymentBatch(
   const today = getSwedishLocalDate()
   const ids = input.items.map((item) => item.supplier_invoice_id)
 
-  const debtorResolution = await resolveBatchDebtor(supabase, companyId)
+  const debtorResolution = await resolveFileDebtor(supabase, companyId)
   if (!debtorResolution.ok) {
     return { ok: false, code: 'debtor_incomplete', missing: debtorResolution.missing }
   }
-  const { debtor } = debtorResolution
-  const swedbankIso2 = paysThroughSwedbankIso2(debtorResolution)
+  const { debtor, format } = debtorResolution
 
   const [{ data: invoices }, activeBatchIdByInvoice, inBankPayment, attestBlocked] = await Promise.all([
     supabase
@@ -503,10 +575,12 @@ export async function planSupplierPaymentBatch(
       continue
     }
     // Swedbank refuses a bankgiro or plusgiro payee in an ISO 2.0 file
-    // (crm#1156); the preview leaves such a line out, a create naming it is
-    // refused like any other ineligible line.
-    if (swedbankIso2 && !swedbankIso2PaysPayee(evaluation.payee.type)) {
-      ineligible.push({ id: invoice.id, reason: SWEDBANK_ISO2_GIRO_PAYEE })
+    // (crm#1156), and an LB file here pays no bank account; the preview
+    // leaves such a line out, a create naming it is refused like any other
+    // ineligible line.
+    const outside = payeeOutsideFile(debtorResolution, evaluation.payee.type)
+    if (outside) {
+      ineligible.push({ id: invoice.id, reason: outside })
       continue
     }
     if (evaluation.activeBatchId && !input.confirm_already_batched) {
@@ -573,6 +647,7 @@ export async function planSupplierPaymentBatch(
   return {
     ok: true,
     plan: {
+      format,
       debtor,
       items: itemRows,
       warnings: itemWarnings,
@@ -589,7 +664,7 @@ export async function createSupplierPaymentBatch(
 ): Promise<CreateBatchResult> {
   const planned = await planSupplierPaymentBatch(supabase, companyId, input)
   if (!planned.ok) return planned
-  const { debtor, items: itemRows } = planned.plan
+  const { format, debtor, items: itemRows } = planned.plan
 
   // The id is minted here (not by the DB default) because msg_id derives from
   // it and both must land in the same transaction.
@@ -606,7 +681,7 @@ export async function createSupplierPaymentBatch(
   const { data, error } = await supabase.rpc('create_supplier_payment_batch', {
     p_company_id: companyId,
     p_batch_id: batchId,
-    p_format: input.format,
+    p_format: format,
     p_msg_id: msgId,
     p_debtor_snapshot: debtor,
     p_items: itemRows.map(({ company_id: _companyId, ...row }) => row),
@@ -685,6 +760,13 @@ export interface RenderedBatchFile {
   content: string
   contentType: string
   filename: string
+  /** How `content` is written to bytes for the bank: UTF-8 for pain.001, ISO 8859-1 for an LB file. */
+  charset: 'utf-8' | 'iso-8859-1'
+}
+
+/** The file's bytes as the bank takes them. */
+export function batchFileBytes(file: Pick<RenderedBatchFile, 'content' | 'charset'>): Buffer<ArrayBuffer> {
+  return Buffer.from(file.content, file.charset === 'iso-8859-1' ? 'latin1' : 'utf8')
 }
 
 /**
@@ -695,6 +777,7 @@ export function renderSupplierPaymentBatchFile(
   batch: Pick<SupplierPaymentBatch, 'id' | 'format' | 'msg_id' | 'debtor_snapshot' | 'created_at'>,
   items: SupplierPaymentBatchItem[],
 ): RenderedBatchFile {
+  if (batch.format === 'bg_lb') return renderBgLbFile(batch, items)
   if (batch.format !== 'pain001') {
     throw new Error(`Filformatet stöds inte: ${batch.format}`)
   }
@@ -741,12 +824,45 @@ export function renderSupplierPaymentBatchFile(
     content,
     contentType: 'application/xml; charset=utf-8',
     filename: supplierPaymentBatchFilename(batch),
+    charset: 'utf-8',
   }
 }
 
-/** The download filename of a batch's file: betalfil_<yyyymmdd>_<first 8 of the id>.xml. */
-export function supplierPaymentBatchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at'>): string {
+/**
+ * The LB file of a stored batch: one TK14 or TK54 per line, sent from the
+ * company's bankgiro. Written the day the batch was created (Swedish
+ * calendar day), so every download is byte-identical.
+ */
+function renderBgLbFile(
+  batch: Pick<SupplierPaymentBatch, 'id' | 'format' | 'debtor_snapshot' | 'created_at'>,
+  items: SupplierPaymentBatchItem[],
+): RenderedBatchFile {
+  const sender = batch.debtor_snapshot.bankgiro
+  if (!sender) throw new Error('LB-filen saknar avsändarens bankgironummer')
+  const payments: BgLbSupplierPayment[] = items.map((item) => {
+    if (item.payee_type === 'bank_account') throw new Error('LB-filen betalar inte till bankkonton')
+    return {
+      payee:
+        item.payee_type === 'bankgiro'
+          ? { type: 'bankgiro', bankgiro: item.payee_bankgiro ?? '' }
+          : { type: 'plusgiro', plusgiro: item.payee_plusgiro ?? '' },
+      reference: item.reference,
+      amount: item.amount,
+      paymentDate: item.payment_date,
+      payeeName: item.payee_name,
+    }
+  })
+  return {
+    content: generateSupplierBgLb(sender, payments, { writeDate: todayIsoStockholm(new Date(batch.created_at)) }),
+    contentType: 'text/plain; charset=iso-8859-1',
+    filename: supplierPaymentBatchFilename(batch),
+    charset: 'iso-8859-1',
+  }
+}
+
+/** The download filename of a batch's file: betalfil_<yyyymmdd>_<first 8 of the id>, .xml for pain.001 and .txt for an LB file. */
+export function supplierPaymentBatchFilename(batch: Pick<SupplierPaymentBatch, 'id' | 'created_at' | 'format'>): string {
   const datePart = batch.created_at.slice(0, 10).replace(/-/g, '')
   const shortId = batch.id.replace(/-/g, '').slice(0, 8)
-  return `betalfil_${datePart}_${shortId}.xml`
+  return `betalfil_${datePart}_${shortId}.${batch.format === 'bg_lb' ? 'txt' : 'xml'}`
 }

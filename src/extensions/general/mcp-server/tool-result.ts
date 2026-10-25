@@ -34,7 +34,8 @@ export interface AgentToolError {
  * names the open operations to approve or reject first
  * (lib/pending-operations/transaction-claims.ts).
  * PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE names why the account cannot pay
- * (details.reason: account_disabled, not_sek, iban_missing, bank_unknown),
+ * (details.reason: account_disabled, not_sek, iban_missing, bank_unknown,
+ * bank_not_supported),
  * which the message alone cannot tell apart (crm#1314).
  * SALARY_RUN_VACATION_PAY_UNDETERMINED names each employee whose vacation
  * days cannot be priced, with the reason in English (issue #85).

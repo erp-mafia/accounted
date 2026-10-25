@@ -140,7 +140,7 @@ describe('POST /api/supplier-invoices/payment-batches/preview', () => {
     const response = await previewBatch(
       createMockRequest('/api/supplier-invoices/payment-batches/preview', {
         method: 'POST',
-        body: { format: 'bg_lb', ids: [UUID_A] },
+        body: { ids: ['not-a-uuid'] },
       }),
     )
     expect(response.status).toBe(400)
@@ -434,6 +434,34 @@ describe('GET /api/supplier-invoices/payment-batches/[id]/file', () => {
     const stamp = findCall('supplier_payment_batches', 'update')?.[0] as Record<string, unknown>
     expect(stamp.download_count).toBe(1)
     expect(stamp.file_generated_at).toBeTruthy()
+  })
+
+  it('serves a Svea Bank batch as the LB file in ISO 8859-1 bytes (crm#1424)', async () => {
+    enqueueMany([
+      {
+        data: batchRow({
+          format: 'bg_lb',
+          debtor_snapshot: { name: 'Testbolaget AB', org_number: '556677-8899', iban: 'SE4496600000000012345678', bic: 'SVEASESS', bankgiro: '9912346' },
+        }),
+      },
+      { data: [itemRow({ payee_name: 'Åkeri Öst AB' })] },
+      { data: null },
+    ])
+    const response = await downloadFile(
+      createMockRequest(`/api/supplier-invoices/payment-batches/${BATCH_ID}/file`),
+      params(BATCH_ID),
+    )
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('Content-Type')).toBe('text/plain; charset=iso-8859-1')
+    expect(response.headers.get('Content-Disposition')).toContain('filename="betalfil_20260810_b1111111.txt"')
+    const bytes = Buffer.from(await response.arrayBuffer())
+    const records = bytes.toString('latin1').split('\r\n').filter((line) => line)
+    expect(records.map((line) => line.slice(0, 2))).toEqual(['11', '14', '29'])
+    for (const line of records) expect(line).toHaveLength(80)
+    // Å as the single ISO 8859-1 byte 0xC5, not UTF-8's two.
+    expect(bytes.includes(0xc5)).toBe(true)
+    expect(bytes.includes(Buffer.from('Å', 'utf8'))).toBe(false)
   })
 })
 

@@ -103,6 +103,20 @@ describe('resolveDebtor', () => {
     expect(resolveDebtor(account, { bank_name: 'SEB', bic: 'ESSESESS' })).toMatchObject({ ok: true, debtor: { bic: 'ESSESESS' } })
   })
 
+  it('refuses an account at a bank the payment provider does not pay from, by its connection\'s BIC (crm#1424)', () => {
+    // 966: Svea Bank. Open Payments reads it by name but its bank lookup answers 404 PRODUCT_UNKNOWN.
+    const svea = { ...account, iban: 'SE4496600000000012345678' }
+    expect(resolveDebtor(svea, { bank_name: 'Svea Bank', bic: 'SVEASESS', affiliated_aspsp_id: null, psu_type: 'business' })).toEqual({
+      ok: false,
+      reason: 'bank_not_supported',
+    })
+    expect(resolveDebtor(svea, { bank_name: 'Svea Bank', bic: 'SVEASESSXXX' })).toEqual({ ok: false, reason: 'bank_not_supported' })
+    // Svea's SWIFT BIC names the same bank.
+    expect(resolveDebtor(svea, { bank_name: 'Svea Bank', bic: 'SVEASES1' })).toEqual({ ok: false, reason: 'bank_not_supported' })
+    // A disabled account keeps the reason a person can act on.
+    expect(resolveDebtor({ ...svea, enabled: false }, { bank_name: 'Svea Bank', bic: 'SVEASESS' })).toEqual({ ok: false, reason: 'account_disabled' })
+  })
+
   it('refuses a disabled account, another currency and a missing or invalid IBAN', () => {
     expect(resolveDebtor({ ...account, enabled: false }, null)).toEqual({ ok: false, reason: 'account_disabled' })
     expect(resolveDebtor({ ...account, currency: 'EUR' }, null)).toEqual({ ok: false, reason: 'not_sek' })

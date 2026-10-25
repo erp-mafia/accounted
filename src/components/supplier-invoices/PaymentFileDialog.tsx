@@ -37,11 +37,13 @@ interface PreviewLine {
 }
 
 interface Preview {
+  /** The file form the company's bank takes: pain.001, or the LB file (Svea Bank). */
+  format: 'pain001' | 'bg_lb'
   eligible: PreviewLine[]
   excluded: Array<{ id: string; reason: string }>
   total: number
   debtor_ok: boolean
-  debtor_missing?: 'iban' | 'bic' | 'org_number' | 'swedbank_ids'
+  debtor_missing?: 'iban' | 'bic' | 'org_number' | 'swedbank_ids' | 'bankgiro'
 }
 
 /** The sentence for each company setting the file cannot be made without. */
@@ -50,6 +52,7 @@ const DEBTOR_MISSING_MESSAGE = {
   bic: 'debtor_missing_bic',
   org_number: 'debtor_missing_org',
   swedbank_ids: 'debtor_missing_swedbank',
+  bankgiro: 'debtor_missing_bankgiro',
 } as const
 
 interface PaymentFileDialogProps {
@@ -94,7 +97,7 @@ export default function PaymentFileDialog({
       const res = await fetch('/api/supplier-invoices/payment-batches/preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ format: 'pain001', ids: invoiceIds }),
+        body: JSON.stringify({ ids: invoiceIds }),
       })
       const body = await res.json()
       if (!res.ok) {
@@ -159,7 +162,6 @@ export default function PaymentFileDialog({
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          format: 'pain001',
           items: preview.eligible.map((line) => ({
             supplier_invoice_id: line.id,
             amount: lineAmount(line),
@@ -181,12 +183,13 @@ export default function PaymentFileDialog({
         return
       }
 
-      const batch = body.data as { id: string; created_at: string }
+      const batch = body.data as { id: string; created_at: string; format: 'pain001' | 'bg_lb' }
       const datePart = batch.created_at.slice(0, 10).replace(/-/g, '')
       const shortId = batch.id.replace(/-/g, '').slice(0, 8)
       const result = await downloadFile({
         url: `/api/supplier-invoices/payment-batches/${batch.id}/file`,
-        filename: `betalfil_${datePart}_${shortId}.xml`,
+        filename: `betalfil_${datePart}_${shortId}.${batch.format === 'bg_lb' ? 'txt' : 'xml'}`,
+        preferServerFilename: true,
         locale,
       })
       if (!result.ok) {
@@ -334,6 +337,9 @@ export default function PaymentFileDialog({
                 {preview.excluded.some((row) => row.reason === 'swedbank_iso2_giro_payee') && (
                   <p className="pt-1">{t('swedbank_iso2_giro_note')}</p>
                 )}
+                {preview.excluded.some((row) => row.reason === 'lb_bank_account_payee') && (
+                  <p className="pt-1">{t('lb_bank_account_note')}</p>
+                )}
               </div>
             )}
 
@@ -363,7 +369,7 @@ export default function PaymentFileDialog({
               {/* The file downloads fine and only fails at the bank if the
                   upload agreement is missing: the precondition, one click
                   away, the same on every file. */}
-              <HelpPopover>{t('pain001_agreement_warning')}</HelpPopover>
+              <HelpPopover>{t(preview.format === 'bg_lb' ? 'lb_file_note' : 'pain001_agreement_warning')}</HelpPopover>
             </div>
           </div>
         )}

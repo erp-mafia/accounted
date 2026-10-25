@@ -51,6 +51,17 @@ describe('readPaymentAccounts', () => {
   })
 })
 
+describe('readPaymentAccounts at a bank the provider does not pay from', () => {
+  it('lists the account as not payable with bank_not_supported, which the dialogs name (crm#1424)', async () => {
+    const svea = { ...rows[0], iban: 'SE4496600000000012345678', bank_connection: { bank_name: 'Svea Bank', bic: 'SVEASESS', affiliated_aspsp_id: null, psu_type: 'business' } }
+    const mock = createTableMockSupabase({ cash_accounts: { data: [svea] } })
+
+    const accounts = await readPaymentAccounts(mock.supabase as unknown as SupabaseClient, COMPANY)
+
+    expect(accounts).toEqual([expect.objectContaining({ bank_name: 'Svea Bank', payable: false, reason: 'bank_not_supported' })])
+  })
+})
+
 describe('loadDebtor', () => {
   it("prepares from the account the list calls payable, with the connection's BIC on the snapshot", async () => {
     const mock = createTableMockSupabase({ cash_accounts: { data: rows[0] } })
@@ -65,6 +76,13 @@ describe('loadDebtor', () => {
     const mock = createTableMockSupabase({ cash_accounts: { data: rows[1] } })
 
     expect(await loadDebtor(mock.supabase as unknown as SupabaseClient, COMPANY, ENABLE_BANKING_ACCOUNT)).toEqual({ ok: false, reason: 'bank_unknown' })
+  })
+
+  it('refuses an account at Svea Bank before any order exists, so no prepare starts', async () => {
+    const svea = { ...rows[0], iban: 'SE4496600000000012345678', bank_connection: { bank_name: 'Svea Bank', bic: 'SVEASESS', affiliated_aspsp_id: null, psu_type: 'business' } }
+    const mock = createTableMockSupabase({ cash_accounts: { data: svea } })
+
+    expect(await loadDebtor(mock.supabase as unknown as SupabaseClient, COMPANY, OPEN_PAYMENTS_ACCOUNT)).toEqual({ ok: false, reason: 'bank_not_supported' })
   })
 
   it('answers not_found for an account the company does not have', async () => {

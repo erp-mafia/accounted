@@ -1,0 +1,1 @@
+[2026-10-25] Svea Bank: the betalfil is Bankgirot's LB file, picked by the paying bank rather than a format choice, bank payments from Svea are refused before signing, and its feed is back on Enable Banking: Svea rejects pain.001, and Open Payments neither pays from nor reads Svea yet.

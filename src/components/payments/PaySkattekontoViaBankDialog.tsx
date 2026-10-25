@@ -231,6 +231,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
 
   const payableAccounts = availability?.accounts.filter((a) => a.payable) ?? []
   const account = payableAccounts.find((a) => a.id === accountId) ?? null
+  const unsupportedBank = availability?.accounts.find((a) => a.reason === 'bank_not_supported' && a.bank_name)?.bank_name ?? null
   // The company's verification, where a payment from this account needs it.
   const readiness = availability && account ? paymentReadinessFor(availability, account) : null
   const verificationLine =
@@ -311,7 +312,7 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
             ) : !availability.available ? (
               <AttnLine>{tb('unavailable')}</AttnLine>
             ) : payableAccounts.length === 0 ? (
-              <AttnLine>{tb('account_none')}</AttnLine>
+              <AttnLine>{unsupportedBank ? tb('account_none_bank_not_supported', { bank: unsupportedBank }) : tb('account_none')}</AttnLine>
             ) : (
               <>
                 {verificationLine}
