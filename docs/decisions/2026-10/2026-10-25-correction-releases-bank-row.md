@@ -1,0 +1,1 @@
+[2026-10-25] A correction whose verifikat no longer books the bank row's leg releases the row to Att bokföra, as a storno does: the anchor guard refuses the move, and a row left on the reversed original could be neither unlinked nor stornoed (crm#1433).
