@@ -1,0 +1,1 @@
+[2026-10-25] The events cleanup cron rolls telemetry up first and runs each step on its own (a failed delivery prune no longer stops the rollup), and delivery events are pruned by prune_delivery_events, which reads only delivery types: the old delete scanned all 180 days of telemetry.
