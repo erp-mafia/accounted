@@ -1,4 +1,5 @@
 import { supportsUnderlagImport, type UnderlagImportProvider } from '@/lib/providers/underlag-import'
+import type { DocumentImportRunStatus } from '@/extensions/general/arcim-migration/lib/document-import-run'
 
 export const ARCIM_DOCUMENT_IMPORT_ENDPOINT =
   '/api/extensions/ext/arcim-migration/import-documents'
@@ -230,7 +231,11 @@ export type ArcimDocumentImportAction =
   | { type: 'discovery-succeeded'; result: ArcimDocumentImportResult }
   | { type: 'discovery-failed'; problem: ArcimDocumentImportProblem }
   | { type: 'dismissed' }
-  | { type: 'import-started' }
+  /**
+   * `resumeFrom`: the running totals of a run that stopped, which the new
+   * attempt continues instead of counting from zero.
+   */
+  | { type: 'import-started'; resumeFrom?: ArcimDocumentImportResult | null }
   | { type: 'import-progress'; result: ArcimDocumentImportResult }
   | { type: 'import-succeeded'; result: ArcimDocumentImportResult }
   | { type: 'import-failed'; problem: ArcimDocumentImportProblem }
@@ -320,7 +325,13 @@ export function arcimDocumentImportReducer(
     case 'import-started':
       // A run counts from zero: drop the dry-run preview and any totals a
       // failed run left behind, so neither is shown as this run's progress.
-      return { ...state, phase: 'importing', result: null, problem: null }
+      // A resumed run continues the totals it stopped at instead.
+      return {
+        ...state,
+        phase: 'importing',
+        result: resumableDocumentImport(action.resumeFrom ?? null),
+        problem: null,
+      }
     case 'import-progress':
       // Running totals after each server slice; the phase stays 'importing'
       // so the UI keeps its spinner and shows "x av y".
@@ -359,11 +370,41 @@ export function documentImportProgress(
   return state.found > 0 ? { done: 0, total: state.found } : null
 }
 
+/**
+ * The totals of a run that stopped part-way, when it can be continued: the
+ * server handed back a cursor past the files it already handled. Null for a
+ * finished run or one that never got a slice back, which start from the top.
+ */
+export function resumableDocumentImport(
+  result: ArcimDocumentImportResult | null,
+): ArcimDocumentImportResult | null {
+  return result && !result.dryRun && result.partial && result.nextCursor ? result : null
+}
+
 export class ArcimDocumentImportRequestError extends Error {
-  constructor(readonly problem: ArcimDocumentImportProblem) {
+  constructor(
+    readonly problem: ArcimDocumentImportProblem,
+    /** The route's HTTP status; null when it answered 200 with an unusable body. */
+    readonly status: number | null = null,
+  ) {
     super(problem.code ?? 'ARCIM_DOCUMENT_IMPORT_FAILED')
     this.name = 'ArcimDocumentImportRequestError'
   }
+}
+
+/**
+ * A slice that failed for a reason a later attempt can outlive: the network
+ * dropped, the server or the database blinked (a 5xx), or a rate limit. A
+ * refusal (4xx: scopes, validation) is an answer, not a blink, and is never
+ * retried. Retrying a slice is safe: the files it already archived are
+ * skipped by hash on the next pass.
+ */
+function isTransientImportFailure(error: unknown): boolean {
+  if (error instanceof ArcimDocumentImportRequestError) {
+    return error.status !== null && (error.status >= 500 || error.status === 429)
+  }
+  // fetch rejects with a TypeError when the request never got an answer.
+  return error instanceof TypeError
 }
 
 function problemFromPayload(payload: unknown): ArcimDocumentImportProblem {
@@ -489,7 +530,7 @@ export async function requestArcimDocumentImport(
   const payload = await response.json().catch(() => null)
 
   if (!response.ok) {
-    throw new ArcimDocumentImportRequestError(problemFromPayload(payload))
+    throw new ArcimDocumentImportRequestError(problemFromPayload(payload), response.status)
   }
 
   const result = (payload as { result?: unknown } | null)?.result
@@ -510,27 +551,57 @@ const MAX_IMPORT_ROUNDS = 500
 export const ARCIM_DOCUMENT_IMPORT_STALLED = 'ARCIM_DOCUMENT_IMPORT_STALLED'
 
 /**
+ * Waits before each new attempt at a slice that failed transiently. A deploy
+ * that reloads the database schema answered every request with a 5xx for a
+ * few seconds and stopped a 3 475-file sweep at 1 897 (crm#1409); a minute of
+ * patience outlives that without hiding a real outage for long.
+ */
+export const DOCUMENT_IMPORT_RETRY_DELAYS_MS: readonly number[] = [2_000, 10_000, 30_000]
+
+const sleep = (ms: number) => new Promise<void>((resolve) => globalThis.setTimeout(resolve, ms))
+
+/**
  * Run the real import to completion: the route works through one time-budgeted
  * slice per call and hands back a cursor, so this loops until the server says
- * it reached the end, reporting running totals after every slice. A thrown
- * request error aborts the loop; the slices already archived stay linked and
- * the next attempt skips them by hash. A server that keeps answering "partial"
- * without advancing (or past the round guard) is reported as a failure, never
- * as a completed import: the retry button resumes safely.
+ * it reached the end, reporting running totals after every slice. A slice that
+ * fails transiently (network, 5xx, 429) is tried again after each of
+ * `retryDelaysMs`; any other request error, or a transient one that outlasts
+ * them, aborts the loop. The slices already archived stay linked, and
+ * `resumeFrom` (the totals the stopped run reported) continues after the last
+ * handled file instead of starting over. A server that keeps answering
+ * "partial" without advancing (or past the round guard) is reported as a
+ * failure, never as a completed import: the retry button resumes safely.
  */
 export async function runArcimDocumentImportToCompletion(
   consentId: string,
   options: {
     fetcher?: typeof fetch
     onProgress?: (accumulated: ArcimDocumentImportResult) => void
+    resumeFrom?: ArcimDocumentImportResult | null
+    retryDelaysMs?: readonly number[]
+    wait?: (ms: number) => Promise<void>
   } = {},
 ): Promise<ArcimDocumentImportResult> {
   const fetcher = options.fetcher ?? fetch
-  let accumulated: ArcimDocumentImportResult | null = null
-  let cursor: string | undefined
+  const retryDelaysMs = options.retryDelaysMs ?? DOCUMENT_IMPORT_RETRY_DELAYS_MS
+  const wait = options.wait ?? sleep
+  const resumeFrom = resumableDocumentImport(options.resumeFrom ?? null)
+  let accumulated: ArcimDocumentImportResult | null = resumeFrom
+  let cursor: string | undefined = resumeFrom?.nextCursor ?? undefined
+
+  const requestSlice = async (): Promise<ArcimDocumentImportResult> => {
+    for (let attempt = 0; ; attempt++) {
+      try {
+        return await requestArcimDocumentImport(consentId, false, fetcher, cursor)
+      } catch (error) {
+        if (attempt >= retryDelaysMs.length || !isTransientImportFailure(error)) throw error
+        await wait(retryDelaysMs[attempt])
+      }
+    }
+  }
 
   for (let round = 0; round < MAX_IMPORT_ROUNDS; round++) {
-    const slice = await requestArcimDocumentImport(consentId, false, fetcher, cursor)
+    const slice = await requestSlice()
     accumulated = mergeArcimDocumentImportResults(accumulated, slice)
     if (!slice.partial) {
       return { ...accumulated, partial: false, nextCursor: null }
@@ -547,4 +618,46 @@ export async function runArcimDocumentImportToCompletion(
     requestId: null,
     reconnectRequired: false,
   })
+}
+
+/**
+ * What the connections list says about the latest underlag run, from the
+ * summary the server keeps (crm#1410): the outcome of a finished run, or how
+ * far an unfinished one got and whether it is still moving. Null when no run
+ * was recorded.
+ */
+export type DocumentImportRunNote =
+  | {
+      kind: 'complete'
+      date: string
+      /** On their verifikat: linked by this run or already there. */
+      present: number
+      total: number
+      unmatched: number
+      locked: number
+      lockedYears: string
+      failed: number
+      /** Fortnox held back the files on supplier invoices. */
+      unreachable: boolean
+    }
+  | { kind: 'running' | 'stopped'; date: string; scanned: number; total: number }
+
+export function documentImportRunNote(
+  run: DocumentImportRunStatus | null | undefined,
+): DocumentImportRunNote | null {
+  if (!run) return null
+  if (!run.complete) {
+    return { kind: run.stalled ? 'stopped' : 'running', date: run.updatedAt, scanned: run.scanned, total: run.total }
+  }
+  return {
+    kind: 'complete',
+    date: run.updatedAt,
+    present: run.linked + run.skipped,
+    total: run.total,
+    unmatched: run.unmatched,
+    locked: run.locked,
+    lockedYears: run.lockedPeriods.join(', '),
+    failed: run.failed,
+    unreachable: run.unreachableSources.length > 0,
+  }
 }

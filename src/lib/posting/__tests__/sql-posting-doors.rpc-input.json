@@ -149,7 +149,8 @@
           "paymentAmount": 100,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },
@@ -179,7 +180,8 @@
           "paymentAmount": 1000,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },
@@ -720,7 +722,8 @@
           "paymentAmount": 100,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },
@@ -750,7 +753,8 @@
           "paymentAmount": 1000,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },
@@ -1305,7 +1309,8 @@
           "paymentAmount": 100,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },
@@ -1335,7 +1340,8 @@
           "paymentAmount": 1000,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },
@@ -1876,7 +1882,8 @@
           "paymentAmount": 100,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },
@@ -1906,7 +1913,8 @@
           "paymentAmount": 1000,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },
@@ -2376,7 +2384,8 @@
           "paymentAmount": 1000,
           "journalEntryId": "00000000-0000-4000-8000-000000009001",
           "reconciledTransactionId": null,
-          "saleJournalEntryId": null
+          "saleJournalEntryId": null,
+          "voucherRemaining": null
         }
       }
     },

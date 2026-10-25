@@ -707,7 +707,7 @@ describe('link_invoice_to_voucher records the link basis', () => {
 
   it('keeps its signature, SECURITY DEFINER, search_path, grants and comment', async () => {
     await expectFunctionUnchanged('link_invoice_to_voucher', {
-      sig: 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,text,text,uuid[],text)',
+      sig: 'link_invoice_to_voucher(uuid,uuid,uuid,uuid,text,numeric,text,text,uuid[],text)',
       definer: true,
       config: ['search_path=public'],
       grantees: ['authenticated', 'postgres', 'service_role'],

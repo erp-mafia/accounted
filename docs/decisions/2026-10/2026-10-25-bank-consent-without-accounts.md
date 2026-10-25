@@ -1,0 +1,1 @@
+[2026-10-25] A bank consent that is signed but lists no account shows an honest empty state in the accounts step instead of a picker with nothing to pick (crm#1445); the bank is not taken off the Open Payments list and no Enable Banking route is offered, because the cause is unconfirmed upstream and Enable Banking ends in November.

@@ -1,0 +1,1 @@
+[2026-10-25] Imported multi-letter verifikationsserier (e.g. Fortnox AM, KL) stay history-only and new verifikat keep a single letter A-Z, with the settings row now saying so: opening them to new verifikat touches the API schemas, four CHECK constraints, every series picker and the MCP schemas, a product change filed as a follow-up rather than a support fix (crm#1438).

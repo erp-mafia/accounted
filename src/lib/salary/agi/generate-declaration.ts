@@ -29,6 +29,7 @@ import {
   buildIndividuppgifterSnapshot,
   AGIIncompleteDataError,
   AGIPayloadTooLargeError,
+  findMissingCompanyData,
 } from './xml-generator'
 import type { AGIEmployeeData, AGICompanyData, AGITotals, AGIUnderlag } from './xml-generator'
 import { agiReportingPeriod, formatAgiPeriodDashed } from './reporting-period'
@@ -244,6 +245,74 @@ function storedDeclarationMatches(
   )
 }
 
+/** The employer identity and kontaktperson an AGI files with, before its period is known. */
+type AgiCompanyIdentity = Omit<AGICompanyData, 'periodYear' | 'periodMonth'>
+
+/**
+ * Reads the employer identity and kontaktperson the AGI files with: one
+ * reader for generation and for the staging pre-check, so the check can
+ * neither pass a company generation refuses nor refuse one it accepts
+ * (crm#1435). Null when the company row is missing.
+ */
+async function readAgiCompanyIdentity(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  userEmail: string | null,
+): Promise<AgiCompanyIdentity | null> {
+  const { data: company } = await supabase
+    .from('companies')
+    .select('name, org_number')
+    .eq('id', companyId)
+    .single()
+
+  if (!company) return null
+
+  const { data: settings } = await supabase
+    .from('company_settings')
+    .select('company_name, org_number, phone, email, tax_contact_name, tax_contact_phone, tax_contact_email')
+    .eq('company_id', companyId)
+    .single()
+
+  const { data: profile } = await supabase
+    .from('profiles')
+    .select('full_name, email')
+    .eq('id', userId)
+    .single()
+
+  // Employer name on the arbetsgivardeklaration follows the current company
+  // name (company_settings.company_name), not the frozen onboarding companies.name.
+  const companyName = settings?.company_name || company.name
+  return {
+    orgNumber: (settings?.org_number || company.org_number || '').trim(),
+    companyName,
+    // The AGI kontaktperson is the company's tax contact when one is set
+    // (company_settings.tax_contact_*, the same contact the periodisk
+    // sammanställning files with); each field falls back on its own to the
+    // company contact details and then the signed-in user.
+    contactName: (settings?.tax_contact_name?.trim() || profile?.full_name || companyName || '').trim(),
+    contactPhone: (settings?.tax_contact_phone?.trim() || settings?.phone || '').trim(),
+    contactEmail: (settings?.tax_contact_email?.trim() || settings?.email || profile?.email || userEmail || '').trim(),
+  }
+}
+
+/**
+ * The staging pre-check: the AGI_INCOMPLETE_DATA refusal generation would
+ * answer for missing company data, read and judged exactly as generation
+ * does, so an agent learns what to fill in before anyone approves a
+ * generation that cannot succeed (crm#1435). Null when nothing is missing,
+ * or when the company row is missing (generation answers that itself).
+ */
+export async function findAgiCompanyDataGap(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  userEmail: string | null,
+): Promise<AGIIncompleteDataError | null> {
+  const identity = await readAgiCompanyIdentity(supabase, companyId, userId, userEmail)
+  return identity ? findMissingCompanyData(identity) : null
+}
+
 export async function generateAgiDeclaration(
   args: GenerateAgiDeclarationArgs,
 ): Promise<GenerateAgiDeclarationResult> {
@@ -274,27 +343,10 @@ export async function generateAgiDeclaration(
   const agiPeriod = agiReportingPeriod(run)
 
   // 2. Company + settings + profile (for contact info).
-  const { data: company } = await supabase
-    .from('companies')
-    .select('name, org_number')
-    .eq('id', companyId)
-    .single()
-
-  if (!company) {
+  const identity = await readAgiCompanyIdentity(supabase, companyId, userId, userEmail)
+  if (!identity) {
     return { ok: false, code: 'COMPANY_NOT_FOUND' }
   }
-
-  const { data: settings } = await supabase
-    .from('company_settings')
-    .select('company_name, org_number, phone, email, tax_contact_name, tax_contact_phone, tax_contact_email')
-    .eq('company_id', companyId)
-    .single()
-
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('full_name, email')
-    .eq('id', userId)
-    .single()
 
   // 3. Roster + line items + per-day absence.
   const { data: runEmployees } = await supabase
@@ -312,21 +364,10 @@ export async function generateAgiDeclaration(
   }
 
   // 4. Build AGI input shapes.
-  // Employer name on the arbetsgivardeklaration follows the current company
-  // name (company_settings.company_name), not the frozen onboarding companies.name.
-  const companyName = settings?.company_name || company.name
   const companyData: AGICompanyData = {
-    orgNumber: (settings?.org_number || company.org_number || '').trim(),
-    companyName,
+    ...identity,
     periodYear: agiPeriod.periodYear,
     periodMonth: agiPeriod.periodMonth,
-    // The AGI kontaktperson is the company's tax contact when one is set
-    // (company_settings.tax_contact_*, the same contact the periodisk
-    // sammanställning files with); each field falls back on its own to the
-    // company contact details and then the signed-in user.
-    contactName: (settings?.tax_contact_name?.trim() || profile?.full_name || companyName || '').trim(),
-    contactPhone: (settings?.tax_contact_phone?.trim() || settings?.phone || '').trim(),
-    contactEmail: (settings?.tax_contact_email?.trim() || settings?.email || profile?.email || userEmail || '').trim(),
   }
 
   // Load per-day absence (VAB + parental only: sick days go to FK separately).

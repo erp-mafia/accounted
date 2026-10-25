@@ -4867,6 +4867,15 @@ const OPENING_BALANCE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'Granskningen har ändrats sedan du öppnade den. Ladda om sidan och försök igen.',
     message_en: 'The review changed after you opened it. Reload the page and try again.',
   },
+  // PH 193: the year before was imported again after the undo that raised the
+  // review, so the year already opens on that year's utgående balanser.
+  OB_PREVIOUS_YEAR_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Föregående räkenskapsår är inläst igen, så årets ingående balanser följer dess utgående balanser och ska inte bokföras en gång till från filen. Stäm av dem och bekräfta granskningen. Ska året i stället öppna med filens balanser, ångra först importen av föregående år under Importera/Exportera > Importhistorik.',
+    message_en:
+      "The previous fiscal year has been imported again, so this year's opening balances follow its closing balances and must not be booked a second time from the file. Reconcile them and confirm the review. If the year should open on the file's balances instead, first undo the previous year's import under Import/Export > Import history.",
+  },
   // "Dela upp IB per projekt" (#3313): lib/import/opening-balance/split-per-project.ts.
   // The split runs as an inline rättelse of the IB verifikat, which BFL 5 kap
   // 5 § only allows in an open, unlocked year: these say what to open first.
@@ -7492,12 +7501,41 @@ const LINK_INVOICE_VOUCHER: Record<string, StructuredErrorEntry> = {
     message_sv: 'Verifikationen är redan länkad till den här fakturan.',
     message_en: 'This journal entry is already linked to this invoice.',
   },
+  // Two shapes, told apart by details: without a stated share the voucher has
+  // more left than the invoice needs (details.ar_credit); with one, the share
+  // itself is more than the invoice has left (details.amount). A correct
+  // verifikat is never split with a storno or a rättelse for this: the share
+  // is stated on the link (crm#1434, migration 20261026007000).
   LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING: {
     httpStatus: 400,
     message_sv:
-      'Verifikationens kundfordringskreditering är större än fakturans återstående belopp. Verifikationen täcker fler fakturor: välj en annan verifikation eller rätta beloppet först.',
+      'Beloppet är större än fakturans återstående belopp. Täcker verifikationen flera fakturor: länka bara den här fakturans del, högst det återstående beloppet. Resten av verifikationen ligger kvar.',
     message_en:
-      'The voucher\'s AR credit exceeds the invoice\'s remaining balance. Split the voucher across multiple invoices via gnubok_correct_entry first, or pick a different voucher.',
+      'More than the invoice has left (details.remaining). Without amount, details.ar_credit is what the voucher has left (its 151x credit, or 19xx debit on kontantmetoden). If the voucher settles several invoices, call again with amount = this invoice\'s share, at most details.remaining: the rest stays on the voucher for its other invoices. Do not storno or correct a correct voucher to split it.',
+    remediation: {
+      description:
+        'When the voucher settles several invoices, link again with amount set to this invoice\'s share (at most details.remaining).',
+      tool: 'gnubok_link_invoice_to_voucher',
+    },
+  },
+  LINK_VOUCHER_FULLY_ALLOCATED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationens belopp är redan kopplat till andra fakturor och har inget kvar. Välj en annan verifikation.',
+    message_en:
+      'The voucher\'s settlement amount (the 151x credit, or the 19xx debit on kontantmetoden) is already used by payment rows for other invoices; nothing is left to settle this one. Pick a different voucher.',
+  },
+  LINK_VOUCHER_AMOUNT_EXCEEDS_VOUCHER: {
+    httpStatus: 400,
+    message_sv:
+      'Beloppet är större än vad verifikationen har kvar. Andra fakturor är redan kopplade till den. Ange ett lägre belopp eller välj en annan verifikation.',
+    message_en:
+      'amount is more than the voucher has left (details.available): details.already_linked of its settlement side (details.ar_credit, or details.bank_debit on kontantmetoden) is used by payment rows for other invoices. Lower amount to at most details.available, or pick a different voucher.',
+  },
+  LINK_VOUCHER_AMOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Beloppet måste vara större än noll.',
+    message_en: 'amount must be a positive amount in the invoice\'s currency, at least 0.01.',
   },
   LINK_VOUCHER_CURRENCY_MISMATCH: {
     httpStatus: 400,
@@ -8193,12 +8231,12 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
   SKATTEVERKET_NOT_CONNECTED: {
     httpStatus: 401,
     message_sv:
-      'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning gäller bara ca 1 timme. Be användaren ansluta (igen) med BankID under Inställningar → Skatteverket.',
+      'Anslutningen till Skatteverket saknas eller har gått ut. Om företaget varit anslutet tidigare är detta normalt: Skatteverkets personliga inloggning räcker i ungefär tio timmar. Be användaren ansluta (igen) med BankID under Inställningar → Skatteverket.',
     message_en:
-      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last only about 1 hour. Tell the user to connect (or reconnect) with BankID under Inställningar → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
+      'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last about ten hours. Tell the user to connect (or reconnect) with BankID under Inställningar → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
     remediation: {
       description:
-        'A person must connect (or reconnect) to Skatteverket with BankID under Inställningar → Skatteverket. Personal Skatteverket sessions expire after about 1 hour by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
+        'A person must connect (or reconnect) to Skatteverket with BankID under Inställningar → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
     },
   },
   // A live connection whose skattekonto has not been fetched yet, so the

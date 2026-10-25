@@ -95,18 +95,28 @@ function assertIsoDate(today: string): void {
 }
 
 /**
- * Narrows an `invoices` query to the overdue ones, the same rows
- * isInvoiceOverdue accepts: the Förfallna view, the Att göra count and the
- * agent's status=overdue filter all read this.
+ * Narrows an `invoices` query to the ones a customer still owes money on,
+ * whatever the due date: a real faktura in an owed status with an open
+ * remainder. A credit note is never owed: it carries credited_invoice_id and
+ * nothing remaining, even while its status says 'sent' (crm#1435).
  */
-export function filterOverdueInvoices<Q extends FilterableQuery>(query: Q, today: string = todayIsoStockholm()): Q {
-  assertIsoDate(today)
+export function filterOwedInvoices<Q extends FilterableQuery>(query: Q): Q {
   return (query as unknown as InvoiceFilterQuery)
     .in('status', OWED_INVOICE_STATUSES)
     .eq('document_type', 'invoice')
     .is('credited_invoice_id', null)
-    .lt('due_date', today)
     .gt('remaining_amount', 0) as unknown as Q
+}
+
+/**
+ * Narrows an `invoices` query to the overdue ones, the same rows
+ * isInvoiceOverdue accepts: the owed ones past their due date. The Förfallna
+ * view, the Att göra count, the Viktiga datum note and the agent's
+ * status=overdue filter all read this.
+ */
+export function filterOverdueInvoices<Q extends FilterableQuery>(query: Q, today: string = todayIsoStockholm()): Q {
+  assertIsoDate(today)
+  return (filterOwedInvoices(query) as unknown as InvoiceFilterQuery).lt('due_date', today) as unknown as Q
 }
 
 /**

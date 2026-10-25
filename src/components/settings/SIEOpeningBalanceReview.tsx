@@ -14,17 +14,21 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 
 interface FileOpeningBalance {
-  filename: string
+  filename: string | null
   lines: { account_number: string; debit_amount: number; credit_amount: number }[]
   total_debit: number
   total_credit: number
+  /** The year before holds bokföring again: the IB follows it (PH 193). */
+  previous_year_booked?: boolean
 }
 
 /**
  * A review acknowledgment changes metadata only; corrections use the entry UI.
  * A year without an IB verifikat had its IB derived from the preceding year,
  * whose import was undone (crm#1099): the dialog previews the IB the year's
- * own SIE file stated and can book it.
+ * own SIE file stated and can book it, unless the year before has been
+ * imported again since (PH 193): then the year opens on its utgående
+ * balanser and only the acknowledgment remains.
  */
 export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalPeriod; canManage: boolean }) {
   const t = useTranslations('settings_bookkeeping')
@@ -37,8 +41,11 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
   // undefined while loading; null when no import stored an IB for the year.
   const [file, setFile] = useState<FileOpeningBalance | null | undefined>(undefined)
   if (!period.opening_balance_review_token) return null
-  const derived = !period.opening_balance_entry_id
-  const balanced = !!file && file.total_debit === file.total_credit
+  // Known once the file preview has loaded; until then the year counts as
+  // derived and the skeleton shows.
+  const previousYearBooked = file?.previous_year_booked === true
+  const derived = !period.opening_balance_entry_id && !previousYearBooked
+  const balanced = !!file && file.lines.length > 0 && file.total_debit === file.total_credit
   const canBook = derived && canManage && balanced
   const busy = saving || booking
 
@@ -55,7 +62,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
   function openDialog() {
     setError(null)
     setOpen(true)
-    if (derived) {
+    if (!period.opening_balance_entry_id) {
       setFile(undefined)
       void loadFile()
     }
@@ -106,7 +113,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
       <DialogContent>
         <DialogHeader>
           <DialogTitle>{t('ib_review_title', { name: period.name })}</DialogTitle>
-          <DialogDescription>{derived ? t('ib_review_description_derived') : t('ib_review_description')}</DialogDescription>
+          <DialogDescription>{previousYearBooked ? t('ib_review_description_previous_booked') : derived ? t('ib_review_description_derived') : t('ib_review_description')}</DialogDescription>
         </DialogHeader>
         {derived && file === undefined && <div className="space-y-2" aria-hidden>
           <Skeleton className="h-4 w-2/3" />
@@ -114,7 +121,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
           <Skeleton className="h-4 w-full" />
         </div>}
         {derived && file && <div className="space-y-3">
-          <p className="text-sm text-muted-foreground">{t('ib_review_file_intro', { filename: file.filename })}</p>
+          <p className="text-sm text-muted-foreground">{t('ib_review_file_intro', { filename: file.filename ?? '' })}</p>
           <div className="max-h-64 overflow-y-auto rounded-lg border border-border">
             <Table>
               <TableHeader>
@@ -154,7 +161,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
             <Link href={`/import?mode=sie&job=${period.opening_balance_review_import_id}`} target="_blank" rel="noopener noreferrer">{t('ib_review_import')}</Link>
           </Button>
         </div>
-        <p className="text-sm text-muted-foreground">{derived ? t('ib_review_confirm_help_derived') : t('ib_review_confirm_help')}</p>
+        <p className="text-sm text-muted-foreground">{derived || previousYearBooked ? t('ib_review_confirm_help_derived') : t('ib_review_confirm_help')}</p>
         {error && <p role="alert" className="text-sm text-destructive">{error}</p>}
         <DialogFooter>
           <Button variant="outline" disabled={busy} onClick={() => setOpen(false)}>{t('fy_confirm_cancel')}</Button>

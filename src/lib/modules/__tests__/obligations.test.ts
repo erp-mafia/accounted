@@ -203,6 +203,32 @@ describe('probePackageObligations', () => {
     expect(await probe([{ id: 'r1', status: 'cancelled', settlement_journal_entry_id: null }])).toEqual([])
   })
 
+  it('keeps Kundfakturor open for an owed invoice, never for a sent credit note with nothing remaining (crm#1435)', async () => {
+    type Row = { id: string; status: string; document_type: string; credited_invoice_id: string | null; remaining_amount: number }
+    // The table answers like Postgres would: only the rows the probe's own filters keep.
+    const invoices = (rows: Row[]): TableMockResolver => (chain) => ({
+      data: rows.filter((r) => {
+        const statuses = arg(chain, 'in', 'status') as string[] | undefined
+        const docType = arg(chain, 'eq', 'document_type')
+        const noCredit = chain.some((c) => c.method === 'is' && c.args[0] === 'credited_invoice_id' && c.args[1] === null)
+        const minRemaining = arg(chain, 'gt', 'remaining_amount') as number | undefined
+        return (
+          (!statuses || statuses.includes(r.status)) &&
+          (docType === undefined || r.document_type === docType) &&
+          (!noCredit || r.credited_invoice_id === null) &&
+          (minRemaining === undefined || r.remaining_amount > minRemaining)
+        )
+      }),
+    })
+    const probe = (rows: Row[]) =>
+      probePackageObligations(supabaseWith({ invoices: invoices(rows) }).supabase, COMPANY_ID, 'customer-invoices', { today: TODAY })
+
+    const creditNote: Row = { id: 'kr', status: 'sent', document_type: 'invoice', credited_invoice_id: 'inv-7', remaining_amount: 0 }
+    const partlyPaid: Row = { id: 'f1', status: 'partially_paid', document_type: 'invoice', credited_invoice_id: null, remaining_amount: 400 }
+    expect(await probe([creditNote])).toEqual([])
+    expect(await probe([creditNote, partlyPaid])).toEqual(['unpaid_customer_invoices'])
+  })
+
   it('counts an obligation whose read fails as open', async () => {
     const { supabase } = supabaseWith({ expense_claims: { data: null, error: { message: 'down' } } })
     expect(await probePackageObligations(supabase, COMPANY_ID, 'expenses', { today: TODAY })).toEqual([

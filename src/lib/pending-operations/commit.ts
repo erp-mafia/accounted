@@ -3800,6 +3800,13 @@ async function commitLinkInvoiceVoucher(
   if (!invoiceId || !journalEntryId) {
     return { error: 'invoice_id and journal_entry_id are required', status: 400 }
   }
+  // The staged share of the verifikat. A value that is not a number is refused
+  // here: read as "no share stated" it would settle another amount than the
+  // one the approver was shown.
+  if (params.amount != null && typeof params.amount !== 'number') {
+    return { error: 'amount must be a number', status: 400 }
+  }
+  const amount = (params.amount as number | null | undefined) ?? undefined
 
   // Only a faktura carries a receivable to settle (parity with the dashboard
   // link route and the match executors); the RPC validates status only.
@@ -3823,6 +3830,7 @@ async function commitLinkInvoiceVoucher(
     invoiceId,
     journalEntryId,
     notes,
+    amount,
   })
 
   return voucherLinkOutcomeToResult(outcome)

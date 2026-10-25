@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import sv from '@/messages/sv.json'
+import en from '@/messages/en.json'
 import { createTableMockSupabase } from '@/tests/helpers'
 
 const findCompanyTokenUser = vi.fn()
@@ -25,6 +26,21 @@ describe('SKV_NEEDS_RECONSENT_MESSAGE', () => {
     expect(SKV_NEEDS_RECONSENT_MESSAGE).toContain(
       `${nav.settings} → ${settingsNav.connections} → ${settingsNav.skatteverket}`,
     )
+  })
+
+  it('states the real session length: about ten hours per BankID login, not one hour (crm#1442)', () => {
+    // Prod data: the hourly cron keeps a consent alive until Skatteverket
+    // refuses refreshes ~10 h after the BankID login (median 10.5 h). The old
+    // "ca 1 timme" made a user who reconnects every morning think something
+    // was broken on his side. The settings panel says the same thing.
+    const connect = sv.settings_skatteverket_connect as Record<string, string>
+    const connectEn = en.settings_skatteverket_connect as Record<string, string>
+    for (const text of [SKV_NEEDS_RECONSENT_MESSAGE, connect.session_lifetime_note]) {
+      expect(text).toContain('tio timmar')
+      expect(text).not.toMatch(/1 timme|en timme/)
+    }
+    expect(connectEn.session_lifetime_note).toContain('ten hours')
+    expect(connectEn.session_lifetime_note).not.toMatch(/one hour|1 hour/)
   })
 })
 

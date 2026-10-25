@@ -2989,10 +2989,15 @@ export const DashboardMatchInvoiceSchema = matchInvoiceFields
  * Link an existing posted verifikat as payment for an invoice. No new
  * journal entry is created: only an invoice_payments row pointing at the
  * supplied journal_entry_id, plus the invoice's paid/remaining are advanced.
+ *
+ * `amount` is the share of the verifikat that is this invoice's, in the
+ * invoice's currency, for a verifikat that settles several invoices. Omitted,
+ * what the verifikat has left must fit inside the invoice's remainder.
  */
 export const LinkInvoiceToVoucherSchema = z.object({
   journal_entry_id: uuid,
   notes: z.string().max(2000).optional(),
+  amount: z.number().finite().positive().optional(),
 })
 
 /**

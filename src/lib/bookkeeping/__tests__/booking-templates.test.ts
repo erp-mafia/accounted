@@ -22,6 +22,7 @@ import { ACCOUNT_RUTA } from '@/lib/reports/vat-declaration'
 import { resolveVatTreatmentRuta } from '@/lib/vat/account-vat-treatment'
 import { isEuMemberCountry } from '@/lib/vat/eu-countries'
 import { DIRECTORY_SEED } from '@/lib/parties/resolver/directory-seed'
+import { matchSeedText } from '@/lib/parties/resolver/directory'
 
 // ============================================================
 // Template Data Integrity
@@ -1132,9 +1133,46 @@ describe('reverse-charge software lands in the box of the supplier location', ()
     }
   })
 
+  // GitHub, Inc. bills from the US; Microsoft's Copilot is billed from Ireland
+  // (counterpart directory). The word 'copilot' alone names both (crm#1431).
+  it.each(['GitHub Copilot', 'GITHUB, INC.', 'GITHUB  INC', 'PAYPAL *GITHUB INC'])(
+    'proposes the non-EU template for GitHub, billed from the US: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_non_eu')
+      expect(topFor(text, 5734)?.id).toBe('it_saas_non_eu')
+    },
+  )
+
+  it.each(['Microsoft Copilot', 'Microsoft 365 Copilot', 'M365 Copilot', 'COPILOT'])(
+    'proposes the EU template for Microsoft Copilot, billed from Ireland: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_eu')
+      expect(topFor(text, 5734)?.id).toBe('it_saas_eu')
+    },
+  )
+
+  it('books GitHub Copilot with the basis on 4531 (ruta 22), never 4535 (ruta 21)', () => {
+    expect(linesFor(topFor('GitHub Copilot')!)).toEqual([
+      { account: '2645', debit: 250, credit: 0, box: 'ruta48' },
+      { account: '2614', debit: 0, credit: 250, box: 'ruta30' },
+      { account: '4531', debit: 1000, credit: 0, box: 'ruta22' },
+      { account: '4598', debit: 0, credit: 1000, box: undefined },
+    ])
+  })
+
+  it('books Microsoft Copilot with the basis on 4535 (ruta 21)', () => {
+    expect(linesFor(topFor('Microsoft 365 Copilot')!)).toEqual([
+      { account: '2645', debit: 250, credit: 0, box: 'ruta48' },
+      { account: '2614', debit: 0, credit: 250, box: 'ruta30' },
+      { account: '4535', debit: 1000, credit: 0, box: 'ruta21' },
+      { account: '4598', debit: 0, credit: 1000, box: undefined },
+    ])
+  })
+
   it('lists on the non-EU template only vendors the counterpart directory places outside the EU', () => {
     for (const keyword of getTemplateById('it_saas_non_eu')!.keywords) {
-      const country = DIRECTORY_SEED.find((e) => e.patterns.includes(keyword))?.country
+      // The directory entry the keyword resolves to: 'github copilot' is GitHub.
+      const country = matchSeedText(keyword)?.country
       expect(country, keyword).toBeDefined()
       expect(isEuMemberCountry(country!), keyword).toBe(false)
     }

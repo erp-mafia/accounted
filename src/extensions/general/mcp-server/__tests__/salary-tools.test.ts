@@ -18,8 +18,11 @@ vi.mock('@/lib/salary/run-calculation', () => ({
 }))
 
 const mockGenerateAgi = vi.fn()
+// The staging pre-check (crm#1435): undefined, so nothing is missing.
+const mockFindAgiCompanyDataGap = vi.fn()
 vi.mock('@/lib/salary/agi/generate-declaration', () => ({
   generateAgiDeclaration: (...a: unknown[]) => mockGenerateAgi(...a),
+  findAgiCompanyDataGap: (...a: unknown[]) => mockFindAgiCompanyDataGap(...a),
 }))
 
 const mockCreateRun = vi.fn()
@@ -123,6 +126,7 @@ describe('gnubok_generate_agi', () => {
     expect(result.staged).toBe(true)
     expect(result.risk_level).toBe('high')
     expect(mockGenerateAgi).not.toHaveBeenCalled()
+    expect(mockFindAgiCompanyDataGap).toHaveBeenCalledWith(supabase, 'company-1', 'user-1', null)
   })
 
   it('previews the payout month the generator declares, not the earned month (agent feedback seq 948847)', async () => {

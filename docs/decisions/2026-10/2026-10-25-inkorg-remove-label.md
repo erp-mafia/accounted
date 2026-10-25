@@ -1,0 +1,1 @@
+[2026-10-25] The Inkorg removal answer (not_underlag) reads "Ta bort ur Inkorgen" instead of "Inte ett underlag", the words of its own confirm dialog, rather than adding a second delete control to the row or the focus view: the action was already offered in every first decision, only its name hid it (PH 203, crm#1446).

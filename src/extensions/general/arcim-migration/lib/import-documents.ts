@@ -31,7 +31,10 @@
  *    verifikat's date; a mismatch is reported as unmatched.
  *  - A receipt whose verifikat sits in a klarmarkerat or locked fiscal year
  *    is reported as locked, without a download: the period-lock trigger
- *    would refuse the link, so it is not a failure a retry could fix.
+ *    would refuse the link, so it is not a failure a retry could fix. The
+ *    exception is a verifikat an earlier run already put files on (the year
+ *    was locked after it): there the content tells a file that is already
+ *    on it (skipped) from one still missing (locked).
  *  - Best-effort: a per-receipt failure is counted and logged, never thrown,
  *    so one bad download can't abort the sweep.
  *
@@ -582,11 +585,14 @@ export async function importProviderDocuments(
   // upload_source 'api' with the verifikat-keyed id, and a re-run must still
   // reach the rest of a verifikat that has several provider files.
   const verifikatWithOtherUnderlag = new Set<string>()
+  // Verifikat this import's earlier runs already put files on.
+  const verifikatWithOwnUnderlag = new Set<string>()
   for (const row of existingAttachments) {
     if (!row.journal_entry_id || verifikatWithOtherUnderlag.has(row.journal_entry_id)) continue
     const archivedByThisImport =
       row.upload_source === 'api' && (await isArchivedForOwnJournalEntry(companyId, row))
-    if (!archivedByThisImport) verifikatWithOtherUnderlag.add(row.journal_entry_id)
+    if (archivedByThisImport) verifikatWithOwnUnderlag.add(row.journal_entry_id)
+    else verifikatWithOtherUnderlag.add(row.journal_entry_id)
   }
 
   // (content, verifikat) pairs already archived → idempotent skip set. Keyed
@@ -648,6 +654,33 @@ export async function importProviderDocuments(
       providerStatus: error instanceof FortnoxApiError ? error.statusCode : undefined,
       providerMessage: fortnoxErrorMessage(error),
     })
+  }
+
+  /**
+   * Whether this file already sits on its verifikat in a locked year, by its
+   * content (the same dedup a re-run does in an open year). A failed download
+   * answers no: the year refuses the link either way, so the file stays
+   * reported as locked.
+   */
+  const isArchivedOnLockedVerifikat = async (
+    attachment: ProviderAttachment,
+    journalEntryId: string,
+  ): Promise<boolean> => {
+    try {
+      const { bytes } = await withUnauthorizedRefresh(() =>
+        source().download(attachment.fileId ?? attachment.id),
+      )
+      const archivedId = seenAttachments.get(attachmentKey(await computeSHA256(bytes), journalEntryId))
+      if (!archivedId) return false
+      await recordUpload(attachment.id, archivedId)
+      return true
+    } catch (error) {
+      log.warn('could not check a file on a locked verifikat', {
+        uploadId: attachment.id,
+        reason: error instanceof Error ? error.message : 'unknown',
+      })
+      return false
+    }
   }
 
   // The listing above is paid again by every slice; it must not eat the
@@ -726,6 +759,19 @@ export async function importProviderDocuments(
     // and reported them as retryable failures (crm#251).
     const periodId = periodIdByEntry.get(journalEntryId)
     if (periodId && isPeriodLocked(periodById.get(periodId))) {
+      // A year locked after an earlier run reached it: the files that run
+      // put there are on their verifikat, and a re-run counted every one of
+      // them as locked, so a byrå read 154 missing where 5 were (crm#1410).
+      // Only such verifikat cost a download, to tell an archived file from a
+      // missing one by its hash; the dry run, which downloads nothing, takes
+      // them as already there.
+      if (verifikatWithOwnUnderlag.has(journalEntryId)) {
+        const alreadyArchived = dryRun || (await isArchivedOnLockedVerifikat(attachment, journalEntryId))
+        if (alreadyArchived) {
+          result.skipped++
+          continue
+        }
+      }
       result.locked++
       lockedPeriodIds.add(periodId)
       continue

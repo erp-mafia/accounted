@@ -444,6 +444,48 @@ describe('listAccountItems', () => {
     expect(res?.items[1]).toMatchObject({ bucket: 'matched', linked_journal_entry_id: 'e-6' })
   })
 
+  it('offers Ignorera on a hand-made row booked without the bank, and nothing new on a normal booking (PH 214)', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: ACCOUNT })
+    enqueue(
+      read({
+        matched_count: 3,
+        matched_rows: [
+          // A sale typed in as a transaction, booked on the clearing account (1580).
+          tx({ id: 't-sale', date: '2026-08-12', description: 'Försäljning', amount: 3797.5, journal_entry_id: 'e-sale' }),
+          // A normal booking from the row: debit 1930.
+          tx({ id: 't-rent', date: '2026-08-10', description: 'Hyra', amount: -8000, journal_entry_id: 'e-rent' }),
+          // A link (not a booking) keeps its Koppla bort and is not read.
+          tx({ id: 't-link', date: '2026-08-05', description: 'Lön', amount: -31200, journal_entry_id: 'e-1', reconciliation_method: 'manual' }),
+        ],
+      }),
+    )
+    enqueue({ data: [] }) // settlements
+    enqueue({ data: [] }) // labels
+    // The rows booked from themselves, with where they came from.
+    enqueue({
+      data: [
+        { id: 't-sale', journal_entry_id: 'e-sale', cash_account_id: null, currency: 'SEK', amount: 3797.5, bank_connection_id: null, import_source: null, invoice_id: null, supplier_invoice_id: null },
+        { id: 't-rent', journal_entry_id: 'e-rent', cash_account_id: CASH, currency: 'SEK', amount: -8000, bank_connection_id: null, import_source: null, invoice_id: null, supplier_invoice_id: null },
+      ],
+    })
+    enqueue({ data: [{ ledger_account: '1930' }] }) // settlement of the unbound row
+    enqueue({ data: { ledger_account: '1930', currency: 'SEK' } }) // settlement of the bound row
+    enqueue({ data: [{ id: 'e-sale', status: 'posted' }, { id: 'e-rent', status: 'posted' }] })
+    enqueue({ data: [{ journal_entry_id: 'e-rent', account_number: '1930', debit_amount: 0, credit_amount: 8000 }] })
+    enqueue({ data: [] }) // voucher links
+    enqueue({ data: [] }) // invoice payments
+    enqueue({ data: [] }) // supplier payments
+
+    const res = await listAccountItems(supabase as never, COMPANY, `bank:${CASH}`, { bucket: 'matched' })
+    const byId = Object.fromEntries((res?.items ?? []).map((i) => [i.item_id, i]))
+
+    expect(byId['t-sale']).toMatchObject({ bucket: 'matched', actions: ['ignore'] })
+    expect(byId['t-rent']).toMatchObject({ bucket: 'matched', actions: [] })
+    expect(byId['t-link']).toMatchObject({ bucket: 'matched', actions: ['unmatch'] })
+    expect(findCalls('transactions', 'in')).toEqual([['id', ['t-sale', 't-rent']]])
+  })
+
   it('lists a partially allocated verifikat with only its remainder (agent feedback seq 854089)', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: ACCOUNT })

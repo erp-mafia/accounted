@@ -61,6 +61,44 @@ export function toSIEFileOpeningBalance(row: ImportRow): SIEFileOpeningBalance |
   }
 }
 
+/**
+ * Whether the year just before `periodStart` holds live bokföring again: a
+ * posted verifikat in it that is not a storno (an undone import leaves only
+ * reversed originals and their stornos). The review that offers the file's
+ * IB is raised when that year's import is undone, and a later import of the
+ * same year leaves it open when this year has no IB verifikat. The year then
+ * opens on the year before's utgående balanser again, as a continuation
+ * import leaves it, so booking the file's #IB on top would open it on other
+ * balances than the year before closed on (ÅRL 2 kap. kontinuitet; PH 193).
+ */
+export async function previousYearHasBookkeeping(
+  supabase: SupabaseClient,
+  companyId: string,
+  periodStart: string,
+): Promise<boolean> {
+  const { data: previous, error: previousError } = await supabase
+    .from('fiscal_periods')
+    .select('id')
+    .eq('company_id', companyId)
+    .lt('period_end', periodStart)
+    .order('period_end', { ascending: false })
+    .limit(1)
+  if (previousError) throw previousError
+  const previousId = (previous as { id: string }[] | null)?.[0]?.id
+  if (!previousId) return false
+
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('fiscal_period_id', previousId)
+    .eq('status', 'posted')
+    .neq('source_type', 'storno')
+    .limit(1)
+  if (error) throw error
+  return ((data as unknown[] | null) ?? []).length > 0
+}
+
 /** The latest completed import of the year, read for its stored IB. */
 export async function readSIEFileOpeningBalance(
   supabase: SupabaseClient,

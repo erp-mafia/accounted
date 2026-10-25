@@ -29,7 +29,7 @@ import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
-import { inboxHref, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
+import { inboxHref, INBOX_SEARCH_KEYWORDS, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 
 type Entry = {
   id: string
@@ -78,7 +78,7 @@ const PAGE_ENTRIES: Entry[] = [
   { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },
   { id: 'löner', label: 'Löner', icon: HandCoins, href: '/salary' },
   { id: 'anställda', label: 'Anställda', icon: Users, href: '/salary/employees' },
-  { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: Inbox, href: LEGACY_INBOX_HREF },
+  { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: Inbox, href: LEGACY_INBOX_HREF, keywords: INBOX_SEARCH_KEYWORDS },
   { id: 'nyckeltal', label: 'Nyckeltal', icon: TrendingUp, href: '/kpi' },
   { id: 'inställningar', label: 'Inställningar', icon: Settings, href: '/settings' },
   { id: 'hjälp', label: 'Hjälp', icon: HelpCircle, href: '/help' },
@@ -99,7 +99,7 @@ function withInbox(entries: Entry[], inkorgV2Enabled: boolean): Entry[] {
           id: 'inkorg',
           label: 'Inkorg',
           href: inboxHref(true),
-          keywords: 'dokumentinkorg underlag kvitton fakturor saknar underlag inbox',
+          keywords: INBOX_SEARCH_KEYWORDS,
           extension: { sector: 'general', id: 'invoice-inbox' },
         }
       : entry,

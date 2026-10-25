@@ -177,6 +177,11 @@ export function VoucherSeriesManager({ settings, onSettingsUpdated }: VoucherSer
                     className="w-full md:w-64"
                   />
                 )}
+                {/* crm#1438: a row without a name field read as a broken
+                    series. Say what it is and where new vouchers go instead. */}
+                {!nameable && (
+                  <SettingsRowNote fill>{t('imported_series_note')}</SettingsRowNote>
+                )}
                 {seriesKey === defaultSeries && (
                   <SettingsRowNote>{t('default_badge')}</SettingsRowNote>
                 )}

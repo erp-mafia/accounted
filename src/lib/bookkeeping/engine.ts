@@ -1802,13 +1802,18 @@ export interface VoucherLinkInput {
  * door. The actor is handed on as for commitMatchBatchAllocation and stamped
  * on that kursdifferens verifikat.
  *
+ * `amount` is the share of the verifikat that is this invoice's, when the
+ * verifikat settles several invoices. `p_amount` is sent only when a share is
+ * stated, as on the supplier side: a link without one then reads the same
+ * against a database that does not have migration 20261026007000 yet.
+ *
  * Returns the RPC's answer unchanged: callers translate its refusals.
  */
 export async function commitInvoiceVoucherLink(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  input: VoucherLinkInput & { invoiceId: string },
+  input: VoucherLinkInput & { invoiceId: string; amount?: number | null },
 ): Promise<PostingRpcAnswer> {
   const { data, error } = await callWithBusinessEvents('link_invoice_to_voucher', input.businessEvents, (events) =>
     rpcWithActor(supabase, 'link_invoice_to_voucher', {
@@ -1817,6 +1822,7 @@ export async function commitInvoiceVoucherLink(
       p_user_id: userId,
       p_company_id: companyId,
       p_notes: input.notes,
+      ...(input.amount == null ? {} : { p_amount: input.amount }),
       ...events,
     }),
   )

@@ -37,3 +37,13 @@ export const INKORG_HREF = '/inkorg'
 export function inboxHref(inkorgV2Enabled: boolean): string {
   return inkorgV2Enabled ? INKORG_HREF : LEGACY_INBOX_HREF
 }
+
+/**
+ * The words the command palette finds the inbox by, under either name.
+ * An utlägg starts here (the receipt, then "Vem betalade?"), and the
+ * Utlägg menu row stays hidden until the first claim exists, so "utlägg"
+ * and "kvitto" must land on the inbox rather than on nothing (PH 201).
+ * Swedish in every locale: it is what people type, not text on screen.
+ */
+export const INBOX_SEARCH_KEYWORDS =
+  'inkorg dokumentinkorg underlag kvitto kvitton utlägg eget utlägg privat betalat fakturor saknar underlag inbox receipt expense'

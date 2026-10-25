@@ -3,6 +3,7 @@ import {
   generateAGIXml,
   buildIndividuppgifterSnapshot,
   AGIIncompleteDataError,
+  findMissingCompanyData,
 } from '../agi/xml-generator'
 import type { AGICompanyData, AGIEmployeeData, AGITotals } from '../agi/xml-generator'
 
@@ -637,6 +638,23 @@ describe('generateAGIXml: fail-fast on missing data', () => {
         expect.arrayContaining(['organisationsnummer', 'telefon', 'e-post'])
       )
     }
+  })
+})
+
+describe('findMissingCompanyData: the check generation and staging share (crm#1435)', () => {
+  it('finds nothing when the company data is complete', () => {
+    expect(findMissingCompanyData(company)).toBeNull()
+  })
+
+  it('names each missing field and the settings label it is filled in under', () => {
+    const gap = findMissingCompanyData({ ...company, orgNumber: '', contactPhone: ' ' })
+    expect(gap).toBeInstanceOf(AGIIncompleteDataError)
+    expect(gap?.missingFields).toEqual(['organisationsnummer', 'telefon'])
+    expect(gap?.message).toBe(
+      'AGI kan inte genereras, följande uppgifter saknas: organisationsnummer, telefon. ' +
+        'Fyll i organisationsnummer under Inställningar → Allmänt; telefon under Inställningar → Moms och skatt → ' +
+        'Kontaktperson för skatteärenden (eller Telefon under Inställningar → Allmänt).',
+    )
   })
 })
 

@@ -54,6 +54,7 @@ import {
   arcimDocumentImportReducer,
   arcimDocumentReconnectPlan,
   documentImportProgress,
+  documentImportRunNote,
   documentOAuthProblemFromReason,
   parseArcimDocumentResumeMarker,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
@@ -64,6 +65,7 @@ import {
   watchArcimOAuthPopup,
   type ArcimDocumentImportPhase,
   type ArcimDocumentImportProblem,
+  type ArcimDocumentImportResult,
   type ArcimDocumentImportState,
   type ArcimUnreachableDocumentSource,
 } from './arcim-document-import-flow'
@@ -273,6 +275,7 @@ import type {
   AssetSkipReasons,
 } from '@/extensions/general/arcim-migration/types'
 import type { SieFetchFailure } from '@/extensions/general/arcim-migration/lib/sie-fetcher'
+import type { DocumentImportRunStatus } from '@/extensions/general/arcim-migration/lib/document-import-run'
 import {
   buildMigrateRequests,
   mergeMigrationResults,
@@ -629,6 +632,11 @@ interface ConnectionStatus {
    * only for a server that predates the field.
    */
   unfinishedConnect?: { provider: ArcimProvider; startedAt: string } | null
+  /**
+   * The latest underlag run, as the server kept it (crm#1410). Optional only
+   * for a server that predates the field.
+   */
+  latestDocumentImport?: DocumentImportRunStatus | null
   entityCounts: {
     customers: number
     suppliers: number
@@ -665,6 +673,37 @@ const PROVIDER_LOGOS: Record<ArcimProvider, string> = {
   bjornlunden: '/logos/bjornlunden.png',
   briox: '/logos/Briox_logo.png',
   wint: '/logos/wint.png',
+}
+
+/** The latest underlag run under its connection: what came in, and what did not. */
+export function DocumentImportRunLine({ run }: { run: DocumentImportRunStatus }) {
+  const t = useTranslations('extensions')
+  const note = documentImportRunNote(run)
+  if (!note) return null
+  const line = 'mt-0.5 text-xs text-muted-foreground tabular-nums'
+  if (note.kind !== 'complete') {
+    return (
+      <p className={line}>
+        {note.kind === 'stopped'
+          ? t('ext_arcim_documents_last_run_stopped', { date: formatDate(note.date), scanned: note.scanned, total: note.total })
+          : t('ext_arcim_documents_last_run_running', { scanned: note.scanned, total: note.total })}
+      </p>
+    )
+  }
+  const left = [
+    note.unmatched > 0 ? t('ext_arcim_documents_last_run_unmatched', { count: note.unmatched }) : null,
+    note.locked > 0 ? t('ext_arcim_documents_last_run_locked', { count: note.locked, years: note.lockedYears }) : null,
+    note.failed > 0 ? t('ext_arcim_documents_last_run_failed', { count: note.failed }) : null,
+    note.unreachable ? t('ext_arcim_documents_last_run_unreachable') : null,
+  ].filter((item): item is string => item !== null)
+  return (
+    <>
+      <p className={line}>
+        {t('ext_arcim_documents_last_run_complete', { date: formatDate(note.date), present: note.present, total: note.total })}
+      </p>
+      {left.length > 0 && <p className={line}>{t('ext_arcim_documents_last_run_left', { items: left.join(', ') })}</p>}
+    </>
+  )
 }
 
 export function ProviderStep({
@@ -794,6 +833,13 @@ export function ProviderStep({
                       <p className="mt-0.5 text-xs text-muted-foreground tabular-nums">
                         {connectionStatus?.entityCounts.customers} kunder, {connectionStatus?.entityCounts.suppliers} leverantörer, {connectionStatus?.entityCounts.invoices} fakturor
                       </p>
+                    )}
+                    {/* The outcome of the latest "Hämta underlag" outlives
+                        the tab that ran it: a reload used to leave a byrå
+                        unable to tell whether every underlag came in. */}
+                    {supportsUnderlagImport(consent.provider)
+                      && connectionStatus?.latestDocumentImport?.provider === consent.provider && (
+                      <DocumentImportRunLine run={connectionStatus.latestDocumentImport} />
                     )}
                   </div>
                   {/* Full width on a phone, so the buttons wrap under the name
@@ -3742,12 +3788,17 @@ export default function ArcimMigrationWorkspace({
     }
   }, [])
 
-  const runDocumentImport = useCallback(async (currentConsentId: string) => {
-    dispatchDocumentImport({ type: 'import-started' })
+  const runDocumentImport = useCallback(async (
+    currentConsentId: string,
+    /** The totals of a run that stopped: continue after its last file instead of from the top. */
+    resumeFrom: ArcimDocumentImportResult | null = null,
+  ) => {
+    dispatchDocumentImport({ type: 'import-started', resumeFrom })
     try {
       // One route call per time-budgeted slice; the helper loops until the
       // server reports the end and feeds running totals back for the UI.
       const result = await runArcimDocumentImportToCompletion(currentConsentId, {
+        resumeFrom,
         onProgress: (progress) =>
           dispatchDocumentImport({ type: 'import-progress', result: progress }),
       })
@@ -4492,7 +4543,15 @@ export default function ArcimMigrationWorkspace({
             if (consentId) void runDocumentDiscovery(consentId, documentImportState.provider, true)
           }}
           onImportDocuments={() => {
-            if (consentId) void runDocumentImport(consentId)
+            // "Försök igen" after a run that stopped continues where it
+            // stopped; anywhere else (an offer, failed files in a finished
+            // run) the import runs from the top.
+            if (consentId) {
+              void runDocumentImport(
+                consentId,
+                documentImportState.phase === 'import-error' ? documentImportState.result : null,
+              )
+            }
           }}
           onDismissDocuments={() => {
             // A dismissed standalone run has nothing left to show: back to

@@ -340,3 +340,52 @@ describe('GET /status: enabled providers', () => {
     expect(await enabledProviders()).toContain('wint')
   })
 })
+
+describe('GET /status: latest underlag run (crm#1410)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(listConsents as Mock).mockResolvedValue([])
+    ;(createServiceClient as Mock).mockReturnValue(buildService({}))
+  })
+
+  const STORED_RUN = {
+    provider: 'fortnox',
+    startedAt: '2026-10-22T08:53:31Z',
+    updatedAt: '2026-10-22T09:20:11Z',
+    complete: true,
+    total: 3003,
+    scanned: 3003,
+    linked: 0,
+    skipped: 2971,
+    unmatched: 27,
+    failed: 0,
+    locked: 5,
+    lockedPeriods: ['2020/2021'],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: null,
+  }
+
+  async function latestDocumentImport(stored: unknown) {
+    const { supabase } = buildSupabase({ history: [], latestCompleted: null })
+    const ctx = buildCtx(supabase)
+    const get = vi.fn().mockResolvedValue(stored)
+    ;(ctx as unknown as { settings: unknown }).settings = { get, set: vi.fn(), clear: vi.fn() }
+    const res = await handler(statusRequest(), ctx)
+    const { body } = await parseJsonResponse<{ latestDocumentImport: unknown }>(res)
+    expect(res.status).toBe(200)
+    return { body, get }
+  }
+
+  it('hands the stored run to the connections list after a reload', async () => {
+    const { body, get } = await latestDocumentImport(STORED_RUN)
+
+    expect(get).toHaveBeenCalledWith('document_import_run')
+    expect(body.latestDocumentImport).toEqual({ ...STORED_RUN, stalled: false })
+  })
+
+  it('answers null before any run, and for a value that is not a run', async () => {
+    expect((await latestDocumentImport(null)).body.latestDocumentImport).toBeNull()
+    expect((await latestDocumentImport({ linked: 3 })).body.latestDocumentImport).toBeNull()
+  })
+})

@@ -333,6 +333,46 @@ describe('gnubok_generate_agi', () => {
     expect(error.message_en).toMatch(/must be past draft/)
     expect(error.remediation).toMatchObject({ tool: 'gnubok_book_salary_run', args: { salary_run_id: 'run-1' } })
   })
+
+  // Staging used to accept a run whose company had no telefon; the refusal
+  // came only after someone approved the generation (crm#1435).
+  it('answers AGI_INCOMPLETE_DATA at staging when the company lacks a phone, naming where to fill it in', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-06' } })
+    enqueue({ data: { name: 'Bolaget AB', org_number: '5561234567' } }) // companies
+    enqueue({ data: { company_name: 'Bolaget AB', org_number: '556123-4567', phone: null, email: 'info@bolaget.example', tax_contact_name: null, tax_contact_phone: null, tax_contact_email: null } })
+    enqueue({ data: { full_name: 'Anna Andersson', email: 'anna@bolaget.example' } }) // profiles
+
+    const error = await refusal('gnubok_generate_agi', { salary_run_id: 'run-1' }, supabase)
+
+    expect(error.code).toBe('AGI_INCOMPLETE_DATA')
+    expect(error.retryable).toBe(false)
+    expect(error.message_sv).toBe(
+      'AGI kan inte genereras, följande uppgifter saknas: telefon. Fyll i telefon under Inställningar → Moms och skatt → ' +
+        'Kontaktperson för skatteärenden (eller Telefon under Inställningar → Allmänt).',
+    )
+    expect(error.message_en).toBe(error.message_sv)
+    expect(error.remediation).toMatchObject({ tool: 'gnubok_update_company_settings' })
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+  })
+
+  it('stages when the company data is complete', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 9, payment_date: '2026-10-06' } })
+    enqueue({ data: { name: 'Bolaget AB', org_number: '5561234567' } }) // companies
+    enqueue({ data: { company_name: 'Bolaget AB', org_number: '556123-4567', phone: '08-123 45 67', email: null, tax_contact_name: null, tax_contact_phone: null, tax_contact_email: null } })
+    enqueue({ data: { full_name: 'Anna Andersson', email: 'anna@bolaget.example' } }) // profiles
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations.insert
+
+    const result = (await tool('gnubok_generate_agi').execute(
+      { salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, ACTOR,
+    )) as { staged: boolean }
+
+    expect(result.staged).toBe(true)
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(1)
+  })
 })
 
 describe('gnubok_update_payslip_line', () => {

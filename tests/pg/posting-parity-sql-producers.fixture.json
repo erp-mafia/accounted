@@ -548,7 +548,8 @@
           "invoiceStatus": "paid",
           "paidAmount": 1000,
           "remainingAmount": 0,
-          "paymentAmount": 1000
+          "paymentAmount": 1000,
+          "voucherRemaining": 0
         }
       ],
       "entries": [
@@ -605,7 +606,8 @@
           "invoiceStatus": "paid",
           "paidAmount": 900,
           "remainingAmount": 0,
-          "paymentAmount": 900
+          "paymentAmount": 900,
+          "voucherRemaining": 0
         }
       ],
       "entries": [],

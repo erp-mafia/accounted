@@ -3548,7 +3548,7 @@ Reads the company's skattekonto saldo and transactions (booked and upcoming) fro
 **Do not use for:** Booking skattekonto rows, or importing a skattekonto file (POST /imports/skattekonto-file).
 
 **Pitfalls:**
-- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about ten hours by design). Only a person can reconnect; do not retry until they confirm.
 - The paid Skatteverket capability is required: 403 SKATTEVERKET_CAPABILITY_BLOCKED otherwise.
 - Skatteverket only returns roughly the last 555 days; older history comes from a skattekonto file import.
 
@@ -3611,7 +3611,7 @@ Sends one arbetsgivardeklaration huvuduppgift (AGI API v1.7 section 7: agRegistr
 **Do not use for:** Filing (POST /salary-runs/{id}/generate-agi, then the BankID-signed submission) or checking a salary run booked in Accounted (the submission flow validates it).
 
 **Pitfalls:**
-- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about ten hours by design). Only a person can reconnect; do not retry until they confirm.
 - redovisningsPeriod is YYYYMM and no earlier than 201807; amounts are whole kronor.
 - A payload that breaks the v1.7 schema answers 400 VALIDATION_ERROR before anything reaches Skatteverket.
 - status OK or INFO means Skatteverket would accept the figures; it never checks them against the books.
@@ -3693,7 +3693,7 @@ Sends one individuppgift (AGI API v1.7 section 8: the payee, specifikationsnumme
 **Do not use for:** Filing, or salary runs booked in Accounted (the AGI submission flow builds and validates their individuppgifter).
 
 **Pitfalls:**
-- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about 1 hour by design). Only a person can reconnect; do not retry until they confirm.
+- Needs a live Skatteverket connection: 401 SKATTEVERKET_NOT_CONNECTED when the company has none or it expired (personal BankID sessions last about ten hours by design). Only a person can reconnect; do not retry until they confirm.
 - betalningsmottagarId is the payee's personnummer (12 digits): it is sent to Skatteverket and not stored by Accounted beyond the audit row's metadata.
 - forstaAnstalld and vaxaStod (FK062/FK063) exist only through redovisningsPeriod 202512 and are mutually exclusive. Setting either for 202601 or later answers 400 VALIDATION_ERROR: växa-stöd is now a refund applied for after filing (Lag 2025:1334), and the individuppgift carries the full avgifter.
 - A payload that breaks the v1.7 schema answers 400 VALIDATION_ERROR before anything reaches Skatteverket.

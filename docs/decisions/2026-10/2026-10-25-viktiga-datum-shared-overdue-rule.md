@@ -1,0 +1,1 @@
+[2026-10-25] Viktiga datum counts overdue invoices by the shared filterOverdueInvoices and sums what is still owed (remaining_amount, partly paid included) linking to Förfallna, instead of adding the two missing filters to its own copy that summed totals and linked to Obetalda: one overdue rule, so the note, Att göra and the agent's status=overdue agree (crm#1435).
