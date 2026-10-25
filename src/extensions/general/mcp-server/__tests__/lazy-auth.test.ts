@@ -291,6 +291,37 @@ describe('MCP lazy authentication', () => {
     expect(response.status).toBe(401)
   })
 
+  it.each(['tools/list', 'initialize'])(
+    'answers %s with a revoked key by the re-auth challenge, never the anonymous catalog (crm#1043)',
+    async (method) => {
+      // A revoked grant (reuse detection, disconnect) must make the client
+      // reconnect. Serving the anonymous catalog instead would look like a
+      // working connection whose tools all fail; the 401 naming the resource
+      // metadata, with RFC 6750 invalid_token, is what clients turn into a
+      // reconnect prompt.
+      mocks.validateApiKey.mockResolvedValueOnce({ error: 'Invalid API key', status: 401 })
+      const response = await handleMcpRequest(
+        rpc(method, method === 'initialize' ? { protocolVersion: '2025-06-18' } : undefined, {
+          token: 'gnubok_sk_revoked',
+        })
+      )
+      expect(response.status).toBe(401)
+      expect(response.headers.get('WWW-Authenticate')).toBe(
+        'Bearer resource_metadata="http://localhost:3000/.well-known/oauth-protected-resource", ' +
+          'error="invalid_token", error_description="The access token is revoked, expired or unknown"'
+      )
+      expect(mocks.checkRateLimit).not.toHaveBeenCalled()
+    }
+  )
+
+  it('keeps the tokenless challenge free of an error code (RFC 6750 3.1)', async () => {
+    const response = await handleMcpRequest(
+      rpc('tools/call', { name: 'gnubok_list_companies', arguments: {} })
+    )
+    expect(response.status).toBe(401)
+    expect(response.headers.get('WWW-Authenticate')).not.toContain('error=')
+  })
+
   it("answers a suspended service account's key with the structured 403 v1 gives, not the 401 challenge", async () => {
     mocks.validateApiKey.mockResolvedValueOnce({
       error: 'Service account suspended: its sponsor is no longer an owner or admin of the company',

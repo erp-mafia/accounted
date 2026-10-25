@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 
 vi.mock('@supabase/supabase-js', () => ({
   createClient: vi.fn(),
@@ -15,6 +15,8 @@ vi.mock('@/lib/company/active-company', () => ({
 import {
   generateApiKey,
   hashApiKey,
+  hashRefreshToken,
+  deriveRotatedCredentials,
   extractBearerToken,
   validateScopes,
   hasScope,
@@ -88,6 +90,52 @@ describe('hashApiKey', () => {
     const hash1 = hashApiKey('gnubok_sk_key-a')
     const hash2 = hashApiKey('gnubok_sk_key-b')
     expect(hash1).not.toBe(hash2)
+  })
+})
+
+// ============================================================
+// deriveRotatedCredentials (crm#1043)
+// ============================================================
+
+describe('deriveRotatedCredentials', () => {
+  beforeEach(() => {
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-role-secret')
+  })
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('rotates the same refresh token into the same pair every time', () => {
+    const a = deriveRotatedCredentials('gnubok_rt_presented')
+    const b = deriveRotatedCredentials('gnubok_rt_presented')
+    expect(b).toEqual(a)
+  })
+
+  it('returns well-formed tokens whose hashes are what the database stores', () => {
+    const { refresh, key } = deriveRotatedCredentials('gnubok_rt_presented')
+    expect(refresh.token).toMatch(/^gnubok_rt_[A-Za-z0-9_-]{43}$/)
+    expect(key.key).toMatch(/^gnubok_sk_[A-Za-z0-9_-]{43}$/)
+    expect(refresh.hash).toBe(hashRefreshToken(refresh.token))
+    expect(key.hash).toBe(hashApiKey(key.key))
+    expect(key.prefix).toBe(key.key.slice(0, 'gnubok_sk_'.length + 8))
+  })
+
+  it('gives different tokens a different successor, and never the token itself', () => {
+    const a = deriveRotatedCredentials('gnubok_rt_one')
+    const b = deriveRotatedCredentials('gnubok_rt_two')
+    expect(a.refresh.token).not.toBe(b.refresh.token)
+    expect(a.key.key).not.toBe(b.key.key)
+    expect(a.refresh.token).not.toBe('gnubok_rt_one')
+    // Access key and refresh token are independent derivations.
+    expect(a.key.key.slice('gnubok_sk_'.length)).not.toBe(a.refresh.token.slice('gnubok_rt_'.length))
+  })
+
+  it('cannot be computed without the server secret', () => {
+    const withSecret = deriveRotatedCredentials('gnubok_rt_presented')
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'another-secret')
+    expect(deriveRotatedCredentials('gnubok_rt_presented').refresh.token).not.toBe(withSecret.refresh.token)
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', '')
+    expect(() => deriveRotatedCredentials('gnubok_rt_presented')).toThrow('SUPABASE_SERVICE_ROLE_KEY')
   })
 })
 

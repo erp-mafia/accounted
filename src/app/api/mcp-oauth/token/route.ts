@@ -5,6 +5,7 @@ import {
   OAUTH_MCP_KEY_NAME,
   generateRefreshToken,
   hashRefreshToken,
+  deriveRotatedCredentials,
   createServiceClientNoCookies,
   validateScopes,
   findStageApproveConflict,
@@ -14,15 +15,17 @@ import {
 import { builtInRedirectProvider, capScopesForRole, lookupCompanyRole } from '@/lib/auth/oauth-allowlist'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { isUuid } from '@/lib/invariants/uuid'
+import { createLogger } from '@/lib/logger'
 
 const ACCESS_TOKEN_TTL_SECONDS = 3600
 
-// Grace window (seconds) during which a just-superseded access token and refresh
-// token stay valid after a rotation. Lets a client that cannot reliably persist
-// the rotated refresh token, or that fires concurrent refreshes: recover via
-// idempotent replay instead of being forced into a re-auth loop (issue #710).
-// Reuse of a previous refresh token AFTER this window revokes the grant.
-const REFRESH_GRACE_SECONDS = 120
+// How long the access key a refresh supersedes keeps working, so requests
+// already in flight with it finish (issue #710). Only the access key: whether
+// a replayed refresh token is honoured depends on the grant's state, not on
+// time (crm#1043, see handleRefreshTokenGrant).
+const ACCESS_KEY_GRACE_SECONDS = 120
+
+const log = createLogger('mcp-oauth/token')
 
 /**
  * OAuth 2.0 Token Endpoint.
@@ -30,9 +33,9 @@ const REFRESH_GRACE_SECONDS = 120
  * Supports two grant types:
  *   - authorization_code: exchange a PKCE-protected auth code for a fresh
  *     api_key (access_token) plus a refresh_token.
- *   - refresh_token: rotate the refresh_token and return the same api_key
- *     with a fresh expires_in. The api_key itself does not expire
- *     server-side; expires_in is a hint so clients refresh on a cadence.
+ *   - refresh_token: rotate both the refresh_token and the api_key. The
+ *     api_key does not expire server-side until a refresh supersedes it;
+ *     expires_in is a hint so clients refresh on a cadence.
  */
 export async function POST(request: Request) {
   let params: URLSearchParams
@@ -353,23 +356,25 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   const supabase = createServiceClientNoCookies()
   const presentedHash = hashRefreshToken(refreshToken)
 
-  // Pre-generate the candidate credentials; the RPC decides whether to use them
-  // (rotate / idempotent replay) or ignore them (reuse / revoked / invalid).
-  // Doing lookup + rotate + demote in ONE SECURITY DEFINER RPC closes the
-  // TOCTOU gap the old SELECT-then-CAS had, and lets a just-superseded refresh
-  // token stay valid for a grace window so a client that cannot persist the
-  // rotated token, or fires concurrent refreshes: recovers instead of being
-  // forced into a re-auth loop (issue #710). Reuse AFTER the grace window
-  // revokes the grant (RFC 9700 §4.14.2 reuse detection).
-  const rotated = generateRefreshToken()
-  const { key: newKey, hash: newKeyHash, prefix: newKeyPrefix } = generateApiKey()
+  // Lookup, rotation and reuse detection happen in ONE SECURITY DEFINER RPC
+  // (no TOCTOU between them). The successor pair is derived from the
+  // presented token, so presenting the same token again yields the same pair:
+  // the RPC answers the immediate predecessor of the current token with that
+  // pair again ('replayed'), however late, because its successor has not been
+  // used yet. A retry after a lost response, two concurrent refreshes and a
+  // client that failed to persist the rotated token all end up holding a
+  // working pair. Only a token presented after its successor was used (two or
+  // more generations old) is reuse, and revokes the grant (RFC 9700 4.14.2).
+  // Before crm#1043 a 120 s clock decided instead, and a late retry revoked a
+  // legitimate connection without a trace.
+  const successor = deriveRotatedCredentials(refreshToken)
 
   const { data, error } = await supabase.rpc('rotate_mcp_refresh_token', {
     p_presented_hash: presentedHash,
-    p_new_refresh_hash: rotated.hash,
-    p_new_key_hash: newKeyHash,
-    p_new_key_prefix: newKeyPrefix,
-    p_grace_seconds: REFRESH_GRACE_SECONDS,
+    p_new_refresh_hash: successor.refresh.hash,
+    p_new_key_hash: successor.key.hash,
+    p_new_key_prefix: successor.key.prefix,
+    p_grace_seconds: ACCESS_KEY_GRACE_SECONDS,
   })
 
   if (error) {
@@ -381,19 +386,29 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   }
 
   const result = (Array.isArray(data) ? data[0] : data) as
-    | { outcome: string; scopes: string[] | null }
+    | { outcome: string; scopes: string[] | null; api_key_id?: string | null }
     | undefined
   const outcome = result?.outcome
+  const apiKeyId = result?.api_key_id ?? null
 
-  // 'rotated' (normal) and 'replayed' (idempotent in-grace retry/concurrent)
-  // both succeed and return the freshly minted pair. Everything else maps to
-  // invalid_grant; for 'reuse_revoked' the grant was already revoked in the RPC.
+  if (outcome === 'reuse_revoked') {
+    // A connection just died: the user has to reconnect. Logged with the key
+    // id only, never a token, so support can find the grant and see why.
+    log.warn('refresh token reuse: grant revoked', { apiKeyId, outcome })
+  } else if (outcome === 'replayed') {
+    log.info('refresh token replayed: same successor returned', { apiKeyId, outcome })
+  }
+
+  // 'rotated' and 'replayed' both succeed with the successor pair. Everything
+  // else is invalid_grant; for 'reuse_revoked' the RPC already revoked it.
   if (outcome !== 'rotated' && outcome !== 'replayed') {
     return NextResponse.json(
       {
         error: 'invalid_grant',
         error_description:
-          outcome === 'revoked' ? 'Refresh token revoked' : 'Invalid or expired refresh token',
+          outcome === 'revoked' || outcome === 'reuse_revoked'
+            ? 'Refresh token revoked'
+            : 'Invalid or expired refresh token',
       },
       { status: 400 }
     )
@@ -404,10 +419,10 @@ async function handleRefreshTokenGrant(params: URLSearchParams) {
   const persistedScopes = validateScopes(result?.scopes ?? null) ?? DEFAULT_OAUTH_SCOPES
 
   return NextResponse.json({
-    access_token: newKey,
+    access_token: successor.key.key,
     token_type: 'Bearer',
     expires_in: ACCESS_TOKEN_TTL_SECONDS,
-    refresh_token: rotated.token,
+    refresh_token: successor.refresh.token,
     scope: persistedScopes.join(' '),
   })
 }

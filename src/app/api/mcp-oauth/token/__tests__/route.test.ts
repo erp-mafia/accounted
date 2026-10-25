@@ -1,10 +1,22 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 const mocks = vi.hoisted(() => ({
   supabaseFactory: vi.fn(),
   getActiveCompanyId: vi.fn().mockResolvedValue('company-1'),
+  logInfo: vi.fn(),
+  logWarn: vi.fn(),
 }))
+
+vi.mock('@/lib/logger', () => {
+  const logger = {
+    info: mocks.logInfo,
+    warn: mocks.logWarn,
+    error: vi.fn(),
+    child: (): unknown => logger,
+  }
+  return { createLogger: () => logger }
+})
 
 vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/auth/api-keys')>()
@@ -26,7 +38,14 @@ vi.mock('@/lib/company/context', () => ({
 
 import { POST } from '../route'
 import { decryptAuthCode, verifyPkce } from '@/lib/auth/oauth-codes'
-import { ALL_SCOPES, STAGING_SCOPES, generateRefreshToken, type ApiKeyScope } from '@/lib/auth/api-keys'
+import {
+  ALL_SCOPES,
+  STAGING_SCOPES,
+  generateRefreshToken,
+  hashApiKey,
+  hashRefreshToken,
+  type ApiKeyScope,
+} from '@/lib/auth/api-keys'
 
 function formRequest(body: Record<string, string>) {
   return new Request('http://localhost/api/mcp-oauth/token', {
@@ -76,6 +95,12 @@ describe('POST /api/mcp-oauth/token', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     mocks.getActiveCompanyId.mockResolvedValue('company-1')
+    // The refresh grant derives the successor pair from this secret.
+    vi.stubEnv('SUPABASE_SERVICE_ROLE_KEY', 'test-service-role-secret')
+  })
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
   })
 
   describe('grant_type validation', () => {
@@ -733,20 +758,27 @@ describe('POST /api/mcp-oauth/token', () => {
   })
 
   describe('refresh_token grant', () => {
-    it('rotates both tokens and returns a fresh access_token', async () => {
+    function refreshRequest(refreshToken: string) {
+      return formRequest({ grant_type: 'refresh_token', refresh_token: refreshToken })
+    }
+
+    function rotateArgs(
+      supabase: ReturnType<typeof createQueuedMockSupabase>['supabase'],
+      call = 0,
+    ): Record<string, unknown> {
+      const calls = supabase.rpc.mock.calls.filter((c) => c[0] === 'rotate_mcp_refresh_token')
+      expect(calls.length).toBeGreaterThan(call)
+      return calls[call][1] as Record<string, unknown>
+    }
+
+    it('rotates: the RPC stores exactly the pair the client receives', async () => {
       const { token: refreshToken } = generateRefreshToken()
 
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      // rotate_mcp_refresh_token RPC → normal rotation
-      enqueue({ data: [{ outcome: 'rotated', scopes: null }], error: null })
+      enqueue({ data: [{ outcome: 'rotated', scopes: null, api_key_id: 'key-1' }], error: null })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: refreshToken,
-        })
-      )
+      const res = await POST(refreshRequest(refreshToken))
 
       expect(res.status).toBe(200)
       const body = await res.json()
@@ -754,6 +786,88 @@ describe('POST /api/mcp-oauth/token', () => {
       expect(body.refresh_token).toMatch(/^gnubok_rt_/)
       expect(body.refresh_token).not.toBe(refreshToken) // rotated
       expect(body.expires_in).toBe(3600)
+
+      const args = rotateArgs(supabase)
+      expect(args.p_presented_hash).toBe(hashRefreshToken(refreshToken))
+      expect(args.p_new_refresh_hash).toBe(hashRefreshToken(body.refresh_token))
+      expect(args.p_new_key_hash).toBe(hashApiKey(body.access_token))
+      expect(args.p_new_key_prefix).toBe(body.access_token.slice(0, 'gnubok_sk_'.length + 8))
+      // The grace covers only the superseded access key (in-flight requests).
+      expect(args.p_grace_seconds).toBe(120)
+      expect(mocks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('answers a replay of the same token, before its successor is used, with the same pair (crm#1043)', async () => {
+      // A lost response, two concurrent refreshes or a client that did not
+      // persist the rotated token all present the same refresh token twice.
+      // Both answers must be the same pair, whichever the client keeps; the
+      // RPC tells the two calls apart ('rotated', then 'replayed') and the
+      // route hands out the same derived successor both times.
+      const { token: refreshToken } = generateRefreshToken()
+
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'rotated', scopes: ['transactions:read'], api_key_id: 'key-1' }], error: null })
+      enqueue({ data: [{ outcome: 'replayed', scopes: ['transactions:read'], api_key_id: 'key-1' }], error: null })
+
+      const first = await POST(refreshRequest(refreshToken))
+      const replay = await POST(refreshRequest(refreshToken))
+
+      expect(first.status).toBe(200)
+      expect(replay.status).toBe(200)
+      const a = await first.json()
+      const b = await replay.json()
+      expect(b.access_token).toBe(a.access_token)
+      expect(b.refresh_token).toBe(a.refresh_token)
+      expect(b.scope).toBe('transactions:read')
+      // Same candidate hashes both times: the RPC can see a replay of the
+      // pair it already stored and write nothing.
+      expect(rotateArgs(supabase, 1)).toEqual(rotateArgs(supabase, 0))
+      expect(mocks.logInfo).toHaveBeenCalledWith(
+        'refresh token replayed: same successor returned',
+        { apiKeyId: 'key-1', outcome: 'replayed' }
+      )
+      expect(mocks.logWarn).not.toHaveBeenCalled()
+    })
+
+    it('derives a different successor for a different refresh token', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'rotated', scopes: null, api_key_id: 'key-1' }], error: null })
+      enqueue({ data: [{ outcome: 'rotated', scopes: null, api_key_id: 'key-2' }], error: null })
+
+      const a = await (await POST(refreshRequest(generateRefreshToken().token))).json()
+      const b = await (await POST(refreshRequest(generateRefreshToken().token))).json()
+      expect(a.refresh_token).not.toBe(b.refresh_token)
+      expect(a.access_token).not.toBe(b.access_token)
+    })
+
+    it('replay after the successor was used revokes: 400 invalid_grant and a warning with the key id, never the token', async () => {
+      // The RPC found the token two or more generations behind (its
+      // successor was already used: RFC 9700 4.14.2 reuse) and revoked the
+      // grant. Which generations count is pinned against real SQL in
+      // tests/pg/mcp-oauth-refresh-idempotent-replay.pg.test.ts.
+      const { token: refreshToken } = generateRefreshToken()
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      mocks.supabaseFactory.mockReturnValue(supabase)
+      enqueue({ data: [{ outcome: 'reuse_revoked', scopes: null, api_key_id: 'key-7' }], error: null })
+
+      const res = await POST(refreshRequest(refreshToken))
+
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toBe('Refresh token revoked')
+      expect(body.access_token).toBeUndefined()
+      expect(mocks.logWarn).toHaveBeenCalledTimes(1)
+      expect(mocks.logWarn).toHaveBeenCalledWith('refresh token reuse: grant revoked', {
+        apiKeyId: 'key-7',
+        outcome: 'reuse_revoked',
+      })
+      const logged = JSON.stringify([...mocks.logWarn.mock.calls, ...mocks.logInfo.mock.calls])
+      expect(logged).not.toContain(refreshToken)
+      expect(logged).not.toContain('gnubok_rt_')
+      expect(logged).not.toContain(hashRefreshToken(refreshToken))
     })
 
     it('returns 400 when refresh_token is missing', async () => {
@@ -766,34 +880,28 @@ describe('POST /api/mcp-oauth/token', () => {
     it('returns 400 when refresh_token is unknown', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: [{ outcome: 'invalid', scopes: null }], error: null })
+      enqueue({ data: [{ outcome: 'invalid', scopes: null, api_key_id: null }], error: null })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_unknown',
-        })
-      )
+      const res = await POST(refreshRequest('gnubok_rt_unknown'))
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')
+      expect(body.error_description).toBe('Invalid or expired refresh token')
+      expect(mocks.logWarn).not.toHaveBeenCalled()
     })
 
     it('returns 400 when the api_key is revoked', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: [{ outcome: 'revoked', scopes: null }], error: null })
+      enqueue({ data: [{ outcome: 'revoked', scopes: null, api_key_id: 'key-1' }], error: null })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
+      const res = await POST(refreshRequest('gnubok_rt_anything'))
       expect(res.status).toBe(400)
       const body = await res.json()
       expect(body.error).toBe('invalid_grant')
       expect(body.error_description).toContain('revoked')
+      // Already revoked earlier (disconnect, earlier reuse): not a new event.
+      expect(mocks.logWarn).not.toHaveBeenCalled()
     })
 
     it('returns 500 when the rotation RPC fails with a DB error', async () => {
@@ -801,56 +909,10 @@ describe('POST /api/mcp-oauth/token', () => {
       mocks.supabaseFactory.mockReturnValue(supabase)
       enqueue({ data: null, error: { message: 'connection reset' } })
 
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
+      const res = await POST(refreshRequest('gnubok_rt_anything'))
       expect(res.status).toBe(500)
       const body = await res.json()
       expect(body.error).toBe('server_error')
-    })
-
-    it('returns 400 invalid_grant when a refresh token is reused after its grace window (reuse_revoked)', async () => {
-      const { supabase, enqueue } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      // The RPC detected reuse of a previous refresh token past its grace
-      // window and already revoked the grant family (RFC 9700 §4.14.2).
-      enqueue({ data: [{ outcome: 'reuse_revoked', scopes: null }], error: null })
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
-      expect(res.status).toBe(400)
-      const body = await res.json()
-      expect(body.error).toBe('invalid_grant')
-    })
-
-    it('returns a fresh pair on idempotent in-grace replay instead of 400 (issue #710 regression)', async () => {
-      // A retried / mis-persisted / concurrent refresh presents the previous
-      // refresh token within the grace window. The old code returned 400
-      // "already used", stranding Claude Code into a re-auth loop; the RPC now
-      // replays idempotently and the client gets a working pair.
-      const { supabase, enqueue } = createQueuedMockSupabase()
-      mocks.supabaseFactory.mockReturnValue(supabase)
-      enqueue({ data: [{ outcome: 'replayed', scopes: ['transactions:read'] }], error: null })
-
-      const res = await POST(
-        formRequest({
-          grant_type: 'refresh_token',
-          refresh_token: 'gnubok_rt_anything',
-        })
-      )
-      expect(res.status).toBe(200)
-      const body = await res.json()
-      expect(body.access_token).toMatch(/^gnubok_sk_/)
-      expect(body.refresh_token).toMatch(/^gnubok_rt_/)
-      expect(body.expires_in).toBe(3600)
-      expect(body.scope).toBe('transactions:read')
     })
   })
 
