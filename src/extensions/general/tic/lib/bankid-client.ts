@@ -7,6 +7,7 @@
 
 import { TICAPIError } from './tic-types'
 import type {
+  BankIdSignRequest,
   BankIdStartRequest,
   BankIdStartResponse,
   BankIdPollResponse,
@@ -95,6 +96,15 @@ export async function startBankIdAuth(
   if (userAgent) body.userAgent = userAgent
 
   return identityFetch<BankIdStartResponse>('POST', '/auth/bankid/start', body)
+}
+
+/**
+ * Start a BankID sign session. It answers the same session shape as an auth
+ * start and is driven by the same poll/collect/cancel calls; the collect of a
+ * completed sign session carries `signature`.
+ */
+export async function startBankIdSign(request: BankIdSignRequest): Promise<BankIdStartResponse> {
+  return identityFetch<BankIdStartResponse>('POST', '/auth/bankid/sign', request)
 }
 
 /** Poll a BankID session for status updates. Call every 2 seconds. */

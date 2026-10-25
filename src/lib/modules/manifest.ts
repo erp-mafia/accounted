@@ -184,6 +184,10 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'export',
       'dimensions',
       'documents',
+      // BankID signing of archived documents (TIC behind a port): the signed
+      // copy and evidence package are archive documents, and the year-end
+      // block's board signatures build on it, so it sits beside documents.
+      'signing',
       // Arrivals: how every document, bank page and file entered the books,
       // with the original kept (BFL 7 kap). Written by the blocks' doors,
       // read with the archive, so it sits beside documents.
