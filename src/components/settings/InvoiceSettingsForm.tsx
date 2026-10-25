@@ -117,7 +117,7 @@ export function InvoiceSettingsForm({ settings, afterInvoiceSettings }: InvoiceS
  */
 export function InvoiceReminderSettingsForm({ settings }: { settings: CompanySettings }) {
   const t = useTranslations('settings_invoice_form')
-  const [sendReminders, setSendReminders] = useState(settings.send_invoice_reminders ?? true)
+  const [sendReminders, setSendReminders] = useState(settings.send_invoice_reminders ?? false)
   return (
     <SettingsGroup label={t('reminder_days_heading')} help={t('reminder_days_help')}>
         <SettingsRow

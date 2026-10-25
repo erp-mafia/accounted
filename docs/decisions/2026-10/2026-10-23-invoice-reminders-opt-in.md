@@ -1,0 +1,1 @@
+[2026-10-23] send_invoice_reminders is opt-in: default false and every existing row reset to false (migration 20261025084600), and remindersActiveFor counts only an explicit true. The old default-true was never a choice, the toggle is hidden, and customers were told reminders return off.
