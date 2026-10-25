@@ -12,9 +12,10 @@ import { insertAuthUser, insertDraftJournalEntry, insertFiscalPeriod, seedCompan
 //
 //   1. for every period start and filter, on a ledger with IB verifikat
 //      (kept, dropped by earlier activity, superseded by a later one,
-//      reversed), stornos before the start and across it, a storno of a
-//      storno, tagged lines, a draft and a cancelled entry, an entry dated
-//      outside its fiscal year and a zero-amount line
+//      reversed), entries tagged as IB on another day than their year's
+//      first (history, 20261025120000), stornos before the start and across
+//      it, a storno of a storno, tagged lines, a draft and a cancelled entry,
+//      an entry dated outside its fiscal year and a zero-amount line
 //   2. still after a storno, an inline rättelse and a date change
 //   3. the caller's access: a member reads the rows, an outsider none
 
@@ -171,10 +172,11 @@ async function world(): Promise<World> {
     date: '2024-01-01', sourceType: 'opening_balance',
     lines: [{ account: '1930', debit: 1300 }, { account: '2081', credit: 1300 }],
   })
-  // 1229 is booked before its first IB, so that IB is dropped; 2099's is kept.
+  // 1229 is booked before its first IB, so that IB is dropped; so is 2099's,
+  // behind the 2023 result read as closed on 2023-12-31.
   await post(w, { date: '2024-02-01', lines: [{ account: '1930', debit: 50 }, { account: '1229', credit: 50 }] })
   await post(w, {
-    date: '2024-03-01', sourceType: 'opening_balance',
+    date: '2025-01-01', sourceType: 'opening_balance',
     lines: [{ account: '1229', credit: 999, dims: { '6': 'P2' } }, { account: '2099', debit: 999, dims: { '6': 'P2' } }],
   })
   // An IB verifikat reversed by its storno: neither counts.
@@ -187,6 +189,14 @@ async function world(): Promise<World> {
   const firstStorno = await storno(w, twice, twiceLines, '2025-05-02')
   const mirrored: Line[] = twiceLines.map((l) => ({ account: l.account, debit: l.credit, credit: l.debit, dims: l.dims }))
   await storno(w, firstStorno, mirrored, '2025-05-03')
+  // Marked as IB in bank reconciliation before 20261006121003: tagged
+  // opening_balance on a day that is not its year's first. Both are history,
+  // never an IB of 1930 or 2440, and the bank fee is in 2025's result.
+  await post(w, {
+    date: '2025-03-10', sourceType: 'opening_balance',
+    lines: [{ account: '2440', debit: 210 }, { account: '1930', credit: 210, dims: { '6': 'P1' } }],
+  })
+  await post(w, { date: '2025-04-01', sourceType: 'opening_balance', lines: [{ account: '5010', debit: 60 }, { account: '1930', credit: 60 }] })
   // A pair across the 2026 start: the original reversed before it, its storno after.
   const acrossLines: Line[] = [{ account: '1930', debit: 70, dims: { '6': 'P2' } }, { account: '2440', credit: 70 }]
   const across = await post(w, { date: '2025-12-20', lines: acrossLines })
@@ -252,18 +262,22 @@ describe('compute_prior_opening_balances on the summaries', () => {
     const { summary, lines } = await bothPaths(w)
     expect(summary).toEqual(lines)
 
-    // The fixture means what it says: 1229's IB is dropped (booked before
-    // it), the later 1930 IB and the reversed 1940 IB ignored. FY2023 earned
-    // 500 and was never closed: it is read as closed onto 2099 on 2023-12-31
-    // (20261024140000), which also drops 2099's later IB line, as a booked
-    // closing would. The IB balances.
+    // The fixture means what it says: the later 1930 IB and the reversed 1940
+    // IB are ignored. FY2023 earned 500 and was never closed: it is read as
+    // closed onto 2099 on 2023-12-31 (20261024140000). The IB balances.
     expect(summary['2025-01-01 null']).toEqual([
       '1229 0 50', '1510 500 0', '1930 1300.5 0', '2081 0 1250.5', '2099 0 500',
+    ])
+    // A year on: 1229's and 2099's 2025 IB lines are dropped (activity before
+    // them), the two entries marked as IB are history on 1930 and 2440, and
+    // the 60 kr bank fee is 2025's loss, read as closed onto 2099.
+    expect(summary['2026-01-01 null']).toEqual([
+      '1229 0 50', '1510 530 0', '1930 1310.5 270', '1940 0 0', '2081 0 1260.5', '2099 60 500', '2440 210 30',
     ])
     // Across the start: the original is reversed, so it is left out; the
     // project's 2099 IB line went with the closing, and the closing is untagged.
     expect(summary['2026-01-01 {"6":"P2"}']).toEqual([])
-    expect(summary['2026-01-01 {"6":"P1"}']).toEqual(['1930 250.5 0'])
+    expect(summary['2026-01-01 {"6":"P1"}']).toEqual(['1930 250.5 210'])
   })
 
   it('stays exact after a storno, an inline rättelse and a date change', async () => {

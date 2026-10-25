@@ -17,6 +17,9 @@ import type { EntityType } from '@/types'
  * dated the year's last day. A booked closing makes the line disappear, and an
  * IB verifikat after it that already carries the result does not count it
  * twice.
+ *
+ * Migration 20261025120000: only an entry dated on its year's first day is an
+ * IB verifikat; one tagged as IB on another day is history.
  */
 
 type Row = { account_number: string; debit: string; credit: string }
@@ -243,5 +246,37 @@ describe('derived opening balance carries an untransferred result', () => {
       (await client.query<Row>('SELECT * FROM public.compute_prior_opening_balances($1, $2)', [companyId, '2026-01-01'])).rows,
     )
     expect(foreign).toEqual([])
+  })
+})
+
+// Bank reconciliation's "Märk som IB" re-tagged mid-year verifikat as
+// opening_balance until 20261006121003 closed that door.
+describe("derived opening balance reads an IB verifikat only on its year's first day", () => {
+  it('a loan repayment marked as IB mid-year still reaches next year', async () => {
+    const { companyId, fy2025, post } = await books()
+    await post(fy2025, '2025-01-01', [
+      { accountNumber: '1930', debitAmount: 500, creditAmount: 0 },
+      { accountNumber: '2840', debitAmount: 0, creditAmount: 500 },
+    ], 'opening_balance')
+    await post(fy2025, '2025-03-10', [
+      { accountNumber: '2840', debitAmount: 210, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 210 },
+    ], 'opening_balance')
+
+    expect(nets(await openingBalance(companyId, '2026-01-01'))).toEqual({ '1930': 290, '2840': -290 })
+  })
+
+  it("a bank fee marked as IB mid-year counts in that year's result", async () => {
+    const { companyId, fy2025, post } = await books()
+    await post(fy2025, '2025-01-01', [
+      { accountNumber: '1930', debitAmount: 500, creditAmount: 0 },
+      { accountNumber: '2081', debitAmount: 0, creditAmount: 500 },
+    ], 'opening_balance')
+    await post(fy2025, '2025-04-01', [
+      { accountNumber: '6570', debitAmount: 100, creditAmount: 0 },
+      { accountNumber: '1930', debitAmount: 0, creditAmount: 100 },
+    ], 'opening_balance')
+
+    expect(nets(await openingBalance(companyId, '2026-01-01'))).toEqual({ '1930': 400, '2081': -500, '2099': 100 })
   })
 })
