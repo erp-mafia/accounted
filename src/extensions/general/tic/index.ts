@@ -36,6 +36,7 @@ import { sendBankIdSignupConfirmation } from './lib/bankid-confirmation-mail'
 import { hashPersonalNumber, encryptPersonalNumberForStorage } from '@/lib/auth/bankid'
 import { generateAuthPassword } from '@/lib/auth/generated-password'
 import { openBankIdResult, sealBankIdResult } from './lib/bankid-flow-result'
+import { bankIdSigningServices } from './lib/bankid-signing'
 import type { BankIdFlowResult, BankIdFlowState } from './lib/bankid-flow-cookie'
 import type { BankIdUser } from './lib/bankid-types'
 import {
@@ -506,9 +507,11 @@ export const ticExtension: Extension = {
   // Core-callable services, resolved via the extension registry (core never
   // imports extension code). The agent onboarding snapshot
   // (lib/agent/composer/tic-fetch) reads the profile here instead of calling
-  // this server's own /profile route over HTTP.
+  // this server's own /profile route over HTTP. The BankID signing ceremony
+  // (lib/signing/bankid-provider) starts and polls sign sessions here.
   services: {
     fetchCompanyProfile: (orgNumber: string) => buildCompanyProfile(orgNumber, console),
+    ...bankIdSigningServices,
   },
 
   apiRoutes: [

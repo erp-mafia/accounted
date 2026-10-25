@@ -4,6 +4,7 @@ import {
   pollBankIdSession,
   collectBankIdResult,
   cancelBankIdSession,
+  startBankIdSign,
 } from '../lib/bankid-client'
 import { TICAPIError } from '../lib/tic-types'
 
@@ -158,6 +159,36 @@ describe('bankid-client', () => {
         expect.objectContaining({ method: 'GET' })
       )
       expect(result.user?.name).toBe('Test Testsson')
+    })
+  })
+
+  describe('startBankIdSign', () => {
+    it('calls POST /auth/bankid/sign with the texts and the personnummer lock', async () => {
+      vi.mocked(fetch).mockResolvedValue(
+        new Response(JSON.stringify({ sessionId: 'sign-session', autoStartToken: 'a', qrStartToken: 'q', qrStartSecret: 's' }), { status: 200 })
+      )
+
+      const result = await startBankIdSign({
+        endUserIp: '192.168.1.1',
+        userVisibleData: 'Jag signerar *Avtal*',
+        userVisibleDataFormat: 'simpleMarkdownV1',
+        userNonVisibleData: '{"sha256":"abc"}',
+        personalNumber: '199001011234',
+      })
+
+      expect(fetch).toHaveBeenCalledWith(
+        `${BASE_URL}/auth/bankid/sign`,
+        expect.objectContaining({ method: 'POST' })
+      )
+      const body = JSON.parse((vi.mocked(fetch).mock.calls[0][1] as RequestInit).body as string)
+      expect(body).toEqual({
+        endUserIp: '192.168.1.1',
+        userVisibleData: 'Jag signerar *Avtal*',
+        userVisibleDataFormat: 'simpleMarkdownV1',
+        userNonVisibleData: '{"sha256":"abc"}',
+        personalNumber: '199001011234',
+      })
+      expect(result.sessionId).toBe('sign-session')
     })
   })
 
