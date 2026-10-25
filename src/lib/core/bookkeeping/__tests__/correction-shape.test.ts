@@ -48,6 +48,21 @@ describe('negatesOriginal', () => {
     ).toBe(true)
   })
 
+  it('rounds an exact half öre with roundOre, like the other rättelse checks (1.005 is 1.01)', () => {
+    expect(
+      negatesOriginal(
+        [
+          { account_number: '6570', debit_amount: 0, credit_amount: 1.005 },
+          { account_number: '1930', debit_amount: 1.005, credit_amount: 0 },
+        ],
+        [
+          { account_number: '6570', debit_amount: '1.01', credit_amount: '0' },
+          { account_number: '1930', debit_amount: '0', credit_amount: '1.01' },
+        ],
+      ),
+    ).toBe(true)
+  })
+
   it('is false for the original itself', () => {
     expect(negatesOriginal(fee, fee)).toBe(false)
   })
