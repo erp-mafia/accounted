@@ -232,6 +232,8 @@ export function paymentReason(
     case 'mode_none':
     case 'not_payable':
     case 'partly_paid':
+    // Bankgirot debits an Autogiro invoice: no code is the point, not a gap.
+    case 'autogiro':
       return null
     case 'nothing_due':
       return { key: 'reason_nothing_due', action: null }

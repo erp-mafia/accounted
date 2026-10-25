@@ -28,6 +28,7 @@ import {
   creditNoteOriginalReference,
 } from '@/lib/invoices/build-credit-note'
 import { fetchExchangeRate, convertToSEK } from '@/lib/currency/riksbanken'
+import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
 import { roundOre } from '@/lib/money'
 import { expandPersonnummerTo12, maskPersonnummer, validatePersonnummer } from '@/lib/salary/personnummer'
 import { revealStoredCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
@@ -578,6 +579,22 @@ async function buildDraftPreview(params: {
     created_at: nowIso,
     updated_at: nowIso,
   } as InvoicePdfInvoice
+
+  // What the issued invoice will say about Autogiro: a SEK faktura to a
+  // customer with an active mandate is debited, as the draft trigger decides
+  // for the stored draft (migration 20261025084700_autogiro.sql).
+  // Bankgirot debits kronor only.
+  if (docType === 'invoice' && isKronorCurrency(currency) && !isPreviewPlaceholderCustomer(customer)) {
+    const { data: mandate, error: mandateError } = await supabase
+      .from('autogiro_mandates')
+      .select('payer_number')
+      .eq('company_id', companyId)
+      .eq('customer_id', customer.id)
+      .eq('status', 'active')
+      .maybeSingle()
+    if (mandateError) throw mandateError
+    invoice.autogiro_payer_number = (mandate as { payer_number: string } | null)?.payer_number ?? null
+  }
 
   const missing: InvoicePreviewMissing[] = []
   if (isPreviewPlaceholderCustomer(customer)) missing.push('customer')

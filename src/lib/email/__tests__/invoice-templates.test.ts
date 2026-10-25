@@ -628,6 +628,62 @@ describe('invoice email templates', () => {
     })
   })
 
+  describe('Autogiro (autogiro_payer_number): says it is debited, never asks to be paid', () => {
+    const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
+    const bgCompany = makeCompanySettings({ ...company, bankgiro: '123-4567', swish: '1234567890', invoice_show_swish: true })
+    const autogiroInvoice = makeInvoice({
+      invoice_number: '1042',
+      due_date: '2026-06-21',
+      total: 12500,
+      autogiro_payer_number: '556677',
+      payment_link_url: 'https://buy.stripe.com/test_abc123',
+    })
+
+    it('HTML: the Autogiro heading, the sentence and the payer number; no giro, OCR, account or pay-online button', () => {
+      const html = generateInvoiceEmailHtml({ invoice: autogiroInvoice, customer: svCustomer, company: bgCompany })
+      expect(html).toContain('Autogiro')
+      expect(html).toContain('Beloppet dras från ditt konto via Autogiro på förfallodagen.')
+      expect(html).toContain('Betalarnummer:')
+      expect(html).toContain('556677')
+      expect(html).not.toContain('Betalningsinformation')
+      expect(html).not.toContain('Bankgiro:')
+      expect(html).not.toContain('OCR/Referens:')
+      expect(html).not.toContain('Bankkonto:')
+      expect(html).not.toContain('Swish:')
+      expect(html).not.toContain('Betala online')
+      // The amount still shows.
+      expect(html).toContain('Att betala:')
+      expect(html).toMatch(/12[\s\u00a0]500,00 SEK/)
+    })
+
+    it('plain text says the same', () => {
+      const text = generateInvoiceEmailText({ invoice: autogiroInvoice, customer: svCustomer, company: bgCompany })
+      expect(text).toContain('Autogiro:\nBeloppet dras från ditt konto via Autogiro på förfallodagen.\nBetalarnummer: 556677\n')
+      expect(text).not.toContain('Bankgiro:')
+      expect(text).not.toContain('OCR/Referens:')
+      expect(text).not.toContain('Betala online')
+      expect(text).toContain('Att betala:')
+    })
+
+    it('English for an English customer', () => {
+      const enCustomer = makeCustomer({ name: 'Jane Doe', customer_type: 'individual', email: 'jane@example.com', language: 'en' })
+      const html = generateInvoiceEmailHtml({ invoice: autogiroInvoice, customer: enCustomer, company: bgCompany })
+      expect(html).toContain('The amount is debited from your account by Autogiro on the due date.')
+      expect(html).toContain('Payer number:')
+      expect(html).not.toContain('Payment information')
+      expect(html).not.toContain('Pay online')
+      const text = generateInvoiceEmailText({ invoice: autogiroInvoice, customer: enCustomer, company: bgCompany })
+      expect(text).toContain('Payer number: 556677')
+    })
+
+    it('a credit note carries no payment block at all, payer number or not', () => {
+      const creditNote = makeInvoice({ invoice_number: '1043', credited_invoice_id: 'inv-orig', total: -5000, autogiro_payer_number: '556677' })
+      const html = generateInvoiceEmailHtml({ invoice: creditNote, customer: svCustomer, company: bgCompany })
+      expect(html).not.toContain('Autogiro')
+      expect(html).not.toContain('Betalarnummer')
+    })
+  })
+
   describe('öresavrundning: "Att betala" matches the PDF', () => {
     const svCustomer = makeCustomer({ name: 'Erik Andersson', customer_type: 'individual', email: 'erik@example.se', language: 'sv' })
 

@@ -2802,6 +2802,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <span className="tabular-nums">{formatDate(invoice.due_date)}</span>
             </DefRow>
           )}
+          {/* Debited by Autogiro (frozen at issue): the invoice told the customer so. */}
+          {(invoice as Invoice).autogiro_payer_number && !isQuote && (
+            <DefRow label={t('autogiro_label')}>
+              <Link href="/invoices/autogiro" className="hover:underline">
+                {t('autogiro_value', { payer: (invoice as Invoice).autogiro_payer_number ?? '' })}
+              </Link>
+            </DefRow>
+          )}
           {/* SEK and domestic 25 % are the norm; the rows show only when the
               invoice deviates (the totals block carries the VAT either way). */}
           {!isLedgerCurrency(invoice.currency) && (

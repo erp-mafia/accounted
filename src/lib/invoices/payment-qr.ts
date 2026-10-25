@@ -29,7 +29,9 @@
  *
  * Every code encodes what the invoice still asks for (lib/invoices/amount-due):
  * nothing on a paid, cancelled or credited invoice or a document that is not
- * a payment request, and the remainder on a partly paid one.
+ * a payment request, and the remainder on a partly paid one. An Autogiro
+ * invoice gets no code at all: Bankgirot debits it, and a code would invite
+ * the customer to pay it a second time.
  *
  * The company passed in must already carry the invoice's payee
  * (companyWithInvoicePaymentAccount), the same company the PDF renders with,
@@ -48,7 +50,7 @@ import {
   buildBankPaymentQrPayload,
   type BankPaymentQrCompany,
 } from '@/lib/invoices/bank-payment-qr'
-import { invoicePrintsSwish } from '@/lib/invoices/payment-rows'
+import { invoiceAutogiroPayerNumber, invoicePrintsSwish } from '@/lib/invoices/payment-rows'
 import { buildSwishQrPayload, isValidSwish, normaliseSwish } from '@/lib/payments/swish'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
 
@@ -91,6 +93,8 @@ export const INVOICE_QR_REASONS = [
   'partly_paid',
   /** Auto mode, a customer outside Sweden and no payment link: bank-app and Swish codes need a Swedish bank. */
   'foreign_customer',
+  /** Debited by Autogiro (invoices.autogiro_payer_number): the customer is not asked to pay. */
+  'autogiro',
 ] as const
 
 export type InvoiceQrReason = (typeof INVOICE_QR_REASONS)[number]
@@ -146,6 +150,7 @@ export type InvoicePaymentQrInvoice = AmountDueInvoice & {
   invoice_date?: string | null
   due_date?: string | null
   payment_link_url?: string | null
+  autogiro_payer_number?: string | null
 }
 
 export type InvoicePaymentQrCompany = BankPaymentQrCompany & {
@@ -230,6 +235,7 @@ export function resolveInvoicePaymentQr(input: ResolveInvoicePaymentQrInput): Re
   const mode = resolveInvoiceQrMode(input.invoice, input.company)
   if (mode === 'none') return { kind: null, mode, reason: 'mode_none' }
   if (!isInvoicePayableStatus(input.invoice)) return { kind: null, mode, reason: 'not_payable' }
+  if (invoiceAutogiroPayerNumber(input.invoice)) return { kind: null, mode, reason: 'autogiro' }
   // Rounding on unless the company turned it off: the same default
   // getAmountToPay applies to a company row without the flag.
   const amount = invoiceAmountDue(input.invoice, { ore_rounding: input.company.ore_rounding ?? true })

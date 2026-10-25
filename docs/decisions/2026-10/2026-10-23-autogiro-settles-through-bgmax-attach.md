@@ -1,0 +1,1 @@
+[2026-10-23] Autogiro deposits settle through the BG Max attachment (lib/import/bgmax/attach.ts: split the bank row by OCR, offer the batch allocation) instead of a new settlement path; the report import only sets debit statuses, and the bank-row wording now also accepts 'autogiro'.

@@ -1705,6 +1705,11 @@ export interface Invoice {
   // Credit note reference
   credited_invoice_id: string | null
 
+  // Autogiro: the payer number the invoice is debited on. Follows the
+  // customer's active mandate while a draft and freezes at issue (migration
+  // 20261025084700_autogiro.sql); null = paid by the customer, never debited.
+  autogiro_payer_number?: string | null
+
   // Document type (invoice, proforma, delivery_note, quote)
   document_type: InvoiceDocumentType
 

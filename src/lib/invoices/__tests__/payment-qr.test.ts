@@ -373,3 +373,37 @@ describe('describeInvoicePaymentQr', () => {
     expect(describeInvoicePaymentQr(resolve({ invoice: withMode('none') }))).toBe('none:mode_none')
   })
 })
+
+describe('Autogiro invoices print no code', () => {
+  const autogiro = { autogiro_payer_number: '556677' }
+
+  it.each(['auto', 'bank_app', 'swish', 'payment_link'] as const)(
+    'mode %s: none, with the autogiro reason (Bankgirot debits it; a code would invite a second payment)',
+    (mode) => {
+      expect(resolve({ invoice: withMode(mode, { ...autogiro, payment_link_url: LINK }) })).toEqual({
+        kind: null,
+        mode,
+        reason: 'autogiro',
+      })
+    },
+  )
+
+  it('a private customer gets no Swish code either', () => {
+    expect(resolve({ invoice: autogiro, customer: privatePerson })).toMatchObject({ kind: null, reason: 'autogiro' })
+  })
+
+  it('keeps the more basic reasons first: mode none, then not a payment request', () => {
+    expect(resolve({ invoice: withMode('none', autogiro) })).toMatchObject({ reason: 'mode_none' })
+    expect(resolve({ invoice: { ...autogiro, status: 'paid', paid_amount: 12500, remaining_amount: 0 } })).toMatchObject({
+      reason: 'not_payable',
+    })
+  })
+
+  it('says so in the log form', () => {
+    expect(describeInvoicePaymentQr(resolve({ invoice: autogiro }))).toBe('none:autogiro')
+  })
+
+  it('an empty payer number is no Autogiro invoice', () => {
+    expect(resolve({ invoice: { autogiro_payer_number: '' } }).kind).toBe('bank_app')
+  })
+})

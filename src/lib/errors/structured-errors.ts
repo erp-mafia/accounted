@@ -10518,6 +10518,108 @@ const PENDING_OPERATIONS: Record<string, StructuredErrorEntry> = {
   },
 }
 
+// ─────────────────────────────────────────────────────────────────
+// Autogiro (src/lib/invoices/autogiro)
+// ─────────────────────────────────────────────────────────────────
+
+const AUTOGIRO: Record<string, StructuredErrorEntry> = {
+  AUTOGIRO_NOT_ENABLED: {
+    httpStatus: 403,
+    message_sv: 'Autogiro är inte påslaget för det här bolaget ännu. Hör av dig till oss så öppnar vi det.',
+    message_en: 'Autogiro is not enabled for this company yet.',
+  },
+  AUTOGIRO_SETTINGS_MISSING: {
+    httpStatus: 400,
+    message_sv: 'Fyll i Kundnummer och bankgiro för autogiroavtalet först (Fakturor > Autogiro).',
+    message_en: 'Enter the Autogiro agreement (Bankgirot customer number and bankgiro) first.',
+  },
+  AUTOGIRO_SETTINGS_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Kundnumret ska vara högst 6 siffror och bankgironumret ett giltigt bankgiro (7 eller 8 siffror).',
+    message_en: 'The customer number must be at most 6 digits and the bankgiro a valid bankgiro number (7 or 8 digits).',
+  },
+  AUTOGIRO_PAYER_NUMBER_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Betalarnumret ska vara 1-16 siffror.',
+    message_en: 'The payer number must be 1-16 digits.',
+  },
+  AUTOGIRO_PAYER_NUMBER_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Betalarnumret har redan ett aktivt medgivande hos en annan kund.',
+    message_en: 'The payer number already has an active mandate for another customer.',
+  },
+  AUTOGIRO_CUSTOMER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Kunden finns inte i bolaget.',
+    message_en: 'The customer was not found in this company.',
+  },
+  AUTOGIRO_CUSTOMER_HAS_MANDATE: {
+    httpStatus: 409,
+    message_sv: 'Kunden har redan ett aktivt autogiromedgivande. Makulera det först.',
+    message_en: 'The customer already has an active Autogiro mandate. Cancel it first.',
+  },
+  AUTOGIRO_MANDATE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Medgivandet finns inte.',
+    message_en: 'The mandate was not found.',
+  },
+  AUTOGIRO_MANDATE_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Medgivandet är redan makulerat eller avvisat.',
+    message_en: 'The mandate is already cancelled or rejected.',
+  },
+  AUTOGIRO_NOTHING_TO_DEBIT: {
+    httpStatus: 400,
+    message_sv: 'Ingen av fakturorna kan dras nu. Se orsaken på varje rad.',
+    message_en: 'None of the invoices can be debited now. See the reason on each row.',
+  },
+  AUTOGIRO_DEBIT_ALREADY_LIVE: {
+    httpStatus: 409,
+    message_sv: 'En av fakturorna ligger redan i en betalningsfil. Ladda om sidan.',
+    message_en: 'One of the invoices is already in a payment file. Reload the page.',
+  },
+  AUTOGIRO_FILE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Filen finns inte.',
+    message_en: 'The file was not found.',
+  },
+  AUTOGIRO_FILE_NOT_STORED: {
+    httpStatus: 409,
+    message_sv: 'Filen innehåller personuppgifter och sparas inte. Den gick bara att ladda ner när den skapades.',
+    message_en: 'The file holds personal data and is not stored; it could only be downloaded when it was made.',
+  },
+  AUTOGIRO_FILE_ALREADY_REPORTED: {
+    httpStatus: 409,
+    message_sv: 'Bankgirot har redan rapporterat betalningar i filen, så den kan inte återkallas här. Makulera i Autogiro Online.',
+    message_en: 'Bankgirot has already reported on payments in this file, so it cannot be withdrawn here.',
+  },
+  AUTOGIRO_REPORT_UNKNOWN: {
+    httpStatus: 400,
+    message_sv: 'Filen är ingen autogirorapport som Accounted läser (betalningsspecifikation, avvisade betalningar, medgivandeavisering, medgivanden via internetbanken eller utdrag ur medgivanderegistret).',
+    message_en: 'The file is not an Autogiro report Accounted reads.',
+  },
+  AUTOGIRO_REPORT_OLD_LAYOUT: {
+    httpStatus: 400,
+    message_sv: 'Filen är i Bankgirots gamla layout. Be banken att byta autogiroavtalet till ny layout, så läses rapporterna här.',
+    message_en: 'The file uses Bankgirot\'s old layout. Ask the bank to switch the Autogiro agreement to the new layout.',
+  },
+  AUTOGIRO_REPORT_WRONG_BANKGIRO: {
+    httpStatus: 400,
+    message_sv: 'Filen gäller ett annat bankgiro än bolagets autogiroavtal.',
+    message_en: 'The file is for another bankgiro than the company\'s Autogiro agreement.',
+  },
+  AUTOGIRO_REPORT_HAS_ERRORS: {
+    httpStatus: 400,
+    message_sv: 'Filen har fel och läses inte in. Ladda ner den på nytt från banken.',
+    message_en: 'The file has errors and is not read. Download it again from the bank.',
+  },
+  AUTOGIRO_REPORT_ALREADY_IMPORTED: {
+    httpStatus: 409,
+    message_sv: 'Den här rapporten är redan inläst.',
+    message_en: 'This report has already been read.',
+  },
+}
+
 const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...GENERIC,
   ...DB_CONFLICTS,
@@ -10584,6 +10686,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SETOFF,
   ...PAYMENT_SIGNING_LINKS,
   ...PENDING_OPERATIONS,
+  ...AUTOGIRO,
 }
 
 export function getErrorEntry(code: string): StructuredErrorEntry | undefined {

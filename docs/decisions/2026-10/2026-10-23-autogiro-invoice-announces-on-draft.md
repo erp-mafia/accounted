@@ -1,0 +1,1 @@
+[2026-10-23] An invoice is debited by Autogiro only when invoices.autogiro_payer_number is set: a DB trigger fills it on drafts from the customer's active mandate and freezes it at issue, because the send route renders the PDF from the draft row before marking it sent; deriving it live would debit invoices that never gave Bankgirot's 8-banking-day notice.

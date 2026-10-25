@@ -39,6 +39,8 @@ export interface NavGateFlags {
   requiresInkorgV2?: boolean
   /** What the new Inkorg page replaces (Underlag under Inköp): hidden for the companies in that rollout. */
   hiddenWithInkorgV2?: boolean
+  /** The Autogiro page (/invoices/autogiro): shown only for companies in the AUTOGIRO_COMPANY_IDS rollout (lib/invoices/autogiro/flag.ts). */
+  requiresAutogiro?: boolean
   requiredCapability?: CapabilityKey
   /** Show only for these legal forms (one or several). */
   entityOnly?: EntityType | readonly EntityType[]
@@ -133,6 +135,8 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
       { href: '/kassa', module: 'pos', labelKey: 'pos_sales', requiresPosSales: true, betaBadge: true },
       { href: '/customers', module: 'invoicing', labelKey: 'customers' },
       { href: '/articles', module: 'invoicing', labelKey: 'articles' },
+      // Autogiro: debit files for the bank and Bankgirot's reports, per company while it rolls out.
+      { href: '/invoices/autogiro', module: 'invoicing', labelKey: 'autogiro', requiresAutogiro: true },
     ],
   },
   {

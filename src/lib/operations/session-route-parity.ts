@@ -467,6 +467,16 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/invoices/recurring/:id': gap('P3', 'delete a schedule (pause is covered by gnubok_update_recurring_schedule)'),
   'POST /api/invoices/recurring/:id/run': gap('P3', 'run a schedule now'),
   'POST /api/invoices/recurring/cron': machine(CRON),
+  // Autogiro v1 (pilot, AUTOGIRO_COMPANY_IDS): the dashboard first; the
+  // operations for v1 and MCP follow once a real debit has run.
+  'PUT /api/invoices/autogiro/settings': gap('P2', 'Autogiro agreement (Bankgirot Kundnummer and bankgiro)'),
+  'POST /api/invoices/autogiro/mandates': gap('P2', 'register an existing Autogiro mandate on a customer'),
+  'PATCH /api/invoices/autogiro/mandates/:id': gap('P2', 'link an Autogiro payer number to a customer'),
+  'POST /api/invoices/autogiro/mandates/:id/cancel': gap('P2', 'cancel an Autogiro mandate (file for the bank)'),
+  'POST /api/invoices/autogiro/debit-files': gap('P2', 'write the Autogiro payment file for due invoices'),
+  'POST /api/invoices/autogiro/debit-files/:id/withdraw': gap('P2', 'withdraw an Autogiro payment file not yet reported'),
+  'POST /api/invoices/autogiro/reports': gap('P2', 'read a Bankgirot Autogiro report (payments, mandates)'),
+  'POST /api/invoices/autogiro/settle': gap('P2', 'settle Autogiro debits from the bank deposit without a report'),
   'POST /api/invoices/reminders/action': machine('machine endpoint: public token link for the invoice recipient'),
 
   // ── Suppliers and supplier invoices ────────────────────────────────
@@ -893,4 +903,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * (crm#1032). Agents book through webshop-orders.book, which archives the
  * underlag itself; the retry repairs a dashboard booking where it failed.
  */
-export const GAP_CEILING = 147
+export const GAP_CEILING = 155

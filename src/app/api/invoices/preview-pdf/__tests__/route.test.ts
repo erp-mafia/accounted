@@ -817,6 +817,18 @@ describe('POST /api/invoices/preview-pdf', () => {
       expect((invoicePdfMock.mock.calls.at(-1)?.[0] as { paymentQr: unknown }).paymentQr).toBeNull()
     })
 
+    it('previews what the issued invoice will say for a customer with an Autogiro mandate: debited, no code', async () => {
+      enqueue({ data: qrCompany, error: null })
+      enqueue({ data: customer, error: null })
+      enqueue({ data: { payer_number: '5501' }, error: null })
+      const response = await previewRequest(validBody)
+
+      expect(response.status).toBe(200)
+      expect(response.headers.get('X-Invoice-Qr')).toBe('none:autogiro')
+      expect(lastRenderProps().invoice.autogiro_payer_number).toBe('5501')
+      expect(findCall('autogiro_mandates', 'eq')).toBeDefined()
+    })
+
     it('inherits the company default when qr_mode is null or empty', async () => {
       for (const qrMode of [null, '']) {
         const response = await preview({ ...validBody, qr_mode: qrMode })
