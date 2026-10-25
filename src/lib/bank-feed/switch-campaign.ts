@@ -33,7 +33,7 @@ import { chunk } from '@/lib/utils'
 import { bankCoveredByOpenPayments, UNCOVERED_BANK_NEEDLES } from './bank-coverage'
 import { matchBankByName } from './bank-match'
 import { getBankFeedConnect } from './connect'
-import { bankFeedPilotAdmits, openBankFeedDoor, PAID_GRANTS_ONLY, type BankFeedEnv } from './door'
+import { bankFeedPilotAdmits, openBankFeedDoor, startingGrants, type BankFeedEnv } from './door'
 
 export const SWITCH_DEADLINE_ENV = 'OPENPAYMENTS_SWITCH_DEADLINE'
 export const SWITCH_MAILS_ENV = 'OPENPAYMENTS_SWITCH_MAILS'
@@ -198,7 +198,7 @@ export async function switchStateFor(
 /**
  * The companies among `companyIds` the door admits, asked as a batch: the
  * pilot list answers alone when it names companies, and one capability read
- * covers every company when it says `*` (paid grants only, like the door).
+ * covers every company when it says `*` (the door's grants, startingGrants).
  */
 export async function admittedCompanyIds(supabase: SupabaseClient, companyIds: readonly string[], env: BankFeedEnv = process.env): Promise<Set<string>> {
   const ids = [...new Set(companyIds)]
@@ -211,7 +211,7 @@ export async function admittedCompanyIds(supabase: SupabaseClient, companyIds: r
     else if (answer === 'with_capability') needCapability.push(id)
   }
   if (needCapability.length > 0) {
-    const entitled = await getCompanyIdsWithCapability(supabase, needCapability, CAPABILITY.bank_sync, PAID_GRANTS_ONLY)
+    const entitled = await getCompanyIdsWithCapability(supabase, needCapability, CAPABILITY.bank_sync, startingGrants(env))
     for (const id of entitled) admitted.add(id)
   }
   return admitted
