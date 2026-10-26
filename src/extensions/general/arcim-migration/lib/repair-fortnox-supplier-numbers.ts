@@ -158,7 +158,8 @@ export function fortnoxNumberRecord(
   return record
 }
 
-function consentUnusable(error: unknown): boolean {
+/** Does this error mean the Fortnox connection itself cannot be used (as opposed to one failed call)? */
+export function consentUnusable(error: unknown): boolean {
   if (error && typeof error === 'object' && !(error instanceof Error) && 'status' in error) {
     return [401, 403, 404].includes(Number((error as { status: unknown }).status))
   }
@@ -167,7 +168,7 @@ function consentUnusable(error: unknown): boolean {
     || code === 'PROVIDER_RESOURCE_FORBIDDEN' || code === 'PROVIDER_API_MODULE_INACTIVE'
 }
 
-function messageOf(error: unknown): string {
+export function messageOf(error: unknown): string {
   if (error instanceof Error) return error.message
   if (error && typeof error === 'object' && 'message' in error) return String((error as { message: unknown }).message)
   return String(error)
