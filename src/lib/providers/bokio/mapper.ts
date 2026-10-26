@@ -391,31 +391,35 @@ export function mapBokioToCreditNote(raw: Record<string, unknown>): SalesInvoice
 /**
  * Map Bokio Customer to CustomerDto.
  *
- * Bokio Customer fields:
- * - id, name, type (company|individual), orgNumber, vatNumber, paymentTerms
+ * Bokio Customer fields (`customer` in Bokio's published company-api spec):
+ * - id, name, type (company|private), orgNumber, vatNumber, paymentTerms
  * - address: { line1, line2, city, postalCode, country }
- * - contactsDetails: [{ email, phone, name }]
+ * - contactsDetails: [{ email, phone, name, isDefault }]
+ *
+ * The type was read as individual or person, words Bokio does not use, so
+ * every private customer arrived as a company with its personnummer in
+ * plain text as the org number (crm#1436).
  */
 export function mapBokioToCustomer(raw: Record<string, unknown>): CustomerDto {
   const name = (raw['name'] as string) ?? '';
   const orgNumber = raw['orgNumber'] as string | undefined;
   const address = raw['address'] as Record<string, unknown> | undefined;
   const contacts = (raw['contactsDetails'] as Record<string, unknown>[] | undefined) ?? [];
-  const firstContact = contacts[0];
+  const contact = contacts.find((c) => c['isDefault'] === true) ?? contacts[0];
 
   const party = buildParty(name, orgNumber, address);
-  if (firstContact) {
+  if (contact) {
     party.contact = {
-      email: firstContact['email'] as string | undefined,
-      telephone: firstContact['phone'] as string | undefined,
-      name: firstContact['name'] as string | undefined,
+      email: contact['email'] as string | undefined,
+      telephone: contact['phone'] as string | undefined,
+      name: contact['name'] as string | undefined,
     };
   }
 
   return {
     id: String(raw['id'] ?? ''),
     customerNumber: String(raw['id'] ?? ''),
-    type: (raw['type'] === 'individual' || raw['type'] === 'person') ? 'private' : 'company',
+    type: raw['type'] === 'private' ? 'private' : 'company',
     party,
     active: true,
     vatNumber: raw['vatNumber'] as string | undefined,
@@ -484,42 +488,52 @@ export function mapBokioToAccountingAccount(raw: Record<string, unknown>): Accou
 /**
  * Map Bokio Supplier to SupplierDto.
  *
- * Bokio Supplier fields:
- * - id, name, orgNumber, vatNumber, paymentTerms
+ * Bokio Supplier fields (`supplier` in Bokio's published company-api spec):
+ * - id, name, orgNumber, vatNumber, currency
  * - address: { line1, line2, city, postalCode, country }
- * - contactsDetails: [{ email, phone, name }]
- * - bankAccount, bankgiro, plusgiro
+ * - paymentDetails: one of { type: bankgiro, bankgiroNumber },
+ *   { type: plusgiro, plusgiroNumber }, { type: transfer, clearingNumber,
+ *   accountNumber } and { type: internationalPayment, iban, bic }
+ *
+ * A Bokio supplier has no contacts and no payment terms. The giro and
+ * account numbers were read from the top level, where Bokio has none, so no
+ * Bokio supplier arrived with them (crm#1436). IBAN and BIC have no field on
+ * SupplierDto yet.
  */
 export function mapBokioToSupplier(raw: Record<string, unknown>): SupplierDto {
   const name = (raw['name'] as string) ?? '';
   const orgNumber = raw['orgNumber'] as string | undefined;
   const address = raw['address'] as Record<string, unknown> | undefined;
-  const contacts = (raw['contactsDetails'] as Record<string, unknown>[] | undefined) ?? [];
-  const firstContact = contacts[0];
-
-  const party = buildParty(name, orgNumber, address);
-  if (firstContact) {
-    party.contact = {
-      email: firstContact['email'] as string | undefined,
-      telephone: firstContact['phone'] as string | undefined,
-      name: firstContact['name'] as string | undefined,
-    };
-  }
 
   return {
     id: String(raw['id'] ?? ''),
     supplierNumber: String(raw['id'] ?? ''),
-    party,
+    party: buildParty(name, orgNumber, address),
     active: true,
     vatNumber: raw['vatNumber'] as string | undefined,
-    bankAccount: raw['bankAccount'] as string | undefined,
-    bankGiro: raw['bankgiro'] as string | undefined,
-    plusGiro: raw['plusgiro'] as string | undefined,
-    defaultPaymentTermsDays: raw['paymentTerms'] != null && !isNaN(Number(raw['paymentTerms']))
-      ? Number(raw['paymentTerms'])
-      : undefined,
+    ...supplierPaymentDetails(raw['paymentDetails']),
     _raw: raw,
   };
+}
+
+/** The one way a Bokio supplier is paid, as the giro or account it names. */
+function supplierPaymentDetails(value: unknown): Pick<SupplierDto, 'bankGiro' | 'plusGiro' | 'bankAccount'> {
+  if (!value || typeof value !== 'object') return {};
+  const details = value as Record<string, unknown>;
+  const text = (key: string) => {
+    const v = details[key];
+    return typeof v === 'string' && v.trim() ? v.trim() : undefined;
+  };
+  switch (details['type']) {
+    case 'bankgiro': return { bankGiro: text('bankgiroNumber') };
+    case 'plusgiro': return { plusGiro: text('plusgiroNumber') };
+    case 'transfer': {
+      const clearing = text('clearingNumber');
+      const account = text('accountNumber');
+      return { bankAccount: clearing && account ? `${clearing}-${account}` : account };
+    }
+    default: return {};
+  }
 }
 
 /**
