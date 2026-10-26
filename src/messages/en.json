@@ -13262,6 +13262,7 @@
     "reg_link": "Linking to the vouchers",
     "reg_link_sub": "{count} of {count}",
     "reg_running": "Fetching …",
+    "reg_progress": "{imported} of {total} records imported",
     "reg_summary": "{customers} customers · {suppliers} suppliers · {invoices} invoices",
     "reg_skipped": "Skipped",
     "reg_card_title": "Log in at {provider}",

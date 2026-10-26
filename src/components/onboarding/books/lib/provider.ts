@@ -9,6 +9,7 @@ import type { ProviderPreviewCounts } from '@/lib/providers/preview-counts'
 import type { TheaterModel } from '@/lib/import/theater-model'
 import type { SIEAccount } from '@/lib/import/types'
 import type { ProviderFileStatus } from '@/lib/onboarding-books/provider-years'
+import type { MigrationResource, ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 
 /**
  * The provider migration routes as the books act calls them. Same
@@ -165,7 +166,69 @@ export async function providerImportSie(file: Pick<ProviderFileStatus, 'storageP
   return json as SieImportOutcome
 }
 
-/** POST /migrate as an NDJSON stream; progress arrives per orchestrator event. */
+/** Every resource's imported and total records, summed. */
+function registerCounts(status: ProviderMigrationStatus): { imported: number; total: number } {
+  return status.counts.reduce((sum, row) => ({ imported: sum.imported + row.imported, total: sum.total + row.total }),
+    { imported: 0, total: 0 })
+}
+
+function registerResults(status: ProviderMigrationStatus): MigrateResults {
+  const results: MigrateResults = {}
+  for (const row of status.counts) results[row.resource] = { imported: row.imported, total: row.total, skipped: row.skipped }
+  return results
+}
+
+/**
+ * The customer, supplier and invoice registers through the background import
+ * job, as the Import page runs them. They went through /migrate, which read
+ * each Fortnox customer's and supplier's own record for at most 90 seconds
+ * and saved everyone it did not reach from the short list: no type, no
+ * active flag, no VAT number, country or terms, so a privatperson became a
+ * company (crm#1436). The job reads every record in full however large the
+ * register. Waits for the job's outcome so the step keeps its one-call
+ * contract, as providerImportSie waits for the SIE job.
+ */
+export async function providerImportRegisters(
+  consentId: string,
+  resources: MigrationResource[],
+  onProgress: (imported: number, total: number) => void,
+): Promise<MigrateResults> {
+  const jobs = `${ARCIM}/migration-jobs`
+  const res = await fetch(jobs, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ consentId, resources }) })
+  const json = await res.json().catch(() => ({}))
+  if (!res.ok) throw fail(json, `HTTP ${res.status}`)
+  const jobId = (json as { data: { jobId: string } }).data.jobId
+  let lastNudge = Date.now()
+  for (;;) {
+    await new Promise((resolve) => setTimeout(resolve, 2500))
+    const statusRes = await fetch(`${jobs}?jobId=${encodeURIComponent(jobId)}`, { cache: 'no-store' })
+    // A missed poll is no outcome: the job runs on regardless.
+    if (!statusRes.ok) continue
+    const status = ((await statusRes.json()) as { data: ProviderMigrationStatus }).data
+    const { imported, total } = registerCounts(status)
+    onProgress(imported, total)
+    if (status.job.state === 'completed') return registerResults(status)
+    if (status.job.state === 'needs_attention') {
+      // Every record has an outcome: the import is done, and the few that
+      // need a look stay listed on the Import page.
+      if (status.review.acceptable) return registerResults(status)
+      const code = status.job.error_code ?? 'PROVIDER_MIGRATE_FAILED'
+      throw fail({ error: { code } }, code)
+    }
+    // The cron runs the job; a nudge makes it start sooner, as the Import page does.
+    if (Date.now() - lastNudge > 30_000) {
+      lastNudge = Date.now()
+      void fetch(`${jobs}/run`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jobId }) })
+        .catch(() => { /* A nudge only hurries the cron: a failed one leaves the job to it. */ })
+    }
+  }
+}
+
+/**
+ * POST /migrate as an NDJSON stream; progress arrives per orchestrator event.
+ * The asset register only: the registers run as a background job
+ * (providerImportRegisters).
+ */
 export async function providerMigrate(
   consentId: string,
   opts: MigrateOptions,

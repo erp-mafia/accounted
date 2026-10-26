@@ -5268,6 +5268,14 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'A completed SIE import is required first. Import the SIE file (chart of accounts, opening balances and verifications) before importing customers, suppliers, invoices and fixed assets from this provider.',
   },
+  // /migrate no longer imports customers, suppliers or invoices: the
+  // background import job does, reading every record in full (crm#1436).
+  // Only a client from before that change sends them.
+  PROVIDER_REGISTERS_VIA_JOB: {
+    httpStatus: 409,
+    message_sv: 'Kunder, leverantörer och fakturor importeras nu i bakgrunden. Ladda om sidan och starta importen igen.',
+    message_en: 'Customers, suppliers and invoices are now imported in the background. Reload the page and start the import again.',
+  },
   PROVIDER_MIGRATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Migrationen från leverantören misslyckades.',
