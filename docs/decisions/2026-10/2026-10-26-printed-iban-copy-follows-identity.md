@@ -1,0 +1,1 @@
+[2026-10-26] A printed IBAN copied from its account's bank IBAN follows a rewrite of that identity by an owner, admin or system writer, narrowing 2026-09-04's never-rewrite rule to typed IBANs: the copy stood for the account, and keeping it printed another account (crm#1483).
