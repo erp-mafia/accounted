@@ -261,6 +261,7 @@ describe('payroll and retention disclosures match the code', () => {
 describe('consent and data choices match the code', () => {
   const INSTRUMENTATION = code(read('instrumentation-client.ts'))
   const IDENTIFY = code(read('components/AnalyticsIdentify.tsx'))
+  const IDENTIFY_ORDER = code(read('lib/analytics/identify.ts'))
   const METER = code(read('lib/ai/meter.ts'))
   const DIRECTORY = code(read('lib/parties/resolver/directory.ts'))
   const MIGRATION = readRepo('supabase/migrations/20261021170000_legal_acceptances_and_data_choices.sql')
@@ -270,8 +271,9 @@ describe('consent and data choices match the code', () => {
     // page must say opt-out and legitimate interest, never consent.
     expect(INSTRUMENTATION).not.toContain('posthog.init')
     expect(INSTRUMENTATION).not.toContain("from 'posthog-js'")
-    expect(IDENTIFY).toContain('if (!analyticsConsent) return')
-    expect(IDENTIFY).toContain('initAnalytics()')
+    expect(IDENTIFY).toContain('analyticsOn: analyticsConsent')
+    expect(IDENTIFY_ORDER).toContain('if (!input.analyticsOn) return false')
+    expect(IDENTIFY_ORDER).toContain('initAnalytics()')
     expect(code(read('app/(dashboard)/layout.tsx'))).toContain('analyticsConsent={acceptance.analyticsConsent !== false}')
     // The signed-in screens before the dashboard (the company journey) follow the same rule.
     expect(code(read('app/(onboarding)/layout.tsx'))).toContain('analyticsConsent={acceptance.analyticsConsent !== false}')

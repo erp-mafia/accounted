@@ -12,7 +12,7 @@ import { stockholmHourToUtcHour } from './lib/schedule'
 import { CLOUD_PROVIDERS, providerFromRequest } from './lib/provider-registry'
 import { googleDriveProvider } from './lib/google-provider'
 import { dropboxProvider } from './lib/dropbox-provider'
-import type { CloudStorageProvider } from './lib/cloud-provider'
+import { CloudScopeMissingError, type CloudStorageProvider } from './lib/cloud-provider'
 import type {
   CloudBackupStatus,
   CloudConnection,
@@ -70,6 +70,10 @@ async function readProviderStatus(
     configured: provider.isConfigured(),
     connected: !!connection,
     needs_reauth: connection?.status === 'needs_reauth',
+    reauth_reason:
+      connection?.status === 'needs_reauth'
+        ? (connection.needs_reauth_reason ?? 'token_revoked')
+        : null,
     account_email: connection?.account_email ?? null,
     connected_at: connection?.connected_at ?? null,
     last_sync: lastSync ?? null,
@@ -166,6 +170,12 @@ async function handleOAuthCallback(
 
     return redirect(firstConnect ? 'connected_first' : 'connected')
   } catch (err) {
+    if (err instanceof CloudScopeMissingError) {
+      // The person left the storage box unticked on the consent screen: their
+      // choice, not our failure. Nothing was stored; the card says what to do.
+      ctx.log.info(`${provider.id} grant refused: storage scope not granted`)
+      return redirect('error', 'missing_scope')
+    }
     ctx.log.error(`${provider.id} oauth callback failed`, err)
     return redirect(
       'error',
@@ -372,7 +382,10 @@ export const cloudBackupExtension: Extension = {
               return jsonError('not_connected', 400)
             }
             if (result.reason === 'needs_reauth') {
-              return jsonError('needs_reauth', 400)
+              return NextResponse.json(
+                { error: 'needs_reauth', reauth_reason: result.reauthReason ?? null },
+                { status: 400 }
+              )
             }
             if (result.reason === 'archive_too_large') {
               return NextResponse.json(

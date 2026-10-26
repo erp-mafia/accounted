@@ -6,6 +6,10 @@ vi.mock('@/lib/supabase/server', () => ({
   createClient: vi.fn(),
 }))
 
+vi.mock('@/lib/auth/api-keys', () => ({
+  createServiceClientNoCookies: vi.fn(),
+}))
+
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', () => ({
   createSupplierInvoiceRegistrationEntry: vi.fn(),
 }))
@@ -15,12 +19,14 @@ vi.mock('@/lib/invoices/match-log', () => ({
 }))
 
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { makeTransaction } from '@/tests/helpers'
 import { registerSupplierInvoiceHandler } from '../supplier-invoice-handler'
 
 const mockCreateClient = vi.mocked(createClient)
+const mockServiceClient = vi.mocked(createServiceClientNoCookies)
 const mockCreateEntry = vi.mocked(createSupplierInvoiceRegistrationEntry)
 const mockLogMatch = vi.mocked(logMatchEvent)
 
@@ -109,6 +115,7 @@ describe('Supplier Invoice Core Handler', () => {
 
     expect(mockCreateEntry).not.toHaveBeenCalled()
     expect(mockCreateClient).not.toHaveBeenCalled()
+    expect(mockServiceClient).not.toHaveBeenCalled()
   })
 
   describe('retroactive match on supplier_invoice.registered', () => {
@@ -141,7 +148,7 @@ describe('Supplier Invoice Core Handler', () => {
         linkedCount: 0,
         candidates: [matchingTx()],
       })
-      mockCreateClient.mockResolvedValue(supabase as never)
+      mockServiceClient.mockReturnValue(supabase as never)
 
       await emitRegistered('si-retro')
 
@@ -160,13 +167,47 @@ describe('Supplier Invoice Core Handler', () => {
       )
     })
 
+    // B14: registered over MCP, v1 or a webhook there is no session cookie and
+    // the cookie client is the anon role: it found no invoice (406 on
+    // .single()) and the retro-match silently never ran. Same outcome now
+    // whichever path emitted the event.
+    it.each([
+      ['a dashboard request (session cookie)', 'session'],
+      ['an MCP, v1 or webhook request (anon cookie client)', 'anon'],
+      ['a cron or the outbox dispatcher (no request scope)', 'no-request'],
+    ] as const)('suggests the payment when emitted from %s', async (_label, mode) => {
+      const { supabase, updates } = makeRetroMock({
+        invoice: baseInvoice(),
+        linkedCount: 0,
+        candidates: [matchingTx()],
+      })
+      const anon = makeRetroMock({ invoice: null, linkedCount: 0, candidates: [] }).supabase
+      mockCreateClient.mockImplementation(async () => {
+        if (mode === 'no-request') throw new Error('cookies() was called outside a request scope')
+        return (mode === 'session' ? supabase : anon) as never
+      })
+      mockServiceClient.mockReturnValue(supabase as never)
+
+      await emitRegistered('si-retro')
+
+      expect(updates).toEqual([{ potential_supplier_invoice_id: 'si-retro' }])
+      expect(mockLogMatch).toHaveBeenCalledWith(
+        supabase,
+        'user-1',
+        'tx-retro',
+        'auto_suggested',
+        expect.objectContaining({ supplierInvoiceId: 'si-retro' }),
+      )
+      expect(mockCreateClient).not.toHaveBeenCalled()
+    })
+
     it('no-ops when the invoice is already tied to a transaction', async () => {
       const { supabase, updates } = makeRetroMock({
         invoice: { ...baseInvoice(), transaction_id: 'tx-existing' },
         linkedCount: 0,
         candidates: [matchingTx()],
       })
-      mockCreateClient.mockResolvedValue(supabase as never)
+      mockServiceClient.mockReturnValue(supabase as never)
       await emitRegistered('si-retro')
       expect(updates).toHaveLength(0)
       expect(mockLogMatch).not.toHaveBeenCalled()
@@ -178,7 +219,7 @@ describe('Supplier Invoice Core Handler', () => {
         linkedCount: 1,
         candidates: [matchingTx()],
       })
-      mockCreateClient.mockResolvedValue(supabase as never)
+      mockServiceClient.mockReturnValue(supabase as never)
       await emitRegistered('si-retro')
       expect(updates).toHaveLength(0)
       expect(mockLogMatch).not.toHaveBeenCalled()
@@ -190,7 +231,7 @@ describe('Supplier Invoice Core Handler', () => {
         linkedCount: 0,
         candidates: [],
       })
-      mockCreateClient.mockResolvedValue(supabase as never)
+      mockServiceClient.mockReturnValue(supabase as never)
       await emitRegistered('si-retro')
       expect(updates).toHaveLength(0)
       expect(mockLogMatch).not.toHaveBeenCalled()

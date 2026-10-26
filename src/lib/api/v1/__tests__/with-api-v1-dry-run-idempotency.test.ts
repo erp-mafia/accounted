@@ -78,7 +78,7 @@ const mockClaimIdempotency = claimIdempotencyKey as ReturnType<typeof vi.fn>
 /** Every response stored under a claim (claim.complete), in order. */
 const mockStoreIdempotency = vi.fn()
 
-const COMPANY_ID = 'company-1'
+const COMPANY_ID = 'c0ffee01-0000-4000-8000-000000000001'
 const USER_ID = 'user-1'
 const INVOICES_URL = `https://x.test/api/v1/companies/${COMPANY_ID}/invoices`
 const REQUEST_BODY = { customer_id: 'cust-1', amount: 1250 }

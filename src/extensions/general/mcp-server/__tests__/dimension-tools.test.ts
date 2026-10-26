@@ -24,6 +24,16 @@ import {
 
 // Real detector by default; the bulk-book staging tests stub one "no
 // duplicate" answer per row so their queued mocks stay about dimensions.
+// The momsdeklaration impact has its own tests
+// (src/lib/vat/__tests__/voucher-vat-impact.test.ts); here it is a fixed
+// answer so the queued reads below stay the tool's own.
+vi.mock('@/lib/vat/voucher-vat-impact', () => ({
+  previewVoucherVatDeclaration: vi.fn().mockResolvedValue({
+    status: 'ok', vat_period: null, counted: true, excluded_as: null, rutor_change: {},
+    summary: 'Påverkar ingen ruta i momsdeklarationen.',
+  }),
+}))
+
 vi.mock('@/lib/transactions/booking-duplicate-detection', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/transactions/booking-duplicate-detection')>()
   return { ...actual, detectBookingDuplicate: vi.fn(actual.detectBookingDuplicate) }

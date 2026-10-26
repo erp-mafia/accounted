@@ -3,6 +3,7 @@ import {
   UNIT_MAX_LENGTH,
   UNIT_NAMES,
   UNIT_SUGGESTIONS,
+  customUnitOutcome,
   isUnitSuggestion,
   normalizeCustomUnit,
   unitName,
@@ -163,8 +164,52 @@ describe('normalizeCustomUnit', () => {
     expect(normalizeCustomUnit('   ')).toBe('')
   })
 
-  it('caps the length the API accepts', () => {
+  it('never shortens a long unit into a different word', () => {
     const long = 'x'.repeat(UNIT_MAX_LENGTH + 10)
-    expect(normalizeCustomUnit(long)).toHaveLength(UNIT_MAX_LENGTH)
+    expect(normalizeCustomUnit(long)).toBe(long)
+  })
+})
+
+describe('customUnitOutcome', () => {
+  it('commits the typed unit when the list closes without Enter (PH 180)', () => {
+    // Typing "EUR" and clicking outside used to drop it without a word.
+    expect(customUnitOutcome('EUR', 'close')).toEqual({ action: 'commit', unit: 'EUR' })
+  })
+
+  it('commits on Enter, as before', () => {
+    expect(customUnitOutcome('EUR', 'enter')).toEqual({ action: 'commit', unit: 'EUR' })
+  })
+
+  it('discards the typed unit on Escape', () => {
+    expect(customUnitOutcome('EUR', 'escape')).toEqual({ action: 'close' })
+    expect(customUnitOutcome('x'.repeat(UNIT_MAX_LENGTH + 1), 'escape')).toEqual({ action: 'close' })
+  })
+
+  it('commits the normalized text', () => {
+    expect(customUnitOutcome('  per   person ', 'close')).toEqual({ action: 'commit', unit: 'per person' })
+  })
+
+  it('never commits blank text, so closing keeps the unit the field had', () => {
+    expect(customUnitOutcome('', 'close')).toEqual({ action: 'close' })
+    expect(customUnitOutcome('   ', 'close')).toEqual({ action: 'close' })
+    expect(customUnitOutcome(' \t ', 'close')).toEqual({ action: 'close' })
+  })
+
+  it('does nothing on Enter in an empty field', () => {
+    expect(customUnitOutcome('', 'enter')).toEqual({ action: 'keep_open', invalid: false })
+    expect(customUnitOutcome('   ', 'enter')).toEqual({ action: 'keep_open', invalid: false })
+  })
+
+  it('accepts exactly the length the API takes', () => {
+    const max = 'x'.repeat(UNIT_MAX_LENGTH)
+    expect(customUnitOutcome(max, 'close')).toEqual({ action: 'commit', unit: max })
+    // Surrounding whitespace does not count against the limit.
+    expect(customUnitOutcome(`  ${max}  `, 'enter')).toEqual({ action: 'commit', unit: max })
+  })
+
+  it('keeps the list open on text over the limit instead of truncating it', () => {
+    const long = 'x'.repeat(UNIT_MAX_LENGTH + 1)
+    expect(customUnitOutcome(long, 'close')).toEqual({ action: 'keep_open', invalid: true })
+    expect(customUnitOutcome(long, 'enter')).toEqual({ action: 'keep_open', invalid: true })
   })
 })

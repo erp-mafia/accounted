@@ -66,6 +66,16 @@ function makeQueryBuilder(result: { data: unknown; error: unknown }) {
   return builder
 }
 
+/**
+ * The look before filing (lib/documents/queued-inbox-item.ts, crm#1413): the
+ * items already on the document, read right before the insert.
+ */
+function queuedItems(rows: unknown[]) {
+  const builder = makeQueryBuilder({ data: rows, error: null })
+  builder.then = (resolve: (v: unknown) => void) => resolve({ data: rows, error: null })
+  return builder
+}
+
 describe('MCP model-free document upload tools', () => {
   afterEach(() => {
     vi.unstubAllEnvs()
@@ -153,6 +163,7 @@ describe('MCP model-free document upload tools', () => {
     const invoiceLookups = [
       makeQueryBuilder({ data: null, error: null }),
       makeQueryBuilder({ data: null, error: null }),
+      queuedItems([]),
       inboxInsert,
     ]
     const supplier = makeQueryBuilder({ data: null, error: null })
@@ -207,6 +218,7 @@ describe('MCP model-free document upload tools', () => {
     const invoiceLookups = [
       makeQueryBuilder({ data: null, error: null }),
       makeQueryBuilder({ data: null, error: null }),
+      queuedItems([]),
       inboxInsert,
     ]
     const from = vi.fn((table: string) => {
@@ -251,6 +263,7 @@ describe('MCP model-free document upload tools', () => {
     const invoiceLookups = [
       makeQueryBuilder({ data: null, error: null }),
       makeQueryBuilder({ data: null, error: null }),
+      queuedItems([]),
       makeQueryBuilder({ data: { id: uploadId, status: 'received' }, error: null }),
       stamp,
     ]
@@ -279,6 +292,66 @@ describe('MCP model-free document upload tools', () => {
       ['is', 'created_supplier_invoice_id', null],
       ['select', 'id'],
     ])
+  })
+
+  it('takes over the item Arkiv queued while the reading ran instead of filing a twin (crm#1413)', async () => {
+    // Prod 2026-10-23: Arkiv classified the archived upload a minute before
+    // the extraction finished and queued it ('partner_api', no reading); the
+    // upload then filed its own item beside it. One upload, two items.
+    const queuedId = '66666666-6666-4666-8666-666666666666'
+    const reading = { supplier: { name: 'Synthetic Supplier AB', orgNumber: null }, invoice: { number: 'INV-1' } }
+    const takeoverCalls: Array<[string, ...unknown[]]> = []
+    const takeover: Record<string, unknown> = {}
+    for (const method of ['update', 'eq', 'is', 'select']) {
+      takeover[method] = vi.fn((...args: unknown[]) => {
+        takeoverCalls.push([method, ...args])
+        return takeover
+      })
+    }
+    takeover.then = (resolve: (v: unknown) => void) =>
+      resolve({ data: [{ id: queuedId, status: 'received', extracted_data: reading, matched_supplier_id: null, matched_transaction_id: null }], error: null })
+    const insert = makeQueryBuilder({ data: { id: uploadId, status: 'received' }, error: null })
+    const invoiceLookups = [
+      makeQueryBuilder({ data: null, error: null }),
+      makeQueryBuilder({ data: null, error: null }),
+      queuedItems([{
+        id: queuedId,
+        status: 'received',
+        extracted_data: null,
+        matched_supplier_id: null,
+        matched_transaction_id: null,
+        created_supplier_invoice_id: null,
+        created_journal_entry_id: null,
+        channel_context: { intake_source: 'partner_api' },
+      }]),
+      takeover,
+    ]
+    const from = vi.fn((table: string) => {
+      if (table === 'invoice_inbox_items') {
+        const next = invoiceLookups.shift()
+        return next ?? insert
+      }
+      if (table === 'suppliers') return makeQueryBuilder({ data: null, error: null })
+      if (table === 'document_attachments') return makeQueryBuilder({ data: { journal_entry_id: null }, error: null })
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    const result = await findTool('gnubok_complete_document_upload').execute(
+      { upload_id: uploadId, file_name: 'invoice.pdf', mime_type: 'application/pdf' },
+      companyId,
+      userId,
+      { from } as never,
+    )
+
+    expect(invoiceLookups).toHaveLength(0)
+    expect(insert.insert).not.toHaveBeenCalled()
+    expect(takeoverCalls[0]).toEqual(['update', expect.objectContaining({
+      source: 'upload',
+      channel_context: { intake_source: 'mcp' },
+      extracted_data: reading,
+      kind_hint: null,
+    })])
+    expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: queuedId, status: 'received', extracted_data: reading })
   })
 
   it('answers with the existing document when the same bytes are already archived, creating nothing', async () => {
@@ -388,7 +461,7 @@ describe('MCP model-free document upload tools', () => {
     else mocks.uploadDocument.mockResolvedValueOnce(document)
     const empty = makeQueryBuilder({ data: null, error: null })
     const insert = makeQueryBuilder({ data: { id: uploadId, status: 'received' }, error: null })
-    const inboxQueries = path === 'signed' ? [empty, empty, insert] : [insert]
+    const inboxQueries = path === 'signed' ? [empty, empty, queuedItems([]), insert] : [queuedItems([]), insert]
     const from = vi.fn((table: string) => table === 'invoice_inbox_items' ? inboxQueries.shift() : empty)
     const tool = findTool(path === 'signed' ? 'gnubok_complete_document_upload' : 'gnubok_upload_document')
     await tool.execute({

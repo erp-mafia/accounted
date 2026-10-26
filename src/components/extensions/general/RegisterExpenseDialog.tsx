@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import {
   Dialog,
@@ -18,6 +18,7 @@ import { useToast } from '@/components/ui/use-toast'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
+import { useLearnedExpenseAccount } from '@/components/expenses/use-learned-expense-account'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -64,6 +65,11 @@ function todayIso(): string {
   return `${now.getFullYear()}-${mm}-${dd}`
 }
 
+/** What the cost is booked on: an account number in classes 4-8 (CreateExpenseClaimSchema refuses anything else). */
+function isCostAccount(account: string): boolean {
+  return ACCOUNT_NUMBER_RE.test(account) && /^[4-8]/.test(account)
+}
+
 function parseAmount(raw: string): number {
   return parseAmountInput(raw) ?? 0
 }
@@ -93,6 +99,8 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
   // expense-claim-vat.ts); null until the receipt or the user answers.
   const [vatCase, setVatCase] = useState<ExpenseVatCase | null>(null)
   const [expenseAccount, setExpenseAccount] = useState('')
+  // A person's pick (or clearing) of the cost account: the learned account never replaces it.
+  const accountPicked = useRef(false)
   const [ownerName, setOwnerName] = useState('')
   const [employeeId, setEmployeeId] = useState('')
   const [employeeName, setEmployeeName] = useState('')
@@ -124,10 +132,22 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     // Prefilled only from VAT the receipt shows; otherwise the user answers.
     setVatCase(vatCaseFromReceipt({ currency, vatAmount: vat, sellerVatNumber: data?.supplier?.vatNumber }))
     setExpenseAccount('')
+    accountPicked.current = false
     setEmployeeId('')
     setEmployeeName('')
     setDimensions({})
   }, [open, item.id, data, currency])
+
+  // What the company booked this merchant on before (lib/expenses/learned-account.ts) opens in the empty
+  // account field, so a receipt from a known merchant is not a fresh pick every time (PH 101).
+  const merchant = data?.supplier?.name?.trim() || null
+  const chart = useMemo(() => new Set(accounts.map((a) => a.account_number)), [accounts])
+  const learned = useLearnedExpenseAccount(open ? merchant : null, chart)
+  const learnedAccount = learned?.account ?? null
+  useEffect(() => {
+    if (!open || !learnedAccount || !isCostAccount(learnedAccount) || accountPicked.current || expenseAccount) return
+    setExpenseAccount(learnedAccount)
+  }, [open, learnedAccount, expenseAccount])
 
   function setDimension(dimNo: string, code: string | null) {
     setDimensions((prev) => {
@@ -174,8 +194,7 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     (!vatDeductible || vatInput.trim().length > 0) &&
     vatAmount >= 0 &&
     vatAmount < amount &&
-    ACCOUNT_NUMBER_RE.test(expenseAccount) &&
-    /^[4-8]/.test(expenseAccount) &&
+    isCostAccount(expenseAccount) &&
     (payer === 'owner' || !!employeeId)
 
   // The verifikat the answer books, in the receipt's currency (the service
@@ -373,10 +392,18 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
             <AccountCombobox
               value={expenseAccount}
               accounts={accounts}
-              onChange={setExpenseAccount}
+              onChange={(account) => {
+                accountPicked.current = true
+                setExpenseAccount(account)
+              }}
               disabled={isSubmitting}
               selectedName={accountName}
             />
+            {learnedAccount && expenseAccount === learnedAccount && merchant && (
+              <p data-ph-mask="" className="text-[12.5px] text-muted-foreground">
+                {t('expense_account_learned', { merchant })}
+              </p>
+            )}
             {reverseChargeLines === null && (
               <p className="attn text-[12.5px]">{t('expense_reverse_charge_account', { account: expenseAccount })}</p>
             )}

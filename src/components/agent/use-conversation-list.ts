@@ -50,7 +50,12 @@ export interface ConversationListApi {
   commitEdit: (id: string) => Promise<void>
 }
 
-export function useConversationList(initial: ConversationRow[]): ConversationListApi {
+/**
+ * `now` is the instant the day groups count from; omitted, the clock when the
+ * list last changed. ChatSidebar passes one so its server render and hydration
+ * group alike (conversation-display.ts).
+ */
+export function useConversationList(initial: ConversationRow[], now?: number): ConversationListApi {
   const [conversations, setConversations] = useState<ConversationRow[]>(initial)
   const [query, setQuery] = useState('')
   const { toast } = useToast()
@@ -73,7 +78,7 @@ export function useConversationList(initial: ConversationRow[]): ConversationLis
     )
   }, [conversations, query])
 
-  const grouped = useMemo(() => groupConversations(filtered), [filtered])
+  const grouped = useMemo(() => groupConversations(filtered, now), [filtered, now])
 
   const togglePin = useCallback(
     async (id: string, current: boolean) => {

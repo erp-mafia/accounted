@@ -65,8 +65,8 @@ describe('Bokio sales invoice rows', () => {
   // crm#1190: Bokio states no row position, and its line id is not one: a
   // row moved to the top of an invoice in Bokio keeps a later id than the
   // rows below it (seen in the source JSON a customer sent, where the PDF
-  // order is the array order). The array as served is the only order there
-  // is, so it is written as it stands and never re-sorted by id.
+  // order is the array order). Such an order is written as it stands and
+  // never re-sorted by id.
   it('keeps the served order when the line ids do not follow it, never sorting by id', () => {
     const [consultancy, hotel, conference, cables, delivered] = BOKIO_INVOICE.lineItems
     const { items } = map({
@@ -80,6 +80,21 @@ describe('Bokio sales invoice rows', () => {
       [3, 'Conference: two nights'],
       [4, 'Cables'],
       [5, 'Delivered on site'],
+    ])
+  })
+
+  // crm#1190: the same list endpoint served an unarranged invoice with its
+  // lines in strictly descending id on the import days and in ascending id,
+  // the PDF's order, a week later. The rows land in the printed order either way.
+  it('writes an invoice served in strictly descending line id in the printed order', () => {
+    const { items } = map({ ...BOKIO_INVOICE, lineItems: [...BOKIO_INVOICE.lineItems].reverse() })
+
+    expect(items.map((item) => [item.sort_order, item.description, item.line_type])).toEqual([
+      [1, 'Consultancy services', 'product'],
+      [2, 'Hotel', 'product'],
+      [3, 'Conference: two nights', 'text'],
+      [4, 'Cables', 'product'],
+      [5, 'Delivered on site', 'text'],
     ])
   })
 

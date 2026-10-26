@@ -877,10 +877,29 @@ export const transactionsBulkBook = defineOperation({
             )
           case 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE': {
             const details = failure.details as
-              | { transaction_id?: string; candidate?: { voucher_label?: string; entry_date?: string; amount_verified?: boolean } }
+              | {
+                  transaction_id?: string
+                  candidate?: {
+                    voucher_label?: string
+                    entry_date?: string
+                    amount_verified?: boolean
+                    account_number?: string | null
+                    covering?: { unlinked: number }
+                  }
+                }
               | undefined
             const dup = details?.candidate
             if (!dup) return undefined
+            if (dup.covering) {
+              // Issue #101: a samlingsverifikat already holds the row's day.
+              return codedRefusal(
+                failure.code,
+                `Possible double booking: transaction ${details?.transaction_id} falls in the period of samlingsverifikat ${dup.voucher_label} (${dup.entry_date}), ` +
+                  `which still has ${dup.covering.unlinked} SEK on ${dup.account_number ?? 'the account'} that no transaction is linked to. ` +
+                  'Link the transaction to that verifikat (gnubok_reconcile_match; existing_journal_entry_id links several at once only when they sum to its net on the account) or ignore it (gnubok_ignore_transaction). ' +
+                  'Call again with force=true only after the user confirms it is not part of that verifikat.',
+              )
+            }
             return codedRefusal(
               failure.code,
               `Possible double booking: transaction ${details?.transaction_id} looks already booked by verifikat ${dup.voucher_label} (${dup.entry_date})` +

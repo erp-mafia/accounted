@@ -44,6 +44,12 @@ export interface DocumentImportRunSummary {
   unreachableSources: UnreachableAttachmentSource[]
   /** Where the next slice of an unfinished run continues; null once complete. */
   nextCursor: string | null
+  /**
+   * The run stopped because the provider refused the connection (a dead
+   * token, or a permission the files need): a reconnect, then a new run,
+   * carries on. Absent on summaries stored before it existed.
+   */
+  needsReconnect?: boolean
 }
 
 /**
@@ -86,6 +92,44 @@ export function foldDocumentImportSlice(
     ),
     unreachableSources: [...unreachableByScope.values()],
     nextCursor: slice.partial ? slice.nextCursor : null,
+    // A slice that answered got through: the connection works again.
+    needsReconnect: false,
+  }
+}
+
+/**
+ * The summary after a slice the provider refused outright, or null when that
+ * slice is not part of the recorded run. A run it continues keeps its counts
+ * and resume point and waits for a reconnect; a run that could not even start
+ * (no cursor) replaces the summary with an empty one that says so.
+ */
+export function markDocumentImportNeedsReconnect(
+  previous: DocumentImportRunSummary | null,
+  provider: string,
+  cursor: string | null,
+  at: string,
+): DocumentImportRunSummary | null {
+  const continues =
+    cursor !== null && previous !== null && !previous.complete && previous.nextCursor === cursor
+  if (continues) return { ...previous, updatedAt: at, needsReconnect: true }
+  if (cursor !== null) return null
+  return {
+    provider,
+    startedAt: at,
+    updatedAt: at,
+    complete: false,
+    total: 0,
+    scanned: 0,
+    linked: 0,
+    skipped: 0,
+    unmatched: 0,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: null,
+    needsReconnect: true,
   }
 }
 
@@ -103,7 +147,8 @@ function isDocumentImportRunSummary(value: unknown): value is DocumentImportRunS
     Array.isArray(summary.lockedPeriods) &&
     Array.isArray(summary.unmatchedSamples) &&
     Array.isArray(summary.unreachableSources) &&
-    (summary.nextCursor === null || typeof summary.nextCursor === 'string')
+    (summary.nextCursor === null || typeof summary.nextCursor === 'string') &&
+    (summary.needsReconnect === undefined || typeof summary.needsReconnect === 'boolean')
   )
 }
 
@@ -146,5 +191,16 @@ export async function recordDocumentImportSlice(
   at: string = new Date().toISOString(),
 ): Promise<void> {
   const next = foldDocumentImportSlice(await readDocumentImportRun(settings), slice, cursor, at)
+  if (next) await settings.set(DOCUMENT_IMPORT_RUN_KEY, next)
+}
+
+/** Mark the stored run as waiting for a reconnect (see markDocumentImportNeedsReconnect). */
+export async function recordDocumentImportNeedsReconnect(
+  settings: ExtensionSettings,
+  provider: string,
+  cursor: string | null,
+  at: string = new Date().toISOString(),
+): Promise<void> {
+  const next = markDocumentImportNeedsReconnect(await readDocumentImportRun(settings), provider, cursor, at)
   if (next) await settings.set(DOCUMENT_IMPORT_RUN_KEY, next)
 }

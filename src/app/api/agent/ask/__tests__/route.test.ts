@@ -100,6 +100,52 @@ describe('POST /api/agent/ask', () => {
     expect(b.code).toBe('empty_model_answer')
   })
 
+  it('502s telling the user to narrow the question when the answer hit the token ceiling', async () => {
+    answer.mockRejectedValue(new EmptyModelAnswerError('claude-sonnet-5', { truncated: true }))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    const { status, body: b } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(status).toBe(502)
+    expect(b.error).toContain('smalare fråga')
+    expect(b.code).toBe('empty_model_answer')
+  })
+
+  it('answers the empty-answer message in English for an English UI', async () => {
+    answer.mockRejectedValue(new EmptyModelAnswerError('claude-sonnet-5'))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ locale: 'en' }) }))
+    const { body: b } = await parseJsonResponse<{ error: string }>(res)
+    expect(b.error).toBe('The assistant gave no answer. Please try again.')
+  })
+
+  // Prod 2026-10-19: "503 Bedrock is unable to process your request." bursts
+  // answered 500 with a generic message and logged as our error. The SDK
+  // already retried; the honest answer is "the AI service is down, wait".
+  it('502s with a provider-unavailable message (not 503, which the console reads as unconfigured) on a Bedrock outage', async () => {
+    answer.mockRejectedValue(
+      Object.assign(new Error('503 Bedrock is unable to process your request.'), { status: 503 }),
+    )
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    const { status, body: b } = await parseJsonResponse<{ error: string; code: string }>(res)
+    expect(status).toBe(502)
+    expect(b.code).toBe('ai_provider_unavailable')
+    expect(b.error).toBe('AI-tjänsten är tillfälligt otillgänglig. Försök igen om en stund.')
+  })
+
+  it('treats a persisted-turn provider outage the same way, keeping the question in the thread', async () => {
+    answer.mockRejectedValue(Object.assign(new Error('Overloaded'), { status: 529 }))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body({ persist: true }) }))
+    const { status, body: b } = await parseJsonResponse<{ code: string }>(res)
+    expect(status).toBe(502)
+    expect(b.code).toBe('ai_provider_unavailable')
+    expect(persistUser).toHaveBeenCalled()
+    expect(persistAssistant).not.toHaveBeenCalled()
+  })
+
+  it('still 500s on our own failures (a 4xx from the provider is a request bug, not an outage)', async () => {
+    answer.mockRejectedValue(Object.assign(new Error('400 invalid request'), { status: 400 }))
+    const res = await POST(createMockRequest('/x', { method: 'POST', body: body() }))
+    expect(res.status).toBe(500)
+  })
+
   it('stateless (no persist): never touches the conversation tables', async () => {
     await POST(createMockRequest('/x', { method: 'POST', body: body() }))
     expect(resolveConv).not.toHaveBeenCalled()

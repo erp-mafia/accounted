@@ -181,6 +181,29 @@ function bokioLineType(line: Record<string, unknown>): SalesInvoiceLineDto['line
 }
 
 /**
+ * Bokio's sales line items in the order Bokio prints them on the invoice.
+ *
+ * A line item has no position field, and the array's order is not stable
+ * between calls. On 2026-10-04 and 10-07 the /invoices list served four of
+ * one company's invoices with their lines in strictly descending line id; a
+ * week later the same endpoint served them in ascending id, the order their
+ * PDFs print (crm#1190, proven against the import's payload hashes). A line
+ * id is assigned when the line is added, so an invoice nobody rearranged
+ * prints in ascending id. The fifth multi-line invoice, rearranged in Bokio
+ * (its first line was added last), was served in its printed order on every
+ * call. So a strictly descending id sequence is Bokio's backwards reading of
+ * an unarranged invoice and is turned round; any other order is kept as
+ * served. The one order this misreads is lines a user arranged in exactly
+ * reverse creation order.
+ */
+function bokioLinesInPrintOrder(lines: Record<string, unknown>[]): Record<string, unknown>[] {
+  if (lines.length < 2) return lines;
+  const ids = lines.map((line) => line['id']);
+  if (!ids.every((id): id is number => typeof id === 'number' && Number.isSafeInteger(id))) return lines;
+  return ids.every((id, i) => i === 0 || ids[i - 1] > id) ? [...lines].reverse() : lines;
+}
+
+/**
  * Bokio's sales line items (`salesInvoiceItem` and
  * `descriptionOnlyInvoiceItem`), shared by invoices and credit notes:
  * itemType, description, quantity, unitPrice, taxRate, unitType. The
@@ -195,7 +218,7 @@ function mapBokioSalesLines(
   rawLines: Record<string, unknown>[] | undefined,
   currency: string,
 ): SalesInvoiceLineDto[] {
-  return (rawLines ?? []).map((line, idx) => {
+  return bokioLinesInPrintOrder(rawLines ?? []).map((line, idx) => {
     const unitPrice = readNumber(line, ['unitPrice']);
     const quantity = readNumber(line, ['quantity']);
     const lineTotal = multiplyIfBothPresent(unitPrice, quantity);

@@ -320,6 +320,40 @@ describe('syncInvoiceStatusFromPaymentEntry', () => {
     })
   })
 
+  // A kreditfaktura refund (lib/invoices/refund-credit-note.ts): its storno
+  // moves the credit note's negative paid_amount back by the refund's row and
+  // leaves the status alone (credit notes never take the payment states).
+  it('restores a credit note refund without touching its status', async () => {
+    const { supabase, calls, updatePayload, wasDeleted } = createRecordingSupabase([
+      { data: [{ id: 'ip-1', amount: -10500, transaction_id: null }] }, // invoice_payments rows
+      { data: [] }, // transactions on the entry
+      { data: { paid_amount: -10500, total: -10500, due_date: '2026-10-11', credited_invoice_id: 'inv-7' } }, // invoices select
+      { data: null }, // invoices update
+      { data: null }, // invoice_payments delete
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(supabase, 'co-1', entry({ source_type: 'invoice_paid', source_id: 'cn-1' }))
+
+    expect(updatePayload('invoices')).toEqual({ paid_amount: 0, paid_at: null })
+    const update = calls.find((c) => c.table === 'invoices' && c.ops.some((o) => o.method === 'update'))
+    expect(update?.ops.find((o) => o.method === 'in')?.args).toEqual(['status', ['sent', 'overdue']])
+    expect(wasDeleted('invoice_payments')).toBe(true)
+  })
+
+  it('restores only the reversed part of a credit note refund', async () => {
+    const { supabase, updatePayload } = createRecordingSupabase([
+      { data: [{ id: 'ip-2', amount: -500, transaction_id: null }] },
+      { data: [] },
+      { data: { paid_amount: -1500, total: -2000, due_date: '2026-10-11', credited_invoice_id: 'inv-7' } },
+      { data: null },
+      { data: null },
+    ])
+
+    await syncInvoiceStatusFromPaymentEntry(supabase, 'co-1', entry({ source_type: 'invoice_paid', source_id: 'cn-1' }))
+
+    expect(updatePayload('invoices')).toEqual({ paid_amount: -1000, paid_at: null })
+  })
+
   // The collections rebook removes the payment the provider collected itself,
   // inside the window block_delete_collected_payment opens for it: the sync
   // reopens the invoice and leaves that row (deleting it would only be refused).

@@ -41,8 +41,10 @@ export const GET = withRouteContext(
         .from('invoices')
         // The status line columns (lib/invoices/status-display.ts
         // invoiceRowStatus): the card says what the invoice list says.
+        // external_invoice_number: a received self-billing invoice has no
+        // invoice_number, the card shows the customer's number (crm#1375).
         .select(
-          'id, invoice_number, invoice_date, due_date, status, total, currency, remaining_amount, paid_at, document_type, credited_invoice_id, is_self_billed, quote_status, valid_until',
+          'id, invoice_number, external_invoice_number, invoice_date, due_date, status, total, currency, remaining_amount, paid_at, document_type, credited_invoice_id, is_self_billed, quote_status, valid_until',
         )
         .eq('customer_id', id)
         .eq('company_id', companyId)

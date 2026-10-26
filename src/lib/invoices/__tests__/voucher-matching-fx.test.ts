@@ -577,6 +577,10 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
     expect(result[0].ar_line_currency).toBeNull()
     expect(result[0].match_reason).toContain('bokförd i SEK')
     expect(result[0].match_reason).toMatch(/11.600/)
+    // The link settles the whole remainder there and refuses a share, so the
+    // picker offers no amount to choose.
+    expect(result[0].whole_remainder).toBe(true)
+    expect(result[0].link_amount).toBeUndefined()
   })
 
   it('offers only what the link accepts: the SEK-booked candidate validates', async () => {
@@ -685,6 +689,25 @@ describe('findMatchingVouchersForInvoice: foreign-currency invoices', () => {
 
     expect(result).toEqual([])
     expect(validated).toMatchObject({ ok: false, code: 'LINK_VOUCHER_AMOUNT_EXCEEDS_REMAINING' })
+
+    // Where a person picks it is offered with the share the link accepts
+    // (crm#1434): the voucher settles both invoices, 1000 EUR is this one's.
+    const shared = await findMatchingVouchersForInvoice(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      { includeShared: true },
+    )
+    expect(shared).toHaveLength(1)
+    expect(shared[0]).toMatchObject({ journal_entry_id: 'je-sibling', ar_credit_amount: 1087, link_amount: 1000 })
+    const withShare = await validateVoucherForInvoiceLink(
+      supabase as never,
+      'company-1',
+      eurInvoice() as never,
+      'je-sibling',
+      shared[0].link_amount,
+    )
+    expect(withShare).toMatchObject({ ok: true, paymentAmount: 1000, voucherRemainingAfter: 87 })
   })
 })
 

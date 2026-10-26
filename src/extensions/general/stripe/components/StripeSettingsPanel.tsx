@@ -17,6 +17,7 @@ import {
 } from '../lib/settings-actions'
 import { MAX_BACKFILL_YEARS } from '../types'
 import type { StripeStatusResponse } from '../types'
+import { InvoicePaymentLinksRow } from './InvoicePaymentLinksRow'
 
 type ConnectionInfo = NonNullable<StripeStatusResponse['connection']>
 
@@ -57,6 +58,9 @@ export default function StripeSettingsPanel() {
       renderBadges={(c) =>
         !c.livemode && c.status === 'active' ? <Badge variant="warning">{t('test_mode')}</Badge> : null
       }
+      // Connecting does not turn invoice links on (that is the opt-in under
+      // Settings > Invoicing): show the switch where the merchant expects it.
+      renderExtras={(c) => (c.status === 'active' ? <InvoicePaymentLinksRow /> : null)}
       renderConnect={({ failureCopy }) => {
         async function handleConnect() {
           if (connecting) return

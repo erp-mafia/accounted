@@ -14,6 +14,16 @@ export const PROVIDER_DOCUMENT_SCOPES_REQUIRED =
 export const PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE =
   'PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE'
 
+/**
+ * The provider refused the connection itself and the run stopped once: a
+ * Fortnox token a refresh could not revive, a grant the refresh was refused,
+ * or a Bokio token without the right (B11). A reconnect is the way on.
+ */
+export const PROVIDER_CONNECTION_REFUSED_CODES: readonly string[] = [
+  'PROVIDER_AUTH_EXPIRED',
+  'PROVIDER_RESOURCE_FORBIDDEN',
+]
+
 export const ARCIM_DOCUMENT_OAUTH_RESUME_KEY =
   'arcim-document-oauth-resume'
 
@@ -428,7 +438,9 @@ function problemFromPayload(payload: unknown): ArcimDocumentImportProblem {
   return {
     code,
     requestId,
-    reconnectRequired: code === PROVIDER_DOCUMENT_SCOPES_REQUIRED,
+    reconnectRequired:
+      code === PROVIDER_DOCUMENT_SCOPES_REQUIRED ||
+      (code !== null && PROVIDER_CONNECTION_REFUSED_CODES.includes(code)),
     ...(providerMessage ? { providerMessage } : {}),
   }
 }
@@ -641,11 +653,16 @@ export type DocumentImportRunNote =
       unreachable: boolean
     }
   | { kind: 'running' | 'stopped'; date: string; scanned: number; total: number }
+  /** The provider refused the connection: nothing moves until it is reconnected (B11). */
+  | { kind: 'reconnect'; date: string; provider: string }
 
 export function documentImportRunNote(
   run: DocumentImportRunStatus | null | undefined,
 ): DocumentImportRunNote | null {
   if (!run) return null
+  if (!run.complete && run.needsReconnect) {
+    return { kind: 'reconnect', date: run.updatedAt, provider: run.provider }
+  }
   if (!run.complete) {
     return { kind: run.stalled ? 'stopped' : 'running', date: run.updatedAt, scanned: run.scanned, total: run.total }
   }

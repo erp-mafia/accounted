@@ -46,6 +46,7 @@ import {
 import { paidAtFromDate } from '@/lib/invoices/paid-at'
 import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { refundCreditNote, type RefundCreditNoteRow } from '@/lib/invoices/refund-credit-note'
 import { requireAccountingMethod } from '@/lib/company/accounting-method'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import {
@@ -69,7 +70,9 @@ const INVOICE_MARK_PAID_RESPONSE_COLUMNS =
 const InvoiceMarkPaidResponse = z.object({
   id: z.string().uuid(),
   invoice_number: z.string(),
-  status: z.enum(['paid', 'partially_paid']),
+  status: z
+    .enum(['paid', 'partially_paid', 'sent', 'overdue'])
+    .describe('A credit note keeps its status: its refund shows in paid_amount (negative, like its total) and paid_at.'),
   total: z.number(),
   paid_amount: z.number(),
   remaining_amount: z.number(),
@@ -80,6 +83,10 @@ const InvoiceMarkPaidResponse = z.object({
     .uuid()
     .optional()
     .describe('The sale verifikat this payment booked first (defer_invoice_booking); absent when none was booked.'),
+  refunded_amount: z
+    .number()
+    .optional()
+    .describe('Credit notes only: the kronor this call refunded to the customer.'),
 })
 
 registerEndpoint({
@@ -88,7 +95,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/mark-paid',
   summary: 'Record a payment against an invoice.',
   description:
-    'Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. Idempotent and dry-runnable. Emits invoice.paid.',
+    'Marks a sent / overdue / partially_paid invoice as paid (or partially_paid). Books the payment via Debit 1930 / Credit 1510 under faktureringsmetoden, or Debit 1930 / Credit revenue + Credit output VAT under kontantmetoden. Optional body supports partial payments via custom balanced journal lines and exchange-rate adjustments for foreign-currency invoices. On a credit note (kreditfaktura) it records the refund paid back to the customer instead: Debit 1510 / Credit the bank account, for what the customer has tillgodo. Idempotent and dry-runnable. Emits invoice.paid (not for a refund).',
   useWhen:
     'A customer paid an invoice via a channel other than the synced bank account (cash, manual transfer, separate processor). Use dry-run to confirm the booking before committing.',
   doNotUseFor:
@@ -100,6 +107,7 @@ registerEndpoint({
     'Custom `lines` are journal lines and therefore SEK, while `total` / `paid_amount` / `remaining_amount` are stored in the invoice currency. The route converts the line total via `invoice.exchange_rate`; a non-SEK invoice with no exchange_rate on file returns 400 MATCH_INVOICE_BOOKING_RATE_MISSING rather than silently treating the SEK amount as invoice currency.',
     'Cash basis (kontantmetoden) recognizes revenue HERE, not at :mark-sent. The dashboard tracks this via company_settings.accounting_method.',
     'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): an invoice sent without its verifikat is booked first by the :book step (Debit 1510 / Credit revenue + output VAT, dated on the invoice date), then the payment clears that 1510. sale_journal_entry_id in the response names it, and the dry run returns it as sale_entry. When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year INVOICE_BOOK_NO_FISCAL_PERIOD, a partially paid invoice INVOICE_BOOK_INVALID_STATUS), or the payment date is locked (PERIOD_LOCKED with details.payment_date), the payment is refused with that code, details.sale_first is true, and nothing is booked.',
+    'Credit notes: the refund is recorded for an issued SEK credit note with its verifikat and no ROT/RUT, up to what the customer has tillgodo (409 CREDIT_NOTE_REFUND_UNSUPPORTED or CREDIT_NOTE_REFUND_NOTHING_OWED otherwise). Custom `lines` must debit 1510 only. 409 CREDIT_NOTE_REFUND_LIKELY_BOOKED when a manual verifikat already debits 1510 with the amount; `force: true` (fresh Idempotency-Key) books it anyway.',
     'Duplicate-payment guard: if an unlinked inbound bank transaction looks like this payment, returns 409 INVOICE_PAID_LIKELY_DUPLICATE with candidate transactions. Retry with `force: true` to bypass, but the retry MUST use a fresh Idempotency-Key (the original is body-hash bound; reusing it returns 400 IDEMPOTENCY_KEY_REUSE). The guard is also evaluated under dry-run, so a successful dry-run does not guarantee a successful commit.',
   ],
   example: {
@@ -227,14 +235,61 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         },
       })
     }
+    // A kreditfaktura: the company pays its credit back to the customer. The
+    // same door records that refund (Dr 1510 / Cr bank), dry run included.
     if (typed.credited_invoice_id) {
-      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
-        requestId: ctx.requestId,
-        details: {
-          field: 'credited_invoice_id',
-          message: 'Credit notes cannot be marked paid; the original invoice they credit was already accounted for.',
-        },
+      if (exchangeRateDifference) {
+        return v1ErrorResponseFromCode('CREDIT_NOTE_REFUND_UNSUPPORTED', ctx.log, {
+          requestId: ctx.requestId,
+          details: { reason: 'foreign_currency' },
+        })
+      }
+      const refund = await refundCreditNote(ctx.supabase, ctx.companyId!, ctx.userId, {
+        creditNote: typed as unknown as RefundCreditNoteRow,
+        refundDate: bodyPaymentDate || todayIsoStockholm(),
+        settlementAccountNumber: await resolveInvoiceSettlementAccount(ctx.supabase, ctx.companyId!, typed),
+        customLines,
+        force,
+        dryRun: ctx.dryRun,
       })
+      if (!refund.ok) {
+        if (refund.code === 'BOOKKEEPING_ERROR' || refund.code === 'DB_ERROR') {
+          return v1ErrorResponse(refund.error, ctx.log, { requestId: ctx.requestId })
+        }
+        return v1ErrorResponseFromCode(refund.code, ctx.log, {
+          requestId: ctx.requestId,
+          ...('details' in refund ? { details: refund.details } : {}),
+        })
+      }
+      const { items: _refundItems, customer: _refundCustomer, journal_entry_id: _creditVoucher, deduction_total: _refundDeduction, ...refundHeader } =
+        typed as Invoice & { deduction_total?: number | null }
+      if (refund.dryRun) {
+        return dryRunPreview(
+          {
+            ...refundHeader,
+            paid_amount: refund.paidAmount,
+            paid_at: refund.refundedAt,
+            refunded_amount: refund.amount,
+            would_create_journal_entry: true,
+            journal_entry_preview: refund.lines,
+          },
+          { requestId: ctx.requestId, log: ctx.log },
+        )
+      }
+      const { data: storedCreditNote } = await ctx.supabase
+        .from('invoices')
+        .select(INVOICE_MARK_PAID_RESPONSE_COLUMNS)
+        .eq('company_id', ctx.companyId!)
+        .eq('id', invoiceId)
+        .maybeSingle()
+      return ok(
+        {
+          ...((storedCreditNote ?? { ...refundHeader, paid_amount: refund.paidAmount, paid_at: refund.refundedAt }) as object),
+          journal_entry_id: refund.journalEntryId,
+          refunded_amount: refund.amount,
+        },
+        { requestId: ctx.requestId },
+      )
     }
 
     // partially_paid is payable (#1717), as on the dashboard: the remaining

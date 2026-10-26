@@ -14,6 +14,12 @@ import { updateDraftJournalEntry } from '@/lib/core/bookkeeping/journal-entry-ed
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { reanchorOrphanedSupplierInvoiceDocuments } from '@/lib/core/documents/supplier-invoice-underlag'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import {
+  SIE_DELETE_BLOCK_CODE,
+  readSieDeleteBlock,
+  sieDeleteBlockFromDbError,
+} from '@/lib/core/bookkeeping/voucher-delete-guard'
 
 const logger = createLogger('journal-entries')
 
@@ -44,7 +50,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
 export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal_entry.delete',
-  async (_request, { supabase, companyId, user }, { params }) => {
+  async (_request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
 
   // Registers that hang on a verifikat live outside the GL, and their FKs are
@@ -61,10 +67,22 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   //     lib/bookkeeping/customer-share.ts, which is not duplicated into SQL.
   const { data: entryBefore } = await supabase
     .from('journal_entries')
-    .select('id, source_type, source_id')
+    .select('id, source_type, source_id, import_batch_id, reverses_id')
     .eq('id', id)
     .eq('company_id', companyId)
     .single()
+
+  // An SIE-imported verifikat, or the storno of an undone SIE import, is
+  // never deletable: the database refuses it (retain_sie_batch_entry,
+  // retain_sie_undo_reversal). Refuse here, before anything is read or
+  // reverted, with a typed 409 that names the way out (PH 212, crm#1438).
+  const sieBlock = entryBefore ? await readSieDeleteBlock(supabase, companyId, entryBefore) : null
+  if (sieBlock) {
+    return errorResponseFromCode(SIE_DELETE_BLOCK_CODE[sieBlock], log, {
+      requestId,
+      details: { entry_id: id },
+    })
+  }
 
   const customerPaymentEntry =
     entryBefore && isCustomerPaymentSourceType(entryBefore.source_type) ? entryBefore : null
@@ -97,6 +115,15 @@ export const DELETE = withRouteContext<{ params: Promise<{ id: string }> }>(
   })
 
   if (error) {
+    // The same refusals raised by the triggers themselves (the state changed
+    // since the read above): an expected answer, not a failure.
+    const raisedBlock = sieDeleteBlockFromDbError(error)
+    if (raisedBlock) {
+      return errorResponseFromCode(SIE_DELETE_BLOCK_CODE[raisedBlock], log, {
+        requestId,
+        details: { entry_id: id },
+      })
+    }
     logger.error('delete_last_voucher failed', { entryId: id, error })
     return NextResponse.json(
       { error: getErrorMessage(error, { context: 'journal_entry', statusCode: 400 }) },

@@ -118,6 +118,50 @@ describe('resolveConsent: Briox token refresh concurrency', () => {
     expect(refreshBrioxToken).not.toHaveBeenCalled();
   });
 
+  describe('a token the provider refused (B11)', () => {
+    // Stamped valid for ten more minutes: our clock says alive, Fortnox said 401.
+    const liveByClock = { ...expiredTokens, token_expires_at: new Date(Date.now() + 600_000).toISOString() };
+    const fortnoxConsent = { ...consentRow, provider: 'fortnox' };
+
+    it('refreshes the refused token although its stamped expiry has not passed', async () => {
+      mock.enqueue({ data: [fortnoxConsent] });
+      mock.enqueue({ data: [liveByClock] });
+      mock.enqueue({ data: [{ consent_id: 'c1', credential_revision: 'new-revision' }] });
+      vi.mocked(refreshFortnoxToken).mockResolvedValueOnce({ access_token: 'fresh', refresh_token: 'fresh-refresh', token_type: 'Bearer', expires_in: 3600 });
+
+      await expect(resolveConsent('co1', 'c1', { rejectedAccessToken: 'old-access' }))
+        .resolves.toMatchObject({ accessToken: 'fresh', credentialRevision: 'new-revision' });
+      expect(refreshFortnoxToken).toHaveBeenCalledOnce();
+    });
+
+    it('serves a token another request rotated since, without refreshing again', async () => {
+      mock.enqueue({ data: [fortnoxConsent] });
+      mock.enqueue({ data: [{ ...liveByClock, access_token: 'rotated-elsewhere' }] });
+
+      await expect(resolveConsent('co1', 'c1', { rejectedAccessToken: 'old-access' }))
+        .resolves.toMatchObject({ accessToken: 'rotated-elsewhere' });
+      expect(refreshFortnoxToken).not.toHaveBeenCalled();
+    });
+
+    it('answers a refused token whose refresh grant is gone with PROVIDER_AUTH_EXPIRED', async () => {
+      mock.enqueue({ data: [fortnoxConsent] });
+      mock.enqueue({ data: [liveByClock] });
+      mock.enqueue({ data: [liveByClock] }); // revision reconciliation: nobody renewed it
+      vi.mocked(refreshFortnoxToken).mockRejectedValueOnce(new FortnoxOAuthError('refresh', 400, 'invalid_grant'));
+
+      await expect(resolveConsent('co1', 'c1', { rejectedAccessToken: 'old-access' }))
+        .rejects.toMatchObject({ code: 'PROVIDER_AUTH_EXPIRED', providerCode: 'invalid_grant' });
+    });
+
+    it('leaves a live token alone when no refusal is named', async () => {
+      mock.enqueue({ data: [fortnoxConsent] });
+      mock.enqueue({ data: [liveByClock] });
+
+      await expect(resolveConsent('co1', 'c1')).resolves.toMatchObject({ accessToken: 'old-access' });
+      expect(refreshFortnoxToken).not.toHaveBeenCalled();
+    });
+  });
+
   it('persists the rotated pair when the guarded update wins the race', async () => {
     mock.enqueue({ data: [consentRow] }); // consent lookup
     mock.enqueue({ data: [expiredTokens] }); // expired token row

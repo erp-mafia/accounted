@@ -17,6 +17,7 @@ import type { InvoiceExtractionResult } from '@/types'
 import { isInboxDocumentKind } from '@/lib/documents/inbox-kind'
 import { normalizeDate, normalizeOrgNumber } from '@/lib/documents/extract/fields'
 import { equalOre, roundOre, sumOre } from '@/lib/money'
+import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
 import type { PeppolInboundDocument } from '@/lib/invoices/peppol-inbound-ubl'
 import type {
   Corroboration,
@@ -63,6 +64,7 @@ const collapse = (value: unknown): string => String(value).replace(/\s+/g, ' ').
  * Northern Ireland's XI.
  */
 export function countryFromVatIdentifier(vat: string | undefined): string | undefined {
+  if (isMalformedEuVatNumber(vat)) return undefined
   const match = vat?.replace(/\s/g, '').toUpperCase().match(/^([A-Z]{2})[0-9A-Z]{2,}$/)
   if (!match) return undefined
   if (match[1] === 'EL') return 'GR'
@@ -113,7 +115,10 @@ export function projectExtraction(raw: unknown): ReadingValueMap {
   const invoice = recordOf(raw.invoice)
   const totals = recordOf(raw.totals)
   const out: ReadingValueMap = {}
-  const vat = str(supplier.vatNumber)
+  // A value with an EU prefix that is not that state's VAT number (a VAT-code label such as "SESL000D") is
+  // neither the seller's VAT number nor its country (crm#1411).
+  const readVat = str(supplier.vatNumber)
+  const vat = readVat && !isMalformedEuVatNumber(readVat) ? readVat : undefined
   put(out, 'seller_name', str(supplier.name))
   put(out, 'seller_legal_registration_identifier', str(supplier.orgNumber))
   put(out, 'seller_vat_identifier', vat)

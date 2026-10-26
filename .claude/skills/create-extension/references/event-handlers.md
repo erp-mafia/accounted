@@ -16,7 +16,7 @@ export const myExtension: Extension = {
 }
 ```
 
-`ctx` can be `undefined` in cron job contexts: always provide fallbacks.
+`ctx.supabase` is the service-role client whichever path emitted the event (dashboard, v1 API key, MCP, webhook, cron): scope every query by `ctx.companyId`. Never open the request's cookie client in a handler: without a session cookie it is the anon role and silently reads nothing. `ctx` can be `undefined` when no context could be built: always provide fallbacks.
 
 ## All Event Types
 
@@ -56,7 +56,8 @@ async function handleTransactionSynced(
   if (!settings.featureEnabled) return  // Settings gate
 
   try {
-    const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+    // Service role in every emit path (v1, MCP and webhooks carry no session cookie): filter by companyId.
+    const supabase = ctx?.supabase ?? createServiceClientNoCookies()
     // Business logic...
     await ctx?.emit({ type: 'receipt.matched', payload: { /* ... */ userId } })
   } catch (error) { log.error('Handler failed:', error) }
@@ -65,7 +66,7 @@ async function handleTransactionSynced(
 
 ## Key Rules
 
-1. **Handle `ctx = undefined`**: fallback for supabase, logging, settings
+1. **Handle `ctx = undefined`**: fallback for supabase (`createServiceClientNoCookies()`), logging, settings
 2. **Handlers run concurrently**: order undefined, don't depend on other handlers
 3. **Use settings gates**: let users control features
 4. **Wrap in try/catch**: don't throw unhandled errors

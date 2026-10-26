@@ -1,0 +1,1 @@
+[2026-10-26] Cloud backup refuses a Google grant whose stated scopes lack drive.file at the OAuth callback but does not revoke it (the mail extension does): the grant carries only sign-in scopes, and a revoke ends that Google account's grant for the whole client, which could take down another company's working backup on the same account (B12).

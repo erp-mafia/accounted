@@ -370,6 +370,53 @@ export async function getInboxItem(
 // Delete
 // ---------------------------------------------------------------------------
 
+interface DeletePreviewRow {
+  id: string
+  document_id: string | null
+  extracted_data: Record<string, unknown> | null
+  email_from: string | null
+  email_subject: string | null
+  created_at: string | null
+}
+
+/**
+ * What approving a delete removes, and how the approver recognises the item
+ * (crm#1411, crm#1412). The card in Granskning showed "Ta bort post ur
+ * inkorgen" and nothing else, so the owner approved blind; and the preview
+ * said `would_delete: true` beside the document id, which read as if the
+ * file went too. It never does: the item goes, the document stays in the
+ * archive, and the preview now says both outright, with the file name,
+ * supplier, amount and sender to tell one item from another. A file name
+ * that cannot be read is left out, never a reason to refuse.
+ */
+async function deletePreview(ctx: OperationContext, item: DeletePreviewRow): Promise<Record<string, unknown>> {
+  let fileName: string | null = null
+  if (item.document_id) {
+    const { data: doc } = await ctx.supabase
+      .from('document_attachments')
+      .select('file_name')
+      .eq('id', item.document_id)
+      .eq('company_id', ctx.companyId)
+      .maybeSingle()
+    fileName = (doc as { file_name?: string | null } | null)?.file_name ?? null
+  }
+  const reading = readingSummary(item.extracted_data)
+  return {
+    inbox_item_id: item.id,
+    document_id: item.document_id ?? null,
+    inbox_item_deleted: true,
+    document_kept: true,
+    file_name: fileName,
+    supplier_name: reading.vendor_name,
+    amount: reading.amount,
+    currency: reading.currency,
+    invoice_date: reading.invoice_date,
+    email_from: item.email_from ?? null,
+    email_subject: item.email_subject ?? null,
+    received_at: item.created_at ?? null,
+  }
+}
+
 /**
  * Discard an inbox item. Refused once it became a supplier invoice or was
  * booked. The document it carried stays in the archive (a separate row with
@@ -382,7 +429,7 @@ export async function deleteInboxItem(
 ): Promise<OperationOutcome<{ id: string; deleted: true }>> {
   const { data: item, error: fetchError } = await ctx.supabase
     .from('invoice_inbox_items')
-    .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id, extracted_data')
+    .select('id, document_id, created_supplier_invoice_id, created_journal_entry_id, extracted_data, email_from, email_subject, created_at')
     .eq('id', inboxItemId)
     .eq('company_id', ctx.companyId)
     .maybeSingle()
@@ -396,11 +443,7 @@ export async function deleteInboxItem(
   }
 
   if (options.dryRun) {
-    return {
-      ok: true,
-      dryRun: true,
-      preview: { inbox_item_id: item.id, document_id: item.document_id ?? null, would_delete: true },
-    }
+    return { ok: true, dryRun: true, preview: await deletePreview(ctx, item as DeletePreviewRow) }
   }
 
   // Deleting the item dismisses the model's reading of its underlag.

@@ -1,6 +1,6 @@
 import { eventBus } from '@/lib/events/bus'
 import type { EventPayload } from '@/lib/events/types'
-import { createClient } from '@/lib/supabase/server'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { findSupplierInvoiceMatch } from '@/lib/invoices/supplier-invoice-matching'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { createLogger } from '@/lib/logger'
@@ -25,6 +25,12 @@ const log = createLogger('supplier-invoice-handler')
  * is "pre-fill, confirm to book": the user reviews and posts the verifikat.
  * Setting supplier_invoice_id directly would skip that confirmation and strand
  * the payment unbooked. This handler therefore never creates a journal entry.
+ *
+ * Reads and writes on the service-role client, scoped by companyId on every
+ * query, like the other core event consumers: the event fires from whatever
+ * registered or approved the invoice, and only a dashboard request has a
+ * session cookie. The cookie client was the anon role under a v1 API key, an
+ * MCP bearer token or a webhook, found no invoice and silently skipped.
  */
 export async function handleSupplierInvoiceRetroMatch(
   // .registered and .approved share this payload shape.
@@ -33,7 +39,7 @@ export async function handleSupplierInvoiceRetroMatch(
   const { supplierInvoice, userId, companyId } = payload
 
   try {
-    const supabase = await createClient()
+    const supabase = createServiceClientNoCookies()
 
     // Re-fetch with the supplier relation (the scorer reads bankgiro/plusgiro/
     // name): the emitted payload can be stale or lack the join.
@@ -103,6 +109,7 @@ export async function handleSupplierInvoiceRetroMatch(
       .from('transactions')
       .update({ potential_supplier_invoice_id: invoice.id })
       .eq('id', best.tx.id)
+      .eq('company_id', companyId)
       .is('supplier_invoice_id', null)
 
     await logMatchEvent(supabase, userId, best.tx.id, 'auto_suggested', {

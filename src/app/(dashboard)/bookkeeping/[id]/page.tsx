@@ -65,6 +65,7 @@ import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
+import type { SieDeleteBlock } from '@/lib/core/bookkeeping/voucher-delete-guard'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
 // Snapshot of a struck line, as stored in journal_entry_rattelse_log.
@@ -187,6 +188,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [showCommitConfirm, setShowCommitConfirm] = useState(false)
   const [commitVoucherPreview, setCommitVoucherPreview] = useState<string | null>(null)
   const [isLastInSeries, setIsLastInSeries] = useState(false)
+  // Set when the database refuses deleting this verifikat whatever the user
+  // does (an SIE-imported verifikat, or the storno of an undone SIE import):
+  // no "Radera verifikat" then, only where to go instead (PH 212).
+  const [deleteBlock, setDeleteBlock] = useState<SieDeleteBlock | null>(null)
   const [attachmentCount, setAttachmentCount] = useState(0)
   const [references, setReferences] = useState<UnderlagReference[]>([])
   const [editingNotes, setEditingNotes] = useState(false)
@@ -237,6 +242,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       setEntry(data.entry)
       setChain(data.chain)
       setIsLastInSeries(data.is_last_in_series ?? false)
+      setDeleteBlock(data.delete_block ?? null)
       // Period lock state for the entry's date, best-effort and not awaited
       // (the page paints without it): the endpoint fails closed (a lookup
       // failure reads as 'locked'), and a missing answer just keeps the
@@ -573,7 +579,8 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   // old surface offered no actions at all on reversed/cancelled entries; keep
   // that gate.
   const showActions = entry.status === 'posted' || entry.status === 'draft'
-  const showDelete = entry.status === 'draft' || isLastInSeries
+  const deleteOffered = entry.status === 'draft' || isLastInSeries
+  const showDelete = deleteOffered && !deleteBlock
   const showRattelseGroup = canCorrect && !isOpeningBalance
   // Inline rättelse is the normal correction path while the period is open,
   // so "Stryk rader" is promoted to a visible secondary button there (#1554:
@@ -744,6 +751,16 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                         <RotateCcw className="h-4 w-4" />
                         {t('reverse_action')}
                       </DropdownMenuItem>
+                    </>
+                  )}
+                  {deleteOffered && deleteBlock && (
+                    <>
+                      <DropdownMenuSeparator />
+                      <p className="max-w-64 px-2 py-1.5 text-xs text-muted-foreground">
+                        {deleteBlock === 'sie_batch_entry'
+                          ? t('delete_blocked_sie_batch')
+                          : t('delete_blocked_sie_undo_storno')}
+                      </p>
                     </>
                   )}
                   {showDelete && (

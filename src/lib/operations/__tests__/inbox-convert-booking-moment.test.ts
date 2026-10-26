@@ -36,7 +36,13 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+vi.mock('@/lib/auth/api-keys', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/auth/api-keys')>()),
+  createServiceClientNoCookies: vi.fn(),
+}))
+
 import { createClient } from '@/lib/supabase/server'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createSupplierInvoiceRegistrationEntry } from '@/lib/bookkeeping/supplier-invoice-entries'
 import { registerSupplierInvoiceHandler } from '@/lib/invoices/supplier-invoice-handler'
 import { CreateSupplierInvoiceSchema } from '@/lib/api/schemas'
@@ -46,6 +52,7 @@ import type { SupplierType } from '@/types'
 
 const mockCreateEntry = vi.mocked(createSupplierInvoiceRegistrationEntry)
 const mockCreateClient = vi.mocked(createClient)
+const mockServiceClient = vi.mocked(createServiceClientNoCookies)
 
 const SUPPLIER_UUID = '00000000-0000-4000-8000-000000000001'
 
@@ -59,7 +66,8 @@ const BODY = CreateSupplierInvoiceSchema.parse({
 })
 
 /**
- * The session client an event subscriber opens with createClient(): answers
+ * The client an event subscriber opens (createClient(), or the service-role
+ * client the core consumers use): answers
  * per table with what the database holds after the convert, the invoice
  * still unlinked when the company defers.
  */
@@ -108,6 +116,7 @@ async function convert(
   enqueue({ data: [{ id: 'item-1', sort_order: 0 }], error: null })
 
   mockCreateClient.mockImplementation(async () => subscriberClient(settings) as never)
+  mockServiceClient.mockImplementation(() => subscriberClient(settings) as never)
 
   return convertInboxItemToSupplierInvoice(
     {

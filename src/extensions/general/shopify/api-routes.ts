@@ -7,7 +7,12 @@ import { guardSandbox, sandboxBlockedResponse } from '@/lib/sandbox/guard'
 import { feedConnectorRoutes, type FeedConnectorSpec } from '@/lib/feed-sync/connector-routes'
 import { DEFAULT_PAYMENT_ACCOUNT } from '@/lib/webshop-orders/booking-lines'
 import { isShopifyConfigured, encryptCredential } from './lib/credentials'
-import { normalizeShopDomain, testConnectionAndFetchShopInfo } from './lib/api-client'
+import {
+  normalizeShopDomain,
+  ShopifyConnectError,
+  testConnectionAndFetchShopInfo,
+} from './lib/api-client'
+import { connectFailureMessage, connectFailureStatus } from './lib/connect-failure'
 import { syncShopifyOrders, type ShopifySyncSummary } from './lib/order-sync'
 import { MAX_BACKFILL_YEARS } from './types'
 import type { ShopifyConnection } from './types'
@@ -114,7 +119,7 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
       }
 
       // Verify before storing: a typo'd secret or missing read_orders scope
-      // must fail here, not at 03:15.
+      // must fail here, not at 03:15, and say which of the two it was.
       let shopInfo
       try {
         shopInfo = await testConnectionAndFetchShopInfo({
@@ -126,13 +131,14 @@ export const shopifyApiRoutes: ApiRouteDefinition[] = [
         log.warn('[shopify] Credential probe failed', {
           companyId: ctx.companyId,
           message: probeError instanceof Error ? probeError.message : String(probeError),
+          ...(probeError instanceof ShopifyConnectError
+            ? { kind: probeError.kind, grantedScopes: probeError.grantedScopes }
+            : {}),
         })
+        // Name what Shopify refused and what to change there (PH 161).
         return NextResponse.json(
-          {
-            error:
-              'Kunde inte ansluta till butiken med de angivna uppgifterna. Kontrollera adressen och att appen har behörigheten read_orders.',
-          },
-          { status: 400 },
+          { error: connectFailureMessage(probeError, shopDomain) },
+          { status: connectFailureStatus(probeError) },
         )
       }
 

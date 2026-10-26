@@ -9,6 +9,7 @@ import type { ExtensionContext } from '@/lib/extensions/types'
 import type { CloudBackupStatus } from '../types'
 import { createOAuthState } from '../lib/crypto'
 import { googleDriveProvider } from '../lib/google-provider'
+import { CloudScopeMissingError } from '../lib/cloud-provider'
 
 const BASE = 'https://test.local/api/extensions/ext/cloud-backup'
 
@@ -211,7 +212,58 @@ describe('canonical redirect URI', () => {
   })
 })
 
+describe('OAuth callback with the storage box unticked (B12)', () => {
+  it('stores nothing and sends the user back with reason missing_scope', async () => {
+    const route = findRoute('GET', '/oauth/callback')
+    const { ctx, set } = makeContext()
+    vi.spyOn(googleDriveProvider, 'exchangeCode').mockRejectedValue(
+      new CloudScopeMissingError('Google Drive', 'granted: openid email')
+    )
+    const callbackUrl = new URL(`${BASE}/oauth/callback`)
+    callbackUrl.searchParams.set('code', 'provider-code')
+    callbackUrl.searchParams.set('state', createOAuthState(ctx.userId, ctx.companyId))
+
+    const res = await route.handler(new Request(callbackUrl), ctx)
+
+    const location = new URL(res.headers.get('location')!)
+    expect(location.searchParams.get('cloud_backup')).toBe('error')
+    expect(location.searchParams.get('reason')).toBe('missing_scope')
+    expect(location.searchParams.get('provider')).toBe('google_drive')
+    expect(set).not.toHaveBeenCalled()
+    // The person's choice, not our failure: no error-level log.
+    expect(ctx.log.error).not.toHaveBeenCalled()
+  })
+})
+
 describe('GET /status', () => {
+  it('says why a connection needs reconnecting', async () => {
+    const route = findRoute('GET', '/status')
+    const { ctx } = makeContext({
+      google_drive_connection: makeConnection({
+        status: 'needs_reauth',
+        needs_reauth_reason: 'missing_scope',
+      }),
+      // Flagged before the reason existed: read as a dead token.
+      dropbox_connection: makeConnection({ status: 'needs_reauth' }),
+    })
+
+    const res = await route.handler(makeRequest('/status', 'GET'), ctx)
+    const { data } = (await res.json()) as { data: CloudBackupStatus }
+
+    expect(data.providers[0]).toMatchObject({ needs_reauth: true, reauth_reason: 'missing_scope' })
+    expect(data.providers[1]).toMatchObject({ needs_reauth: true, reauth_reason: 'token_revoked' })
+  })
+
+  it('reports no reason for a healthy connection', async () => {
+    const route = findRoute('GET', '/status')
+    const { ctx } = makeContext({ google_drive_connection: makeConnection() })
+
+    const res = await route.handler(makeRequest('/status', 'GET'), ctx)
+    const { data } = (await res.json()) as { data: CloudBackupStatus }
+
+    expect(data.providers[0].reauth_reason).toBeNull()
+  })
+
   it('reports every provider independently', async () => {
     const route = findRoute('GET', '/status')
     const { ctx } = makeContext({

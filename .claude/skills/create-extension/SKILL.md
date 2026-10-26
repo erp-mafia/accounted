@@ -29,6 +29,7 @@ Categories: `import`, `operations`, `reports`, `accounting`
 ```typescript
 import type { Extension, ExtensionContext } from '@/lib/extensions/types'
 import type { EventPayload } from '@/lib/events/types'
+import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { myExtApiRoutes } from './api-routes'
 
 interface MyExtSettings { featureEnabled: boolean; threshold: number }
@@ -45,7 +46,8 @@ async function handleSomeEvent(
   if (!settings.featureEnabled) return
 
   try {
-    const supabase = ctx?.supabase ?? await (await import('@/lib/supabase/server')).createClient()
+    // Service role in every emit path (v1, MCP and webhooks carry no session cookie): filter by companyId.
+    const supabase = ctx?.supabase ?? createServiceClientNoCookies()
     // ... business logic ...
   } catch (error) { log.error('Handler failed:', error) }
 }

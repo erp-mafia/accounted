@@ -27,7 +27,7 @@ vi.mock('@/lib/auth/api-keys', () => ({
 import { shopifyExtension } from '../index'
 import { requireCapability, capabilityBlockedResponse } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { testConnectionAndFetchShopInfo } from '../lib/api-client'
+import { testConnectionAndFetchShopInfo, ShopifyApiError, ShopifyConnectError } from '../lib/api-client'
 import { syncShopifyOrders } from '../lib/order-sync'
 import { decryptCredential } from '../lib/credentials'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -196,6 +196,53 @@ describe('shopify extension routes', () => {
         makeContext(supabase),
       )
       expect(res.status).toBe(400)
+    })
+
+    it('names the permission the store has not approved instead of the generic sentence (PH 161)', async () => {
+      const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] }) // no existing connection
+      vi.mocked(testConnectionAndFetchShopInfo).mockRejectedValue(
+        new ShopifyConnectError(
+          'orders_scope_not_granted',
+          new ShopifyApiError('Shopify GraphQL error: Access denied for orders field.', 403, 'ACCESS_DENIED'),
+          ['read_products'],
+        ),
+      )
+      const ctx = makeContext(supabase)
+      const res = await findRoute('POST', '/connect').handler(
+        makeRequest('POST', VALID_CONNECT_BODY),
+        ctx,
+      )
+      expect(res.status).toBe(400)
+      const body = await res.json()
+      expect(body.error).toContain('har inte godkänt behörigheten read_orders')
+      expect(body.error).toContain('minbutik.myshopify.com')
+      expect(body.error).toContain('read_products')
+      // The cause and the granted scopes reach the log, so the next ticket
+      // is answered from the log line alone.
+      expect(ctx.log.warn).toHaveBeenCalledWith(
+        '[shopify] Credential probe failed',
+        expect.objectContaining({ kind: 'orders_scope_not_granted', grantedScopes: ['read_products'] }),
+      )
+      // Nothing is stored for a store that cannot be read.
+      expect(findCall('shopify_connections', 'insert')).toBeUndefined()
+    })
+
+    it('answers 502 when Shopify could not be reached', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      supabase.auth.getUser.mockResolvedValue({ data: { user: USER }, error: null })
+      enqueue({ data: { is_sandbox: false } })
+      enqueue({ data: [] }) // no existing connection
+      vi.mocked(testConnectionAndFetchShopInfo).mockRejectedValue(
+        new ShopifyConnectError('unreachable', new ShopifyApiError('Shopify API 500', 500)),
+      )
+      const res = await findRoute('POST', '/connect').handler(
+        makeRequest('POST', VALID_CONNECT_BODY),
+        makeContext(supabase),
+      )
+      expect(res.status).toBe(502)
     })
 
     it('verifies, encrypts and activates on the happy path', async () => {

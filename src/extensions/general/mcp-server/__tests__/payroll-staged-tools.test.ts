@@ -577,6 +577,43 @@ describe('gnubok_book_salary_run', () => {
     expect(result.preview.current_status).toBe('review')
   })
 
+  // crm#1216: the verifikat credits the net pay to the bank on payment_date,
+  // so a date still ahead needs the user's word before anything is staged.
+  it('refuses a payment date ahead without confirm_payment_date_ahead, staging nothing', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, payment_date: '2999-12-31' } })
+
+    const error = (await bookSalaryRun
+      .execute({ salary_run_id: 'run-1' }, 'company-1', 'user-1', supabase as never, { type: 'user' })
+      .catch((err: unknown) => err)) as Error & { code?: string; remediation?: { args?: Record<string, unknown> } }
+
+    expect(error.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+    expect(error.message).toContain('2999-12-31')
+    expect(error.remediation?.args).toEqual({ salary_run_id: 'run-1', confirm_payment_date_ahead: true })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
+  it('stages a confirmed early payout, carrying the confirmation and telling the approver', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { ...RUN_ROW, status: 'paid', payment_date: '2999-12-31' } })
+    enqueue({ data: [ROSTER_ROW] }) // roster preflight
+    enqueue({ data: null }) // resolvePeriodStatusForDate: company_settings
+    enqueue({ data: null }) // resolvePeriodStatusForDate: fiscal_periods
+    enqueue({ data: { id: 'op-1' }, error: null }) // pending_operations insert
+
+    const result = (await bookSalaryRun.execute(
+      { salary_run_id: 'run-1', confirm_payment_date_ahead: true },
+      'company-1', 'user-1', supabase as never, { type: 'user' },
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.warnings).toEqual([
+      'Utbetalningsdagen 2999-12-31 har inte kommit än: nettolönen bokförs som utbetald från bankkontot den dagen.',
+    ])
+    const [row] = findCall('pending_operations', 'insert') as [{ params: Record<string, unknown> }]
+    expect(row.params).toEqual({ salary_run_id: 'run-1', confirm_payment_date_ahead: true })
+  })
+
   it('throws for an already-booked run', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { ...RUN_ROW, status: 'booked' } })

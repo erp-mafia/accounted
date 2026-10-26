@@ -12,6 +12,8 @@ import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
+import type { SkattekontoTaxDoubleCandidate } from '@/lib/transactions/skattekonto-tax-double'
+import SkattekontoTaxDoubleDialog from './SkattekontoTaxDoubleDialog'
 
 /** The bank transaction being booked, as much as the caller knows about it.
  *  Enables the "Matcha mot verifikatet" action for ledger-only candidates. */
@@ -92,13 +94,17 @@ export default function DuplicateBookingDialog({
   // the target is either a duplicate import (ignore), the second leg of an
   // N:1 settlement (match), or a genuinely separate identical event (book).
   const isSiblingCandidate = candidate !== null && candidate.transaction_id !== null
+  // A samlingsverifikat that holds the row's day and still has an unlinked
+  // part (issue #101): the row is most likely already in it, so it is linked
+  // there (match) or left out (ignore), and booked only if it is not in it.
+  const covering = candidate?.covering ?? null
 
   // Matching links THIS bank line to the existing voucher instead of minting a
   // second verifikat (one affärshändelse, one verifikat). Offered for both
   // candidate kinds: for ledger-only vouchers it is the right default, and for
   // sibling candidates manualLink explicitly permits N:1 links.
   const canMatch = candidate !== null && !!matchTransaction && !!onMatched
-  const canIgnore = isSiblingCandidate && !!matchTransaction && !!onIgnored
+  const canIgnore = (isSiblingCandidate || covering !== null) && !!matchTransaction && !!onIgnored
 
   // Session-cached (lib/reference-data); an empty list resolves to 1930 and
   // the link route re-validates the account either way.
@@ -184,6 +190,21 @@ export default function DuplicateBookingDialog({
 
   const busy = processing || matching || ignoring
 
+  // Issue #50: the skattekonto already booked this tax. Nothing to match or
+  // ignore (the verifikat found has no bank leg): the payment belongs on the
+  // skattekonto account, so the dialog says that and offers book anyway.
+  const skattekonto = (candidate as Partial<SkattekontoTaxDoubleCandidate> | null)?.skattekonto
+  if (candidate && skattekonto) {
+    return (
+      <SkattekontoTaxDoubleDialog
+        candidate={{ ...candidate, skattekonto }}
+        processing={busy}
+        onBookAnyway={onBookAnyway}
+        onCancel={onCancel}
+      />
+    )
+  }
+
   return (
     <Dialog
       open={candidate !== null}
@@ -204,14 +225,24 @@ export default function DuplicateBookingDialog({
           <div className="flex items-center gap-2">
             <DialogTitle>{t('dialog_duplicate_title')}</DialogTitle>
             <HelpPopover className="shrink-0">
-              {isSiblingCandidate ? t('dialog_duplicate_help_sibling') : t('dialog_duplicate_help')}
-              {canIgnore && <> {t('dialog_duplicate_ignore_hint')}</>}
+              {covering
+                ? t('dialog_duplicate_help_covering')
+                : isSiblingCandidate
+                  ? t('dialog_duplicate_help_sibling')
+                  : t('dialog_duplicate_help')}
+              {canIgnore && (
+                <> {covering ? t('dialog_duplicate_ignore_hint_covering') : t('dialog_duplicate_ignore_hint')}</>
+              )}
             </HelpPopover>
           </div>
         </DialogHeader>
         <div className="space-y-4">
           <p className="text-sm text-muted-foreground">
-            {isSiblingCandidate ? t('dialog_duplicate_body_sibling') : t('dialog_duplicate_body')}
+            {covering
+              ? t('dialog_duplicate_body_covering', { unlinked: formatCurrency(covering.unlinked, 'SEK') })
+              : isSiblingCandidate
+                ? t('dialog_duplicate_body_sibling')
+                : t('dialog_duplicate_body')}
           </p>
           {candidate && (
             <div className="space-y-1 rounded-lg border bg-muted/30 p-3">

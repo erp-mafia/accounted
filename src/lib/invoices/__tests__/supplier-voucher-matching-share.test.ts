@@ -545,6 +545,39 @@ describe('findMatchingVouchersForSupplierInvoice: a verifikat with more left tha
     expect(result[0].match_reason).toMatch(/^Verifikationen har 5.250,00 SEK kvar, mer än fakturans belopp/)
   })
 
+  it('offers what is left after another invoice took part of it, and says how much (crm#1434)', async () => {
+    const result = await find(
+      [
+        { data: [entry()] },
+        { data: [line('je-1', 5250)] },
+        { data: [{ journal_entry_id: 'je-1', supplier_invoice_id: 'si-other', amount: 4000, currency: 'SEK' }] },
+        openPeriod,
+      ],
+      { includeShared: true },
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ ap_debit_amount: 1250, already_linked: 4000 })
+    expect(result[0].link_amount).toBeUndefined()
+  })
+
+  it('a verifikat named by its number is read at any date', async () => {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [entry({ entry_date: '2027-01-15' })] },
+      { data: [line('je-1', 5250)] },
+      { data: [] },
+      openPeriod,
+    ])
+    const result = await findMatchingVouchersForSupplierInvoice(supabase as never, 'company-1', invoice() as never, {
+      includeShared: true,
+      voucher: { series: 'A', number: 12 },
+    })
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['voucher_number', 12])
+    expect(findCalls('journal_entries', 'gte')).toEqual([])
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ journal_entry_id: 'je-1', link_amount: 1250 })
+  })
+
   it('ranks under a verifikat whose amount is the amount of the invoice', async () => {
     const result = await find(
       [

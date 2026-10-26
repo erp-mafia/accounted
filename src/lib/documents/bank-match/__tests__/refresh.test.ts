@@ -362,6 +362,28 @@ describe('refreshInboxItemBankMatch', () => {
     expect(outcome).toMatchObject({ decision: { evidenceLevel: 'trolig', basis: 'rule_amount_date' } })
   })
 
+  it('a document in a currency Riksbanken has no rate for (Albanian lek) is checked without a kronor value: no proposal, no request, no error', async () => {
+    loadDocumentReading.mockResolvedValue(
+      reading({ document_type: 'receipt', seller_name: 'Hotel Vlora', amount_due_for_payment: 7000, invoice_currency_code: 'ALL', invoice_issue_date: '2026-08-23' }),
+    )
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+    const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+    const { supabase } = createTableMockSupabase({
+      invoice_inbox_items: inboxItems(itemRow()),
+      transactions: [{ data: [] }, { data: [bankRow({ amount: -700, reference: null, merchant_name: 'HOTEL VLORA', date: '2026-08-23' })] }],
+    })
+    try {
+      // The default rate lookup (Riksbanken through fetchExchangeRate), not an injected one.
+      const outcome = await refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, { today: DEPS.today })
+      expect(outcome).toEqual({ status: 'updated', decision: null })
+      expect(fetchSpy).not.toHaveBeenCalled()
+      expect(consoleError).not.toHaveBeenCalled()
+    } finally {
+      fetchSpy.mockRestore()
+      consoleError.mockRestore()
+    }
+  })
+
   it('throws on a failed read, leaving the stored answer as it was', async () => {
     const { supabase, payloads } = createTableMockSupabase({ invoice_inbox_items: { error: { message: 'boom' } } })
     await expect(refreshInboxItemBankMatch(supabase as never, COMPANY, 'item-1', RULES, DEPS)).rejects.toThrow('boom')

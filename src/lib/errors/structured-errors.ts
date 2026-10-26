@@ -939,9 +939,9 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
   TRANSACTION_BOOK_POSSIBLE_DUPLICATE: {
     httpStatus: 409,
     message_sv:
-      'Den här affärshändelsen ser redan ut att vara bokförd: antingen en annan transaktion på samma datum och belopp, eller en verifikation som redan bokar samma belopp på bankkontot (t.ex. en betald faktura eller en lönekörning). Bokför inte samma affärshändelse två gånger. Granska den befintliga verifikationen och länka transaktionen till den, eller bokför ändå om de inte hör ihop.',
+      'Den här affärshändelsen ser redan ut att vara bokförd: en annan transaktion på samma datum och belopp, en verifikation som redan bokar samma belopp på bankkontot (t.ex. en betald faktura eller en lönekörning), eller ett samlingsverifikat på samma konto som omfattar dagen och har en del som ingen transaktion är kopplad till. Bokför inte samma affärshändelse två gånger. Granska den befintliga verifikationen och länka transaktionen till den, eller bokför ändå om de inte hör ihop.',
     message_en:
-      'This business event already appears to be booked: either another transaction with the same date and amount, or a voucher that already books the same amount on the bank account (e.g. a paid invoice or a salary run). Do not book the same business event twice. Review the existing voucher and link this transaction to it, or pass force=true to book it anyway if they are genuinely unrelated.',
+      'This business event already appears to be booked: another transaction with the same date and amount, a voucher that already books the same amount on the bank account (e.g. a paid invoice or a salary run), or a combined voucher (samlingsverifikat) on the same account that covers the day and has a part no transaction is linked to (details.candidate.covering). Do not book the same business event twice. Review the existing voucher and link this transaction to it, or pass force=true to book it anyway if they are genuinely unrelated.',
   },
   // crm#1264: one open proposal per bank row (lib/pending-operations/transaction-claims.ts).
   TRANSACTION_ALREADY_STAGED: {
@@ -2615,6 +2615,51 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
       description:
         'Match the candidate transaction via POST /api/transactions/{id}/match-invoice, or resend mark-paid with force: true to create the payment entry anyway. When using the v1 endpoint, the force retry requires a fresh Idempotency-Key (the original key is bound to the body hash).',
     },
+  },
+  // Refund of a kreditfaktura through the mark-paid doors (lib/invoices/refund-credit-note.ts).
+  CREDIT_NOTE_REFUND_NOTHING_OWED: {
+    httpStatus: 409,
+    message_sv:
+      'Kunden har inget tillgodo på kreditfakturan: originalfakturan var inte betald, eller så är krediten redan återbetald eller kvittad mot en annan faktura.',
+    message_en:
+      'Nothing is owed to the customer on this credit note: the original was unpaid, or the credit was already refunded or set off against another invoice.',
+  },
+  CREDIT_NOTE_REFUND_UNSUPPORTED: {
+    httpStatus: 409,
+    message_sv:
+      'Återbetalningen kan inte registreras på den här kreditfakturan (den är inte utfärdad, saknar verifikation, är i utländsk valuta eller har ROT/RUT). Bokför återbetalningen som en egen verifikation: debet 1510 Kundfordringar, kredit bankkontot.',
+    message_en:
+      'This credit note cannot take a refund here (details.reason: not_issued, not_booked, foreign_currency, rot_rut or no_original). Book the refund as its own voucher: debit 1510, credit the bank account.',
+    remediation: {
+      description:
+        'not_booked: complete the credit note\'s bookkeeping first (its reversing voucher is missing). Otherwise create the voucher Dr 1510 / Cr the bank account with the journal-entries endpoints.',
+    },
+  },
+  CREDIT_NOTE_REFUND_EXCEEDS_OWED: {
+    httpStatus: 400,
+    message_sv: 'Återbetalningen är större än det kunden har tillgodo på kreditfakturan.',
+    message_en: 'The refund is larger than what the customer is owed on the credit note (details.owed).',
+  },
+  CREDIT_NOTE_REFUND_LINES_INVALID: {
+    httpStatus: 400,
+    message_sv: 'En återbetalning debiterar 1510 Kundfordringar och krediterar kontot pengarna gick ut från.',
+    message_en: 'Refund lines must debit 1510 only and credit the account the money left from (never a 151x receivable).',
+  },
+  CREDIT_NOTE_REFUND_LIKELY_BOOKED: {
+    httpStatus: 409,
+    message_sv:
+      'Återbetalningen ser redan ut att vara bokförd: en verifikation debiterar 1510 med samma belopp. Registrera den bara om det är en annan återbetalning.',
+    message_en:
+      'A posted voucher already debits 1510 with this amount (details.candidates): the refund is most likely booked already.',
+    remediation: {
+      description:
+        'Check the candidate vouchers. Only when this is a separate refund, resend with force: true (dashboard and v1; a fresh Idempotency-Key on v1) or allow_duplicate: true (gnubok_mark_invoice_as_paid).',
+    },
+  },
+  CREDIT_NOTE_REFUND_RACE: {
+    httpStatus: 409,
+    message_sv: 'Kreditfakturan ändrades samtidigt (en annan återbetalning registrerades). Ladda om och försök igen.',
+    message_en: 'The credit note changed concurrently (another refund was recorded). Reload and retry.',
   },
   INVOICE_DELETE_NOT_DRAFT: {
     httpStatus: 400,
@@ -4594,6 +4639,14 @@ const BANK_SELECTION: Record<string, StructuredErrorEntry> = {
     httpStatus: 400,
     message_sv: 'Ett av de valda bokföringskontona finns inte i kontoplanen. Ladda om sidan, välj konton igen och spara. Inget sparades.',
     message_en: 'One of the chosen ledger accounts is not in the chart of accounts. Reload the page, choose the accounts again and save. Nothing was saved.',
+  },
+  // Changing a synced account's ledger account (lib/cash-accounts/ledger-change.ts)
+  // on a connection that is not active: waiting for its first account choice,
+  // ended or failed. Nothing to save until it is chosen or renewed.
+  BANK_LEDGER_CHANGE_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Bankkopplingen är inte aktiv, så bokföringskontot kan inte bytas nu. Välj konton eller förnya kopplingen under Inställningar > Kopplingar och byt sedan. Inget sparades.',
+    message_en: 'The bank connection is not active, so the ledger account cannot be changed now. Choose the accounts or renew the connection under Settings > Connections, then change it. Nothing was saved.',
   },
 }
 
@@ -6775,6 +6828,22 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lönekörningen måste vara markerad som betald för bokföring.',
     message_en: 'Salary run must be marked paid before booking.',
   },
+  // lib/salary/payout-date.ts paymentDateAheadRefusal (crm#1216): marking a
+  // run paid or booking it before its payment date needs an explicit
+  // confirmation at every door, since the salary verifikat credits the net
+  // pay to the bank account on that date. Confirmed, it goes through.
+  SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED: {
+    httpStatus: 422,
+    message_sv:
+      'Lönens utbetalningsdag har inte kommit än. Nettolönen bokförs som utbetald från bankkontot på utbetalningsdagen, så markera körningen som betald och bokför den när lönen har gått ut. Är lönen redan utbetald, eller ligger betalningen klar i banken, bekräfta det och försök igen.',
+    message_en:
+      'The salary payment date (details.payment_date) has not come yet. The net pay is posted as paid out of the bank account on that date, so mark the run paid and book it once the salary has gone out. If it has already been paid, or the payment is scheduled in the bank, send confirm_payment_date_ahead: true.',
+    remediation: {
+      description:
+        'Ask the user whether the salaries have already been paid or the payment file is scheduled in the bank. If so, call again with confirm_payment_date_ahead: true; otherwise wait until details.payment_date.',
+    },
+    retryable: false,
+  },
   SALARY_RUN_ALREADY_BOOKED: {
     httpStatus: 409,
     message_sv: 'Lönekörningen är redan bokförd.',
@@ -6950,6 +7019,37 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       description:
         'A posted verifikat that a register points at is corrected, never deleted (BFL 5 kap. 5 §). Reverse it with storno (gnubok_reverse_journal_entry); details.register names the register and the remediation on the error names its own way back.',
       tool: 'gnubok_reverse_journal_entry',
+    },
+  },
+  // The voucher DELETE refuses these up front (lib/core/bookkeeping/voucher-
+  // delete-guard.ts) with the same sentences get-error-message.ts gives the
+  // triggers' own refusals (PH 212, crm#1438).
+  JOURNAL_ENTRY_DELETE_SIE_BATCH_ENTRY: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen kommer från en SIE-import och kan inte raderas en och en. Ångra hela importen under Bokföring > Importera/Exportera > Importhistorik: alla verifikationer i importen makuleras då med storno, och filen kan importeras igen.',
+    message_en:
+      'This voucher was posted by an SIE import and cannot be deleted on its own. Undo the whole import under Import history: every voucher of the import is then reversed by storno, and the file can be imported again.',
+    retryable: false,
+    remediation: {
+      description:
+        'An SIE-imported verifikat leaves the ledger only with its whole import (retain_sie_batch_entry). Undo the import (gnubok_undo_sie_import, stages for approval; gnubok_sie_import_status shows its state), or correct this one verifikat by storno (gnubok_reverse_journal_entry). Never delete vouchers one by one to redo an import.',
+      tool: 'gnubok_undo_sie_import',
+      resource: '/import?mode=sie',
+    },
+  },
+  JOURNAL_ENTRY_DELETE_SIE_UNDO_STORNO: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen makulerar en ångrad SIE-import och kan inte raderas: då blir importens verifikationer aktiva igen. Importera filen på nytt under Bokföring > Importera/Exportera, eller börja om med tomma verifikationsserier med Gör om migrering under Inställningar > Företag > Allmänt > Riskzon.',
+    message_en:
+      'This voucher reverses an undone SIE import and cannot be deleted: the import\'s vouchers would become active again. Import the file again, or start over with empty voucher series via Redo migration under Settings > Company.',
+    retryable: false,
+    remediation: {
+      description:
+        'The storno belongs to an undone or replaced SIE import (retain_sie_undo_reversal). To bring the vouchers back, import the file again (gnubok_import_sie). To start the books over, the owner uses Redo migration (Gör om migrering) under Settings > Company in the app.',
+      tool: 'gnubok_import_sie',
+      resource: '/settings/company',
     },
   },
   SALARY_RUN_DELETE_BLOCKED_BY_PAYMENT_FILE: {

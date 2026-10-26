@@ -2,12 +2,15 @@ import type { Extension } from '@/lib/extensions/types'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
+import { carryReadingToQueuedItems } from '@/lib/documents/inbox-extraction/carry-to-queue'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { getAiStatus } from '@/lib/ai'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createLogger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
-import type { DocumentAttachment } from '@/types'
+import type { DocumentAttachment, InvoiceExtractionResult } from '@/types'
 import type { DocumentExtractionOwner } from '@/lib/events/types'
 
 const log = createLogger('document-extraction')
@@ -175,18 +178,51 @@ async function extractAndPersist(
     // documents it owns: skipped:<reason> when no model call was made,
     // failed:no_raw_text when the call yielded nothing parseable, else the
     // reading and the model that answered.
-    const { rawText, model, skipped } = await extractAndMirror(document.id, {
+    const { data, rawText, model, skipped } = await extractAndMirror(document.id, {
       buffer,
       mimeType,
       fileName: (document.file_name as string) || 'document',
       ownCompany: await fetchOwnCompanyIdentity(supabase, companyId),
     })
-    if (!skipped && rawText) log.info('extraction persisted', { doc: document.id, model, companyId })
+    // The same test the mirror stamps a reading by: a model call that answered and was parsed.
+    if (!skipped && rawText != null && data != null) {
+      log.info('extraction persisted', { doc: document.id, model, companyId })
+      await fillQueuedItems(supabase, companyId, document.id, data)
+    }
   } catch (err) {
     log.warn('extraction threw', {
       doc: document.id,
       err: err instanceof Error ? err.message : String(err),
     })
     await stamp(supabase, document.id, 'failed:exception')
+  }
+}
+
+/**
+ * The Underlag item Arkiv queued for this document while it was being read
+ * gets the reading now (lib/documents/inbox-extraction/carry-to-queue.ts),
+ * with the supplier match and the bank check the inbox gives an item it read
+ * itself. Best effort: the reading is on the document either way, and the
+ * inbox list shows it from there.
+ */
+async function fillQueuedItems(
+  supabase: SupabaseClient,
+  companyId: string,
+  documentId: string,
+  reading: InvoiceExtractionResult,
+): Promise<void> {
+  try {
+    const filled = await carryReadingToQueuedItems(
+      supabase,
+      { companyId, documentId, reading: reading as unknown as Record<string, unknown> },
+      { supplierFor: () => matchSupplierId(supabase, companyId, reading.supplier) },
+    )
+    for (const itemId of filled) await proposeBankMatchForInboxItem(supabase, companyId, itemId, log)
+    if (filled.length > 0) log.info('reading carried to queued items', { doc: documentId, items: filled.length })
+  } catch (err) {
+    log.warn('carrying the reading to queued items failed', {
+      doc: documentId,
+      err: err instanceof Error ? err.message : String(err),
+    })
   }
 }

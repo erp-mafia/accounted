@@ -20,8 +20,19 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
   }
 })
 
+// The momsdeklaration impact has its own tests
+// (src/lib/vat/__tests__/voucher-vat-impact.test.ts); here it is a fixed
+// answer so the queued reads below stay the tool's own.
+vi.mock('@/lib/vat/voucher-vat-impact', () => ({
+  previewVoucherVatDeclaration: vi.fn().mockResolvedValue({
+    status: 'ok', vat_period: null, counted: true, excluded_as: null, rutor_change: {},
+    summary: 'Påverkar ingen ruta i momsdeklarationen.',
+  }),
+}))
+
 import { tools } from '../server'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { previewVoucherVatDeclaration } from '@/lib/vat/voucher-vat-impact'
 
 const createVoucher = tools.find((t) => t.name === 'gnubok_create_voucher')!
 const correctEntry = tools.find((t) => t.name === 'gnubok_correct_entry')!
@@ -354,6 +365,19 @@ describe('gnubok_create_voucher: staging gates', () => {
     expect(result.operation_id).toBe('op-staged')
     expect(result.preview.total_debit).toBe(250)
     expect(result.preview.total_credit).toBe(250)
+
+    // The momsdeklaration impact (crm#1447) is computed from the lines that
+    // post, in the resolved fiscal period, and carried in the preview.
+    expect(previewVoucherVatDeclaration).toHaveBeenCalledWith(supabase, 'company-1', {
+      entryDate: '2026-05-12',
+      fiscalPeriodId: 'fp-1',
+      lines: expect.arrayContaining([
+        expect.objectContaining({ account_number: '1010', debit_amount: 250 }),
+        expect.objectContaining({ account_number: '1930', credit_amount: 250 }),
+      ]),
+      isOpeningBalance: false,
+    })
+    expect(result.preview.vat_declaration).toMatchObject({ status: 'ok', counted: true, rutor_change: {} })
 
     // No document attached: the advisory BFL 5 kap 6§ warning must reach both
     // the agent (message) and the /pending approval card (preview) without

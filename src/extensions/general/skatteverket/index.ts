@@ -80,7 +80,12 @@ import {
   validateAgiUppgift,
 } from './lib/core-actions'
 import type { SkvActionFailure } from '@/lib/skatteverket/extension-actions'
-import { SKATTEKONTO_BALANCE_SNAPSHOT_KEY, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './lib/skattekonto-sync'
+import {
+  SKATTEKONTO_BALANCE_SNAPSHOT_KEY,
+  SKATTEKONTO_LAST_SYNCED_AT_KEY,
+  SKATTEKONTO_UNAVAILABLE_KEY,
+  type SkattekontoUnavailableState,
+} from './lib/skattekonto-sync'
 import { fetchDeclarationView, fetchVatDeclarationStatus } from './lib/declaration-status'
 import { runPostConnectRefresh } from './lib/post-connect-refresh'
 import { declarationKvittens, newestAgiKvittens, promoteAgiDeclaration } from './lib/agi-kvittens-reconcile'
@@ -876,6 +881,13 @@ export const skatteverketExtension: Extension = {
         // proactively instead of only after a live failure.
         const health = await getTokenHealth(ctx.supabase, ctx.userId, ctx.companyId)
 
+        // Skatteverket's last answer when it would not hand the skattekonto
+        // over (no account yet, person not authorized): the panel says so
+        // instead of the sync failing silently every hour (B07).
+        const unavailable = await ctx.settings
+          .get<SkattekontoUnavailableState>(SKATTEKONTO_UNAVAILABLE_KEY)
+          .catch(() => null)
+
         return NextResponse.json({
           connected: true,
           ombud,
@@ -883,6 +895,9 @@ export const skatteverketExtension: Extension = {
           canRefresh,
           needsReconsent: health?.status === 'needs_reconsent',
           lastErrorCode: health?.last_error_code ?? null,
+          skattekontoUnavailable: unavailable?.reason
+            ? { reason: unavailable.reason, since: unavailable.since, checkedAt: unavailable.checkedAt }
+            : null,
           scope: tokens.scope,
           expiresAt: new Date(tokens.expires_at).toISOString(),
           environment,

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Pin, PinOff, Archive, Pencil, Search, X, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { useRenderedNow } from '@/lib/hooks/use-clock-value'
 import { useAgentSheet } from './AgentSheetProvider'
 import AgentAvatar from './AgentAvatar'
 import {
@@ -17,13 +18,18 @@ import { useConversationList } from './use-conversation-list'
 
 interface Props {
   initialConversations: ConversationRow[]
+  /** When the server rendered the list (epoch ms): the "now" its day groups and "5 min" labels count from during hydration. */
+  renderedAt: number
 }
 
-export default function ChatSidebar({ initialConversations }: Props) {
+export default function ChatSidebar({ initialConversations, renderedAt }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const { openAgentSheet, identity } = useAgentSheet()
   const agentName = identity.displayName?.trim() || null
+  // The server's render instant while hydrating, then the browser's clock:
+  // both renders group and label the list from the same moment (React #418).
+  const now = useRenderedNow(renderedAt)
   // State + all three mutations live in the shared hook so this surface and the
   // in-sheet list cannot drift apart again. Pin/archive/rename here used to be
   // fire-and-forget with no rollback.
@@ -40,7 +46,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
     startEdit,
     cancelEdit,
     commitEdit,
-  } = useConversationList(initialConversations)
+  } = useConversationList(initialConversations, now)
   const [, startTransition] = useTransition()
   // Collapsed by default; persisted across reloads so power users keep
   // their preference. Hidden behind a thin rail when collapsed so the
@@ -210,7 +216,7 @@ export default function ChatSidebar({ initialConversations }: Props) {
                               {c.title ?? intentLabel(c.intent_id)}
                             </p>
                             <p className="text-[11px] text-muted-foreground tabular-nums shrink-0">
-                              {relativeTime(c.last_message_at ?? c.created_at)}
+                              {relativeTime(c.last_message_at ?? c.created_at, now)}
                             </p>
                           </div>
                           <p className="text-xs text-muted-foreground line-clamp-1 mt-0.5">

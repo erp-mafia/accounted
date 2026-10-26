@@ -120,15 +120,91 @@ export function redactRequestPath(path: string): string {
   return `${pathname}?${pairs.join('&')}`
 }
 
+/** An Error as redactedError() hands it to a vendor: `code` set when the source had one. */
+export type RedactedError = Error & { code?: string }
+
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() !== '' ? value : undefined
+}
+
+/**
+ * The message a captured non-Error object carries. Covers what reaches a
+ * capture in practice: redact()'s serialized Error ({ name, message, stack,
+ * code }, which is what the logger hands the sink for EVERY logged error), a
+ * PostgREST error body ({ message, code, details, hint }), a GoTrue body
+ * ({ msg } or { error, error_description }) and a Google-style
+ * { error: { message } }. With no message anywhere it names the keys only:
+ * values are data, and a key list both leaks nothing and groups stably.
+ */
+function messageOfObject(o: Record<string, unknown>): string {
+  const nested =
+    typeof o.error === 'object' && o.error !== null
+      ? nonEmptyString((o.error as Record<string, unknown>).message)
+      : undefined
+  const message =
+    nonEmptyString(o.message) ??
+    nonEmptyString(o.msg) ??
+    nonEmptyString(o.error_description) ??
+    nested ??
+    nonEmptyString(o.error)
+  if (message !== undefined) return message
+  if (typeof o.message === 'string') return o.message
+  const keys = Object.keys(o).sort()
+  if (keys.length === 0) return 'Non-Error object captured (no keys)'
+  const shown = keys.slice(0, 10).join(', ') + (keys.length > 10 ? ', ...' : '')
+  return `Non-Error object captured (keys: ${shown})`
+}
+
+function nameOfObject(o: Record<string, unknown>): string {
+  const name = nonEmptyString(o.name)
+  if (name !== undefined) return name
+  if ('code' in o && ('details' in o || 'hint' in o)) return 'PostgrestError'
+  if ('error_description' in o || ('msg' in o && 'code' in o)) return 'AuthError'
+  return 'Error'
+}
+
 /**
  * An Error a vendor SDK can take (it wants an instance, not redact()'s plain
  * object), with the message and the stack redacted as redact() does them.
+ *
+ * Any captured value comes out as a real Error whose message says what
+ * failed. A plain object used to become `new Error(String(value))`, that is
+ * "Error: [object Object]": every error the logger forwards reaches the
+ * adapter as redact()'s serialized object, so in PostHog all of them shared
+ * one message and one adapter-frame stack and merged into a single issue.
+ * The serialized stack is kept, so an event groups on the frames that threw.
+ * A value with no stack of its own gets a header-only stack rather than this
+ * function's frames, which would lump unrelated failures together again.
+ *
+ * Only name, message, stack and code cross. PostgREST `details` echoes row
+ * values ("Failing row contains (...)") and the logger's serialization never
+ * carried it either; `cause` is not followed for the same reason.
  */
-export function redactedError(err: unknown): Error {
-  const source = err instanceof Error ? err : new Error(String(err))
-  const safe = new Error(redactString(source.message))
-  safe.name = source.name
-  safe.stack = typeof source.stack === 'string' ? redactString(source.stack) : undefined
+export function redactedError(err: unknown): RedactedError {
+  let name: string
+  let message: string
+  let stack: string | undefined
+  let code: unknown
+  if (err instanceof Error) {
+    name = err.name
+    message = err.message
+    stack = typeof err.stack === 'string' ? err.stack : undefined
+    code = (err as Error & { code?: unknown }).code
+  } else if (typeof err === 'object' && err !== null) {
+    const o = err as Record<string, unknown>
+    name = nameOfObject(o)
+    message = messageOfObject(o)
+    stack = nonEmptyString(o.stack)
+    code = o.code
+  } else {
+    name = 'Error'
+    message = typeof err === 'string' ? err : `Non-Error value captured: ${String(err)}`
+  }
+
+  const safe: RedactedError = new Error(redactString(message))
+  safe.name = redactString(name)
+  safe.stack = stack !== undefined ? redactString(stack) : `${safe.name}: ${safe.message}`
+  if (typeof code === 'string' || typeof code === 'number') safe.code = redactString(String(code))
   return safe
 }
 

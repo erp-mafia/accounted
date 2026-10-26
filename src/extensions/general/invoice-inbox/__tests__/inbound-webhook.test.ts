@@ -785,7 +785,7 @@ describe('POST /inbound', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
     enqueue({ data: { created_by: 'user-owner-1' } })
-    enqueue({ data: { id: 'existing-body-item' } }) // dedupe check finds the first delivery's row
+    enqueue({ data: [{ id: 'existing-body-item' }] }) // dedupe check finds the first delivery's row
     vi.mocked(createClient).mockReturnValue(supabase as never)
     vi.mocked(fetchReceivingEmail).mockResolvedValue({
       object: 'email',
@@ -1025,7 +1025,7 @@ describe('POST /inbound', () => {
       enqueue({ data: { created_by: 'user-owner-1' } })
       enqueue({ data: null })                      // per-attachment dup check finds nothing
       enqueue({ data: { id: 'item-ics-err' } })    // rejection-row insert
-      enqueue({ data: { id: 'item-body-1' } })     // body-document dedupe check: already filed
+      enqueue({ data: [{ id: 'item-body-1' }] })   // body-document dedupe check: already filed
       vi.mocked(createClient).mockReturnValue(supabase as never)
       vi.mocked(fetchReceivingEmail).mockResolvedValue(bookingMail([ICS]) as never)
       vi.mocked(fetchInboundAttachment).mockResolvedValue({
@@ -1377,6 +1377,151 @@ describe('POST /inbound with several recipients (#2181)', () => {
     expect(res.status).toBe(200)
     expect(receivedEvents()[0].payload).toMatchObject({
       attachments: [{ id: 'att_1', outcome: 'duplicate', inbox_item_id: 'existing-item-1' }],
+    })
+  })
+
+  describe('an overlapping redelivery (Resend retries while the first run is still extracting)', () => {
+    it('records an attachment the other delivery filed first as a duplicate and files the rest', async () => {
+      const second = { ...PDF_ATTACHMENT, id: 'att_2', filename: 'faktura-2.pdf' }
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent() as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // dup check att_1: the other delivery had not inserted yet
+      enqueue({ data: null }) // dup check att_2
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [PDF_ATTACHMENT, second]) as never)
+      vi.mocked(fetchInboundAttachment).mockResolvedValue(PDF_DOWNLOAD)
+      vi.mocked(uploadAndExtract)
+        .mockResolvedValueOnce({ inbox_item_id: 'item-other-delivery', skip_reason: 'duplicate_delivery', duplicate: true } as never)
+        .mockResolvedValueOnce({ inbox_item_id: 'item-2', skip_reason: null } as never)
+      const consoleError = vi.spyOn(console, 'error').mockImplementation(() => {})
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+      const logged = consoleError.mock.calls.flat().map(String).join('\n')
+      consoleError.mockRestore()
+
+      expect(res.status).toBe(200)
+      expect(body.data.results).toEqual([
+        { attachment_id: 'att_1', inbox_item_id: 'item-other-delivery', duplicate: true },
+        { attachment_id: 'att_2', inbox_item_id: 'item-2' },
+      ])
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [
+          { id: 'att_1', outcome: 'duplicate', inbox_item_id: 'item-other-delivery' },
+          { id: 'att_2', outcome: 'filed', inbox_item_id: 'item-2' },
+        ],
+      })
+      // Already received is not a failure: no error row asking the user to
+      // send the attachment again, and nothing at error level.
+      expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+      expect(logged).not.toContain('Attachment processing failed')
+    })
+
+    it('does not extract the parts of a forwarded .eml again on redelivery, and still files a part not yet filed', async () => {
+      const emlAttachment = { id: 'att_eml', filename: 'Fakturor.eml', size: 4_000, content_type: 'message/rfc822', content_id: null, content_disposition: 'attachment' }
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [emlAttachment] }) as never)
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // dup check for the .eml's own id: its parts are filed under att_eml#i
+      enqueue({ data: [{ id: 'item-part-0', resend_attachment_id: 'att_eml#0' }] }) // parts already filed
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(fullEmailFor(['acme-ab-x7f2@arcim.io'], [emlAttachment]) as never)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-part-1', skip_reason: null } as never)
+      const pdfPart = (name: string) => [
+        `Content-Type: application/pdf; name="${name}"`,
+        'Content-Transfer-Encoding: base64',
+        `Content-Disposition: attachment; filename="${name}"`,
+        '',
+        Buffer.from(`%PDF-1.4 ${name}`).toString('base64'),
+      ]
+      const eml = [
+        'From: Leverantor <faktura@supplier.example>',
+        'To: anna@example.se',
+        'Subject: Fakturor',
+        'Date: Thu, 18 Sep 2026 14:03:00 +0200',
+        'Message-ID: <inner-2@supplier.example>',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/mixed; boundary="B2"',
+        '',
+        '--B2',
+        'Content-Type: text/plain; charset=utf-8',
+        '',
+        'Se bifogade fakturor.',
+        '--B2',
+        ...pdfPart('faktura-1.pdf'),
+        '--B2',
+        ...pdfPart('faktura-2.pdf'),
+        '--B2--',
+        '',
+      ].join('\r\n')
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_eml',
+        filename: 'Fakturor.eml',
+        contentType: 'message/rfc822',
+        buffer: new Uint8Array(Buffer.from(eml, 'utf8')).buffer as ArrayBuffer,
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+
+      expect(res.status).toBe(200)
+      expect(body.data.results).toEqual([
+        { attachment_id: 'att_eml#0', inbox_item_id: 'item-part-0', duplicate: true },
+        { attachment_id: 'att_eml#1', inbox_item_id: 'item-part-1' },
+      ])
+      // One lookup for every part, by its own id.
+      const partLookup = calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'in')
+      expect(partLookup?.args).toEqual(['resend_attachment_id', ['att_eml#0', 'att_eml#1']])
+      // Only the part not yet filed is uploaded and extracted.
+      expect(uploadAndExtract).toHaveBeenCalledOnce()
+      expect(vi.mocked(uploadAndExtract).mock.calls[0][5]?.resendAttachmentId).toBe('att_eml#1')
+      expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [
+          { id: 'att_eml#0', outcome: 'duplicate', inbox_item_id: 'item-part-0' },
+          { id: 'att_eml#1', outcome: 'filed', inbox_item_id: 'item-part-1' },
+        ],
+      })
+    })
+
+    it('files no further body copy when overlapping deliveries already left two', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [] }) as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: [{ id: 'body-a' }, { id: 'body-b' }] }) // body dedupe check: two rows
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(
+        fullEmailFor(['acme-ab-x7f2@arcim.io'], [], { html: '<p>Kvitto 119,00 kr</p>' }) as never,
+      )
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+
+      expect(res.status).toBe(200)
+      expect(body.data.reason).toBe('email_body_duplicate')
+      expect(body.data.inbox_item_id).toBe('body-a')
+      expect(uploadAndExtract).not.toHaveBeenCalled()
+    })
+
+    it('fails closed when the body lookup errors, so Resend redelivers rather than a copy being filed', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [] }) as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null, error: { message: 'connection reset' } })
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(
+        fullEmailFor(['acme-ab-x7f2@arcim.io'], [], { html: '<p>Kvitto 119,00 kr</p>' }) as never,
+      )
+
+      await expect(
+        webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} })),
+      ).rejects.toThrow('Body dedupe lookup failed: connection reset')
+      expect(uploadAndExtract).not.toHaveBeenCalled()
     })
   })
 

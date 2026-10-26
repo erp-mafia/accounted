@@ -36,7 +36,10 @@
  *    was locked after it): there the content tells a file that is already
  *    on it (skipped) from one still missing (locked).
  *  - Best-effort: a per-receipt failure is counted and logged, never thrown,
- *    so one bad download can't abort the sweep.
+ *    so one bad download can't abort the sweep. A refusal of the connection
+ *    itself is not per-receipt: a Fortnox 401 that a real token refresh
+ *    cannot outlive, or a Bokio token it no longer accepts, stops the sweep
+ *    once (ProviderConnectionRefusedError) instead of failing every file left.
  *
  * Driven from its own /import-documents route rather than the migration's
  * critical path: provider document APIs are rate-limited and a full sweep can
@@ -73,7 +76,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
-import { BokioClient } from '@/lib/providers/bokio/client'
+import { BokioApiError, BokioClient } from '@/lib/providers/bokio/client'
 import {
   fetchBokioUploads,
   fetchBokioVoucherIndex,
@@ -126,6 +129,25 @@ export class FortnoxDocumentScopesRequiredError extends Error {
   constructor() {
     super('Fortnox consent lacks archive/connectfile scope: reconnect required')
     this.name = 'FortnoxDocumentScopesRequiredError'
+  }
+}
+
+/**
+ * The provider refused the connection, not one file: a Fortnox token a fresh
+ * refresh could not revive (a 401 again, or the grant is gone), or a Bokio
+ * integration token it no longer accepts. Every file left would be refused
+ * the same way, so the sweep stops at the first one and asks for a reconnect.
+ * A run used to try (and log) each remaining file in turn (B11).
+ */
+export class ProviderConnectionRefusedError extends Error {
+  constructor(
+    readonly provider: string,
+    /** PROVIDER_AUTH_EXPIRED: the token is dead. PROVIDER_RESOURCE_FORBIDDEN: it lacks the right. */
+    readonly code: 'PROVIDER_AUTH_EXPIRED' | 'PROVIDER_RESOURCE_FORBIDDEN',
+    readonly providerStatus: number,
+  ) {
+    super(`${provider} refused the connection (${providerStatus}): reconnect required`)
+    this.name = 'ProviderConnectionRefusedError'
   }
 }
 
@@ -536,9 +558,66 @@ export async function importProviderDocuments(
       ? bokioSource(bokioClient as BokioClient, resolved)
       : (fortnox as ProviderAttachmentSource)
 
+  // The token a refresh after a Fortnox 401 handed out. A 401 on that very
+  // token means the grant itself is gone, not that the token aged out.
+  let tokenFromRefresh: string | null = null
+  // Whatever stopped that refresh: a dead grant (PROVIDER_AUTH_EXPIRED), a
+  // provider blink, a timeout. Every file left would meet the same dead token.
+  let refreshFailure: unknown = undefined
+  /**
+   * Errors that end the sweep instead of counting one file as failed: a
+   * refused connection, or a refresh that failed (the route answers it, and
+   * the page retries a blink as a whole slice).
+   */
+  const stopsTheSweep = (error: unknown): boolean =>
+    error instanceof ProviderConnectionRefusedError || (refreshFailure !== undefined && error === refreshFailure)
+  const refusal = (error: unknown): ProviderConnectionRefusedError | null => {
+    if (provider === 'fortnox' && error instanceof FortnoxApiError && error.statusCode === 401) {
+      return new ProviderConnectionRefusedError(provider, 'PROVIDER_AUTH_EXPIRED', 401)
+    }
+    // Bokio tokens never expire and cannot be refreshed: a refusal is final.
+    if (provider === 'bokio' && error instanceof BokioApiError && (error.statusCode === 401 || error.statusCode === 403)) {
+      return new ProviderConnectionRefusedError(
+        provider,
+        error.statusCode === 401 ? 'PROVIDER_AUTH_EXPIRED' : 'PROVIDER_RESOURCE_FORBIDDEN',
+        error.statusCode,
+      )
+    }
+    return null
+  }
+  /**
+   * Runs a provider call; after a Fortnox 401 it refreshes the token for real
+   * and runs the call once more. The refresh used to re-read the consent, which
+   * refreshes only once our clock says the token expired: Fortnox retires it a
+   * moment earlier, so the re-read handed the same dead token back and every
+   * file left in the slice failed (one 401 burst per hour of a long run, B11).
+   * A 401 that a fresh token cannot outlive is a refused connection.
+   */
+  const withUnauthorizedRefresh = async <T,>(call: () => Promise<T>): Promise<T> => {
+    try {
+      return await call()
+    } catch (error) {
+      const refused = refusal(error)
+      if (!refused) throw error
+      if (provider !== 'fortnox' || tokenFromRefresh === resolved.accessToken) throw refused
+      try {
+        resolved = await resolveConsent(companyId, consentId, { rejectedAccessToken: resolved.accessToken })
+      } catch (refreshError) {
+        refreshFailure = refreshError
+        throw refreshError
+      }
+      tokenFromRefresh = resolved.accessToken
+      try {
+        return await call()
+      } catch (retryError) {
+        throw refusal(retryError) ?? retryError
+      }
+    }
+  }
+
   // ── Bulk reads (one round of paged requests each, no per-item N+1) ──
   const [listing, periods, vouchers, existingAttachments] = await Promise.all([
-    source().list(),
+    withUnauthorizedRefresh(() => source().list()),
     fetchFiscalPeriods(supabase, companyId),
     fetchSourceRefVouchers(supabase, companyId),
     // A stable `.order('id')` is required: fetchAllRows pages with `.range()`,
@@ -621,26 +700,6 @@ export async function importProviderDocuments(
     }
   }
 
-  let refreshedAfterUnauthorized = false
-  /** One consent refresh per call after a Fortnox 401, then the call once more. */
-  const withUnauthorizedRefresh = async <T,>(call: () => Promise<T>): Promise<T> => {
-    try {
-      return await call()
-    } catch (error) {
-      if (
-        provider !== 'fortnox' ||
-        !(error instanceof FortnoxApiError) ||
-        error.statusCode !== 401 ||
-        refreshedAfterUnauthorized
-      ) {
-        throw error
-      }
-      refreshedAfterUnauthorized = true
-      resolved = await resolveConsent(companyId, consentId)
-      return call()
-    }
-  }
-
   // Scopes Fortnox refused for supplier-invoice files in this call: the rest
   // of those files are not tried again (each would be refused the same way),
   // and the refusal is reported once instead of failing the whole sweep.
@@ -675,6 +734,7 @@ export async function importProviderDocuments(
       await recordUpload(attachment.id, archivedId)
       return true
     } catch (error) {
+      if (stopsTheSweep(error)) throw error
       log.warn('could not check a file on a locked verifikat', {
         uploadId: attachment.id,
         reason: error instanceof Error ? error.message : 'unknown',
@@ -709,6 +769,7 @@ export async function importProviderDocuments(
       try {
         ref = (await withUnauthorizedRefresh(() => source().resolveRef!(attachment))) ?? null
       } catch (error) {
+        if (stopsTheSweep(error)) throw error
         if (provider === 'fortnox' && isFortnoxPermissionError(error)) {
           refuseSupplierInvoiceScope('supplierinvoice', error)
           continue
@@ -847,6 +908,7 @@ export async function importProviderDocuments(
     try {
       await withUnauthorizedRefresh(importAttachment)
     } catch (error) {
+      if (stopsTheSweep(error)) throw error
       if (provider === 'fortnox' && isFortnoxPermissionError(error)) {
         // A supplier-invoice file is an addition to the voucher files: a
         // refused download stops those files only, and says which scope.

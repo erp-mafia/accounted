@@ -10,6 +10,8 @@ vi.mock('@/lib/providers/provider-data-fetcher', () => ({
   fetchSalesInvoicesDirect: vi.fn(), hydrateSalesInvoices: vi.fn(),
 }))
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
+import { VismaApiError } from '@/lib/providers/visma/client'
+import { BokioApiError } from '@/lib/providers/bokio/client'
 import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
 import { fetchInvoiceCompletionDetail, fetchInvoiceCompletionPage } from '@/lib/providers/provider-data-fetcher'
@@ -208,5 +210,56 @@ describe('Fortnox completion recovery', () => {
     }))
     expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)).toMatchObject({ companiesBlocked: 0 })
     expect(db.rpc).toHaveBeenCalledWith('release_invoice_completion_work', expect.objectContaining({ p_retry_seconds: 0 }))
+  })
+})
+
+describe('a provider that refuses the connection outside Fortnox (B11)', () => {
+  /** A company whose remaining invoices need the provider listing first. */
+  function listingWork(provider: 'visma' | 'bokio' | 'fortnox') {
+    const { work, rows } = fixture()
+    work.provider = provider
+    work.next_page = 1
+    rows.forEach(row => { row.source_ref = null as never })
+    resolve.mockResolvedValue({ consent: { provider }, accessToken: 'synthetic-token', providerCompanyId: 'synthetic-account', credentialRevision: 'request-revision' })
+    return { work, db: database(rows, work) }
+  }
+  const retrySeconds = (db: ReturnType<typeof database>) =>
+    db.rpc.mock.calls.find(([name]) => name === 'release_invoice_completion_work')?.[1]?.p_retry_seconds
+
+  it.each([
+    ['visma', new VismaApiError('Visma API error: 403 Forbidden', 403)],
+    ['bokio', new BokioApiError('Bokio API error: 403 Forbidden', 403)],
+  ] as const)('asks %s again after a day, not every hour, after a 403 refusal', async (provider, refusal) => {
+    const { work, db } = listingWork(provider)
+    page.mockRejectedValueOnce(refusal)
+
+    expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)).toMatchObject({ companiesFailed: 1, companiesBlocked: 0 })
+    expect(retrySeconds(db)).toBe(86_400)
+    expect(db.rpc.mock.calls.some(([name]) => name === 'block_invoice_completion_work')).toBe(false)
+  })
+
+  it('waits a day on a grant the refresh was refused, too', async () => {
+    const { work, db } = listingWork('visma')
+    resolve.mockRejectedValueOnce(new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'visma', 'refresh refused'))
+
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(retrySeconds(db)).toBe(86_400)
+  })
+
+  it('keeps the hour for a token that aged out mid-run, which the next run refreshes', async () => {
+    const { work, db } = listingWork('visma')
+    page.mockRejectedValueOnce(new VismaApiError('Visma API error: 401 Unauthorized', 401))
+
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(retrySeconds(db)).toBe(3600)
+  })
+
+  it('leaves Fortnox to its own block and delay', async () => {
+    const { work, db } = listingWork('fortnox')
+    page.mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 401 Unauthorized', 401))
+
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(retrySeconds(db)).toBe(3600)
+    expect(db.rpc.mock.calls.some(([name]) => name === 'block_invoice_completion_work')).toBe(false)
   })
 })

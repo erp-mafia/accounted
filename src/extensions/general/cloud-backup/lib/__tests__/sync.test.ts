@@ -61,6 +61,7 @@ import {
   arkivFileName,
 } from '../sync'
 import { GoogleTokenRefreshError, refreshAccessToken } from '../google-oauth'
+import { CloudScopeMissingError } from '../cloud-provider'
 import {
   DriveFileGoneError,
   ensureFolder,
@@ -314,6 +315,157 @@ describe('performSync needs_reauth handling', () => {
 
     expect(result).toMatchObject({ ok: false, reason: 'not_connected' })
     expect(mockRefreshAccessToken).not.toHaveBeenCalled()
+  })
+})
+
+describe('performSync with a grant that lacks the Drive scope (B12)', () => {
+  const scopeError = () =>
+    new CloudScopeMissingError(
+      'Google Drive',
+      'Drive API 403: Request had insufficient authentication scopes.'
+    )
+
+  it('flags needs_reauth (missing_scope) when the first Drive call is refused', async () => {
+    // The production shape: connected, never got a folder, refused every night.
+    const { supabase, upsert } = makeSupabase({
+      connection: makeConnection({ root_folder_id: null, company_folder_id: null }),
+    })
+    mockEnsureFolder.mockRejectedValueOnce(scopeError())
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result).toMatchObject({
+      ok: false,
+      reason: 'needs_reauth',
+      reauthReason: 'missing_scope',
+    })
+    expect(upsert).toHaveBeenCalledTimes(1)
+    const [payload] = upsert.mock.calls[0]
+    expect(payload.key).toBe(CONNECTION_KEY)
+    expect(payload.value).toMatchObject({
+      status: 'needs_reauth',
+      needs_reauth_reason: 'missing_scope',
+      needs_reauth_at: expect.any(String),
+      account_email: 'user@example.com',
+    })
+    expect(mockGenerateFullArchive).not.toHaveBeenCalled()
+  })
+
+  it('flags it when an upload is refused for the scope', async () => {
+    const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+    mockUploadFile.mockRejectedValueOnce(scopeError())
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result).toMatchObject({ ok: false, reason: 'needs_reauth', reauthReason: 'missing_scope' })
+    const connectionSave = upsert.mock.calls.find(([p]) => p.key === CONNECTION_KEY)
+    expect(connectionSave![0].value.needs_reauth_reason).toBe('missing_scope')
+  })
+
+  it('keeps the original needs_reauth_at of an incident already flagged', async () => {
+    const { supabase, upsert } = makeSupabase({
+      connection: makeConnection({
+        status: 'needs_reauth',
+        needs_reauth_at: '2026-07-01T03:00:00.000Z',
+        needs_reauth_reason: 'missing_scope',
+      }),
+    })
+    mockGetFileMeta.mockRejectedValueOnce(scopeError())
+
+    await performSync(syncParams(supabase))
+
+    const [payload] = upsert.mock.calls[0]
+    expect(payload.value.needs_reauth_at).toBe('2026-07-01T03:00:00.000Z')
+  })
+
+  it('records a dead refresh token as token_revoked', async () => {
+    const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+    mockRefreshAccessToken.mockRejectedValueOnce(
+      new GoogleTokenRefreshError(400, '{"error":"invalid_grant"}')
+    )
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result).toMatchObject({ reason: 'needs_reauth', reauthReason: 'token_revoked' })
+    expect(upsert.mock.calls[0][0].value.needs_reauth_reason).toBe('token_revoked')
+  })
+
+  it('keeps an ordinary Drive failure a thrown error, connection untouched', async () => {
+    const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+    mockGetFileMeta.mockRejectedValueOnce(new Error('Drive API 500: backend error'))
+
+    await expect(performSync(syncParams(supabase))).rejects.toThrow(/500/)
+    expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('clears the reason together with the flag once Drive answers again', async () => {
+    const { supabase, upsert } = makeSupabase({
+      connection: makeConnection({
+        status: 'needs_reauth',
+        needs_reauth_at: '2026-07-01T03:00:00.000Z',
+        needs_reauth_reason: 'missing_scope',
+      }),
+    })
+
+    const result = await performSync(syncParams(supabase))
+
+    expect(result.ok).toBe(true)
+    const connectionSave = upsert.mock.calls.find(([p]) => p.key === CONNECTION_KEY)
+    expect(connectionSave![0].value.status).toBe('active')
+    expect(connectionSave![0].value.needs_reauth_reason).toBeUndefined()
+  })
+})
+
+describe('performSync startDeadline', () => {
+  it('starts no archive once the deadline has passed', async () => {
+    const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+
+    const result = await performSync(
+      syncParams(supabase, { startDeadline: Date.now() - 1 })
+    )
+
+    expect(result).toMatchObject({ ok: false, reason: 'deferred' })
+    expect(mockGenerateFullArchive).not.toHaveBeenCalled()
+    expect(mockUploadFile).not.toHaveBeenCalled()
+    expect(upsert).not.toHaveBeenCalled()
+  })
+
+  it('keeps the archives finished before the deadline and stops at the next', async () => {
+    let now = 1_000_000
+    const clock = vi.spyOn(Date, 'now').mockImplementation(() => now)
+    try {
+      // Building the year archive takes longer than the time left.
+      mockGenerateFullArchive.mockImplementationOnce(async () => {
+        now += 200_000
+        return new ArrayBuffer(8)
+      })
+      const { supabase, upsert } = makeSupabase({ connection: makeConnection() })
+
+      const result = await performSync(syncParams(supabase, { startDeadline: 1_100_000 }))
+
+      expect(result).toMatchObject({ ok: false, reason: 'deferred' })
+      expect(mockUploadFile).toHaveBeenCalledTimes(1)
+      expect(mockGenerateBaseDataArchive).not.toHaveBeenCalled()
+      // The finished archive is persisted, so the next run skips it.
+      const snapshots = upsert.mock.calls.filter(([p]) => p.key === LAST_SYNC_KEY)
+      expect(snapshots).toHaveLength(1)
+      expect(snapshots[0][0].value.files).toHaveLength(1)
+    } finally {
+      clock.mockRestore()
+    }
+  })
+
+  it('completes an up-to-date backup whatever the deadline', async () => {
+    const { supabase } = makeSupabase({
+      connection: makeConnection(),
+      lastSync: upToDateLastSync(),
+    })
+
+    const result = await performSync(
+      syncParams(supabase, { startDeadline: Date.now() - 1 })
+    )
+
+    expect(result).toMatchObject({ ok: true, uploadedCount: 0 })
   })
 })
 

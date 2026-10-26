@@ -176,6 +176,7 @@ interface EmployeeOverrides {
   net_salary?: number
   avgifter_amount?: number
   avgifter_basis?: number
+  avgifter_rate?: number
   avgifter_category?: string | null
   avgifter_amount_overridden?: boolean
   vacation_accrual?: number
@@ -1775,5 +1776,59 @@ describe('salary entries: wage accounts per employee', () => {
     expect(linesOn(salary, '7010')[0].debit_amount).toBe(30000)
     expect(linesOn(salary, '7210')[0].debit_amount).toBe(5000)
     assertBalanced(salary)
+  })
+})
+
+describe('salary entries: regionalt stöd avdrag (PH 208)', () => {
+  const regional = (employees: ReturnType<typeof makeEmployee>[]) => ({
+    ...makeRun(employees),
+    calculation_params: { slpRate: 0.2426, avgifterTotal: 0.3142, salary_regional_support: true },
+  })
+
+  it('credits the FK476 avdrag on 7510 and books 2731 at the FK487 the AGI files', async () => {
+    // 30 000 × 31,42 % = 9 426; avdrag 10 % of 30 000 = 3 000.
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', regional([makeEmployee()]))
+    const avgifter = entryByDescription('Arbetsgivaravgifter')
+    const expense = linesOn(avgifter, '7510')
+    expect(expense).toEqual([
+      expect.objectContaining({ debit_amount: 9426, credit_amount: 0 }),
+      expect.objectContaining({ debit_amount: 0, credit_amount: 3000, line_description: 'Lön 2026-06: Avdrag regionalt stöd' }),
+    ])
+    expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 6426 })])
+    assertBalanced(avgifter)
+  })
+
+  it('caps the avdrag at 7 100 kr and keeps the öre utjämning on 3740', async () => {
+    // 4 × 30 000,99: exact avgift 4 × 9 426,31 = 37 705,24, declared
+    // trunc(120 000 × 0,3142) = 37 704; 10 % of 120 000 = 12 000, capped.
+    const employees = ['a', 'b', 'c', 'd'].map((id) =>
+      makeEmployee({ employee_id: id, gross_salary: 30000.99, avgifter_basis: 30000.99, avgifter_amount: 9426.31 }),
+    )
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', regional(employees))
+    const avgifter = entryByDescription('Arbetsgivaravgifter')
+    expect(linesOn(avgifter, '7510')).toContainEqual(expect.objectContaining({ credit_amount: 7100 }))
+    expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 37704 - 7100 })])
+    expect(linesOn(avgifter, '3740')).toEqual([expect.objectContaining({ credit_amount: 1.24 })])
+    assertBalanced(avgifter)
+  })
+
+  it('books no avdrag without the snapshot flag or on rows that form no underlag', async () => {
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', makeRun([makeEmployee()]))
+    let avgifter = entryByDescription('Arbetsgivaravgifter')
+    expect(linesOn(avgifter, '7510')).toHaveLength(1)
+    expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 9426 })])
+
+    mockedCreateEntry.mockClear()
+    fake.ledger.length = 0
+    // 67+ at the start of the year: only ålderspensionsavgift, no avdrag.
+    await createSalaryRunEntries(
+      makeSupabase(),
+      'company-1',
+      'user-1',
+      regional([makeEmployee({ avgifter_rate: 0.1021, avgifter_amount: 3063, avgifter_category: 'reduced_65plus' })]),
+    )
+    avgifter = entryByDescription('Arbetsgivaravgifter')
+    expect(linesOn(avgifter, '7510')).toHaveLength(1)
+    expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 3063 })])
   })
 })

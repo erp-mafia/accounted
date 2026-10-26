@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getAiService, type AiChatTurn, type AiTier, type AiToolDef } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
-import { EmptyModelAnswerError } from './errors'
+import { EmptyModelAnswerError, truncatedAnswerNote } from './errors'
 import { buildLedgerTools } from './ledger-tools'
 import { buildAssistantSnapshot } from './snapshot'
 import { buildUiGrounding } from './ui-map'
@@ -78,13 +78,18 @@ export interface AskResult {
   model: string
 }
 
-// Matches MAX_TOKENS_NO_THINKING in lib/agent/composer/client.ts, the
-// streaming chat's reply-sized ceiling on the same model. The original 1500
-// cap was tighter than every other assistant surface and made stop_reason
-// max_tokens routine on tool-loop turns: the whole budget could be spent
-// before the first visible text block, so the model came back with no text at
-// all ("Tänker", then silence).
-const DEFAULT_MAX_TOKENS = 5400
+// Sized for a model that THINKS. The request sends no `thinking` field, and
+// Claude Sonnet 5 (the hosted assistant model) runs adaptive thinking at its
+// default effort (high) whenever a request does not say otherwise. max_tokens
+// caps thinking and the visible answer together, and thinking blocks come
+// back with empty text by default. The earlier 5400 was the no-thinking reply
+// ceiling (MAX_TOKENS_NO_THINKING), so a question the model reasoned hard
+// about spent the whole budget on thinking and came back with no text at all:
+// prod 2026-10-17..23, single turns ending at exactly 5400 output tokens.
+// 16000 is what the streaming chat gives the same model at the same effort
+// (MAX_TOKENS_STANDARD in lib/agent/composer/client.ts). It is a ceiling, not
+// a spend: only generated tokens are billed.
+const DEFAULT_MAX_TOKENS = 16_000
 const DEFAULT_MAX_STEPS = 5
 const MAX_QUESTION_CHARS = 4000
 const MAX_CONTEXT_CHARS = 24_000
@@ -185,20 +190,36 @@ export async function answerAssistantQuestion(req: AskRequest): Promise<AskResul
     ...(tools.length > 0 ? { tools, maxSteps: req.maxSteps ?? DEFAULT_MAX_STEPS } : {}),
   })
 
-  // An empty answer is a failure, not a result. Passing it through is exactly
-  // the silent-stop bug: the route would 200 and the console would append an
-  // invisible bubble. Log loudly (model + usage tell us whether the budget was
-  // spent on tool churn) and fail typed so the route can answer 502.
-  if (result.text.trim().length === 0) {
-    log.error('model returned an empty answer', {
-      companyId: req.companyId,
-      model: result.model,
-      tier: req.tier ?? 'assistant',
-      usage: result.usage,
-      toolCount: tools.length,
-    })
-    throw new EmptyModelAnswerError(result.model)
+  const diagnostics = {
+    companyId: req.companyId,
+    model: result.model,
+    tier: req.tier ?? 'assistant',
+    usage: result.usage,
+    toolCount: tools.length,
+    stopReason: result.stopReason ?? null,
+    truncated: result.truncated === true,
+    forcedFinal: result.forcedFinal ?? null,
   }
 
-  return { answer: result.text, model: result.model }
+  // An empty answer is a failure, not a result. Passing it through is exactly
+  // the silent-stop bug: the route would 200 and the console would append an
+  // invisible bubble. Log loudly (stop reason, usage and whether the final
+  // answer turn already ran tell us why) and fail typed so the route can
+  // answer 502 with a message that says what to do.
+  if (result.text.trim().length === 0) {
+    log.error('model returned an empty answer', diagnostics)
+    throw new EmptyModelAnswerError(result.model, { truncated: result.truncated === true })
+  }
+
+  // The answer needed the tool loop's final no-tools turn. The user got an
+  // answer, but keep the rate visible: a rise means the step budget or the
+  // token ceiling no longer fits the questions people ask.
+  if (result.forcedFinal) log.warn('answer needed the final answer turn', diagnostics)
+
+  // Cut off at max_tokens: say so, so half an answer never reads as a whole one.
+  const answer = result.truncated
+    ? `${result.text}\n\n${truncatedAnswerNote(req.locale)}`
+    : result.text
+
+  return { answer, model: result.model }
 }

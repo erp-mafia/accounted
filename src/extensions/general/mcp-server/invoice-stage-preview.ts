@@ -342,3 +342,8 @@ export function expectedNumberSuffix(invoice: StagedInvoiceRow, issue: IssuePrev
   if (invoice.invoice_number || !issue.expected_invoice_number) return ''
   return ` (förväntat nr ${issue.expected_invoice_number})`
 }
+
+/** The lines a staged kreditfaktura refund shows (lib/invoices/refund-credit-note.ts), with their sums. */
+export function refundEntryPreview(lines: CreateJournalEntryLineInput[]): NonNullable<MarkPaidPreview['journal_entry_preview']> {
+  return entryPreviewOf(lines)
+}

@@ -14,6 +14,7 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
 import { notifyBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { cn } from '@/lib/utils'
+import { BankAccountLedgerRows } from './BankAccountLedgerRows'
 import { connectionRowState } from './connection-kind'
 import { deleteOpenPaymentsConnection, OpenPaymentsClientError } from './open-payments-client'
 import type { BankConnectFlow } from './use-bank-connect-flow'
@@ -53,7 +54,9 @@ interface OpenPaymentsConnectionRowProps {
  * the bank whose accounts were never chosen (the person left the account
  * step, often after the BankID app on a phone) reads nothing until they are:
  * it says so and offers Välj konton, which reopens the flow on that
- * connection at the account choice, instead of Förnya.
+ * connection at the account choice, instead of Förnya. Under an active
+ * connection, each account it syncs has a row of its own with the 19xx
+ * account it books on, which is where that account is changed (crm#1387).
  */
 export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRenew = true }: OpenPaymentsConnectionRowProps) {
   const t = useTranslations('settings_connections')
@@ -133,6 +136,7 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
           </SettingsRowEnd>
         )}
       </SettingsRow>
+      {connection.status === 'active' && <BankAccountLedgerRows connectionId={connection.id} />}
       <ConfirmDialog
         open={confirmOpen}
         onOpenChange={setConfirmOpen}

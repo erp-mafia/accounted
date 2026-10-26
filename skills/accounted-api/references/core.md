@@ -1883,6 +1883,171 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/settings/skattekonto-account`
+
+**Read which ledger account the skattekonto runs on (1630, or 2012 for an enskild firma).**
+`scope:companies:read · risk:low · idempotent`
+
+Returns the account every skattekonto reader uses now (booking skattekonto rows, matching them to verifikat, the skattekonto reconciliation), the stored choice, the accounts the legal form may choose, what the books suggest and the balance on each choosable account.
+
+**Use when:** Before booking skattekonto rows or a payment to Skatteverket by hand, or before changing the account.
+**Do not use for:** The skattekonto events themselves (the reconciliation and skattekonto sync endpoints).
+
+**Pitfalls:**
+- chosen is null for a company that never chose: it runs 1630.
+- balances read the ledger through as_of; a change of account moves none of it.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    entity_type: string,
+    account: "1630" | "2012",
+    chosen: "1630" | "2012" | null,
+    choices: ("1630" | "2012")[],
+    books_suggest: "1630" | "2012" | null,
+    as_of: string,
+    balances: { account: "1630" | "2012", balance: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "entity_type": "enskild_firma",
+    "account": "1630",
+    "chosen": null,
+    "choices": [
+      "1630",
+      "2012"
+    ],
+    "books_suggest": "1630",
+    "as_of": "2026-10-26",
+    "balances": [
+      {
+        "account": "1630",
+        "balance": 1250
+      },
+      {
+        "account": "2012",
+        "balance": 0
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/settings/skattekonto-account`
+
+**Choose the ledger account the skattekonto runs on: 1630, or 2012 in equity for an enskild firma.**
+`scope:companies:write · risk:high · idempotent · dry-run · reversible`
+
+Stores the choice. From then on booking skattekonto rows, matching them to verifikat and the skattekonto reconciliation use the new account; 2012 is added to the chart (BAS K1 name, eget kapital) when missing. Nothing in the ledger moves: posted verifikat stay on the account they were booked on, and the response says what is left on the previous account (left_on_previous) for a transfer verifikat the user books. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+
+**Use when:** An enskild firma keeps its skattekonto in eget kapital on 2012 (the firm shares the skattekonto with the owner), or a company moves back to 1630.
+**Do not use for:** Moving the balance itself (book the transfer with POST /journal-entries: debit the new account and credit the old one, or the reverse), or the tax profile (PATCH /settings/tax-profile).
+
+**Pitfalls:**
+- Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.
+- 2012 is allowed for an enskild firma only; any other account, or 2012 for another legal form, is 400 SKATTEKONTO_ACCOUNT_NOT_ALLOWED with details.allowed.
+- Company-authored booking templates and mapping rules that name 1630 keep 1630: review them after a change.
+- left_on_previous is the old account's balance when it is not zero: the skattekonto reconciliation reads only the new account, so book the transfer.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ account: "1630" | "2012" }
+```
+
+Example request:
+```json
+{
+  "account": "2012"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    state: { entity_type: string, account: "1630" | "2012", chosen: "1630" | "2012" | null, choices: ("1630" | "2012")[], books_suggest: "1630" | "2012" | null, as_of: string, balances: { account: "1630" | "2012", balance: number }[] },
+    previous_account: "1630" | "2012",
+    left_on_previous: number | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "state": {
+      "entity_type": "enskild_firma",
+      "account": "2012",
+      "chosen": "2012",
+      "choices": [
+        "1630",
+        "2012"
+      ],
+      "books_suggest": "1630",
+      "as_of": "2026-10-26",
+      "balances": [
+        {
+          "account": "1630",
+          "balance": 1250
+        },
+        {
+          "account": "2012",
+          "balance": 0
+        }
+      ]
+    },
+    "previous_account": "1630",
+    "left_on_previous": 1250
+  },
+  "meta": {
+    "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `PATCH /api/v1/companies/{companyId}/settings/tax-profile`
 
 **Change the tax and legal profile: VAT, F-skatt, employer registration, fiscal year, accounting method.**

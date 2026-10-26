@@ -895,6 +895,7 @@ export const salaryRunsMarkPaid = defineOperation({
       'Only an approved run: any other status is refused with SALARY_RUN_MARK_PAID_NOT_APPROVED (details.current_status); a run that moved on meanwhile answers details.reason race.',
       'paid_at is the server time when the operation is approved; a payment date cannot be supplied.',
       'Paid is one-way: there is no unpaid step, and an approval recall (gnubok_unapprove_salary_run) refuses a paid run.',
+      'A run that pays out with a payment_date after today is refused with SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED unless confirm_payment_date_ahead is true. Ask the user first: confirm only when the salaries have gone out or the payment is scheduled in the bank.',
     ],
     example: {
       request: { salary_run_id: RUN_EXAMPLE_ID },
@@ -904,13 +905,17 @@ export const salaryRunsMarkPaid = defineOperation({
       },
     },
   },
-  input: z.object({ salary_run_id: SALARY_RUN_ID.describe('The approved salary run that was paid.') }),
+  input: z.object({
+    salary_run_id: SALARY_RUN_ID.describe('The approved salary run that was paid.'),
+    // Explained by the refusal it answers and the pitfall above.
+    confirm_payment_date_ahead: z.boolean().optional(),
+  }),
   output: z.object({
     salary_run_id: z.string().uuid(),
     status: z.literal('paid'),
     paid_at: z.string(),
   }),
-  errorCodes: ['SALARY_RUN_NOT_FOUND', 'SALARY_RUN_MARK_PAID_NOT_APPROVED'],
+  errorCodes: ['SALARY_RUN_NOT_FOUND', 'SALARY_RUN_MARK_PAID_NOT_APPROVED', 'SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED'],
   mcp: {
     name: 'gnubok_mark_salary_run_paid',
     title: 'Mark Salary Run Paid',
@@ -922,8 +927,11 @@ export const salaryRunsMarkPaid = defineOperation({
       title: () => 'Markera lönekörningen som utbetald',
     },
   },
-  run: async (ctx, { salary_run_id }, { dryRun }) => {
-    const outcome = await markSalaryRunPaid(ctx, salary_run_id, { dryRun })
+  run: async (ctx, { salary_run_id, confirm_payment_date_ahead }, { dryRun }) => {
+    const outcome = await markSalaryRunPaid(ctx, salary_run_id, {
+      dryRun,
+      confirmPaymentDateAhead: confirm_payment_date_ahead,
+    })
     if (!outcome.ok || outcome.dryRun) return outcome
     return {
       ok: true,

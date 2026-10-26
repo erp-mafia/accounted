@@ -60,13 +60,19 @@ import {
   collectSettlementVouchers,
   lockedPeriodIds,
   rankVoucherCandidates,
+  scoreNamedVoucherCandidate,
   scoreVoucherCandidate,
   sekBookedReason,
   sekBookedSettlement,
+  voucherCapacity,
+  voucherShareFields,
   type SettlementSideLine,
+  type VoucherPaymentUse,
   type VoucherRow,
   type VoucherScoreContext,
+  type VoucherShareFields,
 } from './voucher-matching-shared'
+import type { VoucherNumber } from './voucher-label'
 import { roundOre } from '@/lib/money'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
 import { resolveInvoiceSettlementSide } from './invoice-settlement-side'
@@ -79,15 +85,19 @@ import {
 
 const log = createLogger('voucher-matching')
 
-export interface VoucherCandidate {
+/** Ids per `.in()` when reading the payment rows of candidate vouchers. */
+const PAYMENT_ROW_CHUNK = 100
+
+export interface VoucherCandidate extends VoucherShareFields {
   journal_entry_id: string
   voucher_series: string | null
   voucher_number: number | null
   entry_date: string
   description: string
-  /** Matched amount on this voucher, always positive: the AR credit (151x),
+  /** What this voucher can settle, always positive: the AR credit (151x),
    *  or the liquid-funds debit (19xx) for a never-booked kontantmetod invoice
-   *  (invoice_settlement_side).
+   *  (invoice_settlement_side), less what payment rows for other invoices
+   *  have already used of it (`already_linked`).
    *  Expressed in `currency` below (the INVOICE's currency), never in the raw
    *  SEK ledger column: see ledgerLineSideAmountIn.
    *  Kept under this name for API/UI back-compat across both methods. */
@@ -115,12 +125,25 @@ export interface VoucherCandidate {
  * voucher in the window is read (no row cap), a foreign invoice paid by a
  * voucher booked in kronor only is offered through the SEK-booked fallback the
  * link itself accepts, and the validator makes the final call at commit time.
+ *
+ * A candidate is scored on what the voucher has LEFT, as the RPC settles it:
+ * payment rows that already point at it for other invoices are subtracted
+ * (`already_linked`), and a voucher with nothing left, or already linked to
+ * this invoice, is no candidate (crm#1434).
+ *
+ * `options.includeShared` also offers vouchers that have MORE left than the
+ * invoice needs and that nothing else ties to it: one verifikat that settles
+ * several invoices, linkable with a stated share (`link_amount`). Only the
+ * surfaces where a person or an agent picks set it.
+ *
+ * `options.voucher` reads only the voucher a person named by its number, at
+ * any date (SettlementVoucherSearch.voucher).
  */
 export async function findMatchingVouchersForInvoice(
   supabase: SupabaseClient,
   companyId: string,
   invoice: Invoice & { customer?: Customer },
-  options: { limit?: number; dateWindowDays?: number } = {}
+  options: { limit?: number; dateWindowDays?: number; includeShared?: boolean; voucher?: VoucherNumber } = {}
 ): Promise<VoucherCandidate[]> {
   const limit = options.limit ?? 10
   const windowDays = options.dateWindowDays ?? DEFAULT_DATE_WINDOW_DAYS
@@ -147,21 +170,26 @@ export async function findMatchingVouchersForInvoice(
     // side books the kursdifferens, the 19xx side has no receivable to book
     // one against (20261018131110).
     sekBookedAllowed: true,
+    voucher: options.voucher,
     log,
     logContext,
   })
   if (byEntry.size === 0) return []
 
-  // Drop vouchers already linked to *this* invoice.
-  const { data: existingLinks } = await supabase
-    .from('invoice_payments')
-    .select('journal_entry_id')
-    .eq('company_id', companyId)
-    .eq('invoice_id', invoice.id)
-    .in('journal_entry_id', Array.from(byEntry.keys()))
-  for (const row of existingLinks ?? []) {
-    const id = (row as { journal_entry_id: string | null }).journal_entry_id
-    if (id) byEntry.delete(id)
+  // Every payment row on a voucher counts, whichever invoice it belongs to:
+  // the candidate is what the voucher has left (voucherCapacity, the RPC's
+  // capacity rule). One already linked to this invoice is dropped too.
+  const invoiceCurrency = documentCurrency(invoice.currency)
+  const rows = await fetchVoucherPaymentUses(supabase, companyId, Array.from(byEntry.keys()))
+  const usedByEntry = new Map<string, number>()
+  for (const [entryId, voucher] of byEntry) {
+    const capacity = voucherCapacity(voucher, rows.get(entryId) ?? [], invoice.id, invoiceCurrency)
+    if (capacity === null) {
+      byEntry.delete(entryId)
+      continue
+    }
+    voucher.amount = capacity.left
+    usedByEntry.set(entryId, capacity.used)
   }
   if (byEntry.size === 0) return []
 
@@ -180,11 +208,14 @@ export async function findMatchingVouchersForInvoice(
     windowDays,
     references: [{ label: 'Fakturanummer', value: invoice.invoice_number, countsWithoutAmount: true }],
     counterparty: { name: invoice.customer?.name, label: 'kundnamn' },
-    includeShared: false,
+    includeShared: options.includeShared === true,
   }
+  const score = options.voucher ? scoreNamedVoucherCandidate : scoreVoucherCandidate
   const candidates: VoucherCandidate[] = []
   for (const { entry, amount, lineCurrency, sekBooked } of byEntry.values()) {
-    const scored = scoreVoucherCandidate(entry, amount, lineCurrency, scoreContext, !sekBooked)
+    // A share is not on offer through the SEK-booked fallback: the validator
+    // and the RPC refuse one there (the kursdifferens would be a guess).
+    const scored = score(entry, amount, lineCurrency, scoreContext, !sekBooked)
     if (!scored) continue
     candidates.push({
       journal_entry_id: entry.id,
@@ -198,9 +229,33 @@ export async function findMatchingVouchersForInvoice(
       period_locked: lockedPeriods.has(entry.fiscal_period_id),
       confidence: scored.confidence,
       match_reason: sekBooked ? sekBookedReason(scored.match_reason, sekBooked.sekTotal) : scored.match_reason,
+      ...voucherShareFields(amount, usedByEntry.get(entry.id) ?? 0, remainingAmount, Boolean(sekBooked)),
     })
   }
   return rankVoucherCandidates(candidates, limit)
+}
+
+/** The invoice_payments rows on the candidate vouchers, per voucher. */
+async function fetchVoucherPaymentUses(
+  supabase: SupabaseClient,
+  companyId: string,
+  journalEntryIds: string[],
+): Promise<Map<string, VoucherPaymentUse[]>> {
+  const byEntry = new Map<string, VoucherPaymentUse[]>()
+  for (let i = 0; i < journalEntryIds.length; i += PAYMENT_ROW_CHUNK) {
+    const { data } = await supabase
+      .from('invoice_payments')
+      .select('journal_entry_id, invoice_id, amount, currency')
+      .eq('company_id', companyId)
+      .in('journal_entry_id', journalEntryIds.slice(i, i + PAYMENT_ROW_CHUNK))
+    for (const row of (data ?? []) as Array<VoucherPaymentRow & { journal_entry_id: string | null }>) {
+      if (!row.journal_entry_id) continue
+      const list = byEntry.get(row.journal_entry_id) ?? []
+      list.push({ invoiceId: row.invoice_id, amount: row.amount, currency: row.currency })
+      byEntry.set(row.journal_entry_id, list)
+    }
+  }
+  return byEntry
 }
 
 export type ValidateResult =

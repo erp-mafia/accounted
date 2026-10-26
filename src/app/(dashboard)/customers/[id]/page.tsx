@@ -25,7 +25,7 @@ import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { invoiceNumberDisplay } from '@/lib/invoices/display'
+import { invoiceDisplayNumber } from '@/lib/invoices/display'
 import { getCountryName } from '@/lib/vat/country-codes'
 import type { Customer, CustomerType, CreateCustomerInput, InvoiceStatus } from '@/types'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
@@ -55,6 +55,8 @@ const CUSTOMER_TYPE_KEY: Record<CustomerType, string> = {
 interface RelatedInvoice {
   id: string
   invoice_number: string | null
+  /** A received self-billing invoice's number (its invoice_number is null by design). */
+  external_invoice_number: string | null
   invoice_date: string
   due_date: string
   status: InvoiceStatus
@@ -503,10 +505,10 @@ export default function CustomerDetailPage({
                   <span
                     className={cn(
                       'min-w-0 truncate',
-                      !invoice.invoice_number && 'italic text-muted-foreground',
+                      !invoice.invoice_number && !invoice.external_invoice_number && 'italic text-muted-foreground',
                     )}
                   >
-                    {invoiceNumberDisplay(invoice.invoice_number)}
+                    {invoiceDisplayNumber(invoice)}
                   </span>
                   <span className="text-muted-foreground tabular-nums">
                     {formatDate(invoice.invoice_date)}

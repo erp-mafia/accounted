@@ -378,7 +378,9 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
       expect(update?.[0]).toEqual({ default_vat_treatment: 'oss' })
     })
 
-    it('refuses rules that would put a sale taxed abroad in the Swedish VAT return', async () => {
+    it('refuses an EU row with Swedish VAT on own accounts and points it at Svensk moms (crm#1449)', async () => {
+      // Stored as an 'accounts' rule it would read as OSS (VAT code OSS on its
+      // account, the OSS underlag); the one problem sends it to Svensk moms.
       const rules = [
         { country: 'DK', vat_rate: null, mode: 'accounts', revenue_account: '3001', vat_account: '2611' },
       ]
@@ -393,10 +395,7 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
       }>(await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }))
       expect(status).toBe(400)
       expect(body.error.code).toBe('WEBSHOP_COUNTRY_RULES_INVALID')
-      expect(body.error.details.problems.map((p) => p.code)).toEqual([
-        'revenue_in_declaration',
-        'vat_account_in_declaration',
-      ])
+      expect(body.error.details.problems.map((p) => p.code)).toEqual(['revenue_swedish_vat_on_eu'])
       expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
       expect(mockEnsurePresetAccounts).not.toHaveBeenCalled()
       // 3001 is not the preset OSS account: no usage lookup, no VAT code change.
@@ -524,6 +523,46 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
         expect(res.status).toBeGreaterThanOrEqual(500)
         expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
       })
+    })
+
+    it("stores a 'swedish' rule with its own revenue account, checked but never created (crm#1449)", async () => {
+      const rules = [
+        { country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3012' },
+        { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+      ]
+      enqueue({
+        data: [
+          chartRow('3012', 'Försäljning varor EU-konsumenter', {
+            default_vat_rate: 0.25,
+            default_vat_treatment: 'standard_25',
+          }),
+          chartRow('3105', 'Försäljning varor till land utanför EU'),
+        ],
+      })
+      enqueue({ data: { platform: 'shopify', store_scope: SHOP, country_account_rules: rules } })
+      const { status } = await parseJsonResponse(
+        await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }),
+      )
+      expect(status).toBe(200)
+      const lookup = findCall('chart_of_accounts', 'in')
+      expect([...((lookup?.[1] as string[]) ?? [])].sort()).toEqual(['3012', '3105'])
+      expect(mockEnsurePresetAccounts.mock.calls[0][3]).toEqual([])
+      expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+      const upsert = findCall('webshop_store_settings', 'upsert')![0] as Record<string, unknown>
+      expect(upsert.country_account_rules).toEqual(rules)
+    })
+
+    it("refuses a 'swedish' rule whose own account is not a ruta 05 account", async () => {
+      const rules = [{ country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3108' }]
+      enqueue({ data: [chartRow('3108', 'Försäljning varor till annat EU-land, momsfri')] })
+      const { status, body } = await parseJsonResponse<{
+        error: { details: { problems: Array<{ code: string; account?: string }> } }
+      }>(await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }))
+      expect(status).toBe(400)
+      expect(body.error.details.problems).toEqual([
+        { index: 0, field: 'revenue_account', code: 'swedish_revenue_vat_code', account: '3108', box: '35' },
+      ])
+      expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
     })
 
     it('names an account that is not in the chart', async () => {

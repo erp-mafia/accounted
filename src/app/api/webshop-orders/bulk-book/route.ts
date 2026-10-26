@@ -16,7 +16,7 @@ import {
   ROUNDING_ACCOUNT,
   WEBSHOP_PREFILL_ACCOUNTS,
 } from '@/lib/webshop-orders/booking-lines'
-import { usesSwedishAccounts } from '@/lib/webshop-orders/country-routing'
+import { usesRevenueTemplate } from '@/lib/webshop-orders/country-routing'
 import {
   resolveEffectiveVatRate,
   resolveRevenueVatBox,
@@ -439,7 +439,7 @@ export const POST = withRouteContext(
         // Only the buckets the template books: a 0 % bucket a country rule
         // routes (export on 3105) never reaches the 0 % template account.
         const hasZeroRateAmount = routing.buckets
-          .filter(usesSwedishAccounts)
+          .filter(usesRevenueTemplate)
           .some(({ bucket }) => bucket.rate === 0 && bucket.net !== 0)
         if (hasZeroRateAmount && zeroRateContextContradicted(country)) {
           results.push({

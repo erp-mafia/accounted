@@ -45,6 +45,9 @@ describe('GET /api/customers/[id]: the invoices carry the status line columns', 
       'document_type',
       'credited_invoice_id',
       'invoice_number',
+      // A received self-billing invoice has no invoice_number: the card
+      // shows the customer's number instead of "(Utkast)" (crm#1375).
+      'external_invoice_number',
       'is_self_billed',
       'quote_status',
       'valid_until',

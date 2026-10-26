@@ -1511,13 +1511,20 @@ export const invoiceInboxExtension: Extension = {
             // must not duplicate the body document. Body items carry the
             // email_id with a NULL attachment id. Scoped to the company:
             // one mail to two inboxes files once per inbox (#2181).
-            const { data: existingBody } = await serviceSupabase
+            // limit(1), not maybeSingle: a NULL attachment id is outside the
+            // unique index, so two overlapping deliveries can each file a
+            // body, and maybeSingle then errored on every later delivery,
+            // read as "none" and filed one more copy each time. A lookup
+            // that fails, fails closed: the 500 makes Resend redeliver.
+            const { data: existingBodies, error: existingBodyError } = await serviceSupabase
               .from('invoice_inbox_items')
               .select('id')
               .eq('company_id', companyId)
               .eq('resend_email_id', email_id)
               .is('resend_attachment_id', null)
-              .maybeSingle()
+              .limit(1)
+            if (existingBodyError) throw new Error(`Body dedupe lookup failed: ${existingBodyError.message}`)
+            const existingBody = (existingBodies as Array<{ id: string }> | null)?.[0]
             if (existingBody) return { inbox_item_id: existingBody.id, duplicate: true }
             try {
               const result = await uploadAndExtract(
@@ -1579,6 +1586,29 @@ export const invoiceInboxExtension: Extension = {
 
           const results: AttachmentResult[] = []
           attachmentOutcomes.push(...ignoredOutcomes)
+
+          // What one upload became. 'duplicate_delivery' is an overlapping
+          // delivery of this mail that filed the attachment first (Resend
+          // redelivers while a slow run is still extracting): already
+          // received, not a failure, and the rest of the mail goes on.
+          const recordUpload = (
+            attachmentId: string,
+            result: { inbox_item_id: string; skip_reason?: string | null },
+            replacedItemId?: string,
+          ) => {
+            const duplicate = result.skip_reason === 'duplicate_delivery'
+            results.push({
+              attachment_id: attachmentId,
+              inbox_item_id: result.inbox_item_id,
+              ...(duplicate ? { duplicate: true } : {}),
+            })
+            attachmentOutcomes.push({
+              id: attachmentId,
+              outcome: duplicate ? 'duplicate' : 'filed',
+              inbox_item_id: result.inbox_item_id,
+              ...(replacedItemId ? { replaced_item_id: replacedItemId } : {}),
+            })
+          }
 
           // Persist a "rejected" inbox row so the user has visibility into the drop.
           // Without this, attachments that fail MIME validation vanish silently,
@@ -1731,14 +1761,32 @@ export const invoiceInboxExtension: Extension = {
                         kindHint,
                       }
                     )
-                    results.push({ attachment_id: att.id, inbox_item_id: innerBodyResult.inbox_item_id })
-                    attachmentOutcomes.push({ id: att.id, outcome: 'filed', inbox_item_id: innerBodyResult.inbox_item_id })
+                    recordUpload(att.id, innerBodyResult)
                     continue
                   }
                   const rejectedId = await logRejection(att.id, download.filename, download.contentType, 'Det vidarebefordrade meddelandet innehöll inga bilagor')
                   results.push({ attachment_id: att.id, error: 'eml_no_inner_attachments' })
                   attachmentOutcomes.push({ id: att.id, outcome: 'rejected', reason: 'eml_no_inner_attachments', inbox_item_id: rejectedId })
                   continue
+                }
+                // The parts are filed under their own ids (att#i), never under
+                // the .eml's, so the redelivery check above cannot see them.
+                // Without this a redelivery extracted every part again, the
+                // first one already filed hit the unique index, and the rest
+                // of the .eml was skipped behind a false error row. A failed
+                // lookup only costs that check: the index still holds.
+                const innerPartIds = innerAttachments.flatMap((_, i) => (innerIsSignature[i] ? [] : [`${att.id}#${i}`]))
+                const filedParts = new Map<string, string>()
+                if (innerPartIds.length > 0) {
+                  const { data: partRows } = await serviceSupabase
+                    .from('invoice_inbox_items')
+                    .select('id, resend_attachment_id')
+                    .eq('company_id', companyId)
+                    .eq('resend_email_id', email_id)
+                    .in('resend_attachment_id', innerPartIds)
+                  for (const row of (partRows as Array<{ id: string; resend_attachment_id: string }> | null) ?? []) {
+                    filedParts.set(row.resend_attachment_id, row.id)
+                  }
                 }
                 for (let i = 0; i < innerAttachments.length; i++) {
                   const inner = innerAttachments[i]
@@ -1749,6 +1797,12 @@ export const invoiceInboxExtension: Extension = {
                   const innerId = `${att.id}#${i}`
                   if (innerIsSignature[i]) {
                     attachmentOutcomes.push({ id: innerId, outcome: 'ignored', reason: 'signature_image', mime: innerType })
+                    continue
+                  }
+                  const filedPartId = filedParts.get(innerId)
+                  if (filedPartId) {
+                    results.push({ attachment_id: innerId, inbox_item_id: filedPartId, duplicate: true })
+                    attachmentOutcomes.push({ id: innerId, outcome: 'duplicate', inbox_item_id: filedPartId })
                     continue
                   }
                   if (!EMAIL_ALLOWED_MIME_TYPES.has(innerType)) {
@@ -1784,8 +1838,7 @@ export const invoiceInboxExtension: Extension = {
                       kindHint,
                     }
                   )
-                  results.push({ attachment_id: innerId, inbox_item_id: innerResult.inbox_item_id })
-                  attachmentOutcomes.push({ id: innerId, outcome: 'filed', inbox_item_id: innerResult.inbox_item_id })
+                  recordUpload(innerId, innerResult)
                 }
                 continue
               }
@@ -1827,13 +1880,7 @@ export const invoiceInboxExtension: Extension = {
                   kindHint,
                 }
               )
-              results.push({ attachment_id: att.id, inbox_item_id: result.inbox_item_id })
-              attachmentOutcomes.push({
-                id: att.id,
-                outcome: 'filed',
-                inbox_item_id: result.inbox_item_id,
-                ...(replacedItemId ? { replaced_item_id: replacedItemId } : {}),
-              })
+              recordUpload(att.id, result, replacedItemId)
             } catch (err) {
               console.error('[invoice-inbox/inbound] Attachment processing failed:', err)
               const message = err instanceof Error ? err.message : 'Unknown error'

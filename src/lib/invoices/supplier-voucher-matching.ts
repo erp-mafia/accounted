@@ -61,13 +61,18 @@ import {
   collectSettlementVouchers,
   lockedPeriodIds,
   rankVoucherCandidates,
+  scoreNamedVoucherCandidate,
   scoreVoucherCandidate,
   sekBookedReason,
   sekBookedSettlement,
+  voucherCapacity,
+  voucherShareFields,
   type SettlementSideLine,
   type VoucherRow,
   type VoucherScoreContext,
+  type VoucherShareFields,
 } from './voucher-matching-shared'
+import type { VoucherNumber } from './voucher-label'
 import { roundOre } from '@/lib/money'
 
 const log = createLogger('supplier-voucher-matching')
@@ -86,7 +91,7 @@ interface VoucherPaymentRow {
   currency: string | null
 }
 
-export interface SupplierVoucherCandidate {
+export interface SupplierVoucherCandidate extends VoucherShareFields {
   journal_entry_id: string
   voucher_series: string | null
   voucher_number: number | null
@@ -113,10 +118,6 @@ export interface SupplierVoucherCandidate {
   confidence: number
   /** Localized reason in Swedish. */
   match_reason: string
-  /** Set when the voucher has MORE left than the invoice needs: the share to
-   *  state as `amount` on the link (the invoice's remainder). Such a voucher
-   *  is refused without a stated share, since it pays other debts too. */
-  link_amount?: number
 }
 
 /**
@@ -133,6 +134,9 @@ export interface SupplierVoucherCandidate {
  * invoice needs and that nothing else ties to it: a payment of several debts,
  * linkable with a stated share (`link_amount`). Only the surfaces where a
  * person picks set it; the unattended reconcile pass keeps the amount matches.
+ *
+ * `options.voucher` reads only the voucher a person named by its number, at
+ * any date (SettlementVoucherSearch.voucher).
  */
 export async function findMatchingVouchersForSupplierInvoice(
   supabase: SupabaseClient,
@@ -143,6 +147,7 @@ export async function findMatchingVouchersForSupplierInvoice(
     dateWindowDays?: number
     settlementSide?: SupplierSettlementSide
     includeShared?: boolean
+    voucher?: VoucherNumber
   } = {},
 ): Promise<SupplierVoucherCandidate[]> {
   const limit = options.limit ?? 10
@@ -175,6 +180,7 @@ export async function findMatchingVouchersForSupplierInvoice(
     },
     windowDays,
     sekBookedAllowed: true,
+    voucher: options.voucher,
     log,
     logContext,
   })
@@ -187,17 +193,22 @@ export async function findMatchingVouchersForSupplierInvoice(
   // bank", not "this supplier was paid"); on the 244x side it is what lets one
   // verifikat pay several invoices without paying any of them twice. A voucher
   // already linked to this invoice, or with nothing left, is not a candidate.
+  // The SEK-booked fallback reads the kronor voucher as the payment of this
+  // invoice's whole remainder: it cannot also carry another invoice's row
+  // (voucherCapacity, shared with the customer side).
   const rows = await fetchVoucherPaymentRows(supabase, companyId, Array.from(byEntry.keys()))
+  const usedByEntry = new Map<string, number>()
   for (const [entryId, voucher] of byEntry) {
-    const voucherRows = rows.filter((r) => r.journal_entry_id === entryId)
-    // The SEK-booked fallback reads the kronor voucher as the payment of this
-    // invoice's whole remainder: it cannot also carry another invoice's row.
-    const capacity =
-      voucher.sekBooked && voucherRows.some((r) => r.supplier_invoice_id !== invoice.id)
-        ? null
-        : voucherCapacity(voucher.amount, voucherRows, invoice.id, invoiceCurrency)
-    if (capacity === null) byEntry.delete(entryId)
-    else voucher.amount = capacity
+    const voucherRows = rows
+      .filter((r) => r.journal_entry_id === entryId)
+      .map((r) => ({ invoiceId: r.supplier_invoice_id, amount: r.amount, currency: r.currency }))
+    const capacity = voucherCapacity(voucher, voucherRows, invoice.id, invoiceCurrency)
+    if (capacity === null) {
+      byEntry.delete(entryId)
+      continue
+    }
+    voucher.amount = capacity.left
+    usedByEntry.set(entryId, capacity.used)
   }
   if (byEntry.size === 0) return []
 
@@ -225,13 +236,13 @@ export async function findMatchingVouchersForSupplierInvoice(
     counterparty: { name: invoice.supplier?.name, label: 'leverantörsnamn' },
     includeShared: options.includeShared === true,
   }
+  const score = options.voucher ? scoreNamedVoucherCandidate : scoreVoucherCandidate
   const candidates: SupplierVoucherCandidate[] = []
   for (const { entry, amount, lineCurrency, sekBooked } of byEntry.values()) {
     // A share is not on offer through the SEK-booked fallback: the validator
     // and the RPC refuse one there (the kursdifferens would be a guess).
-    const scored = scoreVoucherCandidate(entry, amount, lineCurrency, scoreContext, !sekBooked)
+    const scored = score(entry, amount, lineCurrency, scoreContext, !sekBooked)
     if (!scored) continue
-    const hasMoreThanNeeded = !sekBooked && amount > remainingAmount + AMOUNT_TOLERANCE
     candidates.push({
       journal_entry_id: entry.id,
       voucher_series: entry.voucher_series,
@@ -245,7 +256,7 @@ export async function findMatchingVouchersForSupplierInvoice(
       period_locked: lockedPeriods.has(entry.fiscal_period_id),
       confidence: scored.confidence,
       match_reason: sekBooked ? sekBookedReason(scored.match_reason, sekBooked.sekTotal) : scored.match_reason,
-      ...(hasMoreThanNeeded ? { link_amount: roundOre(remainingAmount) } : {}),
+      ...voucherShareFields(amount, usedByEntry.get(entry.id) ?? 0, remainingAmount, Boolean(sekBooked)),
     })
   }
   return rankVoucherCandidates(candidates, limit)
@@ -882,25 +893,6 @@ async function fetchVoucherPaymentRows(
     rows.push(...((data ?? []) as VoucherPaymentRow[]))
   }
   return rows
-}
-
-/**
- * What a voucher's settlement side (244x debit or 19xx credit) can still
- * settle for `invoiceId`, or null when it is not a candidate at all: already
- * linked to this invoice, carrying rows in another currency (the used part is
- * unreadable), or nothing left.
- */
-function voucherCapacity(
-  sideTotal: number,
-  voucherRows: VoucherPaymentRow[],
-  invoiceId: string,
-  invoiceCurrency: string,
-): number | null {
-  if (voucherRows.some((r) => r.supplier_invoice_id === invoiceId)) return null
-  if (voucherRows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) return null
-  const used = roundOre(voucherRows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
-  const left = roundOre(sideTotal - used)
-  return left > AMOUNT_TOLERANCE ? left : null
 }
 
 /**

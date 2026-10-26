@@ -234,4 +234,50 @@ describe('buildDuplicateBookingClaim (shared web + MCP claim builder)', () => {
     expect(claim).toContain(`bokför ${sv(98565)} kr`)
     expect(claim).toContain('transaktionen är i EUR utan växelkurs')
   })
+
+  it('names a covering samlingsverifikat as such, with what it books and what is unlinked (issue #101)', () => {
+    const claim = buildDuplicateBookingClaim(
+      {
+        amount: 2785,
+        currency: null,
+        amount_in_currency: null,
+        amount_verified: true,
+        account_number: '1686',
+        covering: { booked: 2785, held: 98, unlinked: 2687 },
+      },
+      'SEK',
+    )
+    expect(claim).toContain('samlingsverifikat')
+    expect(claim).toContain(`${sv(2785)} kr på 1686`)
+    expect(claim).toContain(`${sv(2687)} kr av det är inte kopplat`)
+    // Not the same-movement claim: the row's amount is not what it books.
+    expect(claim).not.toContain('bokför redan')
+  })
+})
+
+describe('agent message for a covering samlingsverifikat (issue #101)', () => {
+  it('asks to link or ignore the row, and keeps allow_duplicate as the explicit way past', async () => {
+    mockDetectDup.mockResolvedValue(
+      candidate({
+        transaction_id: null,
+        journal_entry_id: 'je-sam',
+        voucher_label: 'A13',
+        entry_date: '2026-10-17',
+        amount: 2785,
+        account_number: '1686',
+        covering: { booked: 2785, held: 98, unlinked: 2687 },
+      }),
+    )
+    const supabase = queuedSupabase([{ data: txRow({ amount: 49, date: '2026-10-08' }) }])
+
+    const result = await categorizeMatchedTransaction(supabase, 'u1', 'c1', 'tx-1', OPTS)
+
+    expect(result.status).toBe(409)
+    expect(result.errorCode).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+    expect(result.error).toContain('verifikat A13 (2026-10-17) är ett samlingsverifikat')
+    expect(result.error).toContain('gnubok_reconcile_match')
+    expect(result.error).toContain('gnubok_ignore_transaction')
+    expect(result.error).toContain('allow_duplicate=true')
+    expect(mockCreateJE).not.toHaveBeenCalled()
+  })
 })

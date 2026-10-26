@@ -3,8 +3,9 @@
  * dims) with nested values, for the register page and pickers.
  *
  * Calls ensure_company_dimensions first so the system dims (1 = Kostnadsställe,
- * 6 = Projekt) always exist: lazy seeding keeps core zero-config for companies
- * that never touch dimensions.
+ * 6 = Projekt) exist: lazy seeding keeps core zero-config for companies that
+ * never touch dimensions. The seed writes only for a writer and only when a
+ * system dim is missing; for a viewer it is a pure read (20261026209000).
  *
  * Response contract (PR2: the register UI builds against this exactly):
  *   200 { dimensions: [{ id, sie_dim_no, name, resets_annually, is_system,

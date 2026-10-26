@@ -632,6 +632,17 @@ describe('resumable import (one server slice per call)', () => {
     expect(wait).not.toHaveBeenCalled()
   })
 
+  it('never retries a connection the provider refused, and offers the reconnect (B11)', async () => {
+    const fetcher = vi.fn().mockImplementation(async () => jsonResponse({ error: { code: 'PROVIDER_AUTH_EXPIRED' } }, 401))
+    const wait = vi.fn().mockResolvedValue(undefined)
+
+    await expect(
+      runArcimDocumentImportToCompletion('consent-1', { fetcher, wait, retryDelaysMs: [1, 2] }),
+    ).rejects.toMatchObject({ status: 401, problem: { code: 'PROVIDER_AUTH_EXPIRED', reconnectRequired: true } })
+    expect(fetcher).toHaveBeenCalledTimes(1)
+    expect(wait).not.toHaveBeenCalled()
+  })
+
   it('continues a stopped run after its last handled file, keeping its totals', async () => {
     const stopped = result({ dryRun: false, scanned: 1897, linked: 1897, unmatched: 0, total: 3475, partial: true, nextCursor: 'file-1897' })
     const fetcher = vi.fn().mockResolvedValueOnce(
@@ -791,6 +802,16 @@ describe('the latest run under its connection (crm#1410)', () => {
       kind: 'stopped', date: '2026-10-22T09:20:11Z', scanned: 1897, total: 3475,
     })
     expect(documentImportRunNote(unfinished)).toMatchObject({ kind: 'running', scanned: 1897 })
+  })
+
+  it('says a run the provider refused waits for a reconnect, before calling it stopped (B11)', () => {
+    const refused = { ...run, complete: false, scanned: 1200, total: 4610, nextCursor: 'file-1200', needsReconnect: true }
+
+    expect(documentImportRunNote({ ...refused, stalled: true })).toEqual({
+      kind: 'reconnect', date: '2026-10-22T09:20:11Z', provider: 'fortnox',
+    })
+    // A finished run never asks for one, whatever an older mark said.
+    expect(documentImportRunNote({ ...run, needsReconnect: true })).toMatchObject({ kind: 'complete' })
   })
 
   it('says nothing before any run was recorded', () => {

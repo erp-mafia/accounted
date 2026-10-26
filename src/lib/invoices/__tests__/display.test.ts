@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { isTextLikeLine } from '@/lib/invoices/display'
+import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
 
 describe('isTextLikeLine', () => {
   it('is true for explicit text rows regardless of amounts', () => {
@@ -19,5 +19,20 @@ describe('isTextLikeLine', () => {
     expect(isTextLikeLine({ line_type: 'product', quantity: 0, unit_price: 250 })).toBe(false)
     expect(isTextLikeLine({ line_type: 'product', quantity: 0, unit_price: -250 })).toBe(false)
     expect(isTextLikeLine({ quantity: 3, unit_price: 99.5 })).toBe(false)
+  })
+})
+
+describe('invoiceDisplayNumber', () => {
+  it('shows a received self-billing invoice by the customer number, not as a draft (crm#1375)', () => {
+    expect(invoiceDisplayNumber({ invoice_number: null, external_invoice_number: 'S2263' })).toBe('S2263')
+  })
+
+  it('shows our own number when there is one', () => {
+    expect(invoiceDisplayNumber({ invoice_number: 'F-1042', external_invoice_number: null })).toBe('F-1042')
+  })
+
+  it('shows the draft label when there is no number at all', () => {
+    expect(invoiceDisplayNumber({ invoice_number: null, external_invoice_number: null })).toBe('(Utkast)')
+    expect(invoiceDisplayNumber({ invoice_number: null })).toBe('(Utkast)')
   })
 })

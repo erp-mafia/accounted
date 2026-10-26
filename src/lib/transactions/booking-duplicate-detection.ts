@@ -40,10 +40,11 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
-import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
+import { isKronorCurrency, resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { getPrimaryJournalEntryId } from '@/lib/transactions/is-booked'
 import { idsProveDistinctBookings, type TransactionIdentity } from '@/lib/transactions/external-id'
+import { BANK_LEG_ROOM_TOLERANCE, holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { chunk } from '@/lib/utils'
 
@@ -217,6 +218,26 @@ export interface BookedDuplicateCandidate {
    * {@link resolveTransactionAmountSek}).
    */
   unverified_reason: 'transaction_missing_sek_value' | null
+  /**
+   * Set only by detectCoveringVoucher: the candidate is not the same movement
+   * but a samlingsverifikat entered outside the feed that books the row's
+   * account, in the row's direction, for a period holding the row's day, and
+   * still has at least the row's amount that no transaction is linked to
+   * (issue #101). `amount` is then what the verifikat books on the account
+   * in that direction, never a figure for the row. Absent on every
+   * same-movement candidate.
+   */
+  covering?: CoveringVoucherFacts
+}
+
+/** What a covering samlingsverifikat holds on the row's account (kr, positive). */
+export interface CoveringVoucherFacts {
+  /** What the verifikat books on the account in the row's direction. */
+  booked: number
+  /** What transactions already linked to it hold of that. */
+  held: number
+  /** booked - held: the part no transaction is linked to, at least the row's amount. */
+  unlinked: number
 }
 
 /**
@@ -880,12 +901,227 @@ export async function detectLedgerDuplicateVoucher(
 }
 
 /**
+ * The row's settlement ledger account, looked up once from its cash account
+ * when the caller did not resolve it. Null when the row has no cash account
+ * or the lookup finds none: the ledger scan then covers the bank range, and
+ * the covering check has no account to judge and stays silent.
+ */
+async function withSettlementAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  target: BookingTarget,
+): Promise<BookingTarget> {
+  if (target.settlement_account !== undefined) return target
+  if (!target.cash_account_id) return { ...target, settlement_account: null }
+  const { data } = await supabase
+    .from('cash_accounts')
+    .select('ledger_account')
+    .eq('company_id', companyId)
+    .eq('id', target.cash_account_id)
+    .maybeSingle()
+  return { ...target, settlement_account: (data as { ledger_account?: string | null } | null)?.ledger_account ?? null }
+}
+
+/**
+ * The last day a samlingsverifikat may be dated and still hold a row of
+ * `rowDate` on `settlementAccount`, or null for a malformed date.
+ *
+ * A bank account (1910-1949) carries each movement on its own verifikat, and
+ * a gemensam verifikation covers affärshändelser of one kind on one day
+ * (BFL 5 kap. 6 §), so only a verifikat of the row's own day can hold it: a
+ * later hand-entered verifikat on 1930 is, in production, nearly always
+ * another payment. A payment provider's account (1686 Stripe, a card
+ * clearing account) is booked per week or per month instead, by hand or in
+ * the old system, and dated at the period's end or early in the next month
+ * (prod: "Stripe försäljning augusti" dated 4 September), so a verifikat up
+ * to the end of the month after the row's month can hold it. Löpande
+ * bokföring of a non-cash event is due in the month after it (BFL 5 kap.
+ * 2 §), which bounds the window.
+ */
+export function coveringVoucherWindowEnd(rowDate: string, settlementAccount: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(rowDate)
+  if (!match) return null
+  if (isBankRangeAccount(settlementAccount)) return rowDate
+  // Day 0 of the month after next is the last day of the next month.
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) + 1, 0)).toISOString().slice(0, 10)
+}
+
+/**
+ * Which verifikat count as a samlingsverifikat entered outside the feed. On a
+ * bank account only a hand-entered one: an imported (SIE) verifikat on 1930
+ * is the old system's booking of one movement, and counting it flagged 20
+ * legitimate bookings in 60 days of prod. On a payment provider's account an
+ * imported verifikat is the old system's period summary (prod: monthly
+ * Stripe sales on 1686) and counts too.
+ */
+export function coveringVoucherSourceTypes(settlementAccount: string): readonly string[] {
+  return isBankRangeAccount(settlementAccount) ? ['manual'] : ['manual', 'import']
+}
+
+/** One line on the row's account of a verifikat that may cover the row. */
+export interface CoveringVoucherLine {
+  debit_amount: number | string
+  credit_amount: number | string
+  journal_entry: {
+    id: string
+    entry_date: string
+    description: string | null
+    voucher_series: string | null
+    voucher_number: number | null
+  }
+}
+
+/**
+ * Pure: the verifikat among `lines` (all on the row's account, inside the
+ * window) whose part in the row's direction that no transaction holds is at
+ * least the row's amount. The earliest such verifikat wins (the period the
+ * row most likely belongs to), then the lowest id, so a force re-detect
+ * returns the candidate the user reviewed.
+ */
+export function pickCoveringVoucher(
+  row: { amountSek: number },
+  lines: readonly CoveringVoucherLine[],
+  heldByEntry: ReadonlyMap<string, number>,
+): { entry: CoveringVoucherLine['journal_entry']; facts: CoveringVoucherFacts } | null {
+  const inbound = row.amountSek > 0
+  const magnitude = roundOre(Math.abs(row.amountSek))
+  if (magnitude === 0) return null
+  const bookedByEntry = new Map<string, { entry: CoveringVoucherLine['journal_entry']; booked: number }>()
+  for (const line of lines) {
+    const amount = Number(inbound ? line.debit_amount : line.credit_amount)
+    if (!Number.isFinite(amount) || amount <= 0) continue
+    const slot = bookedByEntry.get(line.journal_entry.id)
+    if (slot) slot.booked += amount
+    else bookedByEntry.set(line.journal_entry.id, { entry: line.journal_entry, booked: amount })
+  }
+  const fitting: { entry: CoveringVoucherLine['journal_entry']; facts: CoveringVoucherFacts }[] = []
+  for (const { entry, booked } of bookedByEntry.values()) {
+    const held = roundOre(heldByEntry.get(entry.id) ?? 0)
+    const unlinked = roundOre(booked - held)
+    if (magnitude <= unlinked + BANK_LEG_ROOM_TOLERANCE) {
+      fitting.push({ entry, facts: { booked: roundOre(booked), held, unlinked } })
+    }
+  }
+  fitting.sort((a, b) =>
+    a.entry.entry_date !== b.entry.entry_date
+      ? a.entry.entry_date.localeCompare(b.entry.entry_date)
+      : a.entry.id.localeCompare(b.entry.id),
+  )
+  return fitting[0] ?? null
+}
+
+/**
+ * Third half of the booking-time guard (issue #101, crm#1386): a bank or feed
+ * row whose day a samlingsverifikat entered outside the feed already holds.
+ *
+ * A company that kept its Stripe sales (or a day's Swish) as one hand-entered
+ * verifikat, and later connected the feed or fetched older rows with "Hämta
+ * ändå", has those sales twice: once in the samlingsverifikat and once as
+ * unbooked rows. Booking a row then books the sale a second time (felaktig
+ * bokföring, BFL 5 kap. 1-2 §). The other two halves cannot see it: no
+ * sibling row is booked, and the samlingsverifikat books the period's sum,
+ * not the row's amount.
+ *
+ * The rule, the same for every door: a posted verifikat of the kinds in
+ * coveringVoucherSourceTypes, on the row's settlement account, dated inside
+ * [row day, coveringVoucherWindowEnd], that books the account in the row's
+ * direction and still has at least the row's amount that no transaction is
+ * linked to (the voucher-bank-leg holders: pointers and bank_line slices).
+ * A verifikat whose part is fully held by linked rows does not hold this row
+ * (prod: an agent bulk-booked each day's Stripe rows into one verifikat and
+ * booked the other rows of the same days separately; none of those was a
+ * double booking). The candidate is a warning like the other halves: the
+ * user links the row to it, ignores the row, or books anyway with force
+ * bound to it.
+ *
+ * Silent (null) for a row without a settlement account, a non-SEK row (the
+ * held amounts are compared in kronor), a zero row, and on any read error: a
+ * failed check never blocks a booking.
+ */
+export async function detectCoveringVoucher(
+  supabase: SupabaseClient,
+  companyId: string,
+  target: BookingTarget,
+  opts?: BookingDuplicateExclusions,
+): Promise<BookedDuplicateCandidate | null> {
+  try {
+    if (!isKronorCurrency(target.currency)) return null
+    const amountSek = roundOre(Number(target.amount))
+    if (!Number.isFinite(amountSek) || amountSek === 0) return null
+    const resolved = await withSettlementAccount(supabase, companyId, target)
+    const account = resolved.settlement_account?.trim() || null
+    if (!account || !isAccountNumber(account)) return null
+    const windowEnd = coveringVoucherWindowEnd(target.date, account)
+    if (!windowEnd) return null
+    const amountColumn = amountSek > 0 ? 'debit_amount' : 'credit_amount'
+    const sourceTypes = [...coveringVoucherSourceTypes(account)]
+    const excluded = new Set(opts?.excludeJournalEntryIds ?? [])
+
+    const lines = (
+      await fetchEntryLines<CoveringVoucherLine>({
+        supabase,
+        entryColumns: 'id, entry_date, description, voucher_series, voucher_number',
+        lineColumns: 'debit_amount, credit_amount',
+        filterEntries: (q: EntryLinesQuery) =>
+          q
+            .eq('company_id', companyId)
+            .eq('status', 'posted')
+            .in('source_type', sourceTypes)
+            .gte('entry_date', target.date)
+            .lte('entry_date', windowEnd),
+        filterLines: (q: EntryLinesQuery) => q.eq('account_number', account).gt(amountColumn, 0),
+        attachEntriesAs: 'journal_entry',
+      })
+    ).filter((l) => l.journal_entry && !excluded.has(l.journal_entry.id))
+    if (lines.length === 0) return null
+
+    const entryIds = [...new Set(lines.map((l) => l.journal_entry.id))]
+    const read = await readBankLegHolders(supabase, companyId, entryIds, [target.id])
+    if (!read.ok) return null
+    const heldByEntry = new Map<string, number>()
+    for (const id of entryIds) {
+      const onAccount = holdersOnAccount(read.holders.get(id) ?? [], {
+        cashAccountId: target.cash_account_id ?? null,
+        currency: 'SEK',
+      })
+      let held = 0
+      for (const h of onAccount) {
+        if (amountSek > 0 ? h.amount > 0 : h.amount < 0) held += Math.abs(h.amount)
+      }
+      heldByEntry.set(id, held)
+    }
+
+    const pick = pickCoveringVoucher({ amountSek }, lines, heldByEntry)
+    if (!pick) return null
+    const { entry, facts } = pick
+    return {
+      transaction_id: null,
+      journal_entry_id: entry.id,
+      voucher_label: `${entry.voucher_series ?? 'A'}${entry.voucher_number ?? ''}`,
+      entry_date: entry.entry_date,
+      description: entry.description,
+      amount: facts.booked,
+      account_number: account,
+      currency: null,
+      amount_in_currency: null,
+      amount_verified: true,
+      unverified_reason: null,
+      covering: facts,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
  * Unified booking-time duplicate guard. Returns the single best already-booked
  * candidate for this bank line: a sibling transaction first (the cheaper,
- * higher-confidence signal), then a ledger-only voucher. Null when neither
- * fires. This is the function every booking chokepoint should call (web /book +
- * /categorize routes and the agent commit executors) so all paths reject the
- * same double-bookings.
+ * higher-confidence signal), then a ledger-only voucher that books the same
+ * movement, then a samlingsverifikat that holds the row's day
+ * (detectCoveringVoucher). Null when none fires. This is the function every
+ * booking chokepoint should call (web /book + /categorize routes, bulk book
+ * and the agent commit executors) so all paths reject the same
+ * double-bookings.
  */
 export async function detectBookingDuplicate(
   supabase: SupabaseClient,
@@ -895,5 +1131,9 @@ export async function detectBookingDuplicate(
 ): Promise<BookedDuplicateCandidate | null> {
   const sibling = await detectBookedDuplicateTransaction(supabase, companyId, target, opts)
   if (sibling) return sibling
-  return detectLedgerDuplicateVoucher(supabase, companyId, target, opts)
+  // Both ledger halves judge the row on its settlement account: read it once.
+  const resolved = await withSettlementAccount(supabase, companyId, target)
+  const twin = await detectLedgerDuplicateVoucher(supabase, companyId, resolved, opts)
+  if (twin) return twin
+  return detectCoveringVoucher(supabase, companyId, resolved, opts)
 }

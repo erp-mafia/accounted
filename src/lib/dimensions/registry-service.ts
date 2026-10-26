@@ -72,8 +72,9 @@ async function ensureSystemDimensions(ctx: RegistryReadContext): Promise<Operati
 
 /**
  * The registry with every value nested, dimensions by sort_order then
- * number, values by code. Seeds the system dims first, so the list is never
- * empty. Values are paginated: an SIE history can mint thousands of codes,
+ * number, values by code. Seeds the system dims first, so a writer's list is
+ * never empty; for a read-only member the seed writes nothing and the list
+ * is what exists (20261026209000). Values are paginated: an SIE history can mint thousands of codes,
  * past PostgREST's silent 1000-row cap. The MCP tools read the registry
  * through this function too (list_dimensions and the resolve step of every
  * dims-bag write), so no door can see a shorter registry than another.

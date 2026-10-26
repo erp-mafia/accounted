@@ -3,7 +3,7 @@
  * the dashboard book route's extracted core plus the advance-walk used by the
  * book_salary_run pending-operation executor (MCP gnubok_book_salary_run).
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
 vi.mock('@/lib/events', () => ({
@@ -886,5 +886,112 @@ describe('salary run booking claim (#3251)', () => {
 
     expect(result).toEqual({ ok: false, code: 'SALARY_RUN_BOOKING_IN_PROGRESS' })
     expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+})
+
+// crm#1216: the salary verifikat credits the net pay to the bank account on
+// the payment date, so a date still ahead needs the caller's confirmation at
+// every door before anything moves (paymentDateAheadRefusal).
+describe('salary run booking with the payment date still ahead (crm#1216)', () => {
+  const AHEAD = '2026-10-23'
+
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-15T10:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('bookPaidSalaryRun refuses without the confirmation, before claiming or posting', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRun({ status: 'paid', payment_date: AHEAD }) })
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED',
+      details: { payment_date: AHEAD, today: '2026-10-15' },
+    })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('previewPaidSalaryRunBooking answers the same refusal', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeRun({ status: 'paid', payment_date: AHEAD }) })
+
+    const result = await previewPaidSalaryRunBooking(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+  })
+
+  it('bookPaidSalaryRun books a confirmed run on its payment date', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', payment_date: AHEAD }) },
+      { data: [makeSre()] },
+      { data: BOOKING_CLAIM }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, { ...ARGS, confirmPaymentDateAhead: true })
+
+    expect(result.ok).toBe(true)
+    expect(createSalaryRunEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      'company-1',
+      'user-1',
+      expect.objectContaining({ payment_date: AHEAD }),
+    )
+  })
+
+  it('bookPaidSalaryRun needs no confirmation for a run with nothing paid out', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'paid', payment_date: AHEAD, total_gross: 0, total_tax: 0, total_net: 0, total_avgifter: 0 }) },
+      { data: [] },
+      { data: BOOKING_CLAIM },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await bookPaidSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(result.data.nollkorning).toBe(true)
+  })
+
+  it('advanceAndBookSalaryRun refuses without the confirmation before any status moves', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueMany([{ data: makeRun({ status: 'review', payment_date: AHEAD }) }, { data: [makeSre()] }])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, ARGS)
+
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+    // The run stays in review: nothing was approved, paid or posted.
+    expect(findCall('salary_runs', 'update')).toBeUndefined()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('advanceAndBookSalaryRun walks a confirmed run through to booked', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: makeRun({ status: 'review', payment_date: AHEAD }) },
+      { data: [makeSre()] },
+      { data: { id: 'run-1' } }, // review → approved
+      { data: { id: 'run-1' } }, // approved → paid
+      { data: BOOKING_CLAIM },
+      { data: null },
+      { data: { id: 'run-1', status: 'booked' } },
+    ])
+
+    const result = await advanceAndBookSalaryRun(supabase as never, { ...ARGS, confirmPaymentDateAhead: true })
+
+    expect(result.ok).toBe(true)
+    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
   })
 })

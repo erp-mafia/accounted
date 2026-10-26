@@ -22,11 +22,17 @@ import {
   detectFileMagic,
   isArchivedForOwnJournalEntry,
 } from '@/lib/core/documents/document-service'
-import { importProviderDocuments } from '../lib/import-documents'
+import { BokioApiError } from '@/lib/providers/bokio/client'
+import { ProviderCallError } from '@/lib/providers/with-provider-call'
+import { importProviderDocuments, ProviderConnectionRefusedError } from '../lib/import-documents'
 
 // The Bokio client is constructed but never called directly (the attachments
 // module is mocked), so a bare stub avoids touching real config/rate-limiter.
-vi.mock('@/lib/providers/bokio/client', () => ({ BokioClient: class {} }))
+// The error class stays real: a refused Bokio token is told apart by it.
+vi.mock('@/lib/providers/bokio/client', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/providers/bokio/client')>()
+  return { ...actual, BokioClient: class {} }
+})
 vi.mock('@/lib/providers/fortnox/client', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/providers/fortnox/client')>()
   return { ...actual, FortnoxClient: class {} }
@@ -769,6 +775,8 @@ describe('importProviderDocuments', () => {
 
     expect(result).toMatchObject({ scanned: 1, linked: 1, failed: 0 })
     expect(mockResolveConsent).toHaveBeenCalledTimes(2)
+    // A real refresh of the refused token, not a re-read that hands it back.
+    expect(mockResolveConsent).toHaveBeenLastCalledWith(COMPANY, 'c1', { rejectedAccessToken: 'expired-token' })
     expect(mockDownloadFortnoxArchiveFile).toHaveBeenNthCalledWith(
       1,
       expect.anything(),
@@ -783,31 +791,143 @@ describe('importProviderDocuments', () => {
     )
   })
 
-  it('counts a repeated Fortnox 401 as failed after the one refresh attempt', async () => {
-    const supabase = wireFortnox()
-    mockResolveConsent
-      .mockResolvedValueOnce({
-        consent: { provider: 'fortnox' },
-        accessToken: 'expired-token',
-      } as never)
-      .mockResolvedValueOnce({
-        consent: { provider: 'fortnox' },
-        accessToken: 'still-invalid-token',
-      } as never)
-    mockDownloadFortnoxArchiveFile.mockRejectedValue(
-      new FortnoxApiError('unauthorized', 401),
-    )
+  describe('a connection the provider refuses (B11)', () => {
+    const THREE_FILES: FortnoxFileConnection[] = [
+      { ...FORTNOX_CONNECTION, fileId: 'f-1' },
+      { ...FORTNOX_CONNECTION, fileId: 'f-2' },
+      { ...FORTNOX_CONNECTION, fileId: 'f-3' },
+    ]
+    const tokens = (...accessTokens: string[]) => {
+      for (const accessToken of accessTokens) {
+        mockResolveConsent.mockResolvedValueOnce({ consent: { provider: 'fortnox' }, accessToken } as never)
+      }
+    }
+    const run = (supabase: SupabaseClient) =>
+      importProviderDocuments({ supabase, companyId: COMPANY, userId: USER, consentId: 'c1' })
 
-    const result = await importProviderDocuments({
-      supabase,
-      companyId: COMPANY,
-      userId: USER,
-      consentId: 'c1',
+    it('stops the sweep once, without trying the files left, when the refreshed token is refused too', async () => {
+      const supabase = wireFortnox({ connections: THREE_FILES })
+      tokens('expired-token', 'refused-token')
+      mockDownloadFortnoxArchiveFile.mockRejectedValue(new FortnoxApiError('unauthorized', 401))
+
+      const error = await run(supabase).catch((e) => e)
+
+      expect(error).toBeInstanceOf(ProviderConnectionRefusedError)
+      expect(error).toMatchObject({ provider: 'fortnox', code: 'PROVIDER_AUTH_EXPIRED', providerStatus: 401 })
+      // The first file and its one retry; f-2 and f-3 are never asked for.
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(2)
+      expect(mockUpload).not.toHaveBeenCalled()
     })
 
-    expect(result).toMatchObject({ scanned: 1, linked: 0, failed: 1 })
-    expect(mockResolveConsent).toHaveBeenCalledTimes(2)
-    expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(2)
+    it('outlives the token expiring mid-slice: the rest of the files come in on the new token', async () => {
+      // The hourly pattern in prod: Fortnox retires the token while our
+      // clock still calls it valid, and every later file of the slice failed.
+      const supabase = wireFortnox({ connections: THREE_FILES })
+      tokens('old-token', 'new-token')
+      const pdf = { bytes: bytesOf('FORTNOX-PDF'), contentType: 'application/pdf' }
+      mockDownloadFortnoxArchiveFile.mockImplementation(async (_client, token, fileId) => {
+        if (token === 'old-token' && fileId !== 'f-1') throw new FortnoxApiError('unauthorized', 401)
+        return { ...pdf, bytes: bytesOf(`PDF-${fileId}`) }
+      })
+
+      const result = await run(supabase)
+
+      expect(result).toMatchObject({ scanned: 3, linked: 3, failed: 0 })
+      expect(mockResolveConsent).toHaveBeenCalledTimes(2)
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenLastCalledWith(expect.anything(), 'new-token', 'f-3')
+    })
+
+    it('reads a later 401 on the refreshed token as a refused connection, without refreshing again', async () => {
+      const supabase = wireFortnox({ connections: THREE_FILES })
+      tokens('old-token', 'new-token')
+      mockDownloadFortnoxArchiveFile
+        .mockRejectedValueOnce(new FortnoxApiError('unauthorized', 401))
+        .mockResolvedValueOnce({ bytes: bytesOf('PDF-1'), contentType: 'application/pdf' })
+        .mockRejectedValue(new FortnoxApiError('unauthorized', 401))
+
+      await expect(run(supabase)).rejects.toBeInstanceOf(ProviderConnectionRefusedError)
+
+      expect(mockResolveConsent).toHaveBeenCalledTimes(2)
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(3)
+      expect(mockUpload).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops on a grant the refresh is refused (consent expired)', async () => {
+      const supabase = wireFortnox({ connections: THREE_FILES })
+      tokens('old-token')
+      const dead = new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'fortnox', 'refresh refused', { providerCode: 'invalid_grant' })
+      mockResolveConsent.mockRejectedValueOnce(dead)
+      mockDownloadFortnoxArchiveFile.mockRejectedValue(new FortnoxApiError('unauthorized', 401))
+
+      await expect(run(supabase)).rejects.toBe(dead)
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
+    })
+
+    it('ends the slice on a refresh that failed transiently, so the page retries it whole', async () => {
+      const supabase = wireFortnox({ connections: THREE_FILES })
+      tokens('old-token')
+      const blink = new ProviderCallError('PROVIDER_UPSTREAM_ERROR', 'fortnox', 'refresh 503', { status: 503 })
+      mockResolveConsent.mockRejectedValueOnce(blink)
+      mockDownloadFortnoxArchiveFile.mockRejectedValue(new FortnoxApiError('unauthorized', 401))
+
+      await expect(run(supabase)).rejects.toBe(blink)
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
+    })
+
+    it('ends the slice on a refresh that timed out, instead of failing every file left', async () => {
+      const supabase = wireFortnox({ connections: THREE_FILES })
+      tokens('old-token')
+      const timeout = new Error('credential refresh timed out')
+      mockResolveConsent.mockRejectedValueOnce(timeout)
+      mockDownloadFortnoxArchiveFile.mockRejectedValue(new FortnoxApiError('unauthorized', 401))
+
+      await expect(run(supabase)).rejects.toBe(timeout)
+      expect(mockDownloadFortnoxArchiveFile).toHaveBeenCalledTimes(1)
+    })
+
+    it('refreshes and lists again when the token died before the listing', async () => {
+      const supabase = wireFortnox()
+      tokens('old-token', 'new-token')
+      mockFetchFortnoxFinancialYears.mockRejectedValueOnce(new FortnoxApiError('unauthorized', 401))
+
+      const result = await run(supabase)
+
+      expect(result).toMatchObject({ scanned: 1, linked: 1, failed: 0 })
+      expect(mockResolveConsent).toHaveBeenLastCalledWith(COMPANY, 'c1', { rejectedAccessToken: 'old-token' })
+    })
+
+    it('still counts a file that fails for its own reason and carries on', async () => {
+      const supabase = wireFortnox({ connections: THREE_FILES })
+      mockDownloadFortnoxArchiveFile.mockImplementation(async (_client, _token, fileId) => {
+        if (fileId === 'f-2') throw new FortnoxApiError('not found', 404)
+        return { bytes: bytesOf(`PDF-${fileId}`), contentType: 'application/pdf' }
+      })
+
+      const result = await run(supabase)
+
+      expect(result).toMatchObject({ scanned: 3, linked: 2, failed: 1 })
+      expect(mockResolveConsent).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops at a Bokio token the provider refuses: it cannot be refreshed', async () => {
+      const supabase = wireBokio()
+      mockFetchUploads.mockResolvedValue([UPLOAD, { ...UPLOAD, id: 'up-2' }] as never)
+      mockDownload.mockRejectedValue(new BokioApiError('Bokio API error: 401 Unauthorized', 401))
+
+      const error = await run(supabase).catch((e) => e)
+
+      expect(error).toMatchObject({ provider: 'bokio', code: 'PROVIDER_AUTH_EXPIRED', providerStatus: 401 })
+      expect(mockDownload).toHaveBeenCalledTimes(1)
+      expect(mockResolveConsent).toHaveBeenCalledTimes(1)
+    })
+
+    it('stops at a Bokio listing refused for lack of rights', async () => {
+      const supabase = wireBokio()
+      mockFetchUploads.mockRejectedValue(new BokioApiError('Bokio API error: 403 Forbidden', 403))
+
+      await expect(run(supabase)).rejects.toMatchObject({ code: 'PROVIDER_RESOURCE_FORBIDDEN', providerStatus: 403 })
+      expect(mockDownload).not.toHaveBeenCalled()
+    })
   })
 
   it('explains that a Fortnox 403 requires reconnecting with attachment scopes', async () => {

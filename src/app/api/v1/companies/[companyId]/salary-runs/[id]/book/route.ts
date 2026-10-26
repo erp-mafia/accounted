@@ -34,6 +34,11 @@
  * error. The DB trigger remains authoritative: this is ergonomics, not
  * security.
  *
+ * Payment date ahead (crm#1216): a run that pays out on a payment_date after
+ * today needs { confirm_payment_date_ahead: true } in the optional body, the
+ * same rule as the dashboard and MCP doors (lib/salary/payout-date.ts): the
+ * salary verifikation credits the net pay to the bank account on that date.
+ *
  * Audit block: the success response includes the salary verifikation's
  * voucher number + the entry IDs of all posted entries, so an agent can
  * verify the audit trail in one round-trip. A nollkörning has none.
@@ -44,12 +49,18 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { readV1OptionalJsonBody } from '@/lib/api/v1/body'
 import { SalaryRunPartiallyBookedError } from '@/lib/salary/salary-entries'
 import { bookPaidSalaryRun, previewPaidSalaryRunBooking } from '@/lib/salary/book-run'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { Logger } from '@/lib/logger'
+
+// Optional body. Unknown fields are ignored: the verb took no body before.
+const BookRequest = z.object({
+  confirm_payment_date_ahead: z.boolean().optional(),
+})
 
 const SalaryRunBooked = z.object({
   id: z.string().uuid(),
@@ -88,6 +99,7 @@ registerEndpoint({
   pitfalls: [
     'Run must be in `paid`: non-`paid` runs return 400 SALARY_RUN_BOOK_NOT_PAID.',
     'payment_date must fall in an open fiscal period: locked period returns 400 PERIOD_LOCKED with `fiscal_period_id` and a hint of what unlock action is needed.',
+    'A run that pays out with a payment_date after today (Swedish calendar day) returns 422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED (details.payment_date) unless the body has confirm_payment_date_ahead: true: the salary verifikation credits the net pay to the bank account on payment_date. Confirm only when the salaries have gone out or the payment is scheduled in the bank; otherwise book on or after payment_date.',
     'BFL 5 kap immutability: once `:book` succeeds the verifikationer cannot be edited or deleted. Corrections require `:correct` (Phase 5 PR-3) which does a storno-then-rebook.',
     'The salary verifikation is the primary one; its voucher_number appears in the response audit block. The avgifter, vacation, and pension entries get separate voucher numbers (returned as `entry_ids`).',
     'A run without arbetsgivaravgifter (only utlägg repaid, or only payees without avgifter such as F-skatt holders) posts no avgifter entry: avgifter_entry_id is null.',
@@ -96,6 +108,7 @@ registerEndpoint({
     'One booking per run at a time: while another :book call (or a dashboard or MCP booking) for the same run is in flight, this call returns 409 SALARY_RUN_BOOKING_IN_PROGRESS and posts nothing. Do not retry at once after a client timeout: wait, GET the run, and call :book again only if it is still `paid`.',
   ],
   example: {
+    request: { confirm_payment_date_ahead: true },
     response: {
       data: {
         id: 'run_a8f1…',
@@ -124,12 +137,13 @@ registerEndpoint({
   idempotent: true,
   reversible: false,
   dryRunSupported: true,
+  request: { body: BookRequest },
   response: { success: dataEnvelope(SalaryRunBooked) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'salary-runs.book',
-  async (_request, ctx, params) => {
+  async (request, ctx, params) => {
     const { id } = await params.params
     const idParse = z.string().uuid().safeParse(id)
     if (!idParse.success) {
@@ -138,11 +152,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         details: { field: 'id', message: 'Salary-run id must be a UUID.' },
       })
     }
+    const raw = await readV1OptionalJsonBody(request, ctx)
+    if (!raw.ok) return raw.response
+    const body = BookRequest.safeParse(raw.body)
+    if (!body.success) return v1ValidationError(ctx, body.error)
+
     const args = {
       companyId: ctx.companyId!,
       userId: ctx.userId,
       salaryRunId: idParse.data,
       log: ctx.log,
+      confirmPaymentDateAhead: body.data.confirm_payment_date_ahead,
     }
 
     if (ctx.dryRun) {

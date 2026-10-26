@@ -156,6 +156,7 @@ import {
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
 import { emitInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
 import { settleInvoicePayment } from '@/lib/invoices/settle-invoice-payment'
+import { describeRefundFailure, refundCreditNote, type RefundCreditNoteRow } from '@/lib/invoices/refund-credit-note'
 import {
   bookSaleBeforeSettlement,
   planSaleBeforeSettlement,
@@ -2546,8 +2547,9 @@ async function commitMarkInvoicePaid(
     .single()
 
   if (invoiceError || !invoice) return { error: 'Invoice not found', status: 404 }
+  // A kreditfaktura: the refund paid back to the customer (Dr 1510 / Cr bank).
   if (invoice.credited_invoice_id) {
-    return { error: 'Kreditfakturor kan inte markeras som betalda.', status: 409 }
+    return commitCreditNoteRefund(supabase, userId, companyId, invoice as Invoice, paymentDate, params.allow_duplicate === true)
   }
   // Parity with the dashboard mark-paid route: a quote is an offer, not a
   // claim. Proformas keep working (a prepayment record with no verifikat).
@@ -2755,6 +2757,49 @@ async function commitMarkInvoicePaid(
       journal_entry_id: journalEntryId,
       // The sale verifikat this payment booked first (defer_invoice_booking).
       ...(saleJournalEntryId ? { sale_journal_entry_id: saleJournalEntryId } : {}),
+    },
+  }
+}
+
+/**
+ * The approved refund of a kreditfaktura (gnubok_mark_invoice_as_paid on a
+ * credit note): the whole amount the customer has tillgodo, out of the credit
+ * note's payee account, through the dashboard's write path
+ * (lib/invoices/refund-credit-note.ts). The already-booked guard runs again
+ * here; allow_duplicate skips it as it skips the payment guard.
+ */
+async function commitCreditNoteRefund(
+  supabase: SupabaseClient,
+  userId: string,
+  companyId: string,
+  creditNote: Invoice,
+  paymentDate: string,
+  force: boolean,
+): Promise<ExecutorResult> {
+  const refund = await refundCreditNote(supabase, companyId, userId, {
+    creditNote: creditNote as unknown as RefundCreditNoteRow,
+    refundDate: paymentDate,
+    settlementAccountNumber: await resolveInvoiceSettlementAccount(supabase, companyId, creditNote),
+    force,
+  })
+  if (!refund.ok) {
+    // An engine refusal (a locked period, an account outside the chart)
+    // propagates to the dispatcher, as for a payment.
+    if (refund.code === 'BOOKKEEPING_ERROR') throw refund.error
+    if (refund.code === 'DB_ERROR') {
+      log.error('mark_invoice_paid: credit note refund read failed', refund.error as Error, { companyId, invoiceId: creditNote.id })
+      return { error: 'Återbetalningen kunde inte registreras.', status: 500 }
+    }
+    const { code, status } = describeRefundFailure(refund)
+    return { error: getErrorEntry(code)?.message_sv ?? code, errorCode: code, status }
+  }
+  return {
+    data: {
+      refund: true,
+      refunded_amount: refund.amount,
+      owed_after: refund.owedAfter,
+      paid_amount: refund.paidAmount,
+      journal_entry_id: refund.journalEntryId,
     },
   }
 }
@@ -6674,6 +6719,9 @@ async function commitBookSalaryRun(
       userId,
       salaryRunId,
       log: createLogger('commit/book_salary_run'),
+      // Staged by gnubok_book_salary_run after the user confirmed a payment
+      // date still ahead (crm#1216); the executor refuses it otherwise.
+      confirmPaymentDateAhead: params.confirm_payment_date_ahead === true,
     })
     if (!result.ok) {
       const entry = getErrorEntry(result.code)

@@ -1,4 +1,5 @@
 import { warnIfAnalyticsMisconfigured } from '@/lib/analytics/enabled'
+import { bufferEarlyErrors } from '@/lib/analytics/early-errors'
 import { purgeLegacyAnalyticsStorage } from '@/lib/analytics/purge-legacy-storage'
 
 // Clear anything Recapt left on the device. Runs unconditionally, BEFORE the
@@ -20,7 +21,10 @@ purgeLegacyAnalyticsStorage()
  * AnalyticsIdentify only when the stored consent is true. Public and auth
  * pages never load PostHog.
  *
- * Only the development warning for a missing token stays here, so a local
- * setup without PostHog still says so in the console.
+ * What stays here: the development warning for a missing token, so a local
+ * setup without PostHog still says so in the console, and the in-memory hold
+ * on errors raised before PostHog starts (lib/analytics/early-errors.ts).
+ * Hydration errors happen exactly then, so without the hold PostHog never
+ * sees a React #418; nothing is sent unless initAnalytics() runs.
  */
-warnIfAnalyticsMisconfigured()
+if (warnIfAnalyticsMisconfigured()) bufferEarlyErrors(window)

@@ -241,7 +241,10 @@ export function isMomsAccount(account: string): boolean {
  *   - `net_account_shape`: a declaration account AND a 2650/1650 line;
  *   - `tax_account_shape`: a pure 26xx / skattekonto (/ 3740) verifikat.
  * The classification itself is get_vat_declaration_totals' (migration
- * 20260920182259); there is deliberately no TypeScript copy of it.
+ * 20260920182259); no TypeScript copy decides a posted verifikat. The one
+ * restatement, momsredovisningShapeOfLines in lib/vat/voucher-vat-impact.ts, answers
+ * for a voucher not posted yet (the staged create_voucher preview, crm#1447):
+ * a change to the shapes in SQL changes it too.
  */
 export type MomsredovisningDetection = 'tagged' | 'net_account_shape' | 'tax_account_shape'
 

@@ -14,6 +14,8 @@ import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { routeClassifiedDocument, VOUCHER_TYPES } from './route-from-arkiv'
 import { matchSupplierId } from '@/lib/suppliers/match-supplier'
 import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { adoptQueuedInboxItem } from '@/lib/documents/queued-inbox-item'
+import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
 import type { InboxChannelContext, InvoiceExtractionResult } from '@/types'
 import path from 'node:path'
 
@@ -192,6 +194,60 @@ function sanitiseCaption(raw: string | null | undefined): string | null {
   // eslint-disable-next-line no-control-regex
   const cleaned = raw.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '').trim().slice(0, 500)
   return cleaned || null
+}
+
+// ── Concurrent email delivery ────────────────────────────────
+
+interface FiledDeliveryItem {
+  id: string
+  status: string
+  document_id: string | null
+  extracted_data: unknown
+  matched_supplier_id: string | null
+  matched_transaction_id: string | null
+}
+
+/**
+ * The inbox row another delivery of the same mail attachment already filed.
+ * Resend delivers at least once and redelivers a webhook that has not
+ * answered within its timeout while the first run is still extracting, so two
+ * runs can both pass the webhook's "already filed?" check and meet at this
+ * insert. The (company_id, resend_email_id, resend_attachment_id) unique index
+ * lets one win; for the other the violation means "already received", not a
+ * failure. Null for any other error, or when no such row is found, so the
+ * caller throws the original error.
+ */
+async function findFiledDelivery(
+  supabase: import('@supabase/supabase-js').SupabaseClient,
+  companyId: string,
+  emailMeta: EmailMeta | undefined,
+  insertError: { code?: string },
+): Promise<FiledDeliveryItem | null> {
+  if (insertError.code !== '23505' || !emailMeta?.resendEmailId || !emailMeta.resendAttachmentId) return null
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id, status, document_id, extracted_data, matched_supplier_id, matched_transaction_id')
+    .eq('company_id', companyId)
+    .eq('resend_email_id', emailMeta.resendEmailId)
+    .eq('resend_attachment_id', emailMeta.resendAttachmentId)
+    .limit(1)
+  if (error) return null
+  return (data as FiledDeliveryItem[] | null)?.[0] ?? null
+}
+
+function filedDeliveryResult(docId: string, item: FiledDeliveryItem) {
+  return {
+    document_id: item.document_id ?? docId,
+    inbox_item_id: item.id,
+    status: item.status,
+    extracted_data: item.extracted_data,
+    matched_supplier_id: item.matched_supplier_id,
+    matched_transaction_id: item.matched_transaction_id,
+    extraction_skipped: true,
+    skip_reason: 'duplicate_delivery' as const,
+    page_count: null,
+    duplicate: true as const,
+  }
 }
 
 // ── Shared helper: upload + extract + create inbox item ──────
@@ -530,7 +586,11 @@ async function processArchivedDocumentInner(
       .select('*')
       .single()
 
-    if (inboxError) throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+    if (inboxError) {
+      const filed = await findFiledDelivery(supabase, companyId, emailMeta, inboxError)
+      if (filed) return filedDeliveryResult(doc.id, filed)
+      throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+    }
 
     scheduleDeferredExtraction({
       itemId: inbox.id,
@@ -594,41 +654,80 @@ async function processArchivedDocumentInner(
   // (no AI fuzz).
   const matchedSupplierId = await matchSupplierId(supabase, companyId, extracted.supplier)
 
-  const { data: inbox, error: inboxError } = await supabase
-    .from('invoice_inbox_items')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      status: 'received',
-      source,
-      document_id: doc.id,
-      extracted_data: extracted as unknown as Record<string, unknown>,
-      extraction_skipped: skipExtraction,
-      matched_supplier_id: matchedSupplierId,
-      email_from: emailMeta?.from || null,
-      email_subject: emailMeta?.subject || null,
-      email_received_at: emailMeta?.receivedAt || null,
-      email_body_text: emailMeta?.bodyText || null,
-      resend_email_id: emailMeta?.resendEmailId || null,
-      resend_attachment_id: emailMeta?.resendAttachmentId || null,
-      kind_hint: emailMeta?.kindHint ?? null,
-      raw_email_payload: emailMeta?.messageId
-        ? { messageId: emailMeta.messageId, filename: file.name }
-        : null,
-      correlation_id: correlationId,
-      matched_transaction_id: matchedTransactionId ?? null,
-      // Chat-channel provenance. Explicit nulls (not a conditional spread)
-      // keep the payload statically checkable; a null insert is identical to
-      // omitting the column, so the email/upload behavior is unchanged.
-      whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
-      channel_context: opts.channelMeta
-        ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
-        : (opts.channelContext ?? null),
-    })
-    .select('*')
-    .single()
+  // Chat-channel provenance. Explicit nulls (not a conditional spread) keep
+  // the payload statically checkable; a null insert is identical to omitting
+  // the column, so the email/upload behavior is unchanged.
+  const channelContext = opts.channelMeta
+    ? { channel: 'whatsapp', caption: sanitiseCaption(opts.channelMeta.caption) }
+    : (opts.channelContext ?? null)
+  const rawEmailPayload = emailMeta?.messageId ? { messageId: emailMeta.messageId, filename: file.name } : null
 
-  if (inboxError) throw new Error(`Failed to create inbox item: ${inboxError.message}`)
+  // One document, one inbox item (crm#1413): Arkiv classifies the archived
+  // document on its own clock and may have queued it while the reading above
+  // ran. That item is taken over with this delivery's reading and e-mail
+  // fields instead of filing a second one beside it.
+  const queued = await adoptQueuedInboxItem(supabase, companyId, doc.id, {
+    status: 'received',
+    source,
+    channel_context: channelContext as Record<string, unknown> | null,
+    extracted_data: extracted as unknown as Record<string, unknown>,
+    extraction_skipped: skipExtraction,
+    matched_supplier_id: matchedSupplierId,
+    kind_hint: emailMeta?.kindHint ?? null,
+    matched_transaction_id: matchedTransactionId ?? null,
+    email_from: emailMeta?.from || null,
+    email_subject: emailMeta?.subject || null,
+    email_received_at: emailMeta?.receivedAt || null,
+    email_body_text: emailMeta?.bodyText || null,
+    resend_email_id: emailMeta?.resendEmailId || null,
+    resend_attachment_id: emailMeta?.resendAttachmentId || null,
+    raw_email_payload: rawEmailPayload,
+    correlation_id: correlationId,
+    whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
+  })
+
+  const inserted = queued
+    ? null
+    : await supabase
+        .from('invoice_inbox_items')
+        .insert({
+          company_id: companyId,
+          user_id: userId,
+          status: 'received',
+          source,
+          document_id: doc.id,
+          extracted_data: extracted as unknown as Record<string, unknown>,
+          extraction_skipped: skipExtraction,
+          matched_supplier_id: matchedSupplierId,
+          email_from: emailMeta?.from || null,
+          email_subject: emailMeta?.subject || null,
+          email_received_at: emailMeta?.receivedAt || null,
+          email_body_text: emailMeta?.bodyText || null,
+          resend_email_id: emailMeta?.resendEmailId || null,
+          resend_attachment_id: emailMeta?.resendAttachmentId || null,
+          kind_hint: emailMeta?.kindHint ?? null,
+          raw_email_payload: rawEmailPayload,
+          correlation_id: correlationId,
+          matched_transaction_id: matchedTransactionId ?? null,
+          whatsapp_message_id: opts.channelMeta?.whatsappMessageId ?? null,
+          channel_context: channelContext,
+        })
+        .select('*')
+        .single()
+
+  if (inserted?.error) {
+    const filed = await findFiledDelivery(supabase, companyId, emailMeta, inserted.error)
+    if (filed) return filedDeliveryResult(doc.id, filed)
+    throw new Error(`Failed to create inbox item: ${inserted.error.message}`)
+  }
+  const inbox = (queued ?? inserted?.data) as { id: string; status: string; matched_supplier_id: string | null; matched_transaction_id: string | null }
+  if (doc.deduplicated) {
+    // Filed for a document the company already had (no item on it yet): when a
+    // verifikat holds that document, the item is booked at birth instead of
+    // waiting in Behöver dig beside a booked underlag (the worklist badge and
+    // the MCP list already count it handled).
+    await stampNewInboxItemIfDocumentLinked(supabase, companyId, doc.id)
+  }
 
   // The extension yielded to us (extractionOwner); put the outcome where it
   // would have written it, so the document row tells the same story.

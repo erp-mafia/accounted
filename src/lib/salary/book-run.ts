@@ -23,6 +23,11 @@
  * path): the payment-file generators hard-block on them where it actually
  * matters.
  *
+ * Both refuse a run that pays out on a payment date still ahead unless the
+ * caller confirmed it (confirmPaymentDateAhead, paymentDateAheadRefusal in
+ * lib/salary/payout-date.ts, crm#1216): the salary verifikat credits the
+ * net pay to the bank account on that date.
+ *
  * Bookkeeping-engine errors (period locks, unbalanced entries) and
  * SalaryRunPartiallyBookedError THROW out of both functions: callers map them
  * via their own envelope, exactly like the route did before extraction.
@@ -54,6 +59,7 @@ import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { validateRunForApproval, type ApprovalRosterRow } from '@/lib/salary/approve-run'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
+import { paymentDateAheadRefusal } from '@/lib/salary/payout-date'
 import { eventBus } from '@/lib/events'
 
 export type BookRunResult<T> =
@@ -73,6 +79,12 @@ export interface BookRunArgs {
   userId: string
   salaryRunId: string
   log: Logger
+  /**
+   * The caller confirmed posting a payout whose payment date has not come
+   * yet (the run page's Bokför dialog, confirm_payment_date_ahead on v1 and
+   * MCP). Without it such a run is refused before anything moves.
+   */
+  confirmPaymentDateAhead?: boolean
 }
 
 const ROSTER_SELECT =
@@ -526,6 +538,9 @@ async function loadPaidRunForBooking(
     return { ok: false, code: 'SALARY_RUN_BOOK_NOT_PAID', details: { current_status: status } }
   }
 
+  const ahead = paymentDateAheadRefusal(run, args.confirmPaymentDateAhead)
+  if (ahead) return ahead
+
   const periodRefusal = await bookingPeriodRefusal(supabase, args.companyId, run)
   if (periodRefusal) return periodRefusal
 
@@ -638,7 +653,8 @@ export interface AdvanceAndBookData extends BookedRunData {
  *   - missing or invalid bank details (for a positive net payout), missing
  *     email and F-skatt not verified are warnings, not blockers (dashboard
  *     force-approve semantics)
- * A payment date in a locked period is refused before any status moves.
+ * A payment date in a locked period, or one still ahead without
+ * confirmPaymentDateAhead, is refused before any status moves.
  */
 export async function advanceAndBookSalaryRun(
   supabase: SupabaseClient,
@@ -687,8 +703,11 @@ export async function advanceAndBookSalaryRun(
     warnings.push(...verdict.bankDetails, ...verdict.warnings)
   }
 
-  // Before any status moves: a payment date in a locked period would leave
-  // the run walked to paid with nothing booked.
+  // Before any status moves: a payment date in a locked period, or an
+  // unconfirmed one still ahead, would leave the run walked to paid with
+  // nothing booked.
+  const ahead = paymentDateAheadRefusal(run, args.confirmPaymentDateAhead)
+  if (ahead) return ahead
   const periodRefusal = await bookingPeriodRefusal(supabase, companyId, run)
   if (periodRefusal) return periodRefusal
 

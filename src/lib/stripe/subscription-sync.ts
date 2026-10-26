@@ -2,6 +2,13 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type Stripe from 'stripe'
 import { CAPABILITY, PAID_CAPABILITIES } from '@/lib/entitlements/keys'
 import { createLogger } from '@/lib/logger'
+import {
+  billingInvoiceSkipReason,
+  deliverBillingInvoiceToInbox,
+  invoiceCustomerId,
+  invoiceMetadataCompanyId,
+  invoiceSubscriptionId,
+} from './billing-invoice-inbox'
 import type { BillingPlan } from './client'
 import { syncCompanyStripeIdentity } from './customer-identity'
 
@@ -156,21 +163,32 @@ async function soleCompany(
  * row holds the subscription or its customer, as for an event that outruns
  * the row checkout writes.
  */
-async function companyIdForSubscription(
+async function companyIdFor(
   supabase: SupabaseClient,
-  sub: Stripe.Subscription,
+  ref: { subscriptionId: string | null; customerId: string | null; metadataCompanyId: string | null },
 ): Promise<string | null> {
-  const customerId = typeof sub.customer === 'string' ? sub.customer : sub.customer.id
   return (
-    (await soleCompany(
-      supabase.from('company_subscriptions').select('company_id').eq('stripe_subscription_id', sub.id).limit(2),
-    )) ??
-    (await soleCompany(
-      supabase.from('company_subscriptions').select('company_id').eq('stripe_customer_id', customerId).limit(2),
-    )) ??
-    sub.metadata?.company_id ??
+    (ref.subscriptionId
+      ? await soleCompany(
+          supabase.from('company_subscriptions').select('company_id').eq('stripe_subscription_id', ref.subscriptionId).limit(2),
+        )
+      : null) ??
+    (ref.customerId
+      ? await soleCompany(
+          supabase.from('company_subscriptions').select('company_id').eq('stripe_customer_id', ref.customerId).limit(2),
+        )
+      : null) ??
+    ref.metadataCompanyId ??
     null
   )
+}
+
+function companyIdForSubscription(supabase: SupabaseClient, sub: Stripe.Subscription): Promise<string | null> {
+  return companyIdFor(supabase, {
+    subscriptionId: sub.id,
+    customerId: typeof sub.customer === 'string' ? sub.customer : sub.customer.id,
+    metadataCompanyId: sub.metadata?.company_id ?? null,
+  })
 }
 
 /**
@@ -192,8 +210,9 @@ async function syncIdentityBestEffort(
 }
 
 /**
- * Route a verified Stripe event to a state reconciliation. Only subscription
- * lifecycle events matter; everything else is a no-op (already ack'd 200).
+ * Route a verified Stripe event to a state reconciliation. Subscription
+ * lifecycle events set access; a paid invoice is filed into the paying
+ * company's Inkorg; everything else is a no-op (already ack'd 200).
  */
 export async function handleStripeEvent(
   supabase: SupabaseClient,
@@ -227,6 +246,21 @@ export async function handleStripeEvent(
       if (event.type !== 'customer.subscription.deleted' && statusGrantsAccess(state.status)) {
         await syncIdentityBestEffort(supabase, stripe, companyId, state.stripeCustomerId)
       }
+      return
+    }
+    case 'invoice.paid': {
+      // Our own invoice is the underlag of the company's card payment (PH 191):
+      // filed into the paying company's Inkorg, resolved as the subscription
+      // events resolve it, for match on arrival to pair with the bank row.
+      const invoice = event.data.object as Stripe.Invoice
+      if (billingInvoiceSkipReason(invoice)) return
+      const companyId = await companyIdFor(supabase, {
+        subscriptionId: invoiceSubscriptionId(invoice),
+        customerId: invoiceCustomerId(invoice),
+        metadataCompanyId: invoiceMetadataCompanyId(invoice),
+      })
+      if (!companyId) return
+      await deliverBillingInvoiceToInbox(supabase, stripe, { invoice, companyId })
       return
     }
     default:

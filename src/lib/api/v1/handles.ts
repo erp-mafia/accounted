@@ -30,10 +30,12 @@ import {
   normalizeHandlePath,
   normalizeQueryValue,
   parseHandle,
+  pathParamTypes,
   toHandle,
   type HandleMismatch,
   type HandleType,
 } from '@/lib/handles'
+import { UUID_RE } from '@/lib/invariants/uuid'
 import type { JsonSchema } from './registry'
 
 /** Where an endpoint's response holds its resource objects, and of which type. */
@@ -511,4 +513,50 @@ function normalizeParams(
     out[key] = typeof value === 'string' ? (parseHandle(value)?.uuid ?? value) : value
   }
   return out
+}
+
+// ──────────────────────────────────────────────────────────────────
+// Typed path ids that cannot be ids
+// ──────────────────────────────────────────────────────────────────
+
+/** A path id the request named that cannot name a row, in the v1 issues shape. */
+export interface MalformedPathId {
+  field: string
+  message: string
+}
+
+/** How much of a refused value the issue echoes: enough to recognise it. */
+const MAX_ECHOED_ID_LENGTH = 64
+
+/**
+ * The typed path parameters (pathParamTypes: `companies/:companyId`,
+ * `invoices/:id`, ...) whose value is not a UUID once handles are read.
+ * Every typed id names a uuid column, so such a value can never match a row,
+ * and Postgres refuses it outright (22P02) wherever it reaches a filter.
+ * `companyId` is typed even without a registered pattern: the wrapper's
+ * company gate reads it on every route. Run on the params normalizeV1Handles
+ * returned, so a handle of the right type is already its UUID here.
+ */
+export function malformedPathIds(
+  pattern: string | undefined,
+  params: Record<string, string | string[] | undefined>,
+): MalformedPathId[] {
+  const typing: Record<string, HandleType | null> = {
+    ...(pattern ? pathParamTypes(pattern) : {}),
+    companyId: 'company',
+  }
+  const issues: MalformedPathId[] = []
+  for (const [field, type] of Object.entries(typing)) {
+    const value = params[field]
+    if (type === null || typeof value !== 'string' || UUID_RE.test(value)) continue
+    const resource = handleResource(type)
+    const shown = value.length > MAX_ECHOED_ID_LENGTH ? `${value.slice(0, MAX_ECHOED_ID_LENGTH)}...` : value
+    issues.push({
+      field,
+      message:
+        `${field} must be a ${resource.label} id: a UUID or a ${resource.prefix}_ handle. "${shown}" is neither.` +
+        (field === 'companyId' ? ' GET /api/v1/companies lists the companies this key reaches.' : ''),
+    })
+  }
+  return issues
 }

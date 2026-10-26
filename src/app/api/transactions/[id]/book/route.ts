@@ -12,7 +12,7 @@ import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-e
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { validateBody } from '@/lib/api/validate'
 import { BookTransactionSchema } from '@/lib/api/schemas'
-import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
+import { detectKonteringBookingDuplicate } from '@/lib/transactions/skattekonto-tax-double'
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { propagateUnderlagForBookedTransaction } from '@/lib/transactions/inbox-underlag'
 import { finalFromLines, linesOf, recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
@@ -68,7 +68,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // match-invoice soft-duplicate guard.
     const dupLog = log
     try {
-      const candidate = await detectBookingDuplicate(supabase, companyId, {
+      const candidate = await detectKonteringBookingDuplicate(supabase, companyId, {
         id,
         date: transaction.date,
         amount: transaction.amount,
@@ -86,6 +86,13 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         bank_connection_id: transaction.bank_connection_id ?? null,
         provider_transaction_id: transaction.provider_transaction_id ?? null,
         bank_file_import_id: transaction.bank_file_import_id ?? null,
+        // The lines this booking posts: a tax account booked straight from
+        // the bank after the skattekonto booked the same tax warns too
+        // (issue #50, lib/transactions/skattekonto-tax-double.ts).
+        counter_lines: lines.map((line) => ({
+          account_number: line.account_number,
+          net: Number(line.debit_amount || 0) - Number(line.credit_amount || 0),
+        })),
       })
       if (!force) {
         if (candidate) {

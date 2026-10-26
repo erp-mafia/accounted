@@ -155,4 +155,75 @@ describe('redactedError', () => {
     expect(out.stack).toContain('at ')
     expect(redactedError('boom').message).toBe('boom')
   })
+
+  // Regression (PostHog error tracking, "Error: [object Object]"): the logger
+  // hands the sink redact()'s serialized Error, a plain object, and the
+  // adapter stringified it.
+  it("rebuilds redact()'s serialized Error with its name, message, stack and code", () => {
+    const thrown = Object.assign(new Error('Database operation "commit_entry" failed: X'), {
+      name: 'BookkeepingDatabaseError',
+      code: 'BANK_BOOKING_SETTLEMENT_CHANGED',
+    })
+    const out = redactedError(redact(thrown))
+
+    expect(out).toBeInstanceOf(Error)
+    expect(out.message).not.toContain('[object Object]')
+    expect(out.name).toBe('BookkeepingDatabaseError')
+    expect(out.message).toBe('Database operation "commit_entry" failed: X')
+    expect(out.code).toBe('BANK_BOOKING_SETTLEMENT_CHANGED')
+    // The frames are the ones that threw, not redactedError's own.
+    expect(out.stack).toBe(redactString(thrown.stack!))
+  })
+
+  it('names a PostgREST-shaped object and carries its code, never its details', () => {
+    const out = redactedError({
+      message: 'null value in column "name" violates not-null constraint',
+      code: '23502',
+      details: 'Failing row contains (Anna Andersson, Storgatan 1).',
+      hint: null,
+    })
+    expect(out.name).toBe('PostgrestError')
+    expect(out.message).toBe('null value in column "name" violates not-null constraint')
+    expect(out.code).toBe('23502')
+    expect(JSON.stringify({ m: out.message, s: out.stack, c: out.code })).not.toContain('Anna')
+  })
+
+  it('reads the message of GoTrue and Google-style error bodies', () => {
+    const gotrue = redactedError({ code: 'over_email_send_rate_limit', msg: 'Email rate limit exceeded' })
+    expect(gotrue.name).toBe('AuthError')
+    expect(gotrue.message).toBe('Email rate limit exceeded')
+
+    const oauth = redactedError({ error: 'invalid_grant', error_description: 'Token has been expired or revoked.' })
+    expect(oauth.name).toBe('AuthError')
+    expect(oauth.message).toBe('Token has been expired or revoked.')
+
+    expect(redactedError({ error: { code: 403, message: 'Insufficient Permission' } }).message).toBe(
+      'Insufficient Permission',
+    )
+  })
+
+  it('names only the keys of an object with no message, never its values', () => {
+    const out = redactedError({ amount: 1250, counterparty: 'Anna Andersson' })
+    expect(out.message).toBe('Non-Error object captured (keys: amount, counterparty)')
+    expect(out.stack).not.toContain('Anna')
+  })
+
+  it('redacts PII in an object message and code', () => {
+    const out = redactedError({ message: 'no company for 800101-1234', code: 'gnubok_sk_live_abc' })
+    expect(out.message).toBe(REDACTED)
+    expect(out.code).toBe('[REDACTED_API_KEY]')
+    expect(redactedError({ message: 'mail to a@b.se bounced' }).message).toBe('mail to [REDACTED_EMAIL] bounced')
+  })
+
+  it('gives a stackless value a header-only stack, not redactedError frames', () => {
+    const out = redactedError({ message: 'canceling statement due to statement timeout', code: '57014' })
+    expect(out.stack).toBe('Error: canceling statement due to statement timeout')
+    expect(out.stack).not.toContain('at ')
+  })
+
+  it('describes primitives other than strings', () => {
+    expect(redactedError(undefined).message).toBe('Non-Error value captured: undefined')
+    expect(redactedError(null).message).toBe('Non-Error value captured: null')
+    expect(redactedError(42).message).toBe('Non-Error value captured: 42')
+  })
 })

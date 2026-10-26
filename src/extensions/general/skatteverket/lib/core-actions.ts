@@ -16,6 +16,7 @@ import { agiKontrolleraHU, agiKontrolleraIU } from './agi-client'
 import { skvAuthCodeToStructured } from './error-map'
 import { resolveReadAuth } from './resolve-auth'
 import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from './skattekonto-sync'
+import { isSkattekontoMissing } from './skattekonto-client'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 /**
@@ -218,6 +219,9 @@ export async function runSkattekontoSync(ctx: ExtensionContext): Promise<Skattek
     return { ok: true, data: result }
   } catch (err) {
     if (err instanceof SkatteverketAuthError) return authFailure(err)
+    // Skatteverket keeps no skattekonto for the company (yet): its answer,
+    // with its own status, instead of an unhandled 500 (B07).
+    if (isSkattekontoMissing(err)) return statusFailure(err.httpStatus, err.message, err.felkod ?? undefined)
     throw err
   }
 }

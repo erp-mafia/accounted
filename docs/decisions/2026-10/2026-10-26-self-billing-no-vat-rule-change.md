@@ -1,0 +1,1 @@
+[2026-10-26] crm#1375 changes no VAT rule: received documents and our purchase-side self-billing invoices already book VAT on the summed base per rate (crm#1367), and invoices we issue keep per-line VAT (crm#1343), which ML 17 kap 24 § allows; per-rate rounding would move about 2.4 % of issued invoices by one öre or more, so it stays a founder call.

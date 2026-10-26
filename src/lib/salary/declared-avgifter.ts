@@ -323,22 +323,32 @@ export function declaredAvgifterForRun(
   calculationParams: Record<string, unknown> | null | undefined,
 ): DeclaredAvgifterWithOverrides {
   return computeDeclaredAvgifterWithOverrides(
-    rows
-      .filter((sre) => !sre.removed_from_agi)
-      .map((sre) => {
-        const fSkatt = isFSkattStatus(sre.employee?.f_skatt_status)
-        const overridden = !fSkatt && sre.avgifter_amount_override != null
-        return {
-          basis: fSkatt
-            ? 0
-            : overridden
-              ? (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
-              : sre.avgifter_basis || 0,
-          rate: sre.avgifter_rate,
-          category: sre.avgifter_category ?? null,
-          overrideAmount: overridden ? sre.avgifter_amount_override : null,
-        }
-      }),
+    declaredAvgifterRowsForRun(rows),
     resolveDeclaredAvgifterParams(calculationParams),
   )
+}
+
+/**
+ * The stored roster rows as the AGI declares them (the row rules above):
+ * borttag tombstones dropped, F-skatt rows at basis 0, amount overrides
+ * carried with their override-coalesced basis. Shared with the regionalt
+ * stöd underlag (regional-support.ts) so FK471 reads the rows FK487 reads.
+ */
+export function declaredAvgifterRowsForRun(rows: DeclaredAvgifterRunRow[]): DeclaredAvgifterHybridRow[] {
+  return rows
+    .filter((sre) => !sre.removed_from_agi)
+    .map((sre) => {
+      const fSkatt = isFSkattStatus(sre.employee?.f_skatt_status)
+      const overridden = !fSkatt && sre.avgifter_amount_override != null
+      return {
+        basis: fSkatt
+          ? 0
+          : overridden
+            ? (sre.avgifter_basis_override ?? sre.avgifter_basis) || 0
+            : sre.avgifter_basis || 0,
+        rate: sre.avgifter_rate,
+        category: sre.avgifter_category ?? null,
+        overrideAmount: overridden ? sre.avgifter_amount_override : null,
+      }
+    })
 }

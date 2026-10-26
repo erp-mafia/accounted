@@ -32,6 +32,8 @@ type Status =
       canRefresh: boolean
       needsReconsent?: boolean
       lastErrorCode?: string | null
+      /** Skatteverket's last "no skattekonto yet / not authorized" answer, if any. */
+      skattekontoUnavailable?: { reason: 'no_account' | 'not_authorized'; since: string; checkedAt: string } | null
       scope: string
       expiresAt: string
       environment?: Environment
@@ -319,6 +321,7 @@ function SkatteverketPersonalConnectionCard() {
   }
 
   const scopes = (status.scope || '').split(/\s+/).filter(Boolean)
+  const skattekontoReason = status.skattekontoUnavailable?.reason ?? null
   const expiresAtDate = new Date(status.expiresAt)
   const expiresInMinutes = Math.round(
     (expiresAtDate.getTime() - Date.now()) / 60_000,
@@ -356,7 +359,7 @@ function SkatteverketPersonalConnectionCard() {
           {/* `ska` gates the interactive skattekonto API (saldo +
               transaktioner); a grant without it cannot sync, so offer the
               reconnect even while the token is otherwise healthy. */}
-          {(status.expired || status.needsReconsent || !status.canRefresh || !scopes.includes('ska') || !scopes.includes('agd')) && (
+          {(status.expired || status.needsReconsent || !status.canRefresh || !scopes.includes('ska') || !scopes.includes('agd') || skattekontoReason === 'not_authorized') && (
             <Button
               size="sm"
               onClick={startConnect}
@@ -414,6 +417,15 @@ function SkatteverketPersonalConnectionCard() {
           skahmst (bulk E-transport service) does not substitute for it.
           Missing scopes are actionable state: keep them visible. */}
       {!scopes.includes('ska') && <WarningLine>{t('missing_skattekonto')}</WarningLine>}
+      {/* Skatteverket's own answer on the last skattekonto read: no account
+          yet is a state to explain, not a fault; a person without
+          authorization is something the user can act on. */}
+      {skattekontoReason === 'no_account' && (
+        <SettingsRow label={t('scope_skattekonto')}>
+          <SettingsRowNote>{t('skattekonto_no_account')}</SettingsRowNote>
+        </SettingsRow>
+      )}
+      {skattekontoReason === 'not_authorized' && <WarningLine>{t('skattekonto_not_authorized')}</WarningLine>}
       {!scopes.includes('agd') && <WarningLine>{t('missing_agd')}</WarningLine>}
       {status.disabled && <WarningLine>{t('disabled_filings_message')}</WarningLine>}
     </SettingsGroup>

@@ -496,6 +496,79 @@ describe('POST /salary-runs/:id/mark-paid', () => {
     const body = await res.json()
     expect(body.error.code).toBe('SALARY_RUN_MARK_PAID_NOT_APPROVED')
   })
+
+  // crm#1216: a payout whose payment date has not come needs the caller's
+  // confirmation; the date here is always ahead.
+  const aheadRun = { id: RUN_ID, status: 'approved', payment_date: '2999-12-31', total_net: 25500 }
+
+  it('422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED for a payment date ahead without the confirmation', async () => {
+    const mock = createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      salary_runs: { data: aheadRun, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await markPaid(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/mark-paid`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+    expect(body.error.details.payment_date).toBe('2999-12-31')
+    expect(mock.findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('marks a run with a payment date ahead paid when the body confirms it', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: aheadRun, error: null },
+          { data: { id: RUN_ID, status: 'paid', paid_at: '2026-10-15T08:00:00Z' }, error: null },
+        ],
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+
+    const res = await markPaid(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/mark-paid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_payment_date_ahead: true }),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.status).toBe('paid')
+  })
+
+  it('400 VALIDATION_ERROR for a confirmation that is not a boolean', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: aheadRun, error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+
+    const res = await markPaid(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/mark-paid`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_payment_date_ahead: 'yes' }),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(400)
+    expect((await res.json()).error.code).toBe('VALIDATION_ERROR')
+  })
 })
 
 // ────────────────────────────────────────────────────────────────────
@@ -809,6 +882,68 @@ describe('POST /salary-runs/:id/book', () => {
     expect(body.error.code).toBe('PERIOD_LOCKED')
     expect(body.error.details.reason).toBe('company_lock_date_covers')
     expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED before the engine when payment_date is ahead (crm#1216)', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: { data: { ...paidRun, payment_date: '2999-12-31' }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+
+    const res = await book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book`, {
+        method: 'POST',
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+    expect(mocks.createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('books a run with payment_date ahead when the body confirms it', async () => {
+    mockServiceClient.mockReturnValue(
+      createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        salary_runs: [
+          { data: { ...paidRun, payment_date: '2999-12-31' }, error: null },
+          { data: { id: RUN_ID, status: 'booked', booked_at: '2026-10-15T09:15:00Z', booked_by: USER_ID, salary_entry_id: 'je_salary' }, error: null },
+        ],
+        salary_run_employees: { data: [employeeRow], error: null },
+        'rpc:claim_salary_run_booking': { data: BOOKING_CLAIM, error: null },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+    mocks.checkPeriodLock.mockResolvedValue({ locked: false })
+    mocks.createSalaryRunEntries.mockResolvedValue({
+      salaryEntry: { id: 'je_salary', voucher_number: 'L2999-0001' },
+      avgifterEntry: null,
+      vacationEntry: null,
+      pensionEntry: null,
+    })
+
+    const res = await book(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/book`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm_payment_date_ahead: true }),
+      }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.status).toBe('booked')
+    expect(mocks.createSalaryRunEntries).toHaveBeenCalledWith(
+      expect.anything(),
+      COMPANY_ID,
+      USER_ID,
+      expect.objectContaining({ payment_date: '2999-12-31' }),
+    )
   })
 
   it('strict-mode: engine throw aborts before any state mutation', async () => {

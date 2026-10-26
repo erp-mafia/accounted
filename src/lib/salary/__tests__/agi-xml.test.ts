@@ -180,6 +180,27 @@ describe('generateAGIXml: Huvuduppgift (HU)', () => {
     expect(hu).not.toContain('faltkod="062"')
   })
 
+  it('emits regionalt stöd as FK471 underlag and FK476 avdrag in HU (PH 208)', () => {
+    const xml = generateAGIXml(company, employees, {
+      ...totals,
+      // FK487 is the avgift after the avdrag (IK587, kontroll B_006).
+      totalAvgifterAmount: 24075 - 7100,
+      regionalSupport: { underlag: 75000, deduction: 7100 },
+    })
+    const hu = xml.match(/<gem:HU>[\s\S]*?<\/gem:HU>/)![0]
+    expect(hu).toContain('<gem:UlagRegionaltStod faltkod="471">75000</gem:UlagRegionaltStod>')
+    expect(hu).toContain('<gem:AvdragRegionaltStod faltkod="476">7100</gem:AvdragRegionaltStod>')
+    expect(hu).toContain('<gem:SummaArbAvgSlf faltkod="487">16975</gem:SummaArbAvgSlf>')
+  })
+
+  it('emits neither FK471 nor FK476 without regionalt stöd (kontroll S_106/S_108)', () => {
+    for (const regionalSupport of [undefined, null, { underlag: 9, deduction: 0 }]) {
+      const xml = generateAGIXml(company, employees, { ...totals, regionalSupport })
+      expect(xml).not.toContain('faltkod="471"')
+      expect(xml).not.toContain('faltkod="476"')
+    }
+  })
+
   it('never emits FK499 TotalSjuklonekostnad: retired with högkostnadsskyddet, invalid after 202406', () => {
     const xml = generateAGIXml(company, employees, totals)
     expect(xml).not.toContain('faltkod="499"')

@@ -53,21 +53,28 @@ export async function prepareCountryRules(
   }
 
   const accounts = new Set<string>()
+  // A 'swedish' rule's own revenue account is read for the checks only, never
+  // created: it is the user's account, not a preset one.
+  const lookup = new Set<string>()
   for (const rule of rules) {
-    if (rule.mode !== 'accounts') continue
+    if (rule.mode === 'swedish') {
+      if (rule.revenue_account) lookup.add(rule.revenue_account)
+      continue
+    }
     accounts.add(rule.revenue_account)
     if (rule.vat_account) accounts.add(rule.vat_account)
   }
+  for (const account of accounts) lookup.add(account)
 
   const chart = new Map<string, CountryRuleChartRow>()
-  if (accounts.size > 0) {
+  if (lookup.size > 0) {
     const { data, error } = await supabase
       .from('chart_of_accounts')
       .select(
         'account_number, account_name, account_class, is_active, default_vat_rate, default_vat_treatment, vat_box',
       )
       .eq('company_id', companyId)
-      .in('account_number', Array.from(accounts))
+      .in('account_number', Array.from(lookup))
     if (error) return { ok: false, kind: 'db_error', error }
     for (const row of (data ?? []) as CountryRuleChartRow[]) chart.set(row.account_number, row)
   }

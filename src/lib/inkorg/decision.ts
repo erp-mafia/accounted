@@ -17,7 +17,8 @@
  *   - book: EditKonteringDialog with the proposal (POST /items/:id/suggest-booking);
  *   - unmatch: POST /items/:id/unmatch-transaction;
  *   - not_underlag: DELETE /items/:id (the document stays in the archive);
- *   - retry_reading: POST /items/:id/retry-extraction;
+ *   - retry_reading: POST /items/:id/retry-extraction, for a reading that
+ *     failed and, where the company can read documents, for one never read;
  *   - credit: InboxCreditNotePanel (POST /api/supplier-invoices/:id/credit);
  *   - open_entry, open_supplier_invoice, open_matched_entry: links;
  *   - attach_to_booking: the half of a purchase whose other half is booked
@@ -87,6 +88,7 @@ export type DecisionQuestion =
   | 'already_paid'
   | 'reading'
   | 'unreadable'
+  | 'not_read'
   | 'invoice_paid'
   | 'who_paid'
   | 'credit_note'
@@ -99,6 +101,7 @@ export type DecisionQuestion =
 export type DecisionEvidence =
   | { kind: 'reading' }
   | { kind: 'unreadable' }
+  | { kind: 'not_read' }
   | { kind: 'due'; date: string }
   | { kind: 'issued'; date: string }
   | { kind: 'paid_with'; method: ExtractedPaymentMethod; cardLast4: string | null }
@@ -204,6 +207,26 @@ function cardWeighedIn(item: InkorgItem, companion: InkorgItem | null | undefine
   return cardEvidence(card, [match.counterparty]) === 'agrees'
 }
 
+/**
+ * Nothing was read off the document: no seller, no number, no date, no
+ * amount. The same test the Underlag workspace offers "Tolka med AI igen" by
+ * (hasAnyExtractedField); the currency alone is the empty reading's default,
+ * never a sign of one.
+ */
+export function nothingRead(data: InkorgItem['extracted_data']): boolean {
+  if (!data) return true
+  const s = data.supplier
+  const inv = data.invoice
+  const t = data.totals
+  return !(
+    s?.name || s?.orgNumber || s?.vatNumber || s?.bankgiro || s?.plusgiro ||
+    inv?.invoiceNumber || inv?.invoiceDate || inv?.dueDate || inv?.paymentReference ||
+    t?.subtotal != null || t?.vatAmount != null || t?.total != null ||
+    (data.lineItems?.length ?? 0) > 0 || (data.vatBreakdown?.length ?? 0) > 0 ||
+    (data.prominentAmounts ?? []).some((a) => Number.isFinite(a.amount) && a.amount !== 0)
+  )
+}
+
 /** An invoice its receipt from the same arrival says is paid (./pairs.ts). */
 export function paidByReceipt(item: Pick<InkorgItem, 'pairing' | 'kind_hint' | 'extracted_data'>): boolean {
   return item.pairing?.role === 'invoice' && resolveInboxKind({ kind_hint: item.kind_hint ?? null, extracted_data: item.extracted_data }) === 'supplier_invoice'
@@ -216,6 +239,8 @@ export function focusDecision(
     startable?: InkorgStartable
     /** The receipt the invoice came with as one purchase (its pairing), when the list has it. */
     companion?: InkorgItem | null
+    /** The company can have documents read (the ai capability): a document nobody read can be read now. */
+    canRead?: boolean
   } = {},
 ): FocusDecision {
   const stage = itemStage(item)
@@ -269,6 +294,19 @@ export function focusDecision(
       }
     }
     return { question: 'book_purchase', evidence: { kind: 'linked_purchase' }, actions: ['book', 'unmatch'], quietActions: [], editorEscape: false }
+  }
+
+  // Never read, and the company can have it read: a document filed before its reading (a receipt dropped in Dokument,
+  // a mailbox, a company that had no reading then) asked who paid with nothing to go on, and only a failed reading
+  // offered "Läs igen" (PH 101). Reading it is the first answer; who paid stays one click away.
+  if (context.canRead && item.document_id && nothingRead(item.extracted_data)) {
+    return {
+      question: 'not_read',
+      evidence: { kind: 'not_read' },
+      actions: ['retry_reading', 'match_purchase', privatelyPaid(startable)],
+      quietActions: ['not_underlag'],
+      editorEscape: true,
+    }
   }
 
   // Waiting for the first decision.
