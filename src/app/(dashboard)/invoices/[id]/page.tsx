@@ -29,6 +29,7 @@ import { getDisplayTotal, getAmountToPay } from '@/lib/bookkeeping/invoice-round
 import { workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
 import { computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
 import { isEditableInvoiceDraft } from '@/lib/invoices/is-editable-draft'
+import { countTextRowsLeftOutOfPeppol } from '@/lib/invoices/peppol-lines'
 import {
   continueInvoiceSeries,
   readNextNumberPreview,
@@ -2046,6 +2047,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const peppolRecipientLabel = invoice.customer?.org_number
     ? `0007:${invoice.customer.org_number.replace(/\D/g, '')}`
     : '0007'
+  // Text rows never reach the buyer over Peppol: say so before the send.
+  const peppolTextRowsLeftOut = countTextRowsLeftOutOfPeppol(invoice.items)
   const peppolStatusLabel = (status: string) =>
     PEPPOL_STATUS_KEYS.has(status) ? t(`peppol_status_${status}`) : status
   const latestPeppolDelivery = peppolDeliveries[0] ?? null
@@ -3462,6 +3465,15 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {t('peppol_send_confirm_description', { recipient: peppolRecipientLabel })}
             </DialogDescription>
           </DialogHeader>
+          {peppolTextRowsLeftOut > 0 && (
+            <AttnLine
+              action={isEditableDraft && canWrite
+                ? { label: t('edit_draft'), href: `/invoices/${invoice.id}/edit` }
+                : undefined}
+            >
+              {t('peppol_send_text_rows_left_out', { count: peppolTextRowsLeftOut })}
+            </AttnLine>
+          )}
           <DialogFooter>
             <Button
               variant="outline"

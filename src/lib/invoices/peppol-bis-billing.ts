@@ -11,6 +11,7 @@ import { isValidBic, isValidIban } from '@/lib/payments/payment-details'
 import { resolveInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { computeLineAmounts, computeLineVat, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { getDisplayTotal } from '@/lib/bookkeeping/invoice-rounding'
+import { isPeppolInvoiceLine } from '@/lib/invoices/peppol-lines'
 import { toSingleLine } from '@/lib/utils'
 import { equalOre, ORE_TOLERANCE, roundOre } from '@/lib/money'
 import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
@@ -412,7 +413,7 @@ function prepareInvoice(input: PeppolInvoiceInput):
   }
 
   const productItems = input.items
-    .filter((item) => item.line_type !== 'text')
+    .filter(isPeppolInvoiceLine)
     .sort((left, right) => left.sort_order - right.sort_order)
   if (productItems.length === 0) {
     issues.push(validationIssue(

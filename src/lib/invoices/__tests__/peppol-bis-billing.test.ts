@@ -11,6 +11,7 @@ import {
   PEPPOL_BIS_BILLING_CUSTOMIZATION_ID,
   PEPPOL_BIS_BILLING_PROFILE_ID,
 } from '../peppol-bis-billing'
+import { countTextRowsLeftOutOfPeppol } from '../peppol-lines'
 
 function makeItem(overrides: Partial<InvoiceItem> = {}): InvoiceItem {
   return {
@@ -509,6 +510,25 @@ describe('generatePeppolBisBillingInvoice', () => {
       '  </cac:OrderReference>\n' +
       '  <cac:AccountingSupplierParty>',
     )
+  })
+
+  it('leaves out exactly the text rows the send dialog warns about, and keeps the note', () => {
+    const input = makeValidInput()
+    input.items = [
+      makeItem({ id: 'text-1', sort_order: 0, line_type: 'text', description: 'Avser projekt Norrland' }),
+      makeItem({ ...input.items[0], sort_order: 1 }),
+      makeItem({ id: 'text-2', sort_order: 2, line_type: 'text', description: ' ' }),
+      makeItem({ ...input.items[1], sort_order: 3 }),
+    ]
+
+    const result = generatePeppolBisBillingInvoice(input)
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.xml).not.toContain('Avser projekt Norrland')
+    expect(result.xml.match(/<cac:InvoiceLine>/g)).toHaveLength(2)
+    expect(result.xml).toContain('<cbc:Note>Tack &lt;igen&gt;</cbc:Note>')
+    expect(countTextRowsLeftOutOfPeppol(input.items)).toBe(1)
   })
 
   it('omits BT-13 OrderReference when there is no invoice_marking', () => {

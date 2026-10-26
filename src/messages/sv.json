@@ -6108,6 +6108,7 @@
     "peppol_send_confirm_title": "Skicka via Peppol?",
     "peppol_send_confirm_description": "Fakturan skickas som e-faktura till Peppol-id {recipient}. Ett utkast får fakturanummer, markeras som skickat och bokförs när Peppol-operatören tagit emot den.",
     "peppol_send_confirm_action": "Skicka",
+    "peppol_send_text_rows_left_out": "{count, plural, one {En textrad följer} other {# textrader följer}} inte med i e-fakturan, eftersom varje rad där måste ha ett belopp. Text under Anteckningar följer med.",
     "peppol_sending": "Skickar via Peppol…",
     "peppol_sent_title": "Skickad via Peppol",
     "peppol_sent_description": "Fakturan har lämnats till Peppol-nätverket. Leveransstatus uppdateras här när mottagaren tagit emot den.",

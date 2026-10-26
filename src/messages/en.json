@@ -6108,6 +6108,7 @@
     "peppol_send_confirm_title": "Send via Peppol?",
     "peppol_send_confirm_description": "The invoice is sent as an e-invoice to Peppol id {recipient}. A draft gets its invoice number, is marked as sent and is booked once the Peppol access point has accepted it.",
     "peppol_send_confirm_action": "Send",
+    "peppol_send_text_rows_left_out": "{count, plural, one {One text row is} other {# text rows are}} left out of the e-invoice, since every row there needs an amount. Text under Notes is included.",
     "peppol_sending": "Sending via Peppol…",
     "peppol_sent_title": "Sent via Peppol",
     "peppol_sent_description": "The invoice has been handed to the Peppol network. Delivery status updates here when the recipient has received it.",

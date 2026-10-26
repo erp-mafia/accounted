@@ -1,0 +1,1 @@
+[2026-10-26] Text rows stay out of Peppol e-invoices and the send dialog says so, pointing at Anteckningar (BT-22): carrying them as the invoice note or as 0 kr lines would change what the buyer's system receives without the user choosing it (crm#1486).
