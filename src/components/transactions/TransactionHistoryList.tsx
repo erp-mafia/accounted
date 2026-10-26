@@ -31,7 +31,7 @@ import {
   Unlink,
 } from 'lucide-react'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
-import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
+import { WithCorrection } from '@/components/bookkeeping/WithCorrection'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { canDetachDocument } from './detach-underlag'
 import type { JeUnderlagStatus } from '@/lib/transactions/underlag-status'
@@ -46,31 +46,6 @@ import type {
 type HistoryRow =
   | { source: 'bank'; date: string; data: TransactionWithInvoice }
   | { source: 'skatteverket'; date: string; data: SkattekontoTransactionWithSuggestion }
-
-type CorrectionHandle = { open: () => void; isLoading: boolean }
-
-/**
- * The row menu's "Skapa ändringsverifikation" item needs the opener of
- * CorrectionAffordance, and the affordance (it owns the correction dialog)
- * must outlive the menu content, which unmounts on select: rendered inside
- * the menu, the fetch resolved into an unmounted component and the dialog
- * never opened. So it wraps the whole menu when there is a voucher to
- * correct, and is a pass-through otherwise.
- */
-function WithCorrection({
-  journalEntryId,
-  children,
-}: {
-  journalEntryId: string | null
-  children: (correction: CorrectionHandle | null) => React.ReactNode
-}) {
-  if (!journalEntryId) return <>{children(null)}</>
-  return (
-    <CorrectionAffordance journalEntryId={journalEntryId}>
-      {(correction) => children(correction)}
-    </CorrectionAffordance>
-  )
-}
 
 interface TransactionHistoryListProps {
   transactions: TransactionWithInvoice[]

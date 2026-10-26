@@ -6,8 +6,8 @@
  * trigger (button or link slot) that, on click, fetches the journal entry
  * with its lines and opens the existing CorrectionEntryDialog.
  *
- * Used by:
- *   - /invoices/[id] when invoice.journal_entry_id is set
+ * Used by (through WithCorrection, which wraps a whole menu):
+ *   - /invoices/[id] header menu when invoice.journal_entry_id is set
  *   - /transactions row menu when transaction.journal_entry_id is set
  *
  * Surfacing the storno+rättelse flow at the point where users notice the

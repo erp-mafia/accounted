@@ -739,6 +739,11 @@ export default function SkattekontoPage() {
   }
 
   const data = saldo?.data ?? null
+  // The page's one ochre line (convention 6). The shortfall outranks the
+  // ledger proposals: it has a date and costs kostnadsränta if missed, while
+  // linking the imported rows can wait. The proposals then stay as a quiet
+  // line, since hiding them invites a second booking of the same events.
+  const showShortfall = !notConnected && data !== null && shortfall !== null && nextCharge !== null
 
   return (
     <div className="space-y-8">
@@ -785,9 +790,18 @@ export default function SkattekontoPage() {
       {(ledgerProposals ?? 0) > 0 ? (
         // Rows the imported books already hold win over the connect hint:
         // without the link they read as unbooked and invite a second booking.
-        <AttnLine action={{ label: t('ledger_attn_cta'), onClick: () => setLinkAllOpen(true) }}>
-          {t('ledger_attn_body', { count: ledgerProposals ?? 0, skattekonto: skattekontoAccount })}
-        </AttnLine>
+        showShortfall ? (
+          <p className="text-[12.5px] leading-5 text-muted-foreground">
+            {t('ledger_attn_body', { count: ledgerProposals ?? 0, skattekonto: skattekontoAccount })}{' '}
+            <button type="button" onClick={() => setLinkAllOpen(true)} className={cn(QUIET_LINK_CLASS, 'print:hidden')}>
+              {t('ledger_attn_cta')}
+            </button>
+          </p>
+        ) : (
+          <AttnLine action={{ label: t('ledger_attn_cta'), onClick: () => setLinkAllOpen(true) }}>
+            {t('ledger_attn_body', { count: ledgerProposals ?? 0, skattekonto: skattekontoAccount })}
+          </AttnLine>
+        )
       ) : notConnected ? (
         // File-imported rows without a connection: no saldo to show, but the
         // booking/matching flows below work on the local table. One ochre
