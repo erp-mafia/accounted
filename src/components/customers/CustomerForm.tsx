@@ -109,6 +109,7 @@ export default function CustomerForm({
       .min(0, t('payment_terms_invalid'))
       .max(365, t('payment_terms_invalid')),
     invoice_reference: z.string().max(200, t('invoice_reference_too_long')).optional(),
+    invoice_marking: z.string().max(200, t('invoice_marking_too_long')).optional(),
     notes: z.string().optional(),
   }).superRefine((customer, ctx) => {
     // Country vs customer type vs VAT prefix (#2025): an EU customer with
@@ -195,6 +196,7 @@ export default function CustomerForm({
       // ?? not ||: a stored 0 (betalning direkt) must not reopen as 30.
       default_payment_terms: initialData?.default_payment_terms ?? 30,
       invoice_reference: initialData?.invoice_reference ?? '',
+      invoice_marking: initialData?.invoice_marking ?? '',
       notes: initialData?.notes || '',
     },
   })
@@ -324,6 +326,7 @@ export default function CustomerForm({
       contact_person: data.contact_person?.trim() || (isEditing ? '' : null),
       // Blank is none; on an edit, null clears a stored value.
       invoice_reference: data.invoice_reference?.trim() || null,
+      invoice_marking: data.invoice_marking?.trim() || null,
       personal_number: data.personal_number || null,
       invoice_email_cc_addresses: ccText
         ? parseInvoiceRecipientText(ccText)
@@ -640,6 +643,21 @@ export default function CustomerForm({
           <p className="text-sm text-destructive">{errors.invoice_reference.message}</p>
         ) : (
           <p className="text-xs text-muted-foreground">{t('invoice_reference_hint')}</p>
+        )}
+      </div>
+
+      {/* Märkning: Märkning on new invoices (crm#1477) */}
+      <div className="space-y-2">
+        <Label htmlFor="invoice_marking">{t('invoice_marking_label')}</Label>
+        <Input
+          id="invoice_marking"
+          placeholder={t('invoice_marking_placeholder')}
+          {...register('invoice_marking')}
+        />
+        {errors.invoice_marking ? (
+          <p className="text-sm text-destructive">{errors.invoice_marking.message}</p>
+        ) : (
+          <p className="text-xs text-muted-foreground">{t('invoice_marking_hint')}</p>
         )}
       </div>
 

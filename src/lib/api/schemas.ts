@@ -813,7 +813,11 @@ const CreateInvoiceBaseSchema = z.object({
   // Fakturamärkning: buyer-required marking (kostnadsställe/projekt/PO),
   // separate from your_reference. Printed on the PDF and mapped to Peppol
   // BT-13 OrderReference (and BT-10 when your_reference is empty).
-  invoice_marking: z.string().max(200).optional(),
+  invoice_marking: z
+    .string()
+    .max(200)
+    .optional()
+    .describe('Märkning. Omitted or empty on POST /invoices: the customer\'s invoice_marking.'),
   notes: z.string().optional(),
   // Optional online payment link (manual MVP): the user pastes a link created
   // in their PSP dashboard (e.g. a Stripe Payment Link). https-only because the
@@ -1508,6 +1512,18 @@ const CustomerInvoiceReferenceSchema = z
   .optional()
   .describe('Fakturareferens: the Er referens (your_reference) a new invoice to this customer gets when the request states none.')
 
+/**
+ * Märkning (crm#1477): '' and null both mean none (on update, a clear), as
+ * for the Fakturareferens.
+ */
+const CustomerInvoiceMarkingSchema = z
+  .string()
+  .trim()
+  .max(200)
+  .nullable()
+  .optional()
+  .describe('Märkning: the invoice_marking (Peppol BT-13 OrderReference) a new invoice to this customer gets when the request states none.')
+
 export const CreateCustomerSchema = z.object({
   name: z.string().min(1, 'Customer name is required'),
   customer_type: CustomerTypeSchema,
@@ -1542,6 +1558,7 @@ export const CreateCustomerSchema = z.object({
   // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
   default_payment_terms: z.number().int().min(0).max(365).optional(),
   invoice_reference: CustomerInvoiceReferenceSchema,
+  invoice_marking: CustomerInvoiceMarkingSchema,
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (customer.personal_number && customer.customer_type !== 'individual') {
@@ -1694,6 +1711,7 @@ export const UpdateCustomerSchema = z.object({
   // Whole days 0-365; 0 = betalning direkt / vid mottagande (issue #2070).
   default_payment_terms: z.number().int().min(0).max(365).optional(),
   invoice_reference: CustomerInvoiceReferenceSchema,
+  invoice_marking: CustomerInvoiceMarkingSchema,
   notes: z.string().optional(),
 }).superRefine((customer, ctx) => {
   if (

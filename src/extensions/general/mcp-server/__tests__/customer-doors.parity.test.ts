@@ -77,6 +77,7 @@ const input = {
   language: 'en',
   default_payment_terms: 14,
   invoice_reference: 'KST 4410',
+  invoice_marking: '4500012345',
   notes: 'Ring före leverans.',
 }
 
@@ -161,6 +162,7 @@ describe('customer create: every door inserts the same row', () => {
       phone: '08-123 45',
       language: 'en',
       invoice_reference: 'KST 4410',
+      invoice_marking: '4500012345',
       notes: 'Ring före leverans.',
       country: 'SE',
       default_payment_terms: 14,
@@ -276,7 +278,14 @@ describe('customer update: every door writes the same change', () => {
     org_number: '5566778899',
     personal_number: null,
   }
-  const change = { customer_number: '', email: '', notes: 'Ny adress', city: 'Göteborg', invoice_reference: 'KST 5520' }
+  const change = {
+    customer_number: '',
+    email: '',
+    notes: 'Ny adress',
+    city: 'Göteborg',
+    invoice_reference: 'KST 5520',
+    invoice_marking: '4500067890',
+  }
 
   it('updates one row from the dashboard, v1 and the agent approval', async () => {
     const dashboard = createQueuedMockSupabase()
@@ -300,6 +309,7 @@ describe('customer update: every door writes the same change', () => {
       notes: 'Ny adress',
       city: 'Göteborg',
       invoice_reference: 'KST 5520',
+      invoice_marking: '4500067890',
     })
 
     const v1 = createTableMockSupabase({

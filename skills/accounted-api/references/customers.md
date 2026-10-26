@@ -194,6 +194,7 @@ Request body:
   language?: "sv" | "en",
   default_payment_terms?: number,
   invoice_reference?: string | null,
+  invoice_marking?: string | null,
   notes?: string
 }
 ```
@@ -235,6 +236,7 @@ Response `200`:
     language: "sv" | "en",
     default_payment_terms: number,
     invoice_reference: string | null,
+    invoice_marking: string | null,
     notes: string | null,
     party_id: string | null,
     archived_at: string | null,
@@ -324,6 +326,7 @@ Response `200`:
     language: "sv" | "en",
     default_payment_terms: number,
     invoice_reference: string | null,
+    invoice_marking: string | null,
     notes: string | null,
     party_id: string | null,
     archived_at: string | null,
@@ -416,6 +419,7 @@ Request body:
   language?: "sv" | "en",
   default_payment_terms?: number,
   invoice_reference?: string | null,
+  invoice_marking?: string | null,
   notes?: string
 }
 ```
@@ -454,6 +458,7 @@ Response `200`:
     language: "sv" | "en",
     default_payment_terms: number,
     invoice_reference: string | null,
+    invoice_marking: string | null,
     notes: string | null,
     party_id: string | null,
     archived_at: string | null,
@@ -540,7 +545,7 @@ Bulk-create endpoint mirroring /invoices/bulk-create. Each customer is validated
 Request body:
 ```ts
 {
-  customers: { name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", customer_number?: string | null, contact_person?: string | null, email?: string, phone?: string, invoice_email_cc_addresses?: string[] | null, invoice_email_bcc_addresses?: string[] | null, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, personal_number?: string | null, language?: "sv" | "en", default_payment_terms?: number, invoice_reference?: string | null, notes?: string }[],
+  customers: { name: string, customer_type: "individual" | "swedish_business" | "eu_business" | "non_eu_business", customer_number?: string | null, contact_person?: string | null, email?: string, phone?: string, invoice_email_cc_addresses?: string[] | null, invoice_email_bcc_addresses?: string[] | null, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, personal_number?: string | null, language?: "sv" | "en", default_payment_terms?: number, invoice_reference?: string | null, invoice_marking?: string | null, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```

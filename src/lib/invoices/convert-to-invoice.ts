@@ -3,6 +3,7 @@ import { eventBus } from '@/lib/events'
 import { ensureInvoiceNumber, InvoiceNumberSeriesBehindError } from '@/lib/invoices/ensure-invoice-number'
 import { convertToSEK, fetchExchangeRate } from '@/lib/currency/riksbanken'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
+import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
 import {
   buildQuotePartLines,
   quotePartNote,
@@ -73,7 +74,12 @@ type SourceItem = QuoteSourceLine
 
 type SourceRow = Invoice & {
   items?: SourceItem[] | null
-  customer?: { default_payment_terms?: number | null; language?: string | null; invoice_reference?: string | null } | null
+  customer?: {
+    default_payment_terms?: number | null
+    language?: string | null
+    invoice_reference?: string | null
+    invoice_marking?: string | null
+  } | null
 }
 
 const DEFAULT_PAYMENT_TERMS_DAYS = 30
@@ -90,7 +96,7 @@ export async function convertToInvoice(params: {
 
   const { data: sourceRaw, error: sourceError } = await supabase
     .from('invoices')
-    .select('*, items:invoice_items(*), customer:customers(default_payment_terms, language, invoice_reference)')
+    .select('*, items:invoice_items(*), customer:customers(default_payment_terms, language, invoice_reference, invoice_marking)')
     .eq('id', sourceId)
     .eq('company_id', companyId)
     .single()
@@ -284,8 +290,9 @@ export async function convertToInvoice(params: {
       // (crm#1200): a quote made before the card had one still invoices with it.
       your_reference: yourReferenceForNewInvoice(source.your_reference, source.customer),
       our_reference: source.our_reference,
-      // Buyer routing survives conversion (Peppol BT-10 may rely on it alone).
-      invoice_marking: source.invoice_marking ?? null,
+      // Buyer routing survives conversion (Peppol BT-10 may rely on it alone);
+      // a source without one takes the card's Märkning (crm#1477).
+      invoice_marking: invoiceMarkingForNewInvoice(source.invoice_marking, source.customer),
       notes,
       document_type: 'invoice',
       converted_from_id: sourceId,

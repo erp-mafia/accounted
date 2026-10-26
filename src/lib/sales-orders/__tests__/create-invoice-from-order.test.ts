@@ -345,6 +345,19 @@ describe('createInvoiceFromSalesOrder', () => {
     expect(await builtYourReference('Anna Andersson')).toBe('Anna Andersson')
   })
 
+  it("builds the invoice with the customer card's Märkning (crm#1477)", async () => {
+    enqueue({ data: orderWith([makeSalesOrderItem()]) })
+    enqueue({ data: [] })
+    enqueue({ data: makeOrderCustomer({ invoice_marking: '4500012345' }) })
+    enqueue({ data: { id: IDS.invoice, status: 'draft', invoice_number: null, sales_order_id: IDS.order } })
+    enqueue({ data: null })
+    enqueue({ data: orderWith() })
+    enqueue({ data: [invoicedRow(IDS.item1, 10)] })
+    await createInvoiceFromSalesOrder(sb, { ...params, input: {} })
+    const built = mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { invoice_marking?: string } }
+    expect(built.input.invoice_marking).toBe('4500012345')
+  })
+
   it('still creates the invoice for a foreign-currency order when the rate is present', async () => {
     enqueue({ data: orderWith([makeSalesOrderItem()], { currency: 'EUR' }) })
     enqueue({ data: [] })

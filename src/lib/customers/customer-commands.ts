@@ -150,6 +150,7 @@ export async function createCustomer(
     default_payment_terms: defaultPaymentTerms,
     // Blank is none (lib/customers/invoice-reference.ts reads it so too).
     invoice_reference: input.invoice_reference || null,
+    invoice_marking: input.invoice_marking || null,
     notes: input.notes ?? null,
   }
 
@@ -312,6 +313,7 @@ export async function updateCustomer(
   // Empty string clears the customer number, same as an explicit null.
   if (input.customer_number !== undefined) updateData.customer_number = input.customer_number || null
   if (input.invoice_reference !== undefined) updateData.invoice_reference = input.invoice_reference || null
+  if (input.invoice_marking !== undefined) updateData.invoice_marking = input.invoice_marking || null
   if (rerouted) updateData.org_number = null
   if (rerouted && !personalNumberValue) {
     updateData.personal_number = encryptCustomerPersonalNumber(rerouted)

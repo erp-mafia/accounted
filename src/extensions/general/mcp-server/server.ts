@@ -237,6 +237,7 @@ import {
 } from '@/lib/customers/protect-personal-number'
 import { CustomerRecordSchema, readCustomerRecord, toCustomerRecord } from '@/lib/customers/customer-record'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
+import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
 import { SupplierRecordSchema, readSupplierRecord } from '@/lib/suppliers/supplier-record'
 import { fetchEntryLines, fetchLinesByEntryIds, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { generateARLedger } from '@/lib/reports/ar-ledger'
@@ -8568,9 +8569,10 @@ export const tools: McpTool[] = [
         address_line2: { type: 'string' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
-        country: { type: 'string', description: 'ISO 3166-1 alpha-2 (default SE; a name is normalised). Must fit customer_type and the VAT prefix.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2 (default SE). Must fit customer_type and the VAT prefix.' },
         language: { type: 'string', enum: ['sv', 'en'] },
         invoice_reference: { type: 'string' },
+        invoice_marking: { type: 'string' },
         notes: { type: 'string' },
         dry_run: STAGING_ARGS_PROPERTIES.dry_run,
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
@@ -8661,16 +8663,17 @@ export const tools: McpTool[] = [
         address_line2: { type: 'string' },
         postal_code: { type: 'string' },
         city: { type: 'string' },
-        country: { type: 'string', description: 'ISO 3166-1 alpha-2 (a name is normalised). Must fit customer_type and the VAT prefix.' },
+        country: { type: 'string', description: 'ISO 3166-1 alpha-2. Must fit customer_type and the VAT prefix.' },
         org_number: { type: 'string' },
         personal_number: {
           type: ['string', 'null'],
-          description: 'Individuals only. Encrypted at staging, masked on read. Null clears; a mask (********-1234) means unchanged.',
+          description: 'Individuals only. Null clears; a mask (********-1234) means unchanged.',
         },
         vat_number: { type: 'string' },
         language: { type: 'string', enum: ['sv', 'en'] },
         default_payment_terms: { type: 'integer', minimum: 0, maximum: 365 },
         invoice_reference: { type: 'string' },
+        invoice_marking: { type: 'string' },
         notes: { type: 'string' },
         dry_run: STAGING_ARGS_PROPERTIES.dry_run,
         idempotency_key: STAGING_ARGS_PROPERTIES.idempotency_key,
@@ -9567,10 +9570,11 @@ export const tools: McpTool[] = [
         due_date: dueDate,
         currency,
         our_reference: (args.our_reference as string) || null,
-        // Staged resolved, so the approval card shows the Er referens the
-        // invoice gets: the agent's, else the card's Fakturareferens (crm#1200).
+        // Staged resolved, so the approval card shows the Er referens and
+        // Märkning the invoice gets: the agent's, else the card's
+        // Fakturareferens (crm#1200) and Märkning (crm#1477).
         your_reference: yourReferenceForNewInvoice(args.your_reference as string | undefined, customer),
-        invoice_marking: (args.invoice_marking as string) || null,
+        invoice_marking: invoiceMarkingForNewInvoice(args.invoice_marking as string | undefined, customer),
         notes: (args.notes as string) || null,
         payment_link_url: paymentLinkUrl,
         ...(qrMode ? { qr_mode: qrMode } : {}),

@@ -170,7 +170,12 @@ import {
   type SeriesContinuation,
 } from '@/lib/invoices/next-number-preview'
 import { hasRequiredSellerVatNumber } from '@/lib/invoices/seller-vat-number'
-import { customerCardReference, customerChangedForReference, planYourReferencePrefill } from '@/lib/invoices/editor/customer-reference'
+import {
+  customerCardReference,
+  customerChangedForReference,
+  planMarkingPrefill,
+  planYourReferencePrefill,
+} from '@/lib/invoices/editor/customer-reference'
 import {
   invoiceDateLock,
   resolveDetailsChips,
@@ -823,6 +828,8 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   // The Er referens the editor filled in from the customer card itself
   // (lib/invoices/editor/customer-reference.ts); null once it is the user's.
   const prefilledReferenceRef = useRef<string | null>(null)
+  // The same for Märkning from the card's Märkning (crm#1477).
+  const prefilledMarkingRef = useRef<string | null>(null)
   // The customer Er referens last followed. A saved draft starts on its own
   // customer, so its value stands until another one is picked; a new or
   // copied invoice starts on none.
@@ -1726,6 +1733,15 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     })
     prefilledReferenceRef.current = plan.prefilled
     if (plan.value !== current) setValue('your_reference', plan.value, { shouldDirty: true })
+    // Märkning from the card's Märkning (crm#1477), by the same rule.
+    const currentMarking = getValues('invoice_marking') ?? ''
+    const markingPlan = planMarkingPrefill({
+      current: currentMarking,
+      prefilled: prefilledMarkingRef.current,
+      customer,
+    })
+    prefilledMarkingRef.current = markingPlan.prefilled
+    if (markingPlan.value !== currentMarking) setValue('invoice_marking', markingPlan.value, { shouldDirty: true })
   }, [watchCustomerId, customers, setValue, getValues, mode])
 
   // One-click VIES check from the draft (#2749). /api/vat/validate has

@@ -1,5 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { customerCardReference, customerChangedForReference, planYourReferencePrefill } from '../customer-reference'
+import {
+  customerCardReference,
+  customerChangedForReference,
+  planMarkingPrefill,
+  planYourReferencePrefill,
+} from '../customer-reference'
 
 describe('planYourReferencePrefill', () => {
   it('fills an empty field with the customer card contact person', () => {
@@ -102,6 +107,39 @@ describe('customerCardReference', () => {
     expect(planYourReferencePrefill({ current: '', prefilled: null, customerReference })).toEqual({
       value: 'KST 4410',
       prefilled: 'KST 4410',
+    })
+  })
+})
+
+describe('planMarkingPrefill (crm#1477)', () => {
+  it("fills an empty field with the card's Märkning", () => {
+    expect(planMarkingPrefill({ current: '', prefilled: null, customer: { invoice_marking: ' 4500012345 ' } })).toEqual({
+      value: '4500012345',
+      prefilled: '4500012345',
+    })
+  })
+
+  it('replaces its own value on a customer switch, and clears it for a customer without one', () => {
+    expect(
+      planMarkingPrefill({ current: '4500012345', prefilled: '4500012345', customer: { invoice_marking: '4500067890' } }),
+    ).toEqual({ value: '4500067890', prefilled: '4500067890' })
+    expect(planMarkingPrefill({ current: '4500012345', prefilled: '4500012345', customer: { invoice_marking: null } })).toEqual({
+      value: '',
+      prefilled: null,
+    })
+  })
+
+  it('never overwrites what the user typed', () => {
+    expect(planMarkingPrefill({ current: 'Projekt Norr', prefilled: null, customer: { invoice_marking: '4500012345' } })).toEqual({
+      value: 'Projekt Norr',
+      prefilled: null,
+    })
+  })
+
+  it('takes nothing from the contact person', () => {
+    expect(planMarkingPrefill({ current: '', prefilled: null, customer: { contact_person: 'Karin Ek' } as never })).toEqual({
+      value: '',
+      prefilled: null,
     })
   })
 })

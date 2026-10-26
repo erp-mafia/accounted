@@ -5,6 +5,7 @@ import { validateBody } from '@/lib/api/validate'
 import { CreateInvoiceFromWebshopOrderSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
 import { customerInvoiceReference } from '@/lib/customers/invoice-reference'
+import { customerInvoiceMarking } from '@/lib/customers/invoice-marking'
 import { roundOre } from '@/lib/money'
 import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
@@ -272,6 +273,8 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       // in the web editor over the contact person.
       your_reference:
         customerInvoiceReference(customer) ?? (snapshot ? snapshot.name : order.customer_name) ?? undefined,
+      // The card's Märkning (crm#1477).
+      invoice_marking: customerInvoiceMarking(customer) ?? undefined,
       notes: `Webshoporder ${order.order_number} (${order.store_label || order.store_scope})`,
       items,
     }

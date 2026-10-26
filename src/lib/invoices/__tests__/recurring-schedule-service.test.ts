@@ -484,6 +484,23 @@ describe('executeRecurringSchedule auto-send', () => {
     expect(header.your_reference).toBe('KST 4410')
   })
 
+  it('takes Märkning from the customer card (crm#1477)', async () => {
+    // A schedule has no Märkning of its own; read at each run like Er referens.
+    enqueue({ data: { ...customer, invoice_marking: '4500012345' }, error: null }) // customers select
+    enqueue({ data: { vat_registered: true }, error: null }) // company_settings VAT gate
+    enqueue({ data: makeInsertedInvoice(), error: null }) // invoices insert
+    enqueue({ data: null, error: null }) // invoice_items insert
+    enqueue({ data: makeCompleteInvoice(), error: null }) // re-fetch with relations
+    enqueue({ data: company, error: null }) // company_settings (auto-send)
+    enqueue({ data: [{ id: 'inv-1' }], error: null }) // status flip draft -> sent
+    enqueue({ data: null, error: null }) // journal_entry_id write-back
+
+    await executeRecurringSchedule(client, makeSchedule(), today)
+
+    const header = findCalls('invoices', 'insert')[0][0] as Record<string, unknown>
+    expect(header.invoice_marking).toBe('4500012345')
+  })
+
   it('keeps the schedule\'s own Er referens over the customer card', async () => {
     enqueue({ data: { ...customer, invoice_reference: 'KST 4410' }, error: null })
     enqueue({ data: { vat_registered: true }, error: null })

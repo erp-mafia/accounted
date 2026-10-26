@@ -4,6 +4,7 @@ import type { Currency, Customer, Invoice, SalesOrder, SalesOrderItem } from '@/
 import type { CreateInvoiceFromSalesOrderSchema } from '@/lib/api/schemas'
 import { buildInvoiceWriteData, type InvoiceWriteInput } from '@/lib/invoices/build-invoice-write'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
+import { customerInvoiceMarking } from '@/lib/customers/invoice-marking'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { loadSalesOrder } from './load'
 import { qtyGreater, roundQty } from './progress'
@@ -199,6 +200,8 @@ export async function createInvoiceFromSalesOrder(
       // The order's Er referens, else the card's Fakturareferens (crm#1200).
       your_reference: yourReferenceForNewInvoice(order.your_reference, customer) ?? undefined,
       our_reference: order.our_reference ?? undefined,
+      // An order has no Märkning of its own: the card's (crm#1477).
+      invoice_marking: customerInvoiceMarking(customer) ?? undefined,
       notes: order.order_number ? `Kundorder ${order.order_number}` : undefined,
       default_dimensions: order.default_dimensions ?? {},
       items,

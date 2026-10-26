@@ -39,6 +39,8 @@ export const CustomerRecordSchema = z.object({
   default_payment_terms: z.number(),
   /** Fakturareferens: the Er referens a new invoice to this customer gets when the request states none. */
   invoice_reference: z.string().nullable(),
+  /** Märkning: the invoice_marking a new invoice to this customer gets when the request states none. */
+  invoice_marking: z.string().nullable(),
   notes: z.string().nullable(),
   /** The party (motpart) behind the customer: one per counterpart, shared with the supplier side and the ledger. Null for private individuals. */
   party_id: z.string().uuid().nullable(),
@@ -56,7 +58,7 @@ export type CustomerRecord = z.infer<typeof CustomerRecordSchema>
  * rows; the test pins it to exactly the schema's fields, in order.
  */
 export const CUSTOMER_RECORD_COLUMNS =
-  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, personal_number, language, default_payment_terms, invoice_reference, notes, party_id, archived_at, created_at, updated_at'
+  'id, name, customer_type, customer_number, contact_person, email, phone, invoice_email_cc_addresses, invoice_email_bcc_addresses, address_line1, address_line2, postal_code, city, country, org_number, vat_number, vat_number_validated, personal_number, language, default_payment_terms, invoice_reference, invoice_marking, notes, party_id, archived_at, created_at, updated_at'
 
 /**
  * One customer of the company, personnummer masked, or null when no customer

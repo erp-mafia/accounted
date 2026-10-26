@@ -32,6 +32,7 @@ import { CreateInvoiceSchema } from '@/lib/api/schemas'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
+import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus } from '@/lib/invoices/overdue'
@@ -668,7 +669,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // so dropping a column from this string no longer compiles.
     const { data: customer, error: customerErr } = await ctx.supabase
       .from('customers')
-      .select('id, customer_type, vat_number, vat_number_validated, country, invoice_reference')
+      .select('id, customer_type, vat_number, vat_number_validated, country, invoice_reference, invoice_marking')
       .eq('company_id', ctx.companyId!)
       .eq('id', input.customer_id)
       .maybeSingle()
@@ -698,9 +699,13 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
       // an omitted key, so the choice is visible and type-checked.
       customer: { ...customer, personal_number: null },
       documentType,
-      // Er referens: the request's, else the customer card's Fakturareferens
-      // (crm#1200).
-      input: { ...input, your_reference: yourReferenceForNewInvoice(input.your_reference, customer) ?? undefined },
+      // Er referens and Märkning: the request's, else the customer card's
+      // Fakturareferens (crm#1200) and Märkning (crm#1477).
+      input: {
+        ...input,
+        your_reference: yourReferenceForNewInvoice(input.your_reference, customer) ?? undefined,
+        invoice_marking: invoiceMarkingForNewInvoice(input.invoice_marking, customer) ?? undefined,
+      },
     })
     if (!build.ok) {
       if ('dbError' in build) {

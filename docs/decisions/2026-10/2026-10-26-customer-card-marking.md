@@ -1,0 +1,1 @@
+[2026-10-26] Märkning on the customer card is an explicit field (customers.invoice_marking) copied onto new invoices like the Fakturareferens, not the customer's last used Märkning: a remembered value would silently carry an old purchase order number forward (crm#1477).
