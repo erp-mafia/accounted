@@ -2,7 +2,7 @@
  * What the PDF's Underskrifter and Fastställelseintyg pages print, shared by
  * the K2 and K3 templates.
  *
- * Two renders (crm#1171, crm#1172):
+ * Three renders (crm#1171, crm#1172, BankID signing 2026-10):
  *   - 'signing': a version locked for signature (or signed, filed,
  *     registered). This is the copy the board prints and signs, so the
  *     blank lines stay: they are meant to be filled in by hand.
@@ -11,6 +11,12 @@
  *     to fill in. They are left out and a short note says what goes there
  *     and when; anything already known (signer names, dates, the AGM) is
  *     printed.
+ *   - 'e_signing': the copy the board signs with BankID (lib/signing). It is
+ *     archived once and frozen by its SHA-256, so it carries no date and no
+ *     line to fill in: each signer's date is in their BankID signature, the
+ *     datering is the earliest of them (decision 2026-10-22), and the signed
+ *     copy's Signeringsbevis page prints both. The fastställelseintyg is
+ *     signed at Bolagsverket after the årsstämma, never on this copy.
  *
  * What the pages must contain (.claude/skills/swedish-financial-reporting):
  *   - Underskrifter, ÅRL 2 kap. 7 §: every styrelseledamot and the VD sign;
@@ -24,7 +30,7 @@
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { ISO_DATE_RE } from '@/lib/invariants'
 
-export type ArsredovisningPdfMode = 'draft' | 'signing'
+export type ArsredovisningPdfMode = 'draft' | 'signing' | 'e_signing'
 
 const SIGNING_STATUSES = new Set(['ready_for_signature', 'signed', 'filed', 'registered'])
 
@@ -56,6 +62,19 @@ export const DRAFT_SIGNATURES_NOTE =
   'Raderna för underskrift och datum kommer med i den version som låses för underskrift.'
 
 export const DRAFT_NO_SIGNERS = 'Inga undertecknare är registrerade ännu.'
+
+export const E_SIGNING_SIGNATURES_NOTE =
+  'Årsredovisningen undertecknas elektroniskt med BankID av samtliga styrelseledamöter och eventuell VD ' +
+  '(ÅRL 2 kap. 7 §). Datering och datum för varje underskrift framgår av de elektroniska underskrifterna ' +
+  'och av signeringsbeviset.'
+
+/** @param meeting "årsstämman" or, for an ekonomisk förening, "föreningsstämman". */
+export function eSigningCertificateNote(meeting: string): string {
+  return (
+    `Fastställelseintyget skrivs under elektroniskt hos Bolagsverket efter ${meeting} och lämnas in ` +
+    `tillsammans med årsredovisningen (ÅRL 8 kap. 3 §).`
+  )
+}
 
 /**
  * Who signs the fastställelseintyg: a styrelseledamot or the verkställande

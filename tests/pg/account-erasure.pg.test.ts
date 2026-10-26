@@ -76,6 +76,8 @@ const RETAINED = new Set([
   'bank_file_imports.user_id',
   'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
   'payment_signing_links.created_by', // Who asked the firmatecknare to sign a basket of payments; the company keeps the record.
+  'signing_requests.created_by', // Who sent a document for BankID signing; the company keeps the record with the signatures.
+  'signing_request_signers.user_id', // The member asked to sign; a signature is evidence the company keeps.
   'company_attest_policies.updated_by', // Who last changed the attest policy; the company keeps the record.
   'company_capability_config.decided_by', // Who approved a package switch (a processing-rule change); the company keeps the record.
   'legal_acceptances.user_id', // Which document version a person accepted and when: the evidence of the agreement outlives the account.

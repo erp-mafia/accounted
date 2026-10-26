@@ -451,6 +451,12 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_cancel_payment_order: 'suppliers:write',
   gnubok_get_payments_signing_link: 'suppliers:read',
   gnubok_request_payment_signature: 'suppliers:write',
+  // BankID document signing (lib/operations/signing-requests.ts).
+  gnubok_request_signature: 'documents:write',
+  gnubok_list_signing_requests: 'documents:read',
+  gnubok_get_signing_request: 'documents:read',
+  gnubok_remind_signer: 'documents:write',
+  gnubok_request_arsredovisning_signatures: 'bookkeeping:write',
   // The attest policy for supplier invoices (lib/operations/supplier-invoice-attest.ts).
   gnubok_get_attest_policy: 'suppliers:read',
   // Changed supplier bank details: stages a person's approval (web UI only).

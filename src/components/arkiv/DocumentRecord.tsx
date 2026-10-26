@@ -18,6 +18,9 @@ import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
+import { RequestSignatureDialog } from '@/components/signing/RequestSignatureDialog'
+import { SigningRequestsSection } from '@/components/signing/SigningRequestsSection'
+import { useSigningAvailability } from '@/components/signing/use-signing-availability'
 import { DefList, DefRow, Section, SourceLink, inlineHref } from './DefList'
 import { DocumentDecision } from './DocumentDecision'
 import { useFieldLabel } from './useFieldLabel'
@@ -46,6 +49,10 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
   const { toast } = useToast()
   const router = useRouter()
   const { dialogProps: deleteDialogProps, confirm: confirmDelete } = useDestructiveConfirm()
+  // BankID signing of an archived PDF: offered only where signing is open here.
+  const signingAvailable = useSigningAvailability()
+  const [requestingSignature, setRequestingSignature] = useState(false)
+  const [signingReload, setSigningReload] = useState(0)
 
   const load = useCallback(async () => {
     const res = await fetch(`/api/arkiv/documents/${documentId}`)
@@ -165,6 +172,11 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
           // The viewer below has its own "open in a new tab" link, so the header asks the document's one open question,
           // with a quiet delete beside it for a document nothing is booked on (crm#230).
           <div className="flex items-center gap-2">
+            {signingAvailable && view.mime_type === 'application/pdf' ? (
+              <Button size="sm" variant="outline" onClick={() => setRequestingSignature(true)}>
+                {t('record_request_signature')}
+              </Button>
+            ) : null}
             {view.deletable ? (
               <Button size="sm" variant="ghost" onClick={() => void handleDelete(view.file_name, view.agreement?.title ?? null)}>
                 {t('record_delete')}
@@ -184,6 +196,20 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         }
       />
       <DestructiveConfirmDialog {...deleteDialogProps} />
+      {requestingSignature && (
+        <RequestSignatureDialog
+          documentId={view.document_id}
+          fileName={view.file_name}
+          onOpenChange={setRequestingSignature}
+          onCreated={() => {
+            // The document is now held by an open signing (no delete), and the section lists the request.
+            setSigningReload((n) => n + 1)
+            load()
+              .then(setView)
+              .catch(() => setFailed(true))
+          }}
+        />
+      )}
       <DocumentDecision
         doc={
           deciding
@@ -213,6 +239,7 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
           <DocumentViewerPane documentId={view.document_id} fileName={view.file_name} mime={view.mime_type ?? 'application/octet-stream'} page={initialPage} className="h-[72vh]" />
         </div>
         <div className="space-y-8">
+        <SigningRequestsSection documentId={view.document_id} available={signingAvailable} reloadKey={signingReload} />
         {view.record && (
         <Section title={t('record_fields')} help={t('record_fields_help')}>
           {(

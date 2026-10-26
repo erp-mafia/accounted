@@ -1,0 +1,1 @@
+[2026-10-25] A completed signing request yields two archive documents: a shareable signed PDF with masked personnummer, and Bevispaket.zip with the full BankID signatures: the XML-DSig carries the full personnummer, which must not travel with every copy (Jakob's choice 2026-10-24).

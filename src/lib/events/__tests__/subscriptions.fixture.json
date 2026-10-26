@@ -157,6 +157,24 @@
   "shopify.connected": [
     "suggestion-detectors"
   ],
+  "signing.cancelled": [
+    "event-log"
+  ],
+  "signing.completed": [
+    "event-log",
+    "webhooks"
+  ],
+  "signing.declined": [
+    "event-log",
+    "webhooks"
+  ],
+  "signing.requested": [
+    "event-log"
+  ],
+  "signing.signer_signed": [
+    "event-log",
+    "webhooks"
+  ],
   "supplier.created": [
     "event-log",
     "webhooks"

@@ -14,6 +14,10 @@ const log = createLogger('event-log')
  * anyway (PERSISTED_EVENT_TYPES below): never list a catalogue event here.
  */
 const INTERNAL_PERSISTED_EVENT_TYPES: CoreEventType[] = [
+  // BankID signing: when a document was sent for signing and when a request
+  // was cancelled (the signatures and the outcome are public events).
+  'signing.requested',
+  'signing.cancelled',
   'document.accessed',
   'document.deleted',
   'invoice.draft_deleted',

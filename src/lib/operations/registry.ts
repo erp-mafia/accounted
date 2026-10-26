@@ -212,6 +212,7 @@ import {
   arsredovisningCreateVersion,
   arsredovisningListSignatories,
   arsredovisningRecordSignature,
+  arsredovisningRequestSignatures,
   arsredovisningRemoveSignatory,
   arsredovisningUpdateCompliance,
   arsredovisningUpdateNarrative,
@@ -242,6 +243,7 @@ import { COLLECTIONS_OPERATION_LIST } from './collections'
 import { PACKAGE_OPERATIONS } from './packages'
 import { BANK_FEED_OPERATIONS } from './bank-feed'
 import { PAYMENT_SIGNING_LINK_OPERATIONS } from './payment-signing-links'
+import { SIGNING_REQUEST_OPERATIONS } from './signing-requests'
 import { SUPPLIER_INVOICE_ATTEST_OPERATIONS } from './supplier-invoice-attest'
 import { readCollectionsEnv } from '@/lib/collections/flags'
 import { CUSTOMER_LOSS_OPERATION_LIST } from './customer-loss'
@@ -450,6 +452,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   arsredovisningListSignatories,
   arsredovisningAddSignatory,
   arsredovisningRecordSignature,
+  arsredovisningRequestSignatures,
   arsredovisningRemoveSignatory,
   arsredovisningValidateIxbrl,
   // forenklat-arsbokslut (ideell förening, BFNAR 2010:1)
@@ -485,6 +488,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   ...BANK_FEED_OPERATIONS,
   // The payment signing link: a person without a login signs approved bank payments with BankID; agents request it, staged.
   ...PAYMENT_SIGNING_LINK_OPERATIONS,
+  ...SIGNING_REQUEST_OPERATIONS,
   // The attest policy for supplier invoices: read it (also as an MCP tool), save it (v1 only: owners and admins), and one invoice's attest trail.
   ...SUPPLIER_INVOICE_ATTEST_OPERATIONS,
   // Packages: read their status (winding down included) and stage a switch on or off; approval by an owner or admin.

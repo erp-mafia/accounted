@@ -31,6 +31,11 @@ export interface NavGateContext {
   /** A POS connection exists, live or ended (lib/dashboard/nav-flags.ts). */
   hasPosSales: boolean
   arkivEnabled: boolean
+  /**
+   * BankID document signing is switched on here (lib/navigation/nav-rollouts.ts):
+   * the Signeringar page under Dokument. Absent reads as off.
+   */
+  signingEnabled?: boolean
   agentsEnabled: boolean
   /** The company is in the new Inkorg page's rollout (lib/inkorg/flag.ts). */
   inkorgV2Enabled: boolean
@@ -76,6 +81,8 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   if (item.requiresPosSales && !ctx.hasPosSales) return false
   // Arkiv rolls out per company; outside the rollout the pages 404.
   if (item.requiresArkiv && !ctx.arkivEnabled) return false
+  // Signeringar follows the signing switch, as every other signing affordance does.
+  if (item.requiresSigning && !ctx.signingEnabled) return false
   // The Agenter page is hidden in production while it is finished.
   if (item.requiresAgents && !ctx.agentsEnabled) return false
   // The new Inkorg page rolls out per company, and Underlag under Inköp

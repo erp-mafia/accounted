@@ -35,6 +35,11 @@ import { dbError } from '@/lib/errors/db-error'
  *     That foreign key is ON DELETE RESTRICT; the rule answers it up front
  *     with the same refusal the database's 23503 maps to
  *     (lib/errors/foreign-key-refusal.ts), which stays as the race backstop.
+ *   - a BankID signing request covers it (as the document signed, its signed
+ *     copy or its evidence package) and is still open, or someone has signed
+ *     it: a signature is evidence and the signed original is kept (BFL 7 kap
+ *     for an årsredovisning). Cancelling an unsigned request releases it. The
+ *     guard on signing_requests is the backstop (migration 20261025200000).
  *
  * Account erasure and sandbox or company teardown do not delete documents
  * through here: they run in SQL (anonymize_user_account, the sandbox cleanup
@@ -42,7 +47,7 @@ import { dbError } from '@/lib/errors/db-error'
  */
 
 /** What holds a document so it may not be deleted. */
-export type DocumentDeleteBlock = 'verifikat' | 'supplier_invoice' | 'expense_claim' | 'booked_inbox_item' | 'bank_transaction'
+export type DocumentDeleteBlock = 'verifikat' | 'supplier_invoice' | 'expense_claim' | 'booked_inbox_item' | 'bank_transaction' | 'signing_request'
 
 /** The structured error code each block answers with (lib/errors/structured-errors.ts). */
 export type DocumentDeleteRefusalCode =
@@ -51,6 +56,7 @@ export type DocumentDeleteRefusalCode =
   | 'DOC_DELETE_EXPENSE_CLAIM_UNDERLAG'
   | 'DOC_DELETE_BOOKED_INBOX_ITEM'
   | 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION'
+  | 'SIGNING_DOCUMENT_IN_USE'
 
 export interface DocumentDeleteRefusal {
   block: DocumentDeleteBlock
@@ -69,6 +75,8 @@ export interface DocumentDeletePins {
   bankTransaction: boolean
   /** Inbox items that carry it, as their file or as the received Peppol XML (channel_context.peppol_xml_document_id). */
   inboxItems: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
+  /** A signing request covers it and is open, or has a signature (lib/signing). */
+  signingRequest?: boolean
 }
 
 export type DocumentLinks = { journal_entry_id?: string | null; journal_entry_line_id?: string | null }
@@ -98,6 +106,10 @@ export const DOCUMENT_DELETE_REFUSALS: Record<DocumentDeleteBlock, Omit<Document
     code: 'DOCUMENT_DELETE_BLOCKED_BY_TRANSACTION',
     message: 'Underlaget är kopplat till en banktransaktion och kan inte tas bort. Koppla bort det från transaktionen först.',
   },
+  signing_request: {
+    code: 'SIGNING_DOCUMENT_IN_USE',
+    message: 'Dokumentet ingår i en signering. Avbryt signeringen först; ett signerat dokument sparas och kan inte tas bort.',
+  },
 }
 
 function refusal(block: DocumentDeleteBlock): DocumentDeleteRefusal {
@@ -122,6 +134,7 @@ export function documentDeleteRefusal(doc: DocumentLinks, pins: DocumentDeletePi
     return refusal('booked_inbox_item')
   }
   if (pins.bankTransaction) return refusal('bank_transaction')
+  if (pins.signingRequest) return refusal('signing_request')
   return null
 }
 
@@ -136,7 +149,7 @@ export function offersDocumentDelete(doc: DocumentLinks, pins: DocumentDeletePin
  * (dbError): an unknown pin never reads as "free to delete".
  */
 export async function readDocumentDeletePins(supabase: SupabaseClient, companyId: string, documentId: string): Promise<DocumentDeletePins> {
-  const [supplierInvoice, expenseClaim, bankTransaction, inboxFile, inboxXml] = await Promise.all([
+  const [supplierInvoice, expenseClaim, bankTransaction, inboxFile, inboxXml, signing] = await Promise.all([
     supabase.from('supplier_invoices').select('id').eq('company_id', companyId).eq('document_id', documentId).limit(1),
     supabase.from('expense_claims').select('id').eq('company_id', companyId).eq('document_id', documentId).limit(1),
     supabase.from('transactions').select('id').eq('company_id', companyId).eq('document_id', documentId).limit(1),
@@ -150,9 +163,28 @@ export async function readDocumentDeletePins(supabase: SupabaseClient, companyId
       .select('created_journal_entry_id, created_supplier_invoice_id')
       .eq('company_id', companyId)
       .eq('channel_context->>peppol_xml_document_id', documentId),
+    supabase
+      .from('signing_requests')
+      .select('id, status')
+      .eq('company_id', companyId)
+      .or(`document_id.eq.${documentId},signed_document_id.eq.${documentId},evidence_document_id.eq.${documentId}`),
   ])
-  for (const r of [supplierInvoice, expenseClaim, bankTransaction, inboxFile, inboxXml]) {
+  for (const r of [supplierInvoice, expenseClaim, bankTransaction, inboxFile, inboxXml, signing]) {
     if (r.error) throw dbError(r.error, null)
+  }
+  const requests = (Array.isArray(signing.data) ? signing.data : []) as Array<{ id: string; status: string }>
+  let signingRequest = requests.some((r) => r.status === 'open')
+  const closed = requests.filter((r) => r.status !== 'open').map((r) => r.id)
+  if (!signingRequest && closed.length > 0) {
+    const signed = await supabase
+      .from('signing_request_signers')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('signing_request_id', closed)
+      .eq('status', 'signed')
+      .limit(1)
+    if (signed.error) throw dbError(signed.error, null)
+    signingRequest = (signed.data ?? []).length > 0
   }
   type InboxPin = DocumentDeletePins['inboxItems'][number]
   const rows = (r: { data: unknown }): unknown[] => (Array.isArray(r.data) ? r.data : [])
@@ -161,5 +193,6 @@ export async function readDocumentDeletePins(supabase: SupabaseClient, companyId
     expenseClaim: rows(expenseClaim).length > 0,
     bankTransaction: rows(bankTransaction).length > 0,
     inboxItems: [...(rows(inboxFile) as InboxPin[]), ...(rows(inboxXml) as InboxPin[])],
+    signingRequest,
   }
 }

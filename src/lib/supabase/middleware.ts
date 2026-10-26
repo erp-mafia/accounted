@@ -384,6 +384,13 @@ async function updateSessionInner(
     return supabaseResponse
   }
 
+  // The signing link: a signer opens /signera/<token> to read a document and
+  // sign it with BankID without an account (the token is resolved server-side
+  // against signing_request_signers). See app/signera/[token]/page.tsx.
+  if (pathname.startsWith('/signera/')) {
+    return supabaseResponse
+  }
+
   // Reset-password is reachable in both auth states. The recovery flow lands
   // here with a fresh session (created by the OTP exchange in /auth/callback)
   // precisely so the user can call supabase.auth.updateUser({ password }). If

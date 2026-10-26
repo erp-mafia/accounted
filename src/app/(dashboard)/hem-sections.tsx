@@ -9,6 +9,7 @@ import { HemNotices } from '@/components/dashboard/HemNotices'
 import {
   getWorklistCounts,
   listBankSwitchDue,
+  listDocumentsToSign,
   listExpensePayoutsDue,
   listPaymentsVerificationDue,
   listSkattekontoPaymentDue,
@@ -267,6 +268,9 @@ export async function HemPanesSection({
   // And the invoices waiting for this person's attest under the attest
   // policy: one row each, a per-person view of the company's attest count.
   const attestsDuePromise = user ? listSupplierInvoiceAttestsDue(supabase, companyId, user.id) : Promise.resolve([])
+  // And the documents waiting for this person's BankID signature: one row
+  // each, the count is the list's length.
+  const documentsToSignPromise = user ? listDocumentsToSign(supabase, companyId, user.id, now) : Promise.resolve([])
   // And for supplier invoices with bank details nobody approved: one row per
   // invoice, the count is the list's length.
   const supplierPayeeChangesPromise = listSupplierPayeeChangesDue(supabase, companyId)
@@ -291,6 +295,7 @@ export async function HemPanesSection({
     postedEntries,
     attestsDue,
     suggestedMatches,
+    documentsToSign,
   ] =
     await Promise.all([
       // Pending-work counts come from lib/worklist: the same source as the
@@ -304,6 +309,7 @@ export async function HemPanesSection({
         paymentsVerificationDue: paymentsVerificationPromise,
         supplierPayeeChangesDue: supplierPayeeChangesPromise,
         openSuggestions: openSuggestionsPromise,
+        documentsToSign: documentsToSignPromise,
       }),
       expensePayoutsPromise,
       skattekontoPaymentPromise,
@@ -322,6 +328,7 @@ export async function HemPanesSection({
       attestsDuePromise,
       // The several-invoice payments among them get rows of their own.
       suggestedMatchesPromise,
+      documentsToSignPromise,
     ])
 
   // "Empty ledger" only matters while the setup checklist is still open; once
@@ -350,6 +357,7 @@ export async function HemPanesSection({
           worklist={worklist}
           expensePayouts={expensePayouts}
           attestsDue={attestsDue}
+          documentsToSign={documentsToSign}
           skattekontoPayment={skattekontoPayment}
           missingUnderlag={missingUnderlag}
           bankSwitches={bankSwitches}

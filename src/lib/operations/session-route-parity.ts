@@ -75,6 +75,7 @@ const BANK_CONSENT = 'BankID consent to read a bank account: the account holder 
 const SIGNATORY_LINK = 'token route of the signatory link (/koppla/<token>): the firmatecknare gives the bank consent in person, authenticated by the link, no machine door consents'
 const ATTEST_LINK = 'token route of the attest mail\'s link (/attest/<token>): the attester decides in person, authenticated by the link; the same decision is POST /api/v1/.../supplier-invoices/:id/approve or /reject'
 const PAYMENT_SIGNING_LINK = 'token route of the payment signing link (/betala/<token>): the firmatecknare signs the payments in person with BankID, authenticated by the link, no machine door signs'
+const SIGNING_CEREMONY = 'BankID signing of a document: the signer signs in person, by the link (/signera/<token>) or as the member named; agents and API clients request, chase and read, no machine door signs'
 const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the API takes structured input'
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
 const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
@@ -258,6 +259,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/bookkeeping/fiscal-periods/:id/arsredovisning/compliance': covered([`PATCH ${V}/fiscal-periods/:id/arsredovisning/compliance`, 'gnubok_update_arsredovisning_compliance']),
   'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/narrative': covered([`POST ${V}/fiscal-periods/:id/arsredovisning/narrative`, 'gnubok_update_arsredovisning_narrative']),
   'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/versions': covered([`POST ${V}/fiscal-periods/:id/arsredovisning/versions`, 'gnubok_create_arsredovisning_version']),
+  'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/versions/:versionId/signing-request': covered([`POST ${V}/fiscal-periods/:id/arsredovisning/versions/:versionId/signing-request`, 'gnubok_request_arsredovisning_signatures'], 'the board signs in person with BankID; agents and API clients send the version'),
   'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures': covered([`POST ${V}/fiscal-periods/:id/arsredovisning/signatures`, 'gnubok_add_arsredovisning_signature']),
   'PATCH /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures/:signatureId': covered([`PATCH ${V}/fiscal-periods/:id/arsredovisning/signatures/:signatureId`], 'v1 only: an agent never attests that a person signed'),
   'DELETE /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures/:signatureId': covered([`DELETE ${V}/fiscal-periods/:id/arsredovisning/signatures/:signatureId`]),
@@ -523,6 +525,19 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/betala/:token/signing': uiOnly(PAYMENT_SIGNING_LINK),
   'POST /api/betala/:token/signing/:id/poll': uiOnly(PAYMENT_SIGNING_LINK),
   'POST /api/betala/:token/signing/:id/restart': uiOnly(PAYMENT_SIGNING_LINK),
+  // BankID document signing (lib/signing): agents and API clients request,
+  // chase and cancel; each signer still signs in person with BankID.
+  'POST /api/signing-requests': covered([`POST ${V}/signing-requests`, 'gnubok_request_signature']),
+  'POST /api/signing-requests/:id/cancel': covered([`POST ${V}/signing-requests/:id/cancel`]),
+  'POST /api/signing-requests/:id/signers/:signerId/remind': covered([`POST ${V}/signing-requests/:id/signers/:signerId/remind`, 'gnubok_remind_signer']),
+  'POST /api/signera/:token/start': uiOnly(SIGNING_CEREMONY),
+  'POST /api/signera/:token/poll': uiOnly(SIGNING_CEREMONY),
+  'POST /api/signera/:token/cancel': uiOnly(SIGNING_CEREMONY),
+  'POST /api/signera/:token/decline': uiOnly(SIGNING_CEREMONY),
+  'POST /api/signing/me/:signerId/start': uiOnly(SIGNING_CEREMONY),
+  'POST /api/signing/me/:signerId/poll': uiOnly(SIGNING_CEREMONY),
+  'POST /api/signing/me/:signerId/cancel': uiOnly(SIGNING_CEREMONY),
+  'POST /api/signing/me/:signerId/decline': uiOnly(SIGNING_CEREMONY),
 
   // ── Bank connections through Open Payments (lib/bank-feed) ──────────
   'POST /api/bank/open-payments/connections': uiOnly(BANK_CONSENT),

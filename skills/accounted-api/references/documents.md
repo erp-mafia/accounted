@@ -2,7 +2,7 @@
 
 # Documents endpoints
 
-The WORM document archive (7-year legal retention: uploads are permanent) and inbox-item stamping. Link every uploaded receipt/invoice document to its journal entry.
+The WORM document archive (7-year legal retention: uploads are permanent) and inbox-item stamping. Link every uploaded receipt/invoice document to its journal entry. Signing requests send an archived PDF for BankID signing; each signer signs in person, and the signed copy and evidence package land in the archive.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -1340,6 +1340,414 @@ Example response `200`:
     "inbox_item_id": "1b2c…",
     "matched_transaction_id": null,
     "released_transaction_id": "1f2e…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/signing-requests`
+
+**List the company's BankID signing requests, newest first, with every signer's status.**
+`scope:documents:read · risk:low · idempotent`
+
+Filter by status (open, completed, declined, cancelled) or document_id (the signed PDF, its signed copy or its evidence package). An open request past its expiry reads as state expired.
+
+**Use when:** You need to know which documents wait for signatures, or find the request behind a document.
+**Do not use for:** One request in detail (GET /signing-requests/{id}).
+
+**Pitfalls:**
+- status filters the stored status; an expired request still has status open and reads state expired.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"open" \| "completed" \| "declined" \| "cancelled"` | no | Only requests with this status. |
+| `document_id` | query | `string` | no | Only requests covering this document. |
+| `limit` | query | `number` | no | At most this many (default 50). |
+
+Response `200`:
+```ts
+{
+  data: {
+    signing_requests: { signing_request_id: string, title: string, message: string | null, state: "open" | "completed" | "declined" | "cancelled" | "expired", document_id: string, document_sha256: string, annual_report_version_id: string | null, created_by: string, created_via: "app" | "api" | "mcp", created_at: string, expires_at: string, completed_at: string | null, declined_at: string | null, cancelled_at: string | null, signed_document_id: string | null, evidence_document_id: string | null, signers: { signer_id: string, position: number, name: string, email: string | null, role_label: string | null, user_id: string | null, annual_report_signature_id: string | null, lock: "none" | "member" | "personnummer", status: "pending" | "signed" | "declined", signed_at: string | null, bankid_name: string | null, declined_at: string | null, decline_reason: string | null, last_error_code: string | null, link_sent_at: string | null, last_reminded_at: string | null }[] }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signing_requests": [
+      {
+        "signing_request_id": "8e1d…",
+        "title": "Hyresavtal kontor",
+        "message": null,
+        "state": "open",
+        "document_id": "4f1c…",
+        "document_sha256": "9b2e…",
+        "annual_report_version_id": null,
+        "created_by": "a3f0…",
+        "created_via": "mcp",
+        "created_at": "2026-10-25T09:00:00.000Z",
+        "expires_at": "2026-11-08T09:00:00.000Z",
+        "completed_at": null,
+        "declined_at": null,
+        "cancelled_at": null,
+        "signed_document_id": null,
+        "evidence_document_id": null,
+        "signers": [
+          {
+            "signer_id": "2c7b…",
+            "position": 1,
+            "name": "Anna Svensson",
+            "email": "anna@example.se",
+            "role_label": "Hyresvärd",
+            "user_id": null,
+            "annual_report_signature_id": null,
+            "lock": "none",
+            "status": "pending",
+            "signed_at": null,
+            "bankid_name": null,
+            "declined_at": null,
+            "decline_reason": null,
+            "last_error_code": null,
+            "link_sent_at": "2026-10-25T09:00:01.000Z",
+            "last_reminded_at": null
+          }
+        ]
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/signing-requests`
+
+**Send an archived PDF for BankID signing: one link per signer, mailed when they have an address.**
+`scope:documents:write · risk:medium · idempotent · dry-run`
+
+Freezes the document by its SHA-256 and creates one link per signer to a page at /signera/<token> where they read the PDF and sign it with BankID (an advanced electronic signature under eIDAS). Links are valid expires_in_days (default 14, at most 90). Signers with an email get a mail; the answer carries the url only for a signer no mail reached. A member of the company (user_id) can also sign in the app. When everyone has signed, the archive gets the signed PDF (with a Signeringsbevis page) and Bevispaket.zip; read them from GET /signing-requests/{id} or the signing.completed webhook. Dry-runnable: ?dry_run=true answers what would be sent and mints nothing.
+
+**Use when:** An agreement, minutes, a policy or any other PDF in the archive needs signatures from people inside or outside the company.
+**Do not use for:** Signing bank payments (POST /payments/signing-links), the fastställelseintyg (signed at Bolagsverket), or documents that are not PDFs.
+
+**Pitfalls:**
+- The url is the credential: hand it to that signer only, once, and do not store it.
+- SIGNING_DOCUMENT_UNSUPPORTED: only the current version of a PDF of at most 10 MB without a password can be signed.
+- SIGNING_SIGNERS_INVALID: a name is required, an email or member appears once, and user_id must be a member of the company (details.reason says which).
+- A personnummer cannot be sent here; locking a signer to one person is done in the app.
+- SIGNING_UNAVAILABLE: BankID signing is not switched on for this deployment.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{
+  document_id: string,
+  title: string,
+  message?: string | null,
+  expires_in_days?: number | null,
+  send_email?: boolean,
+  signers: { name: string, email?: string | null, role_label?: string | null, user_id?: string | null }[]
+}
+```
+
+Example request:
+```json
+{
+  "document_id": "4f1c…",
+  "title": "Hyresavtal kontor",
+  "signers": [
+    {
+      "name": "Anna Svensson",
+      "email": "anna@example.se",
+      "role_label": "Hyresvärd"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signing_request_id: string,
+    status: "open",
+    title: string,
+    document_id: string,
+    document_sha256: string,
+    expires_at: string,
+    signers: { signer_id: string, position: number, name: string, email: string | null, annual_report_signature_id: string | null, lock: "none" | "member" | "personnummer", email_sent: boolean, url: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signing_request_id": "8e1d…",
+    "status": "open",
+    "title": "Hyresavtal kontor",
+    "document_id": "4f1c…",
+    "document_sha256": "9b2e…",
+    "expires_at": "2026-11-08T09:00:00.000Z",
+    "signers": [
+      {
+        "signer_id": "2c7b…",
+        "position": 1,
+        "name": "Anna Svensson",
+        "email": "anna@example.se",
+        "annual_report_signature_id": null,
+        "lock": "none",
+        "email_sent": true,
+        "url": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/signing-requests/{id}`
+
+**Read one BankID signing request: every signer's status and, once completed, the signed PDF and the evidence package.**
+`scope:documents:read · risk:low · idempotent`
+
+signed_document_id is the signed PDF (the original plus a Signeringsbevis page with each signer's BankID name, time and masked personnummer) and evidence_document_id is Bevispaket.zip (the original, every BankID signature with its OCSP response, and a manifest). Download either through GET /documents/{id}/download.
+
+**Use when:** You sent a document for signing and need to know who has signed, or want the signed copy.
+**Do not use for:** Listing requests (GET /signing-requests).
+
+**Pitfalls:**
+- A completed request may show null copies for a moment while they are sealed; read it again.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    signing_request_id: string,
+    title: string,
+    message: string | null,
+    state: "open" | "completed" | "declined" | "cancelled" | "expired",
+    document_id: string,
+    document_sha256: string,
+    annual_report_version_id: string | null,
+    created_by: string,
+    created_via: "app" | "api" | "mcp",
+    created_at: string,
+    expires_at: string,
+    completed_at: string | null,
+    declined_at: string | null,
+    cancelled_at: string | null,
+    signed_document_id: string | null,
+    evidence_document_id: string | null,
+    signers: { signer_id: string, position: number, name: string, email: string | null, role_label: string | null, user_id: string | null, annual_report_signature_id: string | null, lock: "none" | "member" | "personnummer", status: "pending" | "signed" | "declined", signed_at: string | null, bankid_name: string | null, declined_at: string | null, decline_reason: string | null, last_error_code: string | null, link_sent_at: string | null, last_reminded_at: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signing_request_id": "8e1d…",
+    "title": "Hyresavtal kontor",
+    "message": null,
+    "state": "open",
+    "document_id": "4f1c…",
+    "document_sha256": "9b2e…",
+    "annual_report_version_id": null,
+    "created_by": "a3f0…",
+    "created_via": "mcp",
+    "created_at": "2026-10-25T09:00:00.000Z",
+    "expires_at": "2026-11-08T09:00:00.000Z",
+    "completed_at": null,
+    "declined_at": null,
+    "cancelled_at": null,
+    "signed_document_id": null,
+    "evidence_document_id": null,
+    "signers": [
+      {
+        "signer_id": "2c7b…",
+        "position": 1,
+        "name": "Anna Svensson",
+        "email": "anna@example.se",
+        "role_label": "Hyresvärd",
+        "user_id": null,
+        "annual_report_signature_id": null,
+        "lock": "none",
+        "status": "pending",
+        "signed_at": null,
+        "bankid_name": null,
+        "declined_at": null,
+        "decline_reason": null,
+        "last_error_code": null,
+        "link_sent_at": "2026-10-25T09:00:01.000Z",
+        "last_reminded_at": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/signing-requests/{id}/cancel`
+
+**Cancel an open signing request: its links stop working; signatures already made stay.**
+`scope:documents:write · risk:low · idempotent · dry-run`
+
+The sender, an owner or an admin. Cancelling twice answers the same. A completed or declined request cannot be cancelled. Dry-runnable.
+
+**Use when:** The document changed or was sent to the wrong people.
+**Do not use for:** Removing a signature (a signature is evidence and is kept).
+
+**Pitfalls:**
+- SIGNING_REQUEST_CLOSED: the request completed or was declined.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { signing_request_id: string, cancelled: true },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signing_request_id": "8e1d…",
+    "cancelled": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/signing-requests/{id}/signers/{signerId}/remind`
+
+**Mail a pending signer again, once a day at most; the mail carries a new link and the old one stops working.**
+`scope:documents:write · risk:low · idempotent · dry-run`
+
+For an open request and a signer who has not signed and has an email. Refused while the signer is in a BankID signing right now. The answer carries the new link only when no mail went out. Dry-runnable.
+
+**Use when:** A signer has not signed after a while.
+**Do not use for:** A signer without an email (hand them the link you got at creation) or a closed request.
+
+**Pitfalls:**
+- SIGNING_REMIND_TOO_SOON: one mail per signer per 24 hours, the first mail included.
+- SIGNING_SESSION_ACTIVE: the signer started BankID in the last few minutes; try later.
+- The old link stops working: only the newest link signs.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `signerId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Response `200`:
+```ts
+{
+  data: { signing_request_id: string, signer_id: string, email_sent: boolean, url: string | null },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signing_request_id": "8e1d…",
+    "signer_id": "2c7b…",
+    "email_sent": true,
+    "url": null
   },
   "meta": {
     "request_id": "req_…",

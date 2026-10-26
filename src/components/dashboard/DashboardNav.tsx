@@ -86,6 +86,8 @@ interface DashboardNavProps {
   hasPosSales?: boolean
   // Whether the company is in the Arkiv rollout (ARKIV_COMPANY_IDS). Computed by the layout.
   arkivEnabled?: boolean
+  // Whether BankID document signing is switched on (the Signeringar page). Computed by the layout.
+  signingEnabled?: boolean
   agentsEnabled?: boolean
   // Whether the company is in the new Inkorg page's rollout (INKORG_V2_COMPANY_IDS): Inkorg
   // at the top, Underlag out of Inköp. Computed by the layout.
@@ -123,7 +125,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const supabase = useRealtimeSupabase()
@@ -367,6 +369,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     hasExpenseClaims,
     hasPosSales,
     arkivEnabled,
+    signingEnabled,
     agentsEnabled,
     inkorgV2Enabled,
     autogiroEnabled,

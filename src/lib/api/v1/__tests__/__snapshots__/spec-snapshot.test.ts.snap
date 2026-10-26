@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `373`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `379`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -155,6 +155,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/setoffs/counterparty",
   "GET /api/v1/companies/:companyId/settings",
   "GET /api/v1/companies/:companyId/settings/skattekonto-account",
+  "GET /api/v1/companies/:companyId/signing-requests",
+  "GET /api/v1/companies/:companyId/signing-requests/:id",
   "GET /api/v1/companies/:companyId/skatteverket/vat-declarations",
   "GET /api/v1/companies/:companyId/supplier-invoices",
   "GET /api/v1/companies/:companyId/supplier-invoices/:id",
@@ -242,6 +244,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/narrative",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/versions",
+  "POST /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/versions/:versionId/signing-request",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/close",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/close-external",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/currency-revaluation",
@@ -332,6 +335,9 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/service-accounts/:id/keys/:keyId/revoke",
   "POST /api/v1/companies/:companyId/service-accounts/:id/revoke",
   "POST /api/v1/companies/:companyId/setoffs",
+  "POST /api/v1/companies/:companyId/signing-requests",
+  "POST /api/v1/companies/:companyId/signing-requests/:id/cancel",
+  "POST /api/v1/companies/:companyId/signing-requests/:id/signers/:signerId/remind",
   "POST /api/v1/companies/:companyId/skattekonto/sync",
   "POST /api/v1/companies/:companyId/skatteverket/agi/validate-huvuduppgift",
   "POST /api/v1/companies/:companyId/skatteverket/agi/validate-individuppgift",
@@ -390,7 +396,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "import": 7,
   "inbox": 11,
   "invoicing": 32,
-  "ledger": 112,
+  "ledger": 117,
   "payments": 20,
   "payroll": 53,
   "platform": 29,
@@ -400,7 +406,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "transactions": 31,
   "vat": 1,
   "webshop": 4,
-  "year-end": 10,
+  "year-end": 11,
 }
 `;
 

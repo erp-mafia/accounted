@@ -1535,6 +1535,7 @@ function pinResults(pins: {
   bankTransaction?: boolean
   inboxFile?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
   inboxXml?: Array<{ created_journal_entry_id: string | null; created_supplier_invoice_id: string | null }>
+  signingRequest?: boolean
 } = {}): Array<{ data: unknown; error: null }> {
   return [
     { data: pins.supplierInvoice ? [{ id: 'si-1' }] : [], error: null },
@@ -1542,6 +1543,7 @@ function pinResults(pins: {
     { data: pins.bankTransaction ? [{ id: 'tx-1' }] : [], error: null },
     { data: pins.inboxFile ?? [], error: null },
     { data: pins.inboxXml ?? [], error: null },
+    { data: pins.signingRequest ? [{ id: 'sr-1', status: 'open' }] : [], error: null },
   ]
 }
 
@@ -1719,6 +1721,7 @@ describe('deleteDocument', () => {
       'transactions',
       'invoice_inbox_items',
       'invoice_inbox_items',
+      'signing_requests',
       'document_attachments',
     ])
     const eqs = (i: number) => (supabase.from.mock.results[i].value as { eq: ReturnType<typeof vi.fn> }).eq.mock.calls
@@ -1742,7 +1745,7 @@ describe('deleteDocument', () => {
     const supabase = makeClient()
 
     await expect(deleteDocument(supabase as never, 'company-1', 'doc-1')).rejects.toMatchObject({ code: '57014' })
-    expect(supabase.from).toHaveBeenCalledTimes(6)
+    expect(supabase.from).toHaveBeenCalledTimes(7)
     expect(serviceRemove).not.toHaveBeenCalled()
   })
 

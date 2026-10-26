@@ -10574,6 +10574,145 @@ const PAYMENT_SIGNING_LINKS: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// BankID document signing (lib/signing)
+// ─────────────────────────────────────────────────────────────────
+
+const SIGNING: Record<string, StructuredErrorEntry> = {
+  SIGNING_UNAVAILABLE: {
+    httpStatus: 403,
+    message_sv: 'Signering med BankID är inte tillgänglig här.',
+    message_en: 'Signing with BankID is not available here.',
+  },
+  SIGNING_DOCUMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Dokumentet finns inte i arkivet.',
+    message_en: 'The document is not in the archive.',
+  },
+  SIGNING_DOCUMENT_UNSUPPORTED: {
+    httpStatus: 422,
+    message_sv: 'Dokumentet kan inte signeras: det måste vara den senaste versionen av en PDF på högst 10 MB, utan lösenordsskydd.',
+    message_en: 'The document cannot be signed: it must be the latest version of a PDF of at most 10 MB, without password protection.',
+  },
+  SIGNING_DOCUMENT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Den lagrade filen stämmer inte med dokumentets kontrollsumma, så den kan inte signeras.',
+    message_en: 'The stored file does not match the document\'s checksum, so it cannot be signed.',
+  },
+  SIGNING_DOCUMENT_IN_USE: {
+    httpStatus: 409,
+    message_sv: 'Dokumentet ingår i en signering. Avbryt signeringen först; ett signerat dokument sparas och kan inte tas bort.',
+    message_en: 'The document is part of a signing. Cancel the signing first; a signed document is kept and cannot be deleted.',
+  },
+  SIGNING_SIGNERS_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Kontrollera undertecknarna: varje person ska ha ett namn, ingen får finnas med två gånger, och ett personnummer måste vara giltigt.',
+    message_en: 'Check the signers: each needs a name, nobody may appear twice, and a personnummer must be valid.',
+  },
+  SIGNING_REQUEST_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Signeringen finns inte.',
+    message_en: 'The signing request does not exist.',
+  },
+  SIGNING_REQUEST_CLOSED: {
+    httpStatus: 409,
+    message_sv: 'Signeringen är inte längre öppen: den är klar, avböjd, avbruten eller har gått ut.',
+    message_en: 'The signing request is no longer open: it is completed, declined, cancelled or expired.',
+  },
+  SIGNING_SIGNER_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Undertecknaren finns inte i signeringen.',
+    message_en: 'The signer is not part of the signing request.',
+  },
+  SIGNING_SIGNER_NOT_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Undertecknaren har redan signerat eller avböjt.',
+    message_en: 'The signer has already signed or declined.',
+  },
+  SIGNING_NOT_SIGNER: {
+    httpStatus: 403,
+    message_sv: 'Den här signeringen väntar på någon annan.',
+    message_en: 'This signature is waiting for someone else.',
+  },
+  SIGNING_SIGNER_MISMATCH: {
+    httpStatus: 403,
+    message_sv: 'Signaturen gjordes med ett annat BankID än det som signeringen gäller, så den sparades inte.',
+    message_en: 'The signature was made with a different BankID than the one the signing is for, so it was not saved.',
+  },
+  SIGNING_SESSION_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'BankID-signeringen startades om, så den här kan inte längre sparas. Signera i den senaste.',
+    message_en: 'The BankID signing was restarted. Sign in the latest one.',
+  },
+  SIGNING_SESSION_CONSUMED: {
+    httpStatus: 409,
+    message_sv: 'Den här BankID-signeringen är redan använd.',
+    message_en: 'This BankID signing has already been used.',
+  },
+  SIGNING_SESSION_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Undertecknaren håller på att signera just nu. Försök igen om en stund.',
+    message_en: 'The signer is signing right now. Try again in a moment.',
+  },
+  SIGNING_SUBJECT_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Det som signeras har ändrats sedan signeringen skickades, så inget sparades.',
+    message_en: 'What is being signed changed after the signing was sent, so nothing was saved.',
+  },
+  SIGNING_EVIDENCE_INCOMPLETE: {
+    httpStatus: 502,
+    message_sv: 'BankID svarade utan en fullständig signatur. Signera igen.',
+    message_en: 'BankID answered without a complete signature. Sign again.',
+  },
+  SIGNING_SIGNATURE_UNBOUND: {
+    httpStatus: 502,
+    message_sv: 'BankID-signaturen gällde inte det här dokumentet, så den sparades inte. Signera igen.',
+    message_en: 'The BankID signature was not for this document, so it was not saved. Sign again.',
+  },
+  SIGNING_PROVIDER_ERROR: {
+    httpStatus: 502,
+    message_sv: 'BankID-tjänsten svarade inte som väntat. Försök igen om en stund.',
+    message_en: 'The BankID service did not answer as expected. Try again in a moment.',
+    retryable: true,
+  },
+  SIGNING_RATE_LIMITED: {
+    httpStatus: 429,
+    message_sv: 'För många BankID-försök på kort tid. Vänta en stund och försök igen.',
+    message_en: 'Too many BankID attempts in a short time. Wait a moment and try again.',
+    retryable: true,
+  },
+  SIGNING_REMIND_TOO_SOON: {
+    httpStatus: 429,
+    message_sv: 'Undertecknaren fick ett mejl om signeringen nyligen. En påminnelse kan skickas en gång per dygn.',
+    message_en: 'The signer got a mail about the signing recently. A reminder can be sent once a day.',
+  },
+  SIGNING_REMIND_NO_EMAIL: {
+    httpStatus: 409,
+    message_sv: 'Undertecknaren har ingen e-postadress, så någon påminnelse kan inte skickas.',
+    message_en: 'The signer has no email address, so no reminder can be sent.',
+  },
+  SIGNING_REQUEST_ALREADY_OPEN: {
+    httpStatus: 409,
+    message_sv: 'Årsredovisningen väntar redan på underskrifter i en annan signering. Avbryt den först.',
+    message_en: 'The annual report already waits for signatures in another signing request. Cancel that one first.',
+  },
+  SIGNING_NAME_MISMATCH: {
+    httpStatus: 409,
+    message_sv: 'Namnet i ditt BankID stämmer inte med namnet i årsredovisningen, så underskriften sparades inte. Den som skickade signeringen behöver rätta namnet och låsa en ny version.',
+    message_en: 'The name in your BankID does not match the name in the annual report, so the signature was not saved. The sender needs to correct the name and lock a new version.',
+  },
+  ARSREDOVISNING_SIGNING_TRACK_MIXED: {
+    httpStatus: 409,
+    message_sv: 'Årsredovisningen skrivs antingen under med BankID i Accounted eller på annat sätt, inte båda. Den här versionen har redan underskrifter på det andra sättet.',
+    message_en: 'The annual report is signed either with BankID in Accounted or another way, not both. This version already has signatures the other way.',
+  },
+  SIGNING_METHOD_RESERVED: {
+    httpStatus: 422,
+    message_sv: 'Metoden BankID kan inte registreras för hand: den sätts bara när styrelsen skriver under med BankID i Accounted. En BankID-underskrift i en annan tjänst registreras som avancerad e-signatur.',
+    message_en: 'The BankID method cannot be recorded by hand: it is set only when the board signs with BankID in Accounted. A BankID signature made in another service is recorded as an advanced e-signature.',
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Pending operations: the v1 REST approval door and the stage mode
 // ─────────────────────────────────────────────────────────────────
 
@@ -10823,6 +10962,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...CUSTOMER_LOSS,
   ...SETOFF,
   ...PAYMENT_SIGNING_LINKS,
+  ...SIGNING,
   ...PENDING_OPERATIONS,
   ...AUTOGIRO,
 }

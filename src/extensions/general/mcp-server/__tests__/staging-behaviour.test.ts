@@ -102,6 +102,19 @@ vi.mock('@/lib/bokslut/arsredovisning/model', () => ({
     ixbrl: null,
   }),
 }))
+// BankID document signing refuses up front unless the switch is on and a
+// provider is wired. A provider whose every call throws: a staging preview must
+// never start or poll a BankID session.
+process.env.SIGNING_ENABLED = '1'
+vi.mock('@/lib/signing/bankid-provider', () => {
+  const noBankId = async (): Promise<never> => {
+    throw new Error('a staging preview contacted BankID')
+  }
+  return {
+    resolveBankIdSigning: async () => ({ startBankIdSignature: noBankId, pollBankIdSignature: noBankId, cancelBankIdSignature: noBankId }),
+  }
+})
+
 vi.mock('@/lib/bokslut/arsredovisning/version-service', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/bokslut/arsredovisning/version-service')>()
   return { ...actual, hasStatementIntegrityErrors: () => false }
@@ -960,7 +973,28 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // No registered record holds the document either (lib/documents/deletion.ts reads these pins).
   gnubok_delete_document: {
     rows: { document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: null } },
-    empty: ['supplier_invoices', 'expense_claims', 'transactions', 'invoice_inbox_items'],
+    empty: ['supplier_invoices', 'expense_claims', 'transactions', 'invoice_inbox_items', 'signing_requests'],
+  },
+  // A current PDF in the archive and one outside signer with an address: the
+  // preview reads the row and the signers, never the file or BankID.
+  gnubok_request_signature: {
+    args: { title: 'Hyresavtal', signers: [{ name: 'Anna Svensson', email: 'anna@example.se' }] },
+    rows: {
+      document_attachments: {
+        file_name: 'hyresavtal.pdf', mime_type: 'application/pdf', is_current_version: true, file_size_bytes: 48213,
+        sha256_hash: '9b2e'.repeat(16), company_id: COMPANY_ID, user_id: USER_ID,
+      },
+    },
+  },
+  // An open request the caller sent, and a pending signer last mailed two days ago.
+  gnubok_remind_signer: {
+    rows: {
+      signing_requests: { status: 'open', expires_at: '2099-01-01T00:00:00.000Z', created_by: USER_ID, title: 'Hyresavtal' },
+      signing_request_signers: {
+        status: 'pending', email: 'anna@example.se', name: 'Anna Svensson',
+        link_sent_at: '2026-01-01T00:00:00.000Z', last_reminded_at: null, bankid_session_id: null, bankid_session_started_at: null,
+      },
+    },
   },
   gnubok_detach_document_from_transaction: {
     rows: { transactions: { document_id: SOME_UUID }, document_attachments: { journal_entry_id: null } },
@@ -989,6 +1023,17 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_add_arsredovisning_signature: {
     args: { role: 'Styrelseledamot', signer_name: 'Anna Andersson' },
     empty: ['arsredovisning_signature_requests'],
+  },
+  // A locked version with one pending slot and no open signing request: the
+  // preview checks the slots and the signers, renders and archives nothing.
+  gnubok_request_arsredovisning_signatures: {
+    args: { signers: [] },
+    rows: {
+      annual_report_versions: { status: 'ready_for_signature' },
+      fiscal_periods: FISCAL_YEAR_2026,
+      arsredovisning_signature_requests: { status: 'pending', signing_method: null, role: 'Styrelseledamot', signer_name: 'Anna Andersson' },
+    },
+    empty: ['signing_requests'],
   },
   // Ingående balanser by hand (wave 4): an open, unlocked 2026 without an IB
   // (no pointer and no posted IB verifikat) and no company lock date; the

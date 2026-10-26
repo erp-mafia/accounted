@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 373 endpoints.
+  pagination, scopes), and all 379 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -218,7 +218,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 373 operations. Paths are shown without
+API version `2026-05-12`, 379 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -277,7 +277,7 @@ POST /companies/{companyId}/journal-entries/no-document-required : Mark many pos
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (49)
+### Periods and registers (50)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -315,6 +315,7 @@ POST /companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures : Add 
 PATCH /companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures/{signatureId} : Record that a signer signed the frozen årsredovisning version, or declined [scope:bookkeeping:write risk:medium idempotent dry-run]
 DELETE /companies/{companyId}/fiscal-periods/{id}/arsredovisning/signatures/{signatureId} : Remove a signer from the årsredovisning roster before a version binds it [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/arsredovisning/versions : Freeze an immutable årsredovisning version: a draft snapshot, or the version that gets signed [scope:bookkeeping:write risk:high idempotent dry-run]
+POST /companies/{companyId}/fiscal-periods/{id}/arsredovisning/versions/{versionId}/signing-request : Send a locked årsredovisning version to the board for BankID signing: one link per signer slot [scope:bookkeeping:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/fiscal-periods/{id}/close : Close a fiscal period (IRREVERSIBLE per BFL 5 kap 8 §) [scope:bookkeeping:write risk:high idempotent]
 POST /companies/{companyId}/fiscal-periods/{id}/close-external : Mark a migrated fiscal year as closed in the previous system (klarmarkera) [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/currency-revaluation : Run FX revaluation for the fiscal period [scope:bookkeeping:write risk:high idempotent reversible]
@@ -438,7 +439,7 @@ DELETE /companies/{companyId}/suppliers/{id} : Archive a supplier (soft-delete) 
 POST /companies/{companyId}/suppliers/bulk-create : Create up to 50 suppliers in one call (partial-success) [scope:suppliers:write risk:low idempotent dry-run reversible]
 ```
 
-### Documents (17)
+### Documents (22)
 
 Full detail: [references/documents.md](references/documents.md)
 
@@ -460,6 +461,11 @@ POST /companies/{companyId}/inbox-items/{id}/match-transaction : Pair an inbox i
 PUT /companies/{companyId}/inbox-items/{id}/purchase-category : Set, or clear, what an inbox item bought (its purchase category) [scope:documents:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/inbox-items/{id}/stamp : Mark an inbox item as consumed by a journal entry [scope:documents:write risk:low idempotent]
 POST /companies/{companyId}/inbox-items/{id}/unmatch-transaction : Release an inbox item's bank transaction match [scope:documents:write risk:low idempotent dry-run reversible]
+GET /companies/{companyId}/signing-requests : List the company's BankID signing requests, newest first, with every signer's status [scope:documents:read risk:low idempotent]
+POST /companies/{companyId}/signing-requests : Send an archived PDF for BankID signing: one link per signer, mailed when they have an address [scope:documents:write risk:medium idempotent dry-run]
+GET /companies/{companyId}/signing-requests/{id} : Read one BankID signing request: every signer's status and, once completed, the signed PDF and the evidence package [scope:documents:read risk:low idempotent]
+POST /companies/{companyId}/signing-requests/{id}/cancel : Cancel an open signing request: its links stop working; signatures already made stay [scope:documents:write risk:low idempotent dry-run]
+POST /companies/{companyId}/signing-requests/{id}/signers/{signerId}/remind : Mail a pending signer again, once a day at most; the mail carries a new link and the old one stops working [scope:documents:write risk:low idempotent dry-run]
 ```
 
 ### Banking (64)

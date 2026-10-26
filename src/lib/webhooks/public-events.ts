@@ -121,6 +121,17 @@ export const PUBLIC_WEBHOOK_EVENT_GROUPS = [
     title: 'Documents',
     events: [{ type: 'document.uploaded' }],
   },
+  {
+    title: 'Signing',
+    events: [
+      { type: 'signing.signer_signed', description: 'one signer signed a signing request with BankID' },
+      { type: 'signing.declined', description: 'a signer declined; the request is closed' },
+      {
+        type: 'signing.completed',
+        description: 'everyone signed; signed_document_id and evidence_document_id are the signed PDF and the evidence package in the archive (null if the seal is still running: read the request)',
+      },
+    ],
+  },
 ] as const satisfies ReadonlyArray<PublicWebhookEventGroup>
 
 /** Union of every deliverable event type, narrowed from the catalogue. */

@@ -33,6 +33,8 @@ export interface NavGateFlags {
   requiresExpenses?: boolean
   // Arkiv: shown only for companies in the ARKIV_COMPANY_IDS rollout (computed by the layout).
   requiresArkiv?: boolean
+  /** Signeringar: shown only where BankID document signing is switched on (lib/navigation/nav-rollouts.ts). */
+  requiresSigning?: boolean
   /** The Agenter page (/skills); hidden in production while it is finished (lib/agent-skills/flag.ts). */
   requiresAgents?: boolean
   /** The new Inkorg page (/inkorg): shown only for companies in the INKORG_V2_COMPANY_IDS rollout (lib/inkorg/flag.ts). */
@@ -175,6 +177,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     sub: [
       { href: '/arkiv', module: 'inbox', labelKey: 'arkiv_all' },
       { href: '/arkiv/historik', module: 'inbox', labelKey: 'arkiv_history' },
+      { href: '/arkiv/signeringar', module: 'inbox', labelKey: 'arkiv_signings', requiresSigning: true },
     ],
   },
   {
