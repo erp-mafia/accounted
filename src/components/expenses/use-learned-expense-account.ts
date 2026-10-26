@@ -24,7 +24,7 @@ export function useLearnedExpenseAccount(merchant: string | null, chart: Readonl
     const readJson = (url: string) =>
       fetch(url, { signal: controller.signal })
         .then(async (res) => (res.ok ? ((await res.json()) as { data?: unknown }).data : null))
-        .catch(() => null)
+        .catch(() => null) // a hint: a failed or aborted read only means no suggestion
     void Promise.all([
       readJson(`/api/settings/counterparty-templates?counterparty=${encodeURIComponent(merchant)}`),
       readJson('/api/expense-claims'),

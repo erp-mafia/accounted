@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -18,7 +18,7 @@ import {
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
 import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert, Landmark } from 'lucide-react'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
 
@@ -462,6 +462,7 @@ interface SystemConnectionState {
  */
 function SkatteverketSystemConnectionCard() {
   const t = useTranslations('settings_skatteverket_connect')
+  const errorLocale = useLocale() as ErrorLocale
   const { appName } = useBranding()
   const { toast } = useToast()
   const [state, setState] = useState<SystemConnectionState | null>(null)
@@ -503,7 +504,7 @@ function SkatteverketSystemConnectionCard() {
       if (!res.ok) {
         toast({
           title: t('system_verify_failed'),
-          description: typeof body?.error === 'string' ? body.error : undefined,
+          description: body?.error ? getUserErrorMessage(body, { locale: errorLocale }) : undefined,
           variant: 'destructive',
         })
         return

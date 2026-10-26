@@ -47,6 +47,7 @@ import { sameBankWarning } from '../lib/connection-warning'
 import { hasSelectableAccounts } from '../lib/claimed-accounts'
 import type { BankConnection } from '@/types'
 import type { StoredAccount } from '../types'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 /** One "reuse an existing connection" offer, as returned by /reusable-sessions. */
 interface ReusableSessionOffer {
@@ -380,7 +381,7 @@ export default function BankingSettingsPanel() {
       if (!response.ok) {
         toast({
           title: 'Kunde inte återanvända anslutningen',
-          description: result?.error || 'Försök igen om en stund.',
+          description: getErrorMessage(result, { fallback: 'Försök igen om en stund.' }),
           variant: 'destructive',
         })
         return
@@ -602,10 +603,7 @@ export default function BankingSettingsPanel() {
           error: data.error,
           connectionId,
         })
-        // Routes answer with either a plain string or the canonical envelope
-        // ({ error: { code, message } }); the envelope's message is Swedish.
-        const message = typeof data.error === 'string' ? data.error : data.error?.message
-        throw new Error(message || 'Synkronisering misslyckades')
+          throw new Error(getErrorMessage(data, { fallback: 'Synkronisering misslyckades' }))
       }
 
       console.log('[enable-banking] Sync completed', {
@@ -713,7 +711,7 @@ export default function BankingSettingsPanel() {
           error: data.error,
           connectionId,
         })
-        throw new Error(data.error || 'Disconnect failed')
+        throw new Error(getErrorMessage(data, { fallback: 'Disconnect failed' }))
       }
 
       console.log('[enable-banking] Bank disconnected', { connectionId })

@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
@@ -308,7 +309,7 @@ export function VatChecksCard({
     setFixingId(null)
     if (!result.ok && result.resolved) {
       setRemovedIds((prev) => new Set(prev).add(gap.entryId))
-      toast({ title: `${gap.voucherSeries}-${gap.voucherNumber}`, description: result.message })
+      toast({ title: formatVoucher({ voucher_series: gap.voucherSeries, voucher_number: gap.voucherNumber }), description: result.message })
       setGapsResult(null)
       onCorrected()
       return
@@ -320,7 +321,7 @@ export function VatChecksCard({
     setRemovedIds((prev) => new Set(prev).add(gap.entryId))
     const correctedId = result.correctedId
     toast({
-      title: `Verifikation ${gap.voucherSeries}-${gap.voucherNumber} korrigerad`,
+      title: `Verifikation ${formatVoucher({ voucher_series: gap.voucherSeries, voucher_number: gap.voucherNumber })} korrigerad`,
       description: 'Storno + ny verifikation skapad.',
       action: correctedId ? (
         <ToastAction
@@ -753,8 +754,8 @@ export function VatChecksCard({
                               aria-expanded={expanded}
                               aria-label={
                                 expanded
-                                  ? `Dölj detaljer för verifikation ${gap.voucherSeries}-${gap.voucherNumber}`
-                                  : `Visa detaljer för verifikation ${gap.voucherSeries}-${gap.voucherNumber}`
+                                  ? `Dölj detaljer för verifikation ${formatVoucher({ voucher_series: gap.voucherSeries, voucher_number: gap.voucherNumber })}`
+                                  : `Visa detaljer för verifikation ${formatVoucher({ voucher_series: gap.voucherSeries, voucher_number: gap.voucherNumber })}`
                               }
                               onClick={(e) => {
                                 e.stopPropagation()
@@ -832,7 +833,7 @@ export function VatChecksCard({
                       >
                         <div className="flex min-w-0 items-baseline gap-4 text-[13px]">
                           <span className="w-16 shrink-0 tabular-nums">
-                            {gap.voucherSeries}-{gap.voucherNumber}
+                            {formatVoucher({ voucher_series: gap.voucherSeries, voucher_number: gap.voucherNumber })}
                           </span>
                           <span className="w-24 shrink-0 tabular-nums text-muted-foreground">{formatDate(gap.entryDate)}</span>
                           {gap.description && <span className="min-w-0 truncate text-muted-foreground">{gap.description}</span>}

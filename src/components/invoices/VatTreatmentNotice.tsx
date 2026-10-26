@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import {
   explainVatTreatment,
@@ -91,7 +91,7 @@ export function VatTreatmentNotice({
       if (!validation.valid) {
         toast({
           title: t('invalid_title'),
-          description: validation.error || t('invalid_default'),
+          description: getErrorMessage(validation, { locale: locale as ErrorLocale, fallback: t('invalid_default') }),
           variant: 'destructive',
         })
         return

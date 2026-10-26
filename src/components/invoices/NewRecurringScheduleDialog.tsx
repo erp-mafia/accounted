@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo, useRef } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useForm, useFieldArray, Controller } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
@@ -31,7 +31,7 @@ import { Plus, Tags, Trash2, Type } from 'lucide-react'
 import { CURRENCIES, type Currency, type RecurringInvoiceSchedule } from '@/types'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { ISO_DATE_RE } from '@/lib/invariants'
 import {
   alignRunDateToDay,
@@ -139,6 +139,7 @@ function NewRecurringScheduleForm({
 }) {
   const { toast } = useToast()
   const t = useTranslations('invoice_recurring_new')
+  const errorLocale = useLocale() as ErrorLocale
   // The per-row dimension affordances share the invoice editor's wording: a
   // schedule's default bag becomes each generated invoice's default.
   const tInvoice = useTranslations('invoice_editor')
@@ -356,10 +357,7 @@ function NewRecurringScheduleForm({
         const body = (await res.json().catch(() => ({}))) as {
           error?: string | { message?: string }
         }
-        // errorResponse() returns the nested envelope { error: { code, message } },
-        // so reading body.error directly would stringify to "[object Object]".
-        const message = typeof body.error === 'string' ? body.error : body.error?.message
-        throw new Error(message || t('create_failed_fallback'))
+          throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('create_failed_fallback') }))
       }
       toast({ title: schedule ? t('updated_title') : t('created_title') })
       onSaved()

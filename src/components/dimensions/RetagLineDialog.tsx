@@ -15,6 +15,7 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { AccountNumber } from '@/components/ui/account-number'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 export interface RetagLine {
   id: string
@@ -80,7 +81,7 @@ export default function RetagLineDialog({ open, onOpenChange, line, onRetagged }
       })
       const payload = await res.json()
       if (!res.ok) {
-        setError(typeof payload.error === 'string' ? payload.error : 'Kunde inte ändra dimensioner')
+        setError(getErrorMessage(payload, { fallback: 'Kunde inte ändra dimensioner' }))
         return
       }
       if (payload.data?.changed === false) {

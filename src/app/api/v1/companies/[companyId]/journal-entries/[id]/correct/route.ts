@@ -35,6 +35,8 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
+import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
+import { OWNED_BY_PITFALL, VoucherOwnerSchema } from '@/lib/api/v1/voucher-owner-schema'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { CorrectionChainTooDeepError, MeaninglessCorrectionError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 
@@ -45,6 +47,7 @@ const JournalEntryCorrected = z.object({
   voucher_series: z.string(),
   reversal_voucher_number: z.number().int(),
   corrected_voucher_number: z.number().int(),
+  owned_by: VoucherOwnerSchema.nullable(),
 })
 
 registerEndpoint({
@@ -66,6 +69,7 @@ registerEndpoint({
     'A chain 3+ corrections deep returns CORRECTION_CHAIN_TOO_DEEP (409). Compute the net effect of the whole chain and book ONE correction, or pass allow_deep_chain=true to override.',
     'Lines that are the original with debit and credit swapped return MEANINGLESS_CORRECTION (400, details.reason negates_original): the storno already reverses the original. To only cancel an entry use /reverse; pass sides_swapped=true only when the original itself was booked with the sides swapped.',
     'Lines crediting import VAT (2615/2625/2635, boxes 60-62) need the taxable amount in box 50 (4545-4547) in the same lines, else 400 IMPORT_VAT_WITHOUT_BASE; reverse charge books its output VAT on 2614/2624/2634.',
+    OWNED_BY_PITFALL,
   ],
   example: {
     request: {
@@ -82,6 +86,7 @@ registerEndpoint({
         voucher_series: 'A',
         reversal_voucher_number: 144,
         corrected_voucher_number: 145,
+        owned_by: null,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -127,7 +132,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // CANNOT_CORRECT_NON_POSTED otherwise but we want the structured envelope).
     const { data: original, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, entry_date, voucher_series, correction_of_id, reverses_id, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
+      .select('id, status, entry_date, voucher_series, correction_of_id, reverses_id, source_type, source_id, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -144,6 +149,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       correction_of_id: string | null
       reverses_id: string | null
       source_type: string | null
+      source_id: string | null
       lines?: Array<{ account_number: string; debit_amount: number | string; credit_amount: number | string }> | null
     }
     if (typed.status !== 'posted') {
@@ -202,6 +208,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
     }
 
+    // The object the verifikat books, if any (advice, never a refusal): the
+    // correction is a new verifikat it does not point at, so name it.
+    const ownedBy = await voucherOwnerOrNull(ctx.supabase, ctx.companyId!, typed)
+
     if (ctx.dryRun) {
       return dryRunPreview(
         {
@@ -211,6 +221,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           voucher_series: typed.voucher_series,
           inherited_entry_date: typed.entry_date,
           new_lines_balance: { debit: balance.totalDebit, credit: balance.totalCredit },
+          owned_by: ownedBy,
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
@@ -242,6 +253,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           voucher_series: corrected.voucher_series,
           reversal_voucher_number: reversal.voucher_number,
           corrected_voucher_number: corrected.voucher_number,
+          owned_by: ownedBy,
         },
         { requestId: ctx.requestId },
       )

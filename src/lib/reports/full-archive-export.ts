@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
@@ -539,7 +540,8 @@ async function writeDocuments(
           : null
 
         const entryInfo = extractJoinedEntry(doc.journal_entries)
-        const voucherLabel = formatVoucherLabel(entryInfo)
+        // A draft (no voucher number yet) is an orphan in the ZIP layout.
+        const voucherLabel = entryInfo?.voucher_number ? formatVoucher(entryInfo) : null
         const zipPath = buildDocumentZipPath(doc, voucherLabel, entryInfo?.entry_date ?? null, usedPaths)
 
         const baseManifest: Omit<DocumentManifestEntry, 'status'> = {
@@ -763,19 +765,6 @@ function extractJoinedEntry(
   if (!raw) return null
   if (Array.isArray(raw)) return raw[0] ?? null
   return raw
-}
-
-/**
- * Format the voucher label as `<series><number>` (e.g. `A23`, `B12`). Returns
- * null if the entry is a draft (no voucher_number assigned yet), in which case
- * the doc is treated as orphaned in the ZIP layout.
- */
-function formatVoucherLabel(
-  entry: { voucher_number: number | null; voucher_series: string | null } | null
-): string | null {
-  if (!entry || entry.voucher_number == null) return null
-  const series = entry.voucher_series ?? ''
-  return `${series}${entry.voucher_number}`
 }
 
 /**

@@ -52,6 +52,7 @@ vi.mock('@/lib/invoices/counterparty-setoff/reversal', () => ({
 import { REVERSAL_HOOKS } from '../reversal-hooks'
 import { REVERSAL_MIRROR_REQUIRED, type ReversalHookAfterContext } from '@/lib/bookkeeping/reversal-hooks'
 import { PAYMENT_SOURCE_TYPES } from '@/lib/bookkeeping/payment-sync'
+import { VOUCHER_OWNER_SOURCES } from '@/lib/core/bookkeeping/voucher-owner'
 import { moduleForLibPath } from '@/lib/modules/resolve'
 import { scanLibImports } from '@/lib/modules/__tests__/import-scan'
 
@@ -131,6 +132,17 @@ describe('reversal hook list: completeness', () => {
   it('keeps the payment hook on exactly the payment source types', () => {
     const payment = REVERSAL_HOOKS.find((hook) => hook.id === 'invoice-payment-status')
     expect(payment?.sourceTypes).toEqual([...PAYMENT_SOURCE_TYPES])
+  })
+
+  // A verifikat an object owns is kept in step with the object either by a
+  // reversal hook or, until it has one, by the owner dialog that leads Vänd
+  // and Rätta with the object's own action (lib/core/bookkeeping/voucher-owner.ts).
+  // year_end and system are owned only when a register row points at them.
+  it('classifies every source type the voucher owner names as mirrored or known unmirrored', () => {
+    const unclassified = Object.keys(VOUCHER_OWNER_SOURCES)
+      .filter((type) => type !== 'year_end' && type !== 'system')
+      .filter((type) => !(type in KNOWN_UNMIRRORED) && !(REVERSAL_MIRROR_REQUIRED as readonly string[]).includes(type))
+    expect(unclassified).toEqual([])
   })
 
   it('lists the known unmirrored source types apart from the mirrored ones', () => {

@@ -46,6 +46,7 @@ import {
   versionShape,
 } from '@/lib/bokslut/arsredovisning/workflow-schemas'
 import { defineOperation, type OperationOutcome } from './types'
+import { SigningRequestCreatedOut } from './signing-requests'
 
 /*
  * The services load on first use: this module sits in the operation
@@ -640,26 +641,7 @@ export const arsredovisningRequestSignatures = defineOperation({
       send_email: z.boolean().optional().describe('Mail each signer with an email (default true).'),
     })
     .strict(),
-  output: z.object({
-    signing_request_id: z.string().uuid(),
-    status: z.literal('open'),
-    title: z.string(),
-    document_id: z.string().uuid(),
-    document_sha256: z.string(),
-    expires_at: z.string(),
-    signers: z.array(
-      z.object({
-        signer_id: z.string().uuid(),
-        position: z.number().int(),
-        name: z.string(),
-        email: z.string().nullable(),
-        annual_report_signature_id: z.string().uuid().nullable(),
-        lock: z.enum(['none', 'member', 'personnummer']),
-        email_sent: z.boolean(),
-        url: z.string().nullable().describe('The signer\'s link, only when no mail reached them. The credential itself.'),
-      }),
-    ),
-  }),
+  output: SigningRequestCreatedOut,
   errorCodes: [
     'SIGNING_UNAVAILABLE',
     'ARSREDOVISNING_VERSION_NOT_SIGNABLE',

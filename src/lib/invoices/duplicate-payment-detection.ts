@@ -25,6 +25,7 @@
  * is always SEK and why `journal_entry_lines.currency` must never be read as
  * evidence that a debit/credit figure is foreign.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { detectLedgerDuplicateVoucher, resolveTransactionAmountSek } from '@/lib/transactions/booking-duplicate-detection'
@@ -382,7 +383,7 @@ function collectSetCandidates(legs: BankLegRow[], target: SetTarget): Map<string
     byEntry.set(entry.id, {
       id: entry.id,
       journal_entry_id: entry.id,
-      voucher_label: `${entry.voucher_series ?? 'A'}${entry.voucher_number ?? ''}`,
+      voucher_label: formatVoucher(entry),
       voucher_series: entry.voucher_series,
       voucher_number: entry.voucher_number,
       entry_date: entry.entry_date,

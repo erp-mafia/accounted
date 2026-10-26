@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { scopeFreeLinkBasisColumns } from '@/lib/links/link-basis'
@@ -348,7 +349,7 @@ export async function assessHistoricalResultRepair(
       openingEntry?.status === 'posted' && openingEntry.source_type === 'opening_balance',
     openingBalanceVoucherLabel:
       openingEntry?.voucher_series != null && openingEntry.voucher_number != null
-        ? `${openingEntry.voucher_series}${openingEntry.voucher_number}`
+        ? formatVoucher(openingEntry)
         : null,
     requiredAccountsActive:
       activeAccounts.has(RESULT_ACCOUNT) && activeAccounts.has(PRIOR_RESULT_ACCOUNT),

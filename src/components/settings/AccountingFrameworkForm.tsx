@@ -17,6 +17,7 @@ import {
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
 import type { AccountingFramework } from '@/types'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 interface AccountingFrameworkFormProps {
   /** Current framework on the company row. */
@@ -68,7 +69,7 @@ export function AccountingFrameworkForm({ current, onSaved }: AccountingFramewor
       if (!res.ok) {
         toast({
           title: 'Kunde inte spara',
-          description: body?.error ?? 'Försök igen.',
+          description: getErrorMessage(body, { fallback: 'Försök igen.' }),
           variant: 'destructive',
         })
         setSelected(current)

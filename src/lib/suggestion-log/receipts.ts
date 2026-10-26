@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { slateAccount } from '@/lib/bookkeeping/proposal'
@@ -275,8 +276,8 @@ function actorType(v: unknown): DecisionActorType {
 }
 
 export function voucherLabel(entry: Pick<ReceiptEntryRow, 'voucher_series' | 'voucher_number'> | undefined): string | null {
-  if (!entry || entry.voucher_number == null) return null
-  return `${entry.voucher_series ?? ''}${entry.voucher_number}`
+  if (!entry || !entry.voucher_number) return null
+  return formatVoucher(entry)
 }
 
 /** The journal entry a decision booked, read off its final. */

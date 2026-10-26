@@ -2357,6 +2357,30 @@ export type AccrualDirection = 'expense' | 'revenue'
 export type AccrualScheduleStatus = 'active' | 'completed' | 'cancelled'
 export type AccrualInstallmentStatus = 'pending' | 'posted' | 'cancelled'
 
+// What "Ändra periodisering" answers: the months not yet posted, now and
+// after the re-plan (replanRemainingInstallments).
+export interface AccrualReplanMonth {
+  period_month: string
+  amount: number
+  /** The day the month books on: its release date, never before the posting floor or the lock date. */
+  booking_date: string
+}
+
+export interface AccrualReplanResult {
+  accrual_schedule_id: string
+  period_start: string
+  period_end_before: string
+  period_end_after: string
+  release_day_before: number | null
+  release_day_after: number | null
+  /** Total minus the posted months: what the months not yet posted share. */
+  remaining_amount: number
+  before: AccrualReplanMonth[]
+  after: AccrualReplanMonth[]
+  /** Months booked right after the re-plan because their day has come (commit only). */
+  posted_now?: number
+}
+
 export interface AccrualSchedule {
   id: string
   user_id: string
@@ -2379,6 +2403,11 @@ export interface AccrualSchedule {
   origin_journal_entry_id: string | null
   // Dissolution entries are never dated before this (= origin entry date).
   posting_floor_date: string
+  // Day of the month each deferral month dissolves on (1-31, clamped to the
+  // month's last day); null = the first of the month. Never set on an
+  // upplupen kostnad, which books on each month's last day. Optional in TS
+  // for pre-migration fixtures.
+  release_day?: number | null
   status: AccrualScheduleStatus
   description: string | null
   // Dimensions bag ({sie_dim_no: object_code}) copied from the origin line

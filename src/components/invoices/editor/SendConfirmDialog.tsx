@@ -15,17 +15,11 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { formatAmount } from '@/lib/utils'
-
-export interface ConfirmVoucherLine {
-  account: string
-  name: string
-  debit: number
-  credit: number
-}
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import type { VoucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 
 export type ConfirmVoucher =
-  | { kind: 'lines'; date: string; lines: ConfirmVoucherLine[] }
+  | { kind: 'lines'; date: string; lines: VoucherLineView[] }
   /** No lines to show: why (kontantmetoden, deferred booking, foreign currency). */
   | { kind: 'note'; text: string }
 
@@ -122,36 +116,9 @@ export function SendConfirmDialog({
             <p className="pb-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
               {t('confirm_voucher_title', { date: voucher.date })}
             </p>
-            {/* Fixed layout: the name column takes what the amounts leave and
-                truncates to one line (full name on hover). */}
-            <table className="w-full table-fixed border-collapse text-[13px]" data-ph-mask="">
-              <colgroup>
-                <col className="w-14" />
-                <col />
-                <col className="w-24" />
-                <col className="w-24" />
-              </colgroup>
-              <thead>
-                <tr className="border-b border-border text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
-                  <th scope="col" className="py-2 text-left font-medium">{t('confirm_voucher_account')}</th>
-                  <th scope="col" className="py-2 pr-2 text-left font-medium">{t('confirm_voucher_name')}</th>
-                  <th scope="col" className="py-2 text-right font-medium">{t('confirm_voucher_debit')}</th>
-                  <th scope="col" className="py-2 text-right font-medium">{t('confirm_voucher_credit')}</th>
-                </tr>
-              </thead>
-              <tbody>
-                {voucher.lines.map((line, index) => (
-                  <tr key={`${line.account}-${index}`} className="border-b border-border">
-                    <td className="py-2 tabular-nums">{line.account}</td>
-                    <td className="truncate py-2 pr-2" title={line.name}>
-                      {line.name}
-                    </td>
-                    <td className="py-2 text-right tabular-nums">{line.debit ? formatAmount(line.debit) : ''}</td>
-                    <td className="py-2 text-right tabular-nums">{line.credit ? formatAmount(line.credit) : ''}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+            <div data-ph-mask="">
+              <VoucherLinesTable lines={voucher.lines} withCurrency showTotals />
+            </div>
           </div>
         )}
         {voucher?.kind === 'note' && <p className="text-[13px] text-muted-foreground">{voucher.text}</p>}

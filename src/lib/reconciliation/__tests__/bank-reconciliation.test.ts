@@ -1637,7 +1637,7 @@ describe('manualLink: the verifikat must have room for the row on its bank leg (
     const result = await manualLink(m.supabase as never, 'company-1', 'tx-b', 'je-1', 'user-1', '1930', MANUAL)
 
     expect(result).toMatchObject({ success: false, code: 'VOUCHER_BANK_LEG_CONSUMED' })
-    expect(result.error).toContain('Verifikat A-17 bokför 2800 på 1930')
+    expect(result.error).toContain('Verifikat A17 bokför 2800 på 1930')
     expect(result.error).toContain('bokför den som ett eget verifikat')
     expect(m.findCalls('transactions', 'update')).toEqual([])
   })
@@ -2008,7 +2008,7 @@ describe('linkTransactionToVouchers', () => {
     )
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Beloppet för verifikat A-11 har fel riktning: verifikatet bokför -500 på 1930.')
+    expect(result.error).toBe('Beloppet för verifikat A11 har fel riktning: verifikatet bokför -500 på 1930.')
   })
 
   it('refuses a slice larger than the verifikat\'s bank line', async () => {
@@ -2028,7 +2028,7 @@ describe('linkTransactionToVouchers', () => {
     )
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Beloppet för verifikat A-11 (-700) är större än verifikatets rad på 1930 (-500).')
+    expect(result.error).toBe('Beloppet för verifikat A11 (-700) är större än verifikatets rad på 1930 (-500).')
   })
 
   it('refuses a zero slice', async () => {
@@ -2048,7 +2048,7 @@ describe('linkTransactionToVouchers', () => {
     )
 
     expect(result.success).toBe(false)
-    expect(result.error).toBe('Beloppet för verifikat A-11 får inte vara 0.')
+    expect(result.error).toBe('Beloppet för verifikat A11 får inte vara 0.')
   })
 
   it('refuses fewer than two verifikat, and the same verifikat twice, before reading anything', async () => {
@@ -2197,13 +2197,13 @@ describe('linkTransactionToVouchers', () => {
     let m = createQueuedMockSupabase()
     enqueueReads(m.enqueue, { entries: [postedEntries[0], { ...postedEntries[1], status: 'draft' }] })
     let r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
-    expect(r.error).toBe('Verifikat A-12 är inte bokförd ännu.')
+    expect(r.error).toBe('Verifikat A12 är inte bokförd ännu.')
     expect(r.code).toBe('ENTRY_NOT_POSTED')
 
     m = createQueuedMockSupabase()
     enqueueReads(m.enqueue, { entries: [postedEntries[0], { ...postedEntries[1], status: 'reversed' }] })
     r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1')
-    expect(r.error).toBe('Verifikat A-12 är makulerat och kan inte kopplas.')
+    expect(r.error).toBe('Verifikat A12 är makulerat och kan inte kopplas.')
     expect(r.code).toBe('ENTRY_REVERSED')
 
     // Only one of the two ids comes back inside the company: the message
@@ -2218,7 +2218,7 @@ describe('linkTransactionToVouchers', () => {
     m = createQueuedMockSupabase()
     enqueueReads(m.enqueue, { lines: [bankLines[0]] })
     r = await linkTransactionToVouchers(m.supabase as never, 'company-1', 'tx-1', [{ journal_entry_id: E1 }, { journal_entry_id: E2 }], 'user-1', '1930')
-    expect(r.error).toBe('Verifikat A-12 saknar rad på 1930')
+    expect(r.error).toBe('Verifikat A12 saknar rad på 1930')
     expect(r.code).toBe('NOT_SETTLED')
   })
 
@@ -2448,7 +2448,7 @@ describe('linkTransactionToVouchers', () => {
     expect(r.success).toBe(false)
     expect(r.code).toBe('OVER_ALLOCATED')
     expect(r.error).toBe(
-      'Beloppet för verifikat A-11 (-500) är större än det som återstår av verifikatets rad på 1930 (-300): resten är redan kopplad till andra transaktioner.',
+      'Beloppet för verifikat A11 (-500) är större än det som återstår av verifikatets rad på 1930 (-300): resten är redan kopplad till andra transaktioner.',
     )
   })
 
@@ -2469,7 +2469,7 @@ describe('linkTransactionToVouchers', () => {
 
     expect(result).toEqual({
       success: false,
-      error: 'Verifikat A-12 är redan helt kopplat på 1930 till andra transaktioner.',
+      error: 'Verifikat A12 är redan helt kopplat på 1930 till andra transaktioner.',
       code: 'OVER_ALLOCATED',
     })
     expect(findCalls('transactions', 'update')).toEqual([])
@@ -2492,7 +2492,7 @@ describe('linkTransactionToVouchers', () => {
 
     expect(result).toEqual({
       success: false,
-      error: 'Verifikat A-12 är redan helt kopplat på 1930 till andra transaktioner.',
+      error: 'Verifikat A12 är redan helt kopplat på 1930 till andra transaktioner.',
       code: 'OVER_ALLOCATED',
     })
     expect(findCalls('transactions', 'update')).toEqual([])

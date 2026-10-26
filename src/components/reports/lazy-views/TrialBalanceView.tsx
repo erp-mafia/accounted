@@ -23,6 +23,7 @@ import { formatAmount } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { ReportSourceLine, ReportSourceFetcher } from '@/lib/reports/source-lines'
 import type { TrialBalanceRow } from '@/types'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 // Recharts is ~180KB: defer the chart so the report table (the regulated
 // content) renders without waiting for the charting bundle.
@@ -207,7 +208,7 @@ function makeTrialBalanceFetcher(accountNumber: string, periodId: string, dateRa
       `/api/reports/trial-balance/account/${encodeURIComponent(accountNumber)}/sources?${params.toString()}`
     )
     const json = await res.json()
-    if (!res.ok) throw new Error(json.error || 'Kunde inte hämta verifikat')
+    if (!res.ok) throw new Error(getErrorMessage(json, { fallback: 'Kunde inte hämta verifikat' }))
     const lines: ReportSourceLine[] = json.data?.lines || []
     return { lines, next_cursor: json.data?.next_cursor ?? null }
   }

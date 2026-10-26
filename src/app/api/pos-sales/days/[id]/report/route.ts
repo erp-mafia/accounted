@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
@@ -55,7 +56,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
         journal_entry_lines: Array<{ account_number: string; debit_amount: number; credit_amount: number; line_description: string | null; sort_order: number | null }>
       } | null
       if (booked) {
-        voucherLabel = booked.voucher_series && booked.voucher_number ? `${booked.voucher_series}${booked.voucher_number}` : null
+        voucherLabel = booked.voucher_series && booked.voucher_number ? formatVoucher(booked) : null
         lines = [...(booked.journal_entry_lines ?? [])]
           .sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
           .map((l) => ({

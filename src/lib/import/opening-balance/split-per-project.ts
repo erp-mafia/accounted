@@ -56,6 +56,7 @@
  * The parser exists (parseSIEFile objectOpeningBalances, planObjectBalances),
  * but the file transport through the dashboard, v1 and MCP doors does not.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { buildOpeningBalanceLines, fetchObjectClosingBalances } from '@/lib/core/bookkeeping/opening-balance-split'
@@ -763,7 +764,7 @@ async function loadSplitState(ctx: OperationContext, fiscalPeriodId: string): Pr
     return { preview, currentLines: [] }
   }
   preview.journal_entry_id = entry.id
-  preview.voucher = entry.voucher_series && entry.voucher_number ? `${entry.voucher_series}${entry.voucher_number}` : null
+  preview.voucher = entry.voucher_series && entry.voucher_number ? formatVoucher(entry) : null
 
   const previous = await readPreviousPeriod(supabase, companyId, period)
   if (!previous) {

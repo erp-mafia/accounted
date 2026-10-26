@@ -3,11 +3,11 @@
 import { useState, useEffect, useCallback, useRef, use } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { settlementsToastAction } from '@/components/collections/settlements-toast-action'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { AccountNumber } from '@/components/ui/account-number'
 import { VoucherLinesTable, type VoucherTableLine } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 import { Textarea } from '@/components/ui/textarea'
 import {
   ArrowLeft,
@@ -65,6 +65,9 @@ import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
+import type { VoucherOwner } from '@/lib/core/bookkeeping/voucher-owner'
+import { OwnedVoucherActionDialog } from '@/components/bookkeeping/OwnedVoucherActionDialog'
+import { useReverseJournalEntry } from '@/components/bookkeeping/use-reverse-journal-entry'
 import type { SieDeleteBlock } from '@/lib/core/bookkeeping/voucher-delete-guard'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 
@@ -146,7 +149,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const t = useTranslations('journal_detail')
   const tCommon = useTranslations('common')
   const tCorrection = useTranslations('journal_correction')
-  const tSettlements = useTranslations('settlements')
   const sourceTypeLabels = useSourceTypeLabels()
   const [entry, setEntry] = useState<JournalEntry | null>(null)
   const [chain, setChain] = useState<JournalEntry[]>([])
@@ -177,7 +179,6 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [showRecordate, setShowRecordate] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [showReverseConfirm, setShowReverseConfirm] = useState(false)
-  const [isReversing, setIsReversing] = useState(false)
   // Non-null when the server refused the storno with CORRECTION_CHAIN_TOO_DEEP:
   // holds the reported chain depth and opens the bypass confirm ("Återför ändå").
   const [reverseDeepChainDepth, setReverseDeepChainDepth] = useState<number | null>(null)
@@ -194,6 +195,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const [deleteBlock, setDeleteBlock] = useState<SieDeleteBlock | null>(null)
   const [attachmentCount, setAttachmentCount] = useState(0)
   const [references, setReferences] = useState<UnderlagReference[]>([])
+  // The object the verifikat books (an invoice, a periodisering, ...), from
+  // the references GET: Vänd and Rätta lead with its own action first.
+  const [owner, setOwner] = useState<VoucherOwner | null>(null)
+  const [ownedIntent, setOwnedIntent] = useState<'reverse' | 'correct_lines' | 'correct_date' | null>(null)
   const [editingNotes, setEditingNotes] = useState(false)
   const [notesValue, setNotesValue] = useState('')
   const [savingNotes, setSavingNotes] = useState(false)
@@ -276,8 +281,10 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       if (refsRes.ok) {
         const { data: refData } = await refsRes.json()
         setReferences(refData?.references ?? [])
+        setOwner(refData?.owned_by ?? null)
       } else {
         setReferences([])
+        setOwner(null)
       }
     } catch {
       setError(t('error_load_failed'))
@@ -375,51 +382,22 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
     }
   }, [id, router, toast, t])
 
-  // Pure reversal (storno): cancels the verifikat with a stornoverifikation and
-  // no replacement, per BFL 5 kap 5§. Distinct from "Rätta", which always books
-  // a replacement entry. Routes through the engine's reverseEntry (storno +
-  // reverses_id link; original → 'reversed', never deleted).
-  const handleReverse = useCallback(async (allowDeepChain = false) => {
-    setIsReversing(true)
-    try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/reverse`, {
-        method: 'POST',
-        ...(allowDeepChain
-          ? {
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ allow_deep_chain: true }),
-            }
-          : {}),
-      })
-      const result = await res.json()
-      if (res.ok) {
-        const storno = result.data
-        toast({
-          title: t('toast_reverse_done_title'),
-          description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
-        })
-        setShowReverseConfirm(false)
-        setReverseDeepChainDepth(null)
-        await fetchData()
-      } else if (result?.error?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
-        // Chain-depth guard: swap into the bypass confirm instead of a
-        // dead-end toast. "Återför ändå" resubmits with allow_deep_chain.
-        setShowReverseConfirm(false)
-        setReverseDeepChainDepth(result.error?.details?.depth ?? 3)
-      } else {
-        toast({
-          title: t('toast_reverse_failed'),
-          description: getErrorMessage(result, { context: 'journal_entry' }),
-          variant: 'destructive',
-          action: settlementsToastAction(result, tSettlements('open_settlements')),
-        })
-      }
-    } catch {
-      toast({ title: t('toast_reverse_failed'), variant: 'destructive' })
-    } finally {
-      setIsReversing(false)
-    }
-  }, [id, toast, fetchData, t, tSettlements])
+  // Pure reversal (storno), shared with the journal list (useReverseJournalEntry).
+  const { reverse, isReversing } = useReverseJournalEntry({
+    onReversed: async () => {
+      setShowReverseConfirm(false)
+      setReverseDeepChainDepth(null)
+      await fetchData()
+    },
+    onDeepChain: (depth) => {
+      setShowReverseConfirm(false)
+      setReverseDeepChainDepth(depth)
+    },
+  })
+  const handleReverse = useCallback(
+    (allowDeepChain = false) => reverse(id, allowDeepChain),
+    [reverse, id],
+  )
 
   useEffect(() => {
     fetchData()
@@ -738,16 +716,16 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                         <PenLine className="h-4 w-4" />
                         {t('correct_metadata')}
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setShowCorrection(true)} disabled={!canWrite || yearClosed}>
+                      <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_lines') : setShowCorrection(true))} disabled={!canWrite || yearClosed}>
                         <Pencil className="h-4 w-4" />
                         {t('correct_lines')}
                       </DropdownMenuItem>
-                      <DropdownMenuItem onSelect={() => setShowRecordate(true)} disabled={!canWrite || yearClosed}>
+                      <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_date') : setShowRecordate(true))} disabled={!canWrite || yearClosed}>
                         <CalendarClock className="h-4 w-4" />
                         {t('correct_date')}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => setShowReverseConfirm(true)} disabled={!canWrite || yearClosed}>
+                      <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('reverse') : setShowReverseConfirm(true))} disabled={!canWrite || yearClosed}>
                         <RotateCcw className="h-4 w-4" />
                         {t('reverse_action')}
                       </DropdownMenuItem>
@@ -793,6 +771,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <span className="tabular-nums">{formatDate(entry.entry_date)}</span>
           </DefRow>
           <DefRow label={t('field_type')}>{sourceTypeLabels[entry.source_type] || entry.source_type}</DefRow>
+          {/* The object the verifikat books, unless Underlag already links it. */}
+          {owner && !references.some((ref) => ref.id === owner.owner_id) && (
+            <DefRow label={t('owned_by_field')}>
+              <Link href={owner.href} className="hover:underline">
+                {`${t(`owner_name_${owner.kind}`)} ${owner.label ?? ''}`.trim()}
+              </Link>
+            </DefRow>
+          )}
           {/* The bank / skattekonto händelse behind the entry, when there is
               one: followable in the other direction from "Visa verifikat". */}
           <JournalEntryTransactionLinks journalEntryId={entry.id} variant="detail" />
@@ -911,24 +897,15 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             if (row.kind === 'struck') {
               const s = row.line
               return {
+                ...voucherLineView(s),
                 key: `struck-${s.id}`,
-                account_number: s.account_number,
-                description: s.line_description,
-                debit_amount: s.debit_amount,
-                credit_amount: s.credit_amount,
                 struck: true,
                 extra: <span data-ph-mask="" className="text-xs">{struckMarker(s)}</span>,
               }
             }
             const line = row.line
-            const lineHasForeignCurrency = line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
             return {
-              key: line.id,
-              account_number: line.account_number,
-              description: line.line_description,
-              debit_amount: line.debit_amount,
-              credit_amount: line.credit_amount,
-              foreignAmount: lineHasForeignCurrency ? `${fmtAmount(line.amount_in_currency!)} ${line.currency}` : null,
+              ...voucherLineView(line),
               extra: (
                 <>
                   {retagButton(line)}
@@ -1251,6 +1228,24 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           {entry?.status === 'draft' ? t('delete_dialog_draft_body') : t('delete_dialog_entry_body')}
         </p>
       </ConfirmationDialog>
+
+      {/* Vänd or Rätta on a verifikat an object owns: its own action first,
+          the verifikat alone as the second way on. */}
+      {owner && ownedIntent && (
+        <OwnedVoucherActionDialog
+          owner={owner}
+          intent={ownedIntent === 'reverse' ? 'reverse' : 'correct'}
+          open
+          onOpenChange={(next) => {
+            if (!next) setOwnedIntent(null)
+          }}
+          onProceed={() => {
+            if (ownedIntent === 'reverse') setShowReverseConfirm(true)
+            else if (ownedIntent === 'correct_lines') setShowCorrection(true)
+            else setShowRecordate(true)
+          }}
+        />
+      )}
 
       {/* Reverse (storno) confirmation dialog */}
       <ConfirmationDialog

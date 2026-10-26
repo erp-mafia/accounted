@@ -5,6 +5,7 @@ import { voucherStornoBusinessEvent } from '@/lib/bookkeeping/ledger-business-ev
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
+import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 
 const ReverseJournalEntrySchema = z
   .object({
@@ -71,7 +72,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
       event: () => voucherStornoBusinessEvent({ entryId: id, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('user_created') }),
       role: 'reversal',
     })
-    return NextResponse.json({ data: reversalEntry })
+    // The object the verifikat books, if any: a storno leaves it as it was
+    // (an invoice stays open), so the answer names it and its own action.
+    const ownedBy = await voucherOwnerOrNull(supabase, companyId, { id })
+    return NextResponse.json({ data: reversalEntry, owned_by: ownedBy })
   },
   { requireWrite: true },
 )

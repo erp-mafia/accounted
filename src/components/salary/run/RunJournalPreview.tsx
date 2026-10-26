@@ -5,6 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { Calculator, FileText } from 'lucide-react'
 import { formatRunAmount } from './types'
 
@@ -112,12 +113,7 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
               <div className="overflow-x-auto">
                 <VoucherLinesTable
                   withCurrency
-                  lines={entry.lines.map((line) => ({
-                    account_number: line.account_number,
-                    description: line.line_description,
-                    debit_amount: line.debit_amount,
-                    credit_amount: line.credit_amount,
-                  }))}
+                  lines={voucherLineViews(entry.lines)}
                 />
               </div>
             </div>

@@ -1183,6 +1183,8 @@ function konteringLines(transaction: Transaction, mappingResult: MappingResult):
       net: Number(line.debit_amount || 0) - Number(line.credit_amount || 0),
     }))
   } catch {
+    // The booking itself refuses an unbuildable row later; the guard's
+    // skattekonto half is simply left out here.
     return undefined
   }
 }

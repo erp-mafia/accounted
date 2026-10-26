@@ -609,7 +609,7 @@ export async function cancelSigningRequest(
     .eq('status', 'pending')
     .not('bankid_session_id', 'is', null)
   for (const s of (sessions ?? []) as Array<{ id: string; bankid_session_id: string }>) {
-    if (provider) await provider.cancelBankIdSignature(s.bankid_session_id).catch(() => null)
+    if (provider) await provider.cancelBankIdSignature(s.bankid_session_id).catch(() => null) // best effort: an order not cancelled expires on its own
     await service.from('signing_request_signers').update({ bankid_session_id: null, poll_lease_until: null }).eq('id', s.id).eq('status', 'pending')
   }
   await eventBus.emit({ type: 'signing.cancelled', payload: { signingRequestId: request.id, userId: request.created_by, companyId: ctx.companyId } })

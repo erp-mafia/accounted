@@ -125,7 +125,7 @@ describe('gnubok_link_invoice_to_voucher: a stated share', () => {
       remaining_after: 0,
       voucher_remaining_after: 4500,
     })
-    expect(inserted.title).toContain('A-285')
+    expect(inserted.title).toContain('A285')
     expect(inserted.title).toContain('1500 SEK av verifikatet')
   })
 

@@ -5,6 +5,7 @@ import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
+import { isCreditableInvoiceStatus } from '@/lib/bookkeeping/creditable-statuses'
 import { createClient } from '@/lib/supabase/client'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -104,6 +105,7 @@ import {
 } from '@/components/invoices/InvoiceDeliveryHistory'
 import { WithCorrection } from '@/components/bookkeeping/WithCorrection'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
+import { AccrualLineInfo, useInvoiceAccrualSchedules } from '@/components/bookkeeping/AccrualLineInfo'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import {
@@ -210,7 +212,6 @@ const RERENDER_CAVEAT_KEYS: Record<
 const itemHasAccrual = (item: InvoiceItem): boolean =>
   !!(item.accrual_period_start && item.accrual_period_end)
 
-const accrualMonth = (date: string): string => date.slice(0, 7)
 
 // In-row text actions inside DefRow values: always underlined so they read as
 // actions next to plain values, the hairline underline darkening on hover.
@@ -238,6 +239,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   }
 
   const [invoice, setInvoice] = useState<InvoiceWithRelations | null>(null)
+  // The rows' periodisering schedules, for "Ändra periodisering".
+  const accrualSchedules = useInvoiceAccrualSchedules(
+    { invoiceId: id },
+    !!invoice?.items?.some(itemHasAccrual),
+  )
   const [reminders, setReminders] = useState<ReminderHistoryRow[]>([])
   const [deliveries, setDeliveries] = useState<InvoiceDeliveryView[]>([])
   // An empty deliveries list means "nothing was ever sent through Accounted".
@@ -827,14 +833,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const response = await fetch(`/api/invoices/${invoice.id}/book`, { method: 'POST' })
       const data = await response.json()
       if (!response.ok) {
-        // data.error is a structured object for this route; only strings are
-        // usable as a toast message.
-        const message =
-          typeof data.error === 'string'
-            ? data.error
-            : typeof data.error?.message === 'string'
-              ? data.error.message
-              : t('book_failed_fallback')
+        const message = getUserErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('book_failed_fallback') })
         throw new Error(message)
       }
       if (Array.isArray(data.warnings) && data.warnings.length > 0) {
@@ -869,7 +868,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         })
         if (!response.ok) {
           const data = await response.json()
-          throw new Error(data.error || t('mark_sent_failed_fallback'))
+          throw new Error(getUserErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('mark_sent_failed_fallback') }))
         }
       } else {
         // Only a quote or a proforma is cancelled here (the menu offers
@@ -1712,7 +1711,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
       const data = await response.json()
 
       if (!response.ok) {
-        throw new Error(data.error?.message || t('fallback_try_again'))
+        throw new Error(getUserErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('fallback_try_again') }))
       }
 
       toast({
@@ -1745,7 +1744,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
 
       if (!response.ok) {
         const data = await response.json()
-        throw new Error(data.error?.message || t('cancel_failed_fallback'))
+        throw new Error(getUserErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('cancel_failed_fallback') }))
       }
 
       // Unnumbered drafts are hard deleted ("Ta bort"); numbered drafts are
@@ -2025,7 +2024,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     isUnsentNumberedInvoice &&
     preferredSendMode === 'email'
   const canCreateCreditNote =
-    (invoice.status === 'sent' || invoice.status === 'overdue' || invoice.status === 'paid') &&
+    isCreditableInvoiceStatus(invoice.status) &&
     isRealInvoice &&
     // A credit note, linked or imported without its original, is never
     // credited (the doors refuse it by the same rule).
@@ -2160,14 +2159,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const lineSubInfo = (item: InvoiceItem) => (
     <>
       {itemHasAccrual(item) && (
-        <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
-          <CalendarClock className="h-3 w-3 shrink-0" />
-          {t('accrual_line_info', {
-            from: accrualMonth(item.accrual_period_start!),
-            to: accrualMonth(item.accrual_period_end!),
-          })}
-          {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
-        </span>
+        <AccrualLineInfo
+          start={item.accrual_period_start!}
+          end={item.accrual_period_end!}
+          balanceAccount={item.accrual_balance_account}
+          schedule={accrualSchedules.scheduleForItem(item.id)}
+          canWrite={canWrite}
+          onReplan={accrualSchedules.openReplan}
+        />
       )}
       {item.deduction_type && (
         <span className="mt-0.5 block text-xs text-muted-foreground tabular-nums">
@@ -3221,7 +3220,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 {paymentHistory.map((p) => {
                   const voucherLabel =
                     p.voucher_series && p.voucher_number != null
-                      ? `${p.voucher_series}-${p.voucher_number}`
+                      ? formatVoucher(p)
                       : null
                   return (
                     <li key={p.id} className="flex items-center gap-4 py-1.5 first:pt-0 last:pb-0">
@@ -3761,6 +3760,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           }
         />
       )}
+
+      {accrualSchedules.replanDialog}
 
       {/* Confirm-before-posting (convention 10): booking writes an immutable
           verifikat, so the outcome is described before the POST, not narrated

@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Button } from '@/components/ui/button'
@@ -24,7 +24,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { CompanyMigrationResetDialog } from '@/components/settings/CompanyMigrationResetDialog'
 import { CompanyMigrationArchiveRow } from '@/components/settings/CompanyMigrationArchiveRow'
 import {
@@ -57,6 +57,7 @@ interface CompanyDangerZoneProps {
  */
 export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDangerZoneProps) {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const tRetention = useTranslations('retention_notice')
   const router = useRouter()
   const { toast } = useToast()
@@ -87,7 +88,7 @@ export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDan
 
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(body.error || t('danger_delete_failed_default'))
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('danger_delete_failed_default') }))
       }
 
       toast({ title: t('danger_deleted_title'), description: company.name })

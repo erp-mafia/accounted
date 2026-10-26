@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/arkiv/untrusted'
 import { dbError } from '@/lib/errors/db-error'
@@ -381,7 +382,10 @@ async function journalEntryRecord(supabase: SupabaseClient, companyId: string, j
   }
   return {
     journal_entry_id: e.id,
-    voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`,
+    voucher: formatVoucher({
+      voucher_series: e.voucher_series as string | null,
+      voucher_number: e.voucher_number as number | null,
+    }),
     entry_date: e.entry_date,
     description: e.description,
     documents,

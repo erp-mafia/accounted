@@ -18,6 +18,7 @@
  * references and that the invoice engine did not write. What those lists do
  * not cover is the residual, with the reasons it usually has.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { toHandle } from '@/lib/handles'
 import { INVOICE_ENGINE_SOURCE_TYPES } from '@/lib/reports/invoice-register-coverage'
@@ -461,7 +462,7 @@ async function ledgerWithoutInvoice(
         account_number: account.account_number,
         handle: toHandle('journal_entry', line.journal_entry_id),
         date: line.date,
-        label: `${line.voucher_series}${line.voucher_number} ${line.description}`.trim(),
+        label: `${formatVoucher(line)} ${line.description}`.trim(),
         // The ledger side is subtracted from the register.
         amount: roundOre(-sign * (line.debit - line.credit)),
       })

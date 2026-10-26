@@ -8,7 +8,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
-import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
+import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { InvoiceEditorShell, type EditorPane } from './InvoiceEditorShell'
@@ -19,6 +19,7 @@ import { EditorEmailPreview, type EmailTextOverride } from './EditorEmailPreview
 import { EditorStatusLine } from './EditorStatusLine'
 import { EditorSection } from './EditorSection'
 import { SendConfirmDialog, type ConfirmVoucher } from './SendConfirmDialog'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import type { InvoiceAttachmentFile } from '@/components/invoices/InvoiceAttachmentsSection'
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { useInvoicePdfPreview } from './use-editor-previews'
@@ -79,7 +80,6 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
   const { company, role, isSandbox } = useCompany()
   const canEmail = useCapability(CAPABILITY.email_send)
   const { settings: companySettings } = useCompanySettings()
-  const { accounts } = useAccounts()
   const locale = useLocale() as ErrorLocale
   const t = useTranslations('invoice_credit')
   const tShell = useTranslations('invoice_editor_shell')
@@ -422,18 +422,12 @@ export function CreditNoteEditor({ invoiceId }: { invoiceId: string }) {
       const lines = isEntityType(entityType)
         ? proposeCreditNoteSendLines({ ...invoice, customer: invoice.customer ?? undefined }, { entityType, today })
         : []
-      const names = new Map(accounts.map((account) => [account.account_number, account.account_name]))
       confirmVoucher =
         lines.length > 0
           ? {
               kind: 'lines',
               date: today,
-              lines: lines.map((line) => ({
-                account: line.account_number,
-                name: names.get(line.account_number) ?? line.line_description,
-                debit: parseFloat(line.debit_amount) || 0,
-                credit: parseFloat(line.credit_amount) || 0,
-              })),
+              lines: voucherLineViews(lines),
             }
           : { kind: 'note', text: tShell('confirm_voucher_foreign') }
     }

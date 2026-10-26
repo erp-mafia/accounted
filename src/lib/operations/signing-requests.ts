@@ -126,6 +126,28 @@ const SignerIn = z
   })
   .strict()
 
+/** What a created signing request answers; årsredovisning signing answers the same. */
+export const SigningRequestCreatedOut = z.object({
+  signing_request_id: z.string().uuid(),
+  status: z.literal('open'),
+  title: z.string(),
+  document_id: z.string().uuid(),
+  document_sha256: z.string(),
+  expires_at: z.string(),
+  signers: z.array(
+    z.object({
+      signer_id: z.string().uuid(),
+      position: z.number().int(),
+      name: z.string(),
+      email: z.string().nullable(),
+      annual_report_signature_id: z.string().uuid().nullable(),
+      lock: z.enum(['none', 'member', 'personnummer']),
+      email_sent: z.boolean(),
+      url: z.string().nullable().describe('The signer\'s link, only when no mail reached them. The credential itself.'),
+    }),
+  ),
+})
+
 export const signingRequestsCreate = defineOperation({
   id: 'signing-requests.create',
   kind: 'write',
@@ -178,26 +200,7 @@ export const signingRequestsCreate = defineOperation({
       signers: z.array(SignerIn).min(1).max(SIGNING_MAX_SIGNERS).describe(`1-${SIGNING_MAX_SIGNERS} signers; everyone signs, in any order.`),
     })
     .strict(),
-  output: z.object({
-    signing_request_id: z.string().uuid(),
-    status: z.literal('open'),
-    title: z.string(),
-    document_id: z.string().uuid(),
-    document_sha256: z.string(),
-    expires_at: z.string(),
-    signers: z.array(
-      z.object({
-        signer_id: z.string().uuid(),
-        position: z.number().int(),
-        name: z.string(),
-        email: z.string().nullable(),
-        annual_report_signature_id: z.string().uuid().nullable(),
-        lock: z.enum(['none', 'member', 'personnummer']),
-        email_sent: z.boolean(),
-        url: z.string().nullable().describe('The signer\'s link, only when no mail reached them. The credential itself.'),
-      }),
-    ),
-  }),
+  output: SigningRequestCreatedOut,
   errorCodes: ['SIGNING_UNAVAILABLE', 'SIGNING_DOCUMENT_NOT_FOUND', 'SIGNING_DOCUMENT_UNSUPPORTED', 'SIGNING_DOCUMENT_CHANGED', 'SIGNING_SIGNERS_INVALID'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/signing-requests' },
   mcp: {

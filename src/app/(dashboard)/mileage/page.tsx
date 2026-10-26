@@ -1,7 +1,8 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -45,6 +46,7 @@ import { Car, Copy, MoreHorizontal, Plus, Trash2, Pencil, ChevronDown, ChevronUp
 import type { MileageTrip, MileageVehicleType } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseDecimalInput } from '@/lib/money'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 interface TripFormState {
   trip_date: string
@@ -124,6 +126,7 @@ function formFromTrip(trip: MileageTrip, keepDate: boolean): TripFormState {
 export default function MileagePage() {
   const t = useTranslations('mileage')
   const tCommon = useTranslations('common')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
 
@@ -358,8 +361,7 @@ export default function MileagePage() {
       })
       if (!res.ok) {
         const body = await res.json().catch(() => null)
-        const message = typeof body?.error === 'string' ? body.error : body?.error?.message
-        toast({ title: message || t('save_error'), variant: 'destructive' })
+          toast({ title: getErrorMessage(body, { locale: errorLocale, fallback: t('save_error') }), variant: 'destructive' })
         return
       }
       setFormOpen(false)
@@ -406,14 +408,13 @@ export default function MileagePage() {
       })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
-        const message = typeof body?.error === 'string' ? body.error : body?.error?.message
-        toast({ title: message || t('book_error'), variant: 'destructive' })
+          toast({ title: getErrorMessage(body, { locale: errorLocale, fallback: t('book_error') }), variant: 'destructive' })
         return
       }
       setBookOpen(false)
       toast({
         title: t('booked_title', {
-          voucher: `${body.data.voucher_series ?? ''}${body.data.voucher_number ?? ''}`,
+          voucher: formatVoucher(body.data),
         }),
         description: t('booked_description', {
           count: body.data.trip_count,
@@ -513,8 +514,7 @@ export default function MileagePage() {
       })
       const body = await res.json().catch(() => null)
       if (!res.ok) {
-        const message = typeof body?.error === 'string' ? body.error : body?.error?.message
-        toast({ title: message || t('push_error'), variant: 'destructive' })
+          toast({ title: getErrorMessage(body, { locale: errorLocale, fallback: t('push_error') }), variant: 'destructive' })
         return
       }
       setPushOpen(false)

@@ -37,6 +37,7 @@
  * already holds from the invoice flows stay as they are; a warning names them
  * for review.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createServiceClient } from '@/lib/supabase/server'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import type { OperationContext, OperationOutcome, OperationWarning } from '@/lib/operations/types'
@@ -204,7 +205,7 @@ export async function checkAccountingMethodChange(
   const warnings: OperationWarning[] = []
   if (methodTimed > 0) {
     const labels = ((timed ?? []) as Array<{ voucher_series: string | null; voucher_number: number | null }>)
-      .map((row) => `${row.voucher_series ?? ''}${row.voucher_number ?? ''}`)
+      .map((row) => formatVoucher(row))
     const more = methodTimed - labels.length
     const listed = labels.join(', ') + (more > 0 ? ` (+${more})` : '')
     warnings.push({

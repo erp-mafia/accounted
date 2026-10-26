@@ -214,6 +214,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/journal-entries/:id/reverse': covered([`POST ${V}/journal-entries/:id/reverse`, 'gnubok_reverse_journal_entry']),
   'POST /api/bookkeeping/journal-entries/:id/correct-metadata': covered([`POST ${V}/journal-entries/:id/correct-metadata`, 'gnubok_correct_entry_metadata']),
   'POST /api/bookkeeping/journal-entries/:id/strike-lines': covered([`POST ${V}/journal-entries/:id/strike-lines`, 'gnubok_correct_entry_lines']),
+  'PATCH /api/bookkeeping/accruals/:id': covered([`POST ${V}/accrual-schedules/:id/replan`, 'gnubok_replan_accrual_schedule']),
   'POST /api/bookkeeping/journal-entries/:id/recordate': covered([`POST ${V}/journal-entries/:id/redate`, 'gnubok_redate_entry']),
   'PATCH /api/bookkeeping/journal-entries/:id/notes': covered([`PATCH ${V}/journal-entries/:id/notes`, 'gnubok_set_voucher_note']),
   'POST /api/bookkeeping/journal-entries/:id/no-document-required': covered([`POST ${V}/journal-entries/:id/no-document-required`]),

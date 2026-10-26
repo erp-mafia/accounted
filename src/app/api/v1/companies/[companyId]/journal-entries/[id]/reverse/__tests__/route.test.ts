@@ -217,6 +217,48 @@ describe('POST .../journal-entries/{id}/reverse', () => {
     expect(reverseEntryMock).not.toHaveBeenCalled()
   })
 
+  // Advice, never a refusal: a supplier invoice's registration verifikat is
+  // reversed as asked, and the answer (dry run too) names the invoice and the
+  // tool that credits it instead.
+  it('reverses an owned verifikat and names its owner in owned_by, dry run and live', async () => {
+    const owned = {
+      company_members: OWNER,
+      journal_entries: {
+        data: { ...ORIGINAL.data, source_type: 'supplier_invoice_registered', source_id: 'si-1' },
+        error: null,
+      },
+      fiscal_periods: YEAR_2025,
+      company_settings: NO_LOCK_DATE,
+      supplier_invoices: {
+        data: { id: 'si-1', supplier_invoice_number: '3744267', status: 'approved', credited_invoice_id: null },
+        error: null,
+      },
+    }
+    for (const query of ['?dry_run=true', '']) {
+      mockServiceClient.mockReturnValue(makeClient(owned))
+
+      const res = await POST(request(undefined, query), params())
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      // The dry-run envelope nests the preview; both carry the owner and its tool.
+      expect(JSON.stringify(body.data)).toContain('"tool":"gnubok_credit_supplier_invoice"')
+      if (!query) {
+        expect(body.data.owned_by).toMatchObject({ kind: 'supplier_invoice', owner_id: 'si-1', action: 'credit_supplier_invoice' })
+      }
+    }
+    expect(reverseEntryMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('answers owned_by null for a verifikat no object owns', async () => {
+    mockServiceClient.mockReturnValue(openYear())
+
+    const res = await POST(request(), params())
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data.owned_by).toBeNull()
+  })
+
   it('maps a lock taken between the pre-flight and the engine to PERIOD_LOCKED', async () => {
     mockServiceClient.mockReturnValue(openYear())
     reverseEntryMock.mockRejectedValueOnce(new TargetPeriodLockedError('2025-11-15', '2026-02-01T00:00:00Z'))

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -26,6 +26,7 @@ import type {
   CloudProviderStatus,
   CloudSchedule,
 } from '../types'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 const API_BASE = '/api/extensions/ext/cloud-backup'
 
@@ -182,6 +183,7 @@ export default function CloudBackupCard() {
 function useConnectProvider(providerId: CloudProviderId, provider: string) {
   const { toast } = useToast()
   const t = useTranslations('extensions')
+  const errorLocale = useLocale() as ErrorLocale
   const [isConnecting, setIsConnecting] = useState(false)
 
   const connect = useCallback(async () => {
@@ -196,7 +198,7 @@ function useConnectProvider(providerId: CloudProviderId, provider: string) {
       )
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || t('ext_cloud_backup_connect_start_failed'))
+        throw new Error(getErrorMessage(body, { locale: errorLocale, fallback: t('ext_cloud_backup_connect_start_failed') }))
       }
       const { url } = (await res.json()) as { url: string }
       window.location.href = url
@@ -264,6 +266,7 @@ interface ProviderRowProps {
 function ProviderRow({ status, onChanged }: ProviderRowProps) {
   const { toast } = useToast()
   const t = useTranslations('extensions')
+  const errorLocale = useLocale() as ErrorLocale
   const { dialogProps, confirm } = useDestructiveConfirm()
   const { appName } = useBranding()
 
@@ -284,7 +287,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
       const res = await fetch(`${API_BASE}/disconnect${qs}`, { method: 'POST' })
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || t('ext_cloud_backup_disconnect_failed'))
+        throw new Error(getErrorMessage(body, { locale: errorLocale, fallback: t('ext_cloud_backup_disconnect_failed') }))
       }
       toast({ title: t('ext_cloud_backup_disconnected', { provider }) })
       await onChanged()
@@ -342,7 +345,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
               )
             )
           }
-          throw new Error(body.error || t('ext_cloud_backup_sync_failed'))
+          throw new Error(getErrorMessage(body, { locale: errorLocale, fallback: t('ext_cloud_backup_sync_failed') }))
         }
         const { data } = (await res.json()) as {
           data: CloudLastSync & {
@@ -609,6 +612,7 @@ function ScheduleSection({
 }: ScheduleSectionProps) {
   const { toast } = useToast()
   const t = useTranslations('extensions')
+  const errorLocale = useLocale() as ErrorLocale
 
   // Prefer the DST-stable Stockholm hour; fall back to converting the legacy
   // UTC hour through the browser's clock (Swedish users: same thing).
@@ -647,7 +651,7 @@ function ScheduleSection({
         )
         if (!res.ok) {
           const body = await res.json().catch(() => ({}))
-          throw new Error(body.error || t('ext_cloud_backup_schedule_save_failed'))
+          throw new Error(getErrorMessage(body, { locale: errorLocale, fallback: t('ext_cloud_backup_schedule_save_failed') }))
         }
         await onUpdated()
       } catch (err) {

@@ -20,6 +20,7 @@
  * everything at commit, so a rule the preview could not see (the exact bank
  * amount an anchored 19xx line must keep) still refuses the commit.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -66,7 +67,7 @@ function refused(messageSv: string, details?: Record<string, unknown>): Failure 
 }
 
 function voucherLabel(entry: { voucher_series?: string | null; voucher_number?: number | null }): string | null {
-  return entry.voucher_number ? `${entry.voucher_series ?? ''}${entry.voucher_number}` : null
+  return entry.voucher_number ? formatVoucher(entry) : null
 }
 
 /**

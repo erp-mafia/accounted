@@ -30,6 +30,8 @@ import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
 import { assertStornoTarget } from '@/lib/core/bookkeeping/storno-target'
+import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
+import { OWNED_BY_PITFALL, VoucherOwnerSchema } from '@/lib/api/v1/voucher-owner-schema'
 import {
   CorrectionChainTooDeepError,
   isBookkeepingError,
@@ -54,6 +56,7 @@ const JournalEntryReversed = z.object({
   voucher_number: z.number().int(),
   entry_date: z.string(),
   status: z.literal('posted'),
+  owned_by: VoucherOwnerSchema.nullable(),
 })
 
 registerEndpoint({
@@ -73,6 +76,7 @@ registerEndpoint({
     'A locked or closed fiscal year, or a date on or before the company lock date, returns PERIOD_LOCKED (details.reason) before any voucher number is drawn; a dry run gives the same verdict. Unlock a locked year with POST /fiscal-periods/{id}/unlock. A closed year stays as it is: book a correcting entry in the open year instead (POST /journal-entries).',
     'You cannot reverse a draft (status must be posted). Use /correct after commit if the original needs replacing.',
     'Reversing an entry 3+ links deep in a correction chain returns CORRECTION_CHAIN_TOO_DEEP (409). Book ONE net-effect correction instead, or pass allow_deep_chain=true to override.',
+    OWNED_BY_PITFALL,
   ],
   example: {
     request: { reversal_date: '2026-05-13' },
@@ -80,6 +84,7 @@ registerEndpoint({
       data: {
         reversal_id: '4d2a…', original_id: '0e9c…',
         voucher_series: 'A', voucher_number: 144, entry_date: '2026-05-13', status: 'posted',
+        owned_by: null,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
     },
@@ -128,7 +133,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     // Pre-flight: confirm the original exists, is posted, and not already reversed.
     const { data: original, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, entry_date, fiscal_period_id, reversed_by_id, voucher_series, voucher_number, correction_of_id, reverses_id')
+      .select('id, status, entry_date, fiscal_period_id, reversed_by_id, voucher_series, voucher_number, correction_of_id, reverses_id, source_type, source_id')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -145,6 +150,8 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       reversed_by_id: string | null
       correction_of_id: string | null
       reverses_id: string | null
+      source_type: string | null
+      source_id: string | null
     }
     if (typed.status !== 'posted') {
       return v1ErrorResponseFromCode('CANNOT_REVERSE_NON_POSTED', ctx.log, {
@@ -189,12 +196,17 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       }
     }
 
+    // The object the verifikat books, if any (advice, never a refusal): a
+    // storno leaves it as it was, so dry run and answer name it and its action.
+    const ownedBy = await voucherOwnerOrNull(ctx.supabase, ctx.companyId!, typed)
+
     if (ctx.dryRun) {
       return dryRunPreview(
         {
           original_id: entryId,
           reversal_date: reversalDate,
           would_create_reversal_with_status: 'posted',
+          owned_by: ownedBy,
         },
         { requestId: ctx.requestId, log: ctx.log },
       )
@@ -221,6 +233,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
           voucher_number: reversal.voucher_number,
           entry_date: reversal.entry_date,
           status: 'posted' as const,
+          owned_by: ownedBy,
         },
         { requestId: ctx.requestId },
       )

@@ -125,7 +125,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
         toast({ title: t('claim_unavailable_title'), description: t('claim_unavailable_description') })
         return
       }
-      if (!res.ok) throw new Error(json.error ?? t('claim_error_title'))
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { locale: errorLocale, fallback: t('claim_error_title') }))
       applyRow(json.data)
       setDomainInput('')
       toast({ title: t('claim_success_title'), description: t('claim_success_description') })
@@ -141,7 +141,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
     try {
       const res = await fetch(`${BASE}/verify`, { method: 'POST' })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? t('verify_error_title'))
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { locale: errorLocale, fallback: t('verify_error_title') }))
       applyRow(json.data)
       toast(
         json.data.status === 'verified'
@@ -165,7 +165,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
           body: JSON.stringify(body),
         })
         const json = await res.json()
-        if (!res.ok) throw new Error(json.error ?? t('save_error_title'))
+        if (!res.ok) throw new Error(getUserErrorMessage(json, { locale: errorLocale, fallback: t('save_error_title') }))
         applyRow(json.data)
         toast({ title: t('saved_title') })
       } catch (err) {
@@ -189,7 +189,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
     try {
       const res = await fetch(BASE, { method: 'DELETE' })
       const json = await res.json()
-      if (!res.ok) throw new Error(json.error ?? t('remove_error_title'))
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { locale: errorLocale, fallback: t('remove_error_title') }))
       applyRow(null)
       toast({ title: t('remove_success_title') })
     } catch (err) {

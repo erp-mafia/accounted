@@ -1,5 +1,5 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
 import { userFacing } from '@/lib/errors/user-facing'
 
 /** The registry code a refused second IB answers with (structured-errors.ts). */
@@ -56,7 +56,7 @@ export async function findExistingOpeningBalance(
     const ref = pointer.opening_balance_entry
     return {
       journal_entry_id: pointer.opening_balance_entry_id,
-      voucher_label: ref?.voucher_number ? formatVoucherLabel(ref.voucher_series, ref.voucher_number) : null,
+      voucher_label: ref?.voucher_number ? formatVoucher(ref, { separator: '-' }) : null,
       linked: true,
     }
   }
@@ -78,7 +78,7 @@ export async function findExistingOpeningBalance(
   if (first) {
     return {
       journal_entry_id: first.id,
-      voucher_label: first.voucher_number ? formatVoucherLabel(first.voucher_series, first.voucher_number) : null,
+      voucher_label: first.voucher_number ? formatVoucher(first, { separator: '-' }) : null,
       linked: false,
     }
   }

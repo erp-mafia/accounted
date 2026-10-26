@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
@@ -15,7 +15,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { parseAmountInput } from '@/lib/money'
 
 interface SalaryOverridePanelProps {
@@ -41,6 +41,7 @@ const num = parseAmountInput
 
 export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
   const t = useTranslations('salary_override')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [expanded, setExpanded] = useState(
     props.taxOverride !== null ||
@@ -89,7 +90,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
       if (!res.ok) {
         toast({
           title: t('save_failed'),
-          description: typeof data?.error === 'string' ? data.error : t('unknown_error'),
+          description: getUserErrorMessage(data, { locale: errorLocale, fallback: t('unknown_error') }),
           variant: 'destructive',
         })
         return
@@ -124,7 +125,7 @@ export function SalaryOverridePanel(props: SalaryOverridePanelProps) {
         const data = await res.json()
         toast({
           title: t('clear_failed'),
-          description: typeof data?.error === 'string' ? data.error : t('unknown_error'),
+          description: getUserErrorMessage(data, { locale: errorLocale, fallback: t('unknown_error') }),
           variant: 'destructive',
         })
         return

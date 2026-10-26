@@ -35,6 +35,7 @@ import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { formatAmount } from '@/lib/utils'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 interface SkatteverketStatus {
   connected: boolean
@@ -491,7 +492,7 @@ function SkatteverketPanelInner({
         if (result.stage === 'validation') {
           setNotice({
             kind: 'error',
-            text: result.error || 'Skatteverket hittade valideringsfel i deklarationen.',
+            text: getErrorMessage(result, { fallback: 'Skatteverket hittade valideringsfel i deklarationen.' }),
           })
         } else if (result.stage === 'lock' && result.draft_saved) {
           setNotice({
@@ -503,7 +504,7 @@ function SkatteverketPanelInner({
         } else {
           setNotice({
             kind: 'error',
-            text: result.error || 'Kunde inte skicka deklarationen till Skatteverket',
+            text: getErrorMessage(result, { fallback: 'Kunde inte skicka deklarationen till Skatteverket' }),
           })
         }
         return

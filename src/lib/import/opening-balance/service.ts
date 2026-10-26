@@ -38,6 +38,7 @@
  * (it is also the MCP staging preview): no account activation, no entry, no
  * voucher number.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { toEntryPreview } from '@/lib/bookkeeping/entry-preview'
 import { isMissingRpcSignature } from '@/lib/bookkeeping/actor-rpc'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -367,7 +368,7 @@ export async function correctOpeningBalances(
     const originalRef = row.opening_balance_entry
     const originalVoucherLabel =
       originalRef?.voucher_series && originalRef?.voucher_number
-        ? `${originalRef.voucher_series}${originalRef.voucher_number}`
+        ? formatVoucher(originalRef)
         : null
     // The description reference IS the linkage to the rättade verifikat:
     // CreateJournalEntryInput has no correction-linkage field for an IB.

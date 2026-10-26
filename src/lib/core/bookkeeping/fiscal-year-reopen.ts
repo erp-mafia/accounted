@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { CannotReverseNonPostedError, EntryAlreadyReversedError } from '@/lib/bookkeeping/errors'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -255,9 +256,6 @@ async function reverseIfPosted(
   }
 }
 
-function voucherLabel(entry: FiscalYearReopenEntry): string {
-  return `${entry.voucher_series ?? 'A'}${entry.voucher_number ?? ''}`
-}
 
 /**
  * Reopen the year. `confirmName` must restate the year's name and
@@ -308,7 +306,7 @@ export async function reopenClosedFiscalYear(
         entryId: entry.id,
         kind: entry.kind,
       })
-      return { ok: false, code: 'FISCAL_YEAR_REOPEN_INCOMPLETE', stoppedAt: voucherLabel(entry) }
+      return { ok: false, code: 'FISCAL_YEAR_REOPEN_INCOMPLETE', stoppedAt: formatVoucher(entry) }
     }
   }
 

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 /**
@@ -87,9 +88,7 @@ export async function loadPostedSalaryRunEntries(
       : undefined
     if (!entry || !entryId) return null
     const voucher =
-      entry.voucher_number != null
-        ? `${entry.voucher_series ?? ''}${entry.voucher_series ? '-' : ''}${entry.voucher_number}`
-        : null
+      entry.voucher_number ? formatVoucher(entry) : null
     return {
       description: entry.description,
       journal_entry_id: entryId,

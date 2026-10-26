@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
 import { cn, formatCurrency } from '@/lib/utils'
@@ -161,12 +162,7 @@ export function PaymentPreviewLinesCard({
       {lines && !editor.isEditing && (
         <VoucherLinesTable
           withCurrency
-          lines={lines.map((line) => ({
-            account_number: line.account_number,
-            description: line.description,
-            debit_amount: line.debit_amount,
-            credit_amount: line.credit_amount,
-          }))}
+          lines={voucherLineViews(lines)}
         />
       )}
 

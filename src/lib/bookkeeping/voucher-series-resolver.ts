@@ -265,17 +265,28 @@ export function applyDefaultSeriesToMap(
 }
 
 /**
- * Format a voucher (series + number) for UI display. Returns "-" when the
- * voucher number is null (e.g. a draft entry that has not been committed yet).
+ * Format a voucher (series + number) for display: "A113". This is the one
+ * voucher reference format, for the UI, messages, exports and agent text;
+ * never build `${series}${number}` by hand (check:guards, hand-built-voucher-ref).
+ * Returns "-" when the voucher number is null or 0 (a draft that has not been
+ * committed yet).
  *
  * Always lifts the series to uppercase. Falls back to 'A' when the series is
  * null/empty for forward-compat with legacy rows. Accepts partial inputs so
  * callsites can pass through API responses without re-shaping them.
+ *
+ * `separator: '-'` gives "A-113". It exists only for the v1 API fields that
+ * are documented in that form (voucher_label on the transaction voucher link,
+ * the compliance check and existing opening balances): their values are a
+ * public contract. parseVoucher reads both forms.
  */
-export function formatVoucher(entry: {
-  voucher_series?: string | null
-  voucher_number?: number | null
-}): string {
+export function formatVoucher(
+  entry: {
+    voucher_series?: string | null
+    voucher_number?: number | null
+  },
+  options: { separator?: '' | '-' } = {},
+): string {
   if (entry.voucher_number == null || entry.voucher_number === 0) {
     return '-'
   }
@@ -283,7 +294,7 @@ export function formatVoucher(entry: {
     entry.voucher_series && typeof entry.voucher_series === 'string'
       ? entry.voucher_series.toUpperCase()
       : 'A'
-  return `${series}${entry.voucher_number}`
+  return `${series}${options.separator ?? ''}${entry.voucher_number}`
 }
 
 /**

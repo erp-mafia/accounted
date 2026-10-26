@@ -239,7 +239,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         } else {
           setFormError({
             kind: 'unknown',
-            message: json.message || json.error || t('register_failed_default'),
+            message: getErrorMessage(json, { locale: errorLocale, fallback: t('register_failed_default') }),
           })
         }
         return
@@ -373,7 +373,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
       if (!res.ok) {
         const error = {
           code: json?.error?.code,
-          message: json?.error?.message ?? t('register_failed_default'),
+          message: getErrorMessage(json, { locale: errorLocale, fallback: t('register_failed_default') }),
           status: res.status,
         }
         if (error.code === 'signup_not_allowed') {

@@ -142,6 +142,54 @@ export function computeInstallments(
   return monthList.map((period_month, i) => ({ period_month, amount: amounts[i] }))
 }
 
+/**
+ * The day a deferral's month dissolves on: `releaseDay` of that month,
+ * clamped to its last day (31 therefore means the last day of every month),
+ * or the first day when the schedule has none (the dating every schedule had
+ * before release days). '2026-02-01', 30 → '2026-02-28'.
+ */
+export function deferralReleaseDate(periodMonth: string, releaseDay: number | null | undefined): string {
+  if (releaseDay === null || releaseDay === undefined) return firstOfMonth(periodMonth)
+  if (!Number.isInteger(releaseDay) || releaseDay < 1 || releaseDay > 31) {
+    throw new Error(`Invalid release day: ${releaseDay}`)
+  }
+  const last = lastOfMonth(periodMonth)
+  const lastDay = Number(last.slice(8, 10))
+  return `${last.slice(0, 8)}${String(Math.min(releaseDay, lastDay)).padStart(2, '0')}`
+}
+
+/**
+ * The pending months of a schedule re-planned over [periodStart, periodEnd]:
+ * every calendar month in the period that has no posted installment, with
+ * what remains (total minus posted) split as computeInstallmentAmounts
+ * splits a new schedule. Posted months stay as they are, so the posted and
+ * the new months cover the period exactly once.
+ *
+ * Throws when a posted month lies after the new period, when no month is
+ * left to plan, or when the remainder is too small to spread.
+ */
+export function replanPendingInstallments(params: {
+  totalAmount: number
+  periodStart: string
+  periodEnd: string
+  posted: ReadonlyArray<{ period_month: string; amount: number }>
+}): InstallmentPlan[] {
+  const months = listCalendarMonths(params.periodStart, params.periodEnd)
+  const lastMonth = months[months.length - 1]
+  const postedMonths = new Set(params.posted.map((p) => p.period_month))
+  for (const month of postedMonths) {
+    if (month > lastMonth) {
+      throw new Error(`Posted month ${month} lies after the new period end ${params.periodEnd}`)
+    }
+  }
+  const open = months.filter((month) => !postedMonths.has(month))
+  if (open.length === 0) throw new Error('No month is left to plan')
+  const postedOre = params.posted.reduce((sum, p) => sum + Math.round(p.amount * 100), 0)
+  const remaining = (Math.round(params.totalAmount * 100) - postedOre) / 100
+  const amounts = computeInstallmentAmounts(remaining, open.length)
+  return open.map((period_month, i) => ({ period_month, amount: amounts[i] }))
+}
+
 /** Latest of any number of ISO dates (lexicographic compare is safe). */
 export function maxIsoDate(...dates: Array<string | null | undefined>): string {
   const present = dates.filter((d): d is string => Boolean(d))

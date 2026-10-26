@@ -58,6 +58,7 @@
  * VAT check warns KONTANTMETOD_CUTOFF_INCOMPLETE on the period holding its
  * period end.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createHash } from 'node:crypto'
 import type {
@@ -3443,7 +3444,7 @@ async function correctPaidBeforePosting(
     paymentAmount: item.paymentAmount,
   })
   const voucher = carry.voucher_number != null
-    ? `${carry.voucher_series ?? ''}${carry.voucher_number}`
+    ? formatVoucher(carry)
     : carry.id
   const { reversal, corrected } = await postingPort.correctJournalEntry({
     supabase,

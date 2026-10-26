@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
@@ -73,11 +74,7 @@ interface LinkVoucherPickerProps {
 }
 
 function voucherLabel(c: VoucherCandidate): string {
-  if (c.voucher_series && c.voucher_number != null) {
-    return `${c.voucher_series}-${c.voucher_number}`
-  }
-  if (c.voucher_number != null) return String(c.voucher_number)
-  return c.journal_entry_id.slice(0, 8)
+  return c.voucher_number ? formatVoucher(c) : c.journal_entry_id.slice(0, 8)
 }
 
 function confidenceBadge(confidence: number): {

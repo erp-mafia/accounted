@@ -2,6 +2,7 @@
 
 import { Badge } from '@/components/ui/badge'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { CheckCircle2, Paperclip } from 'lucide-react'
 import { formatDate } from '@/lib/utils'
 import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -95,13 +96,7 @@ export function JournalEntryReviewContent({
       {/* The rows to be posted, with their Summa (the voucher lines table
           every booking surface uses). */}
       <VoucherLinesTable
-        lines={activeLines.map((line, index) => ({
-          key: index,
-          account_number: line.account_number,
-          description: line.line_description,
-          debit_amount: line.debit_amount,
-          credit_amount: line.credit_amount,
-        }))}
+        lines={voucherLineViews(activeLines)}
         redundantTexts={[description]}
         showTotals
       />

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA } from './sie-import-status'
 import { MIGRATION_PROVIDER_IDS } from '@/lib/providers/catalog'
 import { isAnyUnattended, markUnattended, unattendedMarks, unattendedScopes } from './unattended'
@@ -163,7 +164,7 @@ import {
 import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
-import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
+import { hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
@@ -577,6 +578,7 @@ import { generateSIEExport } from '@/lib/reports/sie-export'
 import { generateFullArchive, estimateArchiveSize } from '@/lib/reports/full-archive-export'
 import { CorrectionChainTooDeepError, MeaninglessCorrectionError } from '@/lib/bookkeeping/errors'
 import { correctionChainDepth, CORRECTION_CHAIN_GUARD_DEPTH } from '@/lib/core/bookkeeping/correction-chain'
+import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
@@ -2740,7 +2742,7 @@ function skattekontoLedgerDirectRefusal(
 function skattekontoDirectNote(holders: SkattekontoLedgerTwin[], skattekontoAccount: SkattekontoLedgerAccount): string {
   const refs = holders
     .slice(0, 5)
-    .map((t) => (t.voucher_number ? `${t.voucher_series ?? ''}${t.voucher_number}` : `draft ${t.entry_date}`))
+    .map((t) => (t.voucher_number ? formatVoucher(t) : `draft ${t.entry_date}`))
     .join(', ')
   return `DUPLICATE_OVERRIDE: verifikat ${refs} already book this event from the bank without ${skattekontoAccount}. Approving books it a second time; approve only if the event is really missing from the ledger, otherwise reject and ignore the row.`
 }
@@ -2749,7 +2751,7 @@ function skattekontoDirectNote(holders: SkattekontoLedgerTwin[], skattekontoAcco
 function skattekontoCoverNote(cover: SkattekontoLedgerCoverInfo): string {
   const refs = cover.entries
     .slice(0, 5)
-    .map((t) => (t.voucher_number ? `${t.voucher_series ?? ''}${t.voucher_number}` : `no number ${t.entry_date}`))
+    .map((t) => (t.voucher_number ? formatVoucher(t) : `no number ${t.entry_date}`))
     .join(', ')
   const held =
     cover.kind === 'planned_link'
@@ -2762,7 +2764,7 @@ function skattekontoCoverNote(cover: SkattekontoLedgerCoverInfo): string {
 function skattekontoDuplicateNote(twins: SkattekontoLedgerTwin[], skattekontoAccount: SkattekontoLedgerAccount): string {
   const refs = twins
     .slice(0, 5)
-    .map((t) => (t.voucher_number ? `${t.voucher_series ?? ''}${t.voucher_number}` : `draft ${t.entry_date}`))
+    .map((t) => (t.voucher_number ? formatVoucher(t) : `draft ${t.entry_date}`))
     .join(', ')
   return `DUPLICATE_OVERRIDE: verifikat ${refs} already carry this event on ${skattekontoAccount}. Approving books it a second time; approve only if the event really happened twice, otherwise reject and link the row instead.`
 }
@@ -13326,7 +13328,7 @@ export const tools: McpTool[] = [
         if (e.source_type !== 'opening_balance' || e.status !== 'posted') continue
         const seen = ibDateByAccount.get(r.account_number)
         if (!seen || e.entry_date > seen) ibDateByAccount.set(r.account_number, e.entry_date)
-        ibLabels.set(e.id, formatVoucherLabel(e.voucher_series, e.voucher_number))
+        ibLabels.set(e.id, formatVoucher(e))
       }
       const crossedAccounts = new Set<string>()
       let crossedIbDate: string | undefined
@@ -14015,7 +14017,7 @@ export const tools: McpTool[] = [
       if (!salePlan.ok) throwOutcomeFailure(salePlan)
 
       const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
-        ? `${validation.voucher.voucher_series}-${validation.voucher.voucher_number}`
+        ? formatVoucher(validation.voucher)
         : journalEntryId.slice(0, 8)
       // A stated share is named in the title: the approver is settling part
       // of a verifikat, not the whole of it.
@@ -14397,7 +14399,7 @@ export const tools: McpTool[] = [
       }
 
       const voucherLabel = validation.voucher.voucher_series && validation.voucher.voucher_number != null
-        ? `${validation.voucher.voucher_series}-${validation.voucher.voucher_number}`
+        ? formatVoucher(validation.voucher)
         : journalEntryId.slice(0, 8)
       // A stated share is named in the title: the approver is settling part
       // of a verifikat, not the whole of it.
@@ -17632,7 +17634,7 @@ export const tools: McpTool[] = [
       const je = check.target.entry
 
       const voucherLabel = je.voucher_series && je.voucher_number
-        ? `${je.voucher_series}${je.voucher_number}`
+        ? formatVoucher(je)
         : je.id.slice(0, 8)
 
       const currentlyLinkedToSameJe = doc.journal_entry_id === journalEntryId
@@ -18005,7 +18007,10 @@ export const tools: McpTool[] = [
           journal_entry_id: je.id,
           ...(je.voucher_series ? { voucher_series: je.voucher_series } : {}),
           ...(je.voucher_number ? { voucher_number: je.voucher_number } : {}),
-          voucher_label: `${je.voucher_series ?? l.voucher_series ?? ''}${je.voucher_number ?? l.voucher_number ?? ''}`,
+          voucher_label: formatVoucher({
+            voucher_series: je.voucher_series ?? l.voucher_series,
+            voucher_number: je.voucher_number ?? l.voucher_number,
+          }),
           voucher_date: je.entry_date,
         }
         const fiscalYear = l.fiscal_year ?? (period ? new Date(period.period_start).getUTCFullYear() : undefined)
@@ -20801,7 +20806,7 @@ export const tools: McpTool[] = [
           currency: tx.currency,
           date: tx.date,
           current_category: tx.category,
-          will_reverse_voucher: `${entry.voucher_series}${entry.voucher_number}`,
+          will_reverse_voucher: formatVoucher(entry),
           method: 'storno (reversal entry, never deletes)',
         },
         actor,
@@ -21538,7 +21543,7 @@ export const tools: McpTool[] = [
       // 1513 does not cover the begäran (the RPC judges it at approval).
       const twoStep = receivableCredit < expectedTotal - 0.005 ? twoStepPayoutShape(voucherLines) : null
       const shareCredit = twoStep?.share ?? 0
-      const voucherLabel = `${voucher.voucher_series}${voucher.voucher_number}`
+      const voucherLabel = formatVoucher(voucher)
 
       return stage({
         supabase,
@@ -24723,6 +24728,7 @@ export const tools: McpTool[] = [
         correction_of_id: string | null
         reverses_id: string | null
         source_type: string | null
+        source_id: string | null
         lines: Array<{
           account_number: string
           debit_amount: number | string
@@ -24740,7 +24746,7 @@ export const tools: McpTool[] = [
       const { data, error: origErr } = await supabase
         .from('journal_entries')
         .select(
-          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, source_type, ' +
+          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, source_type, source_id, ' +
           'lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description, currency, amount_in_currency, exchange_rate, tax_code, dimensions, cost_center, project)'
         )
         .eq('id', entryId)
@@ -24784,6 +24790,14 @@ export const tools: McpTool[] = [
       }
 
       const originalLines = original.lines || []
+      // The object the verifikat books, if any (advice, never a refusal): the
+      // correction is a new verifikat the object does not point at, so the
+      // preview names it and its own action for the agent and the approver.
+      const ownedBy = await voucherOwnerOrNull(supabase, companyId, {
+        ...original,
+        source_type: original.source_type ?? null,
+        source_id: original.source_id ?? null,
+      })
 
       // A second reversal is refused at staging, not at approval: the storno
       // already reverses the original (crm#1397). correctEntry re-checks.
@@ -24796,7 +24810,7 @@ export const tools: McpTool[] = [
         companyId,
         userId,
         type: 'correct_entry',
-        title: `Rättelse: V${original.voucher_series}${original.voucher_number} - ${original.description}`,
+        title: `Rättelse: V${formatVoucher(original)} - ${original.description}`,
         params: {
           entry_id: entryId,
           lines,
@@ -24807,7 +24821,7 @@ export const tools: McpTool[] = [
         preview: {
           original: {
             entry_id: entryId,
-            voucher: `${original.voucher_series}${original.voucher_number}`,
+            voucher: formatVoucher(original),
             entry_date: original.entry_date,
             description: original.description,
             lines: originalLines.map((l) => ({
@@ -24845,6 +24859,7 @@ export const tools: McpTool[] = [
             })),
           },
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
+          ...(ownedBy ? { owned_by: ownedBy, warnings: [ownedBy.hint_sv] } : {}),
           will: 'post a storno that mirrors the original, then post a new corrected entry, then mark the original as reversed (BFL 5 kap 5§)',
         },
         actor,
@@ -24913,6 +24928,8 @@ export const tools: McpTool[] = [
         fiscal_period_id: string
         correction_of_id: string | null
         reverses_id: string | null
+        source_type: string | null
+        source_id: string | null
         fiscal_periods: { name?: string; is_closed?: boolean; locked_at?: string | null } | { name?: string; is_closed?: boolean; locked_at?: string | null }[] | null
         lines: Array<{
           account_number: string
@@ -24924,7 +24941,7 @@ export const tools: McpTool[] = [
       const { data, error: origErr } = await supabase
         .from('journal_entries')
         .select(
-          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, ' +
+          'id, status, entry_date, description, voucher_number, voucher_series, fiscal_period_id, correction_of_id, reverses_id, source_type, source_id, ' +
           'fiscal_periods!journal_entries_fiscal_period_id_fkey!inner(name, is_closed, locked_at), lines:journal_entry_lines(account_number, debit_amount, credit_amount, line_description)'
         )
         .eq('id', entryId)
@@ -24981,13 +24998,22 @@ export const tools: McpTool[] = [
       const vatWarning = vatAccounts.length > 0
         ? `Original innehåller momskonton (${[...new Set(vatAccounts)].join(', ')}). Om momsperioden är inlämnad till Skatteverket krävs omprövning (ML 2023:200): storno räcker inte. Bekräfta att perioden inte är inlämnad innan godkännande.`
         : null
+      // The object the verifikat books, if any (advice, never a refusal): a
+      // storno leaves it as it was (an invoice stays open, a later Kreditera
+      // reverses it again), so the preview names it and its own action.
+      const ownedBy = await voucherOwnerOrNull(supabase, companyId, {
+        ...original,
+        source_type: original.source_type ?? null,
+        source_id: original.source_id ?? null,
+      })
+      const warnings = [vatWarning, ownedBy?.hint_sv ?? null].filter((w): w is string => w !== null)
 
       return stage({
         supabase,
         companyId,
         userId,
         type: 'reverse_entry',
-        title: `Makulering: V${original.voucher_series}${original.voucher_number} - ${original.description}`,
+        title: `Makulering: V${formatVoucher(original)} - ${original.description}`,
         params: {
           entry_id: entryId,
           reversal_date: reversalDate,
@@ -24996,7 +25022,7 @@ export const tools: McpTool[] = [
         preview: {
           original: {
             entry_id: entryId,
-            voucher: `${original.voucher_series}${original.voucher_number}`,
+            voucher: formatVoucher(original),
             entry_date: original.entry_date,
             description: original.description,
             lines: originalLines.map((l) => ({
@@ -25013,7 +25039,8 @@ export const tools: McpTool[] = [
             lines: reversedPreviewLines,
           },
           reason: reason ?? null,
-          ...(vatWarning ? { warnings: [vatWarning] } : {}),
+          ...(ownedBy ? { owned_by: ownedBy } : {}),
+          ...(warnings.length > 0 ? { warnings } : {}),
           will: 'post a storno that mirrors the original with debits and credits swapped, link via reverses_id, and leave the original visible (BFL 5 kap, makulering)',
         },
         actor,

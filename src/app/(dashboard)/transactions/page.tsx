@@ -6,7 +6,7 @@ import type { SupabaseDataClient } from '@/lib/supabase/data-client'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { FLOATING_BULK_BAR_CLASS } from '@/components/ui/floating-bulk-bar'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogVeil, useDashShellInert } from '@/components/ui/dialog'
@@ -107,7 +107,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { collectPages } from '@/lib/lists/collect-pages'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
@@ -465,6 +465,7 @@ export default function TransactionsPage() {
   const companyId = company?.id ?? null
   const searchParams = useSearchParams()
   const t = useTranslations('transactions')
+  const errorLocale = useLocale() as ErrorLocale
   const whyFor = useProposalWhy()
   // Kategori and Konto columns plus per-user column visibility
   // (ui_state.tx_columns), UI v2 PR 4.
@@ -2447,7 +2448,7 @@ export default function TransactionsPage() {
       if (!res.ok || result.error) {
         toast({
           title: 'Kunde inte ignorera transaktionen',
-          description: typeof result.error === 'string' ? result.error : undefined,
+          description: result.error ? getErrorMessage(result, { locale: errorLocale }) : undefined,
           variant: 'destructive',
         })
         return

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { documentTitle, underlagPayload } from '@/lib/arkiv/documents/title'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -147,7 +148,7 @@ export const GET = withRouteContext('arkiv.document', async (_request, ctx, { pa
       state: !d.pages_read_at ? (storedPages ? 'read' : 'unread') : d.read_error?.startsWith('partial:') ? 'partial' : d.read_error ? (needsReadOnDemand(d) ? 'unread' : 'skipped') : 'read',
       lane: readLaneFor(d),
     },
-    journal_entry: e ? { id: e.id, voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}` } : null,
+    journal_entry: e ? { id: e.id, voucher: formatVoucher(e) } : null,
     deletable: pins != null && offersDocumentDelete(d, pins),
     classification: classification.data ? (classification.data as DocumentRecordView['classification']) : null,
     line_items: (d.extracted_data?.lineItems ?? [])

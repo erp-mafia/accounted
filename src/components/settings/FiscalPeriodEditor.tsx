@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -22,7 +22,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { SettingsSaveBar } from '@/components/settings/SettingsFormWrapper'
 import type { FiscalPeriod } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 function formatSwedishDate(dateStr: string): string {
   const months = [
@@ -41,6 +41,7 @@ function isCalendarYear(period: { period_start: string; period_end: string }): b
 
 export function FiscalPeriodEditor() {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const { company, role } = useCompany()
   const { toast } = useToast()
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -166,10 +167,7 @@ export function FiscalPeriodEditor() {
       })
       const body = await res.json().catch(() => ({}))
       if (!res.ok) {
-        // Canonical { error: { code, message } } envelope; a bare string is
-        // still read in case a proxy answers one.
-        const message = typeof body.error === 'string' ? body.error : body.error?.message
-        throw new Error(message || t('fp_update_failed_title'))
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('fp_update_failed_title') }))
       }
       setPeriod(body.data as FiscalPeriod)
       // Every picker reads the shared list: refresh it with the new dates.

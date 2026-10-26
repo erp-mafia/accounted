@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { MoreHorizontal } from 'lucide-react'
@@ -122,7 +123,7 @@ export function SuggestionReviewList({
                     <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
                       {voucher ? (
                         <span className="tabular-nums">
-                          {voucher.voucher_series}-{voucher.voucher_number}
+                          {formatVoucher(voucher)}
                           <span className="text-muted-foreground">
                             {' · '}
                             {formatDate(voucher.entry_date)}

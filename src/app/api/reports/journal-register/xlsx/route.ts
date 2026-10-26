@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { generateJournalRegister } from '@/lib/reports/journal-register'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -47,7 +48,7 @@ export const GET = withRouteContext('report.journal_register.xlsx', async (reque
     // file is filterable in Excel without losing context.
     const rows: FlatRow[] = []
     for (const entry of report.entries) {
-      const voucherLabel = `${entry.voucher_series}${entry.voucher_number}`
+      const voucherLabel = formatVoucher(entry)
       for (const line of entry.lines) {
         rows.push({
           voucher: voucherLabel,

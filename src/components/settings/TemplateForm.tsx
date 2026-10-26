@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState, useMemo } from 'react'
 import type { EntityType } from '@/types'
 import { Button } from '@/components/ui/button'
@@ -13,8 +13,10 @@ import { Trash2, Plus } from 'lucide-react'
 import { convertLibraryToBookingTemplate, applyTemplate, templateShareLines } from '@/lib/bookkeeping/template-library'
 import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
-import { formatCurrency } from '@/lib/utils'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 export type TemplateFormMode = 'create' | 'edit' | 'duplicate'
 
@@ -40,6 +42,7 @@ export function TemplateForm({
   onSaved: () => void
 }) {
   const t = useTranslations('settings_booking_templates')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [isSubmitting, setIsSubmitting] = useState(false)
   // When customizing a system template (mode 'duplicate') we suggest a distinct
@@ -180,7 +183,7 @@ export function TemplateForm({
       })
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
-        toast({ title: json.error || t('toast_create_failed'), variant: 'destructive' })
+        toast({ title: getErrorMessage(json, { locale: errorLocale, fallback: t('toast_create_failed') }), variant: 'destructive' })
         return
       }
       toast({ title: isEdit ? t('toast_updated') : t('toast_created') })
@@ -325,30 +328,7 @@ export function TemplateForm({
       {preview && (
         <div>
           <Label>{t('preview_label')}</Label>
-          <table className="w-full text-xs mt-1">
-            <thead className="[&_th]:font-medium [&_th]:text-[11px] [&_th]:uppercase [&_th]:tracking-wider [&_th]:text-muted-foreground">
-              <tr className="border-b">
-                <th className="text-left py-1 w-14">{t('th_account')}</th>
-                <th className="text-left py-1">{t('th_description')}</th>
-                <th className="text-right py-1 w-20">{t('th_debit')}</th>
-                <th className="text-right py-1 w-20">{t('th_credit')}</th>
-              </tr>
-            </thead>
-            <tbody>
-              {preview.map((pl, i) => (
-                <tr key={i} className="border-b last:border-0">
-                  <td className="py-1 font-mono">{pl.account_number}</td>
-                  <td className="py-1">{pl.line_description}</td>
-                  <td className="py-1 text-right tabular-nums">
-                    {pl.debit_amount ? formatCurrency(Number(pl.debit_amount)) : ''}
-                  </td>
-                  <td className="py-1 text-right tabular-nums">
-                    {pl.credit_amount ? formatCurrency(Number(pl.credit_amount)) : ''}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <VoucherLinesTable lines={voucherLineViews(preview)} withCurrency className="mt-1" />
         </div>
       )}
 

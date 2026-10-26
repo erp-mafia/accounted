@@ -144,9 +144,7 @@ export function AccountDangerZone() {
           setReloadKey((k) => k + 1)
         }
         setError(
-          typeof body?.error === 'string' && body.error
-            ? body.error
-            : t('delete_failed_blockers'),
+          getUserErrorMessage(body, { locale: errorLocale, fallback: t('delete_failed_blockers') }),
         )
         setIsDeleting(false)
         setShowDialog(false)
@@ -155,7 +153,7 @@ export function AccountDangerZone() {
 
       if (!response.ok) {
         const body = await response.json().catch(() => ({}))
-        throw new Error(body.error || t('delete_failed_default'))
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('delete_failed_default') }))
       }
 
       // The account's sessions are already gone server-side; this removes the

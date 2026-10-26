@@ -137,6 +137,7 @@ describe('path parameter typing', () => {
     expect(Object.fromEntries(Object.entries(typing).sort(([a], [b]) => a.localeCompare(b)))).toEqual({
       'accounts/:accountKey': null,
       'accounts/:number': null,
+      'accrual-schedules/:id': null,
       'assets/:id': 'asset',
       'bank-connections/:connectionId': null,
       'bank/:id': null,

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fillTypeFromClassification } from '@/lib/documents/locked-period'
 import { DOC_TYPES, isDocType } from '@/lib/documents/classify/taxonomy'
@@ -95,7 +96,7 @@ export async function listRecords(supabase: SupabaseClient, companyId: string, o
     originalsOf(supabase, companyId, rows),
   ])
   if (entries.error) throw new Error(`list failed: ${entries.error.message}`)
-  const voucherOf = new Map(((entries.data ?? []) as Array<{ id: string; voucher_series: string | null; voucher_number: number | null }>).map((e) => [e.id, `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`]))
+  const voucherOf = new Map(((entries.data ?? []) as Array<{ id: string; voucher_series: string | null; voucher_number: number | null }>).map((e) => [e.id, formatVoucher(e)]))
 
   const items = rows.map((r) => ({
     record_ref: `document:${r.id}`,

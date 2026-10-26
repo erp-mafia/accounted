@@ -34,6 +34,7 @@
  * A dry run reads and checks; it writes nothing (it is also the MCP staging
  * preview).
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { SupplierInvoice, SupplierInvoicePayment } from '@/types'
 import { roundOre } from '@/lib/money'
@@ -342,7 +343,7 @@ export async function uncreditSupplierInvoice(
         postsStorno = true
         creditEntry = {
           entry_date: entry.entry_date as string,
-          voucher: entry.voucher_number ? `${entry.voucher_series ?? ''}${entry.voucher_number}` : null,
+          voucher: entry.voucher_number ? formatVoucher(entry) : null,
         }
       }
     }

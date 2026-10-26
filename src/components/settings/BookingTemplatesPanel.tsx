@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils'
 import type { BookingTemplateLibrary, BookingTemplateLibraryLine } from '@/types'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { useBookingTemplates } from '@/lib/reference-data/hooks'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 export function BookingTemplatesPanel() {
   const t = useTranslations('settings_booking_templates')
@@ -155,7 +156,7 @@ export function BookingTemplatesPanel() {
       })
       const json = await res.json()
       if (!res.ok) {
-        toast({ title: t('toast_import_error'), description: json.error || t('toast_import_generic'), variant: 'destructive' })
+        toast({ title: t('toast_import_error'), description: getErrorMessage(json, { locale: locale, fallback: t('toast_import_generic') }), variant: 'destructive' })
         return
       }
       toast({ title: t('toast_import_done'), description: t('toast_import_count', { count: json.imported }) })

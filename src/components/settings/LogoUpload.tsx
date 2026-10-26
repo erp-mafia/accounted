@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { FileDropzone } from '@/components/ui/file-dropzone'
 import { useToast } from '@/components/ui/use-toast'
@@ -10,7 +10,7 @@ import {
   SettingsGroup,
   SettingsRow,
 } from '@/components/settings/SettingsRows'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 
 const LOGO_TYPES = ['image/png', 'image/jpeg', 'image/webp']
@@ -23,6 +23,7 @@ interface LogoUploadProps {
 
 export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
   const t = useTranslations('settings_company')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [isUploading, setIsUploading] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
@@ -56,7 +57,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
       const result = await response.json()
 
       if (!response.ok) {
-        throw new Error(result.error || t('logo_upload_failed_default'))
+        throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('logo_upload_failed_default') }))
       }
 
       setPreview(result.data.logo_url)

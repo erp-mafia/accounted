@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { Extension } from '@/lib/extensions/types'
 import type { EventPayload } from '@/lib/events/types'
 
@@ -18,7 +19,7 @@ export const exampleLoggerExtension: Extension = {
       eventType: 'journal_entry.committed',
       handler: async (payload: EventPayload<'journal_entry.committed'>) => {
         console.log(
-          `[example-logger] Journal entry committed: ${payload.entry.voucher_series}${payload.entry.voucher_number}: ${payload.entry.description}`
+          `[example-logger] Journal entry committed: ${formatVoucher(payload.entry)}: ${payload.entry.description}`
         )
       },
     },

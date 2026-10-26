@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntriesWithAccountLines } from '@/lib/bookkeeping/entry-lines'
@@ -275,9 +276,7 @@ function round(value: number): number {
 
 /** Voucher label for messages ("A123"), or the id when the entry has none. */
 function voucherLabel(entry: RawEntry): string {
-  return entry.voucher_number != null
-    ? `${entry.voucher_series ?? ''}${entry.voucher_number}`
-    : entry.id
+  return entry.voucher_number ? formatVoucher(entry) : entry.id
 }
 
 /** Net credit of the entry's PS-account lines: what the file would carry. */

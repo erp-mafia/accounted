@@ -3,6 +3,7 @@ import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-even
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
+import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { validateBody } from '@/lib/api/validate'
 import { CorrectJournalEntryAppSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -36,7 +37,10 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         },
       },
     })
-    return NextResponse.json({ data: result })
+    // The object the verifikat books, if any: the correction is a new
+    // verifikat the object does not point at, so the answer names it.
+    const ownedBy = await voucherOwnerOrNull(supabase, companyId, { id })
+    return NextResponse.json({ data: result, owned_by: ownedBy })
   },
   { requireWrite: true },
 )

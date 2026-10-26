@@ -3,7 +3,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import dynamic from 'next/dynamic'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useSuppliers } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { Button } from '@/components/ui/button'
@@ -21,6 +21,7 @@ import { formatOrgNumberDisplay, stripOrgNumberFormatting } from '@/lib/invarian
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import type { Supplier, SupplierType, CreateSupplierInput } from '@/types'
 import { dominantPartyType, partyTypeSuffix } from '@/lib/parties/list-type-suffix'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 const SupplierForm = dynamic(
   () => import('@/components/suppliers/SupplierForm'),
@@ -57,6 +58,7 @@ function getPaymentInfo(supplier: Supplier, t: (key: string) => string): { label
 export default function SuppliersPage() {
   const { canWrite } = useCanWrite()
   const t = useTranslations('suppliers')
+  const errorLocale = useLocale() as ErrorLocale
   // The roster from the session cache (lib/reference-data), the list every
   // supplier picker reads: a create here refreshes them all.
   const { suppliers, isLoading, error: suppliersError } = useSuppliers()
@@ -91,7 +93,7 @@ export default function SuppliersPage() {
       const fieldErrors = result.errors?.map((e: { field: string; message: string }) => `${e.field}: ${e.message}`).join(', ')
       toast({
         title: t('create_failed_title'),
-        description: fieldErrors || result.error || t('create_failed_retry'),
+        description: fieldErrors || getErrorMessage(result, { locale: errorLocale, fallback: t('create_failed_retry') }),
         variant: 'destructive',
       })
     } else {

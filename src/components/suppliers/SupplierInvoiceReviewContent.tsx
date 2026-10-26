@@ -6,6 +6,7 @@ import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import type { ChartVatTreatments } from '@/lib/bookkeeping/vat-entries'
 import { buildSupplierDescription } from '@/lib/bookkeeping/supplier-invoice-description'
@@ -80,13 +81,6 @@ interface SupplierInvoiceReviewContentProps {
   defaultDimensions?: Record<string, string>
   /** The invoice's own moms per rate, as the payload sends it (vat_breakdown). */
   statedVat?: StatedRateVat[] | null
-}
-
-interface JournalPreviewLine {
-  account_number: string
-  description: string
-  debit: number
-  credit: number
 }
 
 /**
@@ -169,7 +163,7 @@ export function SupplierInvoiceReviewContent({
   // below zero). A foreign invoice without a rate previews at 1, as before;
   // the create paths refuse it. A line that nets to nothing on both sides is
   // left out of the table: it books nothing anyone can read.
-  const journalLines: JournalPreviewLine[] = !showsVoucher ? [] : supplierInvoiceRegistrationLines(
+  const journalLines = !showsVoucher ? [] : supplierInvoiceRegistrationLines(
     {
       currency,
       exchange_rate: currency === 'SEK' ? null : fxRate,
@@ -185,12 +179,6 @@ export function SupplierInvoiceReviewContent({
     chartVatTreatments,
   )
     .filter((line) => roundOre(line.debit_amount) !== 0 || roundOre(line.credit_amount) !== 0)
-    .map((line) => ({
-      account_number: line.account_number,
-      description: line.line_description ?? line.account_number,
-      debit: line.debit_amount,
-      credit: line.credit_amount,
-    }))
   const showingSek = fxRate !== 1
 
   // No account-label lookup any more: the BESKRIVNING column shows the
@@ -356,13 +344,7 @@ export function SupplierInvoiceReviewContent({
             )}
           </p>
           <VoucherLinesTable
-            lines={journalLines.map((line, index) => ({
-              key: index,
-              account_number: line.account_number,
-              description: line.description,
-              debit_amount: line.debit,
-              credit_amount: line.credit,
-            }))}
+            lines={voucherLineViews(journalLines)}
             showTotals
           />
           {figures.rounding.applies && (

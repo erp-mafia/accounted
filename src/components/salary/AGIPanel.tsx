@@ -496,7 +496,7 @@ export function AGIPanel(props: AGIPanelProps) {
       })
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
-        setError(json.error || t('disconnect_failed_status', { status: res.status }))
+        setError(getUserErrorMessage(json, { locale: errorLocale, fallback: t('disconnect_failed_status', { status: res.status }) }))
         return
       }
       setSuccess(t('disconnect_success'))
@@ -612,7 +612,7 @@ export function AGIPanel(props: AGIPanelProps) {
       | undefined
     if (rapport) setKontroller(findingsFromRapport(rapport))
     if (!res.ok || json.error) {
-      setError(json.error || t('submit_failed_status', { status: res.status }))
+      setError(getUserErrorMessage(json, { locale: errorLocale, fallback: t('submit_failed_status', { status: res.status }) }))
       return false
     }
     return true
@@ -633,7 +633,7 @@ export function AGIPanel(props: AGIPanelProps) {
     })
     const json = await res.json().catch(() => ({}))
     if (!res.ok || json.error) {
-      setError(json.error || t('signing_link_failed_status', { status: res.status }))
+      setError(getUserErrorMessage(json, { locale: errorLocale, fallback: t('signing_link_failed_status', { status: res.status }) }))
       return null
     }
     // The user typically opens the link, signs in Mina Sidor, then returns
@@ -660,7 +660,7 @@ export function AGIPanel(props: AGIPanelProps) {
     if (!res.ok || json.error) {
       const rapport = json.details?.kontrollrapport as KontrollrapportSummary | undefined
       if (rapport) setKontroller(findingsFromRapport(rapport))
-      setError(json.error || t('submit_failed_status', { status: res.status }))
+      setError(getUserErrorMessage(json, { locale: errorLocale, fallback: t('submit_failed_status', { status: res.status }) }))
       return null
     }
     // The user typically opens the link, signs in Mina Sidor, then returns
@@ -800,7 +800,7 @@ export function AGIPanel(props: AGIPanelProps) {
       )
       const json = await res.json()
       if (!res.ok || json.error) {
-        setError(json.error || t('unlock_failed_status', { status: res.status }))
+        setError(getUserErrorMessage(json, { locale: errorLocale, fallback: t('unlock_failed_status', { status: res.status }) }))
         return
       }
       setSuccess(t('unlock_success'))
@@ -834,7 +834,7 @@ export function AGIPanel(props: AGIPanelProps) {
         return
       }
       if (!res.ok || json.error) {
-        setError(json.error || t('kvittens_fetch_failed'))
+        setError(getUserErrorMessage(json, { locale: errorLocale, fallback: t('kvittens_fetch_failed') }))
         return
       }
       setKvittensUnavailable(false)

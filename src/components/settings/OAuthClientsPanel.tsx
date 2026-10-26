@@ -21,6 +21,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { formatDateLong } from '@/lib/utils'
 import { Plus, Trash2, Globe } from 'lucide-react'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 interface OAuthClient {
   id: string
@@ -75,7 +76,7 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
       const json = await res.json()
 
       if (!res.ok) {
-        toast({ title: json.error ?? t('toast_register_failed'), variant: 'destructive' })
+        toast({ title: getErrorMessage(json, { locale: locale as ErrorLocale, fallback: t('toast_register_failed') }), variant: 'destructive' })
         return
       }
 
@@ -103,7 +104,7 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
         toast({
-          title: body?.error || t('toast_revoke_failed'),
+          title: getErrorMessage(body, { locale: locale as ErrorLocale, fallback: t('toast_revoke_failed') }),
           variant: 'destructive',
         })
         return

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { formatCurrency } from '@/lib/utils'
@@ -200,7 +201,7 @@ async function findBookedOpeningBalance(
   } | null
   if (!row || row.status !== 'posted') return null
   if (replacesImportId && row.import_batch_id === replacesImportId) return null
-  return { entryId: row.id, voucher: `${row.voucher_series ?? ''}${row.voucher_number ?? ''}` }
+  return { entryId: row.id, voucher: formatVoucher(row) }
 }
 
 const FILE_PERIOD_ID = 'sie-file'

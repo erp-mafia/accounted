@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
@@ -87,7 +88,7 @@ async function archiveDayReport(
       .maybeSingle()
     const company = (settings ?? {}) as { company_name?: string | null; org_number?: string | null }
     const voucherLabel = args.entry?.voucher_series && args.entry.voucher_number
-      ? `${args.entry.voucher_series}${args.entry.voucher_number}`
+      ? formatVoucher(args.entry)
       : null
     const pdf = await renderPosDayReport({
       day: args.day.day,

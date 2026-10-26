@@ -48,6 +48,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { roundOre } from '@/lib/money'
+import { createLogger } from '@/lib/logger'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { SKATTEKONTO_LEDGER_ACCOUNT_SET, SKATTEKONTO_TAX_ACCOUNTS } from '@/lib/transactions/skattekonto-tax-accounts'
 import {
   detectBookingDuplicate,
@@ -55,6 +57,8 @@ import {
   type BookingDuplicateExclusions,
   type BookingTarget,
 } from '@/lib/transactions/booking-duplicate-detection'
+
+const log = createLogger('transactions/skattekonto-tax-double')
 
 /** One line of the kontering about to be booked, ledger sign (debit positive). */
 export interface BookingCounterLine {
@@ -229,7 +233,7 @@ export async function detectSkattekontoTaxDouble(
     return {
       transaction_id: null,
       journal_entry_id: entry.id,
-      voucher_label: `${entry.voucher_series ?? 'A'}${entry.voucher_number ?? ''}`,
+      voucher_label: formatVoucher(entry),
       entry_date: entry.entry_date,
       description: entry.description,
       amount: roundOre(Math.abs(probe.net)),
@@ -241,7 +245,8 @@ export async function detectSkattekontoTaxDouble(
       unverified_reason: null,
       skattekonto: { tax_account: probe.account_number, skattekonto_account: skattekontoAccount },
     }
-  } catch {
+  } catch (err) {
+    log.warn('skattekonto tax double probe failed: no double-booking warning shown', err)
     return null
   }
 }
@@ -282,7 +287,8 @@ export async function isSkattekontoTaxCandidateFor(
     if (entry.entry_date < month.from || entry.entry_date > month.to) return false
     const accounts = (entry.journal_entry_lines ?? []).map((l) => l.account_number)
     return accounts.some((a) => SKATTEKONTO_LEDGER_ACCOUNT_SET.has(a)) && accounts.some((a) => SKATTEKONTO_TAX_ACCOUNTS.has(a))
-  } catch {
+  } catch (err) {
+    log.warn('skattekonto tax candidate check failed: treated as no candidate', err)
     return false
   }
 }

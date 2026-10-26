@@ -207,7 +207,7 @@ export async function startSignature(
   const lock = await lockedPersonalNumber(scope)
   if (!lock.ok) return lock
 
-  if (signer.bankid_session_id) await provider.cancelBankIdSignature(signer.bankid_session_id).catch(() => null)
+  if (signer.bankid_session_id) await provider.cancelBankIdSignature(signer.bankid_session_id).catch(() => null) // best effort: an order not cancelled expires on its own
 
   const [{ data: doc }, sender] = await Promise.all([
     service.from('document_attachments').select('file_name').eq('id', request.document_id).maybeSingle(),
@@ -246,7 +246,7 @@ export async function startSignature(
     .select('id')
   if (error) throw error
   if ((updated ?? []).length !== 1) {
-    await provider.cancelBankIdSignature(started.data.sessionId).catch(() => null)
+    await provider.cancelBankIdSignature(started.data.sessionId).catch(() => null) // best effort: an order not cancelled expires on its own
     return { ok: false, code: 'SIGNING_SIGNER_NOT_PENDING' }
   }
   return {
@@ -414,7 +414,7 @@ export async function cancelSignatureSession(scope: SignerScope): Promise<Operat
   const sessionId = signer.bankid_session_id
   if (!sessionId || signer.status !== 'pending') return { ok: true, data: { cancelled: true } }
   const provider = await resolveBankIdSigning()
-  if (provider) await provider.cancelBankIdSignature(sessionId).catch(() => null)
+  if (provider) await provider.cancelBankIdSignature(sessionId).catch(() => null) // best effort: an order not cancelled expires on its own
   await endSession(service, signer.id, sessionId, null)
   return { ok: true, data: { cancelled: true } }
 }

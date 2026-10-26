@@ -12,6 +12,7 @@ import { fetchSessionUser, reloadTo, signOut } from '@/lib/auth/session-client'
 import { useToast } from '@/components/ui/use-toast'
 import { getBranding } from '@/lib/branding/service'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 const branding = getBranding()
 
@@ -105,7 +106,7 @@ export default function InvitePage() {
 
         const data = await inviteRes.json()
         if (!inviteRes.ok) {
-          setError(data.error || t('invalid_invite'))
+          setError(getErrorMessage(data, { locale: locale as ErrorLocale, fallback: t('invalid_invite') }))
           return
         }
 
@@ -163,7 +164,7 @@ export default function InvitePage() {
       if (!res.ok) {
         toast({
           title: t('join_failed_title'),
-          description: body.error || t('unexpected_error'),
+          description: getErrorMessage(body, { locale: locale as ErrorLocale, fallback: t('unexpected_error') }),
           variant: 'destructive',
         })
         setIsJoining(false)

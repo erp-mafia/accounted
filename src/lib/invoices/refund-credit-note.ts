@@ -3,6 +3,7 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { invoicePaymentBusinessEvent } from '@/lib/bookkeeping/invoice-business-events'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
@@ -211,7 +212,7 @@ async function findBookedRefundCandidates(
     candidates.push({
       journal_entry_id: row.journal_entry_id,
       entry_date: entry.entry_date,
-      voucher: entry.voucher_series && entry.voucher_number != null ? `${entry.voucher_series}${entry.voucher_number}` : null,
+      voucher: entry.voucher_number ? formatVoucher(entry) : null,
       source_type: entry.source_type,
     })
   }

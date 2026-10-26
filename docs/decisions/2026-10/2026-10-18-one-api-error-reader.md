@@ -1,0 +1,1 @@
+[2026-10-18] Client code reads an API error only through getErrorMessage(body, { locale, fallback }), with each site's own fallback and the UI locale, enforced by the hand-read-api-error guard (0 findings, allowlist for non-envelope `.error`); customer, article and sales-order refusals answer through sessionFailureResponse, byte-identical (pinned).

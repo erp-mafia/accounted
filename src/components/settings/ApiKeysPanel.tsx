@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -37,6 +37,7 @@ import {
   type ApiKeyScope,
   type ScopeGroup,
 } from '@/lib/auth/scope-catalog'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 type Scope = ApiKeyScope
 
@@ -116,6 +117,7 @@ export function ApiKeysPanel({
   borderless?: boolean
 }) {
   const t = useTranslations('settings_api_keys')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { dialogProps: sodDialogProps, confirm: confirmSod } = useDestructiveConfirm()
 
@@ -213,10 +215,7 @@ export function ApiKeysPanel({
         // The route returns the canonical { error: { code, message, message_en } }
         // envelope: render the message string, never the object (a React child
         // must be a string, not { code, message, ... }).
-        const message =
-          typeof json.error === 'string'
-            ? json.error
-            : json.error?.message ?? t('toast_create_failed')
+        const message = getErrorMessage(json, { locale: errorLocale, fallback: t('toast_create_failed') })
         toast({ title: message, variant: 'destructive' })
         return
       }

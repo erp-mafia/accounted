@@ -29,6 +29,7 @@
  * (migration 20260529120000_transaction_voucher_links.sql): same
  * predicate, three storage locations, in SQL.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 interface TxLike {
@@ -239,5 +240,5 @@ export function getLinkedJournalEntryIds(tx: TxWithEmbeddedLinks): string[] {
 export function embeddedVoucherLabel(link: EmbeddedVoucherLink): string | null {
   const je = link.journal_entry
   if (!je || je.voucher_number == null) return null
-  return `${je.voucher_series ?? ''}${je.voucher_number}`
+  return formatVoucher(je)
 }

@@ -15,6 +15,7 @@ import { useReportData } from '@/lib/hooks/use-report-data'
 import { formatAmount } from '@/lib/utils'
 import { formatDateISO } from '@/lib/calendar/utils'
 import type { ReportSourceLine, ReportSourceFetcher } from '@/lib/reports/source-lines'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 interface SupplierLedgerData {
   ledger: {
@@ -201,7 +202,7 @@ function makeSupplierFetcher(supplierId: string): ReportSourceFetcher {
       `/api/reports/supplier-ledger/supplier/${encodeURIComponent(supplierId)}/invoices`
     )
     const json = await res.json()
-    if (!res.ok) throw new Error(json.error || 'Kunde inte hämta leverantörsfakturor')
+    if (!res.ok) throw new Error(getErrorMessage(json, { fallback: 'Kunde inte hämta leverantörsfakturor' }))
     const lines: ReportSourceLine[] = json.data?.lines || []
     return { lines, next_cursor: json.data?.next_cursor ?? null }
   }

@@ -11,6 +11,7 @@ import {
   FileText,
   MessageSquare,
 } from 'lucide-react'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 interface InvoiceData {
   invoiceNumber: string
@@ -86,7 +87,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
       const data = await response.json()
 
       if (!response.ok) {
-        setError(data.error || 'Kunde inte hämta fakturainformation')
+        setError(getErrorMessage(data, { fallback: 'Kunde inte hämta fakturainformation' }))
         return
       }
 
@@ -112,7 +113,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
       const data = await response.json()
 
       if (!response.ok) {
-        setError(data.error || 'Kunde inte spara ditt svar')
+        setError(getErrorMessage(data, { fallback: 'Kunde inte spara ditt svar' }))
         return
       }
 

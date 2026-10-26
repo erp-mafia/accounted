@@ -294,7 +294,7 @@ export default function CustomerForm({
       } else if (!result.valid) {
         toast({
           title: t('vat_failed_title'),
-          description: result.error || t('vat_failed_default'),
+          description: getErrorMessage(result, { locale: locale, fallback: t('vat_failed_default') }),
           variant: 'destructive',
         })
       }

@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
@@ -67,7 +67,7 @@ import type {
   StoredSkattekontoTransaction,
 } from '@/extensions/general/skatteverket/types'
 import type { SkattekontoBatchRowResult } from '@/types/skatteverket'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { SKATTEKONTO_ACCOUNT_DEFAULT, isSkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { useSkattekontoLedgerProposalCount } from '@/components/skattekonto/use-ledger-proposal-count'
@@ -120,6 +120,7 @@ interface TransaktionerEnvelope {
 export default function SkattekontoPage() {
   const { toast } = useToast()
   const t = useTranslations('skattekonto')
+  const errorLocale = useLocale() as ErrorLocale
   const tStart = useTranslations('start_cards')
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
   const [showPayment, setShowPayment] = useState(false)
@@ -359,8 +360,7 @@ export default function SkattekontoPage() {
         // skvAuthErrorNeedsReconnect predicate (lib/notices), never inline.
         if (res.status === 401) {
           if (skvAuthErrorNeedsReconnect(res.status, json.code)) {
-            const reason =
-              typeof json.error === 'string' && json.error ? json.error : t('attn_reconnect_body')
+            const reason = getUserErrorMessage(json, { locale: errorLocale, fallback: t('attn_reconnect_body') })
             setReconnectMessage(reason)
             toast({ title: t('sync_failed'), description: reason, variant: 'destructive' })
           } else {

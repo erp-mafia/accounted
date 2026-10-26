@@ -62,9 +62,7 @@ import {
 import { bookInvoice } from './book-service'
 import { archiveIssuedInvoicePdf, type IssuePartialFailure } from './issue-and-book-invoice'
 import { recordManualInvoiceDelivery } from './invoice-deliveries'
-
-/** The original's statuses a credit note can be issued against. */
-const CREDITABLE_STATUSES = ['sent', 'paid', 'overdue'] as const
+import { isCreditableInvoiceStatus } from '@/lib/bookkeeping/creditable-statuses'
 
 /** The joined row a credit note is created and issued from. */
 const CREDIT_ROW_SELECT = '*, customer:customers(*), items:invoice_items(*)'
@@ -114,7 +112,7 @@ export function creditNoteRefusal(original: CreditableOriginal): CreditRefusal |
   // posted: widening only this check would post an immutable voucher and
   // then fail on the flip. 'draft' (never issued, no löpnummer to reference)
   // and 'cancelled' are refused either way.
-  if (!(CREDITABLE_STATUSES as readonly string[]).includes(original.status)) {
+  if (!isCreditableInvoiceStatus(original.status)) {
     return { code: 'INVOICE_CREDIT_NOT_SENT', details: { current_status: original.status } }
   }
   // A refused ROT/RUT share booked onto the customer (rot_rut_reclaim) moved

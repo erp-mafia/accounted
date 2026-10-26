@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 import {
@@ -19,7 +19,7 @@ import { isSelfHosted as readSelfHostedFlag } from '@/lib/env/public-flags'
 import { AutoLogoutToggle } from '@/components/settings/AutoLogoutToggle'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
 import { userHasPassword } from '@/lib/auth/has-password'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   SettingsGroup,
   SettingsInput,
@@ -34,6 +34,7 @@ const bankIdEnabled = isBankIdEnabled()
 
 export function SecuritySettings() {
   const t = useTranslations('settings_security')
+  const errorLocale = useLocale() as ErrorLocale
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
   const [isChangingPassword, setIsChangingPassword] = useState(false)
@@ -107,7 +108,7 @@ export function SecuritySettings() {
         }
         toast({
           title: t('toast_update_failed_title'),
-          description: body.error || t('toast_update_failed_description'),
+          description: getUserErrorMessage(body, { locale: errorLocale, fallback: t('toast_update_failed_description') }),
           variant: 'destructive',
         })
         return

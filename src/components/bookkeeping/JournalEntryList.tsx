@@ -2,7 +2,6 @@
 
 import { Fragment, useState, useEffect, useCallback, useMemo, useRef, type ReactNode } from 'react'
 import Link from 'next/link'
-import { settlementsToastAction } from '@/components/collections/settlements-toast-action'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
@@ -46,13 +45,14 @@ import {
   SortableTh,
 } from '@/components/ui/dry-table'
 import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal } from 'lucide-react'
-import { cn, formatAmount, formatDate, formatCurrency } from '@/lib/utils'
+import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
 import { useCashAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { voucherDisplayAmount } from '@/lib/bookkeeping/voucher-display-amount'
 import { Input } from '@/components/ui/input'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import JournalEntryAttachments from '@/components/bookkeeping/JournalEntryAttachments'
 import JournalEntryTransactionLinks from '@/components/bookkeeping/JournalEntryTransactionLinks'
@@ -60,6 +60,9 @@ import NoDocRequiredToggle from '@/components/bookkeeping/NoDocRequiredToggle'
 import CorrectionEntryDialog from '@/components/bookkeeping/CorrectionEntryDialog'
 import VoucherGapNotice from '@/components/bookkeeping/VoucherGapNotice'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
+import { OwnedVoucherActionDialog } from '@/components/bookkeeping/OwnedVoucherActionDialog'
+import { useReverseJournalEntry } from '@/components/bookkeeping/use-reverse-journal-entry'
+import { mayHaveVoucherOwner, type VoucherOwner } from '@/lib/core/bookkeeping/voucher-owner'
 import JournalEntryStatusBadge from '@/components/bookkeeping/JournalEntryStatusBadge'
 import AttachmentPreviewSheet from '@/components/bookkeeping/AttachmentPreviewSheet'
 import { useToast } from '@/components/ui/use-toast'
@@ -183,7 +186,6 @@ export default function JournalEntryList({
   const { canWrite } = useCanWrite()
   const company = useCompanyOptional()?.company ?? null
   const t = useTranslations('journal_list')
-  const tSettlements = useTranslations('settlements')
   // Loads the BAS chart chunk after mount and re-renders once names and
   // descriptions for non-hardcoded accounts are available.
   useBasReference()
@@ -244,7 +246,13 @@ export default function JournalEntryList({
   const [bulkSubmitting, setBulkSubmitting] = useState(false)
   const [correctionEntry, setCorrectionEntry] = useState<JournalEntry | null>(null)
   const [reverseEntryTarget, setReverseEntryTarget] = useState<JournalEntry | null>(null)
-  const [isReversing, setIsReversing] = useState(false)
+  // Vänd or Rätta on a verifikat an object owns: its own action first
+  // (OwnedVoucherActionDialog), as on the verifikat page.
+  const [ownedAction, setOwnedAction] = useState<{
+    entry: JournalEntry
+    owner: VoucherOwner
+    intent: 'reverse' | 'correct'
+  } | null>(null)
   const [previewEntryId, setPreviewEntryId] = useState<string | null>(null)
   const [sortStack, setSortStack] = useState<SortKey[]>(DEFAULT_SORT_STACK)
   const [sortHydrated, setSortHydrated] = useState(false)
@@ -785,37 +793,30 @@ export default function JournalEntryList({
     }
   }
 
-  // Pure reversal (storno) of a posted verifikat: books a stornoverifikation
-  // with no replacement, per BFL 5 kap 5§. Routes through the engine's
-  // reverseEntry (storno + reverses_id link; original → 'reversed', never
-  // deleted). "Rätta" stays the path for booking a replacement entry instead.
+  // Pure reversal (storno), shared with the verifikat page (useReverseJournalEntry).
+  const { reverse, isReversing } = useReverseJournalEntry({
+    onReversed: async () => {
+      setReverseEntryTarget(null)
+      await fetchEntries()
+    },
+  })
   const handleReverse = async () => {
-    const target = reverseEntryTarget
-    if (!target) return
-    setIsReversing(true)
+    if (reverseEntryTarget) await reverse(reverseEntryTarget.id)
+  }
+
+  // Vänd and Rätta ask for the verifikat's owner first, only for the source
+  // types that can have one; any other verifikat (or a failed lookup) goes
+  // straight on, so the list never waits on advice.
+  const startVoucherAction = async (entry: JournalEntry, intent: 'reverse' | 'correct') => {
+    const proceed = () => (intent === 'reverse' ? setReverseEntryTarget(entry) : setCorrectionEntry(entry))
+    if (!mayHaveVoucherOwner(entry.source_type)) return proceed()
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${target.id}/reverse`, { method: 'POST' })
-      const result = await res.json()
-      if (res.ok) {
-        const storno = result.data
-        toast({
-          title: t('toast_reverse_done_title'),
-          description: t('toast_reverse_done_description', { voucher: formatVoucher(storno ?? {}) }),
-        })
-        setReverseEntryTarget(null)
-        await fetchEntries()
-      } else {
-        toast({
-          title: t('toast_reverse_failed'),
-          description: getErrorMessage(result, { context: 'journal_entry' }),
-          variant: 'destructive',
-          action: settlementsToastAction(result, tSettlements('open_settlements')),
-        })
-      }
+      const res = await fetch(`/api/bookkeeping/journal-entries/${entry.id}/references`)
+      const owner = res.ok ? (((await res.json())?.data?.owned_by ?? null) as VoucherOwner | null) : null
+      if (owner) setOwnedAction({ entry, owner, intent })
+      else proceed()
     } catch {
-      toast({ title: t('toast_reverse_failed'), variant: 'destructive' })
-    } finally {
-      setIsReversing(false)
+      proceed()
     }
   }
 
@@ -1762,20 +1763,9 @@ export default function JournalEntryList({
                                   aria-label={formatVoucher(entry)}
                                   showTotals
                                   redundantTexts={[entry.description]}
-                                  lines={lines
-                                    .slice()
-                                    .sort((a, b) => a.sort_order - b.sort_order)
-                                    .map((line) => ({
-                                      key: line.id,
-                                      account_number: line.account_number,
-                                      description: line.line_description,
-                                      debit_amount: line.debit_amount,
-                                      credit_amount: line.credit_amount,
-                                      foreignAmount:
-                                        line.currency && line.currency !== 'SEK' && line.amount_in_currency != null
-                                          ? `${formatAmount(Number(line.amount_in_currency))} ${line.currency}`
-                                          : null,
-                                    }))}
+                                  lines={voucherLineViews(
+                                    lines.slice().sort((a, b) => a.sort_order - b.sort_order),
+                                  )}
                                 />
                               )}
 
@@ -1844,12 +1834,12 @@ export default function JournalEntryList({
                                   {t('show_details')}
                                 </Link>
                                 {entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setCorrectionEntry(entry)}>
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'correct')}>
                                     {t('create_correction')}
                                   </button>
                                 )}
                                 {canWrite && entry.status === 'posted' && entry.source_type !== 'storno' && entry.source_type !== 'correction' && (
-                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => setReverseEntryTarget(entry)}>
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => void startVoucherAction(entry, 'reverse')}>
                                     {t('reverse_action')}
                                   </button>
                                 )}
@@ -1968,6 +1958,22 @@ export default function JournalEntryList({
             await handleCommit(commitTarget.id)
             setCommitTarget(null)
           }}
+        />
+      )}
+
+      {ownedAction && (
+        <OwnedVoucherActionDialog
+          owner={ownedAction.owner}
+          intent={ownedAction.intent}
+          open
+          onOpenChange={(open) => {
+            if (!open) setOwnedAction(null)
+          }}
+          onProceed={() =>
+            ownedAction.intent === 'reverse'
+              ? setReverseEntryTarget(ownedAction.entry)
+              : setCorrectionEntry(ownedAction.entry)
+          }
         />
       )}
 

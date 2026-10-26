@@ -26,6 +26,7 @@ import { ReconciliationMatchPreview, hasReconciliationMatchDetails } from './Rec
 import { PurchaseCategoryPreview } from './PurchaseCategoryPreview'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews, type PostingLineLike } from '@/lib/bookkeeping/voucher-line-view'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { complianceWarningOf, type ComplianceWarning } from './vocabulary'
 import { formatPreviewNumber } from './preview-facts'
@@ -524,36 +525,18 @@ function CreateTransactionPreview({ data }: { data: Record<string, unknown> }) {
   )
 }
 
-type VoucherLine = {
-  account_number: string
-  account_name?: string | null
-  debit_amount: number
-  credit_amount: number
-  line_description?: string | null
-}
-
 // Staged or posted lines through the shared VoucherLinesTable, named from
 // this card's AccountNamesContext and never the active company's chart: the
-// operation may be another company's. Reads both line shapes the payloads
-// use (account/debit/credit and account_number/debit_amount/credit_amount).
-type StagedLine = {
-  account?: string
-  account_number?: string
-  account_name?: string | null
-  description?: string | null
-  line_description?: string | null
-  debit?: number
-  credit?: number
-  debit_amount?: number
-  credit_amount?: number
-}
+// operation may be another company's. voucherLineViews reads every line shape
+// the payloads use (account/debit/credit and account_number/debit_amount/
+// credit_amount).
 
 function StagedLinesTable({
   lines,
   showTotals = false,
   label,
 }: {
-  lines: readonly StagedLine[]
+  lines: readonly PostingLineLike[]
   showTotals?: boolean
   label?: string
 }) {
@@ -564,13 +547,7 @@ function StagedLinesTable({
       withCurrency
       showTotals={showTotals}
       aria-label={label}
-      lines={lines.map((line) => ({
-        account_number: String(line.account_number ?? line.account ?? '?'),
-        account_name: line.account_name,
-        description: line.line_description ?? line.description,
-        debit_amount: line.debit_amount ?? line.debit,
-        credit_amount: line.credit_amount ?? line.credit,
-      }))}
+      lines={voucherLineViews(lines)}
     />
   )
 }
@@ -583,7 +560,7 @@ function VoucherLinesBlock({
   totalDebit,
   totalCredit,
 }: {
-  lines: VoucherLine[]
+  lines: PostingLineLike[]
   totalDebit?: number
   totalCredit?: number
 }) {
@@ -612,7 +589,7 @@ function readVatDeclarationSummary(value: unknown): string | null {
 // OperationPreview above every preview type, not here.
 function VoucherPreview({ data, showSeries = true }: { data: Record<string, unknown>; showSeries?: boolean }) {
   const t = useTranslations('pending')
-  const lines = (data.lines as VoucherLine[]) || []
+  const lines = (data.lines as PostingLineLike[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
   const vatSummary = readVatDeclarationSummary(data.vat_declaration)
@@ -658,7 +635,7 @@ function BulkBookPreview({ data }: { data: Record<string, unknown> }) {
   // aggregates alone ("-720, 2 tx, expense") cannot tell a right booking from
   // a wrong one. Journal lines are SEK; the bank sum is shown in the rows'
   // own currency so a foreign batch is never misread as SEK.
-  const lines = (data.lines as VoucherLine[]) || []
+  const lines = (data.lines as PostingLineLike[]) || []
   const txCount = typeof data.tx_count === 'number' ? data.tx_count : null
   const txSum = typeof data.tx_sum === 'number' && Number.isFinite(data.tx_sum) ? data.tx_sum : null
   const currency = (data.currency as string) || 'SEK'
@@ -704,13 +681,13 @@ function CorrectEntryPreview({ data }: { data: Record<string, unknown> }) {
     voucher?: string
     entry_date?: string
     description?: string
-    lines?: VoucherLine[]
+    lines?: PostingLineLike[]
   }) || {}
   const correction = (data.correction as {
     total_debit?: number
     total_credit?: number
     line_count?: number
-    lines?: VoucherLine[]
+    lines?: PostingLineLike[]
   }) || {}
 
   return (
@@ -775,17 +752,7 @@ function isEntryPreview(value: unknown): value is Record<string, unknown> {
 // rows). Several staged op types carry one under keys like `preview_lines`
 // without a dedicated preview component; rendering it as the actual
 // verifikat rows is what makes the detail panel say what the agent will do.
-interface PreviewKonteringLine {
-  account?: string
-  account_number?: string
-  description?: string
-  debit?: number
-  credit?: number
-  debit_amount?: number
-  credit_amount?: number
-}
-
-function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
+function isKonteringLines(value: unknown): value is PostingLineLike[] {
   return (
     Array.isArray(value) &&
     value.length > 0 &&
@@ -799,7 +766,7 @@ function isKonteringLines(value: unknown): value is PreviewKonteringLine[] {
   )
 }
 
-function PreviewKonteringTable({ lines, label = 'Föreslagen kontering' }: { lines: PreviewKonteringLine[]; label?: string }) {
+function PreviewKonteringTable({ lines, label = 'Föreslagen kontering' }: { lines: PostingLineLike[]; label?: string }) {
   return <StagedLinesTable lines={lines} label={label} />
 }
 
@@ -970,7 +937,7 @@ function GenericPreview({ data, detail = false }: { data: Record<string, unknown
         )
       })}
       {konteringEntries.map(([key, value]) => (
-        <PreviewKonteringTable key={key} lines={value as PreviewKonteringLine[]} />
+        <PreviewKonteringTable key={key} lines={value as PostingLineLike[]} />
       ))}
       {facts.length + groups.length + changeFields.length > 0 && (
         <div className="grid grid-cols-[minmax(0,2fr)_minmax(0,3fr)] gap-x-4 gap-y-1 text-sm">
@@ -1047,7 +1014,7 @@ function readString(value: unknown): string | null {
  * the next one (the DocumentViewerPane idiom).
  */
 function useVoucherLines(journalEntryId: string | null) {
-  const [fetched, setFetched] = useState<{ id: string; lines: VoucherLine[] | null } | null>(null)
+  const [fetched, setFetched] = useState<{ id: string; lines: PostingLineLike[] | null } | null>(null)
   useEffect(() => {
     if (!journalEntryId) return
     let cancelled = false

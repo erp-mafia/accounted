@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useTranslations } from 'next-intl'
 import { cn, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
@@ -46,7 +47,7 @@ export function LinkDocumentsPreview({ data }: { data: Record<string, unknown> }
     status && t.has(`link_preview_status_${status}`) ? t(`link_preview_status_${status}`) : (status ?? '-')
   const voucher = (row: LinkResultRow) =>
     row.voucher_label ??
-    (row.voucher_series && row.voucher_number ? `${row.voucher_series}${row.voucher_number}` : '-')
+    (row.voucher_series && row.voucher_number ? formatVoucher(row) : '-')
 
   return (
     <div className="space-y-3 text-sm">
