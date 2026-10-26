@@ -174,6 +174,29 @@ describe('a matched card gets the details a new card would have had (crm#1436)',
     expect(buildSupplierEnrichment({ ...stub, phone: '031-00 00 00', bankgiro: '765-4321', org_number: undefined },
       { phone: '031-12 34 56', bankgiro: '123-4567', org_number: '5566778899' })).toBeNull()
   })
+
+  describe('a supplier\'s bank account', () => {
+    const card = {
+      bankgiro: null, plusgiro: null, bank_account: null, clearing_number: null, account_number: null, iban: null, bic: null,
+    }
+    const row = { clearing_number: '8327-9', account_number: '123 456 789-0', iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' }
+
+    it('fills the clearing and account number, the IBAN and the BIC on a card that has none', () => {
+      expect(buildSupplierEnrichment(card, row)).toEqual(row)
+    })
+
+    it('fills the account on the card an earlier import gave the same account without its clearing number', () => {
+      expect(buildSupplierEnrichment({ ...card, bank_account: '123456789-0' }, row))
+        .toMatchObject({ clearing_number: '8327-9', account_number: '123 456 789-0' })
+      expect(buildSupplierEnrichment({ ...card, bank_account: '8327-9, 123 456 789-0' }, row))
+        .toMatchObject({ clearing_number: '8327-9', account_number: '123 456 789-0' })
+    })
+
+    it('never pairs the provider\'s account with a clearing number or another account on the card', () => {
+      expect(buildSupplierEnrichment({ ...card, clearing_number: '6000' }, row)).not.toHaveProperty('account_number')
+      expect(buildSupplierEnrichment({ ...card, bank_account: '5000-1112223' }, row)).not.toHaveProperty('account_number')
+    })
+  })
 })
 
 describe('writing an enrichment', () => {
@@ -198,5 +221,15 @@ describe('writing an enrichment', () => {
     expect(result).toEqual({ data: null, error: null })
     expect(calls.find((c) => c.method === 'update')?.table).toBe('suppliers')
     expect(calls.filter((c) => c.method === 'is').map((c) => c.args[0])).toEqual(['phone', 'bankgiro'])
+  })
+
+  it('writes a bank account only while the card has neither a clearing nor an account number', async () => {
+    const { supabase, calls, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'sup-1' } })
+    await writeSupplierEnrichment(supabase as unknown as SupabaseClient, 'company-1', 'sup-1',
+      { clearing_number: '8327-9', account_number: '123 456 789-0', iban: 'DE89370400440532013000' })
+    expect(calls.find((c) => c.method === 'update')?.args[0])
+      .toMatchObject({ clearing_number: '8327-9', account_number: '123 456 789-0', iban: 'DE89370400440532013000' })
+    expect(calls.filter((c) => c.method === 'is').map((c) => c.args[0])).toEqual(['clearing_number', 'account_number', 'iban'])
   })
 })

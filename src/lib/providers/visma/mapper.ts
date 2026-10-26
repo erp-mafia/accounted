@@ -402,10 +402,14 @@ export function mapVismaToSupplier(raw: Record<string, unknown>): SupplierDto {
     active: raw['IsActive'] !== false,
     vatNumber: nonEmptyString(raw['VatNumber']),
     bankAccount: raw['BankAccountNumber'] as string | undefined,
+    clearingNumber: nonEmptyString(raw['Clearing']),
     // SupplierApi spells them BankgiroNumber and PlusgiroNumber; BankGiro and
     // PlusGiro were read instead and found nothing (crm#1436).
     bankGiro: nonEmptyString(raw['BankgiroNumber']),
     plusGiro: nonEmptyString(raw['PlusgiroNumber']),
+    iban: nonEmptyString(raw['BankIban']),
+    bic: nonEmptyString(raw['BankBic']),
+    currencyCode: nonEmptyString(raw['CurrencyCode']),
     note: raw['Note'] as string | undefined,
     updatedAt: raw['ModifiedUtc'] as string | undefined,
     _raw: raw,

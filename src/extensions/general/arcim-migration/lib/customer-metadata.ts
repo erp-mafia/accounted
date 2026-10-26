@@ -41,7 +41,12 @@ export interface ExistingSupplierDetails extends ExistingPartyDetails {
   org_number?: string | null
   bankgiro?: string | null
   plusgiro?: string | null
+  /** The legacy free-text account an earlier import wrote; read, never filled. */
   bank_account?: string | null
+  clearing_number?: string | null
+  account_number?: string | null
+  iban?: string | null
+  bic?: string | null
 }
 
 /**
@@ -72,12 +77,15 @@ export interface SupplierEnrichment extends PartyDetailsEnrichment {
   org_number?: string
   bankgiro?: string
   plusgiro?: string
-  bank_account?: string
+  clearing_number?: string
+  account_number?: string
+  iban?: string
+  bic?: string
 }
 
 const ADDRESS_COLUMNS = ['address_line1', 'address_line2', 'postal_code', 'city'] as const
 const SINGLE_COLUMNS = ['email', 'phone', 'country', 'vat_number', 'notes'] as const
-const SUPPLIER_COLUMNS = ['org_number', 'bankgiro', 'plusgiro', 'bank_account'] as const
+const SUPPLIER_COLUMNS = ['org_number', 'bankgiro', 'plusgiro', 'iban', 'bic'] as const
 
 /** A real provider value: an empty or blank string is no value. */
 function providerText(value: unknown): string | undefined {
@@ -142,7 +150,18 @@ export function buildCustomerMetadataEnrichment(
   return Object.keys(changes).length > 0 ? changes : null
 }
 
-/** The supplier twin of buildCustomerMetadataEnrichment, under the same rule. */
+const digits = (value: unknown) => (typeof value === 'string' ? value.replace(/\D/g, '') : '')
+
+/**
+ * The supplier twin of buildCustomerMetadataEnrichment, under the same rule.
+ *
+ * The bank account is one block, like the address: filled only on a card
+ * with neither a clearing nor an account number, so a clearing number the
+ * user typed is never paired with the provider's account. A card whose
+ * free-text bank_account an earlier import wrote, the same account without
+ * its clearing number, gets the block too; one the user wrote another
+ * account into keeps it.
+ */
 export function buildSupplierEnrichment(
   existing: ExistingSupplierDetails,
   mapped: Record<string, unknown>,
@@ -151,6 +170,14 @@ export function buildSupplierEnrichment(
   for (const column of SUPPLIER_COLUMNS) {
     const value = providerText(mapped[column])
     if (existing[column] === null && value !== undefined) changes[column] = value
+  }
+  const clearing = providerText(mapped.clearing_number)
+  const account = providerText(mapped.account_number)
+  const legacy = digits(existing.bank_account)
+  if (existing.clearing_number === null && existing.account_number === null && account !== undefined
+    && (!legacy || legacy === digits(account) || legacy === digits(`${clearing ?? ''}${account}`))) {
+    changes.account_number = account
+    if (clearing !== undefined) changes.clearing_number = clearing
   }
   return Object.keys(changes).length > 0 ? changes : null
 }
@@ -229,7 +256,10 @@ export async function writeSupplierEnrichment(
       vat_number: changes.vat_number,
       bankgiro: changes.bankgiro,
       plusgiro: changes.plusgiro,
-      bank_account: changes.bank_account,
+      clearing_number: changes.clearing_number,
+      account_number: changes.account_number,
+      iban: changes.iban,
+      bic: changes.bic,
       notes: changes.notes,
     })
     .eq('id', id)
@@ -244,7 +274,9 @@ export async function writeSupplierEnrichment(
   if (changes.vat_number !== undefined) query = query.is('vat_number', null)
   if (changes.bankgiro !== undefined) query = query.is('bankgiro', null)
   if (changes.plusgiro !== undefined) query = query.is('plusgiro', null)
-  if (changes.bank_account !== undefined) query = query.is('bank_account', null)
+  if (changes.account_number !== undefined) query = query.is('clearing_number', null).is('account_number', null)
+  if (changes.iban !== undefined) query = query.is('iban', null)
+  if (changes.bic !== undefined) query = query.is('bic', null)
   if (changes.notes !== undefined) query = query.is('notes', null)
   const { data, error } = await query.select('id').maybeSingle()
   return { data: (data as { id: string } | null) ?? null, error }

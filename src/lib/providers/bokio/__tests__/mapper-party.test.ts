@@ -34,28 +34,37 @@ describe('Bokio supplier', () => {
     paymentDetails,
   });
 
-  const payment = (dto: ReturnType<typeof supplier>) =>
-    ({ bankGiro: dto.bankGiro, plusGiro: dto.plusGiro, bankAccount: dto.bankAccount });
+  const payment = (dto: ReturnType<typeof supplier>) => ({
+    bankGiro: dto.bankGiro, plusGiro: dto.plusGiro, clearingNumber: dto.clearingNumber, bankAccount: dto.bankAccount,
+    iban: dto.iban, bic: dto.bic,
+  });
+  const none = { bankGiro: undefined, plusGiro: undefined, clearingNumber: undefined, bankAccount: undefined, iban: undefined, bic: undefined };
 
   it('reads the bankgiro from paymentDetails', () => {
-    expect(payment(supplier({ type: 'bankgiro', bankgiroNumber: '1234-5678' })))
-      .toEqual({ bankGiro: '1234-5678', plusGiro: undefined, bankAccount: undefined });
+    expect(payment(supplier({ type: 'bankgiro', bankgiroNumber: '1234-5678' }))).toEqual({ ...none, bankGiro: '1234-5678' });
   });
 
   it('reads the plusgiro from paymentDetails', () => {
-    expect(payment(supplier({ type: 'plusgiro', plusgiroNumber: '12345-6' })))
-      .toEqual({ bankGiro: undefined, plusGiro: '12345-6', bankAccount: undefined });
+    expect(payment(supplier({ type: 'plusgiro', plusgiroNumber: '12345-6' }))).toEqual({ ...none, plusGiro: '12345-6' });
   });
 
   it('reads a transfer as the clearing and account number', () => {
-    expect(supplier({ type: 'transfer', clearingNumber: '8327', accountNumber: '9123456' }).bankAccount).toBe('8327-9123456');
-    expect(supplier({ type: 'transfer', accountNumber: '9123456' }).bankAccount).toBe('9123456');
+    expect(payment(supplier({ type: 'transfer', clearingNumber: '8327', accountNumber: '9123456' })))
+      .toEqual({ ...none, clearingNumber: '8327', bankAccount: '9123456' });
+    expect(payment(supplier({ type: 'transfer', accountNumber: '9123456' }))).toEqual({ ...none, bankAccount: '9123456' });
   });
 
-  it('carries no giro or account for an international payment or none at all', () => {
-    for (const details of [{ type: 'internationalPayment', iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' }, undefined, null]) {
-      expect(payment(supplier(details))).toEqual({ bankGiro: undefined, plusGiro: undefined, bankAccount: undefined });
-    }
+  it('reads an international payment as the IBAN and BIC', () => {
+    expect(payment(supplier({ type: 'internationalPayment', iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' })))
+      .toEqual({ ...none, iban: 'DE89370400440532013000', bic: 'COBADEFFXXX' });
+  });
+
+  it('carries no payment details without paymentDetails', () => {
+    for (const details of [undefined, null]) expect(payment(supplier(details))).toEqual(none);
+  });
+
+  it('reads the currency the supplier bills in', () => {
+    expect(supplier(undefined).currencyCode).toBe('SEK');
   });
 
   it('keeps the identity, VAT number and address', () => {
