@@ -2771,6 +2771,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               {invoice.your_reference.split(',').map((ref) => ref.trim()).join(', ')}
             </DefRow>
           )}
+          {invoice.invoice_marking?.trim() && (
+            <DefRow label={t('invoice_marking_label')}>{invoice.invoice_marking.trim()}</DefRow>
+          )}
         </DetailSection>
 
         <DetailSection kicker={t('details_card_title')}>
