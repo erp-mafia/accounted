@@ -141,6 +141,13 @@ describe('a Swedish party from every provider is typed swedish_business with cou
       .toMatchObject({ supplier_type: 'non_eu_business', country: 'NO' })
   })
 
+  it('a Fortnox supplier record is typed by its CountryCode (crm#1436)', () => {
+    // A name no reader knows used to be kept as written and typed foreign
+    // outside the EU; the record's ISO code says Germany.
+    expect(mapSupplier(mapFortnoxToSupplier({ SupplierNumber: '7', Name: 'Lieferant', Country: 'Bundesrepublik Deutschland', CountryCode: 'DE' }), 'u', 'c'))
+      .toMatchObject({ supplier_type: 'eu_business', country: 'DE' })
+  })
+
   it('stores no country for an empty one', () => {
     const row = mapCustomer(mapBokioToCustomer({ id: 'c3', name: 'Kund AB', type: 'company', orgNumber: '556055-1234', address: { country: '' } }), 'u', 'c')
     expect(row.country).toBeNull()

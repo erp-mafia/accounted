@@ -403,8 +403,8 @@ export async function fetchAccountingAccountsDirect(
 
 /**
  * The customer register. `detailBudgetMs` bounds the detail pass for a
- * provider whose list form leaves the terms out (Fortnox, see
- * hydrateCustomers); a customer the pass does not reach keeps its list form.
+ * provider that lists a short form (Fortnox, see partyNeedsDetail); a
+ * customer the pass does not reach keeps its list form.
  */
 export async function fetchCustomersDirect(
   provider: ProviderName,
@@ -463,17 +463,25 @@ export async function fetchCustomersDirect(
   return [];
 }
 
+/**
+ * The supplier register. `detailBudgetMs` bounds the detail pass for a
+ * provider that lists a short form (Fortnox, see partyNeedsDetail); a
+ * supplier the pass does not reach keeps its list form.
+ */
 export async function fetchSuppliersDirect(
   provider: ProviderName,
   accessToken: string,
   providerCompanyId?: string,
+  options: { detailBudgetMs?: number } = {},
 ): Promise<SupplierDto[]> {
   if (provider === 'fortnox') {
     const config = FORTNOX_RESOURCE_CONFIGS[ResourceType.Suppliers]!;
     const items = await fortnoxClient.getPaginated<Record<string, unknown>>(
       accessToken, config.listEndpoint, config.listKey,
     );
-    return items.map((item) => config.mapper(item) as SupplierDto);
+    const listed = items.map((item) => config.mapper(item) as SupplierDto);
+    const { suppliers } = await hydrateSuppliers(provider, accessToken, providerCompanyId, listed, options.detailBudgetMs);
+    return suppliers;
   }
 
   if (provider === 'visma') {
@@ -657,12 +665,14 @@ export async function fetchSupplierInvoicesDirect(
 
 /**
  * The resources hydration applies to: both invoice registers, and Fortnox's
- * customer register, whose list form leaves the terms out (hydrateCustomers).
+ * customer and supplier registers, whose list forms are short
+ * (partyNeedsDetail).
  */
 type DetailResource =
   | typeof ResourceType.SalesInvoices
   | typeof ResourceType.SupplierInvoices
-  | typeof ResourceType.Customers;
+  | typeof ResourceType.Customers
+  | typeof ResourceType.Suppliers;
 
 /** What a hydration pass managed to do, for the migration summary. */
 export interface HydrationReport {
@@ -1177,21 +1187,18 @@ export async function hydrateSupplierInvoices(
 }
 
 /**
- * Does this listed customer still need its detail form for its terms?
+ * Does a listed customer or supplier need its detail form?
  *
- * Fortnox lists customers in a short form (number, name, org number, address,
- * e-mail, phone). TermsOfPayment, VATNumber, EmailInvoice and its copies,
- * YourReference and Type are only on the customer itself, so a register mapped
- * from the list alone gave every migrated Fortnox customer the 30-day default
- * (crm#1245). The other providers' customer lists carry the terms, so they are
- * left alone.
+ * Fortnox lists both registers in a short form, and what the short form
+ * leaves out is lost without a word: a customer's TermsOfPayment, VATNumber,
+ * EmailInvoice and its copies, YourReference and Type (crm#1245), a
+ * supplier's Country and VATNumber, and the phone, which the list names
+ * Phone where the record names it Phone1 (crm#1436). So a Fortnox customer or
+ * supplier is always read from its own record, one request each. The other
+ * providers are left as they were.
  */
-function customerNeedsDetail(provider: ProviderName): (dto: CustomerDto) => boolean {
-  if (provider !== 'fortnox') return () => false;
-  return (dto) => {
-    const terms = dto._raw?.['TermsOfPayment'];
-    return terms === undefined || terms === null || terms === '';
-  };
+function partyNeedsDetail(provider: ProviderName): () => boolean {
+  return provider === 'fortnox' ? () => true : () => false;
 }
 
 /** A customer register with its detail payloads merged in, plus what the pass missed. */
@@ -1205,10 +1212,10 @@ export interface HydratedCustomers {
 }
 
 /**
- * Listed customers with their detail form where the list left the terms out,
- * in the order given. Bounded like the invoice passes: a customer the budget
- * does not reach, or whose detail cannot be read, keeps its list form and is
- * named in `unhydratedIds`.
+ * Listed customers in their detail form where the provider lists a short one
+ * (partyNeedsDetail), in the order given. Bounded like the invoice passes: a
+ * customer the budget does not reach, or whose detail cannot be read, keeps
+ * its list form and is named in `unhydratedIds`.
  */
 export async function hydrateCustomers(
   provider: ProviderName,
@@ -1219,7 +1226,7 @@ export async function hydrateCustomers(
 ): Promise<HydratedCustomers> {
   const { items, report, unhydratedIds, authError } = await hydrateRegister<CustomerDto>(
     customers,
-    customerNeedsDetail(provider),
+    partyNeedsDetail(provider),
     detailFetcher(provider, ResourceType.Customers, accessToken, providerCompanyId),
     resourceMapper(provider, ResourceType.Customers),
     `${provider} customer`,
@@ -1227,4 +1234,34 @@ export async function hydrateCustomers(
   );
 
   return { customers: items, hydration: report, unhydratedIds, authError };
+}
+
+/** A supplier register with its detail payloads merged in, plus what the pass missed. */
+export interface HydratedSuppliers {
+  suppliers: SupplierDto[];
+  hydration: HydrationReport;
+  /** Ids of suppliers that needed their detail form and did not get it. */
+  unhydratedIds: Set<string>;
+  /** The provider's own error when the pass stopped on it (`abortedBy: 'auth'`). */
+  authError?: unknown;
+}
+
+/** The supplier twin of hydrateCustomers, under the same rule and bounds. */
+export async function hydrateSuppliers(
+  provider: ProviderName,
+  accessToken: string,
+  providerCompanyId: string | undefined,
+  suppliers: SupplierDto[],
+  budgetMs: number = DEFAULT_HYDRATION_BUDGET_MS,
+): Promise<HydratedSuppliers> {
+  const { items, report, unhydratedIds, authError } = await hydrateRegister<SupplierDto>(
+    suppliers,
+    partyNeedsDetail(provider),
+    detailFetcher(provider, ResourceType.Suppliers, accessToken, providerCompanyId),
+    resourceMapper(provider, ResourceType.Suppliers),
+    `${provider} supplier`,
+    budgetMs,
+  );
+
+  return { suppliers: items, hydration: report, unhydratedIds, authError };
 }

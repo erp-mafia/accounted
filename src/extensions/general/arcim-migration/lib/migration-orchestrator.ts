@@ -735,7 +735,11 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
     if (options.importSuppliers !== false) {
       emitProgress(options, { status: 'importing', currentStep: 'Importerar leverantörer...', progress: 40 })
       try {
-        const suppliers = await fetchSuppliersDirect(provider, accessToken, providerCompanyId)
+        // Fortnox suppliers are read one by one for the country and VAT
+        // number their list form leaves out (crm#1436), like the customers.
+        const suppliers = await fetchSuppliersDirect(provider, accessToken, providerCompanyId, {
+          detailBudgetMs: hydrationBudgetMs(options, 0),
+        })
         if (suppliers.length > 0) runState.grantProven = true
 
         const supplierSnapshotAt = registerDeltaCursor()

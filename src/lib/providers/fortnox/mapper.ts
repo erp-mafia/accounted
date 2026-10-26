@@ -196,7 +196,10 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
       additionalStreetName: address['Address2'] as string | undefined,
       cityName: (address['City'] ?? address['CityName']) as string | undefined,
       postalZone: (address['ZipCode'] ?? address['PostalCode']) as string | undefined,
-      countryCode: address['Country'] as string | undefined,
+      // A customer or supplier record names its country twice: CountryCode
+      // (ISO, "DE") and Country, the name Fortnox shows ("Tyskland"). The
+      // code needs no translating; an invoice carries only the name.
+      countryCode: nonEmptyString(address['CountryCode']) ?? nonEmptyString(address['Country']),
     } : undefined,
     legalEntity: orgNumber ? {
       registrationName: name,
