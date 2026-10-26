@@ -465,6 +465,31 @@ describe('startPaymentSigning', () => {
     )
   })
 
+  it.each([
+    ['carried a message, so the OCR is missing', 'message' as const, 'OCR_REF_REQUIRED'],
+    ['carried an OCR, so that OCR is wrong', 'ocr' as const, 'OCR_REF_INVALID'],
+  ])('reports a payee under hard OCR control by what the payment carried: it %s', async (_name, referenceType, expected) => {
+    // Swedbank, 2026-10-26: a bankgiro under hard OCR control refused a payment referenced by invoice number.
+    const provider = fakeProvider({ createPayment: vi.fn().mockRejectedValue(new PaymentProviderError('refused', 'OCR_REF_INVALID', false, 422)) })
+    registerPaymentInitiationProvider(provider)
+    const single = batch({ signing_target: 'payment', order_count: 1 })
+    const refused = claimedOrder('o1', { reference_type: referenceType, status: 'failed' })
+    db.setTable('payment_orders', [
+      { data: [order('o1', { reference_type: referenceType })] }, // preview
+      { data: [{ id: 'o1' }] }, // o1 marked
+      { data: [{ id: 'o1' }] }, // o1 failed
+      { data: [refused] }, // stopSigning reads the signing
+      { data: [refused] }, // the refused signing read back
+    ])
+    db.setTable('rpc:claim_payment_orders_for_signing', { data: { ok: true, batch: single, orders: [claimedOrder('o1', { reference_type: referenceType })] } })
+    db.setTable('payment_order_batches', { data: single })
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER })
+
+    expect(result).toMatchObject({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED', details: { provider_code: expected, payment_order_id: 'o1' } })
+    expect(orderPatches()).toContainEqual(expect.objectContaining({ status: 'failed', provider_error_code: expected }))
+  })
+
   it('releases, never fails, an order whose create failed before it reached the bank', async () => {
     const provider = fakeProvider({ createPayment: vi.fn().mockRejectedValue(new PaymentProviderError('busy', 'RATE_LIMITED', true, 429)) })
     registerPaymentInitiationProvider(provider)

@@ -47,6 +47,24 @@ export const PAYMENT_REFUSED = 'PAYMENT_REFUSED'
 
 const WRITE_OPERATIONS: ReadonlySet<PaymentsOperation> = new Set(PAYMENTS_WRITE_OPERATIONS)
 
+/**
+ * The provider code a refused createPayment is known by. Open Payments may answer
+ * with the generic FORMAT_ERROR first and the bank's reason after it
+ * ("FORMAT_ERROR: Invalid ocrRef; OCR_REF_INVALID: ..."); Connect relays the
+ * first code as providerCode and every message as detail, "CODE: text"
+ * joined by "; ". For a create the specific code wins, so the person is told
+ * what to fix. Every other operation keeps FORMAT_ERROR: the signing restart
+ * reads it (isStaleAuthorisationRefusal in orders/signing.ts).
+ */
+export function refusalProviderCode(providerCode: string | null, detail: string | null, operation: PaymentsOperation): string | null {
+  if (providerCode !== 'FORMAT_ERROR' || !detail || operation !== 'createPayment') return providerCode
+  for (const part of detail.split(';')) {
+    const code = /^\s*([A-Z][A-Z0-9_]{2,}):/.exec(part)?.[1]
+    if (code && code !== providerCode) return code
+  }
+  return providerCode
+}
+
 export interface ConnectPaymentsProviderDeps {
   fetch?: typeof fetch
   timeoutMs?: number
@@ -153,7 +171,7 @@ export function toPaymentProviderError(error: unknown, operation: PaymentsOperat
     case 'CONNECTOR_PAYMENTS_NOT_FOUND':
       return new PaymentProviderError(error.message, PAYMENT_NOT_FOUND, false, status, false)
     case 'CONNECTOR_PAYMENTS_REFUSED':
-      return new PaymentProviderError(error.message, error.providerCode ?? PAYMENT_REFUSED, false, status, false)
+      return new PaymentProviderError(error.message, refusalProviderCode(error.providerCode, error.detail, operation) ?? PAYMENT_REFUSED, false, status, false)
     case 'CONNECTOR_PAYMENTS_PROVIDER_FAILED':
     case 'CONNECTOR_RATE_LIMITED':
       return new PaymentProviderError(error.message, error.code, true, status, false)

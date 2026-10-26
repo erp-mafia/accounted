@@ -476,6 +476,15 @@ describe('toPaymentProviderError', () => {
     expect(providerWriteOutcome(toPaymentProviderError(call('CONNECTOR_PAYMENTS_REFUSED', { status: 422 }), 'createPayment'))).toBe('refused')
   })
 
+  it("names a refused create by the bank's own reason behind a FORMAT_ERROR", () => {
+    // The detail as Connect relayed it for Swedbank on 2026-10-26.
+    const detail = "FORMAT_ERROR: Invalid ocrRef; OCR_REF_INVALID: The provided OCR reference is invalid based on the creditor's OCR control requirements"
+    const refused = new ConnectorCallError('Connector: refused', { code: 'CONNECTOR_PAYMENTS_REFUSED', retryable: false, status: 422, providerCode: 'FORMAT_ERROR', detail })
+    expect(toPaymentProviderError(refused, 'createPayment')).toMatchObject({ code: 'OCR_REF_INVALID', retryable: false, outcomeUnknown: false })
+    // The signing restart reads FORMAT_ERROR on a refused start: other operations keep it.
+    expect(toPaymentProviderError(refused, 'startSigning').code).toBe('FORMAT_ERROR')
+  })
+
   it('retries later after a provider failure, a rate limit or a bare 5xx', () => {
     for (const code of ['CONNECTOR_PAYMENTS_PROVIDER_FAILED', 'CONNECTOR_RATE_LIMITED', 'HTTP_502', 'HTTP_503', 'HTTP_429']) {
       const error = toPaymentProviderError(call(code, { status: 502 }), 'createPayment')
