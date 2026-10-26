@@ -3235,7 +3235,11 @@
     "save_failed_title": "Kunde inte spara",
     "iban_prefill": "Hämta från bankkopplingen: {value}",
     "giro_registered_pick": "Registrerat hos Bankgirot: {value}",
-    "giro_registered_pick_named": "Registrerat hos Bankgirot: {value} ({name})"
+    "giro_registered_pick_named": "Registrerat hos Bankgirot: {value} ({name})",
+    "printed_iban_other_account": "Fakturor visar IBAN …{last4} på {account}, men det är kontot {other}.",
+    "printed_iban_use_own": "Använd kontots egen IBAN",
+    "printed_iban_edit": "Redigera kontot",
+    "printed_iban_more": "+{count} till"
   },
   "settings_period_locking": {
     "heading": "Periodlåsning",

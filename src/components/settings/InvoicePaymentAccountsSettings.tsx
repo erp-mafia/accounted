@@ -14,6 +14,7 @@ import {
   SettingsRowNote,
   SettingsSelect,
 } from '@/components/settings/SettingsRows'
+import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -33,7 +34,13 @@ import {
   printedLegacySekAccount,
   summarizeInvoicePaymentAccount,
 } from '@/lib/cash-accounts/invoice-payment-accounts'
-import { blankPrimaryPayeeAccount, cashAccountPayee, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
+import {
+  accountsPrintingOtherAccountIban,
+  blankPrimaryPayeeAccount,
+  cashAccountPayee,
+  isUsableInvoicePayee,
+  type PrintedIbanOfOtherAccount,
+} from '@/lib/cash-accounts/invoice-payee-rules'
 import { isValidSwish, normaliseSwish } from '@/lib/payments/swish'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { foreignInvoicePayeeCandidates } from '@/lib/cash-accounts/invoice-payee-rules'
@@ -244,6 +251,10 @@ export function InvoicePaymentAccountsSettings({
     [accounts, editingId],
   )
   const blankPrimary = useMemo(() => blankPrimaryPayeeAccount(accounts), [accounts])
+  // Accounts whose invoices print another account's bank IBAN (crm#1483):
+  // one attention line for the first, the rest counted; each fix brings up
+  // the next.
+  const printedElsewhere = useMemo(() => accountsPrintingOtherAccountIban(accounts), [accounts])
   // Legacy entries: payment instructions saved per currency before accounts
   // existed, with no account to land on. They still print (the resolver
   // falls back to them) until the user attaches them to an account.
@@ -504,6 +515,31 @@ export function InvoicePaymentAccountsSettings({
     }
   }
 
+  /**
+   * Print the account's own bank IBAN instead of another account's
+   * (crm#1483). The same PATCH as typing it into the account's form; the
+   * route's twin check lets it through because it is the row's own IBAN.
+   */
+  async function printOwnIban(account: CashAccount, ownIban: string) {
+    if (isSaving) return
+    setIsSaving(true)
+    try {
+      const res = await fetch(`/api/cash-accounts/${account.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ iban: ownIban }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok) throw new Error(getUserErrorMessage(json, { context: 'settings', statusCode: res.status }))
+      cancelEdit()
+      await afterWrite(t('saved_account', { account: accountLabel(account) }))
+    } catch (err) {
+      toast({ title: t('save_failed_title'), description: getUserErrorMessage(err), variant: 'destructive' })
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
   /** Attach a legacy per-currency entry to an account: copy its fields, then make it the default. */
   async function attachUnlinked(currency: Currency, cashAccountId: string) {
     const entry = settings.invoice_payment_accounts?.[currency]
@@ -677,6 +713,14 @@ export function InvoicePaymentAccountsSettings({
     )
   }
 
+  /** The one action the attention line offers: print the account's own IBAN, or open the account to fix it by hand. */
+  function printedIbanAction({ account, ownIban }: PrintedIbanOfOtherAccount) {
+    if (ownIban) return { label: t('printed_iban_use_own'), onClick: () => void printOwnIban(account, ownIban) }
+    return { label: t('printed_iban_edit'), onClick: () => startEdit(account) }
+  }
+
+  const printedFix = printedElsewhere[0] ?? null
+
   return (
     <SettingsGroup label={t('heading')} help={t('description')}>
       {isLoading ? (
@@ -686,6 +730,26 @@ export function InvoicePaymentAccountsSettings({
         </div>
       ) : (
         <>
+          {printedFix && (
+            <AttnLine
+              className="px-1 py-3"
+              action={printedIbanAction(printedFix)}
+              trailing={
+                printedElsewhere.length > 1 ? (
+                  <span className="text-muted-foreground">
+                    {' · '}
+                    {t('printed_iban_more', { count: printedElsewhere.length - 1 })}
+                  </span>
+                ) : undefined
+              }
+            >
+              {t('printed_iban_other_account', {
+                last4: printedFix.printedIban.slice(-4),
+                account: accountLabel(printedFix.account),
+                other: printedFix.other.ledger_account,
+              })}
+            </AttnLine>
+          )}
           {accounts.length === 0 && !isAdding && (
             <p className="px-1 py-3 text-sm text-muted-foreground">{t('empty')}</p>
           )}

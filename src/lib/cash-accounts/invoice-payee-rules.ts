@@ -92,6 +92,45 @@ export function foreignInvoicePayeeCandidates(
   return [...usable, ...withBankIban]
 }
 
+/** An account whose invoices print another of the company's accounts' bank IBAN. */
+export interface PrintedIbanOfOtherAccount {
+  account: CashAccount
+  /** The account whose bank IBAN (iban) the printed one is. */
+  other: CashAccount
+  /** The printed IBAN, without spaces and upper case. */
+  printedIban: string
+  /**
+   * The account's own bank IBAN when it has one in IBAN shape: printing it
+   * is the one-click fix. Null when only editing the account can fix it.
+   */
+  ownIban: string | null
+}
+
+/**
+ * The accounts shown on invoices whose printed IBAN (payee_iban) is the bank
+ * IBAN (iban) of another of the company's accounts, in list order: invoices
+ * tell customers to pay into that other account (crm#1483). A copy of the
+ * account's own IBAN that went stale when its bank identity was rewritten, a
+ * map entry the 2026-09-04 backfill put on the account, and a typo all end
+ * here, so the settings page flags it without guessing which. Computed from
+ * the rows the page already loads; nothing is stored.
+ */
+export function accountsPrintingOtherAccountIban(accounts: readonly CashAccount[]): PrintedIbanOfOtherAccount[] {
+  return accounts.flatMap((account) => {
+    const printedIban = compactIban(account.payee_iban)
+    const ownIdentity = compactIban(account.iban)
+    if (!account.invoice_payee || !printedIban || printedIban === ownIdentity) return []
+    const other = accounts.find((candidate) => candidate.id !== account.id && compactIban(candidate.iban) === printedIban)
+    if (!other) return []
+    return [{ account, other, printedIban, ownIban: ownIdentity && IBAN_SHAPE.test(ownIdentity) ? ownIdentity : null }]
+  })
+}
+
+function compactIban(value: string | null | undefined): string | null {
+  const compact = value?.replace(/\s/g, '').toUpperCase() ?? ''
+  return compact || null
+}
+
 /**
  * Bank-type rows only: Stripe (1686), Woo (1680) and Shopify (1584) also live
  * in cash_accounts, and so may a till (1910 Kassa, 1911-1919). A customer is

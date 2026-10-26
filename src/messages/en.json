@@ -3235,7 +3235,11 @@
     "save_failed_title": "Could not save",
     "iban_prefill": "Use the IBAN from your bank connection: {value}",
     "giro_registered_pick": "Registered at Bankgirot: {value}",
-    "giro_registered_pick_named": "Registered at Bankgirot: {value} ({name})"
+    "giro_registered_pick_named": "Registered at Bankgirot: {value} ({name})",
+    "printed_iban_other_account": "Invoices show IBAN …{last4} on {account}, but that is account {other}.",
+    "printed_iban_use_own": "Use the account's own IBAN",
+    "printed_iban_edit": "Edit the account",
+    "printed_iban_more": "+{count} more"
   },
   "settings_period_locking": {
     "heading": "Period locking",
