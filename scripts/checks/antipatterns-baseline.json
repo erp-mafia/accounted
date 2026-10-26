@@ -930,7 +930,6 @@
       "components/transactions/QuickReviewDialog.tsx <-> components/transactions/TransactionBookingDialog.tsx": 10,
       "components/transactions/SkattekontoInboxCard.tsx <-> components/transactions/TransactionInboxCard.tsx": 13,
       "components/transactions/TransactionAttachDocumentDialog.tsx <-> components/transactions/TransactionBookingDialog.tsx": 17,
-      "extensions/general/arcim-migration/lib/backfill-fortnox-phones.ts <-> extensions/general/arcim-migration/lib/repair-fortnox-supplier-numbers.ts": 24,
       "extensions/general/email/lib/resend-service.ts <-> extensions/general/email/lib/smtp-service.ts": 14,
       "extensions/general/mcp-server/server.ts <-> lib/pending-operations/api-approval.ts": 13,
       "extensions/general/mcp-server/server.ts <-> lib/pending-operations/record-app-approval.ts": 11,

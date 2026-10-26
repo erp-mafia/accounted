@@ -1,7 +1,6 @@
 import { migrationJobRoutes } from './lib/migration-job-routes'
 import { invoiceCompletionRoutes } from './lib/invoice-completion-routes'
 import { deductionBackfillRoutes } from './lib/deduction-backfill-routes'
-import { fortnoxPhoneBackfillRoutes } from './lib/fortnox-phone-backfill-routes'
 import { companyMismatchMessages } from './lib/company-mismatch-message'
 import { archiveSIEIntakeText, readSIEIntakeFile, SIEArchiveUnavailableError } from '@/lib/import/sie-intake'
 import { buildTheaterModel } from '@/lib/import/theater-model'
@@ -341,7 +340,6 @@ export const arcimMigrationExtension: Extension = {
     ...migrationJobRoutes,
     ...invoiceCompletionRoutes,
     ...deductionBackfillRoutes,
-    ...fortnoxPhoneBackfillRoutes,
     // ── Check existing connections and import history ──────────────
     {
       method: 'GET',
