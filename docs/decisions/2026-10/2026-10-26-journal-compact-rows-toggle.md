@@ -1,0 +1,1 @@
+[2026-10-26] Bokföring gets back an opt-in Kompakta rader toggle (49px to 31px rows, per company), reversing #1123's one density by design: two customers asked for more verifikat per screen (2026-07, crm#1323) and the default look stays as it is.

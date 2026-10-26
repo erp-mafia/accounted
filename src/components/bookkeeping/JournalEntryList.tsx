@@ -44,7 +44,7 @@ import {
   RowFoldout,
   SortableTh,
 } from '@/components/ui/dry-table'
-import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal } from 'lucide-react'
+import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, Rows3 } from 'lucide-react'
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -139,8 +139,10 @@ function sortHeadOf(stack: SortKey[], column: SortColumn): { direction: 'asc' | 
   return { direction: stack[index].direction, rank: stack.length > 1 ? index + 1 : undefined }
 }
 
-// Compact row density (support feedback: "kompakt visning av verifikat").
-// Persisted per company, mirroring the sort key convention.
+// Compact row density (support feedback: "kompakt visning av verifikat",
+// asked again in crm#1323). Persisted per company, mirroring the sort key
+// convention.
+const DENSITY_STORAGE_KEY_PREFIX = 'Accounted:journal-density:'
 
 // Page-size selector. Persisted per company, mirroring the sort key convention.
 // 'all' collects everything in the current scope in chunks of the most rows
@@ -287,6 +289,7 @@ export default function JournalEntryList({
   const [ledgerHasAnyEntry, setLedgerHasAnyEntry] = useState<boolean | null>(null)
   const [pageSizeChoice, setPageSizeChoice] = useState<PageSizeChoice>('20')
   const [pageSizeHydrated, setPageSizeHydrated] = useState(false)
+  const [compact, setCompact] = useState(false)
   const showingAll = pageSizeChoice === 'all'
   const pageSize = showingAll ? Number.POSITIVE_INFINITY : Number(pageSizeChoice)
 
@@ -444,6 +447,14 @@ export default function JournalEntryList({
       if (stored && PAGE_SIZE_VALUES.has(stored as PageSizeChoice)) setPageSizeChoice(stored as PageSizeChoice)
     }
     setPageSizeHydrated(true)
+  }, [company?.id])
+
+  // Restore the persisted row density (per company). Purely visual, so it
+  // doesn't gate the first fetch; the effect-read avoids an SSR mismatch.
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      setCompact(window.localStorage.getItem(DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default')) === 'compact')
+    }
   }, [company?.id])
 
   // Resolve the initial fiscal-year scope from the session-cached period list.
@@ -1008,6 +1019,14 @@ export default function JournalEntryList({
     }
   }
 
+  const toggleDensity = () => {
+    const next = !compact
+    setCompact(next)
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(DENSITY_STORAGE_KEY_PREFIX + (company?.id ?? 'default'), next ? 'compact' : 'comfortable')
+    }
+  }
+
   // Apply a sort stack, whether it came from a column header or the dialog
   // select. Resets to the first page and persists the choice per company.
   const applySort = (next: SortKey[]) => {
@@ -1105,6 +1124,12 @@ export default function JournalEntryList({
       </DataList>
     )
   }
+
+  // Compact rows take the same 7px off every cell's top and bottom padding
+  // (and the copy button's tap padding, below), so a row goes from 49px to
+  // 31px and the cells keep their alignment.
+  const cellPad = compact ? 'py-1' : undefined
+  const controlCellPad = compact ? 'py-[2px]' : 'py-[9px]'
 
   return (
     <div className="space-y-4">
@@ -1331,6 +1356,19 @@ export default function JournalEntryList({
             </DialogFooter>
           </DialogContent>
         </Dialog>
+        {/* Row density: comfortable vs compact, persisted per company. A toggle
+            (aria-pressed) rather than a mode buried in the filter dialog. */}
+        <Button
+          variant="outline"
+          size="icon-sm"
+          onClick={toggleDensity}
+          aria-pressed={compact}
+          aria-label={t('density_compact')}
+          title={t('density_compact')}
+          className={cn('shrink-0', compact ? 'bg-secondary text-foreground' : 'text-muted-foreground')}
+        >
+          <Rows3 className="h-3.5 w-3.5" />
+        </Button>
         {/* The page context picker (convention 8): fiscal-year scope as a
             chip-dropdown far right in the toolbar, one click to change,
             always visible per BFL. Persists to localStorage (same key as
@@ -1584,7 +1622,7 @@ export default function JournalEntryList({
                     >
                       {/* Hover-revealed selection checkbox (concept .cb) */}
                       <td
-                        className={cn(TD_CLASS, 'w-[26px] !pl-1 py-[9px] select-none')}
+                        className={cn(TD_CLASS, 'w-[26px] !pl-1 select-none', controlCellPad)}
                         onClick={(e) => e.stopPropagation()}
                       >
                         {selectable && (
@@ -1604,7 +1642,7 @@ export default function JournalEntryList({
                           />
                         )}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap', cellPad)}>
                         <span className="inline-flex items-center gap-1">
                           <Link
                             href={`/bookkeeping/${entry.id}`}
@@ -1626,12 +1664,12 @@ export default function JournalEntryList({
                           <OpenInNewTab href={`/bookkeeping/${entry.id}`} />
                         </span>
                       </td>
-                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground', struckCell)}>
+                      <td className={cn(TD_CLASS, 'hidden sm:table-cell whitespace-nowrap tabular-nums text-muted-foreground', struckCell, cellPad)}>
                         {formatDate(entry.entry_date)}
                       </td>
                       {/* overflow-hidden: see #2003, the shrink-0 status
                           chips cannot truncate and would paint over Belopp. */}
-                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden')}>
+                      <td className={cn(TD_CLASS, 'max-w-0 w-full overflow-hidden', cellPad)}>
                         <span className="flex min-w-0 items-center gap-2">
                           <span className={cn('truncate', struckCell)}>{entry.description}</span>
                           {entry.out_of_period && (
@@ -1658,7 +1696,7 @@ export default function JournalEntryList({
                         </span>
                       </td>
                       <td
-                        className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask', struckCell)}
+                        className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums rr-mask', struckCell, cellPad)}
                         title={
                           displayAmount.amount !== displayAmount.debitTotal
                             ? t('amount_money_tooltip', {
@@ -1669,7 +1707,7 @@ export default function JournalEntryList({
                       >
                         {formatCurrency(displayAmount.amount, 'SEK', { minimumFractionDigits: 2 })}
                       </td>
-                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right py-[9px]')}>
+                      <td className={cn(TD_CLASS, 'whitespace-nowrap text-right', controlCellPad)}>
                         <span className="inline-flex items-center justify-end gap-2">
                           {attachmentCounts[entry.id] ? (
                             <button
@@ -1731,6 +1769,9 @@ export default function JournalEntryList({
                                 // changing row height (the row is ~40px from
                                 // the description cell).
                                 'inline-flex items-center rounded-sm p-2 text-muted-foreground hover:text-foreground',
+                                // Compact rows: at 30px the button would set
+                                // the row height on its own.
+                                compact && 'p-1',
                                 // Quiet at rest; coarse pointers (phones and
                                 // tablets) keep the icon visible, since the
                                 // table has no mobile card to fall back on.
