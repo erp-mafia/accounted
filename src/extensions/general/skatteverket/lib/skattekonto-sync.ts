@@ -15,7 +15,7 @@ import {
   SKATTEKONTO_RECONCILIATION_LATEST_KEY,
   type SkattekontoReconciliationLatest,
 } from '@/lib/reconciliation/skattekonto-latest'
-import { getSaldo, getTransaktioner } from './skattekonto-client'
+import { getSaldo, getTransaktioner, isSkattekontoMissing } from './skattekonto-client'
 import { SkatteverketAuthError, type SkvAuth } from './api-client'
 import { auditUserIdFor } from './audit'
 import type {
@@ -31,6 +31,62 @@ const log = createLogger('skattekonto-sync')
 const BALANCE_SNAPSHOT_KEY = 'skattekonto_balance_snapshot'
 const LAST_SYNCED_AT_KEY = 'skattekonto_last_synced_at'
 const SKIPPED_ROWS_KEY = 'skattekonto_skipped_rows'
+const UNAVAILABLE_KEY = 'skattekonto_unavailable'
+
+/**
+ * Why Skatteverket would not hand over the skattekonto on the last attempt,
+ * when the answer was a state rather than a failure:
+ *   no_account     : Skatteverket keeps no skattekonto for the org number
+ *                    (yet): 404 / felkod 3. Newly formed companies.
+ *   not_authorized : the consenting person lacks Skatteverket's
+ *                    authorization for the company (403 felkod 6,
+ *                    BEHORIGHET_SAKNAS).
+ * Stored per company in extension_data and removed by the next successful
+ * sync. The settings panel shows it and the hourly cron re-checks it on a
+ * slower cadence instead of logging the same answer as an error every hour.
+ */
+export type SkattekontoUnavailableReason = 'no_account' | 'not_authorized'
+
+export interface SkattekontoUnavailableState {
+  reason: SkattekontoUnavailableReason
+  /** First attempt that got this answer (kept while the reason is unchanged). */
+  since: string
+  /** Latest attempt that got this answer. */
+  checkedAt: string
+}
+
+/** The unavailable reason an error from a skattekonto read stands for, or null for a real failure. */
+export function skattekontoUnavailableReason(err: unknown): SkattekontoUnavailableReason | null {
+  if (isSkattekontoMissing(err)) return 'no_account'
+  if (err instanceof SkatteverketAuthError && err.code === 'BEHORIGHET_SAKNAS') return 'not_authorized'
+  return null
+}
+
+/**
+ * Record (or refresh) the unavailable state. Best effort: health bookkeeping
+ * must never mask the answer the caller is about to rethrow.
+ */
+async function recordUnavailable(
+  ctx: ExtensionContext,
+  reason: SkattekontoUnavailableReason,
+): Promise<void> {
+  try {
+    const previous = await ctx.settings.get<SkattekontoUnavailableState>(UNAVAILABLE_KEY)
+    const now = new Date().toISOString()
+    const state: SkattekontoUnavailableState = {
+      reason,
+      since: previous?.reason === reason && previous.since ? previous.since : now,
+      checkedAt: now,
+    }
+    await ctx.settings.set(UNAVAILABLE_KEY, state)
+  } catch (err) {
+    log.warn('skattekonto unavailable state not recorded', {
+      companyId: ctx.companyId,
+      reason,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
 
 /**
  * Cap the retained skipped-row trace: it mirrors the CURRENT sync response
@@ -274,6 +330,8 @@ export async function syncSkattekonto(
       getTransaktioner(auth, omfragad, datumFrom, { companyId: ctx.companyId, userId: auditUserId }),
     ])
   } catch (err) {
+    const unavailable = skattekontoUnavailableReason(err)
+    if (unavailable) await recordUnavailable(ctx, unavailable)
     if (err instanceof SkatteverketAuthError) {
       if (
         err.code === 'REFRESH_EXHAUSTED' ||
@@ -551,6 +609,16 @@ export async function syncSkattekonto(
   }
   await ctx.settings.set(BALANCE_SNAPSHOT_KEY, snapshot)
   await ctx.settings.set(LAST_SYNCED_AT_KEY, new Date().toISOString())
+  // Skatteverket handed the account over: any earlier "no account / not
+  // authorized" state is history. Best effort, like recordUnavailable.
+  try {
+    await ctx.settings.clear(UNAVAILABLE_KEY)
+  } catch (err) {
+    log.warn('skattekonto unavailable state not cleared', {
+      companyId: ctx.companyId,
+      message: err instanceof Error ? err.message : String(err),
+    })
+  }
 
   // Persist the reconciliation summary so the Hem notice and the attention
   // resource can read "skattekontot stämmer inte med bokföringen" cheaply
@@ -638,3 +706,4 @@ export async function syncSkattekonto(
 export const SKATTEKONTO_BALANCE_SNAPSHOT_KEY = BALANCE_SNAPSHOT_KEY
 export const SKATTEKONTO_LAST_SYNCED_AT_KEY = LAST_SYNCED_AT_KEY
 export const SKATTEKONTO_SKIPPED_ROWS_KEY = SKIPPED_ROWS_KEY
+export const SKATTEKONTO_UNAVAILABLE_KEY = UNAVAILABLE_KEY

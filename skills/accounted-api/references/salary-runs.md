@@ -471,6 +471,7 @@ Creates 1-4 journal entries (1: salary brutto/tax/net; 2 if the run has any: arb
 **Pitfalls:**
 - Run must be in `paid`: non-`paid` runs return 400 SALARY_RUN_BOOK_NOT_PAID.
 - payment_date must fall in an open fiscal period: locked period returns 400 PERIOD_LOCKED with `fiscal_period_id` and a hint of what unlock action is needed.
+- A run that pays out with a payment_date after today (Swedish calendar day) returns 422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED (details.payment_date) unless the body has confirm_payment_date_ahead: true: the salary verifikation credits the net pay to the bank account on payment_date. Confirm only when the salaries have gone out or the payment is scheduled in the bank; otherwise book on or after payment_date.
 - BFL 5 kap immutability: once `:book` succeeds the verifikationer cannot be edited or deleted. Corrections require `:correct` (Phase 5 PR-3) which does a storno-then-rebook.
 - The salary verifikation is the primary one; its voucher_number appears in the response audit block. The avgifter, vacation, and pension entries get separate voucher numbers (returned as `entry_ids`).
 - A run without arbetsgivaravgifter (only utlägg repaid, or only payees without avgifter such as F-skatt holders) posts no avgifter entry: avgifter_entry_id is null.
@@ -483,6 +484,18 @@ Creates 1-4 journal entries (1: salary brutto/tax/net; 2 if the run has any: arb
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ confirm_payment_date_ahead?: boolean }
+```
+
+Example request:
+```json
+{
+  "confirm_payment_date_ahead": true
+}
+```
 
 Response `200`:
 ```ts
@@ -1468,12 +1481,25 @@ Advances a salary run from `approved` to `paid` and stamps `paid_at`. This is th
 **Pitfalls:**
 - Run must be in `approved`: non-`approved` runs return 400 SALARY_RUN_MARK_PAID_NOT_APPROVED.
 - paid_at is set server-side to the current UTC timestamp; the API does not accept a body-supplied date to keep BFL audit clean.
+- A run that pays out with a payment_date after today (Swedish calendar day) returns 422 SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED (details.payment_date) unless the body has confirm_payment_date_ahead: true. Confirm only when the salaries have already gone out or the payment is scheduled in the bank: :book then posts the net pay as paid out of the bank account on payment_date.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ confirm_payment_date_ahead?: boolean }
+```
+
+Example request:
+```json
+{
+  "confirm_payment_date_ahead": true
+}
+```
 
 Response `200`:
 ```ts

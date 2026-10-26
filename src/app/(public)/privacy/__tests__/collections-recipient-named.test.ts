@@ -136,5 +136,7 @@ describe('named collections recipient on /dpa and /privacy', () => {
       path.relative(SRC, DPA_FILE),
       path.relative(SRC, PRIVACY_FILE),
     ].sort())
-  })
+    // Reads every source file: about 5 s on a busy CI shard, so it gets its own
+    // budget instead of the 5 s default (timed out at 5.3 s on 2026-10-26).
+  }, 30_000)
 })

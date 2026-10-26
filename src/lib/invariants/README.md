@@ -37,6 +37,7 @@ names are the only thing keeping a call site honest, so they carry the weight.
 | `account-number.ts` | BAS account number format (4 digits, always a string) |
 | `iso-date.ts` | `YYYY-MM-DD` shape, plus a real-calendar-date check |
 | `fiscal-year.ts` | Four-digit räkenskapsår key |
+| `vat-number.ts` | EU VAT number format per member state (VIES prefix): the VIES pre-check and the readers of a seller's VAT number off a document |
 | `zod.ts` | Zod primitives built from the rules above, for API schemas |
 
 `zod.ts` is separate so that consumers which do not use Zod (the MCP server,

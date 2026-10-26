@@ -67,6 +67,9 @@ export const OSS_PRESET_RULES: readonly WebshopCountryAccountRule[] = [
 /**
  * "We charge Swedish VAT on EU sales" (below the distance-selling threshold):
  * EU orders book like Swedish sales; VAT-free orders outside the EU as export.
+ * A 'swedish' rule may name its own revenue account (a ruta 05 account, e.g.
+ * one kept for EU consumer sales); the output VAT stays on the Swedish
+ * account for the rate.
  */
 export const NO_OSS_PRESET_RULES: readonly WebshopCountryAccountRule[] = [
   { country: COUNTRY_SCOPE_EU, vat_rate: null, mode: 'swedish' },
@@ -147,7 +150,7 @@ export function alternativeAccountFor(
 function canonicalRule(rule: WebshopCountryAccountRule): string {
   return JSON.stringify(
     rule.mode === 'swedish'
-      ? [rule.country, rule.vat_rate, rule.mode]
+      ? [rule.country, rule.vat_rate, rule.mode, rule.revenue_account || null]
       : [rule.country, rule.vat_rate, rule.mode, rule.revenue_account, rule.vat_account ?? null],
   )
 }
@@ -294,7 +297,19 @@ export function routeOrderBuckets(
   }
 }
 
-/** Whether a routed bucket books on the Swedish accounts (and the bulk revenue template). */
+/**
+ * Whether a routed bucket books like a Swedish sale: output VAT on the
+ * Swedish account for its rate, which only a Swedish rate has.
+ */
 export function usesSwedishAccounts(route: BucketRoute): boolean {
   return route.rule === null || route.rule.mode === 'swedish'
+}
+
+/**
+ * Whether a bucket's revenue line comes from the bulk revenue template (or
+ * the default Swedish sales account): a Swedish-booked bucket whose 'swedish'
+ * rule names no revenue account of its own.
+ */
+export function usesRevenueTemplate(route: BucketRoute): boolean {
+  return route.rule === null || (route.rule.mode === 'swedish' && !route.rule.revenue_account)
 }

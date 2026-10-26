@@ -43,9 +43,14 @@ export const CSP_NONCE_HEADER = 'x-nonce'
  * `/((?!${PROXY_MATCHER_EXCLUSIONS}).*)` literally (Next.js reads the matcher
  * statically, so it cannot import this constant); a test holds the two
  * together.
+ *
+ * robots.txt and sitemap.xml are crawler files that never read a session:
+ * through the proxy every anonymous fetch of them was 307-bounced to /login
+ * (app/robots.ts serves the first; there is no sitemap, so the second is an
+ * honest 404). Anchored, so only the exact files skip the proxy.
  */
 export const PROXY_MATCHER_EXCLUSIONS =
-  '_next/static|_next/image|favicon.ico|\\.well-known|rl/|sw\\.js|sw-register\\.js|manifest\\.json|manifest\\.webmanifest|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$'
+  '_next/static|_next/image|favicon.ico|\\.well-known|rl/|sw\\.js|sw-register\\.js|manifest\\.json|manifest\\.webmanifest|robots\\.txt$|sitemap\\.xml$|icons/|.*\\.(?:svg|png|jpg|jpeg|gif|webp|ico|js|json)$'
 
 /**
  * API routes that serve stored documents and answer with a policy of their

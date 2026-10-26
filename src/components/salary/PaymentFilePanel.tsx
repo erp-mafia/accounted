@@ -25,6 +25,7 @@ import { failureDescription } from '@/lib/browser/action-failure'
 import { cn, formatDate, formatDateTime } from '@/lib/utils'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { parseSalaryPaymentFormat, type SalaryPaymentFileFormat } from '@/lib/salary/payment/payment-format'
+import { salaryInstructionBankFromIban } from '@/lib/salary/payment/instruction-bank'
 
 type PaymentFormat = SalaryPaymentFileFormat
 
@@ -36,7 +37,10 @@ interface PaymentFilePanelProps {
   /** salary_runs.payment_file_version: the version every pain.001 download carries. */
   paymentFileVersion?: number
   defaultFormat: PaymentFormat
-  /** company_settings.salary_default_bank: sorts and auto-expands the matching bank's instructions. */
+  /**
+   * company_settings.salary_default_bank: sorts and auto-expands the matching
+   * bank's instructions. Null falls back to the bank senderIban names.
+   */
   defaultBank?: string | null
   /**
    * company_settings.bankgiro / iban: the sender account each format requires.
@@ -99,7 +103,11 @@ export function PaymentFilePanel({
   const nextVersion = paymentFileVersion + 1
 
   const banks = BANKS_BY_FORMAT[format]
-  const matchedBank = banks.find((b) => b === defaultBank) ?? null
+  // The company's pick, otherwise the bank of its own account (the IBAN the
+  // pain.001 debits): a SEB company that never opened the salary settings
+  // still meets SEB's line first and open (crm#1391). 'other' stays no match.
+  const ownBank = defaultBank ?? salaryInstructionBankFromIban(senderIban)
+  const matchedBank = banks.find((b) => b === ownBank) ?? null
   const sortedBanks = matchedBank
     ? [matchedBank, ...banks.filter((b) => b !== matchedBank)]
     : banks

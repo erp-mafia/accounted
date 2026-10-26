@@ -4,6 +4,7 @@ import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
 import { declaredAvgifterNote, effectiveRunTotals } from '@/lib/salary/effective-figures'
+import { regionalSupportForRun } from '@/lib/salary/regional-support'
 import type { SalaryRunEmployee } from '@/types'
 import { formatRunAmount, type RunDetail } from './types'
 
@@ -29,6 +30,9 @@ export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
   // whenever the two differ, so 1 086,12 here and 1 085 on the AGI and the
   // skattekonto read as one figure, not a rounding error (crm#1149).
   const declared = declaredAvgifterNote(employees, run.calculation_params)
+  // Regionalt stöd (PH 208): the FK476 avdrag the AGI subtracts and the
+  // booking credits back on 7510, from the run's frozen snapshot.
+  const regional = regionalSupportForRun(employees, run.calculation_params)
 
   const cards: Array<{ label: string; value: number; accent?: boolean; note?: ReactNode }> = [
     { label: t('kpi_gross'), value: run.total_gross },
@@ -37,11 +41,19 @@ export function RunKpiCards({ run, employees }: RunKpiCardsProps) {
     {
       label: t('kpi_avgifter'),
       value: effective.total_avgifter,
-      note: declared ? (
-        <InfoTooltip content={t('avgifter_declared_help')}>
-          {t('kpi_avgifter_declared', { amount: formatRunAmount(declared.declared) })}
-        </InfoTooltip>
-      ) : undefined,
+      note:
+        declared || regional ? (
+          <>
+            {declared && (
+              <InfoTooltip content={t('avgifter_declared_help')}>
+                {t('kpi_avgifter_declared', { amount: formatRunAmount(declared.declared) })}
+              </InfoTooltip>
+            )}
+            {regional && (
+              <p>{t('kpi_avgifter_regional_support', { amount: formatRunAmount(regional.deduction) })}</p>
+            )}
+          </>
+        ) : undefined,
     },
     { label: t('kpi_employer_cost'), value: effective.total_employer_cost },
   ]

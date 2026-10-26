@@ -187,6 +187,7 @@ const BANK: PackageDoors = {
     'POST /api/bank/open-payments/connections/:id/restart',
     'POST /api/bank/open-payments/connections/:id/select',
     'POST /api/bank/open-payments/connections/:id/sync',
+    'PATCH /api/bank/connections/:id/ledgers',
     'PATCH /api/extensions/ext/enable-banking/accounts',
     'POST /api/extensions/ext/enable-banking/attach',
     'DELETE /api/extensions/ext/enable-banking/disconnect',

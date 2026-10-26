@@ -221,12 +221,18 @@ export interface AGICompanyData {
 export interface AGITotals {
   totalTax: number                // FK497 SummaSkatteavdr
   totalAvgifterBasis: number      // retained for compat (sum of IU underlag)
-  totalAvgifterAmount: number     // FK487 SummaArbAvgSlf (sum of calculated avgifter across categories)
+  totalAvgifterAmount: number     // FK487 SummaArbAvgSlf (calculated avgifter across categories, less regionalSupport.deduction)
   avgifterByCategory: {
     standard?: { basis: number; amount: number }
     reduced65plus?: { basis: number; amount: number }
     youth?: { basis: number; amount: number }
   }
+  /**
+   * Regionalt stöd (lib/salary/regional-support.ts): FK471 underlag and
+   * FK476 avdrag in HU. When present, totalAvgifterAmount is the category
+   * amounts less the avdrag (Skatteverket's IK587, kontroll B_006).
+   */
+  regionalSupport?: { underlag: number; deduction: number } | null
 }
 
 /**
@@ -536,6 +542,13 @@ export function generateAGIXml(
   // FK487: Summa arbetsgivaravgifter och SLF (calculated total, NOT basis)
   if (totals.totalAvgifterAmount > 0) {
     lines.push(`        <gem:SummaArbAvgSlf faltkod="487">${formatAmount(totals.totalAvgifterAmount)}</gem:SummaArbAvgSlf>`)
+  }
+
+  // FK471/FK476: regionalt stöd, both or neither (kontroll S_106/S_108).
+  // FK487 above already carries the avgift after the avdrag (IK587, B_006).
+  if (totals.regionalSupport && totals.regionalSupport.deduction > 0) {
+    lines.push(`        <gem:UlagRegionaltStod faltkod="471">${formatAmount(totals.regionalSupport.underlag)}</gem:UlagRegionaltStod>`)
+    lines.push(`        <gem:AvdragRegionaltStod faltkod="476">${formatAmount(totals.regionalSupport.deduction)}</gem:AvdragRegionaltStod>`)
   }
 
   lines.push('      </gem:HU>')

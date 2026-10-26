@@ -1,6 +1,6 @@
 'use client'
 
-import { forwardRef, useCallback, useRef, useState } from 'react'
+import { forwardRef, useCallback, useId, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { ChevronDown } from 'lucide-react'
 import {
@@ -13,10 +13,11 @@ import {
 } from '@/components/ui/dropdown-menu'
 import {
   UNIT_MAX_LENGTH,
+  customUnitOutcome,
   isUnitSuggestion,
-  normalizeCustomUnit,
   unitName,
   unitPickerOptions,
+  type CustomUnitTrigger,
 } from '@/lib/invoices/units'
 import { cn } from '@/lib/utils'
 
@@ -54,14 +55,19 @@ export interface UnitPickerProps
  *
  * Opening it always shows the whole list, each code beside its plain name
  * ("st  styck"), the current unit checked. Below the list, "Annan enhet"
- * takes any free text up to the API's limit, committed with Enter, so a unit
- * we do not list is typed rather than blocked; a stored unit we do not list
- * shows as itself and stays pickable.
+ * takes any free text up to the API's limit, so a unit we do not list is
+ * typed rather than blocked; a stored unit we do not list shows as itself and
+ * stays pickable. The typed text is committed by Enter and by the list
+ * closing any other way (a click outside, Tab, the trigger), so "EUR" typed
+ * and clicked away from is kept rather than dropped (PH 180); Escape is the
+ * one way out without it. customUnitOutcome (lib/invoices/units.ts) decides.
  *
  * Keyboard (Radix menu): Enter, Space or ArrowDown on the trigger opens it on
  * the current unit, arrows move, Enter picks, a letter jumps to the first
  * code that starts with it, Escape closes, and focus returns to the trigger.
  * The ref lands on the trigger, so react-hook-form's setFocus reaches it.
+ * Every caller (invoice rows, articles, recurring invoices, sales orders)
+ * gets this through the one component.
  */
 const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitPicker(
   {
@@ -80,6 +86,14 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
   const locale = useLocale()
   const [open, setOpen] = useState(defaultOpen)
   const [draft, setDraft] = useState('')
+  // The same text, readable inside one event: picking a suggestion clears it
+  // and Radix closes the list in that same event, before a re-render, so the
+  // close must not see the stale state and commit the draft over the pick.
+  const draftRef = useRef('')
+  // Set by Escape just before Radix reports the close it causes.
+  const escapingRef = useRef(false)
+  const [draftInvalid, setDraftInvalid] = useState(false)
+  const draftErrorId = useId()
   const contentRef = useRef<HTMLDivElement>(null)
   const customRef = useRef<HTMLInputElement>(null)
   // Custom units this field has held, so one stays pickable after the user
@@ -94,15 +108,26 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
     setEarlier((prev) => (prev.includes(unit) ? prev : [unit, ...prev]))
   }
 
+  function setDraftText(text: string) {
+    draftRef.current = text
+    setDraft(text)
+    setDraftInvalid(false)
+  }
+
   function pick(unit: string) {
     rememberCustom(current)
+    draftRef.current = ''
     if (unit !== current) onChange(unit)
   }
 
-  function commitDraft() {
-    const unit = normalizeCustomUnit(draft)
-    if (unit === '') return
-    pick(unit)
+  function endEntry(trigger: CustomUnitTrigger) {
+    const outcome = customUnitOutcome(draftRef.current, trigger)
+    if (outcome.action === 'keep_open') {
+      setDraftInvalid(outcome.invalid)
+      if (outcome.invalid) customRef.current?.focus()
+      return
+    }
+    if (outcome.action === 'commit') pick(outcome.unit)
     setOpen(false)
   }
 
@@ -125,8 +150,18 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
     <DropdownMenu
       open={open}
       onOpenChange={(next) => {
-        setOpen(next)
-        if (next) setDraft('')
+        if (next) {
+          escapingRef.current = false
+          setDraftText('')
+          setOpen(true)
+          return
+        }
+        // Any close Radix reports (outside click, focus leaving, the trigger,
+        // a picked suggestion, Escape) ends the typed entry; a pick has
+        // already cleared the draft, so only typed text is committed here.
+        const trigger: CustomUnitTrigger = escapingRef.current ? 'escape' : 'close'
+        escapingRef.current = false
+        endEntry(trigger)
       }}
     >
       <DropdownMenuTrigger asChild disabled={triggerProps.disabled}>
@@ -158,6 +193,9 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
         ref={contentRefCallback}
         align={variant === 'cell' ? 'end' : 'start'}
         className="flex w-56 max-h-[var(--radix-dropdown-menu-content-available-height)] flex-col"
+        onEscapeKeyDown={() => {
+          escapingRef.current = true
+        }}
       >
         <div className="min-h-0 overflow-y-auto">
           <DropdownMenuRadioGroup value={current} onValueChange={pick}>
@@ -196,14 +234,25 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
             ref={customRef}
             value={draft}
             maxLength={UNIT_MAX_LENGTH}
-            onChange={(event) => setDraft(event.target.value)}
+            onChange={(event) => setDraftText(event.target.value)}
             placeholder={t('custom_placeholder')}
             aria-label={t('custom_label')}
-            className="h-8 w-full rounded-sm border border-border bg-background px-2 text-[13px] placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+            aria-invalid={draftInvalid || undefined}
+            aria-describedby={draftInvalid ? draftErrorId : undefined}
+            className={cn(
+              'h-8 w-full rounded-sm border border-border bg-background px-2 text-[13px] placeholder:text-muted-foreground/60 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring',
+              draftInvalid && 'border-destructive',
+            )}
             onKeyDown={(event) => {
               if (event.key === 'Enter') {
                 event.preventDefault()
-                commitDraft()
+                endEntry('enter')
+              } else if (event.key === 'Tab') {
+                // Tab leaves the field, so it commits like any other close.
+                // Kept from moving focus itself: the closing menu hands focus
+                // back to the trigger, which then shows the new unit.
+                event.preventDefault()
+                endEntry('close')
               } else if (event.key === 'ArrowUp' || event.key === 'ArrowDown') {
                 event.preventDefault()
                 const list = items()
@@ -216,6 +265,11 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
               if (event.key !== 'Escape') event.stopPropagation()
             }}
           />
+          {draftInvalid && (
+            <p id={draftErrorId} className="px-1 pt-1 text-[12.5px] text-destructive">
+              {t('custom_too_long', { max: UNIT_MAX_LENGTH })}
+            </p>
+          )}
         </div>
       </DropdownMenuContent>
     </DropdownMenu>

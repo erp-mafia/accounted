@@ -210,6 +210,7 @@ function toUpdatePayload(c: CompanySettingsChanges) {
     salary_net_rounding: c.salary_net_rounding,
     salary_payslip_show_employer_cost: c.salary_payslip_show_employer_cost,
     salary_payslip_show_breakdown: c.salary_payslip_show_breakdown,
+    salary_regional_support: c.salary_regional_support,
     salary_calculation_policy: c.salary_calculation_policy,
     salary_deviation_period: c.salary_deviation_period,
     salary_vacation_year_basis: c.salary_vacation_year_basis,

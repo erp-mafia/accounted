@@ -12,6 +12,8 @@ import { COMPLETE_INVOICE_LINES_SOURCE, planInvoiceLineCompletion, type Candidat
 
 const log = createLogger('invoice-completion-worker')
 const COMPANY_BUDGET_MS = 120_000
+/** How long a provider refusal outside Fortnox waits before the next try (B11). */
+export const REFUSED_RETRY_SECONDS = 86_400
 const WRITE_RESERVE_MS = 15_000
 const QUERY_BUDGET_MS = 8_000
 
@@ -58,6 +60,22 @@ function addReceipt(result: InvoiceCompletionSummary, receipt: Receipt) {
     if (receipt.headerUpdated) result.headersUpdated++
     if (receipt.eventId) result.historyAppended++
   }
+}
+
+const REFUSED_CREDENTIAL_CODES: ReadonlySet<string> = new Set([
+  'PROVIDER_AUTH_EXPIRED', 'PROVIDER_LICENSE_MISSING', 'PROVIDER_API_MODULE_INACTIVE', 'PROVIDER_RESOURCE_FORBIDDEN',
+])
+
+/**
+ * How the provider refused this company's connection, or null when it did not:
+ * a 401/403 on a data call, or 'credential' when resolving the connection was
+ * refused for good (a dead grant, a missing licence). A refusal is the
+ * customer's next step, not our fault.
+ */
+function providerRefusal(error: unknown): 401 | 403 | 'credential' | null {
+  if (error instanceof ProviderCallError) return REFUSED_CREDENTIAL_CODES.has(error.code) ? 'credential' : null
+  const status = (error as { statusCode?: unknown } | null)?.statusCode
+  return status === 401 || status === 403 ? status : null
 }
 
 async function stage<T>(name: string, deadline: number, fields: Record<string, unknown>, operation: () => Promise<T>): Promise<T> {
@@ -201,11 +219,21 @@ export async function completeInvoiceCompletionWork(
       log.info('invoice completion yielded at deadline', { ...fields, stage: currentStage })
     } else {
       result.companiesFailed++
-      retrySeconds = work.provider === 'fortnox' ? fortnoxCompletionRetrySeconds(error) : 3600
+      // Outside Fortnox no block is recorded (block_invoice_completion_work
+      // takes Fortnox consents only), so a refusal that answers the same until
+      // the customer acts (a 403, a dead grant) waits a day instead of an
+      // hour: a Visma and a Bokio 403 were asked, and logged as errors, every
+      // run for weeks (B11). A bare 401 is the token ageing mid-run; the next
+      // run refreshes it, so it keeps the hour.
+      const refusal = providerRefusal(error)
+      retrySeconds = work.provider === 'fortnox' ? fortnoxCompletionRetrySeconds(error)
+        : refusal === 403 || refusal === 'credential' ? REFUSED_RETRY_SECONDS : 3600
       const reason = work.provider === 'fortnox' ? fortnoxCompletionBlock(error) : null
       const revision = error instanceof ProviderCallError ? error.credentialRevision ?? connection?.credentialRevision : connection?.credentialRevision
       if (reason && revision) block = { reason, revision }
-      log.error('invoice completion company interrupted', { ...fields, stage: currentStage, error: String(error) })
+      const logFields = { ...fields, provider: work.provider, stage: currentStage, error: String(error) }
+      if (refusal !== null) log.warn('invoice completion company refused by the provider', { ...logFields, retrySeconds })
+      else log.error('invoice completion company interrupted', logFields)
     }
   }
   // The provider deadline leaves room for receipt recovery and releasing the

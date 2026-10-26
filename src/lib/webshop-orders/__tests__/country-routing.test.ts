@@ -10,6 +10,7 @@ import {
   routeOrderBuckets,
   routedCountryOf,
   sameCountryRules,
+  usesRevenueTemplate,
   usesSwedishAccounts,
 } from '../country-routing'
 import type { WebshopCountryAccountRule } from '@/types'
@@ -164,6 +165,15 @@ describe('routeOrderBuckets', () => {
     const routing = routeOrderBuckets(shopify('DK'), [{ rate: 25, net: 100, tax: 25 }], NO_OSS_PRESET_RULES)
     expect(routing.unroutedRates).toEqual([])
     expect(usesSwedishAccounts(routing.buckets[0])).toBe(true)
+    expect(usesRevenueTemplate(routing.buckets[0])).toBe(true)
+  })
+
+  it('keeps the revenue template off a "Swedish VAT" rule with its own account (crm#1449)', () => {
+    const rules: WebshopCountryAccountRule[] = [{ country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3012' }]
+    const routing = routeOrderBuckets(shopify('DK'), [{ rate: 25, net: 100, tax: 25 }], rules)
+    expect(usesSwedishAccounts(routing.buckets[0])).toBe(true)
+    expect(usesRevenueTemplate(routing.buckets[0])).toBe(false)
+    expect(usesRevenueTemplate({ bucket: routing.buckets[0].bucket, rule: null })).toBe(true)
   })
 })
 
@@ -210,6 +220,17 @@ describe('sameCountryRules', () => {
     ).toBe(false)
     expect(sameCountryRules(FROM_FORM.slice(1), FROM_JSONB)).toBe(false)
     expect(sameCountryRules([...FROM_FORM].reverse(), FROM_JSONB)).toBe(false)
+  })
+
+  it("compares a 'swedish' rule's own revenue account, a missing one read as none", () => {
+    const plain: WebshopCountryAccountRule[] = [{ country: 'EU', vat_rate: null, mode: 'swedish' }]
+    const nullAccount: WebshopCountryAccountRule[] = [
+      { country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: null },
+    ]
+    const own: WebshopCountryAccountRule[] = [{ country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3012' }]
+    expect(sameCountryRules(plain, nullAccount)).toBe(true)
+    expect(sameCountryRules(plain, own)).toBe(false)
+    expect(sameCountryRules(own, [{ ...own[0] }])).toBe(true)
   })
 })
 

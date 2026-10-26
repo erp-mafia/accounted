@@ -4,11 +4,13 @@
  *
  * Applying is two requests that already exist, in the order the user would
  * make them by hand:
- *   1. PATCH /api/extensions/ext/enable-banking/accounts with the suggestion's
- *      `selection`: the request the bank picker (AccountPickerDialog) sends,
+ *   1. PATCH /api/bank/connections/:id/ledgers with the suggestion's
+ *      mappings: the ledger-account change every bank connection has, Enable
+ *      Banking and Open Payments alike (lib/cash-accounts/ledger-change.ts),
  *      so save_bank_account_selection stays the one writer of a bank
  *      account's ledger account and its named refusals reach the user as they
- *      do from the picker.
+ *      do from the picker. It used to be the Enable Banking picker's own
+ *      request, which answered 404 for an Open Payments connection.
  *   2. POST /api/reconciliation/bank/run { account_number }: the verifikat
  *      matcher of Bankavstämning, once per ledger account a bank account
  *      moved onto. It links the bank transactions to the verifikat that
@@ -23,9 +25,9 @@
  */
 
 import type { LedgerSuggestionView } from '@/lib/cash-accounts/ledger-suggestion-view'
+import { applyLedgerChange, LedgerChangeError } from '@/lib/cash-accounts/ledger-change-client'
 
 const SUGGESTIONS_URL = '/api/cash-accounts/ledger-suggestions'
-const SELECTION_URL = '/api/extensions/ext/enable-banking/accounts'
 const MATCHER_URL = '/api/reconciliation/bank/run'
 
 /**
@@ -143,23 +145,13 @@ export async function applyLedgerSuggestion(companyId: string, id: string): Prom
     return { status: 'gone' }
   }
 
-  let response: Response
   try {
-    response = await fetch(SELECTION_URL, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(current.selection),
-    })
-  } catch {
-    return { status: 'refused', reason: null }
-  }
-  if (!response.ok) {
-    // Route validation answers { error: string }; a database refusal answers
-    // the envelope { error: { code, message } } with the sentence that names
-    // the bank account (lib/cash-accounts/selection-refusal.ts).
-    const body = (await response.json().catch(() => null)) as { error?: string | { message?: string } } | null
-    const message = typeof body?.error === 'string' ? body.error : body?.error?.message
-    return { status: 'refused', reason: typeof message === 'string' && message ? message : null }
+    // Only the suggested accounts are named: every other account keeps its
+    // ledger account and its on/off. A refusal answers the sentence that
+    // names the bank account (lib/cash-accounts/selection-refusal.ts).
+    await applyLedgerChange(current.selection.connection_id, current.selection.account_mappings)
+  } catch (error) {
+    return { status: 'refused', reason: error instanceof LedgerChangeError ? error.reason : null }
   }
 
   forgetLedgerSuggestions()

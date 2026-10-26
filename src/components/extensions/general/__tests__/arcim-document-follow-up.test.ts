@@ -247,6 +247,38 @@ function supplierFilesNote(html: string, sentence: string): string {
   return html.slice(html.lastIndexOf('<li', at), html.indexOf('</li>', at) + '</li>'.length)
 }
 
+describe('DocumentImportFollowUp, a connection the provider refused (B11)', () => {
+  const refused = (provider: 'fortnox' | 'bokio', code = 'PROVIDER_AUTH_EXPIRED') =>
+    state({
+      phase: 'import-error',
+      provider,
+      found: 4610,
+      result: result({ dryRun: false, scanned: 1200, linked: 1190, total: 4610, partial: true, nextCursor: 'file-1200' }),
+      problem: { code, requestId: 'req_refused', reconnectRequired: true },
+    })
+
+  it('asks for the reconnect with one button, no retry and no failure colour', () => {
+    const html = render(refused('fortnox'))
+    expect(html).toContain('Fortnox behöver kopplas igen')
+    expect(html).toContain('Koppla Fortnox igen')
+    expect(html).not.toContain(ext.ext_arcim_documents_retry_import)
+    expect(html).not.toContain('text-destructive')
+    expect(html.match(/<button/g)).toHaveLength(1)
+  })
+
+  it('names Bokio for a Bokio token without the right', () => {
+    const html = render(refused('bokio', 'PROVIDER_RESOURCE_FORBIDDEN'))
+    expect(html).toContain('Koppla Bokio igen')
+    expect(html).not.toContain(ext.ext_arcim_documents_reconnect_action)
+  })
+
+  it('renders in English with no missing key', () => {
+    const html = render(refused('fortnox'), { locale: 'en' })
+    expect(html).toContain('Reconnect Fortnox')
+    expect(html).toContain('Fortnox needs to be reconnected')
+  })
+})
+
 describe('the supplier-invoice files note', () => {
   const permissionSentence = ext.ext_arcim_documents_supplier_files_permission.replace(
     '{scope}',

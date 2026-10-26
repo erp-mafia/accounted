@@ -1,4 +1,5 @@
 import type { ObservabilityContext, ObservabilityLevel, ObservabilitySink } from '@/lib/observability'
+import { redactedError } from '@/lib/observability/redact'
 import { getPostHogServer, flushAnalytics } from './posthog-server'
 
 /**
@@ -47,10 +48,15 @@ export const postHogSink: ObservabilitySink = {
     try {
       const posthog = getPostHogServer()
       if (!posthog) return
+      // The sink hands over redact()'s serialized object, never a live Error
+      // (sink.ts contract). Wrapping it as new Error(String(error)) sent every
+      // logged error as "Error: [object Object]" with this frame as its only
+      // stack; redactedError rebuilds a real Error from its fields instead.
+      const exception = redactedError(error)
       posthog.captureException(
-        error instanceof Error ? error : new Error(String(error)),
+        exception,
         distinctIdFrom(context),
-        toProperties(context)
+        toProperties(context, exception.code !== undefined ? { error_code: exception.code } : undefined)
       )
     } catch {
       // Contract: must not throw.

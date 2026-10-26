@@ -29,7 +29,11 @@ vi.mock('@/lib/extensions/context-factory', () => ({
 
 vi.mock('@/extensions/general/skatteverket/lib/skattekonto-sync', () => ({
   SKATTEKONTO_LAST_SYNCED_AT_KEY: 'skattekonto_last_synced_at',
+  SKATTEKONTO_UNAVAILABLE_KEY: 'skattekonto_unavailable',
   syncSkattekonto: (...args: unknown[]) => mocks.syncSkattekonto(...args),
+  // The real classifier keys on these two test doubles' shapes.
+  skattekontoUnavailableReason: (err: unknown) =>
+    (err as { unavailable?: string } | null)?.unavailable ?? null,
 }))
 
 vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
@@ -81,14 +85,19 @@ function makeRequest(): Request {
   return new Request('http://localhost/api/extensions/skatteverket/skattekonto/sync/cron')
 }
 
-function makeSupabaseStub(tokens: Record<string, unknown>[], opts: { lastSyncedAt?: string } = {}) {
+function makeSupabaseStub(
+  tokens: Record<string, unknown>[],
+  opts: { lastSyncedAt?: string; extensionRows?: Record<string, unknown>[] } = {},
+) {
   return {
     from: vi.fn((table: string) => {
       const resolved = table === 'skatteverket_tokens'
         ? { data: tokens, error: null }
-        : { data: null, error: null }
+        : table === 'extension_data' && opts.extensionRows
+          ? { data: opts.extensionRows, error: null }
+          : { data: null, error: null }
       const chain: any = {}
-      for (const method of ['select', 'eq', 'order', 'range']) {
+      for (const method of ['select', 'eq', 'in', 'order', 'range']) {
         chain[method] = vi.fn(() => chain)
       }
       // The per-company cooldown read (extension_data, maybeSingle).
@@ -184,5 +193,112 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
     )
     await GET(makeRequest())
     expect(mocks.syncSkattekonto).not.toHaveBeenCalled()
+  })
+  // B07: Skatteverket answering "no skattekonto yet" (404) or "this person is
+  // not authorized" (403 felkod 6) is a state. It was logged as
+  // "[skattekonto-sync-cron] Sync failed" every hour for every such company.
+  it('a no-skattekonto answer is reported as unavailable, not logged as an error', async () => {
+    const companyId = '11111111-1111-4111-8111-111111111111'
+    const tokens = [{ user_id: 'u1', company_id: companyId, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 }]
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+    mocks.syncSkattekonto.mockRejectedValue(Object.assign(new Error('Inget skattekonto'), { unavailable: 'no_account' }))
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body).toMatchObject({ processed: 1, unavailable: 1, errors: 0 })
+    expect(body.results[0]).toMatchObject({ companyId, status: 'unavailable', error: 'no_account' })
+    expect(errorSpy).not.toHaveBeenCalled()
+  })
+
+  it('a real failure is still an error', async () => {
+    const companyId = '11111111-1111-4111-8111-111111111111'
+    const tokens = [{ user_id: 'u1', company_id: companyId, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 }]
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+    mocks.syncSkattekonto.mockRejectedValue(new Error('Skatteverket svarade med 500'))
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body).toMatchObject({ processed: 1, unavailable: 0, errors: 1 })
+    expect(errorSpy).toHaveBeenCalledWith('[skattekonto-sync-cron] Sync failed', expect.anything())
+  })
+
+  it('an unavailable company is asked again after three hours, not every hour', async () => {
+    const companyId = '11111111-1111-4111-8111-111111111111'
+    const tokens = [{ user_id: 'u1', company_id: companyId, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 }]
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+    const state = (hoursAgo: number) => ({
+      company_id: companyId,
+      key: 'skattekonto_unavailable',
+      value: {
+        reason: 'no_account',
+        since: '2026-10-20T10:00:00.000Z',
+        checkedAt: new Date(Date.now() - hoursAgo * 60 * 60 * 1000).toISOString(),
+      },
+    })
+
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens, { extensionRows: [state(1)] }))
+    const skipped = await (await GET(makeRequest())).json()
+    expect(mocks.syncSkattekonto).not.toHaveBeenCalled()
+    expect(skipped.results[0]).toMatchObject({ status: 'skipped_cooldown', error: 'no_account' })
+
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens, { extensionRows: [state(3.5)] }))
+    expect(await (await GET(makeRequest())).json()).toMatchObject({ synced: 1 })
+  })
+
+  it('a company Skatteverket has no account for no longer jumps the queue', async () => {
+    const stale = '11111111-1111-4111-8111-111111111111'
+    const noAccount = '22222222-2222-4222-8222-222222222222'
+    const tokens = [
+      { user_id: 'u2', company_id: noAccount, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 },
+      { user_id: 'u1', company_id: stale, expires_at: '2099-01-01T00:00:00Z', refresh_count: 0 },
+    ]
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([stale, noAccount]))
+    const hoursAgo = (h: number) => new Date(Date.now() - h * 60 * 60 * 1000).toISOString()
+    mocks.createClient.mockReturnValue(
+      makeSupabaseStub(tokens, {
+        extensionRows: [
+          { company_id: stale, key: 'skattekonto_last_synced_at', value: hoursAgo(5) },
+          {
+            company_id: noAccount,
+            key: 'skattekonto_unavailable',
+            value: { reason: 'no_account', since: hoursAgo(30), checkedAt: hoursAgo(4) },
+          },
+        ],
+      }),
+    )
+
+    const body = await (await GET(makeRequest())).json()
+
+    // Never synced, but asked 4 h ago: behind the company synced 5 h ago.
+    expect(body.results.map((r: { companyId: string }) => r.companyId)).toEqual([stale, noAccount])
+  })
+
+  it('syncs up to four companies at once, so one slow company does not stall the run', async () => {
+    const companyIds = Array.from({ length: 9 }, (_, i) => `11111111-1111-4111-8111-${String(i).padStart(12, '0')}`)
+    const tokens = companyIds.map((company_id, i) => ({
+      user_id: `u${i}`,
+      company_id,
+      expires_at: '2099-01-01T00:00:00Z',
+      refresh_count: 0,
+    }))
+    mocks.createClient.mockReturnValue(makeSupabaseStub(tokens))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set(companyIds))
+    let inFlight = 0
+    let maxInFlight = 0
+    mocks.syncSkattekonto.mockImplementation(async () => {
+      inFlight++
+      maxInFlight = Math.max(maxInFlight, inFlight)
+      await new Promise((resolve) => setTimeout(resolve, 5))
+      inFlight--
+      return { booked: 0, upcoming: 0 }
+    })
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body).toMatchObject({ processed: 9, synced: 9, errors: 0 })
+    expect(maxInFlight).toBe(4)
+    expect(body.results.map((r: { companyId: string }) => r.companyId)).toEqual(companyIds)
   })
 })

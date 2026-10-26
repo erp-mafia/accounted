@@ -5,6 +5,7 @@ import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveSkattekontoAccount, type SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
 import { loadCancelledEntryIds } from '@/lib/skatteverket/skattekonto-cancelled-entries'
+import { fetchLiveLedgerSettlements } from '@/lib/reconciliation/ledger-settlement-store'
 import {
   evaluateSkattekontoLink,
   groupSettlesEntry,
@@ -333,13 +334,14 @@ type EntryView = {
 function buildEntryViews(
   lines: LineRow[],
   linkedRows: Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }>,
-  cancelled: Set<string>,
+  /** Never a candidate: cancelled (loadCancelledEntryIds) or settled (loadSettledEntryIds). */
+  excluded: Set<string>,
   account: SkattekontoLedgerAccount,
 ): Map<string, EntryView> {
   const views = new Map<string, EntryView>()
   for (const line of lines) {
     const e = line.journal_entries
-    if (cancelled.has(e.id)) continue
+    if (excluded.has(e.id)) continue
     let view = views.get(e.id)
     if (!view) {
       view = { entry: e, lines: [], linked: [] }
@@ -359,6 +361,39 @@ function buildEntryViews(
     if (view) view.linked.push(Number(r.belopp_skatteverket))
   }
   return views
+}
+
+/**
+ * Verifikat in a live settlement on the skattekonto account (issue #50): the
+ * verifikat a 1:N link spreads one Skatteverket event over (crm#1183,
+ * lib/reconciliation/skattekonto-split.ts), or verifikat settled against
+ * each other there. The event row points at one of them only, so the others
+ * carry no link and the pointed-at one keeps a remainder the row does not
+ * explain; read alone, every one of them looks open. The settlement explains
+ * them, so none is a candidate for another row: proposing one, and linking
+ * it, would break the settlement. Undoing the settlement (the row's unlink)
+ * makes them candidates again. Throws on a failed read.
+ */
+async function loadSettledEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  account: SkattekontoLedgerAccount,
+): Promise<Set<string>> {
+  const members = await fetchLiveLedgerSettlements(supabase, companyId, account)
+  return new Set(members.map(m => m.journal_entry_id))
+}
+
+/** Cancelled and settled verifikat together: what buildEntryViews leaves out. */
+async function loadExcludedEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  from: string,
+  to: string,
+  account: SkattekontoLedgerAccount,
+): Promise<Set<string>> {
+  const cancelled = await loadCancelledEntryIds(supabase, companyId, from, to, account)
+  const settled = await loadSettledEntryIds(supabase, companyId, account)
+  return new Set([...cancelled, ...settled])
 }
 
 /** First day of the AGI period every row names, or null when they disagree or name none. */
@@ -539,8 +574,9 @@ function unambiguousCombinedMatches<R extends CombinableRow>(
  *      since which identical row links where does not change the ledger.
  *
  * Verifikat that are economically cancelled (a storno pair, in-app or
- * imported, see lib/skatteverket/skattekonto-cancelled-entries.ts) are never
- * candidates.
+ * imported, see lib/skatteverket/skattekonto-cancelled-entries.ts) or held
+ * by a live settlement on the skattekonto account (loadSettledEntryIds) are
+ * never candidates.
  */
 export async function findMatchSuggestionsBulk(
   supabase: SupabaseClient,
@@ -619,20 +655,20 @@ export async function findMatchSuggestionsBulk(
   }
   const agiIndex = await loadAgiEntryIndex(supabase, companyId, periods)
 
-  let cancelled: Set<string>
+  let excluded: Set<string>
   try {
-    cancelled = candidateEntryIds.length
-      ? await loadCancelledEntryIds(supabase, companyId, from, to, account)
+    excluded = candidateEntryIds.length
+      ? await loadExcludedEntryIds(supabase, companyId, from, to, account)
       : new Set()
   } catch {
-    // Without the storno check no candidate is safe to propose.
+    // Without the storno and settlement checks no candidate is safe to propose.
     return new Map()
   }
 
   const entryViews = buildEntryViews(
     lines,
     (linked ?? []) as Array<{ journal_entry_id: string | null; belopp_skatteverket?: number | string | null }>,
-    cancelled,
+    excluded,
     account,
   )
 
@@ -877,7 +913,8 @@ function expectedSide(beloppSkatteverket: number): 'debit' | 'credit' {
  *     all of them.
  *     A verifikat that already carries links takes such a group only when
  *     the linked rows and the group explain its whole 1630 movement.
- * Cancelled verifikat (storno pairs) are never listed.
+ * Cancelled verifikat (storno pairs) and settled ones (loadSettledEntryIds)
+ * are never listed.
  *
  * Returns up to 25 candidates ordered by AGI-period match, then date proximity
  * to the SKV row.
@@ -1031,15 +1068,15 @@ export async function findGroupMatchCandidates(
     linked.push(...((linkedData ?? []) as typeof linked))
   }
 
-  let cancelled: Set<string>
+  let excluded: Set<string>
   try {
-    cancelled = await loadCancelledEntryIds(supabase, companyId, from, to, account)
+    excluded = await loadExcludedEntryIds(supabase, companyId, from, to, account)
   } catch (err) {
     throw searchFailed(err)
   }
 
   const candidates: SkattekontoMatchCandidate[] = []
-  for (const view of buildEntryViews(lines, linked, cancelled, account).values()) {
+  for (const view of buildEntryViews(lines, linked, excluded, account).values()) {
     const settles = groupSettlesEntry(view.lines, [...view.linked, ...belopps], account)
     if (!settles.ok) continue
     const e = view.entry
@@ -1361,14 +1398,14 @@ async function searchLedgerTwinWindow(
     openByDate.set(c.transaktionsdatum, list)
   }
 
-  let cancelled: Set<string>
+  let excluded: Set<string>
   try {
-    cancelled = await loadCancelledEntryIds(supabase, companyId, from, to, account)
+    excluded = await loadExcludedEntryIds(supabase, companyId, from, to, account)
   } catch (err) {
     throw searchFailed(err)
   }
 
-  const views = buildEntryViews(typedRows, linked, cancelled, account)
+  const views = buildEntryViews(typedRows, linked, excluded, account)
   const mixedCompanions = mixedGroupCompanions(probes, openByDate, views, account)
 
   for (const p of probes) {

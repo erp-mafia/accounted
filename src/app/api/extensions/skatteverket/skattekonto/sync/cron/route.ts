@@ -5,7 +5,13 @@ import { getCompanyIdsWithCapability } from '@/lib/entitlements/has-capability'
 import { orderByStalestSync } from '@/lib/skatteverket/sync-order'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
-import { syncSkattekonto, SKATTEKONTO_LAST_SYNCED_AT_KEY } from '@/extensions/general/skatteverket/lib/skattekonto-sync'
+import {
+  syncSkattekonto,
+  skattekontoUnavailableReason,
+  SKATTEKONTO_LAST_SYNCED_AT_KEY,
+  SKATTEKONTO_UNAVAILABLE_KEY,
+  type SkattekontoUnavailableState,
+} from '@/extensions/general/skatteverket/lib/skattekonto-sync'
 import { SkatteverketAuthError, type SkvAuth } from '@/extensions/general/skatteverket/lib/api-client'
 import { SkatteverketSkattekontoError } from '@/extensions/general/skatteverket/lib/skattekonto-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
@@ -16,9 +22,29 @@ import { currentSkvEnvironment, hasVerifiedGrant } from '@/extensions/general/sk
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
-export const maxDuration = 60
+// Head room past the 50 s work budget: syncs already in flight when the
+// budget closes finish instead of being killed mid-write at the platform
+// timeout (two "Task timed out after 60 seconds" kills before B07).
+export const maxDuration = 120
 
 const MAX_COMPANIES_PER_RUN = 50
+
+/**
+ * Companies synced at once. A sync is mostly waiting on Skatteverket and the
+ * database (~2 s each, so one-by-one ran out of the 50 s budget at ~23
+ * companies and skipped the rest every hour, B07). SKV's 4 req/s quota is
+ * still kept: every call goes through the transport's process-wide limiter.
+ */
+const SYNC_CONCURRENCY = 4
+
+/**
+ * How often a company whose skattekonto Skatteverket would not hand over
+ * (no account yet, or the consenting person not authorized) is asked again.
+ * The answer changes in Skatteverket's nightly registers, not hour by hour;
+ * three hours still catches the change within a ~10 hour BankID consent. A
+ * manual sync or a new consent asks at once.
+ */
+const UNAVAILABLE_RECHECK_MS = 3 * 60 * 60 * 1000
 
 /**
  * GET /api/extensions/skatteverket/skattekonto/sync/cron
@@ -45,7 +71,14 @@ const MAX_COMPANIES_PER_RUN = 50
  * to keep manual + cron triggers from racing each other. Under an hour so
  * the previous hourly run never blocks the next one.
  *
- * Time budget: 50s (Vercel default 60s function timeout, 10s margin).
+ * Skatteverket answering "no skattekonto for this org number" (404, typical
+ * for a newly formed company) or "this person is not authorized" (403
+ * felkod 6) is a state, not a failure: syncSkattekonto stores it for the
+ * settings panel, the run reports it as `unavailable`, and the company is
+ * asked again every UNAVAILABLE_RECHECK_MS instead of every hour.
+ *
+ * Time budget: 50s of starting new syncs, SYNC_CONCURRENCY at a time;
+ * maxDuration leaves room for the ones in flight to finish.
  *
  * Per-company errors are logged but do not abort the run. A system-token
  * minting failure (SYSTEM_AUTH_FAILED) short-circuits the remaining
@@ -151,26 +184,41 @@ export async function GET(request: Request) {
   // Within the eligible list, never-synced and longest-ago-synced companies
   // go first: a fixed order plus a cap starves the tail forever.
   const eligibleWork = work.filter(item => entitledCompanyIds.has(item.companyId))
-  let lastSyncedAtByCompany = new Map<string, string | null>()
+  const lastSyncedAtByCompany = new Map<string, string | null>()
+  const unavailableByCompany = new Map<string, SkattekontoUnavailableState>()
   try {
     const rows = await fetchAllRows(
       ({ from, to }) => supabase
         .from('extension_data')
-        .select('company_id, value')
+        .select('company_id, key, value')
         .eq('extension_id', 'skatteverket')
-        .eq('key', SKATTEKONTO_LAST_SYNCED_AT_KEY)
+        .in('key', [SKATTEKONTO_LAST_SYNCED_AT_KEY, SKATTEKONTO_UNAVAILABLE_KEY])
         .order('company_id', { ascending: true })
+        .order('key', { ascending: true })
         .range(from, to),
     )
-    lastSyncedAtByCompany = new Map(
-      (rows ?? []).map(r => [r.company_id as string, (r.value as string | null) ?? null]),
-    )
+    for (const r of rows ?? []) {
+      if (r.key === SKATTEKONTO_UNAVAILABLE_KEY) {
+        const state = r.value as SkattekontoUnavailableState | null
+        if (state?.checkedAt) unavailableByCompany.set(r.company_id as string, state)
+      } else {
+        lastSyncedAtByCompany.set(r.company_id as string, (r.value as string | null) ?? null)
+      }
+    }
   } catch (error) {
     console.warn('[skattekonto-sync-cron] last-synced read failed; keeping token order', {
       message: error instanceof Error ? error.message : String(error),
     })
   }
-  const entitledWork = orderByStalestSync(eligibleWork, lastSyncedAtByCompany).slice(0, MAX_COMPANIES_PER_RUN)
+  // Order by the last time Skatteverket was ASKED, not only the last time it
+  // handed data over: a company with no skattekonto yet never gets a
+  // last-synced stamp and would otherwise jump the queue on every run.
+  const lastAskedAtByCompany = new Map(lastSyncedAtByCompany)
+  for (const [companyId, state] of unavailableByCompany) {
+    const synced = lastAskedAtByCompany.get(companyId)
+    if (!synced || state.checkedAt > synced) lastAskedAtByCompany.set(companyId, state.checkedAt)
+  }
+  const entitledWork = orderByStalestSync(eligibleWork, lastAskedAtByCompany).slice(0, MAX_COMPANIES_PER_RUN)
 
   console.info('[skattekonto-sync-cron] Work list built', {
     candidates: work.length,
@@ -187,7 +235,14 @@ export async function GET(request: Request) {
     userId: string
     companyId: string
     source: 'system' | 'user'
-    status: 'synced' | 'skipped_cooldown' | 'expired' | 'grant_revoked' | 'system_auth_failed' | 'error'
+    status:
+      | 'synced'
+      | 'skipped_cooldown'
+      | 'unavailable'
+      | 'expired'
+      | 'grant_revoked'
+      | 'system_auth_failed'
+      | 'error'
     booked?: number
     upcoming?: number
     error?: string
@@ -197,17 +252,21 @@ export async function GET(request: Request) {
   // failure, skip the remaining system-mode entries this run.
   let systemAuthFailed = false
 
-  for (const item of entitledWork) {
-    if (Date.now() - startTime > TIME_BUDGET_MS) {
-      console.log(`[skattekonto-sync-cron] Time budget reached after ${results.length} companies`)
-      break
-    }
-
+  const syncOne = async (item: WorkItem): Promise<Result> => {
     const { companyId, userId, source } = item
 
     if (source === 'system' && systemAuthFailed) {
-      results.push({ userId, companyId, source, status: 'system_auth_failed', error: 'skipped after first failure' })
-      continue
+      return { userId, companyId, source, status: 'system_auth_failed', error: 'skipped after first failure' }
+    }
+
+    // Skatteverket would not hand the skattekonto over a moment ago (no
+    // account yet / person not authorized): ask again on the slower cadence.
+    const unavailableState = unavailableByCompany.get(companyId)
+    if (
+      unavailableState &&
+      Date.now() - new Date(unavailableState.checkedAt).getTime() < UNAVAILABLE_RECHECK_MS
+    ) {
+      return { userId, companyId, source, status: 'skipped_cooldown', error: unavailableState.reason }
     }
 
     try {
@@ -224,8 +283,7 @@ export async function GET(request: Request) {
       if (lastSyncedAt) {
         const elapsed = Date.now() - new Date(lastSyncedAt).getTime()
         if (elapsed < SYNC_COOLDOWN_MS) {
-          results.push({ userId, companyId, source, status: 'skipped_cooldown' })
-          continue
+          return { userId, companyId, source, status: 'skipped_cooldown' }
         }
       }
 
@@ -240,16 +298,24 @@ export async function GET(request: Request) {
         source === 'system' ? { mode: 'system' } : { mode: 'user', supabase, userId, companyId }
       const syncResult = await syncSkattekonto(ctx, auth)
 
-      results.push({
+      return {
         userId,
         companyId,
         source,
         status: 'synced',
         booked: syncResult.booked,
         upcoming: syncResult.upcoming,
-      })
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Unknown error'
+
+      // Skatteverket's answer was a state of the account or the person, not
+      // a failure: syncSkattekonto already stored it for the settings panel.
+      // A system-mode 403 never lands here (it is OMBUD_GRANT_MISSING).
+      const unavailableReason = skattekontoUnavailableReason(err)
+      if (unavailableReason) {
+        return { userId, companyId, source, status: 'unavailable', error: unavailableReason }
+      }
 
       if (source === 'system' && err instanceof SkatteverketAuthError) {
         // System-mode failures never touch skatteverket_tokens.
@@ -261,16 +327,14 @@ export async function GET(request: Request) {
               { companyId, message },
             )
           }
-          results.push({ userId, companyId, source, status: 'system_auth_failed', error: err.code })
-          continue
+          return { userId, companyId, source, status: 'system_auth_failed', error: err.code }
         }
         if (err.code === 'OMBUD_GRANT_MISSING') {
           // The company withdrew the behorighet: downgrade the connection
           // row so the next run falls back to the user token (if any). The
           // sync cron doubles as the ongoing grant liveness probe.
           await markGrantRevoked(companyId, currentSkvEnvironment(), 'lasombud', err.code)
-          results.push({ userId, companyId, source, status: 'grant_revoked', error: err.code })
-          continue
+          return { userId, companyId, source, status: 'grant_revoked', error: err.code }
         }
       }
 
@@ -283,14 +347,12 @@ export async function GET(request: Request) {
         (RECONSENT_ERROR_CODES as readonly string[]).includes(err.code)
       ) {
         await markNeedsReconsent(supabase, userId, companyId, err.code)
-        results.push({ userId, companyId, source, status: 'expired', error: err.code })
-        continue
+        return { userId, companyId, source, status: 'expired', error: err.code }
       }
       // TOKEN_REVOKED auto-deletes the row inside skvRequest — treat it as
       // the same quiet "reconnect needed" outcome, not a runtime error.
       if (source === 'user' && err instanceof SkatteverketAuthError && err.code === 'TOKEN_REVOKED') {
-        results.push({ userId, companyId, source, status: 'expired', error: err.code })
-        continue
+        return { userId, companyId, source, status: 'expired', error: err.code }
       }
 
       const felkod = err instanceof SkatteverketSkattekontoError ? err.felkod : null
@@ -301,25 +363,53 @@ export async function GET(request: Request) {
         message,
         felkod,
       })
-      results.push({ userId, companyId, source, status: 'error', error: getErrorMessage(err) })
+      return { userId, companyId, source, status: 'error', error: getErrorMessage(err) }
     }
+  }
+
+  // A small worker pool over the ordered list: each worker takes the next
+  // company until the list is done or the budget closes. Results keep the
+  // work-list order.
+  const slots: (Result | undefined)[] = new Array(entitledWork.length)
+  let nextIndex = 0
+  let budgetReached = false
+  const worker = async () => {
+    while (nextIndex < entitledWork.length) {
+      if (Date.now() - startTime > TIME_BUDGET_MS) {
+        budgetReached = true
+        return
+      }
+      const index = nextIndex++
+      slots[index] = await syncOne(entitledWork[index])
+    }
+  }
+  await Promise.all(
+    Array.from({ length: Math.min(SYNC_CONCURRENCY, entitledWork.length) }, () => worker()),
+  )
+  for (const result of slots) {
+    if (result) results.push(result)
+  }
+  if (budgetReached) {
+    console.log(`[skattekonto-sync-cron] Time budget reached after ${results.length} companies`)
   }
 
   const synced = results.filter(r => r.status === 'synced').length
   const skipped = results.filter(r => r.status === 'skipped_cooldown').length
+  const unavailable = results.filter(r => r.status === 'unavailable').length
   const expired = results.filter(r => r.status === 'expired').length
   const grantRevoked = results.filter(r => r.status === 'grant_revoked').length
   const systemAuthFailures = results.filter(r => r.status === 'system_auth_failed').length
   const errors = results.filter(r => r.status === 'error').length
 
   console.log(
-    `[skattekonto-sync-cron] Processed ${results.length}: ${synced} synced, ${skipped} cooldown, ${expired} expired, ${grantRevoked} grant revoked, ${systemAuthFailures} system-auth failures, ${errors} errors`,
+    `[skattekonto-sync-cron] Processed ${results.length}: ${synced} synced, ${skipped} cooldown, ${unavailable} unavailable at Skatteverket, ${expired} expired, ${grantRevoked} grant revoked, ${systemAuthFailures} system-auth failures, ${errors} errors`,
   )
 
   return NextResponse.json({
     processed: results.length,
     synced,
     skipped,
+    unavailable,
     expired,
     grantRevoked,
     systemAuthFailures,

@@ -22,7 +22,23 @@ export interface ResolvedConsent {
   credentialRevision?: string;
 }
 
-export async function resolveConsent(companyId: string, consentId: string): Promise<ResolvedConsent> {
+export interface ResolveConsentOptions {
+  /**
+   * The access token the provider just refused with a 401. The stored token
+   * is refreshed when it is still this one, whatever its stamped expiry says:
+   * the expiry is stamped when the token response arrives, so the provider
+   * retires the token a moment before our clock does, and a re-read alone
+   * handed the dead token straight back (B11). A token another request has
+   * rotated since is not the refused one and is served as it is.
+   */
+  rejectedAccessToken?: string;
+}
+
+export async function resolveConsent(
+  companyId: string,
+  consentId: string,
+  options: ResolveConsentOptions = {},
+): Promise<ResolvedConsent> {
   const supabase = createServiceClient();
 
   // Load consent
@@ -65,9 +81,12 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     };
   }
 
+  const refused = options.rejectedAccessToken !== undefined && tokens.access_token === options.rejectedAccessToken;
+  const expired = !!tokens.token_expires_at && new Date(tokens.token_expires_at as string) < new Date();
+
   // Björn Lunden: client credentials, auto-refresh when expired
   if (consent.provider === 'bjornlunden') {
-    if (tokens.token_expires_at && new Date(tokens.token_expires_at as string) < new Date()) {
+    if (expired || refused) {
       const refreshed = await refreshWithinBudget(() => refreshBjornLundenToken());
       const newExpiresAt = new Date(Date.now() + refreshed.expires_in * 1000).toISOString();
 
@@ -91,8 +110,8 @@ export async function resolveConsent(companyId: string, consentId: string): Prom
     };
   }
 
-  // Check expiry, auto-refresh if needed
-  if (tokens.token_expires_at && new Date(tokens.token_expires_at as string) < new Date()) {
+  // Check expiry (or a refusal of this very token), auto-refresh if needed
+  if (expired || refused) {
     if (!tokens.refresh_token) {
       if (consent.provider === 'fortnox') throw new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'fortnox',
         'Fortnox access token expired without a refresh token', { providerCode: 'refresh_token_missing', credentialRevision: tokens.credential_revision as string });

@@ -48,7 +48,11 @@ import {
   plannedLegalForms,
   usesPersonnummerAsOrgNumber,
 } from '@/lib/company/entity-type'
-import { suggestedFormForOrgNumber } from '@/lib/onboarding-journey/org-number-hint'
+import {
+  formSettledByOrgNumber,
+  readOrgFieldText,
+  suggestedFormForOrgNumber,
+} from '@/lib/onboarding-journey/org-number-hint'
 import { shouldGateDuplicate, type ExistingCompanyMatch } from '@/lib/onboarding-journey/duplicate-gate'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
@@ -134,9 +138,10 @@ const SUGGEST_DEBOUNCE_MS = 300
 /** Pause after the last digit before a complete orgnr is looked up. */
 const PREVIEW_DEBOUNCE_MS = 350
 
-/** Digits, spaces and dashes only: the orgnr path, never a name search. */
+/** Digits, spaces and dashes only: the orgnr path, never a name search.
+ *  A typographic dash counts as the hyphen it stands for (readOrgFieldText). */
 function looksLikeOrgNumber(raw: string): boolean {
-  return /^[\d\s-]+$/.test(raw.trim())
+  return /^[\d\s-]+$/.test(readOrgFieldText(raw).trim())
 }
 
 const LOG = '[onboarding-journey]'
@@ -329,17 +334,17 @@ export default function OnboardingJourney({
   const submitOrg = useCallback(
     (raw: string) => {
       const trimmed = raw.trim()
-      const looksNumeric = /^[\d\s-]+$/.test(trimmed)
-      if (looksNumeric) {
-        if (normalizeOrgNumber(trimmed) === null) {
+      if (looksLikeOrgNumber(trimmed)) {
+        const orgNumber = readOrgFieldText(trimmed)
+        if (normalizeOrgNumber(orgNumber) === null) {
           shakeOrg()
           return
         }
-        dispatch({ type: 'ORG_SUBMITTED', orgNumber: trimmed })
-        lookupFor(trimmed).then((outcome) => {
+        dispatch({ type: 'ORG_SUBMITTED', orgNumber })
+        lookupFor(orgNumber).then((outcome) => {
           dispatch({ type: 'LOOKUP_RESULT', outcome })
         })
-        checkDuplicate(trimmed)
+        checkDuplicate(orgNumber)
         return
       }
       if (!ticEnabled || trimmed.length < COMPANY_SEARCH_MIN_CHARS) {
@@ -439,7 +444,7 @@ export default function OnboardingJourney({
   // company inks in under it, and Enter only confirms what is already
   // there. Same single TIC call as the Enter path, taken early.
   useEffect(() => {
-    const raw = orgInput.trim()
+    const raw = readOrgFieldText(orgInput.trim())
     const key = looksLikeOrgNumber(raw) ? normalizeOrgNumber(raw) : null
     if (state.step !== 'orgnr' || state.lookupPending || !key) {
       setPreview(null)
@@ -787,10 +792,13 @@ export default function OnboardingJourney({
                   }}
                   {...flyProps}
                 />
+                {/* None of the hits may be theirs (a namesake's firm, theirs
+                    too new to be listed): the way on is the number. */}
+                <p className="jny-enterhint">{t('journey_search_pick_missing')}</p>
               </>
             ) : (
               <>
-                {preview && normalizeOrgNumber(orgInput.trim()) === preview.orgNumber ? (
+                {preview && normalizeOrgNumber(readOrgFieldText(orgInput.trim())) === preview.orgNumber ? (
                   <p className="jny-found" aria-live="polite">
                     <InkText text={preview.result.companyName} step={40} />
                     <span className="jny-found-sub">
@@ -811,9 +819,16 @@ export default function OnboardingJourney({
           </Question>
         )
 
-      case 'notfound':
+      case 'notfound': {
+        // A personnummer is an enskild firma (formSettledByOrgNumber): say
+        // why a new firm is missing and that the manual path is the same
+        // setup, instead of the Bolagsverket wording meant for a company.
+        const firmByPersonnummer = formSettledByOrgNumber(s.org_number) !== null
         return (
-          <Question title={t('journey_notfound_title')} sub={t('journey_notfound_sub')}>
+          <Question
+            title={firmByPersonnummer ? t('journey_notfound_ef_title') : t('journey_notfound_title')}
+            sub={firmByPersonnummer ? t('journey_notfound_ef_sub') : t('journey_notfound_sub')}
+          >
             <ChipRow
               options={[
                 { key: 'continue', label: t('journey_notfound_continue') },
@@ -826,6 +841,7 @@ export default function OnboardingJourney({
             />
           </Question>
         )
+      }
 
       case 'ceased':
         return (

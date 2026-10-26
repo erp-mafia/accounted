@@ -959,6 +959,8 @@ describe('POST /api/transactions/[id]/book', () => {
         import_source: 'stripe',
         bank_connection_id: null,
       }),
+      // No same-batch exclusions on a single booking.
+      undefined,
     )
   })
 

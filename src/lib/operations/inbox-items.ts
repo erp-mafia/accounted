@@ -38,6 +38,18 @@ const META = { request_id: 'req_…', api_version: '2026-05-12' }
 
 const INBOX_ITEM_ID = z.string().uuid().describe('The inbox item id (inbox_item_id from the list).')
 
+const text = (value: unknown): string | null => (typeof value === 'string' && value.trim() ? value.trim() : null)
+
+/**
+ * The staged delete's title from its preview: the supplier, and the file name
+ * (or the e-mail subject when there is no file). Without them every staged
+ * delete read the same in Granskning and the owner approved blind (crm#1411).
+ */
+export function deleteInboxItemTitle(preview: Record<string, unknown>): string {
+  const what = [text(preview.supplier_name), text(preview.file_name) ?? text(preview.email_subject)].filter(Boolean)
+  return (what.length > 0 ? `Ta bort post ur inkorgen: ${what.join(', ')}` : 'Ta bort post ur inkorgen').slice(0, 200)
+}
+
 const UNDERLAG_STATUS = z
   .enum(['anchored', 'unlinked', 'unlinked_locked', 'anchored_elsewhere', 'unknown'])
   .nullable()
@@ -244,7 +256,8 @@ export const inboxItemsDelete = defineOperation({
     description:
       'Stage discarding an inbox item (spam, duplicate delivery). The document stays in the archive. Refused once the item became a supplier invoice or was booked; cannot be undone.',
     keywords: ['ta bort inkorgspost', 'radera från inkorgen', 'skräppost inkorg', 'dubblett inkorg'],
-    stage: { pendingType: 'delete_inbox_item', title: () => 'Ta bort post ur inkorgen' },
+    // The title is all Granskning's list shows: it names the item (crm#1411).
+    stage: { pendingType: 'delete_inbox_item', title: (_input, preview = {}) => deleteInboxItemTitle(preview) },
   },
   run: async (ctx, { inbox_item_id }, { dryRun }) => {
     const outcome = await deleteInboxItem(ctx, inbox_item_id, { dryRun })

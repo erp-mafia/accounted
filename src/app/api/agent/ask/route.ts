@@ -9,7 +9,12 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { getAiStatus } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
 import { answerAssistantQuestion } from '@/lib/agent/ask/ask-service'
-import { EmptyModelAnswerError } from '@/lib/agent/ask/errors'
+import {
+  EmptyModelAnswerError,
+  emptyAnswerMessage,
+  isAiProviderUnavailable,
+  providerUnavailableMessage,
+} from '@/lib/agent/ask/errors'
 import {
   resolveChatConversation,
   loadChatHistory,
@@ -17,7 +22,7 @@ import {
   persistAssistantTurn,
 } from '@/lib/agent/ask/persist'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
-import { SUPPORTED_LOCALES } from '@/i18n/config'
+import { SUPPORTED_LOCALES, type Locale } from '@/i18n/config'
 
 const log = createLogger('api.agent.ask')
 
@@ -27,8 +32,40 @@ const log = createLogger('api.agent.ask')
 // long-running model surfaces (app/api/receipt-hunt/run).
 export const maxDuration = 300
 
-// The Swedish body AskConsole's !res.ok branch renders verbatim.
-const EMPTY_ANSWER_MESSAGE = 'Assistenten gav inget svar. Försök igen.'
+/**
+ * The response for a failed answer. AskConsole's !res.ok branch renders
+ * `error` verbatim, so each case says what happened and what to do.
+ */
+function failedAnswer(
+  err: unknown,
+  ctx: { companyId: string; persist: boolean; locale: Locale | undefined },
+): Response {
+  if (err instanceof EmptyModelAnswerError) {
+    // Already logged with model, usage and stop reason by ask-service.
+    return NextResponse.json(
+      { error: emptyAnswerMessage(err, ctx.locale), code: 'empty_model_answer' },
+      { status: 502 },
+    )
+  }
+  if (isAiProviderUnavailable(err)) {
+    // The provider's outage, not our bug (Bedrock "503 unable to process your
+    // request" bursts, throttling), and the SDK already retried: warn, not
+    // error, and tell the user to wait. 502, never 503: AskConsole reads a
+    // 503 as "no AI backend configured on this installation".
+    const { status, statusCode } = err as { status?: unknown; statusCode?: unknown }
+    log.warn('assistant provider unavailable', {
+      companyId: ctx.companyId,
+      persist: ctx.persist,
+      status: status ?? statusCode ?? null,
+    })
+    return NextResponse.json(
+      { error: providerUnavailableMessage(ctx.locale), code: 'ai_provider_unavailable' },
+      { status: 502 },
+    )
+  }
+  log.error('assistant ask failed', err, { companyId: ctx.companyId, persist: ctx.persist })
+  return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+}
 
 /**
  * POST /api/agent/ask: a single-call, provider-agnostic assistant answer over a
@@ -124,15 +161,7 @@ export async function POST(request: Request): Promise<Response> {
       })
       return NextResponse.json({ data: result })
     } catch (err) {
-      if (err instanceof EmptyModelAnswerError) {
-        // Already logged with model + usage by ask-service.
-        return NextResponse.json(
-          { error: EMPTY_ANSWER_MESSAGE, code: 'empty_model_answer' },
-          { status: 502 },
-        )
-      }
-      log.error('assistant ask failed', err, { companyId, persist: false })
-      return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+      return failedAnswer(err, { companyId, persist: false, locale: parsed.data.locale })
     }
   }
 
@@ -182,14 +211,6 @@ export async function POST(request: Request): Promise<Response> {
 
     return NextResponse.json({ data: { ...result, conversation_id: conversationId } })
   } catch (err) {
-    if (err instanceof EmptyModelAnswerError) {
-      // Already logged with model + usage by ask-service.
-      return NextResponse.json(
-        { error: EMPTY_ANSWER_MESSAGE, code: 'empty_model_answer' },
-        { status: 502 },
-      )
-    }
-    log.error('assistant ask failed', err, { companyId, persist: true })
-    return NextResponse.json({ error: getUserErrorMessage(err) }, { status: 500 })
+    return failedAnswer(err, { companyId, persist: true, locale: parsed.data.locale })
   }
 }

@@ -93,7 +93,7 @@ describe('the event bus and the registries across module copies', () => {
   })
 
   it('the context factory init sets is the one every copy of the registry builds handler contexts with', async () => {
-    vi.doMock('@/lib/supabase/server', () => ({ createClient: async () => ({ supabase: true }) }))
+    vi.doMock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: () => ({ supabase: true }) }))
     const init = await instrumentationGraph()
     const route = await routeGraph()
     const extensionHandler = vi.fn()
@@ -110,7 +110,7 @@ describe('the event bus and the registries across module copies', () => {
     await route.eventBus.emit(lockedEvent)
 
     expect(extensionHandler).toHaveBeenCalledWith(lockedEvent.payload, { marker: 'ctx' })
-    vi.doUnmock('@/lib/supabase/server')
+    vi.doUnmock('@/lib/auth/api-keys')
   })
 
   it('the services and providers init registers are the ones a route reads', async () => {

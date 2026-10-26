@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 371 endpoints.
+  pagination, scopes), and all 373 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -218,10 +218,10 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 371 operations. Paths are shown without
+API version `2026-05-12`, 373 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
-### Core (22)
+### Core (24)
 
 Full detail: [references/core.md](references/core.md)
 
@@ -245,6 +245,8 @@ POST /companies/{companyId}/service-accounts/{id}/revoke : Revoke a service acco
 GET /companies/{companyId}/settings : Read the company settings [scope:companies:read risk:low idempotent]
 PATCH /companies/{companyId}/settings : Partially update company settings (contact, invoicing, reminders, voucher series, toggles) [scope:companies:write risk:medium idempotent dry-run reversible]
 PATCH /companies/{companyId}/settings/bookkeeping-lock : Set, move or remove the company-wide bookkeeping lock date [scope:companies:write risk:high idempotent dry-run reversible]
+GET /companies/{companyId}/settings/skattekonto-account : Read which ledger account the skattekonto runs on (1630, or 2012 for an enskild firma) [scope:companies:read risk:low idempotent]
+PATCH /companies/{companyId}/settings/skattekonto-account : Choose the ledger account the skattekonto runs on: 1630, or 2012 in equity for an enskild firma [scope:companies:write risk:high idempotent dry-run reversible]
 PATCH /companies/{companyId}/settings/tax-profile : Change the tax and legal profile: VAT, F-skatt, employer registration, fiscal year, accounting method [scope:companies:write risk:high idempotent dry-run reversible]
 GET /health : Health check [risk:low idempotent]
 GET /operations/{id} : Poll a long-running operation by id [scope:operations:read risk:low idempotent]

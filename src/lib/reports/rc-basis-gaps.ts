@@ -46,15 +46,6 @@ const RATE_BY_OUTPUT: Record<RcOutputAccount, number> = {
   '2634': 0.06,
 }
 
-// Default to EU services (matches the booking-template default
-// reverse_charge_supplier_type = 'eu_business'). The user can pick a
-// different supplier type on the Korrigera form if needed.
-const DEFAULT_BASIS_BY_OUTPUT: Record<RcOutputAccount, string> = {
-  '2614': '4535',
-  '2624': '4536',
-  '2634': '4537',
-}
-
 /**
  * The scan's tolerance in kronor: fiktiv moms at or below it is ignored, and
  * a momssats is a gap only when its basis falls short by more than it. The
@@ -176,7 +167,6 @@ export interface RcBasisGap {
   expectedBasisAmount: number
   /** The part of expectedBasisAmount the verifikat does not report: what Korrigera adds. */
   missingBasisAmount: number
-  suggestedBasisAccount: string
   rate: number
 }
 
@@ -352,7 +342,6 @@ export async function findRcBasisGaps(
         rcOutputAmount: rate.rcOutputAmount,
         expectedBasisAmount: rate.expectedBasisAmount,
         missingBasisAmount: missingRcBasis(rate),
-        suggestedBasisAccount: DEFAULT_BASIS_BY_OUTPUT[rate.rcOutputAccount],
         rate: rate.rate,
       })
     }

@@ -123,9 +123,9 @@ describe('answerAssistantQuestion', () => {
     expect(call.prompt).toContain('Status: momsregistrerad (momsperiod: quarterly).')
   })
 
-  it('defaults maxTokens to 5400 (the streaming chat reply ceiling; 1500 caused empty max_tokens answers)', async () => {
+  it('defaults maxTokens to 16000: the model thinks by default and thinking shares the ceiling (5400 left empty answers, B04)', async () => {
     await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
-    expect(generateText.mock.calls[0][0].maxTokens).toBe(5400)
+    expect(generateText.mock.calls[0][0].maxTokens).toBe(16_000)
   })
 
   it('rejects with the typed empty-answer error when the model returns no visible text', async () => {
@@ -136,7 +136,40 @@ describe('answerAssistantQuestion', () => {
       question: 'Hej?',
     })
     await expect(promise).rejects.toBeInstanceOf(EmptyModelAnswerError)
-    await expect(promise).rejects.toMatchObject({ code: 'empty_model_answer' })
+    await expect(promise).rejects.toMatchObject({ code: 'empty_model_answer', truncated: false })
+  })
+
+  it('marks the empty-answer error truncated when the ceiling was hit, so the user is told to narrow the question', async () => {
+    generateText.mockResolvedValue({
+      text: '',
+      model: 'claude-sonnet-5',
+      usage: {},
+      truncated: true,
+      stopReason: 'max_tokens',
+      forcedFinal: 'no_text',
+    })
+    await expect(
+      answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' }),
+    ).rejects.toMatchObject({ code: 'empty_model_answer', truncated: true })
+  })
+
+  it('says so under an answer cut off at the ceiling, in the UI locale', async () => {
+    generateText.mockResolvedValue({ text: 'Del ett av svaret', model: 'm', usage: {}, truncated: true })
+    const sv = await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+    expect(sv.answer.startsWith('Del ett av svaret\n\n(Svaret avbröts')).toBe(true)
+    const en = await answerAssistantQuestion({
+      supabase: supabaseWith(null),
+      companyId: 'c1',
+      question: 'Hi?',
+      locale: 'en',
+    })
+    expect(en.answer).toContain('(The answer was cut off')
+  })
+
+  it('returns an answer from the final answer turn unchanged', async () => {
+    generateText.mockResolvedValue({ text: 'Svar efter sista turen', model: 'm', usage: {}, forcedFinal: 'no_text' })
+    const result = await answerAssistantQuestion({ supabase: supabaseWith(null), companyId: 'c1', question: 'Hej?' })
+    expect(result).toEqual({ answer: 'Svar efter sista turen', model: 'm' })
   })
 
   it('forwards the earlier turns as history so a follow-up can refer back', async () => {

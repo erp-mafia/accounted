@@ -19,6 +19,8 @@ import { shortDate, shortDateTime } from '@/lib/inkorg/dates'
 import { bookedOnAccount, focusDecision, type DecisionQuestion, type InkorgStartable } from '@/lib/inkorg/decision'
 import { doorOf, itemHeadline, type InkorgItem } from '@/lib/inkorg/items'
 import { formatCurrency } from '@/lib/utils'
+import { useCapability } from '@/contexts/CompanyContext'
+import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { SellerRegion } from '@/lib/vat/seller-country'
 import { FocusDecision, type DecisionDone, type SuggestedBooking } from './FocusDecision'
 import { useBookingPlan, type OneClickBooking } from './use-booking-plan'
@@ -175,8 +177,10 @@ export function FocusStage({
   const meta = showingReceipt ? receiptMeta : invoiceMeta
   const docState = showingReceipt ? receiptDocState : invoiceDocState
   const { detail, loading: detailLoading, readingFailed } = useItemDetail(item.id, revision)
+  // A document nobody read gets "Läs igen" only where the server would read it (retry-extraction needs ai).
+  const canRead = useCapability(CAPABILITY.ai)
   // Until the detail lands, the match the list read carried: the question does not change under the person.
-  const decision = focusDecision(item, { bankMatch: detail ? (detail.bank_match ?? null) : (item.bank_match ?? null), startable, companion })
+  const decision = focusDecision(item, { bankMatch: detail ? (detail.bank_match ?? null) : (item.bank_match ?? null), startable, companion, canRead })
   const suggestion = useSuggestion(item.id, item.matched_transaction_id, decision.question === 'book_purchase')
   // What one click books, read after the detail (whose read checks the bank first), and again for each answer.
   const [answers, setAnswers] = useState<{ itemId: string; category: number; seller: SellerRegion | null }>({ itemId: item.id, category: 0, seller: null })

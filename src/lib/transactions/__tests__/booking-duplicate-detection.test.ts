@@ -459,8 +459,18 @@ function makeLedgerSupabase(opts: {
   lines?: Jel[]
   txLinks?: LedgerTxLink[]
   payLinks?: { journal_entry_id: string; transaction_id?: string | null }[]
-  /** Bulk links (bulk_book_transactions); served to both scans. */
-  voucherLinks?: { transaction_id: string; journal_entry_id: string }[]
+  /**
+   * Bulk links (bulk_book_transactions); served to both scans and to the
+   * covering check's holder read, which needs the slice's allocated_amount
+   * and the row it belongs to (the real bank_line shape).
+   */
+  voucherLinks?: {
+    transaction_id: string
+    journal_entry_id: string
+    role?: string
+    allocated_amount?: number
+    transactions?: { amount: number; currency: string | null; cash_account_id: string | null }
+  }[]
   transactionRows?: TxRow[] // siblings for the orchestrator fall-through
 }) {
   // Fixtures stay embed-shaped for readability; the two-step fetch reads the
@@ -1229,7 +1239,12 @@ describe('bank-feed identity: detectBookingDuplicate (orchestrator)', () => {
     const supabase = makeLedgerSupabase({
       ledgerAccount: '1930',
       transactionRows: [bookedSwish()],
-      voucherLinks: [{ transaction_id: 'sib-a43', journal_entry_id: 'je-a43' }],
+      // The bulk link holds the voucher's whole 395 kr, so the covering check
+      // (issue #101) finds no unlinked part for a second Swish either.
+      voucherLinks: [{
+        transaction_id: 'sib-a43', journal_entry_id: 'je-a43', role: 'bank_line', allocated_amount: 395,
+        transactions: { amount: 395, currency: 'SEK', cash_account_id: 'ca-bank' },
+      }],
       lines: [jel({
         account_number: '1930', debit_amount: 395, credit_amount: 0,
         journal_entry: {

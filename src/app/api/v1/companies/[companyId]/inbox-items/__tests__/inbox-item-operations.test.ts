@@ -431,11 +431,30 @@ describe('DELETE /inbox-items/:id', () => {
   })
 
   it('a dry run writes nothing; the commit deletes the item only', async () => {
-    const dry = makeClient({ company_members: MEMBER, invoice_inbox_items: { data: itemRow(), error: null } })
+    const dry = makeClient({
+      company_members: MEMBER,
+      invoice_inbox_items: { data: itemRow(), error: null },
+      document_attachments: { data: { file_name: 'kvitto-0901.pdf' }, error: null },
+    })
     mockServiceClient.mockReturnValue(dry)
     const preview = await del('?dry_run=true')
     expect(preview.status).toBe(200)
-    expect((await preview.json()).data.preview).toEqual({ inbox_item_id: ITEM_ID, document_id: DOC_ID, would_delete: true })
+    // What approving removes, said outright, and what tells this item from the next (crm#1411, crm#1412):
+    // `would_delete` beside the document id read as if the file went too.
+    expect((await preview.json()).data.preview).toEqual({
+      inbox_item_id: ITEM_ID,
+      document_id: DOC_ID,
+      inbox_item_deleted: true,
+      document_kept: true,
+      file_name: 'kvitto-0901.pdf',
+      supplier_name: 'Clas Ohlson AB',
+      amount: 499,
+      currency: 'SEK',
+      invoice_date: '2026-09-01',
+      email_from: 'kvitto@clasohlson.se',
+      email_subject: 'Ditt kvitto',
+      received_at: '2026-09-02T07:41:10.000Z',
+    })
     expect(wrote(dry)).toBe(false)
 
     const client = makeClient({ company_members: MEMBER, invoice_inbox_items: [{ data: itemRow(), error: null }, { data: null, error: null }] })

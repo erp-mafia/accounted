@@ -8,6 +8,17 @@ describe('sellerCountry', () => {
     expect(sellerCountry({ vatNumber: 'EL094014201' })).toMatchObject({ country: 'GR', region: 'eu' })
   })
 
+  it('takes no country from a value that is not its member state\'s VAT number (crm#1411)', () => {
+    // A US seller's VAT-code label: the SE prefix made the seller Swedish, and the purchase Swedish input VAT.
+    expect(sellerCountry({ vatNumber: 'SESL000D', address: '101 Townsend St, San Francisco, CA 94107' })).toEqual({
+      country: 'US',
+      region: 'non_eu',
+      source: 'address',
+    })
+    expect(sellerCountry({ vatNumber: 'SESL000D' })).toEqual({ country: null, region: null, source: null })
+    expect(sellerCountry({ vatNumber: 'SE5566778899', orgNumber: '5566778899' })).toMatchObject({ country: 'SE', source: 'org_number' })
+  })
+
   it('counts the United Kingdom, Norway and Switzerland outside the EU', () => {
     expect(sellerCountry({ vatNumber: 'GB123456789' }).region).toBe('non_eu')
     expect(sellerCountry({ vatNumber: 'NO923609016MVA' }).region).toBe('non_eu')

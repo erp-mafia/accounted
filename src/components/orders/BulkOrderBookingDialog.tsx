@@ -24,7 +24,7 @@ import {
   routeOrder,
   unsupportedSwedishRates,
 } from '@/lib/webshop-orders/booking-lines'
-import { usesSwedishAccounts } from '@/lib/webshop-orders/country-routing'
+import { usesRevenueTemplate } from '@/lib/webshop-orders/country-routing'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
 import { roundOre } from '@/lib/money'
@@ -162,7 +162,7 @@ export default function BulkOrderBookingDialog({
     for (const order of bookableOrders) {
       const rates = new Set(
         routeOrder(order, settingsFor(order))
-          .buckets.filter(usesSwedishAccounts)
+          .buckets.filter(usesRevenueTemplate)
           .map(({ bucket }) => bucket.rate),
       )
       for (const rate of rates) {
@@ -191,7 +191,9 @@ export default function BulkOrderBookingDialog({
         if (!rule) continue
         group.accounts.add(
           rule.mode === 'swedish'
-            ? t('bulk_country_swedish_accounts')
+            ? rule.revenue_account
+              ? t('bulk_country_swedish_vat_account', { account: rule.revenue_account })
+              : t('bulk_country_swedish_accounts')
             : [rule.revenue_account, rule.vat_account].filter(Boolean).join(' / '),
         )
       }

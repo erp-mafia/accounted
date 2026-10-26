@@ -9,13 +9,10 @@ import {
   RIKSBANKEN_CURRENCIES,
 } from '../riksbanken'
 
-// Mock logger to suppress output
+// Mock logger to suppress output; shared so a test can read the level used.
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
 vi.mock('@/lib/logger', () => ({
-  createLogger: () => ({
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-  }),
+  createLogger: () => log,
 }))
 
 // The lookup keeps a per-process memo of fetched years and a cool-off after a
@@ -640,6 +637,27 @@ describe('fetchExchangeRate', () => {
       expect(result).toBeNull()
       expect(fetchSpy).not.toHaveBeenCalled()
     })
+
+    it.each(['ALL', 'UAH'])(
+      'answers %s, a real currency without a Riksbanken series, with null and no error: no request, no cache read',
+      async (currency) => {
+        // Albanian lek receipts in the inbox (prod 2026-10-21): every bank
+        // match check of one logged an error that paged, for an answer.
+        log.error.mockClear()
+        log.info.mockClear()
+        const fetchSpy = vi.spyOn(global, 'fetch')
+        const from = vi.fn()
+
+        const result = await fetchExchangeRate(currency, new Date('2026-08-23'), { from } as never)
+
+        expect(result).toBeNull()
+        expect(fetchSpy).not.toHaveBeenCalled()
+        expect(from).not.toHaveBeenCalled()
+        expect(log.error).not.toHaveBeenCalled()
+        expect(log.info).toHaveBeenCalledWith(expect.any(String), { currency })
+        expect(isExchangeRateTemporarilyUnavailable(currency)).toBe(false)
+      },
+    )
 
     it('never calls an unknown currency temporarily unavailable', async () => {
       vi.spyOn(global, 'fetch').mockRejectedValueOnce(new Error('Network error'))

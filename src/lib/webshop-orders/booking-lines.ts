@@ -207,7 +207,9 @@ export type BookingWarning =
  *   domestic momsfri sales; export/EU sales belong on 31xx/33xx accounts.
  * - foreign_vat: VAT charged on a non-SEK order. Swedish 2611-series output
  *   VAT may be wrong if the merchant is over the EU distance-selling
- *   threshold (OSS): the store's tax setup decides, the user must check.
+ *   threshold (OSS): the store's tax setup decides, the user must check. Not
+ *   for a bucket a 'swedish' country rule books: the store has answered that
+ *   question for it (Swedish VAT on EU sales, crm#1449).
  */
 export function resolveBookingWarnings(
   order: RoutableOrder &
@@ -220,6 +222,7 @@ export function resolveBookingWarnings(
   // accounts are not the Swedish prefill these hints are about.
   const routing = routeOrder(order, settings)
   const swedishBuckets = routing.buckets.filter(usesSwedishAccounts).map((route) => route.bucket)
+  const defaultBuckets = routing.buckets.filter((route) => route.rule === null).map((route) => route.bucket)
   const warnings: BookingWarning[] = []
   if (routing.unroutedRates.length > 0) warnings.push('country_not_routed')
   if (routing.destinationUnknown) warnings.push('country_unknown')
@@ -238,7 +241,7 @@ export function resolveBookingWarnings(
   if (
     order.currency.toUpperCase() !== 'SEK' &&
     order.total_tax !== 0 &&
-    (order.vat_breakdown.length === 0 || swedishBuckets.some((b) => b.tax !== 0))
+    (order.vat_breakdown.length === 0 || defaultBuckets.some((b) => b.tax !== 0))
   ) {
     warnings.push('foreign_vat')
   }
@@ -288,7 +291,8 @@ export interface OrderBookingLinesInput {
    * the map falls back to DEFAULT_REVENUE_ACCOUNT_BY_RATE. Only the revenue
    * side is templated; output VAT accounts are always derived from the rate.
    * Applies to buckets on the Swedish accounts only, never to one a country
-   * rule books.
+   * rule books on its own accounts (usesRevenueTemplate): a 'swedish' rule's
+   * own revenue account outranks it.
    */
   revenueAccounts?: Partial<Record<number, string>>
 }
@@ -375,10 +379,14 @@ export function buildOrderBookingLines({
       if (rule.vat_account) pushSigned(rule.vat_account, round(bucket.tax))
       continue
     }
+    // A 'swedish' rule may name the revenue account (Swedish VAT on EU sales
+    // on an account of their own, crm#1449); the VAT account follows the rate.
+    const ruleRevenueAccount = rule?.mode === 'swedish' ? rule.revenue_account : null
     const revenueAccount =
-      revenueAccounts?.[bucket.rate] ??
-      REVENUE_ACCOUNT_BY_RATE[bucket.rate] ??
-      REVENUE_ACCOUNT_BY_RATE[25]
+      ruleRevenueAccount ||
+      (revenueAccounts?.[bucket.rate] ??
+        REVENUE_ACCOUNT_BY_RATE[bucket.rate] ??
+        REVENUE_ACCOUNT_BY_RATE[25])
     const vatAccount = VAT_ACCOUNT_BY_RATE[bucket.rate] ?? VAT_ACCOUNT_BY_RATE[25]
     pushSigned(revenueAccount, round(bucket.net))
     pushSigned(vatAccount, round(bucket.tax))

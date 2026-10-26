@@ -15,7 +15,10 @@
  *   4. Reads typed handles (`je_...`, `cmp_...`, ./handles.ts) in the path,
  *      query and body as their UUIDs, refusing a wrong-type one with
  *      HANDLE_TYPE_MISMATCH, and stamps `handle` on the responses of the
- *      endpoints that declare their resource type.
+ *      endpoints that declare their resource type. A typed path id that is
+ *      not a UUID once handles are read is refused with VALIDATION_ERROR,
+ *      never sent to Postgres (a malformed companyId before the company
+ *      gate, any other after it).
  *   4b. When the URL contains `companyId`, verifies the API key's user has
  *      access to that company via `company_members`. Multi-company keys are
  *      supported transparently: the URL is the source of truth. A key with a
@@ -105,7 +108,7 @@ import { packageStartRefusal } from '@/lib/modules/package-gate'
 import { createLogger, type Logger } from '@/lib/logger'
 import { isPreviewToken, MALFORMED_PREVIEW_TOKEN_MESSAGE, PREVIEW_TOKEN_HEADER } from '@/lib/operations/preview-token'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from './errors'
-import { handleDeclarationFor, normalizeV1Handles, withResponseHandles } from './handles'
+import { handleDeclarationFor, malformedPathIds, normalizeV1Handles, withResponseHandles } from './handles'
 import { WRAPPED_RESPONSE_HEADERS } from './security-headers'
 import { API_V1_VERSION, API_V1_VERSION_HEADER } from './version'
 
@@ -897,6 +900,27 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       const rawCompanyId = resolvedParams.companyId
       const companyId = typeof rawCompanyId === 'string' ? rawCompanyId : undefined
 
+      // 5a'. Typed path ids. A typed path parameter (companies/:companyId,
+      //      invoices/:id, ...) names a uuid column, so a value that is not a
+      //      UUID once handles are read (an OpenAPI placeholder such as
+      //      "string", a truncated id) names nothing. It used to reach
+      //      Postgres, which refused it with 22P02, and the company gate
+      //      answered that as a logged 500. It is the 400 VALIDATION_ERROR a
+      //      malformed id gets across this surface (and on MCP). A malformed
+      //      companyId is refused before the gate: there is no company to look
+      //      up. Any other after it, so a company the key cannot see still
+      //      answers 404, never 400. The details carry the flat { field,
+      //      message } the routes' own id checks answer and the issues list.
+      const malformedIds = malformedPathIds(endpoint?.path, resolvedParams)
+      const refuseMalformedIds = async () => {
+        userLog.warn('malformed path id', { fields: malformedIds.map((issue) => issue.field) })
+        return v1ErrorResponseFromCode('VALIDATION_ERROR', userLog, {
+          requestId,
+          details: { ...malformedIds[0], issues: malformedIds },
+        })
+      }
+      if (malformedIds.some((issue) => issue.field === 'companyId')) return await refuseMalformedIds()
+
       const supabase = createServiceClientNoCookies()
       let companyWritable = false
 
@@ -917,6 +941,7 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
         if (gate.denied) return gate.denied
         companyWritable = gate.writable
       }
+      if (malformedIds.length > 0) return await refuseMalformedIds()
 
       // 5b. Report query gate. A report dropped any parameter it did not
       //     read, so ?dim_no=6&dim_code=P001 on the trial balance answered

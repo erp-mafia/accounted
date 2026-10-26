@@ -33,6 +33,34 @@ function boundToolResult(raw: string): string {
   return `${head}\n\n[avkortat: resultatet var ${raw.length} tecken, visar de första ${MAX_TOOL_RESULT_CHARS}. Be om en smalare sökning (limit, datumintervall, specifikt id eller fält) för att se mer.]`
 }
 
+// The user-turn text of the final no-tools turn. Without it the model gets a
+// transcript that ends on tool results (or on a turn it already ended without
+// text) and nothing that says "answer now", so the forced turn can come back
+// empty too. Anthropic's stop-reason guide for an empty end_turn says exactly
+// this: add a continuation prompt as a new user message, never resend the
+// request unchanged (the model already decided it was done). Text after tool
+// results is only harmful as a recurring pattern in the history; here it
+// closes the conversation.
+const FINAL_ANSWER_REQUEST =
+  'Answer the question now, in plain text, from what you have already gathered. Do not call any more tools. If that is not enough to answer, say what is missing. Keep to the reply language your instructions set.'
+
+/**
+ * The transcript plus the final answer request. Appended to the closing user
+ * turn (tool results, or the question itself): the API merges consecutive
+ * user messages into one turn anyway, and one explicit turn is valid on every
+ * backend.
+ */
+function withFinalAnswerRequest(
+  messages: Anthropic.Messages.MessageParam[],
+): Anthropic.Messages.MessageParam[] {
+  const ask: Anthropic.Messages.TextBlockParam = { type: 'text', text: FINAL_ANSWER_REQUEST }
+  const last = messages[messages.length - 1]
+  if (last?.role !== 'user') return [...messages, { role: 'user', content: [ask] }]
+  const blocks: Anthropic.Messages.ContentBlockParam[] =
+    typeof last.content === 'string' ? [{ type: 'text', text: last.content }] : last.content
+  return [...messages.slice(0, -1), { role: 'user', content: [...blocks, ask] }]
+}
+
 const EMPTY_USAGE: AiUsage = {
   inputTokens: 0,
   outputTokens: 0,
@@ -99,6 +127,14 @@ function textOf(resp: { content: Array<{ type: string; text?: string }> }): stri
     .trim()
 }
 
+/** How the last turn ended, for the caller: cut off at max_tokens, and the raw reason for logs. */
+function endOf(resp: { stop_reason?: string | null }): Pick<GenerateTextResult, 'truncated' | 'stopReason'> {
+  return {
+    ...(resp.stop_reason === 'max_tokens' ? { truncated: true as const } : {}),
+    ...(resp.stop_reason ? { stopReason: resp.stop_reason } : {}),
+  }
+}
+
 /** User content blocks for one document + trailing instruction. Same literals the inbox extractor sent. */
 export function buildAnthropicDocumentContent(
   document: AiDocumentInput,
@@ -156,7 +192,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
           messages: messagesFor(req.prompt, req.history),
         }
         const resp = await (await getClient()).messages.create(params)
-        return { text: textOf(resp), model, usage: usageOf(resp) }
+        return { text: textOf(resp), model, usage: usageOf(resp), ...endOf(resp) }
       }
 
       // Bounded read-only tool loop. The same dispatch shape run-turn.ts uses,
@@ -171,6 +207,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
       const messages: Anthropic.Messages.MessageParam[] = messagesFor(req.prompt, req.history)
       const maxSteps = req.maxSteps ?? DEFAULT_MAX_STEPS
       let usage = EMPTY_USAGE
+      let forcedFinal: 'step_limit' | 'no_text' = 'step_limit'
 
       for (let step = 0; step < maxSteps; step++) {
         const resp = await (await getClient()).messages.create({
@@ -181,14 +218,32 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
           messages,
         })
         usage = addUsage(usage, usageOf(resp))
-        if (resp.stop_reason !== 'tool_use') {
-          return { text: textOf(resp), model, usage }
+        const toolUses = resp.content.filter(
+          (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use',
+        )
+
+        if (resp.stop_reason !== 'tool_use' || toolUses.length === 0) {
+          // A tool call cut off at max_tokens has incomplete input: never run
+          // it, and its text is at most a preamble ("Jag hämtar..."), not an
+          // answer. Any other turn's text is the answer, cut off or not.
+          const text = toolUses.length > 0 ? '' : textOf(resp)
+          // A refusal is the model's answer: never re-ask around it.
+          if (text || resp.stop_reason === 'refusal') {
+            return { text, model, usage, ...endOf(resp) }
+          }
+          // No visible text: an end_turn with nothing in it, or a turn whose
+          // whole max_tokens budget went to (empty-text) thinking blocks or to
+          // the cut-off tool call. Returning '' here was the "Assistenten gav
+          // inget svar" bug. The turn is dropped (its blocks cannot be replayed:
+          // a cut-off tool_use has no result) and the model is asked for the
+          // answer below.
+          forcedFinal = 'no_text'
+          break
         }
 
         messages.push({ role: 'assistant', content: resp.content })
         const results: Anthropic.Messages.ContentBlockParam[] = []
-        for (const block of resp.content) {
-          if (block.type !== 'tool_use') continue
+        for (const block of toolUses) {
           const def = byName.get(block.name)
           let content: string
           let isError = false
@@ -214,20 +269,28 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         messages.push({ role: 'user', content: results })
       }
 
-      // Spent the step budget without a final answer: force one more turn that
-      // cannot call tools. The tools param MUST stay in the request: the
-      // transcript above holds tool_use/tool_result blocks, and the Messages
-      // API rejects a request that replays those without declaring the tools
-      // they refer to. tool_choice none is the sanctioned "answer in text" knob.
+      // No answer yet (step budget spent, or a turn without visible text):
+      // force one more turn that cannot call tools and is told to answer. The
+      // tools param MUST stay in the request: the transcript above holds
+      // tool_use/tool_result blocks, and the Messages API rejects a request
+      // that replays those without declaring the tools they refer to.
+      // tool_choice none is the sanctioned "answer in text" knob. One turn
+      // only: if this one is empty too, the caller fails it honestly.
       const final = await (await getClient()).messages.create({
         model,
         max_tokens: req.maxTokens,
         ...(req.system ? { system: req.system } : {}),
         tools,
         tool_choice: { type: 'none' },
-        messages,
+        messages: withFinalAnswerRequest(messages),
       })
-      return { text: textOf(final), model, usage: addUsage(usage, usageOf(final)) }
+      return {
+        text: textOf(final),
+        model,
+        usage: addUsage(usage, usageOf(final)),
+        ...endOf(final),
+        forcedFinal,
+      }
     },
 
     async generateStructured(req: GenerateStructuredRequest): Promise<GenerateStructuredResult> {

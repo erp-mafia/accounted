@@ -1552,3 +1552,75 @@ describe('generateAgiDeclaration: writeOnlyIfChanged (submit-time regeneration, 
     expect(db.findCall('agi_declarations', 'update')).toBeDefined()
   })
 })
+
+describe('generateAgiDeclaration: regionalt stöd (PH 208)', () => {
+  const YOUTH_ROW = {
+    ...REGULAR_ROW,
+    employee_id: '33333333-3333-4333-8333-333333333333',
+    gross_salary: 20000,
+    tax_withheld: 4000,
+    avgifter_basis: 20000,
+    avgifter_amount: 4162,
+    avgifter_rate: 0.2081,
+    avgifter_category: 'youth',
+    employee: { personnummer: 'emp2_encrypted', specification_number: 2, f_skatt_status: 'a_skatt' },
+  }
+  const SENIOR_ROW = {
+    ...REGULAR_ROW,
+    employee_id: '44444444-4444-4444-8444-444444444444',
+    gross_salary: 30000,
+    tax_withheld: 6000,
+    avgifter_basis: 30000,
+    avgifter_amount: 3063,
+    avgifter_rate: 0.1021,
+    avgifter_category: 'reduced_65plus',
+    employee: { personnummer: 'emp3_encrypted', specification_number: 3, f_skatt_status: 'a_skatt' },
+  }
+
+  async function generate(calculationParams: Record<string, unknown>, roster: unknown[]) {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: { ...RUN, calculation_params: calculationParams } },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: roster },
+      { data: [] },
+      { data: null },
+      { data: { id: 'agi-1' } },
+      { data: null },
+    ])
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+    expect(result.ok).toBe(true)
+    if (!result.ok) throw new Error('generation failed')
+    return result
+  }
+
+  it('declares FK471/FK476 and files FK487 after the avdrag when the run was calculated with it', async () => {
+    const result = await generate(
+      { avgifterTotal: 0.3142, salary_regional_support: true },
+      [REGULAR_ROW, YOUTH_ROW, SENIOR_ROW],
+    )
+    // Underlag: 40 000 (full rate) + 20 000 (youth); the 67+ row pays only
+    // ålderspensionsavgift and stays out. Avdrag 10 % = 6 000 (< 7 100).
+    // Declared avgift 12 568 + 4 162 + 3 063 = 19 793, less 6 000.
+    expect(result.totals.regionalSupport).toEqual({ underlag: 60000, deduction: 6000 })
+    expect(result.totals.totalAvgifterAmount).toBe(19793 - 6000)
+    const hu = result.xml.match(/<gem:HU>[\s\S]*?<\/gem:HU>/)![0]
+    expect(hu).toContain('<gem:UlagRegionaltStod faltkod="471">60000</gem:UlagRegionaltStod>')
+    expect(hu).toContain('<gem:AvdragRegionaltStod faltkod="476">6000</gem:AvdragRegionaltStod>')
+    expect(hu).toContain('<gem:SummaArbAvgSlf faltkod="487">13793</gem:SummaArbAvgSlf>')
+    // The IUs are unchanged: the avdrag lives in HU only.
+    expect(iuBlockFor(result.xml, '199001011234')).toContain(
+      '<gem:KontantErsattningUlagAG faltkod="011">40000</gem:KontantErsattningUlagAG>',
+    )
+  })
+
+  it('files exactly as before when the run was calculated without it', async () => {
+    const result = await generate({ avgifterTotal: 0.3142 }, [REGULAR_ROW, YOUTH_ROW, SENIOR_ROW])
+    expect(result.totals.regionalSupport).toBeUndefined()
+    expect(result.totals.totalAvgifterAmount).toBe(19793)
+    expect(result.xml).not.toContain('faltkod="471"')
+    expect(result.xml).not.toContain('faltkod="476"')
+  })
+})

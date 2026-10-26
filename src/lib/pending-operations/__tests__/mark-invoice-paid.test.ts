@@ -22,6 +22,12 @@ vi.mock('@/lib/invoices/sale-first', async (importOriginal) => ({
   planSaleBeforeSettlementById: vi.fn(async () => ({ ok: true, required: false })),
   planSalesBeforeBatchSettlement: vi.fn(async () => ({ ok: true, plans: [] })),
 }))
+const mockRefundCreditNote = vi.fn()
+vi.mock('@/lib/invoices/refund-credit-note', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/invoices/refund-credit-note')>()),
+  refundCreditNote: (...args: unknown[]) => mockRefundCreditNote(...args),
+}))
+
 import { eventBus } from '@/lib/events/bus'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { PendingOperation } from '@/types'
@@ -100,25 +106,60 @@ beforeEach(() => {
 })
 
 describe('commitPendingOperation: mark_invoice_paid state + invoice.paid', () => {
-  it('rejects credit notes before creating a payment journal entry', async () => {
+  const CREDIT_NOTE = {
+    id: 'credit-1',
+    invoice_number: 'KR-F-2026001',
+    status: 'sent',
+    total: -525,
+    remaining_amount: -525,
+    paid_amount: null,
+    credited_invoice_id: 'inv-1',
+    document_type: 'invoice',
+    journal_entry_id: 'je-credit',
+    customer: { name: 'Test AB' },
+  }
+
+  // A kreditfaktura: the approval records the refund of its credit, never a payment.
+  it('records the refund of a credit note on approval', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
-    enqueue({
-      data: {
-        id: 'credit-1',
-        invoice_number: 'KR-F-2026001',
-        status: 'sent',
-        total: -525,
-        remaining_amount: -525,
-        paid_amount: null,
-        credited_invoice_id: 'inv-1',
-        document_type: 'invoice',
-        journal_entry_id: 'je-credit',
-        customer: { name: 'Test AB' },
-      },
-      error: null,
-    }) // invoice fetch
+    enqueue({ data: CREDIT_NOTE, error: null }) // invoice fetch
     enqueue({ data: null, error: null }) // dispatcher pending_operations update
+    mockRefundCreditNote.mockResolvedValue({
+      ok: true,
+      dryRun: false,
+      amount: 525,
+      owedAfter: 0,
+      lines: [],
+      journalEntryId: 'je-refund',
+      paidAmount: -525,
+      refundedAt: '2026-03-30T12:00:00Z',
+    })
+
+    const op = makePendingOp({ params: { invoice_id: 'credit-1', payment_date: '2026-03-30', allow_duplicate: false } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('committed')
+    expect(result.data).toMatchObject({ refund: true, refunded_amount: 525, journal_entry_id: 'je-refund' })
+    expect(mockRefundCreditNote.mock.calls[0][3]).toMatchObject({
+      refundDate: '2026-03-30',
+      settlementAccountNumber: '1930',
+      force: false,
+    })
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(mockCreateCashEntry).not.toHaveBeenCalled()
+  })
+
+  it('rejects a credit note refund the service refuses, before any journal entry', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: CREDIT_NOTE, error: null }) // invoice fetch
+    enqueue({ data: null, error: null }) // dispatcher pending_operations update
+    mockRefundCreditNote.mockResolvedValue({
+      ok: false,
+      code: 'CREDIT_NOTE_REFUND_NOTHING_OWED',
+      details: { refunded: 0, credit_used: 0 },
+    })
 
     const op = makePendingOp({ params: { invoice_id: 'credit-1', payment_date: '2026-03-30' } })
     const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)

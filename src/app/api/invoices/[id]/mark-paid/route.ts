@@ -12,7 +12,77 @@ import { roundOre } from '@/lib/money'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { isMatchableInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { refundCreditNote, type RefundCreditNoteRow, type RefundCustomLine } from '@/lib/invoices/refund-credit-note'
+import type { RouteContext } from '@/lib/api/with-route-context'
+import type { Logger } from '@/lib/logger'
 import type { EntityType, Invoice } from '@/types'
+
+/**
+ * The refund of a kreditfaktura (follow-up of crm#1435): the body is the
+ * mark-paid body, payment_date being the refund's date and lines the
+ * person's own rows (Dr 1510 / Cr the bank). Without lines the whole amount
+ * owed goes out of the account the customer paid to (the credit note's
+ * payee, 1930 when none was chosen). The credit note keeps its status: the
+ * response says so with refund: true.
+ */
+async function creditNoteRefundResponse(
+  request: Request,
+  ctx: RouteContext,
+  creditNote: RefundCreditNoteRow,
+  opLog: Logger,
+): Promise<Response> {
+  const { user, supabase, companyId, requestId } = ctx
+  let rawBody: unknown
+  try {
+    const text = await request.text()
+    if (text) rawBody = JSON.parse(text)
+  } catch {
+    // Empty / invalid body: the whole refund, today.
+  }
+  let body: { payment_date?: string; lines?: RefundCustomLine[]; force?: boolean } = {}
+  if (rawBody) {
+    const parsed = MarkInvoicePaidSchema.safeParse(rawBody)
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Ogiltig förfrågan', details: parsed.error.flatten() }, { status: 400 })
+    }
+    // A refund is in kronor (planCreditNoteRefund refuses another currency),
+    // so it never carries an exchange difference.
+    if (parsed.data.exchange_rate_difference) {
+      return errorResponseFromCode('CREDIT_NOTE_REFUND_UNSUPPORTED', opLog, {
+        requestId,
+        details: { reason: 'foreign_currency' },
+      })
+    }
+    body = parsed.data
+  }
+
+  const result = await refundCreditNote(supabase, companyId, user.id, {
+    creditNote,
+    refundDate: body.payment_date || todayIsoStockholm(),
+    settlementAccountNumber: await resolveInvoiceSettlementAccount(supabase, companyId, creditNote),
+    customLines: body.lines,
+    force: body.force === true,
+  })
+  if (!result.ok) {
+    if (result.code === 'BOOKKEEPING_ERROR' || result.code === 'DB_ERROR') {
+      return errorResponse(result.error, opLog, { requestId })
+    }
+    return errorResponseFromCode(result.code, opLog, {
+      requestId,
+      ...('details' in result ? { details: result.details } : {}),
+    })
+  }
+  return NextResponse.json({
+    success: true,
+    refund: true,
+    status: creditNote.status,
+    paid_at: result.refundedAt,
+    paid_amount: result.paidAmount,
+    refunded_amount: result.amount,
+    owed_after: result.owedAfter,
+    journal_entry_id: result.journalEntryId,
+  })
+}
 
 /**
  * POST /api/invoices/[id]/mark-paid
@@ -49,11 +119,10 @@ export const POST = withRouteContext(
       return errorResponseFromCode('INVOICE_PAID_NOT_FOUND', opLog, { requestId })
     }
 
+    // A kreditfaktura is not paid by the customer: the company pays its
+    // credit back. The same door records that refund (Dr 1510 / Cr bank).
     if (invoice.credited_invoice_id) {
-      return errorResponseFromCode('INVOICE_PAID_NOT_PAYABLE', opLog, {
-        requestId,
-        details: { reason: 'credit_note' },
-      })
+      return creditNoteRefundResponse(request, ctx, invoice as RefundCreditNoteRow, opLog)
     }
 
     const activeCreditNotes = ((invoice as { credit_notes?: Array<{

@@ -5,7 +5,9 @@ import {
   DOCUMENT_IMPORT_RUN_KEY,
   documentImportRunStatus,
   foldDocumentImportSlice,
+  markDocumentImportNeedsReconnect,
   readDocumentImportRun,
+  recordDocumentImportNeedsReconnect,
   recordDocumentImportSlice,
   type DocumentImportRunSummary,
 } from '../document-import-run'
@@ -176,6 +178,48 @@ describe('the stored summary', () => {
 
     const summary = (await readDocumentImportRun(settings)) as DocumentImportRunSummary
     expect(summary).toMatchObject({ scanned: 40, startedAt: 't1' })
+  })
+})
+
+describe('a run the provider refused (B11)', () => {
+  const running = foldDocumentImportSlice(null, slice(), null, '2026-10-22T17:49:00Z')!
+
+  it('keeps the counts and resume point of the run it stopped, and says it waits for a reconnect', () => {
+    const marked = markDocumentImportNeedsReconnect(running, 'fortnox', 'file-40', '2026-10-22T17:50:20Z')
+
+    expect(marked).toEqual({ ...running, updatedAt: '2026-10-22T17:50:20Z', needsReconnect: true })
+  })
+
+  it('clears the mark once a slice answers again after the reconnect', () => {
+    const marked = markDocumentImportNeedsReconnect(running, 'fortnox', 'file-40', '2026-10-22T17:50:20Z')
+    const resumed = foldDocumentImportSlice(marked, slice({ partial: false, nextCursor: null }), 'file-40', '2026-10-22T18:30:00Z')
+
+    expect(resumed).toMatchObject({ complete: true, scanned: 80, needsReconnect: false })
+  })
+
+  it('records a run refused before its first slice as an empty one that waits for a reconnect', () => {
+    expect(markDocumentImportNeedsReconnect(running, 'bokio', null, '2026-10-23T08:00:00Z')).toMatchObject({
+      provider: 'bokio',
+      startedAt: '2026-10-23T08:00:00Z',
+      complete: false,
+      total: 0,
+      scanned: 0,
+      nextCursor: null,
+      needsReconnect: true,
+    })
+  })
+
+  it('leaves the summary alone for a refused slice of another chain', () => {
+    expect(markDocumentImportNeedsReconnect(running, 'fortnox', 'file-12', '2026-10-22T17:50:20Z')).toBeNull()
+  })
+
+  it('stores the mark, and reads summaries kept before the mark existed', async () => {
+    const { settings, store } = memorySettings({ [DOCUMENT_IMPORT_RUN_KEY]: running })
+    expect(await readDocumentImportRun(settings)).toEqual(running)
+
+    await recordDocumentImportNeedsReconnect(settings, 'fortnox', 'file-40', '2026-10-22T17:50:20Z')
+
+    expect(store.get(DOCUMENT_IMPORT_RUN_KEY)).toMatchObject({ needsReconnect: true, nextCursor: 'file-40' })
   })
 })
 

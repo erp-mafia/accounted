@@ -525,18 +525,122 @@ query ConnectProbe {
 }`
 
 /**
+ * The scopes the store has actually granted this installation. A version's
+ * declared scopes are not that: a scope added in a new app version only
+ * reaches an installed store once the change is approved on the store, and
+ * the client credentials token carries the granted set (PH 161).
+ */
+const GRANTED_SCOPES_QUERY = `
+query GrantedScopes {
+  currentAppInstallation { accessScopes { handle } }
+}`
+
+/**
+ * Why connecting a store failed, as far as Shopify's answer tells. Each kind
+ * maps to one thing the merchant changes in Shopify.
+ */
+export type ShopifyConnectFailureKind =
+  /** Token exchange: the app exists but is not installed on this store. */
+  | 'app_not_installed'
+  /** Token exchange: shop_not_permitted, the app and store are in different organizations. */
+  | 'other_organization'
+  /** Token exchange refused the client id/secret (or the address is not that store's). */
+  | 'credentials_rejected'
+  /** The store has not granted read_orders to the installation (`grantedScopes` lists what it has). */
+  | 'orders_scope_not_granted'
+  /** read_orders is granted, yet orders are refused: protected customer data access is missing. */
+  | 'orders_protected_data'
+  /** Orders refused, and the granted scopes could not be read to tell the two causes apart. */
+  | 'orders_access_denied'
+  /** Network, 5xx, throttling or anything else: nothing for the merchant to change. */
+  | 'unreachable'
+
+export class ShopifyConnectError extends Error {
+  constructor(
+    readonly kind: ShopifyConnectFailureKind,
+    /** The underlying failure, kept for the log line. */
+    readonly underlying: unknown,
+    /** Scopes the store has granted the app, when the probe could read them. */
+    readonly grantedScopes: string[] | null = null,
+  ) {
+    super(underlying instanceof Error ? underlying.message : String(underlying))
+    this.name = 'ShopifyConnectError'
+  }
+}
+
+/** A write scope includes its read scope. */
+function grantsOrderRead(scopes: readonly string[]): boolean {
+  return scopes.includes('read_orders') || scopes.includes('write_orders')
+}
+
+/** The granted scope handles, or null when they cannot be read. Never throws. */
+export async function fetchGrantedScopes(session: ShopifySession): Promise<string[] | null> {
+  try {
+    const data = await shopifyGraphQL<{
+      currentAppInstallation: { accessScopes: Array<{ handle?: unknown } | null> | null } | null
+    }>(session, GRANTED_SCOPES_QUERY)
+    const scopes = data.currentAppInstallation?.accessScopes
+    if (!Array.isArray(scopes)) return null
+    return scopes
+      .map((scope) => scope?.handle)
+      .filter((handle): handle is string => typeof handle === 'string' && handle.length > 0)
+  } catch {
+    return null
+  }
+}
+
+/** Classify a failed token exchange (exchangeAccessToken's error). */
+function tokenFailureKind(error: unknown): ShopifyConnectFailureKind {
+  if (!(error instanceof ShopifyApiError)) return 'unreachable'
+  if (/not installed/i.test(error.message)) return 'app_not_installed'
+  if (error.code === 'shop_not_permitted' || /shop_not_permitted/i.test(error.message)) {
+    return 'other_organization'
+  }
+  // exchangeAccessToken reports every non-retryable 4xx as 401.
+  return error.status === 401 ? 'credentials_rejected' : 'unreachable'
+}
+
+/**
  * Verify credentials and read shop metadata. The one-order probe inside the
  * query is the authoritative check: it exercises the read_orders scope the
- * feed needs, so an app created without that scope fails here (ACCESS_DENIED)
+ * feed needs, so an app without that scope fails here (ACCESS_DENIED)
  * instead of at 03:15.
+ *
+ * Every failure is thrown as a ShopifyConnectError naming its cause. On
+ * ACCESS_DENIED the granted scopes are read in a second request (failure
+ * path only, so a working store's connect is unchanged): read_orders
+ * missing from them means the store never approved it, typically a scope
+ * added in a later app version; read_orders present means the refusal is
+ * the protected customer data gate on orders.
  */
 export async function testConnectionAndFetchShopInfo(
   creds: ShopifyCredentials,
 ): Promise<ShopifyShopInfo> {
-  const session = await createShopifySession(creds)
-  const data = await shopifyGraphQL<{
-    shop: { name: string | null; currencyCode: string | null }
-  }>(session, PROBE_QUERY)
+  let session: ShopifySession
+  try {
+    session = await createShopifySession(creds)
+  } catch (error) {
+    throw new ShopifyConnectError(tokenFailureKind(error), error)
+  }
+
+  let data: { shop: { name: string | null; currencyCode: string | null } | null }
+  try {
+    data = await shopifyGraphQL(session, PROBE_QUERY)
+  } catch (error) {
+    if (error instanceof ShopifyApiError && error.code === ACCESS_DENIED_CODE) {
+      const granted = await fetchGrantedScopes(session)
+      const kind: ShopifyConnectFailureKind =
+        granted === null
+          ? 'orders_access_denied'
+          : grantsOrderRead(granted)
+            ? 'orders_protected_data'
+            : 'orders_scope_not_granted'
+      throw new ShopifyConnectError(kind, error, granted)
+    }
+    const rejected =
+      error instanceof ShopifyApiError && (error.status === 401 || error.status === 403)
+    throw new ShopifyConnectError(rejected ? 'credentials_rejected' : 'unreachable', error)
+  }
   return {
     name: data.shop?.name ?? null,
     currency: data.shop?.currencyCode ? data.shop.currencyCode.toUpperCase() : null,

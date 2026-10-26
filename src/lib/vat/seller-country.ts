@@ -6,7 +6,8 @@
  *
  * Deterministic, and in this order, the first that answers wins:
  *   1. the VAT number's prefix (EL is Greece; XI, Northern Ireland, is the
- *      United Kingdom, which is right for the services this decides);
+ *      United Kingdom, which is right for the services this decides), when
+ *      the number has its member state's format;
  *   2. the IBAN's country;
  *   3. a Swedish organisationsnummer (ten digits, the hyphen optional);
  *   4. a country named in the address as read, by the names the country
@@ -24,6 +25,7 @@
 import { COUNTRY_OPTIONS, vatNumberCountryPrefix } from './country-codes'
 import { isEuMemberCountry } from './eu-countries'
 import { isKronorCurrency } from '@/lib/bookkeeping/currency-utils'
+import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
 
 export type SellerRegion = 'se' | 'eu' | 'non_eu'
 
@@ -63,10 +65,16 @@ export function supplierTypeForRegion(region: SellerRegion): SupplierTypeForRegi
 /** A Swedish organisationsnummer: ten digits, the hyphen before the last four optional (16 prefix allowed). */
 const SWEDISH_ORG_NUMBER = /^(?:16)?\d{6}-?\d{4}$/
 
-/** The country a VAT number's prefix names; a prefix with no digits after it is no VAT number. */
+/**
+ * The country a VAT number's prefix names. A prefix with no digits after it is
+ * no VAT number, and neither is an EU prefix whose national part is not that
+ * state's number: "SESL000D", a US seller's VAT-code label, read as Sweden and
+ * sent a reverse-charge purchase to Swedish input VAT (crm#1411). The next
+ * source in the order decides then.
+ */
 function vatNumberCountry(vatNumber: string | null | undefined): string | null {
   const prefix = vatNumberCountryPrefix(vatNumber)
-  if (!prefix || !/\d/.test(vatNumber ?? '')) return null
+  if (!prefix || !/\d/.test(vatNumber ?? '') || isMalformedEuVatNumber(vatNumber)) return null
   if (prefix === 'EL') return 'GR'
   if (prefix === 'XI') return 'GB'
   return prefix

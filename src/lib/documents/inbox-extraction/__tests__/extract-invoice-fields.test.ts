@@ -3,6 +3,7 @@ import {
   extractInvoiceFields,
   extractJsonObject,
   stripOwnCompanyAsSupplier,
+  dropMalformedVatNumber,
   emptyResult,
 } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 
@@ -966,5 +967,26 @@ describe('stripOwnCompanyAsSupplier', () => {
     expect(result.documentKind).toBe('other')
     expect(result.totals.total).toBe(2500)
     expect(result.prominentAmounts).toEqual([{ amount: 2500, label: 'Engångspris' }])
+  })
+})
+
+describe('dropMalformedVatNumber (crm#1411)', () => {
+  function withSupplier(supplier: Partial<ReturnType<typeof emptyResult>['supplier']>) {
+    const base = emptyResult()
+    return { ...base, supplier: { ...base.supplier, ...supplier } }
+  }
+
+  it('clears a VAT-code label read as the seller VAT number and keeps the rest of the supplier', () => {
+    const result = dropMalformedVatNumber(
+      withSupplier({ name: 'Synthetic Hosting Inc.', vatNumber: 'SESL000D', address: '101 Townsend St, San Francisco, CA 94107' }),
+    )
+    expect(result.supplier).toMatchObject({ name: 'Synthetic Hosting Inc.', vatNumber: null, address: '101 Townsend St, San Francisco, CA 94107' })
+  })
+
+  it('leaves a real VAT number, a non-EU one and none alone', () => {
+    for (const vatNumber of ['SE556677889901', 'IE3668997OH', 'GB123456789', null]) {
+      const data = withSupplier({ vatNumber })
+      expect(dropMalformedVatNumber(data)).toBe(data)
+    }
   })
 })

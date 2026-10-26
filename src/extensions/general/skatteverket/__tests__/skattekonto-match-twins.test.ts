@@ -159,6 +159,7 @@ describe('findLedgerTwinCandidates', () => {
     enqueue({ data: [] }) // none linked
     enqueue({ data: [{ ...skv('p-jan', -1, '2026-01-05'), status: 'booked' }] }) // open rows that day
     enqueueCancellationRead(enqueue, [jan])
+    enqueue({ data: [] }) // no live settlement on 1630 (issue #50)
     // ... then April's.
     enqueueCandidateLines(enqueue, [apr, aprBoth])
     enqueue({ data: [] })

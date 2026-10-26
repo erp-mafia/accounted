@@ -145,6 +145,11 @@ export interface ExtensionContext {
    * asks auth again; absent outside an HTTP request.
    */
   isAnonymous?: boolean
+  /**
+   * In an API route: the caller's client. In an event handler: the
+   * service-role client, whichever path emitted the event (lib/extensions/
+   * registry.ts), so every query filters by `companyId`.
+   */
   supabase: SupabaseClient
   emit(event: CoreEvent): Promise<void>
   settings: ExtensionSettings

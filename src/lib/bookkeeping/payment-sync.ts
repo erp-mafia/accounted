@@ -241,7 +241,7 @@ export async function syncInvoiceStatusFromPaymentEntry(
   } else {
     const { data: customerInvoice, error: customerInvoiceError } = await supabase
       .from('invoices')
-      .select('paid_amount, total, due_date, deduction_total, deduction_reclaimed_total')
+      .select('paid_amount, total, due_date, deduction_total, deduction_reclaimed_total, credited_invoice_id')
       .eq('id', entry.source_id)
       .eq('company_id', companyId)
       .single()
@@ -257,7 +257,30 @@ export async function syncInvoiceStatusFromPaymentEntry(
       return
     }
 
-    if (customerInvoice) {
+    if (customerInvoice && (customerInvoice as { credited_invoice_id?: string | null }).credited_invoice_id) {
+      // A refund of a kreditfaktura (lib/invoices/refund-credit-note.ts): the
+      // credit note keeps its status, and its paid_amount (negative, like its
+      // total) moves back by the refund's row, so the reskontra shows the
+      // credit as owed again exactly when 1510 does. Without a row there is
+      // no refund to undo.
+      if (reversedAmount !== null) {
+        const restoredPaid = Math.min(0, roundOre(Number(customerInvoice.paid_amount ?? 0) - reversedAmount))
+        const { error: creditNoteUpdateError } = await supabase
+          .from('invoices')
+          .update({ paid_amount: restoredPaid, paid_at: null })
+          .eq('id', entry.source_id)
+          .eq('company_id', companyId)
+          .in('status', ['sent', 'overdue'])
+        if (creditNoteUpdateError) {
+          log.error('Failed to restore credit note for refund reversal: aborting status sync', creditNoteUpdateError, {
+            companyId,
+            journalEntryId: entryId,
+            invoiceId: entry.source_id,
+          })
+          return
+        }
+      }
+    } else if (customerInvoice) {
       // For a partial reversal we take the exact amount from the payment row.
       // The fallback (full paid_amount) only applies when no payment row exists:
       // true for invoice_cash_payment, which is only ever booked on a FULL

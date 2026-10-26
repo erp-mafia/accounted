@@ -100,10 +100,15 @@ export default function CloudBackupCard() {
         }
       }, 10_000)
     } else if (result === 'error') {
-      const reason = searchParams.get('reason') || t('ext_cloud_backup_unknown_error')
+      const reason = searchParams.get('reason')
       toast({
         title: t('ext_cloud_backup_connect_failed', { provider: providerLabel }),
-        description: reason,
+        // The storage box left unticked at the provider is the one refusal
+        // the user can fix themselves, so it gets words instead of a code.
+        description:
+          reason === 'missing_scope'
+            ? t('ext_cloud_backup_connect_missing_scope', { provider: providerLabel })
+            : reason || t('ext_cloud_backup_unknown_error'),
         variant: 'destructive',
       })
     }
@@ -231,7 +236,14 @@ function ReauthAttn({ providers }: { providers: CloudProviderStatus[] }) {
         onClick: connect,
       }}
     >
-      {t('ext_cloud_backup_reauth_description', { provider: labels.join(' / ') })}
+      {t(
+        // A grant without the storage box ticked needs different advice than
+        // an expired one: reconnecting alone would repeat the same refusal.
+        providers.every((p) => p.reauth_reason === 'missing_scope')
+          ? 'ext_cloud_backup_reauth_missing_scope_description'
+          : 'ext_cloud_backup_reauth_description',
+        { provider: labels.join(' / ') }
+      )}
     </AttnLine>
   )
 }
@@ -321,7 +333,14 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
           if (body.error === 'needs_reauth') {
             // Refresh status so the row switches to the reconnect state.
             await onChanged()
-            throw new Error(t('ext_cloud_backup_reauth_description', { provider }))
+            throw new Error(
+              t(
+                body.reauth_reason === 'missing_scope'
+                  ? 'ext_cloud_backup_reauth_missing_scope_description'
+                  : 'ext_cloud_backup_reauth_description',
+                { provider }
+              )
+            )
           }
           throw new Error(body.error || t('ext_cloud_backup_sync_failed'))
         }

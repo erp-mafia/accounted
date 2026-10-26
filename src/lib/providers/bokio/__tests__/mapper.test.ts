@@ -325,6 +325,64 @@ describe('mapBokioToSalesInvoice line items', () => {
     expect(result.lines.map((line) => line.unitCode)).toEqual(['månad', 'st', undefined, '', undefined, 'mil']);
   });
 
+  // crm#1190: the list endpoint served unarranged invoices with their lines
+  // in strictly descending id at import time, and in ascending id (the PDF's
+  // order) a week later. Both readings must import in the printed order.
+  it('turns a strictly descending id sequence back into the printed order', () => {
+    const served = { ...BOKIO_INVOICE_WITH_TEXT_ROWS, lineItems: [...BOKIO_INVOICE_WITH_TEXT_ROWS.lineItems].reverse() };
+    const result = mapBokioToSalesInvoice(served);
+
+    expect(result.lines.map((line) => line.id)).toEqual(['101', '102', '103', '104', '105', '106']);
+    expect(result.lines.map((line) => line.lineType)).toEqual(['product', 'product', 'text', 'product', 'text', 'product']);
+    // The raw payload stays as Bokio served it.
+    expect((result._raw?.['lineItems'] as { id: number }[]).map((line) => line.id)).toEqual([106, 105, 104, 103, 102, 101]);
+  });
+
+  it('turns round a two-line invoice served text first', () => {
+    const [sale, , text] = BOKIO_INVOICE_WITH_TEXT_ROWS.lineItems;
+    const result = mapBokioToSalesInvoice({ ...BOKIO_INVOICE_WITH_TEXT_ROWS, lineItems: [text, sale] });
+
+    expect(result.lines.map((line) => line.id)).toEqual(['101', '103']);
+  });
+
+  it('keeps an order the user arranged in Bokio, where the first line was added last', () => {
+    const [first, ...rest] = BOKIO_INVOICE_WITH_TEXT_ROWS.lineItems;
+    const arranged = [{ ...first, id: 107 }, ...rest];
+    const result = mapBokioToSalesInvoice({ ...BOKIO_INVOICE_WITH_TEXT_ROWS, lineItems: arranged });
+
+    expect(result.lines.map((line) => line.id)).toEqual(['107', '102', '103', '104', '105', '106']);
+  });
+
+  it('keeps the served order when a line has no numeric id', () => {
+    const [a, b, c] = BOKIO_INVOICE_WITH_TEXT_ROWS.lineItems;
+    const result = mapBokioToSalesInvoice({
+      ...BOKIO_INVOICE_WITH_TEXT_ROWS,
+      lineItems: [{ ...c, id: 'x3' }, { ...b, id: 2 }, { ...a, id: 1 }],
+    });
+
+    expect(result.lines.map((line) => line.id)).toEqual(['x3', '2', '1']);
+  });
+
+  it('puts a credit note\'s lines in the printed order too', () => {
+    const result = mapBokioToCreditNote({
+      id: 'c1a2b3c4-0000-4000-8000-000000000001',
+      invoiceNumber: '2',
+      status: 'published',
+      creditDate: '2025-05-01',
+      currency: 'SEK',
+      totalAmount: 100,
+      totalTax: 0,
+      invoiceRef: { id: '8f2c1d3e-0b4a-4c5d-9e6f-7a8b9c0d1e2f', invoiceNumber: '1' },
+      customerRef: { id: '55c899c5-82b2-47fa-9c51-e35fc9b26443', name: 'customer 1' },
+      lineItems: [
+        { id: 202, description: 'Refers to invoice 1', itemType: 'descriptionOnlyItem' },
+        { id: 201, description: 'Laptop', itemType: 'salesItem', unitType: 'piece', quantity: 1, unitPrice: 100, taxRate: 0 },
+      ],
+    });
+
+    expect(result.lines.map((line) => line.id)).toEqual(['201', '202']);
+  });
+
   it('leaves the row kind to inference when itemType is absent', () => {
     const result = mapBokioToSalesInvoice({
       ...BOKIO_INVOICE_WITH_TEXT_ROWS,

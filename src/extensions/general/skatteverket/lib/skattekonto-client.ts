@@ -27,6 +27,8 @@ export function getSkattekontoBaseUrl(): string {
   )
 }
 
+const NO_SKATTEKONTO_MESSAGE = 'Inget skattekonto är registrerat hos Skatteverket.'
+
 /**
  * Map Skatteverket error codes (felkod 1-5) to Swedish user messages.
  */
@@ -37,7 +39,7 @@ function mapFelkodToMessage(fel: SkatteverketFel): string {
     case 2:
       return 'Felaktigt datum.'
     case 3:
-      return 'Inget skattekonto är registrerat hos Skatteverket.'
+      return NO_SKATTEKONTO_MESSAGE
     case 4:
       return 'Internt fel hos Skatteverket. Försök igen om en stund.'
     case 5:
@@ -69,6 +71,15 @@ async function handleErrorResponse(response: Response): Promise<never> {
     )
   }
 
+  // A bare 404 ({"message": "Not found"}, no felkod) on /skattekonton/{id}
+  // means Skatteverket keeps no skattekonto for that identity yet. Observed
+  // in prod on newly formed companies: the same identifier, on the same
+  // consent, later answers 200 once Skatteverket has opened the account, so
+  // the request is right and the state is Skatteverket's (B07).
+  if (response.status === 404) {
+    throw new SkatteverketSkattekontoError(NO_SKATTEKONTO_MESSAGE, null, response.status)
+  }
+
   throw new SkatteverketSkattekontoError(
     `Skatteverket svarade med ${response.status}`,
     null,
@@ -89,6 +100,20 @@ export class SkatteverketSkattekontoError extends Error {
     super(message)
     this.name = 'SkatteverketSkattekontoError'
   }
+}
+
+/**
+ * True when Skatteverket answered that it has no skattekonto for the
+ * identity: felkod 3, or a bare 404 without a felkod envelope. A state of
+ * the account at Skatteverket (typically a company too new to have one),
+ * not a failed request: callers record it and show it, they do not log it
+ * as an error.
+ */
+export function isSkattekontoMissing(err: unknown): err is SkatteverketSkattekontoError {
+  return (
+    err instanceof SkatteverketSkattekontoError &&
+    (err.felkod === 3 || (err.felkod === null && err.httpStatus === 404))
+  )
 }
 
 /**

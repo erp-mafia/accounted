@@ -102,7 +102,11 @@ export interface GenerateTextRequest {
    * alone (so a snapshot in the prompt is the fallback grounding).
    */
   tools?: AiToolDef[]
-  /** Max model turns in the tool loop (default 4). Ignored when `tools` is absent. */
+  /**
+   * Max model turns in the tool loop (default 4). Ignored when `tools` is
+   * absent. A loop that ends without a text answer (budget spent, or a turn
+   * with no visible text) gets one more turn that may not call tools.
+   */
   maxSteps?: number
 }
 
@@ -110,6 +114,21 @@ export interface GenerateTextResult {
   text: string
   model: string
   usage: AiUsage
+  /**
+   * The last model turn hit the output ceiling (max_tokens): `text` is cut
+   * off, or empty when the whole budget went to reasoning. Absent when the
+   * answer ended on its own.
+   */
+  truncated?: true
+  /** The provider's raw stop reason for the last model turn. Diagnostics (logs) only. */
+  stopReason?: string
+  /**
+   * Set when the tool loop had to ask for the answer in a final no-tools turn:
+   * 'step_limit' when the step budget ran out, 'no_text' when a turn ended
+   * without visible text (an empty end_turn, or max_tokens spent on reasoning
+   * or on a tool call that was cut off).
+   */
+  forcedFinal?: 'step_limit' | 'no_text'
 }
 
 export interface GenerateStructuredRequest {

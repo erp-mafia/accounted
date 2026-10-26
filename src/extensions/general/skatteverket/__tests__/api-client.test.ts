@@ -116,6 +116,21 @@ describe('skvRequest: error mapping', () => {
     }
   })
 
+  // B07: the skattekonto API says "this person is not authorized for the
+  // company" as felkod 6, without the word Behörighet. It used to fall to the
+  // generic ACCESS_DENIED ("Kontakta support") and an hourly cron error.
+  it('maps 403 felkod 6 "Auktorisation saknas" → BEHORIGHET_SAKNAS', async () => {
+    mockFetchStatus(403, '{\n  "felkod": 6,\n  "felmeddelande": "Auktorisation saknas"\n}')
+    try {
+      await skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)
+      expect.fail('expected throw')
+    } catch (e) {
+      expect(e).toBeInstanceOf(SkatteverketAuthError)
+      expect((e as SkatteverketAuthError).code).toBe('BEHORIGHET_SAKNAS')
+      expect((e as SkatteverketAuthError).message).toMatch(/firmatecknare/)
+    }
+  })
+
   // #1155: the MuleSoft APIGW contract error wears scope wording but is our
   // subscription gap (#973), not the user's token. It used to match the
   // `required scope` substring test and surface as MISSING_SCOPE, which is in
@@ -629,5 +644,35 @@ describe('refresh-token dead-session classification', () => {
       expect(e).not.toBeInstanceOf(SkatteverketAuthError)
       expect((e as Error).message).toMatch(/500/)
     }
+  })
+})
+
+describe('skvRequest: rate limit under concurrency', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  // B07: the skattekonto cron now syncs several companies at once. The old
+  // limiter spaced each caller from the previous CLAIM, so four concurrent
+  // calls all left within ~260 ms; slots must be 250 ms apart.
+  it('spaces concurrent calls 250 ms apart instead of bursting', async () => {
+    vi.useFakeTimers()
+    // Start well past any slot an earlier test reserved.
+    vi.setSystemTime(Date.now() + 60_000)
+    const sentAt: number[] = []
+    global.fetch = vi.fn(async () => {
+      sentAt.push(Date.now())
+      return new Response('{}', { status: 200 })
+    }) as unknown as typeof fetch
+
+    const calls = Promise.all(
+      Array.from({ length: 4 }, () => skvRequest(fakeSupabase, 'user-1', 'comp-1', 'GET', '/x', AUDIT)),
+    )
+    await vi.advanceTimersByTimeAsync(2_000)
+    await calls
+
+    expect(sentAt).toHaveLength(4)
+    const gaps = sentAt.slice(1).map((t, i) => t - sentAt[i])
+    for (const gap of gaps) expect(gap).toBeGreaterThanOrEqual(250)
   })
 })

@@ -3,7 +3,7 @@
  * posted a bank payout that had not happened, with nothing asking first.
  */
 import { describe, it, expect } from 'vitest'
-import { isPaymentDateAhead, needsFuturePayoutConfirm } from '../payout-date'
+import { isPaymentDateAhead, needsFuturePayoutConfirm, paymentDateAheadRefusal } from '../payout-date'
 
 describe('isPaymentDateAhead', () => {
   const today = '2026-10-15'
@@ -49,5 +49,34 @@ describe('needsFuturePayoutConfirm', () => {
 
   it('never asks for a run with no payout: there is nothing to have paid', () => {
     expect(needsFuturePayoutConfirm('2026-10-23', true, today)).toBe(false)
+  })
+})
+
+describe('paymentDateAheadRefusal (the server-side rule every door shares)', () => {
+  const today = '2026-10-15'
+  const run = { payment_date: '2026-10-23', total_net: 23000 }
+
+  it('refuses a payout ahead of its payment date without the confirmation', () => {
+    expect(paymentDateAheadRefusal(run, undefined, today)).toEqual({
+      ok: false,
+      code: 'SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED',
+      details: { payment_date: '2026-10-23', today },
+    })
+    expect(paymentDateAheadRefusal(run, false, today)).not.toBeNull()
+  })
+
+  it('lets a confirmed one through', () => {
+    expect(paymentDateAheadRefusal(run, true, today)).toBeNull()
+  })
+
+  it('lets the payment date itself and any later day through', () => {
+    expect(paymentDateAheadRefusal({ ...run, payment_date: today }, undefined, today)).toBeNull()
+    expect(paymentDateAheadRefusal(run, undefined, '2026-10-24')).toBeNull()
+  })
+
+  it('never refuses a run with nothing paid out (net rounds to 0 öre)', () => {
+    expect(paymentDateAheadRefusal({ ...run, total_net: 0 }, undefined, today)).toBeNull()
+    expect(paymentDateAheadRefusal({ ...run, total_net: 0.004 }, undefined, today)).toBeNull()
+    expect(paymentDateAheadRefusal({ ...run, total_net: null }, undefined, today)).toBeNull()
   })
 })

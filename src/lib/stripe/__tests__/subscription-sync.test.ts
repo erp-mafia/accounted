@@ -15,6 +15,14 @@ vi.mock('../customer-identity', () => ({
   syncCompanyStripeIdentity: (...args: unknown[]) => syncIdentityMock(...args),
 }))
 
+// The delivery into the Inkorg is its own unit (billing-invoice-inbox.test.ts);
+// here only which invoices reach it, and for which company.
+const deliverMock = vi.hoisted(() => vi.fn())
+vi.mock('../billing-invoice-inbox', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../billing-invoice-inbox')>()),
+  deliverBillingInvoiceToInbox: (...args: unknown[]) => deliverMock(...args),
+}))
+
 afterEach(() => vi.unstubAllEnvs())
 
 // Recording mock: captures the from()/upsert()/delete()/eq() operations so we
@@ -292,5 +300,72 @@ describe('handleStripeEvent: which company an event is for', () => {
     await handleStripeEvent(supabase, stripe, updated(sourceSub()))
 
     expect(upsertedCompany(calls)).toBe('co_source')
+  })
+})
+
+// PH 191: our own paid invoice is the underlag of the company's card payment.
+describe('handleStripeEvent: a paid invoice goes to the paying company\'s Inkorg', () => {
+  const stripe = {} as Stripe
+  function paid(over: Record<string, unknown> = {}): Stripe.Event {
+    const invoice = {
+      id: 'in_1',
+      status: 'paid',
+      amount_paid: 24875,
+      collection_method: 'charge_automatically',
+      customer: 'cus_123',
+      parent: { subscription_details: { subscription: 'sub_123', metadata: { company_id: 'co_meta' } } },
+      ...over,
+    }
+    return { id: 'evt_1', type: 'invoice.paid', data: { object: invoice } } as unknown as Stripe.Event
+  }
+
+  afterEach(() => deliverMock.mockReset())
+
+  it('delivers to the company whose row holds the subscription', async () => {
+    const { supabase } = recordingSupabase((filters) =>
+      filters.some(([col, val]) => col === 'stripe_subscription_id' && val === 'sub_123') ? [{ company_id: 'co_row' }] : [],
+    )
+    deliverMock.mockResolvedValue({ inboxItemId: 'inbox-1' })
+
+    await handleStripeEvent(supabase, stripe, paid())
+
+    expect(deliverMock).toHaveBeenCalledWith(supabase, stripe, {
+      invoice: expect.objectContaining({ id: 'in_1' }),
+      companyId: 'co_row',
+    })
+  })
+
+  it("falls back to the subscription's metadata when the event outruns the checkout's row", async () => {
+    const { supabase } = recordingSupabase()
+    deliverMock.mockResolvedValue({ inboxItemId: 'inbox-1' })
+
+    await handleStripeEvent(supabase, stripe, paid())
+
+    expect(deliverMock.mock.calls[0][2]).toMatchObject({ companyId: 'co_meta' })
+  })
+
+  it("skips a trial's 0 kr invoice before any lookup", async () => {
+    const { supabase, calls } = recordingSupabase()
+
+    await handleStripeEvent(supabase, stripe, paid({ amount_paid: 0 }))
+
+    expect(calls).toHaveLength(0)
+    expect(deliverMock).not.toHaveBeenCalled()
+  })
+
+  it('lets a failed delivery fail the webhook, so Stripe delivers the event again', async () => {
+    const { supabase } = recordingSupabase()
+    deliverMock.mockRejectedValue(new Error('invoice PDF fetch failed with status 503'))
+
+    await expect(handleStripeEvent(supabase, stripe, paid())).rejects.toThrow('503')
+  })
+
+  it('writes no access state for an invoice', async () => {
+    const { supabase, calls } = recordingSupabase()
+    deliverMock.mockResolvedValue({ inboxItemId: 'inbox-1' })
+
+    await handleStripeEvent(supabase, stripe, paid())
+
+    expect(calls.some((c) => c.op === 'upsert' || c.op === 'delete' || c.op === 'update')).toBe(false)
   })
 })

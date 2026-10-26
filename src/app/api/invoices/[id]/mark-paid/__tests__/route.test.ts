@@ -61,6 +61,11 @@ vi.mock('@/lib/bookkeeping/engine', () => ({
     mockFindFiscalPeriod(...args),
 }))
 
+const mockRefundCreditNote = vi.fn()
+vi.mock('@/lib/invoices/refund-credit-note', () => ({
+  refundCreditNote: (...args: unknown[]) => mockRefundCreditNote(...args),
+}))
+
 import { POST } from '../route'
 
 describe('POST /api/invoices/[id]/mark-paid', () => {
@@ -130,22 +135,88 @@ describe('POST /api/invoices/[id]/mark-paid', () => {
     expect(status).toBe(400)
   })
 
-  it('rejects a sent credit note before booking a payment', async () => {
+  // A kreditfaktura is never paid by the customer: the same door records the
+  // company's refund of its credit (lib/invoices/refund-credit-note.ts).
+  it('records the refund of a sent credit note instead of a payment', async () => {
     const invoice = makeInvoice({
       status: 'sent',
+      total: -10500,
       credited_invoice_id: 'original-invoice-1',
     })
     enqueue({ data: invoice, error: null })
+    mockRefundCreditNote.mockResolvedValue({
+      ok: true,
+      dryRun: false,
+      amount: 10500,
+      owedAfter: 0,
+      lines: [],
+      journalEntryId: 'je-refund',
+      paidAmount: -10500,
+      refundedAt: '2026-10-20T12:00:00Z',
+    })
 
-    const request = createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' })
+    const request = createMockRequest('/api/invoices/inv-1/mark-paid', {
+      method: 'POST',
+      body: { payment_date: '2026-10-20' },
+    })
     const response = await POST(request, createMockRouteParams({ id: 'inv-1' }))
-    const { status, body } = await parseJsonResponse<{ error: { code: string; details?: unknown } }>(response)
+    const { status, body } = await parseJsonResponse<Record<string, unknown>>(response)
 
-    expect(status).toBe(400)
-    expect(body.error.code).toBe('INVOICE_PAID_NOT_PAYABLE')
+    expect(status).toBe(200)
+    expect(body).toMatchObject({
+      success: true,
+      refund: true,
+      status: 'sent',
+      refunded_amount: 10500,
+      paid_amount: -10500,
+      journal_entry_id: 'je-refund',
+    })
+    expect(mockRefundCreditNote).toHaveBeenCalledWith(
+      mockSupabase,
+      'company-1',
+      'user-1',
+      expect.objectContaining({
+        creditNote: expect.objectContaining({ credited_invoice_id: 'original-invoice-1' }),
+        refundDate: '2026-10-20',
+        settlementAccountNumber: '1930',
+        force: false,
+      }),
+    )
     expect(mockCreateInvoicePaymentJournalEntry).not.toHaveBeenCalled()
     expect(mockCreateInvoiceCashEntry).not.toHaveBeenCalled()
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('answers a refused refund with its registered code', async () => {
+    enqueue({ data: makeInvoice({ status: 'sent', total: -10500, credited_invoice_id: 'original-invoice-1' }), error: null })
+    mockRefundCreditNote.mockResolvedValue({
+      ok: false,
+      code: 'CREDIT_NOTE_REFUND_NOTHING_OWED',
+      details: { refunded: 0, credit_used: 0 },
+    })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST' }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('CREDIT_NOTE_REFUND_NOTHING_OWED')
+  })
+
+  it('refuses an exchange difference on a credit note refund', async () => {
+    enqueue({ data: makeInvoice({ status: 'sent', total: -10500, credited_invoice_id: 'original-invoice-1' }), error: null })
+
+    const response = await POST(
+      createMockRequest('/api/invoices/inv-1/mark-paid', { method: 'POST', body: { exchange_rate_difference: 12 } }),
+      createMockRouteParams({ id: 'inv-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('CREDIT_NOTE_REFUND_UNSUPPORTED')
+    expect(mockRefundCreditNote).not.toHaveBeenCalled()
   })
 
   it('rejects an original invoice while an active credit-note draft exists', async () => {

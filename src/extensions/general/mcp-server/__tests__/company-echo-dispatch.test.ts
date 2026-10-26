@@ -194,6 +194,19 @@ describe('company echo and operation routing at the dispatcher', () => {
       { company_id: OTHER_COMPANY_ID, name: 'Other AB' },
     ])
   })
+
+  it('answers a company_id that is not a UUID with VALIDATION_ERROR and the same candidates, reading no membership', async () => {
+    const result = await parse(
+      await handleMcpRequest(toolCall('gnubok_list_pending_operations', { company_id: 'string' }))
+    )
+    expect(result.isError).toBe(true)
+    expect((result.text.error as { code: string }).code).toBe('VALIDATION_ERROR')
+    expect(result.text.candidates).toEqual([
+      { company_id: DEFAULT_COMPANY_ID, name: 'Default AB' },
+      { company_id: OTHER_COMPANY_ID, name: 'Other AB' },
+    ])
+    expect(mocks.membershipLookups).toEqual([])
+  })
 })
 
 describe('typed handles in tool arguments (handle-args.ts)', () => {

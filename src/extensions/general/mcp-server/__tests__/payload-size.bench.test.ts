@@ -865,6 +865,12 @@ describe('tools/list payload size guard', () => {
     // catalog 66 055). The 61 600 bump stays the founder call above: the
     // run's own additions hold no 166 tokens to trim back under 61 400
     // (gnubok_backfill_feed alone projects to about 173).
+    // Run t1026 landing (2026-10-26): gnubok_mark_salary_run_paid and
+    // gnubok_book_salary_run gain confirm_payment_date_ahead, bare (the
+    // SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED refusal says when to send it).
+    // The kreditfaktura refund through gnubok_mark_invoice_as_paid is told by
+    // the kreditfaktura-process skill, not the description, to stay under
+    // the ceiling. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

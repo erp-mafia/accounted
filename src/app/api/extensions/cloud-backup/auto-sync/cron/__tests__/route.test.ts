@@ -327,6 +327,77 @@ describe('cloud-backup auto-sync cron', () => {
     )
   })
 
+  it('passes a missing storage scope to the alert so the advice fits (B12)', async () => {
+    mockCreateClient.mockReturnValueOnce(makeSupabaseStub([scheduleRow()]))
+    mockPerformSync.mockResolvedValueOnce({
+      ok: false,
+      reason: 'needs_reauth',
+      message: 'Google Drive access was granted without the storage permission; reconnect required',
+      reauthReason: 'missing_scope',
+    })
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    // Recorded as a failed attempt, then skipped as needs_reauth from now on.
+    expect(body.errors).toBe(1)
+    expect(mockSendBackupFailureAlert).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ kind: 'needs_reauth', reauthReason: 'missing_scope' })
+    )
+  })
+
+  it('gives every sync a file start deadline inside the function limit', async () => {
+    mockCreateClient.mockReturnValueOnce(makeSupabaseStub([scheduleRow()]))
+    mockPerformSync.mockResolvedValueOnce(okSyncResult())
+
+    await GET(makeRequest())
+
+    const deadline = mockPerformSync.mock.calls[0][0].startDeadline!
+    expect(deadline).toBe(NOW.getTime() + 150_000)
+  })
+
+  it('starts no further company once the cutoff has passed', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub([scheduleRow(), { ...scheduleRow(), company_id: 'c-2' }])
+    )
+    mockPerformSync.mockImplementationOnce(async () => {
+      // The first company's upload runs past the 150 s cutoff.
+      vi.setSystemTime(NOW.getTime() + 151_000)
+      return okSyncResult()
+    })
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(mockPerformSync).toHaveBeenCalledTimes(1)
+    expect(body.processed).toBe(1)
+    // c-2 was not attempted, so its schedule stays due for the next run.
+    expect(mockSaveExtensionData).toHaveBeenCalledTimes(1)
+  })
+
+  it('leaves a deferred company due: no schedule write, no failure, no alert', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub([scheduleRow({ consecutive_failures: 2 })])
+    )
+    mockPerformSync.mockResolvedValueOnce({
+      ok: false,
+      reason: 'deferred',
+      message: 'time budget reached after 1 file(s); the next run resumes',
+    })
+
+    const res = await GET(makeRequest())
+    const body = await res.json()
+
+    expect(body.deferred).toBe(1)
+    expect(body.errors).toBe(0)
+    expect(body.results).toEqual([
+      { companyId: 'c-1', provider: 'google_drive', status: 'deferred' },
+    ])
+    expect(mockSaveExtensionData).not.toHaveBeenCalled()
+    expect(mockSendBackupFailureAlert).not.toHaveBeenCalled()
+  })
+
   it('catches thrown errors, counts them and records them against the schedule', async () => {
     mockCreateClient.mockReturnValueOnce(
       makeSupabaseStub([scheduleRow({ consecutive_failures: 2 })])
@@ -374,6 +445,28 @@ describe('cloud-backup auto-sync cron', () => {
     expect((value as any).last_alert_at).toEqual(expect.any(String))
     // last_auto_sync_* stays untouched: it keeps showing the original failure.
     expect((value as any).last_auto_sync_at).toBeNull()
+  })
+
+  it('alerts a pre-flagged missing-scope connection with its reason', async () => {
+    mockCreateClient.mockReturnValueOnce(
+      makeSupabaseStub([scheduleRow()], {
+        connectionRows: [
+          connectionRow('c-1', {
+            status: 'needs_reauth',
+            needs_reauth_at: '2026-07-10T03:00:00.000Z',
+            needs_reauth_reason: 'missing_scope',
+          }),
+        ],
+      })
+    )
+
+    await GET(makeRequest())
+
+    expect(mockPerformSync).not.toHaveBeenCalled()
+    expect(mockSendBackupFailureAlert).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ kind: 'needs_reauth', reauthReason: 'missing_scope' })
+    )
   })
 
   it('does not re-alert an already alerted needs_reauth incident', async () => {

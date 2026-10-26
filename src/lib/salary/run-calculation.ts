@@ -56,6 +56,7 @@ import {
   type PayrollConfig,
 } from './payroll-config'
 import { fetchAllTaxTableRatesForRun, TaxTableUnavailableError } from './tax-tables'
+import { REGIONAL_SUPPORT_PARAM } from './regional-support'
 import { AbsenceInputError, deriveEmployeeAbsence, loadRunAbsence } from './derive-absence-line-items'
 import { monthWindow, runDeviationWindow } from './deviation-period'
 import type { MoneyLineItemType } from './account-mapping'
@@ -262,7 +263,7 @@ export async function runSalaryCalculation(
   //     refuses the run rather than silently calculating on defaults.
   const { data: companySettings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('salary_net_rounding, salary_calculation_policy, salary_vacation_year_basis')
+    .select('salary_net_rounding, salary_calculation_policy, salary_vacation_year_basis, salary_regional_support')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsError) {
@@ -285,6 +286,10 @@ export async function runSalaryCalculation(
     }
   }
   const calculationPolicy = policyParse.data
+  // Regionalt stöd (regional-support.ts, PH 208): the company attests work
+  // at a fast driftställe in a stödområde. Frozen into the snapshot below so
+  // the run's booking and AGI read the answer it was calculated with.
+  const regionalSupport = companySettings?.salary_regional_support === true
 
   // 3. Load roster: `salary_run_employees` joined with employees + line items.
   // Defense-in-depth: filter by company_id too even though salary_run_id is a
@@ -1512,7 +1517,12 @@ export async function runSalaryCalculation(
       total_avgifter: Math.round(totalAvgifter * 100) / 100,
       total_vacation_accrual: Math.round(totalVacationAccrual * 100) / 100,
       total_employer_cost: Math.round(totalEmployerCost * 100) / 100,
-      calculation_params: { ...serializePayrollConfig(config), salary_calculation_policy: calculationPolicy },
+      calculation_params: {
+        ...serializePayrollConfig(config),
+        salary_calculation_policy: calculationPolicy,
+        // Only when on, so a run calculated without it keeps its snapshot shape.
+        ...(regionalSupport ? { [REGIONAL_SUPPORT_PARAM]: true } : {}),
+      },
     })
     .eq('id', id)
     // Defense-in-depth: scope the write to the company explicitly. The

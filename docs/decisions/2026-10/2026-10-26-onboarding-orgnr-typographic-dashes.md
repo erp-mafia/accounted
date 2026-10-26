@@ -1,0 +1,1 @@
+[2026-10-26] The onboarding orgnr field reads typographic dashes (en dash, minus sign, non-breaking hyphen) as hyphens in the journey only (readOrgFieldText), not in the shared normalizeOrgNumber invariant, so a number pasted from a PDF stops turning into a company-name search while every other intake path keeps its audited rule (crm#1382).

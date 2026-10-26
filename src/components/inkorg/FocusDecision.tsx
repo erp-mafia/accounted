@@ -760,6 +760,8 @@ function Evidence({ evidence, suggestion }: { evidence: DecisionEvidence | null;
         return t('ev_reading')
       case 'unreadable':
         return t('ev_unreadable')
+      case 'not_read':
+        return t('ev_not_read')
       case 'booked':
         return t('ev_booked')
       case 'booked_with': {

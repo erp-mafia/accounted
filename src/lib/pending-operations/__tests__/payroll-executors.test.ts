@@ -670,6 +670,49 @@ describe('commitPendingOperation: book_salary_run', () => {
     )
   })
 
+  it('hands the staged confirmation of an early payout to the service, and only that (crm#1216)', async () => {
+    for (const [params, expected] of [
+      [{ salary_run_id: 'run-1', confirm_payment_date_ahead: true }, true],
+      [{ salary_run_id: 'run-1' }, false],
+      [{ salary_run_id: 'run-1', confirm_payment_date_ahead: 'true' }, false],
+    ] as const) {
+      mockAdvanceAndBook.mockReset()
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+      enqueue({ data: null, error: null }) // finalize
+      mockAdvanceAndBook.mockResolvedValue({
+        ok: true,
+        data: { run: { status: 'booked' }, entryIds: ['je-1'], nollkorning: false, warnings: [] },
+      })
+
+      const op = makePendingOp({ operation_type: 'book_salary_run', risk_level: 'high', params })
+      await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+      expect(mockAdvanceAndBook).toHaveBeenCalledWith(
+        supabase,
+        expect.objectContaining({ salaryRunId: 'run-1', confirmPaymentDateAhead: expected }),
+      )
+    }
+  })
+
+  it('fails an unconfirmed early payout with the 422 refusal, posting nothing', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // finalize (failed)
+    mockAdvanceAndBook.mockResolvedValue({
+      ok: false,
+      code: 'SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED',
+      details: { payment_date: '2999-12-31', today: '2026-10-15' },
+    })
+
+    const op = makePendingOp({ operation_type: 'book_salary_run', risk_level: 'high', params: { salary_run_id: 'run-1' } })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', op)
+
+    expect(result.status).toBe('failed')
+    expect(result.http_status).toBe(422)
+    expect(result.error).toMatch(/utbetalningsdag har inte kommit än/)
+  })
+
   it('rejects cleanly when the run was already booked between staging and approval', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim

@@ -392,6 +392,7 @@ import '@/app/api/v1/companies/[companyId]/accounts/activate/route'
 import '@/app/api/v1/companies/[companyId]/accounts/deactivate/route'
 import '@/app/api/v1/companies/[companyId]/settings/tax-profile/route'
 import '@/app/api/v1/companies/[companyId]/settings/bookkeeping-lock/route'
+import '@/app/api/v1/companies/[companyId]/settings/skattekonto-account/route'
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/route'
 // #895: value lifecycle (rename/archive/end-date + delete-unreferenced).
 import '@/app/api/v1/companies/[companyId]/dimensions/[id]/values/[valueId]/route'

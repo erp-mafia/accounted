@@ -198,6 +198,87 @@ describe('journeyReducer: manual path (not found)', () => {
     expect(s.settings.address_line1).toBeUndefined()
   })
 
+  // crm#1382 / crm#1419: a newly registered enskild firma is not in the
+  // register yet. Its org number is the owner's personnummer, so the form
+  // is settled by the number and the manual path starts at its questions.
+  const NEW_FIRM = '19850420-1230' // fictional, Luhn-valid personnummer
+
+  it('a personnummer not found continues manually as an enskild firma, without the picker', () => {
+    const notfound = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: NEW_FIRM },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+    )
+    expect(notfound.step).toBe('notfound')
+    const s = journeyReducer(notfound, { type: 'NOTFOUND_CONTINUE' })
+    expect(s.step).toBe('name')
+    expect(s.settings.entity_type).toBe('enskild_firma')
+    expect(s.settings.org_number).toBe(NEW_FIRM)
+    expect(s.lookupRan).toBe(false)
+  })
+
+  it('Back from the settled form returns to notfound with the form unset', () => {
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: NEW_FIRM },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_CONTINUE' },
+      { type: 'BACK' },
+    )
+    expect(s.step).toBe('notfound')
+    expect(s.settings.entity_type).toBeUndefined()
+    expect(s.settings.org_number).toBe(NEW_FIRM)
+  })
+
+  it('a failed lookup on a personnummer also settles enskild firma', () => {
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: NEW_FIRM },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'error' } },
+    )
+    expect(s.step).toBe('name')
+    expect(s.settings.entity_type).toBe('enskild_firma')
+  })
+
+  it('a juridisk person not found still asks the form', () => {
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '556036-0793' },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_CONTINUE' },
+    )
+    expect(s.step).toBe('form')
+    expect(s.settings.entity_type).toBeUndefined()
+  })
+
+  it('the manual enskild firma path collects the full payload through to submit', () => {
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: NEW_FIRM },
+      { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
+      { type: 'NOTFOUND_CONTINUE' },
+      { type: 'NAME_SUBMITTED', name: 'Alice Nordin Konsult' },
+      { type: 'ADDRESS_SUBMITTED', addressLine1: 'Gatan 1', postalCode: '123 45', city: 'Lund' },
+      { type: 'FSKATT_ANSWERED', fskatt: true },
+      { type: 'FY_CALENDAR_CONFIRMED' },
+      { type: 'VAT_ANSWERED', registered: true },
+      { type: 'MOMS_PERIOD_PICKED', period: 'yearly' },
+      { type: 'METHOD_PICKED', method: 'cash' },
+    )
+    expect(s.submitting).toBe(true)
+    expect(s.settings).toMatchObject({
+      entity_type: 'enskild_firma',
+      org_number: NEW_FIRM,
+      company_name: 'Alice Nordin Konsult',
+      f_skatt: true,
+      fiscal_year_start_month: 1,
+      vat_registered: true,
+      vat_number: 'SE850420123001',
+      moms_period: 'yearly',
+      accounting_method: 'cash',
+    })
+  })
+
   it('notfound → edit clears the orgnr and returns to the question', () => {
     const s = run(
       initJourney(),

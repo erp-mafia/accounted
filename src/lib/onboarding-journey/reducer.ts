@@ -16,6 +16,7 @@ import {
 } from '@/lib/company-lookup/entity-type-map'
 import { isEntityType, isEntityTypeCreatable, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { deriveSwedishVatNumber } from '@/lib/vat/vat-number'
+import { formSettledByOrgNumber } from './org-number-hint'
 
 /**
  * Pure state machine for the journey onboarding. The component renders `step`,
@@ -242,6 +243,22 @@ function pickerStep(state: JourneyState): JourneyStep {
 }
 
 /**
+ * The manual path once the lookup gave no company (not found, failed, or
+ * off). A form already known keeps its questions; a personnummer settles
+ * the form on its own (formSettledByOrgNumber: it can only be an enskild
+ * firma), so the picker's one-answer question is skipped; anything else
+ * goes to the picker. The entry snapshot is untouched, so Back returns to
+ * the step before with the form unset.
+ */
+function continueManually(state: JourneyState): JourneyState {
+  if (state.settings.entity_type) return go(state, nextCompanyStep(state))
+  const settled = state.plannedForm ? null : formSettledByOrgNumber(state.settings.org_number)
+  if (!settled) return go(state, pickerStep(state))
+  const withForm = stay(state, { settings: { ...state.settings, entity_type: settled } })
+  return go(withForm, nextCompanyStep(withForm))
+}
+
+/**
  * The Företaget station asks only what is still unknown, then hands over to
  * the fiscal-year station. Order: name → address → F-skatt.
  * - A company_name from the lookup (or BankID roles) skips the name
@@ -421,12 +438,9 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       const noted = stay(cleared, {
         lookupNote: outcome.status === 'error' ? ('error' as const) : ('none' as const),
       })
-      if (noted.settings.entity_type) {
-        // BankID prefill (or re-run after entity known): degraded ask-
-        // questions path; entity/name from CompanyRoles survive as prefill.
-        return go(noted, nextCompanyStep(noted))
-      }
-      return go(noted, pickerStep(noted))
+      // BankID prefill (or re-run after entity known): degraded ask-
+      // questions path; entity/name from CompanyRoles survive as prefill.
+      return continueManually(noted)
     }
 
     case 'SEARCH_RESULT': {
@@ -484,10 +498,8 @@ export function journeyReducer(state: JourneyState, action: JourneyAction): Jour
       })
     }
 
-    case 'NOTFOUND_CONTINUE': {
-      if (state.settings.entity_type) return go(state, nextCompanyStep(state))
-      return go(state, pickerStep(state))
-    }
+    case 'NOTFOUND_CONTINUE':
+      return continueManually(state)
 
     case 'NOTFOUND_EDIT':
     case 'CEASED_EDIT':

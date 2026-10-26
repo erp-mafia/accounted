@@ -35,3 +35,21 @@ export function useClockValue<T extends string | number>(read: (now: Date, timeZ
 export function hourIn(now: Date, timeZone?: string): number {
   return Number(new Intl.DateTimeFormat('en-GB', { hour: '2-digit', hourCycle: 'h23', timeZone }).format(now))
 }
+
+/** The clock to the minute: two reads in the same minute are equal, as a snapshot must be. */
+function currentMinute(): number {
+  return Math.floor(Date.now() / 60_000) * 60_000
+}
+
+/**
+ * "Now" for labels counted from it ("5 min", Idag / Igår) in a client
+ * component the server also renders. useClockValue reads the clock afresh in
+ * each render, which is fine for an hour but not for minutes: seconds pass
+ * between the server render and hydration, and "4 min" became "5 min". Here
+ * the server render and hydration both use `renderedAt`, the instant the
+ * server rendered, handed down as a prop, so they produce the same text;
+ * right after hydration it is the browser's clock, to the minute.
+ */
+export function useRenderedNow(renderedAt: number): number {
+  return useSyncExternalStore(subscribe, currentMinute, () => renderedAt)
+}

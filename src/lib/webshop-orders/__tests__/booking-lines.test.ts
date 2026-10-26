@@ -461,6 +461,53 @@ describe('buildOrderBookingLines with country rules (crm#1032)', () => {
     expect(resolveBookingWarnings(eurDkNoSplit, shopifySettings)).toEqual(['foreign_vat'])
   })
 
+  describe("Swedish VAT on EU sales, the store's own revenue account (crm#1449)", () => {
+    const swedishSettings = (revenue_account?: string): WebshopStoreSettings => ({
+      ...shopifySettings,
+      country_account_rules: [
+        { country: 'EU', vat_rate: null, mode: 'swedish', ...(revenue_account ? { revenue_account } : {}) },
+        { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+      ],
+    })
+
+    it('books the net on the rule\'s account and the VAT on the Swedish account for the rate', () => {
+      const lines = buildOrderBookingLines({ order: toCountry('DE'), settings: swedishSettings('3012') })
+      expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['1686', 500, 0],
+        ['3012', 0, 400],
+        ['2611', 0, 100],
+      ])
+    })
+
+    it('lets the rule\'s account outrank the bulk revenue template, which keeps Swedish orders', () => {
+      const settings = swedishSettings('3012')
+      const eu = buildOrderBookingLines({ order: toCountry('DE'), settings, revenueAccounts: { 25: '3011' } })
+      expect(lineFor(eu, '3012')?.credit_amount).toBe(400)
+      expect(lineFor(eu, '3011')).toBeUndefined()
+      const se = buildOrderBookingLines({ order: toCountry('SE'), settings, revenueAccounts: { 25: '3011' } })
+      expect(lineFor(se, '3011')?.credit_amount).toBe(400)
+    })
+
+    it('keeps the default Swedish accounts, or the template, for a rule without an account', () => {
+      const settings = swedishSettings()
+      expect(lineFor(buildOrderBookingLines({ order: toCountry('DE'), settings }), '3001')?.credit_amount).toBe(400)
+      const templated = buildOrderBookingLines({ order: toCountry('DE'), settings, revenueAccounts: { 25: '3011' } })
+      expect(lineFor(templated, '3011')?.credit_amount).toBe(400)
+    })
+
+    it('drops the OSS currency hint for an EU order the rule books with Swedish VAT', () => {
+      const eurDe = toCountry('DE', { currency: 'EUR', total_sek: 5600, exchange_rate: 11.2 })
+      expect(resolveBookingWarnings(eurDe, swedishSettings('3012'))).toEqual([])
+      expect(resolveBookingWarnings(eurDe, swedishSettings())).toEqual([])
+      // Without a rule the store has not answered the question: the hint stays.
+      expect(resolveBookingWarnings(eurDe)).toEqual(['country_not_routed', 'foreign_vat'])
+      // A Swedish order in euro is not covered by any rule either.
+      expect(resolveBookingWarnings(toCountry('SE', { currency: 'EUR' }), swedishSettings('3012'))).toEqual([
+        'foreign_vat',
+      ])
+    })
+  })
+
   describe('order without a destination country', () => {
     const noCountry = (overrides: Record<string, unknown> = {}) => ({
       ...makeOrder({ payment_method: 'shopify_payments', ...overrides }),

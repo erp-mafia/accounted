@@ -1,7 +1,7 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
 import { createElement } from 'react'
 import { renderToString } from 'react-dom/server'
-import { hourIn, useClockValue } from '../use-clock-value'
+import { hourIn, useClockValue, useRenderedNow } from '../use-clock-value'
 
 function Hour() {
   return createElement('span', null, useClockValue(hourIn))
@@ -48,5 +48,26 @@ describe('useClockValue', () => {
       const iso = `${day}T${String(utcHour).padStart(2, '0')}:30:00Z`
       expect(serverRenderedHour(iso)).toBe(hourIn(new Date(iso), 'Europe/Stockholm'))
     }
+  })
+})
+
+describe('useRenderedNow', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  function Now({ renderedAt }: { renderedAt: number }) {
+    return createElement('span', null, useRenderedNow(renderedAt))
+  }
+
+  // React #418 on /chat: seconds pass between the server render and
+  // hydration, so a label counted from each render's own clock read "4 min"
+  // on the server and "5 min" in the browser. Both renders count from the
+  // server's instant instead, handed down as a prop.
+  it('renders the instant the server rendered at, not the clock', () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date('2026-10-27T09:00:42Z'))
+    const renderedAt = new Date('2026-10-27T09:00:41.250Z').getTime()
+    expect(renderToString(createElement(Now, { renderedAt }))).toBe(`<span>${renderedAt}</span>`)
   })
 })

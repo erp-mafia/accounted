@@ -3,9 +3,10 @@
  *
  * Exercises the route through the real withRouteContext wrapper, mocking its
  * auth/company dependencies and findRcBasisGaps(). Covers: 401, missing and
- * invalid params, the happy path, and that fiscal_period_id is forwarded so
+ * invalid params, the happy path, that fiscal_period_id is forwarded so
  * yearly (helårsmoms) worklists cover the räkenskapsår instead of the
- * calendar year.
+ * calendar year, and that each row carries where its Korrigera picker starts
+ * (crm#1431), empty when that read fails.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
@@ -28,6 +29,11 @@ vi.mock('@/lib/reports/rc-basis-gaps', () => ({
   findRcBasisGaps: (...args: unknown[]) => findRcBasisGapsMock(...args),
 }))
 
+const rcBasisSupplierDefaultsMock = vi.fn()
+vi.mock('@/lib/vat/rc-basis-supplier-default', () => ({
+  rcBasisSupplierDefaults: (...args: unknown[]) => rcBasisSupplierDefaultsMock(...args),
+}))
+
 import { GET } from '../route'
 
 function gapsRequest(searchParams: Record<string, string>) {
@@ -42,6 +48,7 @@ describe('GET /api/reports/vat-declaration/rc-basis-gaps', () => {
     reset()
     requireAuthMock.mockResolvedValue({ user: { id: 'user-1' }, supabase })
     findRcBasisGapsMock.mockResolvedValue([])
+    rcBasisSupplierDefaultsMock.mockResolvedValue(new Map())
   })
 
   it('returns 401 when unauthenticated', async () => {
@@ -85,7 +92,7 @@ describe('GET /api/reports/vat-declaration/rc-basis-gaps', () => {
       rcOutputAccount: '2614',
       rcOutputAmount: 527.29,
       expectedBasisAmount: 2109.16,
-      suggestedBasisAccount: '4535',
+      missingBasisAmount: 2109.16,
       rate: 0.25,
     }
     findRcBasisGapsMock.mockResolvedValue([gap])
@@ -94,7 +101,9 @@ describe('GET /api/reports/vat-declaration/rc-basis-gaps', () => {
     const { status, body } = await parseJsonResponse<{ data: { gaps: unknown[] } }>(response)
 
     expect(status).toBe(200)
-    expect(body.data.gaps).toEqual([gap])
+    // No country signal: the picker starts empty, never on EU (crm#1431).
+    expect(body.data.gaps).toEqual([{ ...gap, supplierDefault: null }])
+    expect(rcBasisSupplierDefaultsMock).toHaveBeenCalledWith(supabase, 'company-1', ['entry-1'])
     expect(findRcBasisGapsMock).toHaveBeenCalledWith(supabase, 'company-1', 'quarterly', 2026, 2, {
       fiscalPeriodId: undefined,
     })
@@ -109,6 +118,44 @@ describe('GET /api/reports/vat-declaration/rc-basis-gaps', () => {
     expect(findRcBasisGapsMock).toHaveBeenCalledWith(supabase, 'company-1', 'yearly', 2026, 1, {
       fiscalPeriodId: 'fp-1',
     })
+  })
+
+  it('starts each row on the supplier type read from its seller country', async () => {
+    const row = (entryId: string, rcOutputAccount: string) => ({
+      entryId,
+      voucherNumber: 3,
+      voucherSeries: 'A',
+      entryDate: '2026-02-10',
+      description: 'GitHub, Inc.',
+      rcOutputAccount,
+      rcOutputAmount: 25,
+      expectedBasisAmount: 100,
+      missingBasisAmount: 100,
+      rate: 0.25,
+    })
+    findRcBasisGapsMock.mockResolvedValue([row('entry-us', '2614'), row('entry-unknown', '2614')])
+    const nonEu = { supplierType: 'non_eu_business', country: 'US', source: 'directory' }
+    rcBasisSupplierDefaultsMock.mockResolvedValue(new Map([['entry-us', nonEu]]))
+
+    const response = await GET(gapsRequest(validParams), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { gaps: Array<{ entryId: string; supplierDefault: unknown }> } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.gaps.map((g) => [g.entryId, g.supplierDefault])).toEqual([
+      ['entry-us', nonEu],
+      ['entry-unknown', null],
+    ])
+  })
+
+  it('still lists the gaps, every picker empty, when the supplier defaults cannot be read', async () => {
+    findRcBasisGapsMock.mockResolvedValue([{ entryId: 'entry-1', rcOutputAccount: '2614' }])
+    rcBasisSupplierDefaultsMock.mockRejectedValue(new Error('transactions read failed'))
+
+    const response = await GET(gapsRequest(validParams), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ data: { gaps: Array<{ supplierDefault: unknown }> } }>(response)
+
+    expect(status).toBe(200)
+    expect(body.data.gaps).toEqual([{ entryId: 'entry-1', rcOutputAccount: '2614', supplierDefault: null }])
   })
 
   it('maps a lib failure to VAT_REPORT_GENERATION_FAILED', async () => {

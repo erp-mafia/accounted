@@ -2,6 +2,9 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { arkivSectionRollout, isArkivSectionEnabled } from '@/lib/arkiv/flag'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
 import { inboxSourceForIntake, intakeSourceFromUploadSource } from '@/lib/intake/sources'
+import { carryReadingToQueuedItems } from '@/lib/documents/inbox-extraction/carry-to-queue'
+import { proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
+import { matchSupplierId, supplierIdentityFrom } from '@/lib/suppliers/match-supplier'
 
 /**
  * Arkiv phase 7: the queue is decided by what the document is, not by the
@@ -168,6 +171,7 @@ export async function routeClassifiedDocument(
       extraction_skipped: d.extracted_data == null,
     })
     if (error) throw new Error(`inbox item insert failed: ${error.message}`)
+    if (d.extracted_data == null) await fillIfReadSince(supabase, input.companyId, input.documentId)
     return 'queued'
   }
 
@@ -183,6 +187,29 @@ export async function routeClassifiedDocument(
     )
   if (error) throw new Error(`inbox item update failed: ${error.message}`)
   return 'routed_to_arkiv'
+}
+
+/**
+ * Queued unread: the document is usually still being read (document-extraction runs beside the classifier and
+ * fills the item when its reading lands, lib/documents/inbox-extraction/carry-to-queue.ts). A reading that landed
+ * between the fetch above and the insert found no item to fill, so one look after filing closes that gap: whichever
+ * finishes second fills the item. Best effort, never the routing's failure: the inbox list shows the document's
+ * reading either way.
+ */
+async function fillIfReadSince(supabase: SupabaseClient, companyId: string, documentId: string): Promise<void> {
+  try {
+    const { data } = await supabase.from('document_attachments').select('extracted_data').eq('id', documentId).eq('company_id', companyId).maybeSingle()
+    const reading = (data as { extracted_data?: Record<string, unknown> | null } | null)?.extracted_data ?? null
+    if (!reading) return
+    const filled = await carryReadingToQueuedItems(
+      supabase,
+      { companyId, documentId, reading },
+      { supplierFor: () => matchSupplierId(supabase, companyId, supplierIdentityFrom(reading.supplier)) },
+    )
+    for (const itemId of filled) await proposeBankMatchForInboxItem(supabase, companyId, itemId)
+  } catch {
+    // The reader fills it when it lands, and the list reads the document's reading meanwhile.
+  }
 }
 
 /**

@@ -38,6 +38,7 @@ vi.mock('@/lib/extensions/context-factory', () => ({
 }))
 
 import { SkatteverketAuthError } from '../lib/api-client'
+import { SkatteverketSkattekontoError } from '../lib/skattekonto-client'
 import { previewSkattekontoSync, syncSkattekontoNow, validateAgiUppgift } from '../lib/core-actions'
 
 const supabase = {} as never
@@ -116,6 +117,30 @@ describe('skattekonto sync services', () => {
     const result = await syncSkattekontoNow(supabase, 'u', 'c')
     expect(result).toMatchObject({ ok: false, code: 'SKATTEVERKET_NOT_CONNECTED', details: { skv_code: 'SESSION_EXPIRED' } })
     expect(syncMock).not.toHaveBeenCalled()
+  })
+
+  // B07: a company too new to have a skattekonto made "Synkronisera nu"
+  // answer an unhandled 500 ("Skatteverket svarade med 404").
+  it('no skattekonto at Skatteverket answers its own status and sentence, not a 500', async () => {
+    resolveReadAuthMock.mockResolvedValue({ ok: true, auth: { mode: 'system' }, source: 'system', tokenUserId: null })
+    syncMock.mockRejectedValue(
+      new SkatteverketSkattekontoError('Inget skattekonto är registrerat hos Skatteverket.', null, 404),
+    )
+    const result = await syncSkattekontoNow(supabase, 'u', 'c')
+    expect(result).toEqual({
+      ok: false,
+      code: 'SKATTEVERKET_API_ERROR',
+      http_status: 502,
+      error: 'Inget skattekonto är registrerat hos Skatteverket.',
+      details: { skv_status: 404 },
+    })
+  })
+
+  it('any other skattekonto failure still throws', async () => {
+    resolveReadAuthMock.mockResolvedValue({ ok: true, auth: { mode: 'system' }, source: 'system', tokenUserId: null })
+    const internal = new SkatteverketSkattekontoError('Internt fel hos Skatteverket.', 4, 500)
+    syncMock.mockRejectedValue(internal)
+    await expect(syncSkattekontoNow(supabase, 'u', 'c')).rejects.toBe(internal)
   })
 
   it('syncs on the resolved company auth', async () => {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { ALL_STARTABLE, MAX_DECISION_ACTIONS, UNDO_OF, bookedOnAccount, canUndo, focusDecision, rowStatus, type DecisionAction, type InkorgStartable } from '../decision'
+import { ALL_STARTABLE, MAX_DECISION_ACTIONS, UNDO_OF, bookedOnAccount, canUndo, focusDecision, nothingRead, rowStatus, type DecisionAction, type InkorgStartable } from '../decision'
 import { makeItem, reading } from './fixtures'
 
 describe('focusDecision', () => {
@@ -420,5 +420,62 @@ describe('focusDecision: the other half of the purchase is booked already', () =
     const item = makeItem({ extracted_data: reading({ documentKind: 'supplier_invoice' }), pairing })
     expect(focusDecision(item, { bankMatch: match }).question).toBe('already_booked_with')
     expect(rowStatus(item, match)).toEqual({ kind: 'booked_with', voucher: 'A41' })
+  })
+})
+
+// PH 101: a receipt dropped in Dokument was filed in the Inkorg before its reading, and only a failed reading
+// offered "Läs igen", so a company that can read documents had no way to read it short of uploading it again.
+describe('focusDecision: a document nobody read', () => {
+  it('offers to read it first where the company can read documents, with who paid one click away', () => {
+    const d = focusDecision(makeItem({ kind_hint: 'receipt' }), { canRead: true })
+    expect(d.question).toBe('not_read')
+    expect(d.evidence).toEqual({ kind: 'not_read' })
+    expect(d.actions).toEqual(['retry_reading', 'match_purchase', 'expense'])
+    expect(d.quietActions).toEqual(['not_underlag'])
+    expect(d.actions.length).toBeLessThanOrEqual(MAX_DECISION_ACTIONS)
+  })
+
+  it('counts the empty reading (only the default currency) as nothing read', () => {
+    expect(focusDecision(makeItem({ extracted_data: reading() }), { canRead: true }).question).toBe('not_read')
+  })
+
+  it('keeps asking who paid where the company cannot read documents: reading is not offered without the capability', () => {
+    const d = focusDecision(makeItem({ kind_hint: 'receipt' }))
+    expect(d.question).toBe('who_paid')
+    expect(d.actions).not.toContain('retry_reading')
+    expect(focusDecision(makeItem({ kind_hint: 'receipt' }), { canRead: false }).actions).not.toContain('retry_reading')
+  })
+
+  it('asks who paid as before once anything was read', () => {
+    const d = focusDecision(makeItem({ extracted_data: reading({ totals: { total: 99 } }) }), { canRead: true })
+    expect(d.question).toBe('who_paid')
+    expect(d.actions).not.toContain('retry_reading')
+  })
+
+  it('needs a document to read: a mail with no attachment is never offered a reading', () => {
+    expect(focusDecision(makeItem({ document_id: null }), { canRead: true }).question).toBe('who_paid')
+  })
+
+  it('follows the switched-off packages for who paid', () => {
+    const d = focusDecision(makeItem(), { canRead: true, startable: { ...ALL_STARTABLE, expenses: false, soleTrader: true } })
+    expect(d.actions).toEqual(['retry_reading', 'match_purchase', 'owner_paid'])
+  })
+
+  it('leaves the failed, linked and booked stages as they were', () => {
+    expect(focusDecision(makeItem({ status: 'error' }), { canRead: true }).question).toBe('unreadable')
+    expect(focusDecision(makeItem({ matched_transaction_id: 'tx-1' }), { canRead: true }).question).toBe('book_purchase')
+    expect(focusDecision(makeItem({ created_journal_entry_id: 'je-1' }), { canRead: true }).question).toBe('booked')
+    expect(focusDecision(makeItem({ status: 'processing' }), { canRead: true }).question).toBe('reading')
+  })
+})
+
+describe('nothingRead', () => {
+  it('is true for no reading and for the empty skeleton, false once one value was read', () => {
+    expect(nothingRead(null)).toBe(true)
+    expect(nothingRead(reading())).toBe(true)
+    expect(nothingRead(reading({ supplier: { name: 'ICA' } }))).toBe(false)
+    expect(nothingRead(reading({ invoice: { invoiceDate: '2026-10-01' } }))).toBe(false)
+    expect(nothingRead(reading({ prominentAmounts: [{ amount: 0 }] as never }))).toBe(true)
+    expect(nothingRead(reading({ prominentAmounts: [{ amount: 45 }] as never }))).toBe(false)
   })
 })

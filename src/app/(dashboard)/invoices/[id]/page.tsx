@@ -20,6 +20,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { getVatTreatmentLabel } from '@/lib/invoices/vat-rules'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { invoiceDisplayNumber, isTextLikeLine } from '@/lib/invoices/display'
@@ -36,6 +37,7 @@ import { creditNoteNeedsJournalEntry } from '@/lib/bookkeeping/booking-mode'
 import { getCreditNoteSendMode } from '@/lib/invoices/credit-note-send-mode'
 import { canCopyInvoice } from '@/lib/invoices/copy-invoice'
 import { isCreditNoteDocument } from '@/lib/invoices/build-credit-note'
+import { planCreditNoteRefund } from '@/lib/invoices/credit-note-refund-plan'
 import { isRegisteredFromBooks } from '@/lib/bookkeeping/registered-from-books'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
@@ -91,6 +93,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import PaymentBookingDialog from '@/components/invoices/PaymentBookingDialog'
+import RefundCreditNoteDialog from '@/components/invoices/RefundCreditNoteDialog'
 import SendInvoiceDialog from '@/components/invoices/SendInvoiceDialog'
 import QuotePartDialog from '@/components/invoices/QuotePartDialog'
 import { quoteInvoicingProgress } from '@/lib/invoices/quote-partial-invoice'
@@ -351,6 +354,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // confirmed first (which action, so the dialog can name it).
   const [unsentQuoteAction, setUnsentQuoteAction] = useState<'accept' | 'invoice' | 'order' | null>(null)
   const [showPaymentDialog, setShowPaymentDialog] = useState(false)
+  const [showRefundDialog, setShowRefundDialog] = useState(false)
   const [showSendDialog, setShowSendDialog] = useState(false)
   const [sendDialogMode, setSendDialogMode] = useState<'email' | 'manual'>('email')
   // #2399: "Ladda ner PDF" on a document that is not issued yet. The render
@@ -1865,6 +1869,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         }))
       : payments
   const isCreditNote = !!invoice.credited_invoice_id
+  // What the customer has tillgodo on this credit note (follow-up of
+  // crm#1435): the same rule the mark-paid door records the refund by.
+  const refundPlan = isCreditNote && originalInvoice ? planCreditNoteRefund(invoice, originalInvoice) : null
+  const refundedAmount = isCreditNote ? roundOre(-(Number(invoice.paid_amount) || 0)) : 0
   const booksOnIssue = isCreditNote
     ? !!originalInvoice && creditNoteNeedsJournalEntry(accountingMethod, originalInvoice)
     : accountingMethod === 'accrual' && !deferInvoiceBooking
@@ -2362,6 +2370,16 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             >
               {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
               {t('mark_as_paid')}
+            </Button>
+          )}
+          {refundPlan?.ok && (
+            <Button size="sm"
+              onClick={() => setShowRefundDialog(true)}
+              disabled={isUpdating || !canWrite}
+              title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
+            >
+              {canWrite ? <HandCoins className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {t('record_refund')}
             </Button>
           )}
 
@@ -2948,6 +2966,19 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               <Link href={`/invoices/${originalInvoice.id}`} className="hover:underline">
                 {t('title_invoice', { number: originalInvoice.invoice_number ?? '' })}
               </Link>
+            </DefRow>
+          )}
+          {isCreditNote && refundedAmount > 0 && (
+            <DefRow label={t('def_refunded')}>
+              <span className="tabular-nums">
+                {formatCurrency(refundedAmount, invoice.currency)}
+                {invoice.paid_at ? ` · ${formatDate(invoice.paid_at)}` : ''}
+              </span>
+            </DefRow>
+          )}
+          {refundPlan?.ok && refundedAmount > 0 && (
+            <DefRow label={t('def_refund_owed')}>
+              <span className="tabular-nums">{formatCurrency(refundPlan.owed, invoice.currency)}</span>
             </DefRow>
           )}
           {convertedFromInvoice && (
@@ -3697,6 +3728,21 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
         </DialogContent>
       </Dialog>
 
+      {refundPlan?.ok && (
+        <RefundCreditNoteDialog
+          open={showRefundDialog}
+          onOpenChange={setShowRefundDialog}
+          creditNote={invoice}
+          owed={refundPlan.owed}
+          onSuccess={() => {
+            fetchInvoice()
+            toast({
+              title: t('refund_toast_title'),
+              description: t('refund_toast_description', { number: invoice.invoice_number ?? '' }),
+            })
+          }}
+        />
+      )}
       <PaymentBookingDialog
         open={showPaymentDialog}
         onOpenChange={setShowPaymentDialog}

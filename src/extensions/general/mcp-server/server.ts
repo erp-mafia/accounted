@@ -152,13 +152,22 @@ import {
   buildPaidAtIssuePreview,
   describeUnnumberedInvoice,
   expectedNumberSuffix,
+  refundEntryPreview,
 } from './invoice-stage-preview'
+import {
+  describeRefundFailure,
+  refundCreditNote,
+  type RefundCreditNoteResult,
+  type RefundCreditNoteRow,
+} from '@/lib/invoices/refund-credit-note'
+import { resolveInvoiceSettlementAccount } from '@/lib/invoices/invoice-payee'
 import { supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
 import { findCounterpartyTemplatesBatch, formatCounterpartyName } from '@/lib/bookkeeping/counterparty-templates'
 import { formatVoucherLabel, hasLiveJournalEntryLink } from '@/lib/transactions/link-journal-entry'
 import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
 import { setTransactionIgnored } from '@/lib/transactions/ignore'
 import { stampNewInboxItemIfDocumentLinked } from '@/lib/transactions/inbox-underlag'
+import { adoptQueuedInboxItem } from '@/lib/documents/queued-inbox-item'
 import {
   PERSON_REJECTION_CATEGORIES,
   type PersonRejectionCategory,
@@ -353,6 +362,7 @@ import {
   effectiveCompanyRestriction,
   isCompanyReadOnly,
   extractRequestedCompany,
+  isMalformedCompanyIdError,
   getReachableCompanyCount,
   isCompanyDependentTool,
   isMultiCompanyOnlyTool,
@@ -386,6 +396,7 @@ import { companyCurrentResource } from './resources/company-current'
 import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFor } from './arg-guard'
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
 import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
+import { previewVoucherVatDeclaration } from '@/lib/vat/voucher-vat-impact'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
   AGENT_AMOUNT_FORMAT,
@@ -470,6 +481,7 @@ import { decryptPersonnummer, maskEmployeeForResponse, maskPersonnummer } from '
 import { daysOffPerYear } from '@/lib/salary/vacation-net-days'
 import { effectiveRow, effectiveRunTotals, type EffectiveFiguresInput } from '@/lib/salary/effective-figures'
 import { validateRunForApproval, type ApprovalRosterRow } from '@/lib/salary/approve-run'
+import { paymentDateAheadRefusal } from '@/lib/salary/payout-date'
 import {
   deriveAgiFilingState,
   resolveRunAgiKvittensnummer,
@@ -1057,6 +1069,14 @@ const ANNOTATIONS_WRITE_OPEN_WORLD = {
  */
 function registryError(code: string): Error {
   return Object.assign(new Error(getErrorEntry(code)?.message_sv ?? code), { code })
+}
+
+/** A refused credit note refund (lib/invoices/refund-credit-note.ts) as the error the agent reads. */
+function creditNoteRefundRefusal(failure: Extract<RefundCreditNoteResult, { ok: false }>): Error {
+  if (failure.code === 'BOOKKEEPING_ERROR') return failure.error instanceof Error ? failure.error : new Error(String(failure.error))
+  if (failure.code === 'DB_ERROR') return dbError(failure.error)
+  const { code, message } = describeRefundFailure(failure)
+  return codedRefusal(code, `gnubok_mark_invoice_as_paid: ${message}`)
 }
 
 /** SALARY_RUN_NOT_FOUND naming the id the agent sent. */
@@ -1751,6 +1771,36 @@ async function createDocumentInboxItem(
   }
 
   const matchedSupplierId = await matchSupplierId(supabase, companyId, extracted.supplier)
+
+  // One document, one inbox item (crm#1413): Arkiv classifies the archived document on its own clock and may have
+  // queued it while the reading above ran. That item is taken over with this upload's reading and stamp instead of
+  // filing a second one beside it (lib/documents/queued-inbox-item.ts).
+  const queued = await adoptQueuedInboxItem(
+    supabase,
+    companyId,
+    documentId,
+    {
+      status: 'received',
+      source: 'upload',
+      channel_context: { intake_source: 'mcp' },
+      extracted_data: extracted as unknown as Record<string, unknown>,
+      extraction_skipped: !aiEntitled,
+      matched_supplier_id: matchedSupplierId,
+      kind_hint: null,
+    },
+    { ownStamp: 'mcp' },
+  )
+  if (queued) {
+    if (queued.adopted) await stampNewInboxItemIfDocumentLinked(supabase, companyId, documentId)
+    return {
+      document_id: documentId,
+      inbox_item_id: queued.id,
+      status: queued.status,
+      extracted_data: queued.adopted ? (extracted as unknown as Record<string, unknown>) : (queued.extracted_data ?? {}),
+      matched_supplier_id: queued.matched_supplier_id,
+      ...(aiEntitled ? {} : { extraction_skipped: true }),
+    }
+  }
 
   const { data: inbox, error: inboxError } = await supabase
     .from('invoice_inbox_items')
@@ -10649,6 +10699,44 @@ export const tools: McpTool[] = [
 
       const paymentDate = (args.payment_date as string) || todayIsoStockholm()
 
+      // A kreditfaktura: the refund paid back to the customer (Dr 1510 / Cr
+      // bank), planned with every check the approval runs.
+      if (invoice.credited_invoice_id) {
+        const creditNote = invoice as unknown as RefundCreditNoteRow
+        const refund = await refundCreditNote(supabase, companyId, userId, {
+          creditNote,
+          refundDate: paymentDate,
+          settlementAccountNumber: await resolveInvoiceSettlementAccount(supabase, companyId, invoice as Invoice),
+          force: args.allow_duplicate === true,
+          dryRun: true,
+        })
+        if (!refund.ok) throw creditNoteRefundRefusal(refund)
+        return stage({
+          supabase,
+          companyId,
+          userId,
+          type: 'mark_invoice_paid',
+          title: `Återbetalning: ${invoice.invoice_number} ${invoice.customer?.name || ''} ${refund.amount} ${invoice.currency}`,
+          params: { invoice_id: invoiceId, payment_date: paymentDate, allow_duplicate: args.allow_duplicate === true },
+          preview: {
+            invoice_number: invoice.invoice_number,
+            customer_name: invoice.customer?.name,
+            total: invoice.total,
+            currency: invoice.currency,
+            payment_date: paymentDate,
+            refund_amount: refund.amount,
+            source_type: 'invoice_paid',
+            journal_entry_preview: refundEntryPreview(refund.lines),
+          },
+          actor,
+          next: {
+            description: 'Once approved the refund clears the credit on 1510 and the kreditfaktura nets to zero in the kundreskontra.',
+            tool: 'gnubok_get_ar_ledger',
+          },
+          dateForPeriodCheck: paymentDate,
+        })
+      }
+
       // Duplicate-payment guard: surface a likely existing bank payment to the
       // agent before staging, so it matches the transaction to the invoice
       // instead of booking a parallel payment voucher (the orphan that later
@@ -13844,11 +13932,14 @@ export const tools: McpTool[] = [
         }
       }
 
+      // includeShared: a verifikat that settles several invoices is offered
+      // with link_amount, the share to pass as amount on
+      // gnubok_link_invoice_to_voucher (crm#1434), as on the supplier side.
       const candidates = await findMatchingVouchersForInvoice(
         supabase,
         companyId,
         invoice as never,
-        { limit },
+        { limit, includeShared: true },
       )
       return {
         invoice_id: invoiceId,
@@ -18577,6 +18668,8 @@ export const tools: McpTool[] = [
       additionalProperties: false,
       properties: {
         salary_run_id: { type: 'string', description: 'UUID of the salary run' },
+        // Explained by the refusal it answers (payload ceiling).
+        confirm_payment_date_ahead: { type: 'boolean' },
       },
       required: ['salary_run_id'],
     },
@@ -18590,7 +18683,7 @@ export const tools: McpTool[] = [
 
       const { data: run, error } = await supabase
         .from('salary_runs')
-        .select('id, status, period_year, period_month, payment_date, calculation_params')
+        .select('id, status, period_year, period_month, payment_date, total_net, calculation_params')
         .eq('id', id)
         .eq('company_id', companyId)
         .maybeSingle()
@@ -18599,6 +18692,21 @@ export const tools: McpTool[] = [
       if (run.status === 'booked') throw codedRefusal('SALARY_RUN_ALREADY_BOOKED', `Salary run ${id} is already booked.`)
       if (!['draft', 'review', 'approved', 'paid'].includes(run.status as string)) {
         throw new Error(`Salary run cannot be booked from status "${run.status}"`)
+      }
+      // The executor's rule (crm#1216): the verifikat credits the net pay to
+      // the bank on payment_date, so a date still ahead needs the user's word.
+      const confirmPaymentDateAhead = args.confirm_payment_date_ahead === true
+      const ahead = paymentDateAheadRefusal(run as { payment_date: string | null; total_net: number | null }, false)
+      if (ahead && !confirmPaymentDateAhead) {
+        throw codedRefusal(
+          ahead.code,
+          `Salary run ${id} pays out on ${ahead.details.payment_date}, after today (${ahead.details.today}): booking now posts the net pay as paid out of the bank before that day. Ask the user whether the salaries are already paid or scheduled in the bank; if so, stage again with confirm_payment_date_ahead: true, otherwise book on or after the payment date.`,
+          {
+            description: 'Stage again with confirm_payment_date_ahead: true once the user confirmed, or wait for the payment date.',
+            tool: 'gnubok_book_salary_run',
+            args: { salary_run_id: id, confirm_payment_date_ahead: true },
+          },
+        )
       }
 
       // Preflight: the approval rules the executor applies
@@ -18632,6 +18740,13 @@ export const tools: McpTool[] = [
       }
       const approvalWarnings =
         run.status === 'draft' || run.status === 'review' ? [...verdict.bankDetails, ...verdict.warnings] : []
+      // The approver sees the confirmed early payout, as the run page's
+      // Bokför dialog says it.
+      if (ahead) {
+        approvalWarnings.push(
+          `Utbetalningsdagen ${ahead.details.payment_date} har inte kommit än: nettolönen bokförs som utbetald från bankkontot den dagen.`,
+        )
+      }
 
       // The preview shows what the verifikat will carry: review-step overrides
       // applied exactly as the booking applies them (salaryRunDataFromRows),
@@ -18645,7 +18760,7 @@ export const tools: McpTool[] = [
         userId,
         type: 'book_salary_run',
         title: `Bokför lönekörning ${period}: ${rosterRows.length} anställda, netto ${effective.total_net} kr`,
-        params: { salary_run_id: id },
+        params: { salary_run_id: id, ...(confirmPaymentDateAhead ? { confirm_payment_date_ahead: true } : {}) },
         preview: {
           salary_run_id: id,
           period,
@@ -24404,6 +24519,17 @@ export const tools: McpTool[] = [
       // misrepresent the entry's origin, only assert "this is an IB" via a
       // boolean the executor independently verifies.
       const isOpeningBalance = args.is_opening_balance === true
+      // What the voucher would do to the momsdeklaration, decided before it is
+      // posted (crm#1447): the VAT period of entry_date, whether the
+      // declaration reads it (excluded_as: the momsredovisning shape or the
+      // opening-balance rule get_vat_report applies) and the rutor it moves.
+      // Read-only and never throws: a failed read says unavailable.
+      const vatDeclaration = await previewVoucherVatDeclaration(supabase, companyId, {
+        entryDate,
+        fiscalPeriodId,
+        lines: bookedLines,
+        isOpeningBalance,
+      })
       return stage({
         supabase,
         companyId,
@@ -24436,6 +24562,7 @@ export const tools: McpTool[] = [
           // Echoed for every non-exact dimension resolution (resolve-don't-
           // select) so the agent can verify what a name attached to.
           ...(dimensionResolutions.length > 0 ? { dimension_resolutions: dimensionResolutions } : {}),
+          vat_declaration: vatDeclaration,
           inbox_item_id: inboxItemId,
           document_attached: Boolean(inboxDocumentId),
           // The document-attach claim keys off inboxDocumentId, not
@@ -28358,8 +28485,9 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // such denials in the 60 days before this shipped had no way back).
         // NOT_FOUND only: a FORBIDDEN is about the role in a company the
         // caller did reach, and the viewer gate must stay a pure refusal.
+        // A company_id that is not a UUID at all is a wrong company_id too.
         const candidates =
-          structured.error.code === 'NOT_FOUND'
+          structured.error.code === 'NOT_FOUND' || isMalformedCompanyIdError(err)
             ? await listAccessibleCompanies(
                 supabase,
                 userId,

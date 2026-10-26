@@ -69,6 +69,8 @@ export function SalarySettingsContent() {
   // same null = not touched rule.
   const [showEmployerCost, setShowEmployerCost] = useState<boolean | null>(null)
   const [showBreakdown, setShowBreakdown] = useState<boolean | null>(null)
+  // Regionalt stöd (PH 208): controlled Switch, same null = not touched rule.
+  const [regionalSupport, setRegionalSupport] = useState<boolean | null>(null)
   // Employer flags moved here from Skatt (2026-09-24). Controlled for the
   // same reason; null = not touched, read the saved value.
   const [paysSalaries, setPaysSalaries] = useState<boolean | null>(null)
@@ -82,6 +84,7 @@ export function SalarySettingsContent() {
   const effectiveNetRounding = netRounding ?? settings.salary_net_rounding ?? false
   const effectiveShowEmployerCost = showEmployerCost ?? settings.salary_payslip_show_employer_cost ?? true
   const effectiveShowBreakdown = showBreakdown ?? settings.salary_payslip_show_breakdown ?? true
+  const effectiveRegionalSupport = regionalSupport ?? settings.salary_regional_support ?? false
   const effectivePays = paysSalaries ?? settings.pays_salaries ?? false
   // Fall back to pays_salaries for rows saved before the registration flag
   // existed; saving attests the shown value.
@@ -111,6 +114,7 @@ export function SalarySettingsContent() {
       salary_net_rounding: effectiveNetRounding,
       salary_payslip_show_employer_cost: effectiveShowEmployerCost,
       salary_payslip_show_breakdown: effectiveShowBreakdown,
+      salary_regional_support: effectiveRegionalSupport,
       salary_deviation_period: deviationPeriod,
       pays_salaries: effectivePays,
       employer_registered: effectiveRegistered,
@@ -291,6 +295,20 @@ export function SalarySettingsContent() {
               </SettingsSelect>
             </SettingsRow>
           ))}
+        </SettingsGroup>
+
+        {/* Regionalt stöd (lib/salary/regional-support.ts): the company
+            attests work at a fast driftställe in a stödområde; runs
+            calculated afterwards declare FK471/FK476 and book the avdrag. */}
+        <SettingsGroup label={t('avgifter_heading')}>
+          <SettingsRow label={t('regional_support_label')} help={t('regional_support_help')}>
+            <Switch
+              id="salary_regional_support"
+              aria-label={t('regional_support_toggle')}
+              checked={effectiveRegionalSupport}
+              onCheckedChange={(next) => setRegionalSupport(next)}
+            />
+          </SettingsRow>
         </SettingsGroup>
 
         {/* What the employee's copy of the payslip prints (crm#202). The

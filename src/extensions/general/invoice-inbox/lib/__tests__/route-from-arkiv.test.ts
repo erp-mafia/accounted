@@ -1,4 +1,14 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest'
+
+const matchSupplierMock = vi.fn()
+vi.mock('@/lib/suppliers/match-supplier', () => ({
+  matchSupplierId: (...args: unknown[]) => matchSupplierMock(...args),
+  supplierIdentityFrom: (raw: { name?: string } | null) => ({ orgNumber: null, vatNumber: null, name: raw?.name ?? null }),
+}))
+const bankMatchMock = vi.fn()
+vi.mock('@/lib/operations/inbox-bank-match', () => ({
+  proposeBankMatchForInboxItem: (...args: unknown[]) => bankMatchMock(...args),
+}))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { resolveInboxKind, type InboxKindSource } from '@/lib/documents/inbox-kind'
@@ -30,6 +40,8 @@ const savedSection = process.env.ARKIV_COMPANY_IDS
 
 beforeEach(() => {
   reset()
+  vi.clearAllMocks()
+  matchSupplierMock.mockResolvedValue(null)
   // co-1 sees the Dokument section unless a test says otherwise.
   process.env.ARKIV_COMPANY_IDS = 'co-1'
 })
@@ -116,6 +128,52 @@ describe('routeClassifiedDocument', () => {
     enqueue({})
     expect(await classified('credit_note')).toBe('queued')
     expect(findCall('invoice_inbox_items', 'insert')?.[0]).toMatchObject({ extracted_data: null, extraction_skipped: true })
+  })
+
+  // PH 101: the reading usually lands after the item is filed (the reader fills it then); one that landed between the
+  // fetch and the insert found no item, so the queue looks once more after filing.
+  it('fills an item it queued unread when the reading landed meanwhile, with the supplier match and a bank check', async () => {
+    matchSupplierMock.mockResolvedValue('sup-1')
+    enqueue({ data: { ...doc, extracted_data: null } })
+    enqueue({ data: [] })
+    enqueue({}) // the insert
+    enqueue({ data: { extracted_data: { supplier: { name: 'Elgiganten' } } } }) // the look after filing
+    enqueue({ data: [{ id: 'item-new' }] }) // the item it just filed, still unread
+    enqueue({ data: { doc_type: 'receipt' } })
+    enqueue({ data: [{ id: 'item-new', matched_supplier_id: null }] }) // the fill
+    enqueue({}) // the supplier write
+    expect(await classified('receipt')).toBe('queued')
+    const updates = findCalls('invoice_inbox_items', 'update')
+    expect(updates[0][0]).toEqual({ extracted_data: { supplier: { name: 'Elgiganten' } }, extraction_skipped: false })
+    expect(updates[1][0]).toEqual({ matched_supplier_id: 'sup-1' })
+    expect(bankMatchMock).toHaveBeenCalledWith(supabase, 'co-1', 'item-new')
+  })
+
+  it('leaves an item it queued unread for the reader when the document is still being read', async () => {
+    enqueue({ data: { ...doc, extracted_data: null } })
+    enqueue({ data: [] })
+    enqueue({})
+    enqueue({ data: { extracted_data: null } })
+    expect(await classified('receipt')).toBe('queued')
+    expect(findCalls('invoice_inbox_items', 'update')).toHaveLength(0)
+    expect(bankMatchMock).not.toHaveBeenCalled()
+  })
+
+  it('queues even when the look after filing fails', async () => {
+    enqueue({ data: { ...doc, extracted_data: null } })
+    enqueue({ data: [] })
+    enqueue({})
+    enqueue({ data: { extracted_data: { supplier: { name: 'Elgiganten' } } } })
+    enqueue({ error: { message: 'boom' } })
+    expect(await classified('receipt')).toBe('queued')
+  })
+
+  it('does not look again for an item queued with its reading', async () => {
+    enqueue({ data: doc })
+    enqueue({ data: [] })
+    enqueue({})
+    await classified('receipt')
+    expect(findCalls('document_attachments', 'select')).toHaveLength(1)
   })
 
   it('leaves a receipt alone when it is already queued, booked, or attached to a voucher', async () => {

@@ -4,7 +4,9 @@
  * other state-advancing action on the page confirmed first; design.md
  * convention 10 says posting actions confirm up front with the outcome.
  * Markera som betald, the step before it, asks first too when the payment
- * date has not come yet (the rule itself: lib/salary/payout-date.ts).
+ * date has not come yet (the rule itself: lib/salary/payout-date.ts). The
+ * server refuses an early payout without that answer, so the confirmed call
+ * carries confirm_payment_date_ahead.
  * Components are not rendered in this suite (vitest runs in `node`), so the
  * wiring is pinned on the page source and the copy on the message files.
  */
@@ -26,14 +28,19 @@ describe('salary run Bokför confirms before posting', () => {
     const body = page.slice(page.indexOf('async function handleBook()'))
     const confirmAt = body.indexOf('await confirmAction(')
     const guardAt = body.indexOf('if (!ok) return')
-    const bookAt = body.indexOf("handleAction('book')")
+    const bookAt = body.indexOf("handleAction('book'")
     expect(confirmAt).toBeGreaterThan(-1)
     expect(guardAt).toBeGreaterThan(confirmAt)
     expect(bookAt).toBeGreaterThan(guardAt)
   })
 
   it('says so when the payment date is after today (Stockholm calendar day)', () => {
-    expect(page).toMatch(/if \(isPaymentDateAhead\(run\.payment_date\)\) lines\.push\(t\('confirm_book_ahead'/)
+    expect(page).toMatch(/const ahead = isPaymentDateAhead\(run\.payment_date\)/)
+    expect(page).toMatch(/if \(ahead\) lines\.push\(t\('confirm_book_ahead'/)
+  })
+
+  it('sends the confirmation the server asks for only when the dialog named the early date', () => {
+    expect(page).toMatch(/handleAction\('book', 'POST', ahead \? \{ confirm_payment_date_ahead: true \} : undefined\)/)
   })
 
   it('names the bank leg when the run pays something out', () => {
@@ -52,11 +59,13 @@ describe('salary run Markera som betald asks first when the payment date is ahea
     const askAt = body.indexOf('if (needsFuturePayoutConfirm(run.payment_date, noPayout))')
     const confirmAt = body.indexOf('await confirmAction(')
     const guardAt = body.indexOf('if (!ok) return')
-    const paidAt = body.indexOf("handleAction('paid')")
+    const confirmedPaidAt = body.indexOf("handleAction('paid', 'POST', { confirm_payment_date_ahead: true })")
+    const plainPaidAt = body.indexOf("handleAction('paid')")
     expect(askAt).toBeGreaterThan(-1)
     expect(confirmAt).toBeGreaterThan(askAt)
     expect(guardAt).toBeGreaterThan(confirmAt)
-    expect(paidAt).toBeGreaterThan(guardAt)
+    expect(confirmedPaidAt).toBeGreaterThan(guardAt)
+    expect(plainPaidAt).toBeGreaterThan(confirmedPaidAt)
     expect(body.slice(confirmAt, guardAt)).toContain("t('confirm_mark_paid_ahead'")
   })
 })

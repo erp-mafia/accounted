@@ -180,7 +180,6 @@ describe('findRcBasisGaps', () => {
       rcOutputAmount: 527.29,
       expectedBasisAmount: 2109.16,
       missingBasisAmount: 2109.16,
-      suggestedBasisAccount: '4535',
       rate: 0.25,
     })
   })

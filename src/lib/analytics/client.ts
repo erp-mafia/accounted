@@ -1,21 +1,23 @@
 import posthog from 'posthog-js'
+import { drainEarlyErrors } from './early-errors'
 import { isAnalyticsEnabled } from './enabled'
 import { replayMaskText } from './replay-masking'
 
 /**
- * Browser PostHog, started only on the signed-in person's consent.
+ * Browser PostHog, started only for a signed-in person.
  *
- * Founder decision 2026-10-21: product analytics in the browser (PostHog
- * analytics, masked session replay, surveys) is a choice the person makes in
- * the acceptance prompt and can change under Inställningar → Konto. Until
- * they say yes nothing here runs: no posthog.init, so no request leaves the
- * browser and nothing is read from or written to the device (LEK 9 kap. 28 §
- * covers the access itself, not only cookies). The public and auth pages
- * never start it, because nobody has consented there.
+ * Founder decision 2026-10-22 (superseding the consent prompt of 2026-10-21):
+ * product analytics in the browser (PostHog analytics, masked session replay,
+ * surveys) is on for a signed-in person unless they switched it off under
+ * Inställningar, Konto (user_preferences.analytics_consent = false; null, never
+ * asked, is on). Switched off, nothing here runs: no posthog.init, so no
+ * request leaves the browser and nothing is read from or written to the
+ * device. The public and auth pages never start it.
  *
- * AnalyticsIdentify (dashboard layout) calls initAnalytics() when the stored
- * consent is true. Every other browser caller asks isAnalyticsActive(), which
- * is false until then, so a capture before consent is a no-op instead of
+ * identifySignedInPerson() (lib/analytics/identify.ts, from AnalyticsIdentify
+ * in the dashboard and onboarding layouts) calls initAnalytics() right before
+ * identify. Every other browser caller asks isAnalyticsActive(), which is
+ * false until then, so a capture before the start is a no-op instead of
  * PostHog's "initialize first" console error.
  *
  * Choices that are deliberate and worth not "fixing":
@@ -81,8 +83,8 @@ function tracingHosts(): string[] {
 let started = false
 
 /**
- * Start PostHog in this browser. Call only for a signed-in person whose stored
- * analytics consent is true. Idempotent; returns whether analytics now runs.
+ * Start PostHog in this browser. Call only for a signed-in person who has not
+ * switched analytics off. Idempotent; returns whether analytics now runs.
  */
 export function initAnalytics(): boolean {
   if (typeof window === 'undefined') return false
@@ -110,6 +112,12 @@ export function initAnalytics(): boolean {
     debug: process.env.NODE_ENV === 'development',
   })
   started = true
+  // Errors this page raised before the start, hydration mismatches above
+  // all, which happen before AnalyticsIdentify's effect can run
+  // (lib/analytics/early-errors.ts).
+  for (const error of drainEarlyErrors(window.location.pathname)) {
+    posthog.captureException(error, { before_analytics_start: true })
+  }
   return true
 }
 

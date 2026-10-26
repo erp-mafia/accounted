@@ -220,6 +220,10 @@ const READ_ONLY_RPCS = new Set([
   // basis scan reads the fiktiv moms verifikat with it, so the VAT check
   // review preview (gnubok_mark_vat_check_reviewed) reaches it.
   'get_entries_with_account_lines',
+  // The accounts the momsredovisning shapes read as the skattekonto (1630,
+  // plus 2012 for an enskild firma): STABLE SQL, the create_voucher preview
+  // reads it to say whether the declaration would read the voucher, crm#1447.
+  'skattekonto_shape_accounts',
 ])
 
 /**

@@ -270,10 +270,15 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // Every handler below releases actionLoading in a finally: the flag gates the
   // header button, the progress rail and the employee table, so a rejected
   // fetch that skipped the release froze the whole page until a reload.
-  async function handleAction(action: string, method: string = 'POST') {
+  async function handleAction(action: string, method: string = 'POST', body?: Record<string, unknown>) {
     setActionLoading(action)
     try {
-      const res = await fetch(`/api/salary/runs/${id}/${action}`, { method })
+      const res = await fetch(
+        `/api/salary/runs/${id}/${action}`,
+        body
+          ? { method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) }
+          : { method },
+      )
       if (res.ok) {
         // Optimistic: the status-transition endpoints return the updated run row.
         // Merge it in immediately so the screen flips without waiting for the
@@ -945,8 +950,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   // Markera som betald records that the net pay has left the bank; it posts
   // nothing, but Bokför then books the payout on the payment date. With that
-  // date still ahead it is rarely true yet, so ask first (crm#1216). Ask,
-  // never refuse: some companies pay early on purpose.
+  // date still ahead it is rarely true yet, so ask first (crm#1216). The
+  // server refuses such a run without the answer (paymentDateAheadRefusal);
+  // a confirmed one goes through, since some companies pay early on purpose.
   async function handleMarkPaid() {
     if (!run) return
     if (needsFuturePayoutConfirm(run.payment_date, noPayout)) {
@@ -957,6 +963,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         variant: 'warning',
       })
       if (!ok) return
+      handleAction('paid', 'POST', { confirm_payment_date_ahead: true })
+      return
     }
     handleAction('paid')
   }
@@ -969,9 +977,10 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   async function handleBook() {
     if (!run) return
     const date = formatDate(run.payment_date)
+    const ahead = isPaymentDateAhead(run.payment_date)
     const lines = [t('confirm_book_intro', { period: periodLabel, date })]
     if (!noPayout) lines.push(t('confirm_book_bank'))
-    if (isPaymentDateAhead(run.payment_date)) lines.push(t('confirm_book_ahead', { date }))
+    if (ahead) lines.push(t('confirm_book_ahead', { date }))
     lines.push(t('confirm_book_correction'))
     const ok = await confirmAction({
       title: t('confirm_book_title'),
@@ -980,7 +989,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       variant: 'warning',
     })
     if (!ok) return
-    handleAction('book')
+    // The dialog named the early date: that is the confirmation the server
+    // asks for before it posts a payout ahead of its day.
+    handleAction('book', 'POST', ahead ? { confirm_payment_date_ahead: true } : undefined)
   }
 
   // A booked run's next step is the AGI, filed in the section further down:

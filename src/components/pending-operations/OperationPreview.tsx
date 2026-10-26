@@ -591,15 +591,31 @@ function VoucherLinesBlock({
   return <StagedLinesTable lines={lines} showTotals={totalDebit != null && totalCredit != null} />
 }
 
+// The momsdeklaration impact a staged create_voucher carries (crm#1447):
+// server-built Swedish, like the ruta labels it names. Shown when the
+// declaration leaves the voucher out, when it moves a ruta, when the outcome
+// waits for posting, or when it could not be computed; silent when the
+// voucher moves no ruta or the company files no momsdeklaration.
+function readVatDeclarationSummary(value: unknown): string | null {
+  if (!isPlainObject(value)) return null
+  const { summary, status, counted, rutor_change: change } = value
+  if (typeof summary !== 'string' || summary === '' || status === 'not_vat_registered') return null
+  const moves = isPlainObject(change) && Object.keys(change).length > 0
+  if (status === 'ok' && counted === true && !moves) return null
+  return summary
+}
+
 // showSeries: false for a toEntryPreview payload, which carries no series;
 // the engine picks it per source type at commit, so defaulting to A here
 // would state a series the verifikat may not get. The missing-underlag
 // warning (BFL 5 kap 6 §) is read by complianceWarningOf and rendered by
 // OperationPreview above every preview type, not here.
 function VoucherPreview({ data, showSeries = true }: { data: Record<string, unknown>; showSeries?: boolean }) {
+  const t = useTranslations('pending')
   const lines = (data.lines as VoucherLine[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
+  const vatSummary = readVatDeclarationSummary(data.vat_declaration)
 
   return (
     <div className="space-y-3 text-sm">
@@ -624,6 +640,12 @@ function VoucherPreview({ data, showSeries = true }: { data: Record<string, unkn
             <span className="font-mono">{String(data.voucher_series ?? 'A')}</span>
           </>
         )}
+        {vatSummary ? (
+          <>
+            <span className="text-muted-foreground">{t('preview_vat_declaration')}</span>
+            <span>{vatSummary}</span>
+          </>
+        ) : null}
       </div>
       <VoucherLinesBlock lines={lines} totalDebit={totalDebit} totalCredit={totalCredit} />
     </div>

@@ -22,7 +22,9 @@ import {
   COUNTRY_SCOPE_NON_EU,
   NO_OSS_PRESET_RULES,
   OSS_PRESET_RULES,
+  SWEDISH_RULE_RATES,
   alternativeAccountFor,
+  isEuRuleCountry,
   presetAccountsFor,
   ruleCoversVat,
   sameCountryRules,
@@ -36,14 +38,18 @@ interface CountryAccountRulesFormProps {
   storeScope: string
 }
 
-/** One editable row; account fields are strings while the user types. */
+/**
+ * One editable row; account fields are strings while the user types. A
+ * 'swedish' row's revenue is optional: empty books the default Swedish sales
+ * account for the rate.
+ */
 type DraftRule =
   | { country: string; vat_rate: number | null; mode: 'accounts'; revenue: string; vat: string }
-  | { country: string; vat_rate: number | null; mode: 'swedish' }
+  | { country: string; vat_rate: number | null; mode: 'swedish'; revenue: string }
 
 function toDraft(rule: WebshopCountryAccountRule): DraftRule {
   return rule.mode === 'swedish'
-    ? { country: rule.country, vat_rate: rule.vat_rate, mode: 'swedish' }
+    ? { country: rule.country, vat_rate: rule.vat_rate, mode: 'swedish', revenue: rule.revenue_account ?? '' }
     : {
         country: rule.country,
         vat_rate: rule.vat_rate,
@@ -55,7 +61,12 @@ function toDraft(rule: WebshopCountryAccountRule): DraftRule {
 
 function toRule(draft: DraftRule): WebshopCountryAccountRule {
   return draft.mode === 'swedish'
-    ? { country: draft.country, vat_rate: draft.vat_rate, mode: 'swedish' }
+    ? {
+        country: draft.country,
+        vat_rate: draft.vat_rate,
+        mode: 'swedish',
+        ...(draft.revenue ? { revenue_account: draft.revenue } : {}),
+      }
     : {
         country: draft.country,
         vat_rate: draft.vat_rate,
@@ -66,6 +77,19 @@ function toRule(draft: DraftRule): WebshopCountryAccountRule {
 }
 
 type RateChoice = 'any' | 'zero' | 'other'
+
+/**
+ * Whether a row may book with Swedish VAT ('swedish'): an EU destination at a
+ * Swedish rate or every rate. Such a row offers the choice between its own
+ * accounts (OSS and the like) and Swedish VAT, so a seller below the
+ * distance-selling threshold reaches Svensk moms on a row that exists
+ * (crm#1449), not only through the preset on an empty form.
+ */
+function offersSwedishMode(rule: DraftRule): boolean {
+  if (rule.mode === 'swedish') return true
+  if (!isEuRuleCountry(rule.country) || !ruleCoversVat(rule)) return false
+  return rule.vat_rate === null || SWEDISH_RULE_RATES.some((rate) => sameVatRate(rate, rule.vat_rate as number))
+}
 
 /**
  * Where the stored rules stand. Only 'ready' renders rules, presets or save:
@@ -184,18 +208,45 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
 
   const setAccount = (index: number, field: 'revenue' | 'vat', value: string) => {
     editDraft(
-      draft.map((rule, i) => (i === index && rule.mode === 'accounts' ? { ...rule, [field]: value } : rule)),
+      draft.map((rule, i) => {
+        if (i !== index) return rule
+        if (rule.mode === 'accounts') return { ...rule, [field]: value }
+        return field === 'revenue' ? { ...rule, revenue: value } : rule
+      }),
+    )
+  }
+
+  // Switching a row keeps an account the user typed: a ruta 05 account on an
+  // EU row is exactly what Svensk moms books on. The preset OSS account is
+  // not carried over, and back to own accounts the row starts from the preset.
+  const setMode = (index: number, mode: DraftRule['mode']) => {
+    editDraft(
+      draft.map((rule, i) => {
+        if (i !== index || rule.mode === mode) return rule
+        const preset = presetAccountsFor(rule.country, rule.vat_rate)
+        if (mode === 'swedish') {
+          const revenue = rule.revenue !== preset.revenue ? rule.revenue : ''
+          return { country: rule.country, vat_rate: rule.vat_rate, mode, revenue }
+        }
+        return {
+          country: rule.country,
+          vat_rate: rule.vat_rate,
+          mode,
+          revenue: preset.revenue ?? '',
+          vat: preset.vat ?? '',
+        }
+      }),
     )
   }
 
   const removeRule = (index: number) => editDraft(draft.filter((_, i) => i !== index))
 
-  const invalid = draft.some(
-    (rule) =>
-      rule.mode === 'accounts' &&
-      (!ACCOUNT_NUMBER_RE.test(rule.revenue) ||
+  const invalid = draft.some((rule) =>
+    rule.mode === 'swedish'
+      ? rule.revenue !== '' && !ACCOUNT_NUMBER_RE.test(rule.revenue)
+      : !ACCOUNT_NUMBER_RE.test(rule.revenue) ||
         (rule.vat !== '' && !ACCOUNT_NUMBER_RE.test(rule.vat)) ||
-        (rule.vat === '' && ruleCoversVat(rule))),
+        (rule.vat === '' && ruleCoversVat(rule)),
   )
 
   async function save() {
@@ -292,8 +343,30 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
         return (
           <div key={`${rule.country}-${rule.vat_rate ?? 'any'}`}>
             <SettingsRow label={label} borderless={rowProblems.length > 0}>
+              {offersSwedishMode(rule) && (
+                <SettingsSelect
+                  value={rule.mode}
+                  onChange={(e) => setMode(index, e.target.value as DraftRule['mode'])}
+                  aria-label={t('country_rules_mode_aria', { country: label })}
+                  wrapperClassName="min-w-28 flex-1"
+                >
+                  <option value="swedish">{t('country_rules_mode_swedish')}</option>
+                  <option value="accounts">{t('country_rules_mode_accounts')}</option>
+                </SettingsSelect>
+              )}
               {rule.mode === 'swedish' ? (
-                <SettingsRowNote>{t('country_rules_swedish')}</SettingsRowNote>
+                ruleCoversVat(rule) && (
+                  <SettingsInput
+                    value={rule.revenue}
+                    onChange={(e) => setAccount(index, 'revenue', e.target.value.trim())}
+                    inputMode="numeric"
+                    maxLength={4}
+                    placeholder={t('country_rules_swedish_revenue_placeholder')}
+                    className="max-w-24 flex-none text-right tabular-nums"
+                    aria-label={t('country_rules_swedish_revenue_aria', { country: label })}
+                    aria-invalid={rule.revenue !== '' && !ACCOUNT_NUMBER_RE.test(rule.revenue)}
+                  />
+                )
               ) : (
                 <>
                   <SettingsInput

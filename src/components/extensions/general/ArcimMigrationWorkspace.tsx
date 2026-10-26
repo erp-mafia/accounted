@@ -57,6 +57,7 @@ import {
   documentImportRunNote,
   documentOAuthProblemFromReason,
   parseArcimDocumentResumeMarker,
+  PROVIDER_CONNECTION_REFUSED_CODES,
   PROVIDER_DOCUMENT_SCOPES_UNAVAILABLE,
   requestArcimDocumentImport,
   runArcimDocumentImportToCompletion,
@@ -681,6 +682,10 @@ export function DocumentImportRunLine({ run }: { run: DocumentImportRunStatus })
   const note = documentImportRunNote(run)
   if (!note) return null
   const line = 'mt-0.5 text-xs text-muted-foreground tabular-nums'
+  if (note.kind === 'reconnect') {
+    const provider = ARCIM_PROVIDERS.find(p => p.id === note.provider)?.name ?? note.provider
+    return <p className={line}>{t('ext_arcim_documents_last_run_reconnect', { date: formatDate(note.date), provider })}</p>
+  }
   if (note.kind !== 'complete') {
     return (
       <p className={line}>
@@ -710,6 +715,7 @@ export function ProviderStep({
   onSelect,
   onResync,
   onFetchDocuments,
+  onReconnectDocuments,
   onDisconnect,
   connectionStatus,
   isLoadingStatus,
@@ -718,6 +724,11 @@ export function ProviderStep({
   onResync: (provider: ArcimProvider, consentId: string) => void
   /** Run the underlag import on its own against an active consent whose provider serves underlag. */
   onFetchDocuments: (consentId: string, provider: ArcimProvider) => void
+  /**
+   * Reconnect a connection the latest underlag run found refused (B11), then
+   * look for underlag again. Without it the row falls back to onFetchDocuments.
+   */
+  onReconnectDocuments?: (consentId: string, provider: ArcimProvider) => void
   onDisconnect: (consentId: string) => void
   connectionStatus: ConnectionStatus | null
   isLoadingStatus: boolean
@@ -744,6 +755,10 @@ export function ProviderStep({
   // theirs keeps "Synka igen" and the SIE upload above is the way forward.
   // The provider list quotes the same label.
   const continuesImport = (provider: ArcimProvider) => !hasSieImport && sieViaApi(provider)
+  const documentRunNeedsReconnect = (provider: ArcimProvider) => {
+    const run = connectionStatus?.latestDocumentImport
+    return run?.provider === provider && !run.complete && run.needsReconnect === true
+  }
   const connectionAction = (provider: ArcimProvider) =>
     continuesImport(provider) ? t('ext_arcim_continue_import') : t('ext_arcim_resync')
 
@@ -858,13 +873,26 @@ export function ProviderStep({
                         from the source has to be the obvious one, and the
                         re-run says plainly what it is. */}
                     {hasSieImport && supportsUnderlagImport(consent.provider) && (
-                      <Button
-                        size="sm"
-                        onClick={() => onFetchDocuments(consent.id, consent.provider)}
-                      >
-                        <Paperclip className="mr-1.5 h-3.5 w-3.5" />
-                        {t('ext_arcim_documents_fetch_action')}
-                      </Button>
+                      // The latest run stopped because the provider refused
+                      // the connection: fetching again would meet the same
+                      // refusal, so the one way on is the reconnect (B11).
+                      documentRunNeedsReconnect(consent.provider) ? (
+                        <Button
+                          size="sm"
+                          onClick={() => (onReconnectDocuments ?? onFetchDocuments)(consent.id, consent.provider)}
+                        >
+                          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                          {t('ext_arcim_documents_reconnect_provider', { provider: providerInfo?.name ?? consent.provider })}
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={() => onFetchDocuments(consent.id, consent.provider)}
+                        >
+                          <Paperclip className="mr-1.5 h-3.5 w-3.5" />
+                          {t('ext_arcim_documents_fetch_action')}
+                        </Button>
+                      )
                     )}
                     {continuesImport(consent.provider) ? (
                       <Button size="sm" onClick={() => onResync(consent.provider, consent.id)}>
@@ -2556,6 +2584,10 @@ export function DocumentImportFollowUp({
     }
   } else {
     const reconnectRequired = state.problem?.reconnectRequired === true
+    // The provider refused the connection itself (B11), as opposed to the
+    // Fortnox file permissions the approval state below asks for.
+    const connectionRefused =
+      state.problem?.code != null && PROVIDER_CONNECTION_REFUSED_CODES.includes(state.problem.code)
     const discoveryFailed = state.phase === 'discovery-error'
     // Fortnox has not granted the file permissions to the integration itself, so
     // neither reconnecting nor retrying can succeed: state it and offer nothing.
@@ -2589,16 +2621,23 @@ export function DocumentImportFollowUp({
         </DocumentState>
       )
     } else if (reconnectRequired) {
-      // A permission to approve is a step to take, not an error.
+      // A permission to approve, or a connection to renew, is a step to take,
+      // not an error.
       body = (
         <DocumentState
-          lead={t('ext_arcim_documents_scope_error_title', { provider })}
-          sub={state.problem?.message ?? t('ext_arcim_documents_scope_error', { provider })}
+          lead={connectionRefused
+            ? t('ext_arcim_documents_refused_title', { provider })
+            : t('ext_arcim_documents_scope_error_title', { provider })}
+          sub={state.problem?.message ?? (connectionRefused
+            ? t('ext_arcim_documents_refused', { provider })
+            : t('ext_arcim_documents_scope_error', { provider }))}
         >
           <div>
             <Button onClick={onReconnect}>
               <RefreshCw className="mr-2 h-4 w-4" />
-              {t('ext_arcim_documents_reconnect_action')}
+              {connectionRefused
+                ? t('ext_arcim_documents_reconnect_provider', { provider })
+                : t('ext_arcim_documents_reconnect_action')}
             </Button>
           </div>
           {technicalDetails}
@@ -3378,7 +3417,9 @@ export default function ArcimMigrationWorkspace({
         if (reconnectAction === 'discover') {
           void runDocumentDiscovery(data.consentId, 'fortnox', true)
         } else {
-          void runDocumentImport(data.consentId)
+          // Continue after the last file the stopped run handled, as the
+          // reconnect copy promises, instead of downloading everything again.
+          void runDocumentImport(data.consentId, documentImportState.result)
         }
         return
       }
@@ -3831,21 +3872,20 @@ export default function ArcimMigrationWorkspace({
     await runDocumentDiscovery(existingConsentId, provider, true)
   }, [clearDocumentReconnectFailureCleanup, runDocumentDiscovery])
 
-  const handleDocumentReconnect = useCallback(() => {
-    if (!consentId) return
+  /** The Fortnox login for the underlag run, coming back to `reconnectAction`. */
+  const startDocumentReconnect = useCallback((
+    targetConsentId: string,
+    reconnectAction: 'discover' | 'import',
+    returnTo: ArcimDocumentImportPhase | null,
+    priorProblem: ArcimDocumentImportProblem,
+    standalone: boolean,
+  ) => {
     clearDocumentReconnectFailureCleanup()
-    const { resume: reconnectAction, returnTo } = arcimDocumentReconnectPlan(documentImportState.phase)
-    const priorProblem = documentImportState.problem ?? {
-      code: null,
-      requestId: null,
-      reconnectRequired: false,
-    }
-
     documentReconnectActionRef.current = reconnectAction
     documentReconnectReturnRef.current = returnTo
-    storeDocumentOAuthResume(reconnectAction, documentsOnly)
+    storeDocumentOAuthResume(reconnectAction, standalone)
     dispatchDocumentImport({ type: 'reconnect-started' })
-    void handleReconnect('fortnox', consentId, {
+    void handleReconnect('fortnox', targetConsentId, {
       // The whole point of this reconnect is the attachment permissions, so
       // this is the one path that asks Fortnox for them.
       documentScopes: true,
@@ -3867,14 +3907,62 @@ export default function ArcimMigrationWorkspace({
         }, 30_000)
       },
     })
+  }, [clearDocumentReconnectFailureCleanup, handleReconnect])
+
+  const handleDocumentReconnect = useCallback(() => {
+    if (!consentId) return
+    // A Bokio integration token is replaced in the credential form, not in a
+    // Fortnox login (B11: a refused Bokio token stops the run too).
+    if (documentImportState.provider === 'bokio') {
+      void handleReconnect('bokio', consentId)
+      return
+    }
+    const { resume: reconnectAction, returnTo } = arcimDocumentReconnectPlan(documentImportState.phase)
+    startDocumentReconnect(
+      consentId,
+      reconnectAction,
+      returnTo,
+      documentImportState.problem ?? { code: null, requestId: null, reconnectRequired: false },
+      documentsOnly,
+    )
   }, [
-    clearDocumentReconnectFailureCleanup,
     consentId,
     documentImportState.phase,
     documentImportState.problem,
+    documentImportState.provider,
     documentsOnly,
     handleReconnect,
+    startDocumentReconnect,
   ])
+
+  // "Koppla Fortnox igen" on a connection whose latest underlag run the
+  // provider refused (B11): straight to the login, then a fresh look for
+  // underlag, on the standalone documents page. The popup opens inside the
+  // click, so nothing is awaited before startDocumentReconnect.
+  const handleReconnectDocuments = useCallback((existingConsentId: string, provider: ArcimProvider) => {
+    if (provider !== 'fortnox') {
+      void handleReconnect(provider, existingConsentId)
+      return
+    }
+    setSelectedProvider('fortnox')
+    setConsentId(existingConsentId)
+    setError(null)
+    setMigrationResults(null)
+    setProviderReview(null)
+    setSieImportResults([])
+    setSieData(null)
+    setTheaterModel(null)
+    setDocumentsOnly(true)
+    setStep('result')
+    dispatchDocumentImport({ type: 'discovery-started', provider: 'fortnox', migrationSucceeded: true })
+    startDocumentReconnect(
+      existingConsentId,
+      'discover',
+      null,
+      { code: 'PROVIDER_AUTH_EXPIRED', requestId: null, reconnectRequired: true },
+      true,
+    )
+  }, [handleReconnect, startDocumentReconnect])
 
   // Disconnect an existing consent
   const handleDisconnect = useCallback(async (consentIdToDelete: string) => {
@@ -4439,6 +4527,7 @@ export default function ArcimMigrationWorkspace({
           onSelect={handleSelectProvider}
           onResync={handleResync}
           onFetchDocuments={handleFetchDocuments}
+          onReconnectDocuments={handleReconnectDocuments}
           onDisconnect={handleDisconnect}
           connectionStatus={connectionStatus}
           isLoadingStatus={isLoadingStatus}

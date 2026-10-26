@@ -9,13 +9,20 @@ import { buildDriveFolderReadme } from '@/lib/reports/archive-readme'
 import { getBranding } from '@/lib/branding/service'
 import { createServiceClient } from '@/lib/supabase/server'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { CloudTokenRefreshError, type CloudStorageProvider } from './cloud-provider'
+import {
+  CloudScopeMissingError,
+  CloudTokenRefreshError,
+  type CloudStorageProvider,
+  type PreparedTarget,
+  type PutFileResult,
+} from './cloud-provider'
 import { googleDriveProvider } from './google-provider'
 import { decryptToken } from './crypto'
 import type {
   CloudConnection,
   CloudFileState,
   CloudLastSync,
+  CloudReauthReason,
 } from '../types'
 
 /**
@@ -50,6 +57,11 @@ export type SyncFailureReason =
   | 'archive_too_large'
   | 'upload_failed'
   | 'internal'
+  /**
+   * `startDeadline` passed before every changed file was uploaded. Not a
+   * failure: the finished files are persisted and the next run resumes.
+   */
+  | 'deferred'
 
 export type PerformSyncResult =
   | {
@@ -66,6 +78,8 @@ export type PerformSyncResult =
       message: string
       size_bytes?: number
       size_limit_bytes?: number
+      /** Set with reason `needs_reauth`. */
+      reauthReason?: CloudReauthReason
     }
 
 interface PerformSyncParams {
@@ -87,6 +101,13 @@ interface PerformSyncParams {
    * and schedule records, so syncing one never disturbs the other.
    */
   provider?: CloudStorageProvider
+  /**
+   * Epoch ms after which no further archive may start. The cron passes one so
+   * a run stops between files instead of being killed mid-upload by the
+   * function's time limit; each finished file is already persisted, so the
+   * next run resumes where this one stopped. Omitted: no limit.
+   */
+  startDeadline?: number
 }
 
 interface PlannedFile {
@@ -152,46 +173,79 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
     }
   }
 
+  // The stored record as of now: preparing the target may rewrite it.
+  let current = connection
+
+  /**
+   * Flag the connection so the cron stops retrying it and the UI can ask the
+   * user to reconnect. An already flagged connection keeps its original
+   * `needs_reauth_at`: the cron alerts once per incident, anchored on it.
+   */
+  const flagNeedsReauth = async (
+    reauthReason: CloudReauthReason,
+    message: string
+  ): Promise<PerformSyncResult> => {
+    const flagged: CloudConnection = {
+      ...current,
+      status: 'needs_reauth',
+      needs_reauth_at:
+        (current.status === 'needs_reauth' && current.needs_reauth_at) ||
+        new Date().toISOString(),
+      needs_reauth_reason: reauthReason,
+    }
+    await saveExtensionData(supabase, companyId, userId, keys.connection, flagged)
+    return { ok: false, reason: 'needs_reauth', message, reauthReason }
+  }
+  const scopeMissing = () =>
+    flagNeedsReauth(
+      'missing_scope',
+      `${provider.label} access was granted without the storage permission; reconnect required`
+    )
+
   const refreshToken = decryptToken(connection.refresh_token_encrypted)
   let accessToken: string
   try {
     accessToken = await provider.refreshAccessToken(refreshToken, origin)
   } catch (err) {
     if (err instanceof CloudTokenRefreshError && err.isInvalidGrant) {
-      // The refresh token is permanently dead (revoked or expired). Flag the
-      // connection so the cron stops retrying it and the UI can ask the user
-      // to reconnect. Other failures (network, 5xx) stay throwing: they are
-      // transient and worth retrying.
-      const flagged: CloudConnection = {
-        ...connection,
-        status: 'needs_reauth',
-        needs_reauth_at: new Date().toISOString(),
-      }
-      await saveExtensionData(supabase, companyId, userId, keys.connection, flagged)
-      return {
-        ok: false,
-        reason: 'needs_reauth',
-        message: `${provider.label} authorization expired; reconnect required`,
-      }
+      // The refresh token is permanently dead (revoked or expired). Other
+      // failures (network, 5xx) stay throwing: they are transient and worth
+      // retrying.
+      return flagNeedsReauth(
+        'token_revoked',
+        `${provider.label} authorization expired; reconnect required`
+      )
     }
     throw err
   }
 
   const company = await fetchCompanyInfo(supabase, companyId)
 
-  const { target, connectionPatch } = await provider.prepareTarget({
-    accessToken,
-    connection,
-    companyLabel: company.label,
-  })
+  let prepared: PreparedTarget
+  try {
+    prepared = await provider.prepareTarget({
+      accessToken,
+      connection,
+      companyLabel: company.label,
+    })
+  } catch (err) {
+    // The token refreshed but the grant lacks the storage scope: the same
+    // answer would come back every night, so this is a reconnect, not a
+    // failure to retry.
+    if (err instanceof CloudScopeMissingError) return scopeMissing()
+    throw err
+  }
+  const { target, connectionPatch } = prepared
   if (connectionPatch || connection.status === 'needs_reauth') {
-    // A successful refresh also clears a stale needs_reauth flag.
-    await saveExtensionData(supabase, companyId, userId, keys.connection, {
+    // A successful refresh and target check also clears a stale flag.
+    current = {
       ...connection,
       ...connectionPatch,
       status: 'active',
       needs_reauth_at: undefined,
-    })
+      needs_reauth_reason: undefined,
+    }
+    await saveExtensionData(supabase, companyId, userId, keys.connection, current)
   }
 
   // ---- Fingerprint basis: three paged reads + one point read. ----
@@ -403,19 +457,35 @@ export async function performSync(params: PerformSyncParams): Promise<PerformSyn
       continue
     }
 
+    if (params.startDeadline !== undefined && Date.now() >= params.startDeadline) {
+      // Stop between files: a file started now could be cut off by the
+      // function's time limit, losing the work and the rest of the run.
+      return {
+        ok: false,
+        reason: 'deferred',
+        message: `time budget reached after ${uploadedCount} file(s); the next run resumes`,
+      }
+    }
+
     const bytes = await plan.generate()
-    const uploaded = await provider.putFile({
-      accessToken,
-      target,
-      name: plan.name,
-      // Only reuse the remote handle when it still belongs to this file name:
-      // a renamed archive (a fiscal year that changed shape) must not
-      // overwrite the file the old name points at.
-      previousId:
-        prev?.file_id && prev.file_name === plan.name ? prev.file_id : undefined,
-      data: bytes,
-      contentType: plan.contentType,
-    })
+    let uploaded: PutFileResult
+    try {
+      uploaded = await provider.putFile({
+        accessToken,
+        target,
+        name: plan.name,
+        // Only reuse the remote handle when it still belongs to this file
+        // name: a renamed archive (a fiscal year that changed shape) must not
+        // overwrite the file the old name points at.
+        previousId:
+          prev?.file_id && prev.file_name === plan.name ? prev.file_id : undefined,
+        data: bytes,
+        contentType: plan.contentType,
+      })
+    } catch (err) {
+      if (err instanceof CloudScopeMissingError) return scopeMissing()
+      throw err
+    }
 
     stateByKey.set(plan.key, {
       kind: plan.kind,

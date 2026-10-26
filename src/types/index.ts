@@ -763,6 +763,10 @@ export interface CompanySettings {
   // the employer's own view always prints both (build-payslip-data).
   salary_payslip_show_employer_cost: boolean
   salary_payslip_show_breakdown: boolean
+  // Regionalt stöd (migration 20261026110000): employees work at a fast
+  // driftställe in a stödområde (lag 2001:1170). Snapshotted into each run's
+  // calculation_params at :calculate (lib/salary/regional-support.ts).
+  salary_regional_support: boolean
   // Avvikelseperiod (migration 20260918120000): the month a new salary run
   // reads absence and worked days from. 'previous_month' is the common
   // Swedish setup (innevarande månads lön, föregående månads avvikelser).
@@ -3222,6 +3226,9 @@ export interface InboxChannelContext {
   peppol_sender_endpoint?: string | null
   /** Archived exact UBL XML, when the inbox document is a rendering (embedded PDF) instead. */
   peppol_xml_document_id?: string | null
+  /** Set by lib/stripe/billing-invoice-inbox.ts: Accounted's own paid subscription invoice, by Stripe's id and number. */
+  stripe_invoice_id?: string | null
+  stripe_invoice_number?: string | null
   /** Set by lib/receipt-hunt/ingest.ts: which mailbox the receipt came out of. */
   mail_mailbox?: string | null
   mail_provider?: 'gmail' | 'microsoft' | null
@@ -4478,7 +4485,9 @@ export type WebshopPaymentMethodPolicy =
  * percentage; null covers every rate that carries VAT (a 0 % bucket needs its
  * own rule). 'accounts' books the bucket's net and VAT on the given accounts;
  * 'swedish' books it like a Swedish sale (EU sales taxed in Sweden, below the
- * distance-selling threshold).
+ * distance-selling threshold): output VAT on the Swedish account for the
+ * rate, and the net on `revenue_account` when set (a ruta 05 account with the
+ * rule's rate), else on the default Swedish sales account for the rate.
  */
 export type WebshopCountryAccountRule =
   | {
@@ -4488,7 +4497,7 @@ export type WebshopCountryAccountRule =
       revenue_account: string
       vat_account: string | null
     }
-  | { country: string; vat_rate: number | null; mode: 'swedish' }
+  | { country: string; vat_rate: number | null; mode: 'swedish'; revenue_account?: string | null }
 
 /** Row shape of public.webshop_store_settings. */
 export interface WebshopStoreSettings {

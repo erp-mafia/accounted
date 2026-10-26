@@ -46,7 +46,7 @@ export default async function ChatLayout({ children }: { children: React.ReactNo
     // visible viewport exactly. Desktop: fill the frame panel (<main> has an
     // explicit height there, so h-full resolves).
     <div className="flex h-[calc(100dvh-var(--bottom-nav-h))] md:h-full">
-      <ChatSidebar initialConversations={conversations ?? []} />
+      <ChatSidebar initialConversations={conversations ?? []} renderedAt={new Date().getTime()} />
       <div className="flex-1 min-w-0 flex flex-col bg-background">{children}</div>
     </div>
   )

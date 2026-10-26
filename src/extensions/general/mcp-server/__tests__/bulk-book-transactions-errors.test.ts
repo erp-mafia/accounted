@@ -143,6 +143,33 @@ describe('gnubok_bulk_book_transactions: duplicate-booking guard at stage', () =
     expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
   })
 
+  it('names a covering samlingsverifikat as such and points at link or ignore (issue #101)', async () => {
+    vi.mocked(detectBookingDuplicate).mockResolvedValueOnce({
+      ...CANDIDATE,
+      journal_entry_id: 'je-sam',
+      voucher_label: 'A57',
+      entry_date: '2026-05-31',
+      description: 'Stripe försäljning maj',
+      amount: 3477,
+      account_number: '1686',
+      covering: { booked: 3477, held: 0, unlinked: 3477 },
+    })
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [ROW], error: null }) // transactions fetch
+
+    const err = await bulkBook
+      .execute({ tx_ids: [TX_1], ...NEW_ENTRY }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e)
+
+    expect(getStructuredError(err).code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
+    expect((err as Error).message).toContain('samlingsverifikat A57 (2026-05-31)')
+    expect((err as Error).message).toContain('3477 SEK on 1686')
+    expect((err as Error).message).toContain('gnubok_reconcile_match')
+    expect((err as Error).message).toContain('gnubok_ignore_transaction')
+    expect((err as Error).message).toContain('force=true')
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+  })
+
   it('stages with force=true and carries the override to the approval', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [ROW], error: null }) // transactions fetch

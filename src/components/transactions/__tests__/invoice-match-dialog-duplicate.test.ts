@@ -101,20 +101,22 @@ describe('DuplicateBookingDialog sibling candidates', () => {
     // double-count the bank side, booking would double-count the ledger side).
     expect(BOOKING_DIALOG_SRC).toMatch(/\/api\/transactions\/\$\{matchTransaction\.id\}\/ignore/)
     expect(BOOKING_DIALOG_SRC).toContain("t('dialog_duplicate_ignore')")
-    // Gated on a sibling candidate: never shown for ledger-only vouchers.
+    // Gated on a sibling candidate, or a samlingsverifikat that already holds
+    // the row (issue #101): never shown for other ledger-only vouchers.
     expect(BOOKING_DIALOG_SRC).toMatch(
-      /canIgnore = isSiblingCandidate && !!matchTransaction && !!onIgnored/,
+      /canIgnore = \(isSiblingCandidate \|\| covering !== null\) && !!matchTransaction && !!onIgnored/,
     )
   })
 
   it('switches the body fact and the "matcha i stället" help for sibling candidates', () => {
     expect(BOOKING_DIALOG_SRC).toContain("t('dialog_duplicate_body_sibling')")
     expect(BOOKING_DIALOG_SRC).toMatch(
-      /isSiblingCandidate \? t\('dialog_duplicate_body_sibling'\) : t\('dialog_duplicate_body'\)/,
+      /isSiblingCandidate\s*\? t\('dialog_duplicate_body_sibling'\)\s*: t\('dialog_duplicate_body'\)/,
     )
-    // The body states one fact; what to do about it sits behind the "?".
+    // The body states one fact; what to do about it sits behind the "?"
+    // (a covering samlingsverifikat, issue #101, has its own fact and help).
     expect(BOOKING_DIALOG_SRC).toMatch(
-      /<HelpPopover[^>]*>\s*\{isSiblingCandidate \? t\('dialog_duplicate_help_sibling'\) : t\('dialog_duplicate_help'\)\}/,
+      /<HelpPopover[^>]*>\s*\{covering\s*\? t\('dialog_duplicate_help_covering'\)\s*: isSiblingCandidate\s*\? t\('dialog_duplicate_help_sibling'\)\s*: t\('dialog_duplicate_help'\)\}/,
     )
   })
 
@@ -146,6 +148,8 @@ describe('DuplicateBookingDialog sibling candidates', () => {
   })
 
   it('renders the ignore hint only when the ignore action is offered', () => {
-    expect(BOOKING_DIALOG_SRC).toMatch(/canIgnore && <> \{t\('dialog_duplicate_ignore_hint'\)\}<\/>/)
+    expect(BOOKING_DIALOG_SRC).toMatch(
+      /canIgnore && \(\s*<> \{covering \? t\('dialog_duplicate_ignore_hint_covering'\) : t\('dialog_duplicate_ignore_hint'\)\}<\/>/,
+    )
   })
 })

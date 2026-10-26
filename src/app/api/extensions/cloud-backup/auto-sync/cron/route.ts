@@ -13,6 +13,7 @@ import {
 import type { CloudStorageProvider } from '@/extensions/general/cloud-backup/lib/cloud-provider'
 import type {
   CloudConnection,
+  CloudReauthReason,
   CloudSchedule,
 } from '@/extensions/general/cloud-backup/types'
 
@@ -33,6 +34,8 @@ import type {
  * Failures increment `consecutive_failures` on that provider's schedule; alert
  * emails go out on dead tokens (once per incident) and repeated failures
  * (threshold in `backup-alert.ts`), throttled per company and provider.
+ * A grant that lacks the storage scope is a dead token too: performSync flags
+ * it needs_reauth, so it is alerted once and skipped, never retried nightly.
  *
  * Uses the service role client: no user session, no RLS. Each row in
  * `extension_data` carries its own `user_id` (the user who configured the
@@ -142,13 +145,19 @@ export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (
     if (value) connectionByCompanyAndKey.set(`${r.company_id}:${r.key}`, value)
   }
 
-  const startTime = Date.now()
-  const TIME_BUDGET_MS = 250_000 // 4m10s: leaves 50s margin below Vercel's 300s Pro limit
+  // No company and no archive file starts after this point. One archive with
+  // its documents has taken up to ~140 s to build and upload in production,
+  // so work started later could be cut off by Vercel's 300 s limit, which
+  // kills the whole run mid-upload. Checking only between companies was not
+  // enough: one company can upload several large archives in a row. Work left
+  // over stays due and the next hourly run picks it up.
+  const START_CUTOFF_MS = 150_000
+  const startDeadline = Date.now() + START_CUTOFF_MS
 
   const results: {
     companyId: string
     provider: string
-    status: 'success' | 'error' | 'skipped'
+    status: 'success' | 'error' | 'skipped' | 'deferred'
     error?: string
   }[] = []
 
@@ -164,6 +173,7 @@ export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (
     consecutiveFailures: number
     errorMessage: string | null
     lastAlertAt: string | null | undefined
+    reauthReason?: CloudReauthReason | null
   }): Promise<string | null> => {
     const prior = params.lastAlertAt ?? null
     if (
@@ -184,12 +194,13 @@ export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (
       consecutiveFailures: params.consecutiveFailures,
       errorMessage: params.errorMessage,
       origin,
+      reauthReason: params.reauthReason,
     })
     return sent.sent ? new Date().toISOString() : prior
   }
 
   for (const candidate of candidates) {
-    if (Date.now() - startTime > TIME_BUDGET_MS) {
+    if (Date.now() >= startDeadline) {
       ctx.log.info('time budget reached', {
         processedSoFar: results.length,
         skipped: candidates.length - results.length,
@@ -222,6 +233,7 @@ export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (
           consecutiveFailures: schedule.consecutive_failures ?? 0,
           errorMessage: null,
           lastAlertAt: schedule.last_alert_at,
+          reauthReason: connection.needs_reauth_reason,
         })
         if (lastAlertAt !== (schedule.last_alert_at ?? null)) {
           await saveExtensionData(supabase, companyId, userId, scheduleKey, {
@@ -253,7 +265,16 @@ export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (
         includeDocuments: true,
         allowDocumentFallback: true,
         provider,
+        startDeadline,
       })
+
+      if (!syncResult.ok && syncResult.reason === 'deferred') {
+        // Out of time between two files, not a failure: the finished files are
+        // persisted and the schedule is left untouched, so it stays due and
+        // the next hourly run resumes this company.
+        results.push({ companyId, provider: provider.id, status: 'deferred' })
+        continue
+      }
 
       const consecutiveFailures = syncResult.ok
         ? 0
@@ -269,6 +290,7 @@ export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (
           consecutiveFailures,
           errorMessage: safeSyncError,
           lastAlertAt,
+          reauthReason: syncResult.reauthReason,
         })
       }
 
@@ -335,12 +357,14 @@ export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (
   const successCount = results.filter((r) => r.status === 'success').length
   const errorCount = results.filter((r) => r.status === 'error').length
   const skippedCount = results.filter((r) => r.status === 'skipped').length
+  const deferredCount = results.filter((r) => r.status === 'deferred').length
 
   ctx.log.info('cloud backup cron summary', {
     processed: results.length,
     succeeded: successCount,
     failed: errorCount,
     skipped: skippedCount,
+    deferred: deferredCount,
   })
 
   return NextResponse.json({
@@ -350,6 +374,7 @@ export const GET = withServiceCronContext('cron.cloud_backup_auto_sync', async (
     successes: successCount,
     errors: errorCount,
     skipped: skippedCount,
+    deferred: deferredCount,
     results,
   })
 })

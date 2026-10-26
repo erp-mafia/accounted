@@ -448,9 +448,21 @@ export function extractRequestedCompany(
   const { company_id: rawCompanyId, ...toolArgs } = rawArgs
   if (rawCompanyId === undefined) return { requestedCompanyId: undefined, toolArgs }
   if (typeof rawCompanyId !== 'string' || !UUID_PATTERN.test(rawCompanyId)) {
-    throw codedError('VALIDATION_ERROR', 'company_id must be a valid UUID')
+    throw Object.assign(codedError('VALIDATION_ERROR', 'company_id must be a valid UUID'), {
+      malformedCompanyId: true,
+    })
   }
   return { requestedCompanyId: rawCompanyId, toolArgs }
+}
+
+/**
+ * The refusal of a company_id that is not a UUID (a name, an org number, a
+ * placeholder). It stays a VALIDATION_ERROR, but it is a wrong company_id
+ * like an unknown one, so the dispatcher answers it with the same candidates
+ * (the server instructions promise them for a wrong company_id).
+ */
+export function isMalformedCompanyIdError(err: unknown): boolean {
+  return (err as { malformedCompanyId?: unknown } | null)?.malformedCompanyId === true
 }
 
 export async function resolveMcpCompanyContext(args: {

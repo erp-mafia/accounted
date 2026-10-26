@@ -33,7 +33,7 @@ function stubFetch(answers: { suggestions?: () => Response; selection?: () => Re
     vi.fn(async (url: string, init?: RequestInit) => {
       calls.push({ url, method: init?.method ?? 'GET', body: init?.body ? JSON.parse(String(init.body)) : undefined })
       if (url.startsWith('/api/cash-accounts/ledger-suggestions')) return (answers.suggestions ?? (() => json({ data: { suggestions: [] } })))()
-      if (url === '/api/extensions/ext/enable-banking/accounts') return (answers.selection ?? (() => json({ success: true })))()
+      if (url === '/api/bank/connections/conn-1/ledgers') return (answers.selection ?? (() => json({ data: { connection_id: 'conn-1', moves: [] } })))()
       if (url === '/api/reconciliation/bank/run') return (answers.sweep ?? (() => json({ data: { applied: 0, suggested: 0 } })))()
       throw new Error(`Unexpected fetch: ${url}`)
     }),
@@ -110,8 +110,10 @@ describe('applyLedgerSuggestion', () => {
     expect(result).toEqual({ status: 'applied', relinked: { linked: 46, suggested: 2 } })
     expect(calls.slice(1)).toEqual([
       { url: '/api/cash-accounts/ledger-suggestions', method: 'GET', body: undefined },
-      // The save: PATCH /accounts, exactly the picker's body, from the fresh read.
-      { url: '/api/extensions/ext/enable-banking/accounts', method: 'PATCH', body: SELECTION },
+      // The save: the provider-neutral ledger change (crm#1395), with the
+      // suggestion's mappings from the fresh read. It works for an Open
+      // Payments connection too, where the Enable Banking route answered 404.
+      { url: '/api/bank/connections/conn-1/ledgers', method: 'PATCH', body: { accounts: SELECTION.account_mappings } },
       { url: '/api/reconciliation/bank/run', method: 'POST', body: { account_number: '1920' } },
     ])
   })
@@ -148,16 +150,15 @@ describe('applyLedgerSuggestion', () => {
     expect(calls.some((c) => c.url === '/api/reconciliation/bank/run')).toBe(false)
   })
 
-  it('reads the plain error string the route validation answers with', async () => {
-    stubFetch({
+  it('answers the sentence of a connection that is not active, without running the matcher', async () => {
+    const sentence = 'Bankkopplingen är inte aktiv, så bokföringskontot kan inte bytas nu.'
+    const calls = stubFetch({
       suggestions: () => json({ data: { suggestions: [suggestion()] } }),
-      selection: () => json({ error: 'Flera bankkonton kan inte bokföras på samma konto. Välj olika bokföringskonton.' }, 400),
+      selection: () => json({ error: { code: 'BANK_LEDGER_CHANGE_NOT_ACTIVE', message: sentence } }, 409),
     })
 
-    expect(await applyLedgerSuggestion(COMPANY, 'move:cash-a>1920')).toEqual({
-      status: 'refused',
-      reason: 'Flera bankkonton kan inte bokföras på samma konto. Välj olika bokföringskonton.',
-    })
+    expect(await applyLedgerSuggestion(COMPANY, 'move:cash-a>1920')).toEqual({ status: 'refused', reason: sentence })
+    expect(calls.some((c) => c.url === '/api/reconciliation/bank/run')).toBe(false)
   })
 
   it('answers refused without a reason when the save cannot be reached or says nothing', async () => {

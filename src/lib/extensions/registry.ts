@@ -104,8 +104,8 @@ export const extensionRegistry = globalSingleton('extensionRegistry', () => new 
  * subscribed to each event type it handles; null when it handles none.
  *
  * Each handler receives `(payload, ctx)`. The context is built lazily when
- * the event fires, using the userId from the payload and a Supabase client
- * created from the current request cookies. Several handlers of one
+ * the event fires, from the payload's userId and companyId, on the
+ * service-role client (runExtensionHandler below). Several handlers of one
  * extension for the same event type run concurrently and all settle before
  * the delivery does; the first failure is the one rethrown to the bus.
  */
@@ -132,6 +132,18 @@ export function extensionEventConsumer(extension: Extension): EventConsumer | nu
 
 type ExtensionEventPayload = { userId: string; companyId?: string; [key: string]: unknown }
 
+/**
+ * Run one extension handler with its context.
+ *
+ * `ctx.supabase` is the service-role client, never the request's cookie
+ * client: an event fires from whatever emitted it, and only a dashboard
+ * request carries a session cookie. Under a v1 API key, an MCP bearer token
+ * or a provider webhook the cookie client was the anon role and read nothing,
+ * silently (a credited invoice kept its Stripe payment link). The core event
+ * consumers already work this way (lib/composition/event-consumers.ts), so a
+ * handler filters every query by `ctx.companyId`, which server code set after
+ * authorising the write that emitted the event.
+ */
 async function runExtensionHandler(
   extensionId: string,
   handler: ExtensionEventHandler['handler'],
@@ -142,13 +154,12 @@ async function runExtensionHandler(
   if (contextFactory && payload.userId) {
     try {
       // Dynamic import to avoid circular deps at module load time
-      const { createClient } = await import('@/lib/supabase/server')
-      const supabase = await createClient()
+      const { createServiceClientNoCookies } = await import('@/lib/auth/api-keys')
       const companyId = payload.companyId ?? payload.userId // fallback for legacy events
-      ctx = contextFactory(supabase, payload.userId, companyId, extensionId)
+      ctx = contextFactory(createServiceClientNoCookies(), payload.userId, companyId, extensionId)
     } catch {
-      // Context creation failed (e.g. no request cookies in cron jobs).
-      // Handler still gets called: ctx will be undefined.
+      // Context creation failed (e.g. no service-role configuration). The
+      // handler still gets called: ctx will be undefined.
     }
   }
   return handler(payload, ctx)

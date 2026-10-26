@@ -9,6 +9,17 @@
 export type CloudProviderId = 'google_drive' | 'dropbox'
 
 /**
+ * Why a connection needs reconnecting.
+ * - `token_revoked`: the provider rejected the refresh token (400
+ *   invalid_grant): it expired or the user removed the app's access.
+ * - `missing_scope`: the grant works but lacks the storage scope, because
+ *   Google's consent screen lets a person untick Drive and still approve.
+ * Records flagged before this field existed carry none: read as
+ * `token_revoked`, the only reason that existed then.
+ */
+export type CloudReauthReason = 'token_revoked' | 'missing_scope'
+
+/**
  * Connection stored per company + provider in extension_data (key
  * `google_drive_connection` / `dropbox_connection`). The refresh token is
  * AES-256-GCM encrypted (see lib/crypto.ts): never store it in plaintext.
@@ -31,14 +42,17 @@ export interface CloudConnection {
    */
   company_folder_path?: string | null
   /**
-   * Connection health. `needs_reauth` means the provider rejected the refresh
-   * token permanently (400 invalid_grant): the cron skips the connection
-   * and the UI asks the user to reconnect. Absent/undefined means active
+   * Connection health. `needs_reauth` means retrying can never succeed: the
+   * provider rejected the refresh token permanently (400 invalid_grant), or
+   * the grant lacks the storage scope. The cron skips the connection and the
+   * UI asks the user to reconnect. Absent/undefined means active
    * (records created before this field existed).
    */
   status?: 'active' | 'needs_reauth'
   /** ISO timestamp of when the dead refresh token was detected. */
   needs_reauth_at?: string
+  /** Set together with `status: 'needs_reauth'`. */
+  needs_reauth_reason?: CloudReauthReason
 }
 
 /**
@@ -148,8 +162,10 @@ export interface CloudProviderStatus {
    */
   configured: boolean
   connected: boolean
-  /** True when the stored refresh token is dead and the user must reconnect. */
+  /** True when the stored grant cannot work and the user must reconnect. */
   needs_reauth: boolean
+  /** Why, when `needs_reauth`; null otherwise. */
+  reauth_reason: CloudReauthReason | null
   account_email: string | null
   connected_at: string | null
   last_sync: CloudLastSync | null

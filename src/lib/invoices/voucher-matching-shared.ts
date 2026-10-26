@@ -14,6 +14,7 @@ import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-l
 import { documentCurrency, ledgerLineSideAmountIn } from '@/lib/bookkeeping/ledger-line-amount'
 import type { Logger } from '@/lib/logger'
 import { formatAmount as formatNumber } from '@/lib/utils'
+import type { VoucherNumber } from './voucher-label'
 import {
   CONFIDENCE,
   amountsMatchExact,
@@ -192,6 +193,13 @@ export interface SettlementVoucherSearch {
   windowDays: number
   /** False where the link refuses the SEK-booked fallback for this invoice. */
   sekBookedAllowed: boolean
+  /**
+   * A voucher a person named by its number in the picker's search. It is
+   * read at any date, since a verifikat that clears an invoice can be booked
+   * long after the due date (a konstaterad kundförlust at the year end, crm#1434),
+   * and its settlement side is read in full, without the 19xx amount band.
+   */
+  voucher?: VoucherNumber
   log: Logger
   logContext: Record<string, unknown>
 }
@@ -240,15 +248,20 @@ export async function collectSettlementVouchers(
         'id, voucher_series, voucher_number, entry_date, description, status, source_type, fiscal_period_id, company_id',
       lineColumns:
         'id, journal_entry_id, account_number, debit_amount, credit_amount, currency, amount_in_currency',
-      filterEntries: (q: EntryLinesQuery) =>
-        q
-          .eq('company_id', search.companyId)
-          .eq('status', 'posted')
+      filterEntries: (q: EntryLinesQuery) => {
+        const posted = q.eq('company_id', search.companyId).eq('status', 'posted')
+        const named = search.voucher
+        if (named) {
+          const byNumber = posted.eq('voucher_number', named.number)
+          return named.series === null ? byNumber : byNumber.eq('voucher_series', named.series)
+        }
+        return posted
           .gte('entry_date', dateFrom.toISOString().slice(0, 10))
-          .lte('entry_date', dateTo.toISOString().slice(0, 10)),
+          .lte('entry_date', dateTo.toISOString().slice(0, 10))
+      },
       filterLines: (q: EntryLinesQuery) => {
         const scoped = q.like('account_number', `${side.accountPrefix}%`).gt(amountColumn, 0)
-        if (!side.bankSide) return scoped
+        if (!side.bankSide || search.voucher) return scoped
         if (isForeignInvoice) return scoped.eq('currency', invoiceCurrency)
         const band = candidateAmountBand(remainingAmount, invoice.total)
         return scoped.gte(amountColumn, band.floor).lte(amountColumn, band.ceil)
@@ -309,6 +322,65 @@ export async function collectSettlementVouchers(
     }
   }
   return byEntry
+}
+
+/** A payment row that already points at a candidate voucher, on either side
+ *  (invoice_payments or supplier_invoice_payments), keyed by its invoice. */
+export interface VoucherPaymentUse {
+  invoiceId: string
+  amount: number | string | null
+  currency: string | null
+}
+
+/**
+ * What a candidate voucher can still settle for `invoiceId`, as the link RPCs
+ * count it on both sides (20261011153000 supplier, 20261026007000 customer):
+ * its settlement side less every payment row that points at it for ANOTHER
+ * invoice. Null when it is no candidate at all: already linked to this
+ * invoice, carrying a row in another currency (the used part is unreadable),
+ * read through the SEK-booked fallback while another invoice has a row on it
+ * (that fallback reads the voucher as this invoice's whole remainder), or
+ * nothing left.
+ */
+export function voucherCapacity(
+  voucher: Pick<SettlementVoucher, 'amount' | 'sekBooked'>,
+  rows: readonly VoucherPaymentUse[],
+  invoiceId: string,
+  invoiceCurrency: string,
+): { left: number; used: number } | null {
+  if (rows.some((r) => r.invoiceId === invoiceId)) return null
+  if (voucher.sekBooked && rows.length > 0) return null
+  if (rows.some((r) => (r.currency ?? 'SEK') !== invoiceCurrency)) return null
+  const used = roundOre(rows.reduce((sum, r) => sum + (Number(r.amount) || 0), 0))
+  const left = roundOre(voucher.amount - used)
+  return left > AMOUNT_TOLERANCE ? { left, used } : null
+}
+
+/** What a candidate tells the picker about the share a link may state. */
+export interface VoucherShareFields {
+  /** Set when the voucher has MORE left than the invoice needs: the share to
+   *  state as `amount` on the link (the invoice's remainder). Such a voucher
+   *  is refused without a stated share, since it settles other debts too. */
+  link_amount?: number
+  /** Set when payment rows for other invoices already use part of the
+   *  voucher: the candidate's amount is what is left after them. */
+  already_linked?: number
+  /** Set on the SEK-booked fallback: the link settles the invoice's whole
+   *  remainder and refuses a stated share (the kursdifferens would be a guess). */
+  whole_remainder?: true
+}
+
+export function voucherShareFields(
+  left: number,
+  used: number,
+  remainingAmount: number,
+  sekBooked: boolean,
+): VoucherShareFields {
+  if (sekBooked) return { whole_remainder: true }
+  return {
+    ...(left > remainingAmount + AMOUNT_TOLERANCE ? { link_amount: roundOre(remainingAmount) } : {}),
+    ...(used > AMOUNT_TOLERANCE ? { already_linked: used } : {}),
+  }
 }
 
 /**
@@ -486,6 +558,34 @@ export function scoreVoucherCandidate(
     confidence = Math.min(CONFIDENCE.OCR_REFERENCE_MATCH - 0.001, confidence + DATE_PROXIMITY_BUMP)
   }
   return { confidence, match_reason: reason }
+}
+
+/** Confidence of a voucher offered only because a person named it by its
+ *  number: nothing else ties it to the invoice, so it is a "weak match". */
+const NAMED_VOUCHER_CONFIDENCE = 0.5
+
+/**
+ * Score a voucher a person named by its number (SettlementVoucherSearch.voucher).
+ * The ordinary scorer decides first; a voucher it would drop on the amount
+ * alone (a part payment, or a share without includeShared) is still offered,
+ * because the person asked for that very voucher and the link validator makes
+ * the final call. The label guard still holds: a settlement line stamped with
+ * another document's currency belongs to another invoice.
+ */
+export function scoreNamedVoucherCandidate(
+  entry: VoucherRow,
+  amount: number,
+  lineCurrency: string | null,
+  ctx: VoucherScoreContext,
+  shareable = true,
+): { confidence: number; match_reason: string } | null {
+  const scored = scoreVoucherCandidate(entry, amount, lineCurrency, ctx, shareable)
+  if (scored) return scored
+  if ((lineCurrency ?? ctx.currency) !== ctx.currency) return null
+  return {
+    confidence: NAMED_VOUCHER_CONFIDENCE,
+    match_reason: `Sökt på verifikationsnumret; verifikationen har ${formatNumber(amount)} ${ctx.currency} kvar att koppla`,
+  }
 }
 
 /** The reason suffix of a voucher that settles through the SEK-booked fallback. */

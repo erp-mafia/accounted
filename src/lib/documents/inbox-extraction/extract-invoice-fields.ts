@@ -18,6 +18,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { InvoiceExtractionResult } from '@/types'
 import { getAiService, readAiConfig, extractJsonObject } from '@/lib/ai'
 import { orgNumberKey } from '@/lib/invariants/org-number'
+import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
 import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
 import { fitImageForModel, HEIC_MIME_TYPES } from '@/lib/documents/read/image'
@@ -255,6 +256,19 @@ const digitsOf = (value: string | null | undefined): string => (value ?? '').rep
 const toOrg10 = (value: string | null | undefined): string => orgNumberKey(value) ?? ''
 
 /**
+ * A VAT number the model read that is not one never reaches the reading
+ * (crm#1411): a supplier's VAT-code label ("SESL000D" on a US seller's
+ * invoice) came back as supplier.vatNumber, and its SE prefix made the seller
+ * Swedish. An EU-prefixed value whose national part is not that state's
+ * number is cleared; the seller's country then comes from the IBAN, the
+ * organisationsnummer or the address (lib/vat/seller-country.ts).
+ */
+export function dropMalformedVatNumber(data: InvoiceExtractionResult): InvoiceExtractionResult {
+  if (!isMalformedEuVatNumber(data.supplier.vatNumber)) return data
+  return { ...data, supplier: { ...data.supplier, vatNumber: null } }
+}
+
+/**
  * Never present the receiving company as its own supplier.
  *
  * Documents like bank agreements and bankintyg print the CUSTOMER's company
@@ -427,7 +441,7 @@ Rules:
 - servicePeriodStart/servicePeriodEnd: only when the document explicitly states the period the charge covers ("Avtalsperiod", "Period", "Försäkringstid", "Subscription period", coverage dates). Never infer from invoice/due dates. Month-only boundaries map to the first resp. last day of the month.
 - Bankgiro/Plusgiro: only set when the document is for a Swedish supplier on a Swedish bank rail. Do not invent.
 - Org.nr: only set when it is an actual Swedish organisation number (10 digits, Luhn-valid). For US/EU companies leave null even if they list an EIN/VAT number.
-- VAT number: include the country prefix.
+- VAT number: include the country prefix. Only a VAT registration number in its country's format (EU: the country code and the national number; Swedish: SE and 12 digits ending in 01). A tax code or label printed beside the VAT line ("VAT Code: SESL000D") is not a VAT number: leave null, and never take the seller's country from it.
 - Numbers: parse with the document's locale (Swedish "1 234,56" = 1234.56; English "$1,234.56" = 1234.56). Output as plain JSON numbers.
 - If a field is missing or unreadable, set it to null. Never invent values.
 - lineItems: include every line. Empty array is fine if the document has no itemised lines.
@@ -773,9 +787,11 @@ export async function extractInvoiceFields(
     return {
       // accountSuggestion is null at this point, enforced by the schema's
       // .transform, so no post-validation coercion is needed.
-      data: stripOwnCompanyAsSupplier(
-        promoteSingleProminentAmount({ ...validated, confidence: 1 }),
-        input.ownCompany
+      data: dropMalformedVatNumber(
+        stripOwnCompanyAsSupplier(
+          promoteSingleProminentAmount({ ...validated, confidence: 1 }),
+          input.ownCompany
+        )
       ),
       rawText,
       model,

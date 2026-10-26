@@ -1,14 +1,8 @@
 'use client'
 
 import { useEffect } from 'react'
-import posthog from 'posthog-js'
-import { initAnalytics } from '@/lib/analytics/client'
-import {
-  buildPersonProperties,
-  buildGroupProperties,
-  type AnalyticsCompanyInput,
-  type AnalyticsUserInput,
-} from '@/lib/analytics/properties'
+import { identifySignedInPerson } from '@/lib/analytics/identify'
+import type { AnalyticsCompanyInput, AnalyticsUserInput } from '@/lib/analytics/properties'
 
 /**
  * Starts PostHog for a signed-in person who has not switched analytics off,
@@ -20,12 +14,8 @@ import {
  * from app/(onboarding)/layout.tsx without a company, so the company journey
  * and the other signed-in screens before the dashboard are measured too.
  * With analytics switched off (`analyticsConsent` false) this does nothing
- * at all: PostHog is never started (lib/analytics/client.ts).
- *
- * identify() runs on every dashboard load rather than only at login, per
- * PostHog's guidance: with `persistence: 'memory'` nothing survives a hard
- * reload, so re-identifying on each load is what keeps person-level analytics
- * correct without storing an identity on the device.
+ * at all: PostHog is never started. The start, identify and group order lives
+ * in lib/analytics/identify.ts, where it is tested.
  *
  * A useEffect is correct here despite the general rule against it: this
  * synchronises with an external, non-React system (the PostHog SDK).
@@ -64,30 +54,23 @@ export default function AnalyticsIdentify({
   const capabilityKey = capabilities ? [...capabilities].sort().join(',') : ''
 
   useEffect(() => {
-    if (!analyticsConsent) return
-    if (!initAnalytics()) return
-
-    // Verified identity first: it tells PostHog Support this browser really
-    // is `userId`, so a support ticket follows the person across devices
-    // instead of being scoped to one browser session. Without the secret key
-    // this is skipped and tickets fall back to email recovery.
-    if (identityHash) posthog.setIdentity(userId, identityHash)
-
-    posthog.identify(userId, buildPersonProperties({ userId, email, fullName, role }))
-    if (!companyId || !companyName) return
-    posthog.group(
-      'company',
-      companyId,
-      buildGroupProperties({
-        id: companyId,
-        name: companyName,
-        entityType,
-        accountingFramework,
-        paysSalaries,
-        trialEndsAt,
-        capabilities: capabilityKey ? capabilityKey.split(',') : undefined,
-      })
-    )
+    identifySignedInPerson({
+      analyticsOn: analyticsConsent,
+      user: { userId, email, fullName, role },
+      identityHash,
+      company:
+        companyId && companyName
+          ? {
+              id: companyId,
+              name: companyName,
+              entityType,
+              accountingFramework,
+              paysSalaries,
+              trialEndsAt,
+              capabilities: capabilityKey ? capabilityKey.split(',') : undefined,
+            }
+          : undefined,
+    })
   }, [
     analyticsConsent,
     userId,

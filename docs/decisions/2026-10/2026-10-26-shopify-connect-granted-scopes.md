@@ -1,0 +1,1 @@
+[2026-10-26] Shopify connect reads the store's granted scopes (currentAppInstallation.accessScopes, failure path only) to tell 'read_orders not approved on the store' from 'protected customer data' instead of trusting the token response's scope field, which Shopify documents as a readback of the version's declared scopes, not the store's grant (PH 161).

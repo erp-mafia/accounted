@@ -70,7 +70,12 @@ import {
   type BookingDuplicateExclusions,
   type BookingTarget,
 } from '@/lib/transactions/booking-duplicate-detection'
-import { runBookingDuplicateGuard } from '@/lib/transactions/booking-duplicate-guard'
+import { runBookingDuplicateGuard, runSkattekontoTaxGuard } from '@/lib/transactions/booking-duplicate-guard'
+import {
+  isSkattekontoTaxDouble,
+  skattekontoTaxDoubleAgentMessage,
+  type BookingCounterLine,
+} from '@/lib/transactions/skattekonto-tax-double'
 import { assertTransactionBookable } from '@/lib/transactions/is-booked'
 import { OPEN_INVOICES } from '@/lib/composition/open-invoices'
 import { invoiceMatchSide } from '@/lib/transactions/invoice-match-side'
@@ -285,11 +290,21 @@ function formatProseAmount(n: number): string {
  *   - unverified with a kr figure (ledger-voucher path): the leg's own SEK
  *     amount is real, but no comparison against the TARGET was possible
  *     because the target is foreign without a rate. Say so.
+ * A covering samlingsverifikat (issue #101) is not the same movement, so it
+ * gets its own claim: what it books on the account and how much of that no
+ * transaction is linked to.
  */
 export function buildDuplicateBookingClaim(
-  dup: Pick<BookedDuplicateCandidate, 'amount' | 'currency' | 'amount_in_currency' | 'amount_verified'>,
+  dup: Pick<BookedDuplicateCandidate, 'amount' | 'currency' | 'amount_in_currency' | 'amount_verified'> &
+    Partial<Pick<BookedDuplicateCandidate, 'covering' | 'account_number'>>,
   transactionCurrency: string | null | undefined,
 ): string {
+  if (dup.covering) {
+    return (
+      `är ett samlingsverifikat som bokför ${formatProseAmount(dup.covering.booked)} kr på ${dup.account_number ?? 'kontot'} ` +
+      `för en period som omfattar transaktionens dag, och ${formatProseAmount(dup.covering.unlinked)} kr av det är inte kopplat till någon transaktion`
+    )
+  }
   return dup.amount == null
     ? `bokför redan samma belopp (${formatProseAmount(dup.amount_in_currency ?? 0)} ${dup.currency}) på bankkontot, ` +
       `men värdet i kronor kan inte fastställas eftersom växelkurs saknas`
@@ -705,6 +720,10 @@ export async function categorizeTransaction(
   // _DUPLICATE). `force` bound to the reviewed candidate books anyway; the
   // agent doors' allow_duplicate does too without naming it. Either bypass
   // leaves a behandlingshistorik record on a live call (BFNAR 2013:2 p. 9.16).
+  // The skattekonto half needs the kontering and runs after the mapping
+  // below; a force naming its candidate is bound there (deferredForce).
+  let deferredForce: string | null = null
+  let forcedOverBankCandidate = false
   if (wouldBook) {
     if (input.allow_duplicate === true) {
       if (!dryRun) checks.push(duplicateCheck(await recordAllowedDuplicate(supabase, companyId, userId, target, options.exclude, txLog)))
@@ -713,9 +732,12 @@ export async function categorizeTransaction(
         exclude: options.exclude,
         recordDismissal: !dryRun,
         via: options.forceVia,
+        deferForceToSkattekonto: true,
       })
       if (!verdict.ok) return refuseFor(verdict.code, verdict.details as Record<string, unknown>)
-      checks.push(duplicateCheck(verdict.verdict))
+      if (verdict.deferredForce) deferredForce = verdict.deferredForce
+      else checks.push(duplicateCheck(verdict.verdict))
+      forcedOverBankCandidate = verdict.verdict.kind === 'forced'
     }
   }
 
@@ -821,6 +843,30 @@ export async function categorizeTransaction(
     })
   }
   checks.push(passed('chart'))
+
+  // The booking guard's skattekonto half (issue #50): a tax account booked
+  // straight from the bank when the skattekonto booked the same tax this
+  // month. It judges the kontering, so it runs here; a force already bound
+  // to a bank-line candidate covers the booking.
+  if (wouldBook && !forcedOverBankCandidate) {
+    const tax = await runSkattekontoTaxGuard(
+      supabase,
+      companyId,
+      userId,
+      { ...target, counter_lines: konteringLines(transaction, mappingResult) },
+      input,
+      txLog,
+      { deferredForce, exclude: options.exclude, recordDismissal: !dryRun, via: options.forceVia },
+    )
+    if (!tax.ok) return refuseFor(tax.code, tax.details as Record<string, unknown>)
+    if (tax.verdict) {
+      // One duplicate check per booking: this verdict replaces the bank-line
+      // halves' allow_duplicate record, or is the deferred force's.
+      const at = checks.findIndex((c) => c.id === 'duplicate')
+      if (at >= 0) checks[at] = duplicateCheck(tax.verdict)
+      else checks.push(duplicateCheck(tax.verdict))
+    }
+  }
 
   // Invoice-match intercept: a plain 244x / 151x categorization an open
   // supplier / customer invoice covers is refused with the candidates, so the
@@ -1125,6 +1171,23 @@ function missingSekRefusal(err: TransactionMissingSekValueError, transaction: Tr
 }
 
 /**
+ * The lines the booking would post, ledger sign, for the guard's skattekonto
+ * half. Undefined when they cannot be built (a foreign row with no SEK
+ * value: the booking itself refuses that later), which leaves the half out.
+ */
+function konteringLines(transaction: Transaction, mappingResult: MappingResult): BookingCounterLine[] | undefined {
+  try {
+    return buildTransactionEntryLines(transaction, mappingResult).map((line) => ({
+      account_number: line.account_number,
+      // Netted to the öre by the guard (directTaxCounterLines).
+      net: Number(line.debit_amount || 0) - Number(line.credit_amount || 0),
+    }))
+  } catch {
+    return undefined
+  }
+}
+
+/**
  * allow_duplicate bypassed the guard without naming the candidate. Booking
  * over a possible double-booking still has to leave a durable
  * behandlingshistorik record (BFNAR 2013:2 p. 9.16): re-detect to capture the
@@ -1234,11 +1297,25 @@ export function agentDuplicateMessage(
   candidate: BookedDuplicateCandidate,
   transactionCurrency: string | null | undefined,
 ): string {
+  // Issue #50: the tax is already booked through the skattekonto; the fix
+  // is booking the bank line on the skattekonto account, not linking it.
+  if (isSkattekontoTaxDouble(candidate)) return skattekontoTaxDoubleAgentMessage(candidate)
   const voucher = candidate.voucher_label ? `verifikat ${candidate.voucher_label}` : 'en befintlig verifikation'
   // Shared three-branch claim (see buildDuplicateBookingClaim above): SEK
   // figure when verified, foreign amount when the sibling has no SEK value,
   // explicit "could not compare" otherwise.
   const claim = buildDuplicateBookingClaim(candidate, transactionCurrency)
+  if (candidate.covering) {
+    // Issue #101: the row's day is already in a samlingsverifikat. Linking
+    // (gnubok_reconcile_match) books the row through it; ignoring
+    // (gnubok_ignore_transaction) leaves it out of the books.
+    return (
+      `Möjlig dubblettbokföring: ${voucher} (${candidate.entry_date}) ${claim}. ` +
+      'Transaktionen ingår troligen redan i det samlingsverifikatet: länka den till verifikationen ' +
+      '(gnubok_reconcile_match) eller ignorera den (gnubok_ignore_transaction) i stället för att bokföra den igen. ' +
+      'Om den verkligen inte ingår, kör om med allow_duplicate=true.'
+    )
+  }
   return (
     `Möjlig dubblettbokföring: ${voucher} (${candidate.entry_date}) ${claim}. ` +
     'Den här affärshändelsen ser redan ut att vara bokförd: länka transaktionen till den befintliga ' +

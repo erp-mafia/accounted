@@ -44,11 +44,13 @@ import { executeMigration } from './lib/migration-orchestrator'
 import { fiscalYearScopeFromImports, type FiscalYearScope } from './lib/invoice-scope'
 import {
   FortnoxDocumentScopesRequiredError,
+  ProviderConnectionRefusedError,
   importProviderDocuments,
 } from './lib/import-documents'
 import {
   documentImportRunStatus,
   readDocumentImportRun,
+  recordDocumentImportNeedsReconnect,
   recordDocumentImportSlice,
 } from './lib/document-import-run'
 import { fetchFortnoxAssetPreview } from './lib/import-assets'
@@ -83,7 +85,7 @@ import {
   requireFlowInitiator,
   FLOW_INITIATOR_MISMATCH_MESSAGE,
 } from '@/lib/auth/oauth-flow-binding'
-import { classifyProviderError } from '@/lib/providers/with-provider-call'
+import { classifyProviderError, ProviderCallError } from '@/lib/providers/with-provider-call'
 import { getProviderResourceForbiddenMessage } from '@/lib/errors/get-error-message'
 import { FortnoxApiError, fortnoxErrorMessage } from '@/lib/providers/fortnox/client'
 import { createLogger } from '@/lib/logger'
@@ -2110,6 +2112,53 @@ export const arcimMigrationExtension: Extension = {
           }
           return NextResponse.json({ success: true, dryRun, result })
         } catch (error) {
+          // The provider refused the connection itself: the token is dead (a
+          // 401 a real refresh could not outlive, or a grant the refresh was
+          // refused), or the files need a permission it lacks. That is the
+          // customer's next step, not our fault: one warning, the run kept as
+          // "needs reconnect" for the connections list, and a 4xx the page
+          // answers with a reconnect instead of retrying (B11).
+          const reconnectCode =
+            error instanceof ProviderConnectionRefusedError
+              ? error.code
+              : error instanceof ProviderCallError && error.code === 'PROVIDER_AUTH_EXPIRED'
+                ? error.code
+                : error instanceof FortnoxDocumentScopesRequiredError && FORTNOX_DOCUMENT_SCOPES_APPROVED
+                  ? error.code
+                  : null
+          if (reconnectCode) {
+            log.warn('arcim import-documents stopped: the provider refused the connection', {
+              code: reconnectCode,
+              dryRun,
+              cursor,
+              providerStatus:
+                error instanceof ProviderConnectionRefusedError ? error.providerStatus : undefined,
+            })
+            if (!dryRun && ctx.settings) {
+              const resolvedProvider =
+                error instanceof ProviderConnectionRefusedError
+                  ? error.provider
+                  : error instanceof ProviderCallError
+                    ? error.provider
+                    : 'fortnox'
+              await recordDocumentImportNeedsReconnect(ctx.settings, resolvedProvider, cursor).catch(
+                (recordError) =>
+                  log.warn('arcim import-documents run summary not stored', {
+                    reason: recordError instanceof Error ? recordError.message : 'unknown',
+                  }),
+              )
+            }
+            return errorResponseFromCode(reconnectCode, moduleLog, {
+              details: { reason: error instanceof Error ? error.message : 'unknown' },
+            })
+          }
+          // A refresh that failed for another reason (the provider blinked, a
+          // rate limit, a missing licence) answers with its own code, so the
+          // page retries a 5xx or 429 slice and states the rest.
+          if (error instanceof ProviderCallError) {
+            log.warn('arcim import-documents could not refresh the connection', { code: error.code, cursor })
+            return providerFailureResponse(error, 'PROVIDER_IMPORT_DOCUMENTS_FAILED')
+          }
           // "400 Bad Request" alone told us nothing when a live Fortnox
           // discovery failed (2026-08-20): keep status, Fortnox's own
           // message and a body excerpt in the log, and hand the message

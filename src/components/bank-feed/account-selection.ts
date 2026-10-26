@@ -4,7 +4,8 @@
  * (PRIV) off; an account the company already booked keeps its ledger account
  * and cannot be moved here (the feed resumes where it stopped), a new one
  * gets the server's suggestion with the chart's bank accounts as the
- * alternatives.
+ * alternatives. A ledger account is changed afterwards on the account's own
+ * row under the connection (BankAccountLedgerRows, crm#1387).
  */
 
 import type { AccountSelection, PolledAccount } from './open-payments-client'

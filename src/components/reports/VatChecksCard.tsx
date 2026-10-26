@@ -27,6 +27,14 @@ import {
 } from 'lucide-react'
 import type { VatDeclarationCheck } from '@/lib/reports/vat-declaration-checks'
 import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
+import type { RcBasisGapWithDefault } from '@/lib/vat/rc-basis-supplier-default'
+import {
+  coerceSupplyType,
+  rcGapClassification,
+  type RcGapClassification,
+  type RcSupplierType,
+  type RcSupplyType,
+} from '@/lib/vat/rc-basis-gap-classification'
 import {
   isReviewableVatCheck,
   unreviewedVatChecks,
@@ -40,12 +48,9 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { cn } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
-type SupplierType = 'eu_business' | 'non_eu_business' | 'swedish_business'
-type SupplyType = 'service' | 'goods'
-interface GapClassification {
-  supplierType: SupplierType
-  supplyType: SupplyType
-}
+type SupplierType = RcSupplierType
+type SupplyType = RcSupplyType
+type GapClassification = RcGapClassification
 
 const SUPPLIER_LABELS: Record<SupplierType, string> = {
   eu_business: 'EU-leverantör',
@@ -70,7 +75,7 @@ const SUPPLIER_ITEMS = [
 
 // Non-EU + goods is import VAT (ruta 50/60-62), not reverse charge: the
 // goods choice disappears entirely for non-EU suppliers.
-const supplyItemsFor = (supplierType: SupplierType) =>
+const supplyItemsFor = (supplierType: SupplierType | null) =>
   supplierType === 'non_eu_business'
     ? [{ id: 'service', label: 'Tjänst' }]
     : [
@@ -143,16 +148,18 @@ export function VatChecksCard({
   const gapsKey = `${periodType}:${year}:${period}:${fiscalPeriodId ?? ''}`
   const [gapsResult, setGapsResult] = useState<{
     key: string
-    gaps: RcBasisGap[]
+    gaps: RcBasisGapWithDefault[]
     failed?: boolean
   } | null>(null)
   const [removedIds, setRemovedIds] = useState<Set<string>>(new Set())
   const [showAll, setShowAll] = useState(false)
   const [expandedId, setExpandedId] = useState<string | null>(null)
-  // Shared classification applied by "Korrigera alla" and any row without an
-  // override. Visible in the toolbar so a bulk fix never runs on a hidden guess.
+  // The toolbar's classification: its supply type applies to every row
+  // without its own, its supplier type to every row without its own and
+  // without one preselected from the supplier's country. It starts empty:
+  // a row nothing is known about is asked, never guessed as EU (crm#1431).
   const [sharedSel, setSharedSel] = useState<GapClassification>({
-    supplierType: 'eu_business',
+    supplierType: null,
     supplyType: 'service',
   })
   const [overrides, setOverrides] = useState<Record<string, GapClassification>>({})
@@ -224,9 +231,27 @@ export function VatChecksCard({
   const showGapWorklist = hasRcBasisGaps || gaps.length > 0
 
   const busy = fixingId !== null || bulkProgress !== null
+  const preselectedVerifikatCount = new Set(gaps.filter((g) => g.supplierDefault).map((g) => g.entryId)).size
 
-  const classificationFor = (gap: RcBasisGap): GapClassification =>
-    overrides[rowKey(gap)] ?? sharedSel
+  const classificationFor = (gap: RcBasisGapWithDefault): GapClassification =>
+    rcGapClassification(overrides[rowKey(gap)], gap.supplierDefault?.supplierType, sharedSel)
+
+  /** The rows of the verifikat that have no supplier type yet: Korrigera asks for one first. */
+  const unclassifiedRowsOf = (entryId: string) =>
+    gaps.filter((g) => g.entryId === entryId && classificationFor(g).supplierType === null)
+
+  /**
+   * A supplier type was picked, for one verifikat or (no id) in the toolbar
+   * for every row without one: its "choose one first" notes have done their job.
+   */
+  const clearChooseFirstErrors = (entryId?: string) => {
+    const chooseFirst = t('vat_basis_choose_supplier_first')
+    setRowErrors((prev) =>
+      Object.fromEntries(
+        Object.entries(prev).filter(([id, message]) => message !== chooseFirst || (entryId !== undefined && id !== entryId)),
+      ),
+    )
+  }
 
   // One korrigering per verifikat, each momssats with its own row's
   // classification. `resolved`: the verifikat has nothing left to correct
@@ -234,7 +259,7 @@ export function VatChecksCard({
   // included, or the kontoplan changed), so the row goes and the list is read
   // again rather than kept as a failure.
   const postFix = async (
-    gap: RcBasisGap,
+    gap: RcBasisGapWithDefault,
   ): Promise<
     { ok: true; correctedId?: string } | { ok: false; resolved: boolean; message: string }
   > => {
@@ -266,7 +291,13 @@ export function VatChecksCard({
     }
   }
 
-  const handleFixOne = async (gap: RcBasisGap) => {
+  const handleFixOne = async (gap: RcBasisGapWithDefault) => {
+    const unclassified = unclassifiedRowsOf(gap.entryId)
+    if (unclassified.length > 0) {
+      setExpandedId(rowKey(unclassified[0]))
+      setRowErrors((prev) => ({ ...prev, [gap.entryId]: t('vat_basis_choose_supplier_first') }))
+      return
+    }
     setFixingId(gap.entryId)
     setRowErrors((prev) => {
       const next = { ...prev }
@@ -308,16 +339,39 @@ export function VatChecksCard({
     // verifikat lacks, so a second row for the same verifikat has nothing left.
     const targets = [...new Map(gaps.map((g) => [g.entryId, g])).values()]
     if (targets.length === 0) return
-    const overriddenCount = gaps.filter((g) => overrides[rowKey(g)]).length
+    // Nothing is posted while a row has no supplier type: each such row says
+    // so inline, and the toolbar or the row's own picker answers it.
+    const unclassifiedIds = new Set(
+      gaps.filter((g) => classificationFor(g).supplierType === null).map((g) => g.entryId),
+    )
+    if (unclassifiedIds.size > 0) {
+      setRowErrors((prev) => {
+        const next = { ...prev }
+        for (const id of unclassifiedIds) next[id] = t('vat_basis_choose_supplier_first')
+        return next
+      })
+      toast({ title: t('vat_basis_fix_all_unclassified', { count: unclassifiedIds.size }) })
+      return
+    }
+    const ownCount = gaps.filter((g) => overrides[rowKey(g)]?.supplierType).length
+    const preselectedCount = gaps.filter((g) => !overrides[rowKey(g)]?.supplierType && g.supplierDefault).length
+    const sharedCount = gaps.length - ownCount - preselectedCount
     const ok = await confirm({
       title: `Korrigera ${targets.length} verifikationer?`,
-      description:
-        `Detta skapar ${targets.length} stornon och ${targets.length} nya verifikationer ` +
-        `klassificerade som ${SUPPLIER_LABELS[sharedSel.supplierType].toLowerCase()}, ` +
-        `${SUPPLY_LABELS[sharedSel.supplyType]}.` +
-        (overriddenCount > 0
-          ? ` ${overriddenCount} rader använder sina egna val i stället.`
-          : ' Rader du inte ändrat använder valen ovan.'),
+      description: [
+        t('vat_basis_fix_all_confirm', { count: targets.length }),
+        sharedCount > 0 && sharedSel.supplierType
+          ? t('vat_basis_fix_all_confirm_shared', {
+              count: sharedCount,
+              supplier: SUPPLIER_LABELS[sharedSel.supplierType].toLowerCase(),
+              supply: SUPPLY_LABELS[sharedSel.supplyType],
+            })
+          : null,
+        preselectedCount > 0 ? t('vat_basis_fix_all_confirm_preselected', { count: preselectedCount }) : null,
+        ownCount > 0 ? t('vat_basis_fix_all_confirm_own', { count: ownCount }) : null,
+      ]
+        .filter(Boolean)
+        .join(' '),
       variant: 'warning',
       confirmLabel: 'Korrigera alla',
     })
@@ -606,11 +660,15 @@ export function VatChecksCard({
                         // Non-EU + goods is import VAT, not reverse charge:
                         // coerce back to service so an invalid combo can't
                         // be mass-applied.
-                        supplyType:
-                          supplierType === 'non_eu_business' ? 'service' : prev.supplyType,
+                        supplyType: coerceSupplyType(supplierType, prev.supplyType),
                       }))
+                      clearChooseFirstErrors()
                     }}
-                    triggerLabel={SUPPLIER_LABELS[sharedSel.supplierType]}
+                    triggerLabel={
+                      sharedSel.supplierType
+                        ? SUPPLIER_LABELS[sharedSel.supplierType]
+                        : t('vat_basis_supplier_placeholder')
+                    }
                     ariaLabel="Leverantörstyp"
                     disabled={busy}
                   />
@@ -630,6 +688,11 @@ export function VatChecksCard({
                   </Button>
                 </div>
                 )}
+                {!rcBasisAdvisory && preselectedVerifikatCount > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    {t('vat_basis_preselected_hint', { count: preselectedVerifikatCount, total: verifikatCount })}
+                  </p>
+                )}
 
                 {bulkProgress && (
                   <p role="status" className="text-sm text-muted-foreground">
@@ -644,6 +707,17 @@ export function VatChecksCard({
                 <DataList className="rounded-none border-0 bg-transparent">
                   {visibleGaps.map((gap) => {
                     const sel = classificationFor(gap)
+                    // Why the row's supplier type is what it is, when the
+                    // person did not pick it: read from the supplier, or not
+                    // known at all (the row is then asked).
+                    const supplierNote =
+                      sel.supplierType === null
+                        ? t('vat_basis_supplier_unknown')
+                        : !overrides[rowKey(gap)]?.supplierType && gap.supplierDefault
+                          ? gap.supplierDefault.country
+                            ? t('vat_basis_preselected_from_country', { country: gap.supplierDefault.country })
+                            : t('vat_basis_preselected_from_card')
+                          : null
                     const expanded = expandedId === rowKey(gap)
                     const rowError = rowErrors[gap.entryId]
                     return (
@@ -716,14 +790,16 @@ export function VatChecksCard({
                                     ...prev,
                                     [rowKey(gap)]: {
                                       supplierType,
-                                      supplyType:
-                                        supplierType === 'non_eu_business'
-                                          ? 'service'
-                                          : sel.supplyType,
+                                      supplyType: coerceSupplyType(supplierType, sel.supplyType),
                                     },
                                   }))
+                                  clearChooseFirstErrors(gap.entryId)
                                 }}
-                                triggerLabel={SUPPLIER_LABELS[sel.supplierType]}
+                                triggerLabel={
+                                  sel.supplierType
+                                    ? SUPPLIER_LABELS[sel.supplierType]
+                                    : t('vat_basis_supplier_placeholder')
+                                }
                                 ariaLabel="Leverantörstyp"
                                 disabled={busy}
                               />
@@ -734,7 +810,10 @@ export function VatChecksCard({
                                   setOverrides((prev) => ({
                                     ...prev,
                                     [rowKey(gap)]: {
-                                      ...sel,
+                                      // Only the supply type is the row's own: its
+                                      // supplier type keeps coming from the
+                                      // supplier's country or the toolbar.
+                                      supplierType: prev[rowKey(gap)]?.supplierType ?? null,
                                       supplyType: value as SupplyType,
                                     },
                                   }))
@@ -744,6 +823,9 @@ export function VatChecksCard({
                                 disabled={busy}
                               />
                             </div>
+                            )}
+                            {!rcBasisAdvisory && supplierNote && (
+                              <p className="text-xs text-muted-foreground">{supplierNote}</p>
                             )}
                           </div>
                         }

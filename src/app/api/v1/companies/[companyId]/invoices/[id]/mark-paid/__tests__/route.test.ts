@@ -56,6 +56,11 @@ vi.mock('@/lib/bookkeeping/cancel-orphaned-entry', () => ({
   cancelOrphanedPaymentEntry: mockCancelOrphan,
 }))
 
+const mockRefundCreditNote = vi.fn()
+vi.mock('@/lib/invoices/refund-credit-note', () => ({
+  refundCreditNote: (...args: unknown[]) => mockRefundCreditNote(...args),
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import {
   createInvoicePaymentJournalEntry as mockedPayment,
@@ -651,28 +656,73 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/mark-paid', () => {
     expect(mockPayment).not.toHaveBeenCalled()
   })
 
-  it('rejects credit notes', async () => {
-    mockServiceClient.mockReturnValue(
-      createTableMockSupabase({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-        invoices: {
-          data: { ...SENT_INVOICE, credited_invoice_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' },
-          error: null,
-        },
-      }).supabase,
-    )
+  // A kreditfaktura: the door records the refund of its credit instead.
+  describe('credit notes', () => {
+    const CREDIT_NOTE = { ...SENT_INVOICE, total: -12500, credited_invoice_id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd' }
+    const refunded = {
+      ok: true,
+      amount: 12500,
+      owedAfter: 0,
+      lines: [
+        { account_number: '1510', debit_amount: 12500, credit_amount: 0 },
+        { account_number: '1930', debit_amount: 0, credit_amount: 12500 },
+      ],
+      paidAmount: -12500,
+      refundedAt: '2026-05-12T12:00:00Z',
+    }
 
-    const res = await markPaid(
-      makeRequest(
-        `https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`,
-      ),
-      detailParams(COMPANY_ID, INVOICE_ID),
-    )
+    beforeEach(() => {
+      mockServiceClient.mockReturnValue(
+        createTableMockSupabase({
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: { data: CREDIT_NOTE, error: null },
+        }).supabase,
+      )
+    })
 
-    expect(res.status).toBe(400)
-    const body = await res.json()
-    expect(body.error.code).toBe('VALIDATION_ERROR')
-    expect(body.error.details.field).toBe('credited_invoice_id')
+    it('records the refund and answers with it', async () => {
+      mockRefundCreditNote.mockResolvedValue({ ...refunded, dryRun: false, journalEntryId: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee' })
+
+      const res = await markPaid(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`, { payment_date: '2026-05-12' }),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data).toMatchObject({ journal_entry_id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee', refunded_amount: 12500 })
+      expect(mockRefundCreditNote.mock.calls[0][3]).toMatchObject({ refundDate: '2026-05-12', settlementAccountNumber: '1930', dryRun: false })
+      expect(mockPayment).not.toHaveBeenCalled()
+    })
+
+    it('previews the refund on a dry run', async () => {
+      mockRefundCreditNote.mockResolvedValue({ ...refunded, dryRun: true, journalEntryId: null })
+
+      const res = await markPaid(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid?dry_run=true`),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+
+      expect(res.status).toBe(200)
+      const body = await res.json()
+      expect(body.data.dry_run).toBe(true)
+      expect(body.data.preview).toMatchObject({ refunded_amount: 12500, paid_amount: -12500, would_create_journal_entry: true })
+      expect(mockRefundCreditNote.mock.calls[0][3]).toMatchObject({ dryRun: true })
+    })
+
+    it('answers a refused refund with its code', async () => {
+      mockRefundCreditNote.mockResolvedValue({ ok: false, code: 'CREDIT_NOTE_REFUND_UNSUPPORTED', details: { reason: 'rot_rut' } })
+
+      const res = await markPaid(
+        makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices/${INVOICE_ID}/mark-paid`),
+        detailParams(COMPANY_ID, INVOICE_ID),
+      )
+
+      expect(res.status).toBe(409)
+      const body = await res.json()
+      expect(body.error.code).toBe('CREDIT_NOTE_REFUND_UNSUPPORTED')
+      expect(body.error.details.reason).toBe('rot_rut')
+    })
   })
 
   it('dry-run previews the post-payment state without booking', async () => {

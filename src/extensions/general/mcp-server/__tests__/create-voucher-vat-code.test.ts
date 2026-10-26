@@ -17,6 +17,16 @@ vi.mock('@/lib/bookkeeping/engine', async () => {
   return { ...actual, findFiscalPeriod: vi.fn() }
 })
 
+// The momsdeklaration impact has its own tests
+// (src/lib/vat/__tests__/voucher-vat-impact.test.ts); here it is a fixed
+// answer so the queued reads below stay the tool's own.
+vi.mock('@/lib/vat/voucher-vat-impact', () => ({
+  previewVoucherVatDeclaration: vi.fn().mockResolvedValue({
+    status: 'ok', vat_period: null, counted: true, excluded_as: null, rutor_change: {},
+    summary: 'Påverkar ingen ruta i momsdeklarationen.',
+  }),
+}))
+
 import { tools } from '../server'
 
 const createVoucher = tools.find((t) => t.name === 'gnubok_create_voucher')!

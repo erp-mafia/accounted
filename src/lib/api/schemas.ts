@@ -2793,6 +2793,7 @@ const WebshopCountryAccountRuleSchema = z.discriminatedUnion('mode', [
     country: webshopCountryRuleCountry,
     vat_rate: webshopCountryRuleRate,
     mode: z.literal('swedish'),
+    revenue_account: accountNumber.nullish(),
   }),
 ])
 
@@ -2984,6 +2985,16 @@ export const DashboardMatchInvoiceSchema = matchInvoiceFields
     message: 'fee_account and fee_amount are sent together',
     path: ['fee_amount'],
   })
+
+/**
+ * Query of the "Koppla till verifikat" candidate lists (customer and supplier
+ * invoices). `voucher` is the text a person typed to name a verifikat by its
+ * number ("A17", "A-17"): the list then holds that verifikat at any date
+ * (lib/invoices/voucher-label.ts). Text that names no number gives an empty list.
+ */
+export const VoucherCandidatesQuerySchema = z.object({
+  voucher: z.string().trim().max(40).optional(),
+})
 
 /**
  * Link an existing posted verifikat as payment for an invoice. No new
@@ -3423,6 +3434,27 @@ export const LedgerSuggestionsQuerySchema = z.object({
   connection_id: uuid.optional(),
 }).strict()
 
+/**
+ * PATCH /api/bank/connections/[id]/ledgers: which bank ledger account each
+ * named synced bank account of the connection books on from now on, for any
+ * aggregator (lib/cash-accounts/ledger-change.ts). Accounts not named keep
+ * theirs; ?dry_run=true answers the moves without writing.
+ */
+export const ChangeBankLedgersSchema = z.object({
+  accounts: z
+    .array(z.object({
+      uid: z.string().min(1).max(200),
+      // An account number; that it is a bank account (19xx) is the service's rule.
+      ledger_account: accountNumber,
+    }).strict())
+    .min(1)
+    .max(50),
+}).strict()
+
+export const ChangeBankLedgersQuerySchema = z.object({
+  dry_run: z.enum(['true', 'false']).optional(),
+}).strict()
+
 /** PUT /api/cash-accounts/payee-defaults: which account invoices in a currency pay to. */
 export const SetInvoicePayeeDefaultSchema = z.object({
   currency: CurrencySchema,
@@ -3749,6 +3781,10 @@ export const UpdateSettingsSchema = z.object({
   // 20260930200000). The employer's own view always prints both.
   salary_payslip_show_employer_cost: z.boolean().optional(),
   salary_payslip_show_breakdown: z.boolean().optional(),
+  // Regionalt stöd (migration 20261026110000, lib/salary/regional-support.ts):
+  // employees work at a fast driftställe in a stödområde. Runs calculated
+  // afterwards declare FK471/FK476 and book the avdrag.
+  salary_regional_support: z.boolean().optional(),
   // Calculation conventions (migration 20260919120100): partial-month
   // proration, sick-pay rate, long-leave measure, leave context, net and
   // one-off tax rounding. The full object is stored (every key present,

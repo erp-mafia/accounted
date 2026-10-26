@@ -83,6 +83,9 @@ export const SE_PACK_TERRITORY = [
   // The kontantmetoden (bokslutsmetoden) year-end cut-off, BFL 5 kap 2 §: the
   // per-invoice carry onto 1510 / 1513 / 2440 and its ordinary 26xx moms.
   'lib/core/bookkeeping/kontantmetod-cutoff.ts',
+  // The skattekonto in BAS terms for the booking guard: the accounts it runs
+  // on and the tax liabilities a bank line must not clear itself (issue #50).
+  'lib/transactions/skattekonto-tax-accounts.ts',
 ]
 
 /**

@@ -34,6 +34,7 @@ const NOT_ON_THE_API: Record<string, string> = {
   salary_payslip_show_breakdown: 'payroll: PATCH /salary/settings',
   salary_calculation_policy: 'payroll: PATCH /salary/settings (merged, not replaced)',
   salary_deviation_period: 'payroll: PATCH /salary/settings',
+  salary_regional_support: 'payroll: dashboard switch only so far (PH 208); the PATCH /salary/settings door is a follow-up',
 }
 
 /** Dashboard fields that are not columns but a parameter of one door's save. */

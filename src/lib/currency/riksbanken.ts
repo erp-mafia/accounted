@@ -349,7 +349,9 @@ async function readLatestCachedRate(
  * recent CACHED observation within the look-back is returned. With none,
  * returns null: never a hardcoded number, and never 1. Callers treat null as
  * "no rate"; isExchangeRateTemporarilyUnavailable() tells a temporary refusal
- * from a rate that does not exist.
+ * from a rate that does not exist. A currency outside RIKSBANKEN_CURRENCIES
+ * is the permanent kind: null without a request, logged at info, never as an
+ * error.
  */
 export async function fetchExchangeRate(
   currency: string,
@@ -369,7 +371,13 @@ export async function fetchExchangeRate(
 
   const seriesId = riksbankenSeriesId(currency)
   if (!seriesId) {
-    log.error(`Unknown currency: ${currency}`)
+    // An answer, not a failure: real documents carry currencies Riksbanken
+    // publishes no series for (Albanian lek receipts read as ALL, prod
+    // 2026-10-21), and every caller turns this null into its own honest
+    // outcome (no kronor value for a bank match, SI_FX_RATE_MISSING asking
+    // for the rate, unsupported_currency in an import). Logged at error, it
+    // paged once per inbox item checked.
+    log.info('no Riksbanken series for currency: no rate', { currency })
     return null
   }
 

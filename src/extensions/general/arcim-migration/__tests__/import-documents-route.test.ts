@@ -12,8 +12,19 @@ vi.mock('../lib/import-documents', () => {
     }
   }
 
+  class ProviderConnectionRefusedError extends Error {
+    constructor(
+      readonly provider: string,
+      readonly code: 'PROVIDER_AUTH_EXPIRED' | 'PROVIDER_RESOURCE_FORBIDDEN',
+      readonly providerStatus: number,
+    ) {
+      super(`${provider} refused the connection (${providerStatus}): reconnect required`)
+    }
+  }
+
   return {
     FortnoxDocumentScopesRequiredError,
+    ProviderConnectionRefusedError,
     importProviderDocuments: vi.fn(),
   }
 })
@@ -68,8 +79,10 @@ vi.mock('../lib/provider-client', () => {
 import { arcimMigrationExtension } from '../index'
 import {
   FortnoxDocumentScopesRequiredError,
+  ProviderConnectionRefusedError,
   importProviderDocuments,
 } from '../lib/import-documents'
+import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import {
   ProviderTokenInvalidError,
   submitProviderToken,
@@ -307,6 +320,131 @@ describe('POST /import-documents keeps the run outcome (crm#1410)', () => {
 
     expect(status).toBe(200)
     expect(body).toMatchObject({ success: true, result: { linked: 39 } })
+  })
+})
+
+describe('POST /import-documents stops once on a refused connection (B11)', () => {
+  const running = {
+    provider: 'fortnox',
+    startedAt: '2026-10-22T17:30:00Z',
+    updatedAt: '2026-10-22T17:49:00Z',
+    complete: false,
+    total: 4610,
+    scanned: 1200,
+    linked: 1190,
+    skipped: 5,
+    unmatched: 5,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: 'file-1200',
+  }
+
+  function contextWithRun(stored: unknown = running) {
+    const ctx = buildContext()
+    const set = vi.fn().mockResolvedValue(undefined)
+    ;(ctx as unknown as { settings: unknown }).settings = { get: vi.fn().mockResolvedValue(stored), set, clear: vi.fn() }
+    return { ctx, set, log: ctx.log as unknown as { warn: Mock; error: Mock } }
+  }
+
+  function slice(cursor: string | null, dryRun = false) {
+    return createMockRequest('http://localhost/api/extensions/ext/arcim-migration/import-documents', {
+      method: 'POST',
+      body: cursor ? { consentId: 'consent-1', dryRun, cursor } : { consentId: 'consent-1', dryRun },
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+    fortnoxOAuth.documentScopesApproved = false
+  })
+
+  it('answers a token Fortnox refuses after a refresh with a reconnect, warns once and marks the run', async () => {
+    ;(importProviderDocuments as Mock).mockRejectedValue(
+      new ProviderConnectionRefusedError('fortnox', 'PROVIDER_AUTH_EXPIRED', 401),
+    )
+    const { ctx, set, log } = contextWithRun()
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await handler(slice('file-1200'), ctx),
+    )
+
+    // A 4xx: the page offers the reconnect instead of retrying the slice.
+    expect(status).toBe(401)
+    expect(body.error.code).toBe('PROVIDER_AUTH_EXPIRED')
+    expect(set).toHaveBeenCalledWith(
+      'document_import_run',
+      expect.objectContaining({ needsReconnect: true, scanned: 1200, nextCursor: 'file-1200' }),
+    )
+    expect(log.warn).toHaveBeenCalledTimes(1)
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('answers a grant the refresh was refused the same way, also before the first slice', async () => {
+    ;(importProviderDocuments as Mock).mockRejectedValue(
+      new ProviderCallError('PROVIDER_AUTH_EXPIRED', 'fortnox', 'refresh refused', { providerCode: 'invalid_grant' }),
+    )
+    const { ctx, set } = contextWithRun()
+
+    const response = await handler(slice(null), ctx)
+
+    expect(response.status).toBe(401)
+    expect(set).toHaveBeenCalledWith(
+      'document_import_run',
+      expect.objectContaining({ provider: 'fortnox', scanned: 0, complete: false, needsReconnect: true }),
+    )
+  })
+
+  it('names a Bokio token without the right as a refused permission', async () => {
+    ;(importProviderDocuments as Mock).mockRejectedValue(
+      new ProviderConnectionRefusedError('bokio', 'PROVIDER_RESOURCE_FORBIDDEN', 403),
+    )
+    const { ctx, set } = contextWithRun(null)
+
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(await handler(slice(null), ctx))
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('PROVIDER_RESOURCE_FORBIDDEN')
+    expect(set).toHaveBeenCalledWith('document_import_run', expect.objectContaining({ provider: 'bokio', needsReconnect: true }))
+  })
+
+  it('marks the run when the files need the Fortnox scopes a reconnect grants', async () => {
+    fortnoxOAuth.documentScopesApproved = true
+    ;(importProviderDocuments as Mock).mockRejectedValue(new FortnoxDocumentScopesRequiredError())
+    const { ctx, set, log } = contextWithRun()
+
+    const response = await handler(slice('file-1200'), ctx)
+
+    expect(response.status).toBe(403)
+    expect(set).toHaveBeenCalledWith('document_import_run', expect.objectContaining({ needsReconnect: true }))
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('keeps discovery out of the run summary', async () => {
+    ;(importProviderDocuments as Mock).mockRejectedValue(
+      new ProviderConnectionRefusedError('fortnox', 'PROVIDER_AUTH_EXPIRED', 401),
+    )
+    const { ctx, set } = contextWithRun()
+
+    const response = await handler(slice(null, true), ctx)
+
+    expect(response.status).toBe(401)
+    expect(set).not.toHaveBeenCalled()
+  })
+
+  it('answers a refresh the provider failed transiently with a 5xx the page retries, the run untouched', async () => {
+    ;(importProviderDocuments as Mock).mockRejectedValue(
+      new ProviderCallError('PROVIDER_UPSTREAM_ERROR', 'fortnox', 'refresh 503', { status: 503 }),
+    )
+    const { ctx, set } = contextWithRun()
+
+    const response = await handler(slice('file-1200'), ctx)
+
+    expect(response.status).toBeGreaterThanOrEqual(500)
+    expect(set).not.toHaveBeenCalled()
   })
 })
 

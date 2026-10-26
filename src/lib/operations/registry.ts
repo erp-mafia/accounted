@@ -32,6 +32,7 @@ import {
   settingsUpdateBookkeepingLock,
   settingsUpdateTaxProfile,
 } from './company-settings'
+import { settingsGetSkattekontoAccount, settingsUpdateSkattekontoAccount } from './skattekonto-account'
 import {
   cashAccountsCreate,
   cashAccountsSetPayeeDefault,
@@ -274,6 +275,9 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   settingsUpdate,
   settingsUpdateTaxProfile,
   settingsUpdateBookkeepingLock,
+  // skattekonto-account (PH 175)
+  settingsGetSkattekontoAccount,
+  settingsUpdateSkattekontoAccount,
   // cash-accounts
   cashAccountsCreate,
   cashAccountsUpdate,

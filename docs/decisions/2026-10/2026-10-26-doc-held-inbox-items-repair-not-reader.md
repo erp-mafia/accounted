@@ -1,0 +1,1 @@
+[2026-10-26] The 4 853 open inbox items whose document a posted verifikat already holds are healed by an optional stamp repair (the rule every link already applies), not by teaching the Inkorg page a third booked rule: the worklist badge and the MCP list already count them handled, and the twin fix stops new ones (crm#1413).

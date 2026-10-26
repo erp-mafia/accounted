@@ -116,6 +116,47 @@ describe('ProviderStep, a company with an imported ledger', () => {
   })
 })
 
+describe('ProviderStep, a connection the latest underlag run found refused (B11)', () => {
+  const refusedRun = {
+    provider: 'fortnox',
+    startedAt: '2026-10-22T17:30:00Z',
+    updatedAt: '2026-10-22T17:50:20Z',
+    complete: false,
+    total: 4610,
+    scanned: 1200,
+    linked: 1190,
+    skipped: 5,
+    unmatched: 5,
+    failed: 0,
+    locked: 0,
+    lockedPeriods: [],
+    unmatchedSamples: [],
+    unreachableSources: [],
+    nextCursor: 'file-1200',
+    needsReconnect: true,
+    stalled: true,
+  }
+
+  it('says the run waits for a reconnect and offers it in place of Hämta underlag', () => {
+    const html = render({ ...status(true), latestDocumentImport: refusedRun })
+    expect(html).toContain('Fortnox behöver kopplas igen')
+    expect(html).toContain('Koppla Fortnox igen')
+    expect(html).not.toContain(fetchDocuments)
+  })
+
+  it('keeps Hämta underlag once a run got through again', () => {
+    const html = render({ ...status(true), latestDocumentImport: { ...refusedRun, needsReconnect: false, stalled: false } })
+    expect(html).toContain(fetchDocuments)
+    expect(html).not.toContain('Koppla Fortnox igen')
+  })
+
+  it('leaves another provider row alone', () => {
+    const html = render({ ...status(true, [FORTNOX_CONSENT, BOKIO_CONSENT]), latestDocumentImport: refusedRun })
+    expect(html).toContain('Koppla Fortnox igen')
+    expect(html).toContain(fetchDocuments)
+  })
+})
+
 describe('ProviderStep, a Visma or Bokio connection before the SIE upload', () => {
   it('keeps the re-run, since the ledger has to come in as a SIE file first', () => {
     const html = render(status(false, [BOKIO_CONSENT]))

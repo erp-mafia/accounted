@@ -35,7 +35,7 @@ vi.mock('@/lib/reconciliation/bank-reconciliation', () => ({
   autoReconcileTransactionForLinkedVoucher: vi.fn().mockResolvedValue(null),
 }))
 
-import { validateVoucherForInvoiceLink, linkInvoiceToVoucher } from '../voucher-matching'
+import { validateVoucherForInvoiceLink, linkInvoiceToVoucher, findMatchingVouchersForInvoice } from '../voucher-matching'
 import { makeInvoice, createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events/bus'
 
@@ -345,5 +345,162 @@ describe('linkInvoiceToVoucher: the share reaches the RPC only when stated', () 
       ([fn]) => fn === 'link_invoice_to_voucher',
     )
     expect(linkCall?.[1]).not.toHaveProperty('p_amount')
+  })
+})
+
+describe('findMatchingVouchersForInvoice: a verifikat that settles several invoices', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  // The report: the kundförlust verifikat is booked at the year end, long
+  // after the invoices' due dates. Synthetic amounts.
+  const lossEntry = (over: Partial<{ id: string; entry_date: string }> = {}) => ({
+    id: over.id ?? 'je-1',
+    voucher_series: 'A',
+    voucher_number: 17,
+    entry_date: over.entry_date ?? '2026-05-03',
+    description: 'Konstaterade kundförluster',
+    status: 'posted',
+    source_type: 'import',
+    fiscal_period_id: 'fp-1',
+  })
+  const arLine = (entryId: string, credit: number) => ({
+    id: `line-${entryId}`,
+    journal_entry_id: entryId,
+    account_number: '1510',
+    debit_amount: 0,
+    credit_amount: credit,
+    currency: 'SEK',
+    amount_in_currency: null,
+  })
+  const paymentRow = (invoiceId: string, amount: number, currency = 'SEK') => ({
+    journal_entry_id: 'je-1',
+    invoice_id: invoiceId,
+    amount,
+    currency,
+  })
+  const invoice = () =>
+    makeInvoice({
+      id: 'inv-1',
+      total: 2000,
+      paid_amount: 0,
+      remaining_amount: 2000,
+      currency: 'SEK',
+      due_date: '2026-05-01',
+      invoice_number: '4711',
+    })
+  const openPeriod = { data: [{ id: 'fp-1', is_closed: false, locked_at: null }] }
+
+  async function find(
+    queue: Array<{ data?: unknown; error?: unknown }>,
+    options: Parameters<typeof findMatchingVouchersForInvoice>[3] = {},
+  ) {
+    const { supabase, enqueueMany, findCalls } = createQueuedMockSupabase()
+    enqueueMany([{ data: AR_CREDIT_ROW }, ...queue])
+    const result = await findMatchingVouchersForInvoice(supabase as never, 'company-1', invoice() as never, options)
+    return { result, findCalls }
+  }
+
+  it('is offered where a person picks, as a weak match carrying the share to propose', async () => {
+    const { result } = await find(
+      [{ data: [lossEntry()] }, { data: [arLine('je-1', 8000)] }, { data: [] }, openPeriod],
+      { includeShared: true },
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ journal_entry_id: 'je-1', ar_credit_amount: 8000, link_amount: 2000 })
+    expect(result[0].already_linked).toBeUndefined()
+    expect(result[0].whole_remainder).toBeUndefined()
+    expect(result[0].confidence).toBeLessThan(0.7)
+  })
+
+  it('is not offered without includeShared: nothing but the amount would tie it to the invoice', async () => {
+    const { result } = await find([{ data: [lossEntry()] }, { data: [arLine('je-1', 8000)] }, { data: [] }])
+    expect(result).toEqual([])
+  })
+
+  it('offers what is left after the invoices already linked to it, and says how much they use', async () => {
+    // Three of the invoices are linked already: 6 000 of 8 000 is used, and
+    // the 2 000 left is exactly this invoice's remainder.
+    const { result } = await find(
+      [
+        { data: [lossEntry()] },
+        { data: [arLine('je-1', 8000)] },
+        { data: [paymentRow('inv-a', 3000), paymentRow('inv-b', 2000), paymentRow('inv-c', 1000)] },
+        openPeriod,
+      ],
+      { includeShared: true },
+    )
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ ar_credit_amount: 2000, already_linked: 6000 })
+    expect(result[0].link_amount).toBeUndefined()
+    expect(result[0].match_reason).toMatch(/^Exakt belopp/)
+  })
+
+  it('is no candidate when other invoices use all of it', async () => {
+    const { result } = await find(
+      [
+        { data: [lossEntry()] },
+        { data: [arLine('je-1', 8000)] },
+        { data: [paymentRow('inv-a', 6000), paymentRow('inv-b', 2000)] },
+      ],
+      { includeShared: true },
+    )
+    expect(result).toEqual([])
+  })
+
+  it('is no candidate when it is already linked to this invoice', async () => {
+    const { result } = await find(
+      [{ data: [lossEntry()] }, { data: [arLine('je-1', 8000)] }, { data: [paymentRow('inv-1', 500)] }],
+      { includeShared: true },
+    )
+    expect(result).toEqual([])
+  })
+
+  it('is no candidate when a row on it is in another currency (the used part is unreadable)', async () => {
+    const { result } = await find(
+      [{ data: [lossEntry()] }, { data: [arLine('je-1', 8000)] }, { data: [paymentRow('inv-a', 100, 'EUR')] }],
+      { includeShared: true },
+    )
+    expect(result).toEqual([])
+  })
+
+  it('reads every payment row on the candidates, whichever invoice it belongs to', async () => {
+    const { findCalls } = await find(
+      [{ data: [lossEntry()] }, { data: [arLine('je-1', 8000)] }, { data: [] }, openPeriod],
+      { includeShared: true },
+    )
+    const eqs = findCalls('invoice_payments', 'eq')
+    expect(eqs).toContainEqual(['company_id', 'company-1'])
+    expect(eqs.some(([column]) => column === 'invoice_id')).toBe(false)
+    expect(findCalls('invoice_payments', 'in')).toEqual([['journal_entry_id', ['je-1']]])
+  })
+
+  it('a verifikat named by its number is read at any date, and offered although its amount ties it to nothing', async () => {
+    // Booked half a year after the due date, outside the suggestions' window,
+    // and with less left than the invoice needs: a part of the invoice.
+    const { result, findCalls } = await find(
+      [{ data: [lossEntry({ entry_date: '2026-12-31' })] }, { data: [arLine('je-1', 900)] }, { data: [] }, openPeriod],
+      { includeShared: true, voucher: { series: 'A', number: 17 } },
+    )
+    const entryEqs = findCalls('journal_entries', 'eq')
+    expect(entryEqs).toContainEqual(['voucher_number', 17])
+    expect(entryEqs).toContainEqual(['voucher_series', 'A'])
+    expect(findCalls('journal_entries', 'gte')).toEqual([])
+    expect(result).toHaveLength(1)
+    expect(result[0]).toMatchObject({ journal_entry_id: 'je-1', ar_credit_amount: 900 })
+    expect(result[0].link_amount).toBeUndefined()
+    expect(result[0].confidence).toBeLessThan(0.7)
+    expect(result[0].match_reason).toMatch(/^Sökt på verifikationsnumret/)
+  })
+
+  it('a number without a series matches it in every series', async () => {
+    const { findCalls } = await find(
+      [{ data: [lossEntry()] }, { data: [arLine('je-1', 8000)] }, { data: [] }, openPeriod],
+      { includeShared: true, voucher: { series: null, number: 17 } },
+    )
+    const entryEqs = findCalls('journal_entries', 'eq')
+    expect(entryEqs).toContainEqual(['voucher_number', 17])
+    expect(entryEqs.some(([column]) => column === 'voucher_series')).toBe(false)
   })
 })

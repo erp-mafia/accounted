@@ -250,13 +250,16 @@ describe('POST /service-accounts', () => {
 })
 
 describe('GET /service-accounts/:id', () => {
-  it('answers 404 for an account that is not the company\'s, and for a malformed id', async () => {
+  it('answers 404 for an account that is not the company\'s, 400 for a malformed id', async () => {
     db()
-    for (const id of [ACCOUNT_ID, 'not-a-uuid']) {
-      const res = await getAccount(request(`/${id}`), accountParams(id))
-      expect(res.status).toBe(404)
-      expect((await res.json()).error.code).toBe('SERVICE_ACCOUNT_NOT_FOUND')
-    }
+    const res = await getAccount(request(`/${ACCOUNT_ID}`), accountParams(ACCOUNT_ID))
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('SERVICE_ACCOUNT_NOT_FOUND')
+
+    // A malformed id is refused by withApiV1 before the route runs (B08).
+    const malformed = await getAccount(request('/not-a-uuid'), accountParams('not-a-uuid'))
+    expect(malformed.status).toBe(400)
+    expect((await malformed.json()).error).toMatchObject({ code: 'VALIDATION_ERROR', details: { field: 'id' } })
   })
 
   it('returns the account with its keys and their access, never a secret', async () => {
@@ -401,14 +404,17 @@ describe('POST /service-accounts/:id/keys', () => {
 })
 
 describe('POST /service-accounts/:id/keys/:keyId/revoke', () => {
-  it('answers 404 for a key that is not this account\'s, and for a malformed id', async () => {
+  it('answers 404 for a key that is not this account\'s, 400 for a malformed id', async () => {
     const mock = db()
     mock.setTable('rpc:revoke_service_account_key', { data: null })
-    for (const keyId of [KEY_ID, 'nope']) {
-      const res = await revokeKey(request(`/${ACCOUNT_ID}/keys/${keyId}/revoke`, { method: 'POST' }), keyParams(keyId))
-      expect(res.status).toBe(404)
-      expect((await res.json()).error.code).toBe('SERVICE_ACCOUNT_KEY_NOT_FOUND')
-    }
+    const res = await revokeKey(request(`/${ACCOUNT_ID}/keys/${KEY_ID}/revoke`, { method: 'POST' }), keyParams(KEY_ID))
+    expect(res.status).toBe(404)
+    expect((await res.json()).error.code).toBe('SERVICE_ACCOUNT_KEY_NOT_FOUND')
+
+    // A malformed id is refused by withApiV1 before the route runs (B08).
+    const malformed = await revokeKey(request(`/${ACCOUNT_ID}/keys/nope/revoke`, { method: 'POST' }), keyParams('nope'))
+    expect(malformed.status).toBe(400)
+    expect((await malformed.json()).error).toMatchObject({ code: 'VALIDATION_ERROR', details: { field: 'keyId' } })
   })
 
   it('revokes the key as the calling key', async () => {

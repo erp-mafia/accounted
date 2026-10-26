@@ -23,6 +23,22 @@ import {
 const DRIVE_SCOPE = 'https://www.googleapis.com/auth/drive.file'
 const USERINFO_ENDPOINT = 'https://openidconnect.googleapis.com/v1/userinfo'
 
+/**
+ * Whether Google's own answer shows that a grant cannot write to Drive.
+ *
+ * Google's consent screen lets a person untick the Drive box and still
+ * approve. Such a grant used to be stored as a working connection whose every
+ * Drive call then failed with 403 "insufficient authentication scopes", night
+ * after night. Only a stated scope list that leaves drive.file out counts: an
+ * absent list means Google did not state the scopes, which RFC 6749 (5.1)
+ * defines as "identical to the scope requested". A grant that truly lacks the
+ * scope is still caught by the sync, which flags it for reconnect.
+ */
+export function lacksDriveScope(scope: string | null | undefined): boolean {
+  const scopes = (scope ?? '').split(' ').filter(Boolean)
+  return scopes.length > 0 && !scopes.includes(DRIVE_SCOPE)
+}
+
 export type OAuthEnv = GoogleOAuthClient
 
 /**
@@ -62,6 +78,8 @@ export interface TokenExchangeResult {
   refresh_token: string
   expires_in: number
   id_token?: string
+  /** Space-separated scopes Google actually granted. */
+  scope?: string
 }
 
 export async function exchangeCodeForTokens(

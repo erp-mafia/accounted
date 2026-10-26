@@ -44,6 +44,7 @@ import {
 import { eventBus } from '@/lib/events'
 import { truncateToWholeKronor } from '@/lib/money'
 import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
+import { regionalSupportForRun } from '../regional-support'
 import type { Logger } from '@/lib/logger'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
@@ -693,8 +694,17 @@ export async function generateAgiDeclaration(
     (run.calculation_params as Record<string, unknown> | null) ?? null,
   )
   const avgifterByCategory = declared.byCategory as AGITotals['avgifterByCategory']
-  const totalAvgifterAmount = declared.totalAmount
   const totalAvgifterBasis = declared.totalUnderlag
+  // Regionalt stöd (PH 208): when the run was calculated with the company's
+  // setting on, HU carries FK471/FK476 and FK487 is the avgift after the
+  // avdrag (Skatteverket's IK587 subtracts FK476; kontroll B_006). The
+  // stored total_avgifter, the tax payment and the booked 2731
+  // (salary-entries.ts) follow the same net figure.
+  const regionalSupport = regionalSupportForRun(
+    parsedRows,
+    (run.calculation_params as Record<string, unknown> | null) ?? null,
+  )
+  const totalAvgifterAmount = declared.totalAmount - (regionalSupport?.deduction ?? 0)
 
   // FK497 SummaSkatteavdr must equal the sum of FK001 on active IUs (not
   // run.total_tax, which includes removed rows). Same for FK487.
@@ -716,6 +726,7 @@ export async function generateAgiDeclaration(
     totalAvgifterBasis,
     totalAvgifterAmount,
     avgifterByCategory,
+    ...(regionalSupport ? { regionalSupport } : {}),
   }
 
   // Soft AGI deadline check: warn (but don't block) when generating for a

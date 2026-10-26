@@ -88,7 +88,7 @@ export type CoreEvent =
   // Bank connection lifecycle: consent + account selection are the
   // GDPR/PSD2 audit points; emitted to event_log for compliance trail.
   | { type: 'bank_connection.consent_granted'; payload: { connectionId: string; bankName: string | null; accountCount: number; consentExpiresAt: string | null; userId: string; companyId: string } }
-  | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string } }
+  | { type: 'bank_connection.account_selection_changed'; payload: { connectionId: string; bankName: string | null; previousStatus: string; newStatus: string; enabledCount: number; totalCount: number; userId: string; companyId: string; /** Set by a ledger-account change (lib/cash-accounts/ledger-change.ts): which bank account moved from which 19xx account to which, kept in event_log as the behandlingshistorik of the change. */ ledgerChanges?: Array<{ cashAccountId: string | null; uid: string; from: string | null; to: string }> } }
   | { type: 'bank_connection.revoked'; payload: { connectionId: string; bankName: string | null; userId: string; companyId: string } }
   // Emitted when a new or renewed connection supersedes an older row for the
   // same bank in the same company: the old row is parked as 'revoked' with

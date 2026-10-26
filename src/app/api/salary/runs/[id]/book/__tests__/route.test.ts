@@ -261,3 +261,76 @@ describe('POST /api/salary/runs/[id]/book: concurrent booking of the same run', 
     expect(eventBus.emit).not.toHaveBeenCalled()
   })
 })
+
+// crm#1216: Bokför on a run whose payment date has not come posted the net
+// pay as paid out of the bank before it was. The server now refuses that
+// unless the Bokför dialog's confirmation comes with the request.
+describe('POST /api/salary/runs/[id]/book: payment date still ahead', () => {
+  const aheadRun = () =>
+    makePaidRun({ payment_date: '2999-12-31', total_gross: 30000, total_tax: 7000, total_net: 23000, total_avgifter: 9426 })
+  const roster = [
+    {
+      employee_id: 'e1',
+      employee: { employment_type: 'employee' },
+      gross_salary: 30000,
+      tax_withheld: 7000,
+      net_salary: 23000,
+      avgifter_amount: 9426,
+      avgifter_rate: 0.3142,
+      vacation_accrual: 0,
+      vacation_accrual_avgifter: 0,
+      line_items: [],
+    },
+  ]
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('answers 422 in Swedish without the confirmation and posts nothing', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({ user: mockUser as never, supabase: supabase as never, error: null })
+    enqueueMany([{ data: aheadRun() }])
+
+    const request = createMockRequest('/api/salary/runs/run-1/book', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_DATE_AHEAD_UNCONFIRMED')
+    expect(body.error.message).toContain('utbetalningsdag har inte kommit än')
+    expect(body.error.details.payment_date).toBe('2999-12-31')
+    expect(supabase.rpc).not.toHaveBeenCalled()
+    expect(createSalaryRunEntries).not.toHaveBeenCalled()
+  })
+
+  it('books when the request carries the confirmation', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    vi.mocked(requireAuth).mockResolvedValue({ user: mockUser as never, supabase: supabase as never, error: null })
+    vi.mocked(createSalaryRunEntries).mockResolvedValue({
+      salaryEntry: { id: 'je-1' },
+      avgifterEntry: { id: 'je-2' },
+      vacationEntry: null,
+      pensionEntry: null,
+    } as never)
+    enqueueMany([
+      { data: aheadRun() },
+      { data: roster },
+      { data: 'booking-claim-1' }, // claim_salary_run_booking
+      { data: null }, // personnel category stamp
+      { data: { id: 'run-1', status: 'booked' } }, // salary_runs update → booked
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/book', {
+      method: 'POST',
+      body: { confirm_payment_date_ahead: true },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status } = await parseJsonResponse(response)
+
+    expect(status).toBe(200)
+    expect(createSalaryRunEntries).toHaveBeenCalledTimes(1)
+  })
+})

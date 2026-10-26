@@ -165,7 +165,7 @@ describe('v1 reconciliation sign-off', () => {
     expect(missing.status).toBe(404)
   })
 
-  it('POST reopen needs reconciliation:signoff, accepts an empty body, previews on dry run, 404s a bad id', async () => {
+  it('POST reopen needs reconciliation:signoff, accepts an empty body, previews on dry run, 400s a malformed id', async () => {
     authOk(['reconciliation:write'])
     const forbidden = await reopenPOST(req(`${BASE}/skattekonto/signoff/${SIGNOFF_ID}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: SIGNOFF_ID }))
     expect(forbidden.status).toBe(403)
@@ -179,8 +179,10 @@ describe('v1 reconciliation sign-off', () => {
     expect(dry.status).toBe(200)
     expect(reopenMock).toHaveBeenCalledTimes(1)
 
+    // A malformed id is refused by withApiV1 before the route runs (B08).
     const bad = await reopenPOST(req(`${BASE}/skattekonto/signoff/nope/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: 'nope' }))
-    expect(bad.status).toBe(404)
+    expect(bad.status).toBe(400)
+    expect((await bad.json()).error).toMatchObject({ code: 'VALIDATION_ERROR', details: { field: 'signoffId' } })
 
     reopenMock.mockRejectedValueOnce(new ReconciliationSignoffError('redan', 'ALREADY_REOPENED'))
     const already = await reopenPOST(req(`${BASE}/skattekonto/signoff/${SIGNOFF_ID}/reopen`, { method: 'POST' }), params({ accountKey: 'skattekonto', signoffId: SIGNOFF_ID }))

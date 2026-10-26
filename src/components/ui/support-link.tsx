@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { ChevronLeft, ChevronRight, FileText, Mail, Paperclip, Plus, Send, X } from 'lucide-react'
@@ -46,6 +46,7 @@ import {
   type TicketSummary,
   whenConversationsReady,
 } from '@/lib/support/conversations'
+import { dialogViewportStyle, fitTextarea, useVisualViewport } from '@/components/support/composer-fit'
 
 interface SupportLinkProps {
   /** 'hidden' renders no trigger: the dialog is controlled through `open`. */
@@ -108,6 +109,10 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const fileInputRef = useRef<HTMLInputElement>(null)
   const attachmentGenerationRef = useRef(0)
   const listRef = useRef<HTMLDivElement>(null)
+  const panelRef = useRef<HTMLDivElement>(null)
+  // The compose and the reply box: never both on screen, so one ref.
+  const textareaRef = useRef<HTMLTextAreaElement>(null)
+  const viewport = useVisualViewport(open)
 
   const setOpen = useCallback(
     (next: boolean) => {
@@ -208,6 +213,16 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
     const el = listRef.current
     if (el) el.scrollTop = el.scrollHeight
   }, [thread])
+
+  // The message box grows with its text, so a long message reads in full
+  // while it is written, up to what the visible viewport leaves beside the
+  // rest of the dialog; past that it scrolls inside (PH 216). Re-fitted on
+  // everything that changes its text, its width or the room around it.
+  useLayoutEffect(() => {
+    const el = textareaRef.current
+    if (!el) return
+    fitTextarea(el, panelRef.current, viewport?.height ?? window.innerHeight)
+  }, [message, view, viewport, attachments.length, thread, composeBack])
 
   if (companyCtx?.isSandbox) return null
 
@@ -483,6 +498,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const composeForm = (
     <form onSubmit={handleCompose}>
       <Textarea
+        ref={textareaRef}
         value={message}
         onChange={(e) => updateMessage(e.target.value)}
         placeholder={t('placeholder')}
@@ -582,6 +598,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   const replyForm = (
     <form onSubmit={handleReply} className="mt-3">
       <Textarea
+        ref={textareaRef}
         value={message}
         onChange={(e) => updateMessage(e.target.value)}
         placeholder={t('reply_placeholder')}
@@ -604,7 +621,16 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       {trigger && <DialogTrigger asChild>{trigger}</DialogTrigger>}
-      <DialogContent className="sm:max-w-md" onInteractOutside={guardDismiss} onEscapeKeyDown={guardDismiss}>
+      {/* Centered in, and capped to, the visual viewport: an on-screen
+          keyboard shrinks only that one, so a dialog placed by the layout
+          viewport sits half behind the keyboard on a tablet (PH 216). */}
+      <DialogContent
+        ref={panelRef}
+        className="sm:max-w-md"
+        style={dialogViewportStyle(viewport)}
+        onInteractOutside={guardDismiss}
+        onEscapeKeyDown={guardDismiss}
+      >
         <DialogHeader>
           <DialogTitle>{t('dialog_title')}</DialogTitle>
           <DialogDescription>

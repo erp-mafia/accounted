@@ -220,8 +220,9 @@ const DEFAULT_API_BASE_URL = 'https://api.test.skatteverket.se/momsdeklaration/v
 const MAX_REFRESH_COUNT = 10
 const TOKEN_REFRESH_MARGIN_MS = 5 * 60 * 1000 // Refresh 5 min before expiry
 
-// Simple in-memory token bucket for 4 req/sec rate limit
-let lastRequestTime = 0
+// In-memory send-slot schedule for the 4 req/sec rate limit: the next moment
+// a request may leave this process.
+let nextRequestSlotAt = 0
 const MIN_REQUEST_INTERVAL_MS = 250 // 1000ms / 4 = 250ms
 
 function getApiBaseUrl(): string {
@@ -284,14 +285,18 @@ export function getSkatteverketEnvironment(): 'test' | 'prod' {
 
 /**
  * Ensure rate limit compliance (4 req/sec).
- * Delays if the last request was too recent.
+ *
+ * Each caller reserves the first free slot at or after now, 250 ms after the
+ * previous reservation, and waits for it. Spacing from the previous CLAIM
+ * time instead (the old form) let concurrent callers all wake about 250 ms
+ * after the first one: a burst. Sequential callers wait exactly as before.
  */
 async function enforceRateLimit(): Promise<void> {
   const now = Date.now()
-  const elapsed = now - lastRequestTime
-  lastRequestTime = now // Claim the slot immediately to prevent concurrent bypass
-  if (elapsed < MIN_REQUEST_INTERVAL_MS) {
-    await new Promise(resolve => setTimeout(resolve, MIN_REQUEST_INTERVAL_MS - elapsed))
+  const slot = Math.max(now, nextRequestSlotAt)
+  nextRequestSlotAt = slot + MIN_REQUEST_INTERVAL_MS
+  if (slot > now) {
+    await new Promise(resolve => setTimeout(resolve, slot - now))
   }
 }
 
@@ -1024,8 +1029,11 @@ async function sendSkvRequest(
         'MISSING_SCOPE'
       )
     }
-    // Behörighet saknas: user is authenticated but not authorized for this company
-    if (text.includes('Behörighet') || text.includes('behörighet')) {
+    // Behörighet saknas: user is authenticated but not authorized for this
+    // company. The skattekonto API says it as felkod 6 "Auktorisation saknas"
+    // (prod, B07): the consenting person lacks Skatteverket's authorization
+    // for this company, which only that person or the company can change.
+    if (text.includes('Behörighet') || text.includes('behörighet') || /auktorisation saknas/i.test(text)) {
       throw new SkatteverketAuthError(
         'Du har inte behörighet att agera för detta företag hos Skatteverket. ' +
         'Kontrollera att du är registrerad som firmatecknare eller deklarationsombud.',

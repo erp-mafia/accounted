@@ -176,7 +176,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/settings/booking-templates/import': gap('P3', 'import templates exported from another company'),
   'PATCH /api/settings/counterparty-templates': gap('P3', 'rename a learned counterparty template (read via gnubok_get_counterparty_templates)'),
   'DELETE /api/settings/counterparty-templates': gap('P3'),
-  'PUT /api/settings/skattekonto-account': gap('P2', 'the skattekonto ledger account, 1630 or 2012 for an enskild firma (PH 175); read via the reconciliation status account_number'),
+  'PUT /api/settings/skattekonto-account': covered([`PATCH ${V}/settings/skattekonto-account`], 'no MCP tool yet: a staged write needs its own pending type (issue #50)'),
   'POST /api/settings/skattekonto-account/transfer-draft': gap('P2', 'draft the transfer verifikat after a skattekonto account change; gnubok_create_voucher can book the same lines'),
   'POST /api/settings/peppol': covered([`POST ${V}/peppol/registration`, 'gnubok_register_peppol_participant']),
   'DELETE /api/settings/peppol': gap('P3', 'Peppol deregistration'),
@@ -531,6 +531,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bank/open-payments/connections/:id/select': gap('P3', 'map connected bank accounts to ledger accounts, as for Enable Banking (Svea: also signs the second consent, which stays a person\'s act)'),
   'POST /api/bank/open-payments/connections/:id/sync': covered([`POST ${V}/bank-connections/:connectionId/sync`, 'gnubok_sync_bank'], 'both doors fall through to the Open Payments runner for its connections'),
   'DELETE /api/bank/open-payments/connections/:id': gap('P3', 'remove a bank connection, as for Enable Banking'),
+  'PATCH /api/bank/connections/:id/ledgers': gap('P3', 'change the ledger account of a connected bank account on any connection (crm#1395); dashboard first, like the pickers it complements'),
   'POST /api/clients/bank-switch/remind': uiOnly('a byrå mails its own clients about the one-off Enable Banking to Open Payments switch; the campaign ends with the deadline'),
   'POST /api/bank/open-payments/invites': covered([`POST ${V}/bank-feed/invites`, 'gnubok_bank_feed_connect_link'], 'the signatory link (operation bank-feed.invite): the firmatecknare still signs the consent in person'),
 
@@ -902,5 +903,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 146 -> 147 (2026-10-23): the orderunderlag retry on a booked order
  * (crm#1032). Agents book through webshop-orders.book, which archives the
  * underlag itself; the retry repairs a dashboard booking where it failed.
+ * 155 -> 156 (2026-10-26, crm#1395): changing a connected bank account's
+ * ledger account on any connection, dashboard first like the pickers.
+ * 156 -> 155 (2026-10-26, PH 175 / issue #50): the skattekonto account is
+ * covered by PATCH /settings/skattekonto-account.
  */
 export const GAP_CEILING = 155
