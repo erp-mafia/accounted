@@ -146,18 +146,20 @@ describe('bank switch notices', () => {
     expect(switchStateMock).toHaveBeenCalledWith({ supabase, companyId: COMPANY }, { now: NOW })
   })
 
-  it('names the one connection and links straight into its switch, with the deadline as a date argument', async () => {
+  it('asks to update the one connection, its "här" linking straight into the switch', async () => {
     switchStateMock.mockResolvedValue(state())
     const notice = await detectBankSwitchNeeded(supabase, COMPANY, NOW)
     expect(notice).toEqual({
       id: 'bank_switch_needed:c1=2026-11-09',
       category: 'bank_switch_needed',
       severity: 'warning',
-      messageKey: 'bank_switch_one',
+      messageKey: 'bank_switch_update_one',
       messageParams: { bank: 'Swedbank', deadline: DEADLINE_PARAM },
-      actionKey: 'bank_switch_action',
+      actionKey: 'bank_switch_here',
       actionHref: '/settings/connections?bank_connect_switch=c1',
     })
+    // An unnamed connection gets the same plain line.
+    expect(bankSwitchNeededNotice(state({ pending: [{ connection_id: 'c1', bank_name: '' }] }) as never)?.messageKey).toBe('bank_switch_update_one')
   })
 
   it('folds several connections into one counted notice linking to Kopplingar, with a bounded id', async () => {
@@ -165,8 +167,9 @@ describe('bank switch notices', () => {
     const notice = bankSwitchNeededNotice(state({ pending: [{ connection_id: 'c2', bank_name: 'SEB' }, { connection_id: 'c1', bank_name: 'Swedbank' }] }) as never)
     expect(notice).toMatchObject({
       id: `bank_switch_needed:2@${digest}`,
-      messageKey: 'bank_switch_many',
+      messageKey: 'bank_switch_update_many',
       messageParams: { count: 2, deadline: DEADLINE_PARAM },
+      actionKey: 'bank_switch_here',
       actionHref: '/settings/connections',
     })
   })
@@ -178,9 +181,9 @@ describe('bank switch notices', () => {
       severity: 'error',
       messageKey: 'bank_switch_stopped_one',
       messageParams: { bank: 'Swedbank', deadline: DEADLINE_PARAM },
+      actionKey: 'bank_switch_action',
       actionHref: '/settings/connections?bank_connect_switch=c1',
     })
-    expect(bankSwitchNeededNotice(state({ pending: [{ connection_id: 'c1', bank_name: '' }] }) as never)?.messageKey).toBe('bank_switch_one_unnamed')
     expect(bankSwitchNeededNotice(state({ pending: [] }) as never)).toBeNull()
   })
 
