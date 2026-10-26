@@ -3,7 +3,16 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
-import { ChevronLeft, ChevronRight, FileText, Mail, Paperclip, Plus, Send, X } from 'lucide-react'
+import {
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  DocumentTextIcon,
+  EnvelopeIcon,
+  PaperAirplaneIcon,
+  PaperClipIcon,
+  PlusIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import {
   Dialog,
   DialogContent,
@@ -445,7 +454,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
               )}
             </span>
           </span>
-          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         </button>
       </li>
     )
@@ -480,7 +489,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           className
         )}
       >
-        <Mail className="h-3 w-3" />
+        <EnvelopeIcon className="h-3 w-3" />
         {triggerLabel}
       </button>
     ) : (
@@ -518,7 +527,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
               key={`${file.name}-${file.size}-${index}`}
               className="ph-no-capture flex min-w-0 items-center gap-2 rounded-lg border border-border px-3 py-1"
             >
-              <FileText className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+              <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
               <span className="min-w-0 flex-1 truncate text-xs">
                 {file.name}
               </span>
@@ -531,7 +540,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                 aria-label={t('remove_attachment')}
                 className="shrink-0"
               >
-                <X className="h-4 w-4" />
+                <XMarkIcon className="h-4 w-4" />
               </Button>
             </li>
           ))}
@@ -559,7 +568,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           loading={isPreparing}
           onClick={() => fileInputRef.current?.click()}
         >
-          {!isPreparing && <Paperclip className="mr-2 h-3.5 w-3.5" />}
+          {!isPreparing && <PaperClipIcon className="mr-2 h-3.5 w-3.5" />}
           {t('attach_label')}
         </Button>
         <span className="text-xs text-muted-foreground">
@@ -586,7 +595,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
         >
           {isSending ? t('sending') : (
             <>
-              <Send className="mr-2 h-4 w-4" />
+              <PaperAirplaneIcon className="mr-2 h-4 w-4" />
               {t('send')}
             </>
           )}
@@ -611,7 +620,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
           {t('cancel')}
         </Button>
         <Button type="submit" disabled={message.trim().length === 0} loading={isSending}>
-          {!isSending && <Send className="mr-2 h-4 w-4" />}
+          {!isSending && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
           {isSending ? t('sending') : t('reply')}
         </Button>
       </DialogFooter>
@@ -651,7 +660,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
             {ticketSection(t('resolved_section'), resolvedTickets)}
             <DialogFooter>
               <Button type="button" onClick={() => startNewTicket('list')}>
-                <Plus className="mr-2 h-4 w-4" />
+                <PlusIcon className="mr-2 h-4 w-4" />
                 {t('new_ticket')}
               </Button>
             </DialogFooter>
@@ -661,7 +670,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
         {view === 'sent' && (
           <div className="flex flex-col items-center py-6 gap-3">
             <div className="p-3 rounded-full bg-success/10">
-              <Send className="h-6 w-6 text-success" />
+              <PaperAirplaneIcon className="h-6 w-6 text-success" />
             </div>
             <p className="text-sm font-medium">{t('thanks')}</p>
           </div>
@@ -676,7 +685,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
               className="-ml-3"
               onClick={() => (composeBack === 'list' ? void showList() : setView('thread'))}
             >
-              <ChevronLeft className="mr-1 h-4 w-4" />
+              <ChevronLeftIcon className="mr-1 h-4 w-4" />
               {composeBack === 'list' ? t('all_tickets') : t('back_to_ticket')}
             </Button>
           </div>
@@ -696,7 +705,7 @@ export function SupportLink({ variant = 'inline', subject, children, className, 
                   onClick={() => void showList()}
                   aria-label={t('all_tickets')}
                 >
-                  <ChevronLeft className="h-4 w-4" />
+                  <ChevronLeftIcon className="h-4 w-4" />
                 </Button>
               )}
               <div className="flex min-w-0 flex-1 items-center gap-2">

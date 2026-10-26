@@ -4,7 +4,7 @@ import { atomLabel } from '@/lib/agent-context/atom-labels'
 
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
-import { Pin, ArrowUpRight } from 'lucide-react'
+import { ArrowUpRightIcon, BookmarkIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { SettingsGroup, SettingsRow } from '@/components/settings/SettingsRows'
@@ -89,7 +89,7 @@ export function FactsCard({ competence }: { competence: AgentCompetence }) {
             {facts.map((f) => (
               <li key={f.id} className="flex items-start gap-2 border-b border-border px-1 py-3">
                 {f.is_pinned ? (
-                  <Pin role="img" className="mt-1 h-3.5 w-3.5 shrink-0 fill-current text-muted-foreground" aria-label={t('facts_pinned')} />
+                  <BookmarkIcon role="img" className="mt-1 h-3.5 w-3.5 shrink-0 fill-current text-muted-foreground" aria-label={t('facts_pinned')} />
                 ) : (
                   <span className="mt-1 h-3.5 w-3.5 shrink-0" aria-hidden />
                 )}
@@ -119,7 +119,7 @@ function ManageLink({ href, label }: { href: string; label: string }) {
     <Button asChild variant="outline" size="sm">
       <Link href={href}>
         {label}
-        <ArrowUpRight className="ml-1 h-3 w-3" />
+        <ArrowUpRightIcon className="ml-1 h-3 w-3" />
       </Link>
     </Button>
   )

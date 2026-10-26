@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRightIcon } from '@/components/icons'
 import { contextRefToTarget } from '@/lib/agent/intents/route-mapping'
 import { cn } from '@/lib/utils'
 
@@ -53,7 +53,7 @@ export default function ContextChip({
       )}
     >
       <span className="truncate">{target.label}</span>
-      <ArrowUpRight className="h-3 w-3 shrink-0" />
+      <ArrowUpRightIcon className="h-3 w-3 shrink-0" />
     </Link>
   )
 }

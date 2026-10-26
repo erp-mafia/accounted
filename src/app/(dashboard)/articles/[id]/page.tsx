@@ -17,7 +17,7 @@ import {
 } from '@/lib/hooks/use-submit-with-account-activation'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency } from '@/lib/utils'
 import { DEDUCTION_TYPE_LABEL_KEYS, articleDeductionPrefill, workTypeLabel } from '@/lib/bookkeeping/rot-rut-rules'
@@ -254,7 +254,7 @@ export default function ArticleDetailPage({
             disabled={!canWrite}
             title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >
-            {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+            {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
             {t('edit')}
           </Button>
           <Button
@@ -266,7 +266,7 @@ export default function ArticleDetailPage({
             loading={isTogglingActive}
             title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >
-            {!isTogglingActive && !canWrite && <Lock className="h-4 w-4 mr-1" />}
+            {!isTogglingActive && !canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
             {article.active ? t('deactivate') : t('activate')}
           </Button>
           <Button
@@ -278,7 +278,7 @@ export default function ArticleDetailPage({
             loading={isDeleting}
             title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
           >
-            {!isDeleting && !canWrite && <Lock className="h-4 w-4 mr-1" />}
+            {!isDeleting && !canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
             {t('delete')}
           </Button>
         </div>

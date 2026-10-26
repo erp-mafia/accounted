@@ -24,7 +24,7 @@
  * two partition the path space.
  *
  * style-src keeps 'unsafe-inline' on purpose: React style attributes and the
- * inline styles of Radix, framer-motion and next/font need it, and a nonce in
+ * inline styles of Radix, Motion and next/font need it, and a nonce in
  * style-src would make browsers ignore 'unsafe-inline' for style attributes
  * as well.
  *

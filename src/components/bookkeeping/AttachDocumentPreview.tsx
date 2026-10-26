@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowDown, AlertTriangle } from 'lucide-react'
+import { ArrowDownIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { isUuid } from '@/lib/invariants/uuid'
 import { DocumentViewButton } from './DocumentViewButton'
@@ -84,13 +84,13 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
       )}
 
       <div className="flex items-center justify-center text-xs text-muted-foreground">
-        <ArrowDown className="h-3.5 w-3.5 mr-1" />
+        <ArrowDownIcon className="h-3.5 w-3.5 mr-1" />
         kopplas till transaktionen
       </div>
 
       {willOverwrite && existingIsAccounting && (
         <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/10 p-3 text-sm text-destructive">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <div>
             <p className="font-medium">Ersätter räkenskapsinformation</p>
             <p className="mt-1 text-xs">

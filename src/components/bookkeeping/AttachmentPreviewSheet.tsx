@@ -3,15 +3,15 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import {
-  AlertTriangle,
-  ExternalLink,
-  FileText,
-  ImageIcon,
-  Lock,
-  Paperclip,
-  RefreshCw,
-  Trash2,
-} from 'lucide-react'
+  ArrowPathIcon,
+  ArrowTopRightOnSquareIcon,
+  DocumentTextIcon,
+  ExclamationTriangleIcon,
+  LockClosedIcon,
+  PaperClipIcon,
+  PhotoIcon,
+  TrashIcon,
+} from '@/components/icons'
 import {
   Dialog,
   DialogContent,
@@ -239,7 +239,7 @@ export default function AttachmentPreviewSheet({
         ) : documents.length === 0 ? (
           <div className="flex flex-col items-center justify-center py-12 text-center">
             <div className="mb-3 rounded-full bg-muted p-3">
-              <Paperclip className="h-5 w-5 text-muted-foreground" />
+              <PaperClipIcon className="h-5 w-5 text-muted-foreground" />
             </div>
             <p className="text-sm text-muted-foreground">{t('empty')}</p>
           </div>
@@ -255,9 +255,9 @@ export default function AttachmentPreviewSheet({
                   <div className="flex items-start justify-between gap-3">
                     <div className="flex min-w-0 items-start gap-2">
                       {kind === 'image' ? (
-                        <ImageIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                        <PhotoIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                       ) : (
-                        <FileText className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                        <DocumentTextIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                       )}
                       <div className="min-w-0">
                         <p className="truncate text-sm font-medium">
@@ -277,7 +277,7 @@ export default function AttachmentPreviewSheet({
                         title={t('replace')}
                         aria-label={t('replace')}
                       >
-                        {!isReplacing && <RefreshCw className="h-3.5 w-3.5" />}
+                        {!isReplacing && <ArrowPathIcon className="h-3.5 w-3.5" />}
                       </Button>
                       <Button
                         variant="ghost"
@@ -286,7 +286,7 @@ export default function AttachmentPreviewSheet({
                         title={t('remove')}
                         aria-label={t('remove')}
                       >
-                        <Trash2 className="h-3.5 w-3.5" />
+                        <TrashIcon className="h-3.5 w-3.5" />
                       </Button>
                       {doc.download_url && (
                         <a
@@ -295,7 +295,7 @@ export default function AttachmentPreviewSheet({
                           rel="noopener noreferrer"
                           className="inline-flex items-center gap-1 px-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
                         >
-                          <ExternalLink className="h-3.5 w-3.5" />
+                          <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
                           {t('open_in_new_tab')}
                         </a>
                       )}
@@ -305,7 +305,7 @@ export default function AttachmentPreviewSheet({
                   {kind === 'pdf' && integrity[doc.id] === 'invalid' && (
                     <div className="flex h-[70vh] w-full flex-col items-center justify-center gap-4 rounded-lg border border-border bg-muted/30 p-6 text-center">
                       <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted">
-                        <AlertTriangle className="h-5 w-5 text-attn" />
+                        <ExclamationTriangleIcon className="h-5 w-5 text-attn" />
                       </div>
                       <div className="max-w-md space-y-2">
                         <p className="text-sm font-medium">{t('corrupt_title')}</p>
@@ -398,7 +398,7 @@ export default function AttachmentPreviewSheet({
             <DialogHeader>
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted shrink-0">
-                  <Lock className="h-5 w-5 text-attn" />
+                  <LockClosedIcon className="h-5 w-5 text-attn" />
                 </div>
                 <DialogTitle>{tj('remove_blocked_title')}</DialogTitle>
               </div>
@@ -409,7 +409,7 @@ export default function AttachmentPreviewSheet({
 
             <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
               <div className="flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <p className="text-muted-foreground">{tj('remove_blocked_hint')}</p>
               </div>
             </div>

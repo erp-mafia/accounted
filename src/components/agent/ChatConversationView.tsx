@@ -2,7 +2,7 @@
 
 import { useMemo } from 'react'
 import Link from 'next/link'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeftIcon } from '@/components/icons'
 import AgentChat, { attachStagedOperations, normalizeStoredMessages } from './AgentChat'
 import AskConsole, { type AskConsoleMessage } from './AskConsole'
 import { CHAT_INTENT_ID } from '@/lib/agent/ask/persist'
@@ -65,7 +65,7 @@ export default function ChatConversationView({
           className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors -ml-1"
           aria-label="Tillbaka till konversationer"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
         </Link>
         <AgentAvatar
           avatarId={identity.avatarId}

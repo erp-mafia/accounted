@@ -1,7 +1,7 @@
 'use client'
 
-import { Reorder, useDragControls, useReducedMotion } from 'framer-motion'
-import { GripVertical } from 'lucide-react'
+import { Reorder, useDragControls, useReducedMotion } from 'motion/react'
+import { Bars2Icon } from '@/components/icons'
 import type { ReactNode } from 'react'
 
 interface SortableRowProps<T> {
@@ -17,7 +17,7 @@ interface SortableRowProps<T> {
 }
 
 /**
- * A drag-to-reorder row built on framer-motion's Reorder, with the grip handle
+ * A drag-to-reorder row built on Motion's Reorder, with the grip handle
  * on the LEFT edge. The handle owns the drag (dragListener=false +
  * dragControls) so text inputs inside the row stay selectable. The handle is
  * vertically centered against the row so it reads correctly for both compact
@@ -59,7 +59,7 @@ export function SortableRow<T>({
           }}
           className="flex shrink-0 touch-none cursor-grab items-center px-1 text-muted-foreground transition-colors duration-150 hover:text-foreground active:cursor-grabbing disabled:cursor-default disabled:opacity-30"
         >
-          <GripVertical className="h-4 w-4" />
+          <Bars2Icon className="h-4 w-4" />
         </button>
         <div className="min-w-0 flex-1">{children}</div>
       </div>

@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowDown } from 'lucide-react'
+import { ArrowDownIcon } from '@/components/icons'
 import { formatCurrency, formatDate } from '@/lib/utils'
 
 interface MatchTransactionInvoicePreviewProps {
@@ -61,7 +61,7 @@ export function MatchTransactionInvoicePreview({ data }: MatchTransactionInvoice
       </div>
 
       <div className="flex items-center justify-center text-xs text-muted-foreground">
-        <ArrowDown className="h-3.5 w-3.5 mr-1" />
+        <ArrowDownIcon className="h-3.5 w-3.5 mr-1" />
         matchas mot fakturan
       </div>
 

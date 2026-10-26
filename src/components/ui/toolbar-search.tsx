@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { Search } from 'lucide-react'
+import { MagnifyingGlassIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 
@@ -26,7 +26,7 @@ export const TOOLBAR_FIELD_CLASS = 'h-8 rounded-full px-3.5 text-[13px]'
 export const ToolbarSearch = React.forwardRef<HTMLInputElement, ToolbarSearchProps>(
   ({ containerClassName, className, ...props }, ref) => (
     <div className={cn('relative min-w-[220px] max-w-xs flex-1', containerClassName)}>
-      <Search
+      <MagnifyingGlassIcon
         className="absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
         aria-hidden="true"
       />

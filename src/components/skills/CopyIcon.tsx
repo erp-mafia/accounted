@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Check, Copy } from 'lucide-react'
+import { CheckIcon, Square2StackIcon } from '@/components/icons'
 import styles from './skills.module.css'
 
 /**
@@ -21,7 +21,7 @@ export function CopyIcon({ text, label }: { text: string | undefined; label: str
   const said = state === 'copied' ? t('copied') : state === 'failed' ? t('copy_failed') : label
   return (
     <button type="button" className={styles.copyIcon} onClick={copy} disabled={!text} aria-label={said} title={said} data-state={state}>
-      {state === 'copied' ? <Check className="h-3.5 w-3.5" aria-hidden /> : <Copy className="h-3.5 w-3.5" aria-hidden />}
+      {state === 'copied' ? <CheckIcon className="h-3.5 w-3.5" aria-hidden /> : <Square2StackIcon className="h-3.5 w-3.5" aria-hidden />}
     </button>
   )
 }

@@ -2,7 +2,7 @@
 
 import { useCallback, useMemo, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { Pencil, Plus, Trash2 } from 'lucide-react'
+import { PencilIcon, PlusIcon, TrashIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
@@ -148,7 +148,7 @@ export function PaymentPreviewLinesCard({
                 t('booking_done_editing')
               ) : (
                 <>
-                  <Pencil className="h-3 w-3 mr-1" />
+                  <PencilIcon className="h-3 w-3 mr-1" />
                   {t('booking_edit')}
                 </>
               )}
@@ -228,14 +228,14 @@ export function PaymentPreviewLinesCard({
                 disabled={editor.lines.length <= 2}
                 aria-label={t('booking_remove_line')}
               >
-                <Trash2 className="h-3 w-3" />
+                <TrashIcon className="h-3 w-3" />
               </Button>
             </div>
           ))}
 
           <div className="flex items-center justify-between pt-1">
             <Button variant="ghost" size="sm" onClick={editor.addLine}>
-              <Plus className="h-3 w-3 mr-1" />
+              <PlusIcon className="h-3 w-3 mr-1" />
               {t('booking_add_line')}
             </Button>
             <div className="text-xs tabular-nums text-muted-foreground">

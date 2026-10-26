@@ -3,7 +3,7 @@
 import { Fragment, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Landmark } from 'lucide-react'
+import { BuildingLibraryIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import type { PaymentReason, SummaryPart } from '@/lib/invoices/editor/payment-summary'
@@ -58,7 +58,7 @@ export function PaymentSummary({
     const { currency, options, busy } = foreignChoice
     return (
       <div className="flex items-start gap-3 text-[13px]">
-        <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <BuildingLibraryIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1 leading-5">
           <p className="text-muted-foreground">
             {t(options.length > 0 ? 'foreign_missing' : 'foreign_missing_no_iban', { currency })}
@@ -99,7 +99,7 @@ export function PaymentSummary({
     // Muted: the page's one ochre sentence is the status line, which says the same.
     return (
       <div className="flex items-start gap-3 text-[13px]">
-        <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <BuildingLibraryIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <p className="leading-5 text-muted-foreground">
           {t('missing')}{' '}
           {canEditCompany ? (
@@ -146,7 +146,7 @@ export function PaymentSummary({
   return (
     <div className="text-[13px]">
       <div className="flex items-start gap-3">
-        <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <BuildingLibraryIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <p className="leading-5" data-ph-mask="">
             {pieces.length > 0

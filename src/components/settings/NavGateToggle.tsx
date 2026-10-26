@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
 import { SettingsRow, SettingsRowEnd } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
@@ -65,7 +65,7 @@ export function NavGateToggle({ setting, namespace, href }: NavGateToggleProps) 
             href={href}
             className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             {t('settings_open_page')}
           </Link>
         </SettingsRowEnd>

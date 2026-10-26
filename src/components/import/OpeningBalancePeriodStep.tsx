@@ -8,7 +8,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Label } from '@/components/ui/label'
-import { AlertCircle, Loader2, CheckCircle2 } from 'lucide-react'
+import { CheckCircleIcon, ExclamationCircleIcon, SpinnerIcon } from '@/components/icons'
 
 interface EditableRow {
   id: string
@@ -98,7 +98,7 @@ export default function OpeningBalancePeriodStep({
           <Label>Räkenskapsperiod</Label>
           {loadingPeriods ? (
             <div className="flex items-center gap-2 text-sm text-muted-foreground py-2">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
               Hämtar perioder...
             </div>
           ) : periods.length === 0 ? (
@@ -144,12 +144,12 @@ export default function OpeningBalancePeriodStep({
           </div>
           {isBalanced ? (
             <div className="flex items-center gap-2 pt-1 border-t text-sm">
-              <CheckCircle2 className="h-4 w-4 text-success" />
+              <CheckCircleIcon className="h-4 w-4 text-success" />
               <span className="text-success font-medium">Balanserar</span>
             </div>
           ) : (
             <div className="flex items-center gap-2 pt-1 border-t text-sm">
-              <AlertCircle className="h-4 w-4 text-destructive shrink-0" />
+              <ExclamationCircleIcon className="h-4 w-4 text-destructive shrink-0" />
               <span className="text-destructive font-medium">
                 Balanserar inte (differens{' '}
                 <span className="tabular-nums">
@@ -164,7 +164,7 @@ export default function OpeningBalancePeriodStep({
         {/* Error */}
         {error && (
           <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
-            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+            <ExclamationCircleIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-destructive">{error}</p>
           </div>
         )}

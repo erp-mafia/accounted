@@ -1,7 +1,7 @@
 'use client'
 
 import { useId, useState } from 'react'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import { AccountNumber } from '@/components/ui/account-number'
 
 export interface DeclarationAccountLine {
@@ -73,9 +73,9 @@ export function DeclarationRutaRow({
               }}
             >
               {expanded ? (
-                <ChevronDown className="h-4 w-4" />
+                <ChevronDownIcon className="h-4 w-4" />
               ) : (
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRightIcon className="h-4 w-4" />
               )}
             </button>
           )}

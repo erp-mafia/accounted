@@ -1,7 +1,7 @@
 'use client'
 
 import type { KeyboardEvent } from 'react'
-import { Check } from 'lucide-react'
+import { CheckIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { PALETTE_VALUES, type Palette } from '@/lib/theme/palettes'
 
@@ -74,7 +74,7 @@ export function PalettePicker({
               <span className="h-2 w-2 rounded-full border border-border bg-secondary" />
             </span>
             <span className="min-w-0 truncate">{labels[palette]}</span>
-            <Check
+            <CheckIcon
               aria-hidden="true"
               className={cn('ml-auto h-3 w-3 shrink-0', selected ? 'opacity-100' : 'opacity-0')}
             />

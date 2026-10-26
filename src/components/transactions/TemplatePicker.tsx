@@ -5,7 +5,15 @@ import { useTranslations } from 'next-intl'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Search, ChevronDown, ChevronUp, AlertTriangle, Info, PenLine, Briefcase } from 'lucide-react'
+import {
+  BriefcaseIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+  MagnifyingGlassIcon,
+  PencilSquareIcon,
+} from '@/components/icons'
 import {
   getCommonTemplates,
   getAdvancedTemplates,
@@ -170,7 +178,7 @@ function LibraryTemplateCard({ raw, converted, selected, onClick, dense }: Libra
             )}
             {!converted && (
               <span className="inline-flex items-center gap-1 text-[11px] text-muted-foreground">
-                <PenLine className="h-3 w-3" />
+                <PencilSquareIcon className="h-3 w-3" />
                 {t('opens_editor_badge')}
               </span>
             )}
@@ -231,14 +239,14 @@ function TemplateCard({ template, selected, onClick, compact, dense }: TemplateC
             )}
             {template.requires_vat_registration_data && (
               <Badge variant="warning" className="text-[11px] px-1.5 py-0 gap-0.5">
-                <AlertTriangle className="h-2.5 w-2.5" />
+                <ExclamationTriangleIcon className="h-2.5 w-2.5" />
                 {t('requires_vat_reg')}
               </Badge>
             )}
           </div>
         </div>
         {template.requires_review && (
-          <Info className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />
+          <InformationCircleIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0 mt-0.5" />
         )}
       </div>
       {template.special_rules_sv && !compact && (
@@ -275,7 +283,7 @@ function AccountResultCard({ account, onClick, dense }: { account: AccountSearch
           <span className="font-medium text-sm leading-tight truncate">{account.account_name}</span>
         </div>
         <span className="inline-flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
-          <PenLine className="h-3 w-3" />
+          <PencilSquareIcon className="h-3 w-3" />
           {note}
         </span>
       </div>
@@ -550,7 +558,7 @@ export default function TemplatePicker({
     <div className="flex flex-col h-full">
       {/* Search bar */}
       <div className={dense ? 'relative px-3 pt-2.5 pb-1.5' : 'relative px-4 pt-3 pb-2'}>
-        <Search className={cn('absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground mt-0.5', dense ? 'left-6' : 'left-7')} />
+        <MagnifyingGlassIcon className={cn('absolute top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground mt-0.5', dense ? 'left-6' : 'left-7')} />
         <Input
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
@@ -626,10 +634,10 @@ export default function TemplatePicker({
                 own templates are shown regardless of expense/income context. */}
             {sortedLibraryRaw.length > 0 && (
               <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
-                  <Briefcase className="h-3 w-3" />
+                <div className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1.5">
+                  <BriefcaseIcon className="h-3 w-3" />
                   {t('my_templates')}
-                </p>
+                </div>
                 <div className={dense ? 'space-y-px' : 'space-y-1.5'}>
                   {sortedLibraryRaw.map((raw) => (
                     <LibraryTemplateCard
@@ -765,9 +773,9 @@ export default function TemplatePicker({
                 >
                   {t('more_templates', { count: allAdvanced.length })}
                   {showAdvanced ? (
-                    <ChevronUp className="h-3.5 w-3.5" />
+                    <ChevronUpIcon className="h-3.5 w-3.5" />
                   ) : (
-                    <ChevronDown className="h-3.5 w-3.5" />
+                    <ChevronDownIcon className="h-3.5 w-3.5" />
                   )}
                 </Button>
                 {showAdvanced && (

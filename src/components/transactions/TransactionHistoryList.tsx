@@ -20,16 +20,16 @@ import { embeddedVoucherLabel, getLinkedJournalEntryIds } from '@/lib/transactio
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { getCategoryDisplayName } from '@/lib/tax/expense-warnings'
 import {
-  ArrowLeftRight,
-  FileText,
-  Landmark,
-  Link2,
-  FileSearch,
-  MoreHorizontal,
-  Paperclip,
-  Trash2,
-  Unlink,
-} from 'lucide-react'
+  ArrowsRightLeftIcon,
+  BuildingLibraryIcon,
+  DocumentMagnifyingGlassIcon,
+  DocumentTextIcon,
+  EllipsisHorizontalIcon,
+  LinkIcon,
+  LinkSlashIcon,
+  PaperClipIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { TransactionAttachmentIndicator } from './TransactionAttachmentIndicator'
 import { WithCorrection } from '@/components/bookkeeping/WithCorrection'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -173,7 +173,7 @@ export default function TransactionHistoryList({
 
       {filtered.length === 0 ? (
         <DataListEmpty
-          icon={<ArrowLeftRight className="h-6 w-6" />}
+          icon={<ArrowsRightLeftIcon className="h-6 w-6" />}
           title={t('empty_title')}
           description={searchTerm ? t('empty_search') : t('empty_filter')}
         />
@@ -357,13 +357,13 @@ function BankHistoryRow({
           )}
           {isLinkedToInvoice && (
             <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground md:inline-flex">
-              <Link2 className="h-3 w-3" />
+              <LinkIcon className="h-3 w-3" />
               {t('linked_to_invoice')}
             </span>
           )}
           {hasInvoiceMatch && (
             <Badge data-ph-mask="" variant="secondary" className="hidden shrink-0 gap-1 font-normal md:inline-flex">
-              <FileText className="h-3 w-3" />
+              <DocumentTextIcon className="h-3 w-3" />
               {t('possible_match_invoice', {
                 number: transaction.potential_invoice!.invoice_number ?? '',
               })}
@@ -437,13 +437,13 @@ function BankHistoryRow({
                       className={cn('mr-2 text-muted-foreground hover:text-foreground data-[state=open]:opacity-100', HOVER_REVEAL_CLASS)}
                       aria-label="Fler alternativ"
                     >
-                      <MoreHorizontal className="h-4 w-4" />
+                      <EllipsisHorizontalIcon className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
                     {hasInvoiceMatch && (
                       <DropdownMenuItem onSelect={() => onOpenMatchDialog(transaction)}>
-                        <FileText className="h-3.5 w-3.5" />
+                        <DocumentTextIcon className="h-3.5 w-3.5" />
                         {t('possible_match_invoice', {
                           number: transaction.potential_invoice!.invoice_number ?? '',
                         })}
@@ -451,7 +451,7 @@ function BankHistoryRow({
                     )}
                     {showMatchVoucherItem && (
                       <DropdownMenuItem onSelect={() => onOpenMatchVoucher!(transaction)}>
-                        <FileSearch className="h-3.5 w-3.5" />
+                        <DocumentMagnifyingGlassIcon className="h-3.5 w-3.5" />
                         {t('match_voucher')}
                       </DropdownMenuItem>
                     )}
@@ -459,13 +459,13 @@ function BankHistoryRow({
                         propagates the doc onto the verifikation) and unbooked. */}
                     {showAttachItem && (
                       <DropdownMenuItem onSelect={() => onOpenAttachDocument!(transaction)}>
-                        <Paperclip className="h-3.5 w-3.5" />
+                        <PaperClipIcon className="h-3.5 w-3.5" />
                         {t('attach_document')}
                       </DropdownMenuItem>
                     )}
                     {showDetachItem && (
                       <DropdownMenuItem onSelect={() => onDetachDocument!(transaction)}>
-                        <Unlink className="h-3.5 w-3.5" />
+                        <LinkSlashIcon className="h-3.5 w-3.5" />
                         {tDetach('menu_item')}
                       </DropdownMenuItem>
                     )}
@@ -481,7 +481,7 @@ function BankHistoryRow({
                           onSelect={() => onDelete(transaction.id)}
                           className="text-destructive focus:text-destructive"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <TrashIcon className="h-3.5 w-3.5" />
                           {t('delete')}
                         </DropdownMenuItem>
                       </>
@@ -524,7 +524,7 @@ function SkattekontoHistoryRow({
           {/* Source marker, not an exception: muted text instead of a chip
               that would repeat on every Skatteverket row. */}
           <span className="hidden shrink-0 items-center gap-1 text-xs text-muted-foreground md:inline-flex">
-            <Landmark className="h-3 w-3" />
+            <BuildingLibraryIcon className="h-3 w-3" />
             {t('skv_badge')}
           </span>
           {!isBooked && row.match_suggestion && (

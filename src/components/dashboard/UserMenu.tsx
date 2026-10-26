@@ -12,18 +12,18 @@ import { useToast } from '@/components/ui/use-toast'
 import { SupportLink } from '@/components/ui/support-link'
 import NewClientCompanyDialog from '@/components/dashboard/NewClientCompanyDialog'
 import {
-  Check,
-  ChevronsUpDown,
-  ChevronRight,
-  CreditCard,
-  HelpCircle,
-  Loader2,
-  LogOut,
-  Plus,
-  Search,
-  Settings,
-  Users,
-} from 'lucide-react'
+  ArrowRightStartOnRectangleIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  ChevronUpDownIcon,
+  Cog6ToothIcon,
+  CreditCardIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  QuestionMarkCircleIcon,
+  SpinnerIcon,
+  UsersIcon,
+} from '@/components/icons'
 
 // Community invite (Accounted's Discord). Deliberately a constant, not
 // branding config: self-hosted rebrands can hide or swap it when someone
@@ -31,8 +31,8 @@ import {
 // expired and left logged-in users with a dead link.
 const DISCORD_INVITE_URL = 'https://discord.gg/nfE9Uyv69a'
 
-// Lucide ships no brand marks, so the Discord logo is inlined (simple-icons
-// path, CC0). Sized and colored like the surrounding lucide icons.
+// Heroicons ships no brand marks, so the Discord logo is inlined (simple-icons
+// path, CC0). Sized and colored like the surrounding icons.
 function DiscordLogo({ className }: { className?: string }) {
   return (
     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
@@ -245,7 +245,7 @@ export default function UserMenu({
             </span>
           )}
         </span>
-        <ChevronsUpDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground opacity-50 group-hover:opacity-100" />
+        <ChevronUpDownIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground opacity-50 group-hover:opacity-100" />
       </button>
 
       {open &&
@@ -284,7 +284,7 @@ export default function UserMenu({
                     ? tSwitcher('choose_company')
                     : company?.name || tSwitcher('default_company_name')}
                 </span>
-                <ChevronRight className="h-3.5 w-3.5 flex-shrink-0 opacity-50" />
+                <ChevronRightIcon className="h-3.5 w-3.5 flex-shrink-0 opacity-50" />
               </button>
 
               {companiesOpen && (
@@ -292,7 +292,7 @@ export default function UserMenu({
                 // (founder feedback 2026-07-23: never upward over the menu).
                 <div className={cn('absolute top-0 left-full z-[61] ml-1.5 w-60 py-1', POPOVER_SURFACE_CLASS, POPOVER_ENTER_CLASS)}>
                   <div className="flex items-center gap-2 border-b border-border px-3 pb-2 pt-1.5">
-                    <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+                    <MagnifyingGlassIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
                     <input
                       ref={searchRef}
                       value={query}
@@ -332,10 +332,10 @@ export default function UserMenu({
                             </span>
                           )}
                           {isCurrent && (
-                            <Check className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                            <CheckIcon className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
                           )}
                           {isPending && !isCurrent && (
-                            <Loader2 className="h-3 w-3 flex-shrink-0 animate-spin text-muted-foreground" />
+                            <SpinnerIcon className="h-3 w-3 flex-shrink-0 animate-spin text-muted-foreground" />
                           )}
                         </button>
                       )
@@ -373,12 +373,12 @@ export default function UserMenu({
                           }}
                           className={menuRow}
                         >
-                          <Plus className="h-4 w-4 flex-shrink-0" />
+                          <PlusIcon className="h-4 w-4 flex-shrink-0" />
                           {tClients('new_client_company')}
                         </button>
                       )}
                       <Link href="/select-company?choose=1" onClick={close} className={menuRow}>
-                        <Plus className="h-4 w-4 flex-shrink-0" />
+                        <PlusIcon className="h-4 w-4 flex-shrink-0" />
                         {tSwitcher('add_company')}
                       </Link>
                     </div>
@@ -398,7 +398,7 @@ export default function UserMenu({
                 onClick={close}
                 className={menuRow}
               >
-                <Settings className="h-4 w-4 flex-shrink-0" />
+                <Cog6ToothIcon className="h-4 w-4 flex-shrink-0" />
                 {tNav(cockpitMode ? 'account_settings' : 'settings')}
               </Link>
               <Link
@@ -406,18 +406,18 @@ export default function UserMenu({
                 onClick={close}
                 className={menuRow}
               >
-                <Users className="h-4 w-4 flex-shrink-0" />
+                <UsersIcon className="h-4 w-4 flex-shrink-0" />
                 {tNav('members_roles')}
               </Link>
               {!cockpitMode && (
                 <Link href="/settings/billing" onClick={close} className={menuRow}>
-                  <CreditCard className="h-4 w-4 flex-shrink-0" />
+                  <CreditCardIcon className="h-4 w-4 flex-shrink-0" />
                   {tNav('subscription')}
                 </Link>
               )}
               <div className="my-1 border-t border-border" />
               <Link href="/help" onClick={close} className={menuRow}>
-                <HelpCircle className="h-4 w-4 flex-shrink-0" />
+                <QuestionMarkCircleIcon className="h-4 w-4 flex-shrink-0" />
                 {tNav('help')}
               </Link>
               <a
@@ -440,7 +440,7 @@ export default function UserMenu({
                 }}
                 className={cn(menuRow, 'text-destructive hover:text-destructive')}
               >
-                <LogOut className="h-4 w-4 flex-shrink-0" />
+                <ArrowRightStartOnRectangleIcon className="h-4 w-4 flex-shrink-0" />
                 {sandbox ? tNav('logout_sandbox') : tCommon('logout')}
               </button>
             </div>

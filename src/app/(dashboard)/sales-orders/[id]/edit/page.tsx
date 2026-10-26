@@ -4,7 +4,7 @@ import { use, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeftIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PageHeader } from '@/components/ui/page-header'
@@ -68,7 +68,7 @@ export default function EditSalesOrderPage({ params }: { params: Promise<{ id: s
             href={`/sales-orders/${id}`}
             className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeftIcon className="h-4 w-4" />
             {t('back_to_order')}
           </Link>
         }

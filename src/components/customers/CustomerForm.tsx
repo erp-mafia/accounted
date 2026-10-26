@@ -12,7 +12,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { AttnLine } from '@/components/ui/attn-line'
 import { useToast } from '@/components/ui/use-toast'
-import { CheckCircle, XCircle, Lock } from 'lucide-react'
+import { CheckCircleIcon, LockClosedIcon, XCircleIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import {
@@ -428,9 +428,9 @@ export default function CustomerForm({
                     loading={isValidatingVat}
                   >
                     {isValidatingVat ? null : vatValidationResult?.valid ? (
-                      <CheckCircle className="h-4 w-4 text-success" />
+                      <CheckCircleIcon className="h-4 w-4 text-success" />
                     ) : vatValidationResult?.valid === false ? (
-                      <XCircle className="h-4 w-4 text-destructive" />
+                      <XCircleIcon className="h-4 w-4 text-destructive" />
                     ) : (
                       t('vat_verify')
                     )}
@@ -704,7 +704,7 @@ export default function CustomerForm({
             t('submit_saving')
           ) : !canWrite ? (
             <>
-              <Lock className="mr-2 h-4 w-4" />
+              <LockClosedIcon className="mr-2 h-4 w-4" />
               {t('submit_save')}
             </>
           ) : (

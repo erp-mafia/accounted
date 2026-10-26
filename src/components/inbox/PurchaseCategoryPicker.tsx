@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type Ref } from 'react'
 import { useTranslations } from 'next-intl'
-import { Check, Search } from 'lucide-react'
+import { CheckIcon, MagnifyingGlassIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import {
@@ -146,7 +146,7 @@ export function PurchaseCategoryPicker({
       >
         <span className="min-w-0 flex-1 truncate">{tc(purchaseCategoryNameKey(option.code))}</span>
         {option.hint && <span className="max-w-[50%] shrink-0 truncate text-[11px] text-muted-foreground">{option.hint}</span>}
-        <Check aria-hidden className={cn('h-4 w-4 shrink-0', picked ? 'opacity-100' : 'opacity-0')} />
+        <CheckIcon aria-hidden className={cn('h-4 w-4 shrink-0', picked ? 'opacity-100' : 'opacity-0')} />
       </div>
     )
   }
@@ -164,7 +164,7 @@ export function PurchaseCategoryPicker({
   return (
     <div className="space-y-2">
       <div className="relative">
-        <Search aria-hidden className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <MagnifyingGlassIcon aria-hidden className="pointer-events-none absolute left-4 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           ref={inputRef}
           value={query}

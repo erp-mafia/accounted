@@ -18,15 +18,15 @@ import {
 } from '@/components/ui/select'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import {
-  CheckCircle,
-  AlertCircle,
-  ArrowRight,
-  Loader2,
-  Calendar,
-  FileText,
-  Database,
-  Lock,
-} from 'lucide-react'
+  ArrowRightIcon,
+  CalendarIcon,
+  CheckCircleIcon,
+  CircleStackIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+  LockClosedIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { createClient } from '@/lib/supabase/client'
@@ -269,7 +269,7 @@ export default function ImportReviewStep({
               </div>
             ) : (
               <div className="flex flex-col items-center text-center space-y-6">
-                <Loader2 className="h-10 w-10 text-primary animate-spin" />
+                <SpinnerIcon className="h-10 w-10 text-primary animate-spin" />
                 <div className="space-y-1">
                   <p className="font-medium text-lg">{tStep('importing')}</p>
                   <p className="text-sm text-muted-foreground">
@@ -296,7 +296,7 @@ export default function ImportReviewStep({
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <CheckCircle className="h-5 w-5 text-success" />
+            <CheckCircleIcon className="h-5 w-5 text-success" />
             {tStep('ready_title')}
             {/* What the import does lives behind the "?" (convention 7)
                 instead of a trailing card of numbered steps. */}
@@ -318,14 +318,14 @@ export default function ImportReviewStep({
         <CardContent className="space-y-4">
           <div className="grid gap-4 md:grid-cols-3">
             <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
-              <FileText className="h-8 w-8 text-muted-foreground" />
+              <DocumentTextIcon className="h-8 w-8 text-muted-foreground" />
               <div>
                 <p className="font-medium">{preview.companyName || tStep('unknown_company')}</p>
                 <p className="text-sm text-muted-foreground">{preview.orgNumber || tStep('no_org_number')}</p>
               </div>
             </div>
             <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
-              <Calendar className="h-8 w-8 text-muted-foreground" />
+              <CalendarIcon className="h-8 w-8 text-muted-foreground" />
               <div>
                 <p className="font-medium">{tStep('fiscal_year')}</p>
                 <p className="text-sm text-muted-foreground">
@@ -340,7 +340,7 @@ export default function ImportReviewStep({
               </div>
             </div>
             <div className="flex items-center gap-3 p-3 bg-muted rounded-lg">
-              <Database className="h-8 w-8 text-muted-foreground" />
+              <CircleStackIcon className="h-8 w-8 text-muted-foreground" />
               <div>
                 <p className="font-medium">{tStep('accounts_mapped', { count: mappedCount })}</p>
                 <p className="text-sm text-muted-foreground">
@@ -553,7 +553,7 @@ export default function ImportReviewStep({
         <Card className="border-border bg-muted/30">
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-warning">
-              <AlertCircle className="h-5 w-5" />
+              <ExclamationCircleIcon className="h-5 w-5" />
               {tStep('note_title')}
             </CardTitle>
           </CardHeader>
@@ -589,7 +589,7 @@ export default function ImportReviewStep({
 
       {error && (
         <div role="alert" className="p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
-          <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
+          <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
           <div className="space-y-1.5 min-w-0">
             <p className="font-medium text-destructive">{t('execute_rejected_title')}</p>
             <p className="whitespace-pre-line text-sm text-muted-foreground">{error}</p>
@@ -607,9 +607,9 @@ export default function ImportReviewStep({
           disabled={!canWrite || isLoading || (orgMismatch && !orgConfirmed)}
           title={!canWrite ? tStep('read_only') : undefined}
         >
-          {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+          {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
           {tStep('start_import')}
-          {canWrite && <ArrowRight className="ml-2 h-4 w-4" />}
+          {canWrite && <ArrowRightIcon className="ml-2 h-4 w-4" />}
         </Button>
       </div>
     </div>

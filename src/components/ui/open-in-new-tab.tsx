@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
@@ -64,7 +64,7 @@ export function OpenInNewTab({
         className,
       )}
     >
-      <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+      <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
       <span className="sr-only">{text}</span>
     </Link>
   )

@@ -15,8 +15,7 @@
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
-import type { LucideIcon } from 'lucide-react'
-import { History, RefreshCw, Unlink } from 'lucide-react'
+import { ArrowPathIcon, ClockIcon, LinkSlashIcon, type Icon as AppIcon } from '@/components/icons'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -61,7 +60,7 @@ export interface FeedConnectorPanelProps<C extends FeedPanelConnection, P extend
   extensionId: string
   /** The connector's own namespace: the sentences that name the provider. */
   namespace: string
-  icon: LucideIcon
+  icon: AppIcon
   /** The connector's request helper, with its quick-call deadline. */
   request: <T>(options: PanelRequestOptions) => Promise<PanelRequestResult<T>>
   /** Deadline for "Synka nu" and the backfill: the route's ceiling plus margin. */
@@ -379,7 +378,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
         <CardContent className="space-y-4 pt-0">
           <p className="text-sm text-destructive">{t('load_failed')}</p>
           <Button variant="outline" size="sm" onClick={retryLoadStatus}>
-            <RefreshCw className="mr-2 h-4 w-4" />
+            <ArrowPathIcon className="mr-2 h-4 w-4" />
             {tCommon('retry')}
           </Button>
         </CardContent>
@@ -491,7 +490,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                         disabled={blocked}
                         loading={syncing}
                       >
-                        {!syncing && <RefreshCw className="mr-2 h-4 w-4" />}
+                        {!syncing && <ArrowPathIcon className="mr-2 h-4 w-4" />}
                         {syncing ? tf('syncing') : tf('sync_now')}
                       </Button>
                       <Button
@@ -500,7 +499,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                         onClick={() => setConfirmDisconnectId(connection.id)}
                         disabled={blocked}
                       >
-                        <Unlink className="mr-2 h-4 w-4" />
+                        <LinkSlashIcon className="mr-2 h-4 w-4" />
                         {tf('disconnect')}
                       </Button>
                     </div>
@@ -559,7 +558,7 @@ export function FeedConnectorPanel<C extends FeedPanelConnection, P extends Feed
                       disabled={blocked}
                       loading={backfilling}
                     >
-                      {!backfilling && <History className="mr-2 h-4 w-4" />}
+                      {!backfilling && <ClockIcon className="mr-2 h-4 w-4" />}
                       {backfilling ? tf('backfill_running') : tf('backfill_submit')}
                     </Button>
                   </div>

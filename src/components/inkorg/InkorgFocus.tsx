@@ -2,8 +2,8 @@
 
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { AnimatePresence, motion, useReducedMotion, type Variants } from 'framer-motion'
-import { ArrowLeft, ChevronLeft, ChevronRight } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion, type Variants } from 'motion/react'
+import { ArrowLeftIcon, ChevronLeftIcon, ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { focusPosition, neighbour, swipeStep } from '@/lib/inkorg/focus'
 import { cn } from '@/lib/utils'
@@ -124,7 +124,7 @@ export function InkorgFocus({
           />
         )}
         <Button variant="ghost" size="sm" onClick={onBack}>
-          <ArrowLeft aria-hidden="true" className="mr-1 h-3.5 w-3.5" />
+          <ArrowLeftIcon aria-hidden="true" className="mr-1 h-3.5 w-3.5" />
           {viewLabel}
         </Button>
         {position && (
@@ -135,10 +135,10 @@ export function InkorgFocus({
         <span className="flex-1" />
         <span className="hidden text-[12.5px] text-muted-foreground lg:inline">{t('keys_hint')}</span>
         <Button variant="ghost" size="icon-sm" aria-label={t('previous')} disabled={!canPrevious} onClick={() => onStep(-1)}>
-          <ChevronLeft className="h-4 w-4" />
+          <ChevronLeftIcon className="h-4 w-4" />
         </Button>
         <Button variant="ghost" size="icon-sm" aria-label={t('next')} disabled={!canNext} onClick={() => onStep(1)}>
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRightIcon className="h-4 w-4" />
         </Button>
       </div>
 

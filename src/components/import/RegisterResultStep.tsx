@@ -2,7 +2,12 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { CheckCircle2, XCircle, ArrowRight, AlertTriangle } from 'lucide-react'
+import {
+  ArrowRightIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import Link from 'next/link'
 import { ImportNotices } from '@/components/import/ImportNotices'
 import { resolveNotices, type ImportNotice } from '@/lib/import/notices'
@@ -61,11 +66,11 @@ export default function RegisterResultStep({
       <CardHeader>
         <div className="flex items-center gap-3">
           {result.success ? (
-            <CheckCircle2 className="h-6 w-6 text-success" />
+            <CheckCircleIcon className="h-6 w-6 text-success" />
           ) : isPartial ? (
-            <AlertTriangle className="h-6 w-6 text-warning" />
+            <ExclamationTriangleIcon className="h-6 w-6 text-warning" />
           ) : (
-            <XCircle className="h-6 w-6 text-destructive" />
+            <XCircleIcon className="h-6 w-6 text-destructive" />
           )}
           <CardTitle>
             {result.success
@@ -114,7 +119,7 @@ export default function RegisterResultStep({
           <Button asChild>
             <Link href={copy.listHref}>
               {copy.listLabel}
-              <ArrowRight className="h-4 w-4 ml-2" />
+              <ArrowRightIcon className="h-4 w-4 ml-2" />
             </Link>
           </Button>
           <Button variant="ghost" onClick={onNewImport}>Ny import</Button>

@@ -2,7 +2,7 @@
 
 import { useRef, useState, type DragEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check, ExternalLink, Upload } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, ArrowUpTrayIcon, CheckIcon } from '@/components/icons'
 import { Button, type ButtonProps } from '@/components/ui/button'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -102,7 +102,7 @@ export function MissingFocusStage({
           <Button key={action} asChild variant={variant} className={width}>
             <a href={decision.route.url} target="_blank" rel="noopener noreferrer">
               {t('action_open_portal', { vendor: decision.route.vendor })}
-              <ExternalLink aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
+              <ArrowTopRightOnSquareIcon aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
             </a>
           </Button>
         ) : null
@@ -145,7 +145,7 @@ export function MissingFocusStage({
               dragging && 'border-foreground bg-secondary/60 text-foreground',
             )}
           >
-            <Upload aria-hidden="true" className="h-6 w-6" />
+            <ArrowUpTrayIcon aria-hidden="true" className="h-6 w-6" />
             {busy ? (
               <span>{t('uploading')}</span>
             ) : dragging ? (
@@ -218,7 +218,7 @@ export function MissingFocusStage({
       {finishing && (
         <div className="absolute inset-0 flex items-start justify-center bg-background/70 pt-12 animate-fade-in" aria-live="polite">
           <span className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-[13px] font-medium">
-            <Check aria-hidden="true" className="h-4 w-4" />
+            <CheckIcon aria-hidden="true" className="h-4 w-4" />
             {t('done')}
           </span>
         </div>

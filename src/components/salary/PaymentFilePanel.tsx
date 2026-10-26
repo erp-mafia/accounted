@@ -18,7 +18,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
 import { PaymentBankList } from '@/components/salary/PaymentBankList'
-import { Download, ChevronDown, ChevronRight } from 'lucide-react'
+import { ArrowDownTrayIcon, ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
@@ -292,14 +292,14 @@ export function PaymentFilePanel({
               className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
               aria-expanded={showInstructions}
             >
-              <ChevronDown
+              <ChevronDownIcon
                 className={cn('h-3 w-3 transition-transform duration-150', showInstructions && 'rotate-180')}
               />
               {t('instructions_toggle')}
             </button>
             <span className="inline-flex items-center gap-3">
               <Button onClick={() => void handleDownload()} loading={downloading}>
-                {!downloading && <Download className="mr-2 h-4 w-4" />}
+                {!downloading && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
                 {t('download')}
               </Button>
               {/* The file downloads fine and only fails at the bank if the
@@ -390,7 +390,7 @@ export function PaymentFilePanel({
             aria-expanded={settledOpen}
             className="inline-flex items-center gap-2 transition-colors duration-150 hover:text-foreground"
           >
-            <ChevronRight
+            <ChevronRightIcon
               className={cn(
                 'h-3.5 w-3.5 text-muted-foreground transition-transform duration-150',
                 settledOpen && 'rotate-90',

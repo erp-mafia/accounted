@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRightIcon } from '@/components/icons'
 import { DetailSection } from '@/components/ui/detail-section'
 import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
 import { declaredAvgifterNote } from '@/lib/salary/effective-figures'
@@ -46,7 +46,7 @@ export function RunCalculationDetails({ periodYear, employees, calculationParams
             return (
               <details key={sre.id} className="group">
                 <summary className="flex cursor-pointer list-none items-center gap-2 py-1 text-sm transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
+                  <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
                   <span className="font-medium">
                     {employee
                       ? `${employee.first_name} ${employee.last_name}`

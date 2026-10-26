@@ -2,7 +2,12 @@
 
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { FileSpreadsheet, Lock, MoreHorizontal, Table, Upload } from 'lucide-react'
+import {
+  ArrowUpTrayIcon,
+  EllipsisHorizontalIcon,
+  LockClosedIcon,
+  TableCellsIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -32,30 +37,30 @@ export function RegisterActionsMenu({ entity }: { entity: RegisterImportEntity }
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')} title={tCommon('more_options')}>
-          <MoreHorizontal className="h-4 w-4" />
+          <EllipsisHorizontalIcon className="h-4 w-4" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
         {canWrite ? (
           <DropdownMenuItem asChild>
             <Link href={registerImportHref(entity)}>
-              <Upload className="mr-2 h-4 w-4" />
+              <ArrowUpTrayIcon className="mr-2 h-4 w-4" />
               {t('register_import_button')}
             </Link>
           </DropdownMenuItem>
         ) : (
           <DropdownMenuItem disabled title={t('register_import_viewer_tooltip')}>
-            <Lock className="mr-2 h-4 w-4" />
+            <LockClosedIcon className="mr-2 h-4 w-4" />
             {t('register_import_button')}
           </DropdownMenuItem>
         )}
         <DropdownMenuSeparator />
         <DropdownMenuItem onSelect={() => window.open(exportHref, '_blank')}>
-          <FileSpreadsheet className="mr-2 h-4 w-4" />
+          <TableCellsIcon className="mr-2 h-4 w-4" />
           {t('register_export_xlsx')}
         </DropdownMenuItem>
         <DropdownMenuItem onSelect={() => window.open(`${exportHref}?format=csv`, '_blank')}>
-          <Table className="mr-2 h-4 w-4" />
+          <TableCellsIcon className="mr-2 h-4 w-4" />
           {t('register_export_csv')}
         </DropdownMenuItem>
       </DropdownMenuContent>

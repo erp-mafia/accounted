@@ -5,7 +5,19 @@ import { isEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
 import { useTranslations } from 'next-intl'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
-import { Receipt, Lock, Loader2, Upload, Sparkles, X, Plus, ChevronRight, ChevronLeft, NotebookPen, FileText } from 'lucide-react'
+import {
+  ArrowUpTrayIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  DocumentTextIcon,
+  LockClosedIcon,
+  PencilSquareIcon,
+  PlusIcon,
+  ReceiptRefundIcon,
+  SparklesIcon,
+  SpinnerIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -968,7 +980,7 @@ export default function ExpenseClaimsPage() {
             <Button size="sm" onClick={() => setCreating(true)}>{t('new_claim')}</Button>
           ) : (
             <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-              <Lock className="mr-2 h-4 w-4" />
+              <LockClosedIcon className="mr-2 h-4 w-4" />
               {t('new_claim')}
             </Button>
           )
@@ -1044,7 +1056,7 @@ export default function ExpenseClaimsPage() {
         </div>
       ) : visibleClaims.length === 0 ? (
         <EmptyState
-          icon={Receipt}
+          icon={ReceiptRefundIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('new_claim') : undefined}
@@ -1227,7 +1239,7 @@ export default function ExpenseClaimsPage() {
           {receiptDoc && (
             <div className="flex shrink-0 justify-end">
               <Button type="button" variant="ghost" size="sm" onClick={() => setShowReceipt((v) => !v)}>
-                <FileText className="mr-1.5 h-3.5 w-3.5" />
+                <DocumentTextIcon className="mr-1.5 h-3.5 w-3.5" />
                 {showReceipt ? t('hide_receipt') : t('show_receipt')}
               </Button>
             </div>
@@ -1258,7 +1270,7 @@ export default function ExpenseClaimsPage() {
                 {upload.phase === 'idle' && inboxChoice !== NO_RECEIPT_VALUE ? (
                   // A receipt picked from the inbox: one line, like an upload.
                   <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
-                    <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1 truncate">
                       {inboxOptions.find((i) => i.id === inboxChoice)?.label ?? inboxChoice}
                     </span>
@@ -1269,7 +1281,7 @@ export default function ExpenseClaimsPage() {
                       onClick={() => setInboxChoice(NO_RECEIPT_VALUE)}
                       className="text-muted-foreground hover:text-foreground"
                     >
-                      <X className="h-4 w-4" />
+                      <XMarkIcon className="h-4 w-4" />
                     </button>
                   </div>
                 ) : upload.phase === 'idle' || upload.phase === 'error' ? (
@@ -1299,10 +1311,10 @@ export default function ExpenseClaimsPage() {
                         onClick={() => fileInputRef.current?.click()}
                         className="inline-flex items-center gap-2 transition-colors duration-150 hover:text-foreground"
                       >
-                        <Upload className="h-4 w-4" />
+                        <ArrowUpTrayIcon className="h-4 w-4" />
                         {t('dropzone_hint')}
                         <span className="inline-flex items-center gap-1 text-xs">
-                          <Sparkles className="h-3 w-3" />
+                          <SparklesIcon className="h-3 w-3" />
                           {t('dropzone_ai_hint')}
                         </span>
                       </button>
@@ -1330,9 +1342,9 @@ export default function ExpenseClaimsPage() {
                 ) : (
                   <div className="flex items-center gap-2 rounded-lg border border-border px-3 py-2 text-sm">
                     {upload.phase === 'done' ? (
-                      <Sparkles className="h-4 w-4 shrink-0" />
+                      <SparklesIcon className="h-4 w-4 shrink-0" />
                     ) : (
-                      <Loader2 className="h-4 w-4 shrink-0 animate-spin" />
+                      <SpinnerIcon className="h-4 w-4 shrink-0 animate-spin" />
                     )}
                     <span className="min-w-0 flex-1 truncate">{upload.fileName}</span>
                     <span className="text-xs text-muted-foreground">
@@ -1350,7 +1362,7 @@ export default function ExpenseClaimsPage() {
                       }}
                       className="text-muted-foreground hover:text-foreground"
                     >
-                      <X className="h-4 w-4" />
+                      <XMarkIcon className="h-4 w-4" />
                     </button>
                   </div>
                 )}
@@ -1478,26 +1490,26 @@ export default function ExpenseClaimsPage() {
                     className="flex w-full items-center gap-3 rounded-lg border border-border px-3 py-2.5 text-left transition-colors hover:bg-secondary/35"
                     onClick={chooseManual}
                   >
-                    <NotebookPen className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <PencilSquareIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                     <span className="flex-1">
                       <span className="block text-sm font-medium">{t('book_manually')}</span>
                       <span className="block text-xs text-muted-foreground">{t('book_manually_help')}</span>
                     </span>
-                    <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   </button>
                   <div className="max-h-[340px] space-y-3 overflow-y-auto">
                     {!templateSearch.trim() && (templateSections.recommended.length > 0 || aiPending) && (
                       <div className="space-y-1">
-                        <p className="flex items-center gap-2 px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                        <div className="flex items-center gap-2 px-3 pt-1 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
                           {t('templates_recommended')}
                           {templateSections.recommendedSource === 'ai' && !aiPending && (
                             <span className="flex items-center gap-1">
-                              <Sparkles className="h-3 w-3" aria-hidden="true" />
+                              <SparklesIcon className="h-3 w-3" aria-hidden="true" />
                               {t('templates_ai_badge')}
                             </span>
                           )}
-                          {aiPending && <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />}
-                        </p>
+                          {aiPending && <SpinnerIcon className="h-3 w-3 animate-spin" aria-hidden="true" />}
+                        </div>
                         {aiPending && templateSections.recommended.length === 0 ? (
                           <p className="px-3 py-2.5 text-sm text-muted-foreground">{t('templates_ai_loading')}</p>
                         ) : (
@@ -1514,7 +1526,7 @@ export default function ExpenseClaimsPage() {
                                   <span className="block text-xs leading-snug text-muted-foreground">{tpl.description}</span>
                                 )}
                               </span>
-                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                              <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                             </button>
                           ))
                         )}
@@ -1544,7 +1556,7 @@ export default function ExpenseClaimsPage() {
                                   <span className="block text-xs leading-snug text-muted-foreground">{tpl.description}</span>
                                 )}
                               </span>
-                              <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                              <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                             </button>
                           ))}
                         </div>
@@ -1565,7 +1577,7 @@ export default function ExpenseClaimsPage() {
                     className="flex w-full items-center gap-2 rounded-lg bg-secondary/40 px-3 py-2.5 text-left"
                     onClick={() => setBookingMode('choose')}
                   >
-                    <ChevronLeft className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <ChevronLeftIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                     <span className="flex-1">
                       <span className="block text-sm font-medium">
                         {appliedTemplate ? appliedTemplate.name : t('book_manually')}
@@ -1732,7 +1744,7 @@ export default function ExpenseClaimsPage() {
                             aria-label={t('remove_row')}
                             onClick={() => removeRow(row.key)}
                           >
-                            <X className="h-3.5 w-3.5" />
+                            <XMarkIcon className="h-3.5 w-3.5" />
                           </Button>
                         </td>
                       </tr>
@@ -1754,7 +1766,7 @@ export default function ExpenseClaimsPage() {
                   )}
                   <tr>
                     <td className={TD_CLASS}>
-                      <Lock
+                      <LockClosedIcon
                         className="mr-1.5 inline h-3.5 w-3.5 align-[-2px] text-muted-foreground"
                         aria-hidden="true"
                       />
@@ -1771,7 +1783,7 @@ export default function ExpenseClaimsPage() {
                     <td className={`${TD_CLASS} font-medium`}>
                       {showRowEditor && (
                         <Button type="button" variant="ghost" size="sm" className="-ml-2" onClick={addRow}>
-                          <Plus className="mr-1 h-3.5 w-3.5" />
+                          <PlusIcon className="mr-1 h-3.5 w-3.5" />
                           {t('add_row')}
                         </Button>
                       )}

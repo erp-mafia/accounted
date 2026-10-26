@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog'
 import { Progress } from '@/components/ui/progress'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Paperclip } from 'lucide-react'
+import { PaperClipIcon } from '@/components/icons'
 import VatTreatmentSelect from './VatTreatmentSelect'
 import { EXPENSE_CATEGORIES, INCOME_CATEGORIES } from './transaction-types'
 import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
@@ -90,7 +90,7 @@ export default function BatchCategorySelector({
           <div className="space-y-4 py-2">
             {/* Underlag reminder */}
             <div className="flex items-start gap-2 rounded-lg bg-muted/30 border border-border p-3">
-              <Paperclip className="h-4 w-4 text-attn mt-0.5 shrink-0" />
+              <PaperClipIcon className="h-4 w-4 text-attn mt-0.5 shrink-0" />
               <p className="text-xs text-attn">
                 {t('underlag_reminder')}
               </p>

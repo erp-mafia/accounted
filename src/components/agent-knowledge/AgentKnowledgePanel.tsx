@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
-import { Brain } from 'lucide-react'
+import { LightBulbIcon } from '@/components/icons'
 import type { LedgerContext } from '@/lib/agent-context/ledger-context'
 import type { DeepLedgerContext } from '@/lib/agent-context/ledger-deep'
 import type { AgentCompetence } from '@/lib/agent-context/agent-competence'
@@ -52,7 +52,7 @@ export function AgentKnowledgePanel() {
   if (error) {
     return (
       <EmptyState
-        icon={Brain}
+        icon={LightBulbIcon}
         title={t('load_error_title')}
         description={t('load_error_description')}
       />

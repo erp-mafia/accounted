@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { MoreHorizontal, Store } from 'lucide-react'
+import { BuildingStorefrontIcon, EllipsisHorizontalIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -217,7 +217,7 @@ export default function PosSalesPage() {
         </div>
       ) : noConnection ? (
         <EmptyState
-          icon={Store}
+          icon={BuildingStorefrontIcon}
           title={t('no_connection_title')}
           description={t('no_connection_description')}
           actionLabel={t('no_connection_action')}
@@ -226,7 +226,7 @@ export default function PosSalesPage() {
       ) : days.length === 0 ? (
         <div role="status" aria-live="polite">
           <EmptyState
-            icon={Store}
+            icon={BuildingStorefrontIcon}
             title={filter === 'all' && !venue ? t('empty_title') : t('empty_filtered_title')}
             description={filter === 'all' && !venue ? t('empty_description') : undefined}
           />
@@ -287,7 +287,7 @@ export default function PosSalesPage() {
                               className={cn('shrink-0', HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')}
                               aria-label={t('row_menu_aria', { date: formatDate(day.business_date) })}
                             >
-                              <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                              <EllipsisHorizontalIcon className="h-4 w-4 text-muted-foreground" />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">

@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { LogOut } from 'lucide-react'
+import { ArrowRightStartOnRectangleIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { SecuritySettings } from '@/components/settings/SecuritySettings'
@@ -42,7 +42,7 @@ export function SecuritySettingsContent() {
         <SettingsRow label={tCommon('logout')} help={tCommon('logout_description')}>
           <SettingsRowEnd>
             <Button variant="outline" size="sm" onClick={handleLogout}>
-              <LogOut className="mr-2 h-3.5 w-3.5" />
+              <ArrowRightStartOnRectangleIcon className="mr-2 h-3.5 w-3.5" />
               {tCommon('logout')}
             </Button>
           </SettingsRowEnd>

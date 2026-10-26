@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -107,7 +107,7 @@ export default function BookingWhy({
             aria-controls={detailsId}
             className="mt-1 flex items-center gap-1 rounded-sm py-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring pointer-coarse:min-h-10"
           >
-            <ChevronDown
+            <ChevronDownIcon
               aria-hidden="true"
               className={cn('h-3.5 w-3.5 transition-transform duration-150', open && 'rotate-180')}
             />

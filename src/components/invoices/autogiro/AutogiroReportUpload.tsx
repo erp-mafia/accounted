@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertCircle, Download, FileUp } from 'lucide-react'
+import { ArrowDownTrayIcon, DocumentArrowUpIcon, ExclamationCircleIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { FileDropzone } from '@/components/ui/file-dropzone'
@@ -94,7 +94,7 @@ export function AutogiroReportUpload({ canWrite, onApplied }: { canWrite: boolea
       {!file ? (
         <FileDropzone onFile={pick} disabled={!canWrite} label={t('upload_drop_label')}>
           <div className="flex flex-col items-center gap-2 px-6 py-8 text-center text-[13px]">
-            <FileUp className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
+            <DocumentArrowUpIcon className="h-5 w-5 text-muted-foreground" aria-hidden="true" />
             <p>{t('upload_drop')}</p>
             <p className="max-w-xl text-[12.5px] text-muted-foreground">{t('upload_or_settle')}</p>
           </div>
@@ -120,7 +120,7 @@ export function AutogiroReportUpload({ canWrite, onApplied }: { canWrite: boolea
 
           {error && (
             <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
-              <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" aria-hidden="true" />
+              <ExclamationCircleIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" aria-hidden="true" />
               <div>
                 <p className="font-medium text-destructive">{t('upload_failed')}</p>
                 <p className="text-sm text-muted-foreground">{error}</p>
@@ -386,7 +386,7 @@ function ResultNotes({ result, t }: { result: ReportResponse; t: AutogiroT }) {
         <div className="flex flex-wrap items-center gap-3">
           <p>{t('answer_file_saved')}</p>
           <Button type="button" size="sm" variant="ghost" onClick={() => saveAnswerFile(result.answer_file!)}>
-            <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
+            <ArrowDownTrayIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
             {t('answer_file_again')}
           </Button>
         </div>

@@ -2,7 +2,7 @@
 
 import { useMemo, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { cn } from '@/lib/utils'
@@ -337,7 +337,7 @@ export function useRegisterImportConfig(entity: RegisterImportEntity): RegisterI
               </Select>
               {row.vat_rate_adjusted && (
                 <span className="text-warning shrink-0" title={t('vat_adjusted_title')}>
-                  <AlertTriangle className="h-3.5 w-3.5" />
+                  <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                 </span>
               )}
             </div>

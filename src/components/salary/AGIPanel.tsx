@@ -2,18 +2,18 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  AlertCircle,
-  CheckCircle2,
-  Circle,
-  Download,
-  ExternalLink,
-  Link2,
-  Link2Off,
-  Loader2,
-  Lock,
-  Send,
-  Unlock,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowTopRightOnSquareIcon,
+  CheckCircleIcon,
+  CircleIcon,
+  ExclamationCircleIcon,
+  LinkIcon,
+  LinkSlashIcon,
+  LockClosedIcon,
+  LockOpenIcon,
+  PaperAirplaneIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
@@ -862,17 +862,17 @@ export function AGIPanel(props: AGIPanelProps) {
       loading={actionLoading === 'download'}
       title={t('download_xml_title')}
     >
-      {actionLoading !== 'download' && <Download className="mr-2 h-3.5 w-3.5" />}
+      {actionLoading !== 'download' && <ArrowDownTrayIcon className="mr-2 h-3.5 w-3.5" />}
       {t('download_xml_button')}
     </Button>
   )
   // The connected branch renders `error` in its own block; the early branches
   // only need it for a failed download.
   const downloadError = error && (
-    <p className="mt-3 text-sm text-destructive">
-      <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
+    <div className="mt-3 text-sm text-destructive">
+      <ExclamationCircleIcon className="mr-1 inline h-3.5 w-3.5" />
       {error}
-    </p>
+    </div>
   )
 
   // ── Render branches ─────────────────────────────────────────────
@@ -911,7 +911,7 @@ export function AGIPanel(props: AGIPanelProps) {
           <div className="mt-3 flex flex-wrap justify-end gap-2">
             {downloadXmlButton}
             <Button onClick={handleConnect} disabled={connecting}>
-              <Link2 className="mr-2 h-4 w-4" />
+              <LinkIcon className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_button')}
             </Button>
           </div>
@@ -998,7 +998,7 @@ export function AGIPanel(props: AGIPanelProps) {
               className="inline-flex items-center gap-1 underline decoration-border underline-offset-4 transition-colors duration-150 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-50"
               title={t('disconnect_title')}
             >
-              {actionLoading === 'disconnect' && <Loader2 className="h-3 w-3 animate-spin" />}
+              {actionLoading === 'disconnect' && <SpinnerIcon className="h-3 w-3 animate-spin" />}
               {t('disconnect_button')}
             </button>
           )}
@@ -1147,7 +1147,7 @@ export function AGIPanel(props: AGIPanelProps) {
               rel="noreferrer"
               className="mt-2 inline-flex items-center gap-1 font-medium underline underline-offset-2 hover:opacity-80"
             >
-              {t('open_signing_link')} <ExternalLink className="h-3.5 w-3.5" />
+              {t('open_signing_link')} <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             </a>
           </div>
         )}
@@ -1193,7 +1193,7 @@ export function AGIPanel(props: AGIPanelProps) {
               rel="noreferrer"
               className="mt-2 inline-flex items-center gap-1 font-medium text-destructive underline underline-offset-2 hover:opacity-80"
             >
-              {t('open_error_report')} <ExternalLink className="h-3.5 w-3.5" />
+              {t('open_error_report')} <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             </a>
           </div>
         )}
@@ -1224,7 +1224,7 @@ export function AGIPanel(props: AGIPanelProps) {
                   k.status === 'STOPP' ? 'text-destructive' : 'text-attn',
                 )}
               >
-                <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                <ExclamationCircleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                 <span>
                   {k.kod && <span className="font-mono">{k.kod} </span>}
                   {k.uppgiftsTyp && <span className="text-muted-foreground">[{k.uppgiftsTyp}{k.specifikationsnummer ? ` #${k.specifikationsnummer}` : ''}] </span>}
@@ -1245,14 +1245,14 @@ export function AGIPanel(props: AGIPanelProps) {
             sessionExpiredStatus
           return (
             <div className="text-sm text-destructive">
-              <p>
-                <AlertCircle className="mr-1 inline h-3.5 w-3.5" />
+              <div>
+                <ExclamationCircleIcon className="mr-1 inline h-3.5 w-3.5" />
                 {error}
-              </p>
+              </div>
               {sessionExpired && !readOnly && (
                 <div className="mt-2">
                   <Button size="sm" variant="outline" onClick={handleConnect} disabled={connecting}>
-                    <Link2 className="mr-2 h-3.5 w-3.5" />
+                    <LinkIcon className="mr-2 h-3.5 w-3.5" />
                     {reconnectLabel}
                   </Button>
                 </div>
@@ -1261,10 +1261,10 @@ export function AGIPanel(props: AGIPanelProps) {
           )
         })()}
         {success && !error && (
-          <p className="text-sm">
-            <CheckCircle2 className="mr-1 inline h-3.5 w-3.5 text-success" />
+          <div className="text-sm">
+            <CheckCircleIcon className="mr-1 inline h-3.5 w-3.5 text-success" />
             {success}
-          </p>
+          </div>
         )}
 
         {!readOnly && !isSigned && (
@@ -1279,13 +1279,13 @@ export function AGIPanel(props: AGIPanelProps) {
                   return (
                     <li key={step} className="flex items-center gap-2">
                       {state === 'done' ? (
-                        <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+                        <CheckCircleIcon className="h-3.5 w-3.5 shrink-0 text-success" />
                       ) : state === 'running' ? (
-                        <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                        <SpinnerIcon className="h-3.5 w-3.5 shrink-0 animate-spin" />
                       ) : state === 'failed' ? (
-                        <AlertCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                        <ExclamationCircleIcon className="h-3.5 w-3.5 shrink-0 text-destructive" />
                       ) : (
-                        <Circle className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
+                        <CircleIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />
                       )}
                       <span className={state === 'upcoming' ? 'text-muted-foreground' : ''}>
                         {t(`chain_step_${step}`)}
@@ -1324,7 +1324,7 @@ export function AGIPanel(props: AGIPanelProps) {
                     disabled={actionLoading !== null || !hasSkatteverket}
                     loading={actionLoading === 'chain'}
                   >
-                    {actionLoading !== 'chain' && <Send className="mr-2 h-4 w-4" />}
+                    {actionLoading !== 'chain' && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
                     {t('chain_button')}
                   </Button>
                 )}
@@ -1344,7 +1344,7 @@ export function AGIPanel(props: AGIPanelProps) {
                   disabled={actionLoading !== null || !hasSkatteverket}
                   loading={actionLoading === 'submit'}
                 >
-                  {actionLoading !== 'submit' && <Send className="mr-2 h-3.5 w-3.5" />}
+                  {actionLoading !== 'submit' && <PaperAirplaneIcon className="mr-2 h-3.5 w-3.5" />}
                   {t('submit_button')}
                 </Button>
                 <Button
@@ -1354,7 +1354,7 @@ export function AGIPanel(props: AGIPanelProps) {
                   disabled={actionLoading !== null || !underlagSubmitted}
                   loading={actionLoading === 'granskning'}
                 >
-                  {actionLoading !== 'granskning' && <Lock className="mr-2 h-3.5 w-3.5" />}
+                  {actionLoading !== 'granskning' && <LockClosedIcon className="mr-2 h-3.5 w-3.5" />}
                   {t('signing_link_button')}
                 </Button>
                 <Button
@@ -1364,7 +1364,7 @@ export function AGIPanel(props: AGIPanelProps) {
                   disabled={actionLoading !== null}
                   loading={actionLoading === 'check'}
                 >
-                  {actionLoading !== 'check' && <Download className="mr-2 h-3.5 w-3.5" />}
+                  {actionLoading !== 'check' && <ArrowDownTrayIcon className="mr-2 h-3.5 w-3.5" />}
                   {t('check_kvittens_button')}
                 </Button>
                 {awaitingSigning && (
@@ -1375,7 +1375,7 @@ export function AGIPanel(props: AGIPanelProps) {
                     disabled={actionLoading !== null}
                     loading={actionLoading === 'unlock'}
                   >
-                    {actionLoading !== 'unlock' && <Unlock className="mr-2 h-3.5 w-3.5" />}
+                    {actionLoading !== 'unlock' && <LockOpenIcon className="mr-2 h-3.5 w-3.5" />}
                     {t('unlock_button')}
                   </Button>
                 )}
@@ -1404,9 +1404,9 @@ function StatusRow({
   return (
     <div className="flex items-start gap-2 py-2">
       {ok ? (
-        <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-success" />
+        <CheckCircleIcon className="mt-0.5 h-4 w-4 shrink-0 text-success" />
       ) : (
-        <Link2Off className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+        <LinkSlashIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
       )}
       <span className="text-muted-foreground">{ok ? okText : pendingText}</span>
     </div>

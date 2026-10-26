@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -194,7 +194,7 @@ export function FiscalYearResetDialog({
 
         {isLoading ? (
           <div className="flex min-h-40 items-center justify-center text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <SpinnerIcon className="mr-2 h-4 w-4 animate-spin" />
             {t('fy_reset_checking')}
           </div>
         ) : loadError ? (
@@ -206,7 +206,7 @@ export function FiscalYearResetDialog({
             {eligibility.blockers.length > 0 ? (
               <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-destructive">
-                  <AlertTriangle className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="h-4 w-4" />
                   {t('fy_reset_blocked_title')}
                 </div>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">

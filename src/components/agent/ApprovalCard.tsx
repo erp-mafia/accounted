@@ -3,7 +3,14 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Check, X, AlertTriangle, Lock, ShieldCheck, ArrowRight } from 'lucide-react'
+import {
+  ArrowRightIcon,
+  CheckIcon,
+  ExclamationTriangleIcon,
+  LockClosedIcon,
+  ShieldCheckIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
@@ -290,9 +297,9 @@ export default function ApprovalCard({
         className="rounded-lg border border-success/40 bg-success/10 px-4 py-3 text-sm"
         aria-description={message}
       >
-        <p className="flex items-center gap-2 font-medium">
-          <Check className="h-4 w-4" /> Godkänt
-        </p>
+        <div className="flex items-center gap-2 font-medium">
+          <CheckIcon className="h-4 w-4" /> Godkänt
+        </div>
         {bulkSummary && (
           <p className="mt-1 text-xs text-muted-foreground tabular-nums">
             {bulkSummary.booked} {bulkSummary.booked === 1 ? 'underlag bokfört' : 'underlag bokförda'}
@@ -305,7 +312,7 @@ export default function ApprovalCard({
             className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-foreground hover:underline"
           >
             {deepLink.label}
-            <ArrowRight className="h-3 w-3" />
+            <ArrowRightIcon className="h-3 w-3" />
           </Link>
         )}
       </div>
@@ -318,12 +325,12 @@ export default function ApprovalCard({
         className="rounded-lg border border-border bg-card px-4 py-3 text-sm text-muted-foreground"
         aria-description={message}
       >
-        <p className="flex items-center gap-2">
-          <X className="h-4 w-4" /> Avslaget
+        <div className="flex items-center gap-2">
+          <XMarkIcon className="h-4 w-4" /> Avslaget
           {rejectCategory && (
             <span className="text-xs text-muted-foreground/80">· {REJECTION_CATEGORY_LABELS[rejectCategory]}</span>
           )}
-        </p>
+        </div>
       </div>
     )
   }
@@ -368,10 +375,10 @@ export default function ApprovalCard({
 
       {requiresTextConfirm && (
         <div className="space-y-1">
-          <p className="flex items-center gap-2 text-xs text-destructive">
-            <AlertTriangle className="h-3.5 w-3.5" />
+          <div className="flex items-center gap-2 text-xs text-destructive">
+            <ExclamationTriangleIcon className="h-3.5 w-3.5" />
             Hög risk: skriv <strong className="font-semibold">godkänn</strong> för att bekräfta.
-          </p>
+          </div>
           <input
             type="text"
             value={confirmText}
@@ -515,21 +522,21 @@ function PeriodBadge({ status }: { status: PeriodStatus }) {
   if (status.status === 'open') {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-success">
-        <ShieldCheck className="h-3 w-3" /> Period öppen
+        <ShieldCheckIcon className="h-3 w-3" /> Period öppen
       </span>
     )
   }
   if (status.status === 'locked') {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-warning">
-        <Lock className="h-3 w-3" /> Period låst
+        <LockClosedIcon className="h-3 w-3" /> Period låst
         {status.lock_date ? <span className="tabular-nums">· {status.lock_date}</span> : null}
       </span>
     )
   }
   return (
     <span className="inline-flex items-center gap-1 text-[11px] uppercase tracking-wider text-destructive">
-      <Lock className="h-3 w-3" /> Period stängd
+      <LockClosedIcon className="h-3 w-3" /> Period stängd
     </span>
   )
 }

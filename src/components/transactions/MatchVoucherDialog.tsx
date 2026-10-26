@@ -20,7 +20,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { buildSplitSelection, proposeSplitSelection } from '@/lib/reconciliation/split-selection'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { useToast } from '@/components/ui/use-toast'
-import { ArrowUpRight, ArrowDownRight, Loader2 } from 'lucide-react'
+import { ArrowDownRightIcon, ArrowUpRightIcon, SpinnerIcon } from '@/components/icons'
 import type { TransactionWithInvoice } from './transaction-types'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
 
@@ -261,7 +261,7 @@ export function MatchVoucherDialog({
             className={isIncome ? 'text-success' : 'text-foreground/60'}
             aria-hidden
           >
-            {isIncome ? <ArrowUpRight className="h-4 w-4" /> : <ArrowDownRight className="h-4 w-4" />}
+            {isIncome ? <ArrowUpRightIcon className="h-4 w-4" /> : <ArrowDownRightIcon className="h-4 w-4" />}
           </span>
           <div className="min-w-0 flex-1">
             <p className="truncate font-medium">{transaction.description}</p>
@@ -284,7 +284,7 @@ export function MatchVoucherDialog({
         <div className="space-y-2">
           {loading ? (
             <div className="flex items-center justify-center gap-2 rounded-lg border border-border py-6 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
               Söker verifikationer…
             </div>
           ) : glLines.length === 0 ? (

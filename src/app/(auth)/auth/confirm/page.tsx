@@ -1,5 +1,5 @@
 import { getTranslations } from 'next-intl/server'
-import { KeyRound, MailCheck, UserPlus, type LucideIcon } from 'lucide-react'
+import { EnvelopeOpenIcon, KeyIcon, UserPlusIcon, type Icon as AppIcon } from '@/components/icons'
 import { confirmFormAction } from '@/lib/auth/confirm-link'
 import { ConfirmLinkForm } from './confirm-link-form'
 
@@ -45,36 +45,36 @@ export default async function ConfirmLinkPage({
   }
 
   const t = await getTranslations('auth_confirm')
-  const copy: Record<LinkKind, { title: string; subtitle: string; button: string; Icon: LucideIcon }> = {
+  const copy: Record<LinkKind, { title: string; subtitle: string; button: string; Icon: AppIcon }> = {
     recovery: {
       title: t('recovery_title'),
       subtitle: t('recovery_subtitle'),
       button: t('recovery_button'),
-      Icon: KeyRound,
+      Icon: KeyIcon,
     },
     signup: {
       title: t('signup_title'),
       subtitle: t('signup_subtitle'),
       button: t('signup_button'),
-      Icon: MailCheck,
+      Icon: EnvelopeOpenIcon,
     },
     invite: {
       title: t('invite_title'),
       subtitle: t('invite_subtitle'),
       button: t('invite_button'),
-      Icon: UserPlus,
+      Icon: UserPlusIcon,
     },
     email_change: {
       title: t('email_change_title'),
       subtitle: t('email_change_subtitle'),
       button: t('email_change_button'),
-      Icon: MailCheck,
+      Icon: EnvelopeOpenIcon,
     },
     other: {
       title: t('other_title'),
       subtitle: t('other_subtitle'),
       button: t('other_button'),
-      Icon: MailCheck,
+      Icon: EnvelopeOpenIcon,
     },
   }
   const { title, subtitle, button, Icon } = copy[linkKind(query.get('type'))]

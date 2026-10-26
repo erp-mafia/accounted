@@ -4,7 +4,7 @@ import { useId, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Search } from 'lucide-react'
+import { MagnifyingGlassIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import {
@@ -163,7 +163,7 @@ function SettingsSearch({
 
   return (
     <div className="relative">
-      <Search aria-hidden="true" className="pointer-events-none absolute left-3 top-2 h-4 w-4 text-muted-foreground" />
+      <MagnifyingGlassIcon aria-hidden="true" className="pointer-events-none absolute left-3 top-2 h-4 w-4 text-muted-foreground" />
       <input
         ref={inputRef}
         type="search"

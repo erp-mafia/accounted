@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { Pencil, X, ArrowLeft, ArrowRight } from 'lucide-react'
+import { ArrowLeftIcon, ArrowRightIcon, PencilIcon, XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
@@ -288,7 +288,7 @@ export default function ReviewCard({
                       className="text-muted-foreground hover:text-foreground transition-colors"
                       aria-label="Redigera profil"
                     >
-                      <Pencil className="h-4 w-4" />
+                      <PencilIcon className="h-4 w-4" />
                     </button>
                   )}
                 </div>
@@ -448,14 +448,14 @@ export default function ReviewCard({
               onClick={() => setStep(1)}
               disabled={step === 1}
             >
-              <ArrowLeft className="h-4 w-4 mr-2" />
+              <ArrowLeftIcon className="h-4 w-4 mr-2" />
               Tillbaka
             </Button>
 
             {step === 1 && (
               <Button onClick={() => setStep(2)}>
                 Nästa
-                <ArrowRight className="h-4 w-4 ml-2" />
+                <ArrowRightIcon className="h-4 w-4 ml-2" />
               </Button>
             )}
             {step === 2 && (
@@ -467,7 +467,7 @@ export default function ReviewCard({
                 ) : (
                   <>
                     Möt {agentName}
-                    <ArrowRight className="h-4 w-4 ml-2" />
+                    <ArrowRightIcon className="h-4 w-4 ml-2" />
                   </>
                 )}
               </Button>
@@ -567,7 +567,7 @@ function FieldRow({
           className="text-muted-foreground hover:text-foreground transition-colors shrink-0"
           aria-label={`Redigera ${label}`}
         >
-          <Pencil className="h-4 w-4" />
+          <PencilIcon className="h-4 w-4" />
         </button>
       )}
     </div>
@@ -638,7 +638,7 @@ function Chip({
         className="ml-1 rounded-full hover:bg-secondary/60 p-0.5 transition-colors"
         aria-label={`Ta bort ${label}`}
       >
-        <X className="h-3 w-3" />
+        <XMarkIcon className="h-3 w-3" />
       </button>
     </Badge>
   )

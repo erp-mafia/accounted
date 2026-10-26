@@ -9,7 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ArrowRight, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { ArrowRightIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -357,12 +357,12 @@ export function DispositionsStep({
                 <CardTitle className="text-base">{completed.label}</CardTitle>
                 {completed.status === 'booked' ? (
                   <span className="mt-2 inline-flex items-center gap-1 text-xs text-muted-foreground">
-                    <CheckCircle2 className="h-3.5 w-3.5" />
+                    <CheckCircleIcon className="h-3.5 w-3.5" />
                     Redan bokförd
                   </span>
                 ) : (
                   <Badge variant="warning" className="mt-2 gap-1">
-                    <AlertTriangle className="h-3.5 w-3.5" />
+                    <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                     Behöver rättas
                   </Badge>
                 )}
@@ -446,7 +446,7 @@ export function DispositionsStep({
             'Bokför…'
           ) : (
             <>
-              Bokför valda dispositioner <ArrowRight className="ml-1 h-4 w-4" />
+              Bokför valda dispositioner <ArrowRightIcon className="ml-1 h-4 w-4" />
             </>
           )}
         </Button>
@@ -632,7 +632,7 @@ function ProposalCard({
             <p className="text-sm text-muted-foreground mt-1">{proposal.description}</p>
             {proposal.required && (
               <Badge variant="warning" className="mt-2 gap-1">
-                <AlertTriangle className="h-3.5 w-3.5" /> Obligatorisk
+                <ExclamationTriangleIcon className="h-3.5 w-3.5" /> Obligatorisk
               </Badge>
             )}
           </div>

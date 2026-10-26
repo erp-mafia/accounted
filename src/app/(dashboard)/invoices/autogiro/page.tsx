@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { FileDown, Repeat } from 'lucide-react'
+import { ArrowPathRoundedSquareIcon, DocumentArrowDownIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -83,7 +83,7 @@ export default function AutogiroPage() {
       <div className="space-y-8">
         <PageHeader title={t('title')} help={help} />
         {loadError ? (
-          <EmptyState icon={Repeat} title={t('load_failed_title')} description={loadError}>
+          <EmptyState icon={ArrowPathRoundedSquareIcon} title={t('load_failed_title')} description={loadError}>
             <Button type="button" variant="outline" onClick={() => load()}>
               {tCommon('retry')}
             </Button>
@@ -105,7 +105,7 @@ export default function AutogiroPage() {
     return (
       <div className="space-y-8">
         <PageHeader title={t('title')} />
-        <EmptyState icon={Repeat} title={t('pilot_title')} description={t('pilot_description')} supportHint />
+        <EmptyState icon={ArrowPathRoundedSquareIcon} title={t('pilot_title')} description={t('pilot_description')} supportHint />
       </div>
     )
   }
@@ -180,7 +180,7 @@ export default function AutogiroPage() {
               title={chosen.length === 0 ? t('create_file_none_chosen') : undefined}
               onClick={() => void createDebitFile()}
             >
-              <FileDown className="mr-2 h-4 w-4" aria-hidden="true" />
+              <DocumentArrowDownIcon className="mr-2 h-4 w-4" aria-hidden="true" />
               {allChosen ? t('create_file') : t('create_file_count', { count: chosen.length })}
             </Button>
           ) : undefined

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { FileText, Loader2, Paperclip, X } from 'lucide-react'
+import { DocumentTextIcon, PaperClipIcon, SpinnerIcon, XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -279,7 +279,7 @@ export function InvoiceAttachmentsSection({
           onClick={() => inputRef.current?.click()}
           disabled={disabled || loading || full}
         >
-          <Paperclip className="mr-2 h-4 w-4" />
+          <PaperClipIcon className="mr-2 h-4 w-4" />
           {t('add')}
         </Button>
         <input
@@ -305,7 +305,7 @@ export function InvoiceAttachmentsSection({
               key={a.document_id}
               className="flex min-w-0 items-center gap-2 rounded-sm bg-muted/50 px-2 py-1 text-sm"
             >
-              <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
               {/* data-ph-mask: the file name is user data */}
               <span className="min-w-0 flex-1 truncate" title={a.file_name} data-ph-mask="">
                 {a.file_name}
@@ -323,7 +323,7 @@ export function InvoiceAttachmentsSection({
                 disabled={disabled || removing !== null}
                 onClick={() => void remove(a.document_id)}
               >
-                <X className="h-3 w-3" />
+                <XMarkIcon className="h-3 w-3" />
               </Button>
             </li>
           ))}
@@ -332,7 +332,7 @@ export function InvoiceAttachmentsSection({
               key={p.key}
               className="flex min-w-0 items-center gap-2 rounded-sm bg-muted/50 px-2 py-1 text-sm text-muted-foreground"
             >
-              <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-label={t('uploading')} />
+              <SpinnerIcon className="h-4 w-4 shrink-0 animate-spin" aria-label={t('uploading')} />
               <span className="min-w-0 flex-1 truncate" title={p.file_name} data-ph-mask="">
                 {p.file_name}
               </span>

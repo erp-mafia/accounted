@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { useLocale, useTranslations } from 'next-intl'
-import { MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
@@ -188,7 +188,7 @@ export function PartyDossier({
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>
                       <Button type="button" size="sm" variant="outline" aria-label={t('more_actions')} disabled={!canWrite || busy}>
-                        <MoreHorizontal className="h-4 w-4" aria-hidden="true" />
+                        <EllipsisHorizontalIcon className="h-4 w-4" aria-hidden="true" />
                       </Button>
                     </DropdownMenuTrigger>
                     <DropdownMenuContent align="start">

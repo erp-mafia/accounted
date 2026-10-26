@@ -13,20 +13,14 @@ import {
 } from 'date-fns'
 import { enUS, sv } from 'date-fns/locale'
 import {
-  Activity,
-  Baby,
-  CalendarPlus,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  Heart,
-  HeartPulse,
-  Loader2,
-  MinusCircle,
-  Trash2,
-  X,
-  type LucideIcon,
-} from 'lucide-react'
+  CalendarIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  ClockIcon,
+  SpinnerIcon,
+  TrashIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -81,7 +75,6 @@ interface AbsenceTypeMeta {
   /** Translation keys in the `salary_calendar` namespace. */
   labelKey: string
   shortLabelKey: string
-  icon: LucideIcon
   pillClass: string
 }
 
@@ -89,23 +82,22 @@ interface AbsenceTypeMeta {
 // Every value is alpha-over-token, which is why none of these need a `dark:`
 // variant: the same class reads correctly on both grounds (the approach
 // components/ui/badge.tsx already takes). The eight types share four tones, so
-// fill carries a second axis: filled vs outlined separates the two types
-// inside a tone whose Lucide icon is identical (Heart is parental, pregnancy
-// and care_relative; Activity is study and other_leave).
+// fill carries a second axis: filled vs outlined separates the types inside a
+// tone, and the short label names each one.
 //
 //   terracotta = sick (karens, employer cost)
 //   ochre      = caring for someone else (vab, närstående)
 //   sage       = parental and pregnancy leave
 //   neutral    = the rest (study, unpaid, other)
 const TYPE_META: Record<AbsenceType, AbsenceTypeMeta> = {
-  sick:          { labelKey: 'type_sick',          shortLabelKey: 'type_sick_short',          icon: HeartPulse,   pillClass: 'bg-destructive/10 text-destructive' },
-  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           icon: Baby,         pillClass: 'bg-muted text-attn' },
-  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', icon: Heart,        pillClass: 'border border-border text-attn' },
-  parental:      { labelKey: 'type_parental',      shortLabelKey: 'type_parental_short',      icon: Heart,        pillClass: 'bg-success/10 text-success' },
-  pregnancy:     { labelKey: 'type_pregnancy',     shortLabelKey: 'type_pregnancy_short',     icon: Heart,        pillClass: 'border border-success/40 text-success' },
-  study:         { labelKey: 'type_study',         shortLabelKey: 'type_study_short',         icon: Activity,     pillClass: 'bg-secondary text-secondary-foreground' },
-  unpaid_leave:  { labelKey: 'type_unpaid_leave',  shortLabelKey: 'type_unpaid_leave_short',  icon: MinusCircle,  pillClass: 'bg-muted text-muted-foreground' },
-  other_leave:   { labelKey: 'type_other_leave',   shortLabelKey: 'type_other_leave_short',   icon: Activity,     pillClass: 'border border-border text-muted-foreground' },
+  sick:          { labelKey: 'type_sick',          shortLabelKey: 'type_sick_short',          pillClass: 'bg-destructive/10 text-destructive' },
+  vab:           { labelKey: 'type_vab',           shortLabelKey: 'type_vab_short',           pillClass: 'bg-muted text-attn' },
+  care_relative: { labelKey: 'type_care_relative', shortLabelKey: 'type_care_relative_short', pillClass: 'border border-border text-attn' },
+  parental:      { labelKey: 'type_parental',      shortLabelKey: 'type_parental_short',      pillClass: 'bg-success/10 text-success' },
+  pregnancy:     { labelKey: 'type_pregnancy',     shortLabelKey: 'type_pregnancy_short',     pillClass: 'border border-success/40 text-success' },
+  study:         { labelKey: 'type_study',         shortLabelKey: 'type_study_short',         pillClass: 'bg-secondary text-secondary-foreground' },
+  unpaid_leave:  { labelKey: 'type_unpaid_leave',  shortLabelKey: 'type_unpaid_leave_short',  pillClass: 'bg-muted text-muted-foreground' },
+  other_leave:   { labelKey: 'type_other_leave',   shortLabelKey: 'type_other_leave_short',   pillClass: 'border border-border text-muted-foreground' },
 }
 
 const TYPE_ORDER: AbsenceType[] = ['sick', 'vab', 'parental', 'pregnancy', 'care_relative', 'study', 'unpaid_leave', 'other_leave']
@@ -367,7 +359,7 @@ export function SalaryCalendar({
             onClick={() => setVisibleMonth(prev => addDays(startOfMonth(prev), -1))}
             aria-label={t('prev_month')}
           >
-            <ChevronLeft className="h-4 w-4" />
+            <ChevronLeftIcon className="h-4 w-4" />
           </Button>
           <span className="text-sm font-medium tabular-nums">
             {format(visibleMonth, 'MMMM yyyy', { locale: dateLocale })}
@@ -378,9 +370,9 @@ export function SalaryCalendar({
             onClick={() => setVisibleMonth(prev => addDays(endOfMonth(prev), 1))}
             aria-label={t('next_month')}
           >
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRightIcon className="h-4 w-4" />
           </Button>
-          {loading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+          {loading && <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" />}
         </div>
         {isHourly && !readOnly && (
           <Button
@@ -390,7 +382,7 @@ export function SalaryCalendar({
             className="text-xs"
             title={t('fill_weekdays_title')}
           >
-            <CalendarPlus className="mr-1 h-3.5 w-3.5" />
+            <CalendarIcon className="mr-1 h-3.5 w-3.5" />
             {t('fill_weekdays')}
           </Button>
         )}
@@ -441,7 +433,7 @@ export function SalaryCalendar({
               <div className="mt-auto flex flex-col items-start gap-0.5">
                 {w && (
                   <span className="inline-flex items-center gap-0.5 rounded-full bg-secondary px-1.5 py-px text-[11px] font-medium text-secondary-foreground">
-                    <Clock className="h-2.5 w-2.5" aria-hidden />
+                    <ClockIcon className="h-2.5 w-2.5" aria-hidden />
                     <span className="tabular-nums">{w.hours}h</span>
                   </span>
                 )}
@@ -449,7 +441,6 @@ export function SalaryCalendar({
                   <div className="flex flex-wrap gap-0.5">
                     {dayAbsences.map(a => {
                       const meta = TYPE_META[a.absence_type]
-                      const Icon = meta.icon
                       return (
                         <span
                           key={a.id}
@@ -459,7 +450,6 @@ export function SalaryCalendar({
                           )}
                           title={t('pill_title', { label: t(meta.labelKey), hours: String(a.hours) })}
                         >
-                          <Icon className="h-2.5 w-2.5" aria-hidden />
                           <span>{t(meta.shortLabelKey)}</span>
                         </span>
                       )
@@ -491,19 +481,16 @@ export function SalaryCalendar({
         {isHourly && (
           <span className="inline-flex items-center gap-1">
             <span className="inline-flex h-3 w-3 items-center justify-center rounded-full bg-secondary">
-              <Clock className="h-2 w-2 text-secondary-foreground" aria-hidden />
+              <ClockIcon className="h-2 w-2 text-secondary-foreground" aria-hidden />
             </span>
             <span>{t('worked_time')}</span>
           </span>
         )}
         {TYPE_ORDER.map(type => {
           const meta = TYPE_META[type]
-          const Icon = meta.icon
           return (
             <span key={type} className="inline-flex items-center gap-1">
-              <span className={cn('inline-flex h-3 w-3 items-center justify-center rounded-full', meta.pillClass)}>
-                <Icon className="h-2 w-2" aria-hidden />
-              </span>
+              <span className={cn('inline-flex h-3 w-3 rounded-full', meta.pillClass)} aria-hidden />
               <span>{t(meta.labelKey)}</span>
             </span>
           )
@@ -525,7 +512,7 @@ export function SalaryCalendar({
           </div>
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="ghost" size="sm" onClick={clearSelection} disabled={deleting}>
-              <X className="mr-1 h-3.5 w-3.5" />
+              <XMarkIcon className="mr-1 h-3.5 w-3.5" />
               {t('clear_selection')}
             </Button>
             <Button
@@ -534,7 +521,7 @@ export function SalaryCalendar({
               onClick={handleBulkDelete}
               loading={deleting}
             >
-              {!deleting && <Trash2 className="mr-1 h-3.5 w-3.5" />}
+              {!deleting && <TrashIcon className="mr-1 h-3.5 w-3.5" />}
               {t('delete')}
             </Button>
             <Button variant="outline" size="sm" onClick={() => setBulkMode('absence')} disabled={deleting}>
@@ -1012,7 +999,7 @@ function DayInspectorDialog({
           {isHourly && worked && (
             <div className="flex items-center justify-between rounded-lg border bg-secondary/50 px-3 py-2">
               <div className="flex items-center gap-2 text-sm">
-                <Clock className="h-4 w-4 text-muted-foreground" />
+                <ClockIcon className="h-4 w-4 text-muted-foreground" />
                 <div>
                   <div className="font-medium">{t('worked_time')}</div>
                   <div className="text-xs text-muted-foreground tabular-nums">{t('hours_count', { hours: String(worked.hours) })}</div>
@@ -1027,18 +1014,16 @@ function DayInspectorDialog({
                 loading={busy === 'worked'}
                 aria-label={t('delete_worked_aria')}
               >
-                {busy !== 'worked' && <Trash2 className="h-3.5 w-3.5" />}
+                {busy !== 'worked' && <TrashIcon className="h-3.5 w-3.5" />}
               </Button>
             </div>
           )}
 
           {absences.length > 0 && absences.map(a => {
             const meta = TYPE_META[a.absence_type]
-            const Icon = meta.icon
             return (
               <div key={a.id} className={cn('flex items-center justify-between rounded-lg border px-3 py-2', meta.pillClass)}>
                 <div className="flex items-center gap-2 text-sm">
-                  <Icon className="h-4 w-4" />
                   <div>
                     <div className="font-medium">{t(meta.labelKey)}</div>
                     <div className="text-xs opacity-80 tabular-nums">{t('hours_count', { hours: String(a.hours) })}</div>
@@ -1053,7 +1038,7 @@ function DayInspectorDialog({
                   loading={busy === a.id}
                   aria-label={t('delete_absence_aria')}
                 >
-                  {busy !== a.id && <Trash2 className="h-3.5 w-3.5" />}
+                  {busy !== a.id && <TrashIcon className="h-3.5 w-3.5" />}
                 </Button>
               </div>
             )

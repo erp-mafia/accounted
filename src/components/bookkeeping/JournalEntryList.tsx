@@ -44,7 +44,22 @@ import {
   RowFoldout,
   SortableTh,
 } from '@/components/ui/dry-table'
-import { ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight, Copy, Paperclip, CircleSlash, Loader2, BookOpen, X, Lock, Search, SlidersHorizontal, Rows3 } from 'lucide-react'
+import {
+  AdjustmentsHorizontalIcon,
+  BookOpenIcon,
+  ChevronDoubleLeftIcon,
+  ChevronDoubleRightIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  LockClosedIcon,
+  MagnifyingGlassIcon,
+  NoSymbolIcon,
+  PaperClipIcon,
+  QueueListIcon,
+  SpinnerIcon,
+  Square2StackIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { cn, formatDate, formatCurrency } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { resolveCurrentPeriodId } from '@/lib/bookkeeping/suggest-fiscal-period'
@@ -1117,7 +1132,7 @@ export default function JournalEntryList({
     return (
       <DataList className="stagger-enter">
         <DataListEmpty
-          icon={<BookOpen className="h-6 w-6" />}
+          icon={<BookOpenIcon className="h-6 w-6" />}
           title={t('empty_title')}
           description={t('empty_description')}
         />
@@ -1160,7 +1175,7 @@ export default function JournalEntryList({
           {loading && search && (
             // Search is server-side and can take a moment on a large ledger;
             // without this the only signal was the list dimming.
-            <Loader2
+            <SpinnerIcon
               className="absolute right-7 top-1/2 h-3.5 w-3.5 -translate-y-1/2 animate-spin text-muted-foreground"
               aria-hidden="true"
             />
@@ -1173,7 +1188,7 @@ export default function JournalEntryList({
               title={t('clear_search')}
               aria-label={t('clear_search')}
             >
-              <X className="h-3.5 w-3.5" />
+              <XMarkIcon className="h-3.5 w-3.5" />
             </button>
           )}
         </div>
@@ -1190,7 +1205,7 @@ export default function JournalEntryList({
                   : t('filter')
               }
             >
-              <SlidersHorizontal className="h-3.5 w-3.5" />
+              <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
               {t('filter')}
               {dialogFilterCount > 0 && (
                 <Badge
@@ -1296,7 +1311,7 @@ export default function JournalEntryList({
                       title={t('clear_date_filter')}
                       aria-label={t('clear_date_filter')}
                     >
-                      <X className="h-4 w-4" />
+                      <XMarkIcon className="h-4 w-4" />
                     </button>
                   )}
                 </div>
@@ -1367,7 +1382,7 @@ export default function JournalEntryList({
           title={t('density_compact')}
           className={cn('shrink-0', compact ? 'bg-secondary text-foreground' : 'text-muted-foreground')}
         >
-          <Rows3 className="h-3.5 w-3.5" />
+          <QueueListIcon className="h-3.5 w-3.5" />
         </Button>
         {/* The page context picker (convention 8): fiscal-year scope as a
             chip-dropdown far right in the toolbar, one click to change,
@@ -1418,7 +1433,7 @@ export default function JournalEntryList({
         // mounted so the sort/filter that caused the failure can be changed.
         <DataList className={cn('stagger-enter', loading && 'opacity-60')} aria-busy={loading || undefined}>
           <DataListEmpty
-            icon={<CircleSlash className="h-6 w-6" />}
+            icon={<NoSymbolIcon className="h-6 w-6" />}
             title={t('load_failed_title')}
             description={t('load_failed_description')}
             action={
@@ -1442,9 +1457,9 @@ export default function JournalEntryList({
           <DataListEmpty
             icon={
               listMode === 'drafts' || !hasActiveFilters ? (
-                <BookOpen className="h-6 w-6" />
+                <BookOpenIcon className="h-6 w-6" />
               ) : (
-                <Search className="h-6 w-6" />
+                <MagnifyingGlassIcon className="h-6 w-6" />
               )
             }
             title={
@@ -1720,14 +1735,14 @@ export default function JournalEntryList({
                               }}
                               className="inline-flex items-center gap-0.5 rounded-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
                             >
-                              <Paperclip className="h-3.5 w-3.5" />
+                              <PaperClipIcon className="h-3.5 w-3.5" />
                               <span className="text-xs tabular-nums">{attachmentCounts[entry.id]}</span>
                             </button>
                           ) : (
                             attachmentCountsLoaded && NEEDS_ATTACHMENT.has(entry.source_type) && entry.status === 'posted' && !invoiceReferenced.has(entry.id) && (
                               noDocRequired.has(entry.id) ? (
                                 <span title={t('no_doc_required_indicator_tooltip')}>
-                                  <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />
+                                  <NoSymbolIcon className="h-3.5 w-3.5 text-muted-foreground" />
                                 </span>
                               ) : (
                                 // Imported rows are counted once in the line
@@ -1778,10 +1793,10 @@ export default function JournalEntryList({
                                 HOVER_REVEAL_CLASS,
                               )}
                             >
-                              <Copy className="h-3.5 w-3.5" />
+                              <Square2StackIcon className="h-3.5 w-3.5" />
                             </button>
                           )}
-                          <ChevronRight
+                          <ChevronRightIcon
                             className={cn(
                               'h-3.5 w-3.5 text-muted-foreground transition-[transform,opacity] duration-150',
                               isExpanded
@@ -1863,7 +1878,7 @@ export default function JournalEntryList({
                                     loading={canWrite && committingId === entry.id}
                                     title={!canWrite ? t('read_only_tooltip') : undefined}
                                   >
-                                    {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                                    {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
                                     {t('post')}
                                   </Button>
                                 )}
@@ -1923,7 +1938,7 @@ export default function JournalEntryList({
           <div className="space-y-3 text-sm">
             {bulkCount === null ? (
               <div className="flex items-center gap-2 text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <SpinnerIcon className="h-4 w-4 animate-spin" />
                 {t('bulk_mark_counting')}
               </div>
             ) : bulkCount === 0 ? (
@@ -2093,7 +2108,7 @@ export default function JournalEntryList({
                 aria-label={t('first_page')}
                 title={t('first_page')}
               >
-                <ChevronsLeft className="h-4 w-4" />
+                <ChevronDoubleLeftIcon className="h-4 w-4" />
               </Button>
               <Button
                 variant="outline"
@@ -2103,7 +2118,7 @@ export default function JournalEntryList({
                 aria-label={t('previous')}
                 title={t('previous')}
               >
-                <ChevronLeft className="h-4 w-4" />
+                <ChevronLeftIcon className="h-4 w-4" />
               </Button>
               <span className="px-2 text-xs text-muted-foreground tabular-nums self-center whitespace-nowrap">
                 {t('page_of', { page: page + 1, total: Math.ceil(count / pageSize) })}
@@ -2116,7 +2131,7 @@ export default function JournalEntryList({
                 aria-label={t('next')}
                 title={t('next')}
               >
-                <ChevronRight className="h-4 w-4" />
+                <ChevronRightIcon className="h-4 w-4" />
               </Button>
               <Button
                 variant="outline"
@@ -2126,7 +2141,7 @@ export default function JournalEntryList({
                 aria-label={t('last_page')}
                 title={t('last_page')}
               >
-                <ChevronsRight className="h-4 w-4" />
+                <ChevronDoubleRightIcon className="h-4 w-4" />
               </Button>
             </div>
           )}

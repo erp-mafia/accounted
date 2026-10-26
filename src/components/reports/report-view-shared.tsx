@@ -6,7 +6,7 @@
 
 import React from 'react'
 import Link from 'next/link'
-import { AlertCircle, FileText } from 'lucide-react'
+import { DocumentTextIcon, ExclamationCircleIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -38,7 +38,7 @@ export function ReportErrorCard({ message }: { message: string }) {
   return (
     <Card>
       <CardContent className="p-8 text-center text-destructive">
-        <AlertCircle className="h-6 w-6 mx-auto mb-2" />
+        <ExclamationCircleIcon className="h-6 w-6 mx-auto mb-2" />
         {message}
       </CardContent>
     </Card>
@@ -46,7 +46,7 @@ export function ReportErrorCard({ message }: { message: string }) {
 }
 
 export function ReportEmptyState({ title, description }: { title: string; description: string }) {
-  return <EmptyState icon={FileText} title={title} description={description} />
+  return <EmptyState icon={DocumentTextIcon} title={title} description={description} />
 }
 
 export function reportQuery(

@@ -19,7 +19,7 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { Search, Trash2 } from 'lucide-react'
+import { MagnifyingGlassIcon, TrashIcon } from '@/components/icons'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 
 interface PruneCandidate {
@@ -280,7 +280,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
           // horizontally instead of truncating.
           <div className="min-w-0 space-y-3">
             <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder={t('search_placeholder')}
                 value={searchQuery}
@@ -331,7 +331,7 @@ export function PruneAccountsDialog({ open, onOpenChange, onPruned }: PruneAccou
             disabled={loading || selected.size === 0}
             loading={isDeleting}
           >
-            {!isDeleting && <Trash2 className="mr-1.5 h-3.5 w-3.5" />}
+            {!isDeleting && <TrashIcon className="mr-1.5 h-3.5 w-3.5" />}
             {t('prune_confirm', { count: selected.size })}
           </Button>
         </DialogFooter>

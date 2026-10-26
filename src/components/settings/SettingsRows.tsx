@@ -2,7 +2,7 @@
 
 import { Children, cloneElement, isValidElement, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeftIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { HelpPopover, type HelpPopoverContent } from '@/components/ui/help-popover'
 import { Switch } from '@/components/ui/switch'
@@ -71,7 +71,7 @@ export function SettingsBackLink({ href, label }: { href: string; label: string 
       href={href}
       className="mb-2 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
     >
-      <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
+      <ChevronLeftIcon className="h-3.5 w-3.5" aria-hidden="true" />
       {label}
     </Link>
   )

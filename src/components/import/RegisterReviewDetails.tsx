@@ -2,7 +2,7 @@
 
 import { useCallback, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS, RowFoldout, VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { cn } from '@/lib/utils'
@@ -124,7 +124,7 @@ export function RowExpandButton({
       aria-label={expanded ? t('hide_fields') : t('show_fields')}
       onClick={(e) => onToggle(e.currentTarget)}
     >
-      <ChevronRight
+      <ChevronRightIcon
         className={cn(
           'h-3.5 w-3.5 text-muted-foreground transition-transform duration-150',
           expanded && 'rotate-90',

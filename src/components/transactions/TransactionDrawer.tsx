@@ -5,7 +5,7 @@ import { createPortal } from 'react-dom'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, X, type LucideIcon } from 'lucide-react'
+import { ChevronDownIcon, XMarkIcon, type Icon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
@@ -34,7 +34,7 @@ async function fetchUnderlag(url: string): Promise<TransactionUnderlag> {
 export interface DrawerAction {
   key: string
   label: string
-  icon: LucideIcon
+  icon: Icon
   onSelect: () => void
   destructive?: boolean
 }
@@ -178,7 +178,7 @@ export function TransactionDrawer({
           </p>
         </div>
         <Button variant="ghost" size="icon-sm" className="-mr-2 -mt-1 shrink-0 text-muted-foreground" onClick={onClose} aria-label={t('drawer_close')}>
-          <X className="h-4 w-4" />
+          <XMarkIcon className="h-4 w-4" />
         </Button>
       </div>
 
@@ -196,7 +196,7 @@ export function TransactionDrawer({
               disabled={processing}
             >
               <span className="truncate">{categoryLabel ?? t('category_pick')}</span>
-              <ChevronDown className="h-3.5 w-3.5 shrink-0 opacity-60" />
+              <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 opacity-60" />
             </button>
             {categoryLabel && proposalWhy && (
               <p className="mt-1.5 text-[11px] text-muted-foreground">

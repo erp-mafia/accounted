@@ -20,7 +20,7 @@ import { ImportWizardRail } from '@/components/import/ImportWizardRail'
 import { mapWithConcurrency } from '@/lib/concurrency'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
-import { FileUp, FolderUp, Loader2 } from 'lucide-react'
+import { DocumentArrowUpIcon, FolderOpenIcon, SpinnerIcon } from '@/components/icons'
 import type { FiscalPeriod } from '@/types'
 import type {
   UnderlagPlan,
@@ -472,7 +472,7 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
                 disabled={!fiscalPeriodId}
                 loading={isLoading}
               >
-                {!isLoading && <FileUp className="h-4 w-4" />}
+                {!isLoading && <DocumentArrowUpIcon className="h-4 w-4" />}
                 {t('underlag_pick_files')}
               </Button>
               <Button
@@ -480,7 +480,7 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
                 onClick={() => folderInputRef.current?.click()}
                 disabled={isLoading || !fiscalPeriodId}
               >
-                <FolderUp className="h-4 w-4" />
+                <FolderOpenIcon className="h-4 w-4" />
                 {t('underlag_pick_folder')}
               </Button>
             </div>
@@ -731,7 +731,7 @@ function TargetCell({
         }}
       />
       {row.resolving ? (
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+        <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" />
       ) : (
         <Badge variant={badgeVariant(row.status)} className="font-normal">
           {t(STATUS_KEY[row.status])}

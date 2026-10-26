@@ -1,7 +1,7 @@
 'use client'
 
 import * as React from 'react'
-import { X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 interface TagInputProps {
@@ -99,7 +99,7 @@ const TagInput = React.forwardRef<HTMLInputElement, TagInputProps>(
                 }}
                 className="rounded-full opacity-60 hover:opacity-100 focus:outline-none"
               >
-                <X className="h-3 w-3" />
+                <XMarkIcon className="h-3 w-3" />
               </button>
             )}
           </span>

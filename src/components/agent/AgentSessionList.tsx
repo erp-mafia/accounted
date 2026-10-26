@@ -1,7 +1,16 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { Search, X, Loader2, MessageSquare, Pencil, Pin, PinOff, Archive } from 'lucide-react'
+import {
+  ArchiveBoxIcon,
+  BookmarkIcon,
+  BookmarkSlashIcon,
+  ChatBubbleLeftIcon,
+  MagnifyingGlassIcon,
+  PencilIcon,
+  SpinnerIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { cn } from '@/lib/utils'
 import {
   type ConversationRow,
@@ -74,7 +83,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
     <div className="flex flex-1 flex-col min-h-0">
       <div className="border-b border-border px-5 py-3">
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
             type="text"
             value={query}
@@ -89,7 +98,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
               aria-label="Rensa sökning"
               className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
             >
-              <X className="h-3 w-3" />
+              <XMarkIcon className="h-3 w-3" />
             </button>
           )}
         </div>
@@ -98,13 +107,13 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
       <div className="flex-1 overflow-y-auto">
         {loading ? (
           <div className="flex items-center justify-center gap-2 p-6 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" /> Hämtar…
+            <SpinnerIcon className="h-4 w-4 animate-spin" /> Hämtar…
           </div>
         ) : error ? (
           <div className="p-6 text-sm text-destructive">{error}</div>
         ) : grouped.length === 0 ? (
           <div className="flex flex-col items-center gap-2 p-10 text-center text-sm text-muted-foreground">
-            <MessageSquare className="h-6 w-6 opacity-40" />
+            <ChatBubbleLeftIcon className="h-6 w-6 opacity-40" />
             {conversations.length === 0 ? 'Inga konversationer ännu.' : 'Inga träffar.'}
           </div>
         ) : (
@@ -178,9 +187,9 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                             className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
                           >
                             {c.pinned ? (
-                              <PinOff className="h-3.5 w-3.5" />
+                              <BookmarkSlashIcon className="h-3.5 w-3.5" />
                             ) : (
-                              <Pin className="h-3.5 w-3.5" />
+                              <BookmarkIcon className="h-3.5 w-3.5" />
                             )}
                           </button>
                           <button
@@ -190,7 +199,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                             aria-label="Byt namn på konversation"
                             className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
                           >
-                            <Pencil className="h-3.5 w-3.5" />
+                            <PencilIcon className="h-3.5 w-3.5" />
                           </button>
                           <button
                             type="button"
@@ -199,7 +208,7 @@ export default function AgentSessionList({ activeConversationId, onSelect }: Pro
                             aria-label="Arkivera konversationen"
                             className="flex h-8 w-8 items-center justify-center text-muted-foreground/50 hover:text-foreground transition-colors"
                           >
-                            <Archive className="h-3.5 w-3.5" />
+                            <ArchiveBoxIcon className="h-3.5 w-3.5" />
                           </button>
                         </div>
                       </div>

@@ -24,7 +24,7 @@
  *                           action, or a hand-rolled .page-header). A 36px
  *                           button next to a 32px picker was the visible
  *                           symptom (KPI "Anpassa", 2026-09-24).
- *   button-spinner          a Loader2 rendered inside a <Button>. Pass
+ *   button-spinner          a SpinnerIcon rendered inside a <Button>. Pass
  *                           loading={...}; the button owns the spinner.
  *   off-token-duration      a duration other than 150 (state changes) or 300
  *                           (layout changes), or an arbitrary duration-[..].
@@ -47,6 +47,12 @@
  *                           focus-visible:ring-*.
  *   off-scale-text          text-[Npx] outside the scale 11 / 12.5 / 13 / 15.
  *   decorative-animation    animate-bounce, animate-ping, animate-scale-in.
+ *   icon-in-paragraph       an icon (a tag named *Icon or Icon) inside a <p>.
+ *                           Every icon from @/components/icons renders a
+ *                           <div> (the animated package's wrapper), and the
+ *                           HTML parser closes a <p> where a <div> starts, so
+ *                           the server HTML and the hydrated tree disagree.
+ *                           Use a <div> for the text block.
  */
 import fs from 'node:fs'
 import path from 'node:path'
@@ -184,11 +190,16 @@ function buttonSize(opening, sf) {
   return attr.initializer ? attr.initializer.getText(sf).replace(/["'{}]/g, '') : 'default'
 }
 
-function containsLoader(node) {
+// A tag that renders an icon: an import from @/components/icons (all named
+// *Icon), a local *Icon component, or an icon held in a variable (`Icon`,
+// `item.icon`).
+const ICON_TAG_RE = /^(?:[A-Z]\w*Icon|Icon)$|\.(?:icon|Icon)$/
+
+function containsTag(node, sf, test) {
   let found = false
   const visit = (n) => {
     if (found) return
-    if ((ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) && tagName(n) === 'Loader2') {
+    if ((ts.isJsxSelfClosingElement(n) || ts.isJsxOpeningElement(n)) && test(n.tagName.getText(sf))) {
       found = true
       return
     }
@@ -236,8 +247,12 @@ export function findInSource(file, text) {
       }
     }
 
-    if (ts.isJsxElement(node) && tagName(node.openingElement) === 'Button' && containsLoader(node)) {
-      push(node, 'button-spinner', 'Loader2 inside <Button>')
+    if (ts.isJsxElement(node) && tagName(node.openingElement) === 'Button' && containsTag(node, sf, (t) => t === 'SpinnerIcon')) {
+      push(node, 'button-spinner', 'SpinnerIcon inside <Button>')
+    }
+
+    if (ts.isJsxElement(node) && tagName(node.openingElement) === 'p' && containsTag(node, sf, (t) => ICON_TAG_RE.test(t))) {
+      push(node, 'icon-in-paragraph', '<p> holding an icon')
     }
 
     if ((ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) && tagName(node) === 'Button') {
@@ -317,4 +332,5 @@ export const UI_UNIFORMITY_HINTS = {
   'focus-not-visible': 'use focus-visible:ring-* so rings only show for keyboard focus',
   'off-scale-text': 'use the text scale: 11 (labels, chips), 12.5 (meta, attn), 13 (body, tables), 15 (lead)',
   'decorative-animation': 'motion is functional: use animate-fade-in, stagger-enter or animate-typing-dot',
+  'icon-in-paragraph': 'make the text block a <div>: an icon renders a <div>, which a <p> cannot hold (hydration mismatch)',
 }

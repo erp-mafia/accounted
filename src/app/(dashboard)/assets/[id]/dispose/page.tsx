@@ -5,7 +5,7 @@ import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { ArrowLeft, Lock } from 'lucide-react'
+import { ArrowLeftIcon, LockClosedIcon } from '@/components/icons'
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -256,7 +256,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
         <p className="text-sm text-muted-foreground">
           {!asset ? t('not_found') : t('already_disposed', { date: formatDate(asset.disposed_at!) })}
         </p>
-        <Link href="/assets"><Button variant="secondary"><ArrowLeft className="mr-1 h-4 w-4" />{t('back')}</Button></Link>
+        <Link href="/assets"><Button variant="secondary"><ArrowLeftIcon className="mr-1 h-4 w-4" />{t('back')}</Button></Link>
       </div>
     )
   }
@@ -281,7 +281,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
         href="/assets"
         className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
       >
-        <ArrowLeft className="h-4 w-4" />
+        <ArrowLeftIcon className="h-4 w-4" />
         {t('back')}
       </Link>
 
@@ -488,7 +488,7 @@ export default function DisposeAssetPage({ params }: { params: Promise<{ id: str
           disabled={!canWrite || !periodId || periodLocked || proceedsInvalid || missingJamkningData || (disposalType === 'business_transfer' && !businessTransferConfirmed) || (transferNeedsDocument && !adjustmentDocumentConfirmed)}
           title={!canWrite ? t('write_required') : undefined}
         >
-          {!canWrite && <Lock className="mr-1 h-4 w-4" />}
+          {!canWrite && <LockClosedIcon className="mr-1 h-4 w-4" />}
           {t('submit')}
         </Button>
       </div>

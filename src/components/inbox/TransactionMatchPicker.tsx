@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
-import { Loader2, Search } from 'lucide-react'
+import { MagnifyingGlassIcon, SpinnerIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import type { InvoiceExtractionResult } from '@/types'
 import { useUnderlagBankCandidates } from './use-underlag-bank-candidates'
@@ -201,7 +201,7 @@ export default function TransactionMatchPicker({
         )}
 
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
@@ -285,7 +285,7 @@ export default function TransactionMatchPicker({
                       </p>
                     )}
                   </div>
-                  {isMatching && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
+                  {isMatching && <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" />}
                 </button>
               )
             })

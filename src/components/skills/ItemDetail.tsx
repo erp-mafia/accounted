@@ -6,7 +6,14 @@ import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowUpRight, Check, ChevronDown, ChevronUp, Plus } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  ArrowUpRightIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  PlusIcon,
+} from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -176,7 +183,7 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
     return (
       <div className={styles.apage}>
         <PageHeader title={t('title')} />
-        <Link href={backHref} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+        <Link href={backHref} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
         {loaded && <p className={styles.muted}>{t('not_found')}</p>}
       </div>
     )
@@ -243,7 +250,7 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
   return (
     <div className={styles.apage}>
       <PageHeader title={t('title')} />
-      <Link href={back} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      <Link href={back} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={item.name}>
@@ -260,17 +267,17 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={AI_CLIENTS.find((c) => c.id === 'claude')!.logo} alt="" width={16} height={16} className={styles.btnLogo} />
                 {t('connect_client', { client: 'Claude' })}
-                <ArrowUpRight className="h-4 w-4" aria-hidden />
+                <ArrowUpRightIcon className="h-4 w-4" aria-hidden />
               </Button>
             ) : runnable && client === 'claude' ? <ClaudeStart onStart={runShared} /> : runnable ? (
               <Button size="lg" className="gap-2 pl-4" onClick={() => void runShared()}>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={ai.logo} alt="" width={16} height={16} className={styles.btnLogo} />
                 {t('run_agent', { client: ai.name })}
-                <ArrowUpRight className="h-4 w-4" aria-hidden />
+                <ArrowUpRightIcon className="h-4 w-4" aria-hidden />
               </Button>
             ) : item.atomId
-              ? <Button size="lg" className="gap-2" disabled={!canWrite} onClick={() => setView('give')}><Plus className="h-4 w-4" aria-hidden />{t('give_to_flow')}</Button>
+              ? <Button size="lg" className="gap-2" disabled={!canWrite} onClick={() => setView('give')}><PlusIcon className="h-4 w-4" aria-hidden />{t('give_to_flow')}</Button>
               : <span />}
             {/* A routine is scheduled in Claude; an analysis only reads, so a viewer may schedule one. */}
             {runnable && <RoutineOffer client={client} disconnected={disconnected} readOnly={item.kind === 'analysis'} canWrite={canWrite} onOpen={() => setView('routine')} />}
@@ -317,7 +324,7 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
                   {isPack && (
                     <button type="button" className={`${styles.catLink} ${styles.packToggle}`} aria-expanded={showBody} aria-controls="item-body" onClick={() => setShowBody(!showBody)}>
                       {t(showBody ? 'hide_ai_text' : 'show_ai_text')}
-                      {showBody ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />}
+                      {showBody ? <ChevronUpIcon className="h-4 w-4" aria-hidden /> : <ChevronDownIcon className="h-4 w-4" aria-hidden />}
                     </button>
                   )}
                   {(!isPack || showBody) && (
@@ -327,7 +334,7 @@ function Detail({ companyId, companyName, segment, backHref }: { companyId: stri
                   )}
                 </Field>}
                 {mine?.draft && (
-                  <div><Button disabled={!canWrite} onClick={() => void addMine()}><Plus className="h-4 w-4" aria-hidden />{t(`add_draft_${item.kind}`)}</Button></div>
+                  <div><Button disabled={!canWrite} onClick={() => void addMine()}><PlusIcon className="h-4 w-4" aria-hidden />{t(`add_draft_${item.kind}`)}</Button></div>
                 )}
                 {COMMUNITY_OPEN && mine?.installations[0] && !mine.draft && (
                   <div className={styles.alist}><ShareBox preview={{ title: item.name, desc: item.desc, kind: item.kind, hue, symbolKey: item.key }} status={mine.shareStatus ?? 'private'} publishedUrl={mine.publishedUrl} reviewNote={mine.reviewNote} canWrite={canWrite} onShare={(share) => patchMine(share === 'withdraw' ? { action: 'withdraw' } : { action: 'submit', confirmed_no_customer_data: true, author_handle: share.author_handle })} /></div>
@@ -372,7 +379,7 @@ function GiveCard({ name, task, hue, has, note, disabled, onToggle }: { name: st
       <span className={styles.giveText}><b>{name}</b><span>{note ? `${task} · ${note}` : task}</span></span>
       <Button variant={has ? 'default' : 'outline'} size="icon" aria-pressed={has} aria-label={has ? t('knowledge_remove', { name }) : t('give_to_named', { name })} disabled={disabled} loading={busy}
         onClick={() => { setBusy(true); void onToggle().finally(() => setBusy(false)) }}>
-        {has ? <Check className="h-4 w-4" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
+        {has ? <CheckIcon className="h-4 w-4" aria-hidden /> : <PlusIcon className="h-4 w-4" aria-hidden />}
       </Button>
     </div>
   )
@@ -398,7 +405,7 @@ function Vote({ meta, slug }: { meta: CommunityMeta; slug: string }) {
       setVoted(next)
       void sendFeedback({ slug, vote: next }).then((ok) => { if (!ok) setVoted(!next) })
     }}>
-      <ChevronUp className="h-4 w-4" aria-hidden />{t(voted ? 'voted' : 'vote')}<span className={styles.voteCount}>{votes}</span>
+      <ChevronUpIcon className="h-4 w-4" aria-hidden />{t(voted ? 'voted' : 'vote')}<span className={styles.voteCount}>{votes}</span>
     </Button>
   )
 }

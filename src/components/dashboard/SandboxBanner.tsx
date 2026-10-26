@@ -1,7 +1,7 @@
 'use client'
 
 import { useState } from 'react'
-import { X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import { signOutAndNavigate } from '@/lib/auth/session-client'
 
 export function SandboxBanner() {
@@ -31,7 +31,7 @@ export function SandboxBanner() {
         className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 hover:bg-foreground/10 transition-colors"
         aria-label="Stäng"
       >
-        <X className="h-3.5 w-3.5" />
+        <XMarkIcon className="h-3.5 w-3.5" />
       </button>
     </div>
   )

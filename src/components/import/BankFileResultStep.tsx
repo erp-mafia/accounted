@@ -5,11 +5,11 @@ import { useTranslations } from 'next-intl'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import {
-  CheckCircle,
-  XCircle,
-  ArrowRight,
-  RotateCcw,
-} from 'lucide-react'
+  ArrowRightIcon,
+  ArrowUturnLeftIcon,
+  CheckCircleIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import type { IngestResult } from '@/types'
 
 interface BankFileResultStepProps {
@@ -32,12 +32,12 @@ export default function BankFileResultStep({
           <CardTitle className="flex items-center gap-2">
             {isSuccess ? (
               <>
-                <CheckCircle className="h-6 w-6 text-success" />
+                <CheckCircleIcon className="h-6 w-6 text-success" />
                 Import genomförd
               </>
             ) : (
               <>
-                <XCircle className="h-6 w-6 text-destructive" />
+                <XCircleIcon className="h-6 w-6 text-destructive" />
                 Import misslyckades
               </>
             )}
@@ -121,14 +121,14 @@ export default function BankFileResultStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onNewImport}>
-          <RotateCcw className="mr-2 h-4 w-4" />
+          <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
           Ny import
         </Button>
         {isSuccess && (
           <Button asChild>
             <Link href="/transactions">
               Visa transaktioner
-              <ArrowRight className="ml-2 h-4 w-4" />
+              <ArrowRightIcon className="ml-2 h-4 w-4" />
             </Link>
           </Button>
         )}

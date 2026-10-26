@@ -4,7 +4,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { AlertTriangle, Info, XCircle } from 'lucide-react'
+import { ExclamationTriangleIcon, InformationCircleIcon, XCircleIcon } from '@/components/icons'
 import Link from 'next/link'
 import type { BokslutReadinessReport } from '@/lib/bokslut/readiness-aggregator'
 import { BokslutChecklist } from './BokslutChecklist'
@@ -75,7 +75,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 
       {blockerItems.length > 0 && (
         <section>
-          <SectionHead icon={<XCircle className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />}>
+          <SectionHead icon={<XCircleIcon className="h-3.5 w-3.5 text-destructive" aria-hidden="true" />}>
             Måste åtgärdas innan bokslut
           </SectionHead>
           {blockerItems.map((blocker, i) => (
@@ -90,7 +90,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 
       {report.warnings.length > 0 && (
         <section>
-          <SectionHead icon={<AlertTriangle className="h-3.5 w-3.5 text-attn" aria-hidden="true" />}>
+          <SectionHead icon={<ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn" aria-hidden="true" />}>
             Varningar
           </SectionHead>
           {report.warnings.map((warning, i) => (
@@ -105,7 +105,7 @@ export function PreflightStep({ report, isLoading, error, onContinue }: Prefligh
 
       {report.reminders.length > 0 && (
         <section>
-          <SectionHead icon={<Info className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />}>
+          <SectionHead icon={<InformationCircleIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />}>
             Påminnelser
           </SectionHead>
           {report.reminders.map((reminder) => (

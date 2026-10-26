@@ -2,7 +2,13 @@
 
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useSyncExternalStore } from 'react'
-import { ArrowUpRight, Building2, KeyRound, Loader2, Terminal } from 'lucide-react'
+import {
+  ArrowUpRightIcon,
+  BuildingOfficeIcon,
+  CommandLineIcon,
+  KeyIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -70,15 +76,15 @@ function McpMark({ className }: { className?: string }) {
 }
 
 const ICON = {
-  local: Terminal,
+  local: CommandLineIcon,
   cursor: CursorMark,
   gemini: GeminiMark,
   mcp: McpMark,
   other: McpMark,
-  key: KeyRound,
+  key: KeyIcon,
 } as const
 
-/** A client's mark in a round well: the logo where we ship one, else a Lucide glyph. */
+/** A client's mark in a round well: the logo where we ship one, else an icon. */
 function ClientMark({ kind, size = 'md' }: { kind: ConnectionKind | ConnectTarget; size?: 'md' | 'lg' }) {
   const logo = LOGO[kind]
   const Icon = ICON[kind as keyof typeof ICON] ?? McpMark
@@ -192,7 +198,7 @@ export function McpConnectionsPanel({
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-12">
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+        <SpinnerIcon className="h-5 w-5 animate-spin text-muted-foreground" />
       </div>
     )
   }
@@ -235,7 +241,7 @@ export function McpConnectionsPanel({
                     rel="noopener noreferrer"
                   >
                     {t('connect_to_claude')}
-                    <ArrowUpRight className="ml-1.5 h-4 w-4" />
+                    <ArrowUpRightIcon className="ml-1.5 h-4 w-4" />
                   </a>
                 </Button>
                 <button
@@ -255,7 +261,7 @@ export function McpConnectionsPanel({
                   className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 transition-colors duration-150 hover:text-foreground hover:underline"
                 >
                   {t('full_guide_link')}
-                  <ArrowUpRight className="h-3 w-3" />
+                  <ArrowUpRightIcon className="h-3 w-3" />
                 </a>
               </div>
             </div>
@@ -316,7 +322,7 @@ export function McpConnectionsPanel({
                         onClick={() => setEditingCompanies(key)}
                         aria-label={t('companies_edit', { name: rowName(key) })}
                       >
-                        <Building2 className="mr-1.5 h-3.5 w-3.5" />
+                        <BuildingOfficeIcon className="mr-1.5 h-3.5 w-3.5" />
                         {[
                           key.company_ids && key.company_ids.length > 0
                             ? t('companies_some', { selected: key.company_ids.length, total: companies.length })

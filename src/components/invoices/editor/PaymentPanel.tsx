@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeftIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -128,7 +128,7 @@ export function PaymentPanel({
     <div ref={rootRef} className="scroll-mt-6 space-y-8">
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" variant="ghost" size="sm" onClick={onClose} className="-ml-2">
-          <ArrowLeft className="mr-1 h-4 w-4" aria-hidden="true" />
+          <ArrowLeftIcon className="mr-1 h-4 w-4" aria-hidden="true" />
           {t('back')}
         </Button>
         <h2 className="font-display text-[15px]">{t('title')}</h2>

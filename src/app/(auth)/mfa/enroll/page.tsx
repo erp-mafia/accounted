@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { ShieldCheck, Copy, Check, ArrowLeft } from 'lucide-react'
+import { ArrowLeftIcon, CheckIcon, ShieldCheckIcon, Square2StackIcon } from '@/components/icons'
 import { getBranding } from '@/lib/branding/service'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
@@ -176,7 +176,7 @@ function MfaEnrollContent() {
           <div className="text-center mb-10">
             <div className="flex justify-center mb-4">
               <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-                <ShieldCheck className="h-7 w-7 text-primary" />
+                <ShieldCheckIcon className="h-7 w-7 text-primary" />
               </div>
             </div>
             <h1 className="text-2xl tracking-tight">Aktivera tvåfaktorsautentisering</h1>
@@ -212,7 +212,7 @@ function MfaEnrollContent() {
             className="w-full mt-4 text-muted-foreground"
             onClick={abort}
           >
-            <ArrowLeft className="mr-2 h-4 w-4" />
+            <ArrowLeftIcon className="mr-2 h-4 w-4" />
             Tillbaka
           </Button>
         </div>
@@ -227,7 +227,7 @@ function MfaEnrollContent() {
         <div className="text-center mb-8">
           <div className="flex justify-center mb-4">
             <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <ShieldCheck className="h-7 w-7 text-primary" />
+              <ShieldCheckIcon className="h-7 w-7 text-primary" />
             </div>
           </div>
           <h1 className="text-2xl tracking-tight">Skanna QR-koden</h1>
@@ -261,9 +261,9 @@ function MfaEnrollContent() {
                 onClick={copySecret}
               >
                 {copied ? (
-                  <Check className="h-4 w-4 text-foreground" />
+                  <CheckIcon className="h-4 w-4 text-foreground" />
                 ) : (
-                  <Copy className="h-4 w-4" />
+                  <Square2StackIcon className="h-4 w-4" />
                 )}
               </Button>
             </div>
@@ -309,7 +309,7 @@ function MfaEnrollContent() {
           className="w-full mt-4 text-muted-foreground"
           onClick={abort}
         >
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
       </div>

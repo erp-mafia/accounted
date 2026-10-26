@@ -22,14 +22,14 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import {
-  ArrowRight,
-  Search,
-  Check,
-  CheckCircle,
-  AlertCircle,
-  XCircle,
-  Filter,
-} from 'lucide-react'
+  ArrowRightIcon,
+  CheckCircleIcon,
+  CheckIcon,
+  ExclamationCircleIcon,
+  FunnelIcon,
+  MagnifyingGlassIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import type { AccountMapping } from '@/lib/import/types'
 import { isValidBASRange } from '@/lib/import/account-mapper'
 import { ACCOUNT_TO_BOX } from '@/lib/vat/moms-box-mapping'
@@ -316,7 +316,7 @@ export default function AccountMappingStep({
               className="cursor-pointer"
               onClick={() => handleFilterChange('vat_review')}
             >
-              <AlertCircle className="h-3 w-3 mr-1" />
+              <ExclamationCircleIcon className="h-3 w-3 mr-1" />
               {t('vat_review_filter', { count: stats.vatReview })}
             </Badge>
             <Badge
@@ -324,7 +324,7 @@ export default function AccountMappingStep({
               className="cursor-pointer"
               onClick={() => handleFilterChange('unmapped')}
             >
-              <XCircle className="h-3 w-3 mr-1" />
+              <XCircleIcon className="h-3 w-3 mr-1" />
               {tStep('filter_unmapped_count', { count: stats.unmapped })}
             </Badge>
             <Badge
@@ -332,7 +332,7 @@ export default function AccountMappingStep({
               className="cursor-pointer"
               onClick={() => handleFilterChange('new_account')}
             >
-              <CheckCircle className="h-3 w-3 mr-1" />
+              <CheckCircleIcon className="h-3 w-3 mr-1" />
               {t('new_account_filter', { count: stats.newAccounts })}
             </Badge>
             <Badge
@@ -340,7 +340,7 @@ export default function AccountMappingStep({
               className="cursor-pointer"
               onClick={() => handleFilterChange('low_confidence')}
             >
-              <AlertCircle className="h-3 w-3 mr-1" />
+              <ExclamationCircleIcon className="h-3 w-3 mr-1" />
               {tStep('filter_low_confidence_count', { count: stats.lowConfidence })}
             </Badge>
             <Badge
@@ -348,7 +348,7 @@ export default function AccountMappingStep({
               className="cursor-pointer"
               onClick={() => handleFilterChange('manual')}
             >
-              <CheckCircle className="h-3 w-3 mr-1" />
+              <CheckCircleIcon className="h-3 w-3 mr-1" />
               {tStep('filter_manual_count', { count: stats.manual })}
             </Badge>
             <Badge
@@ -453,7 +453,7 @@ export default function AccountMappingStep({
           {/* Search and filter */}
           <div className="flex gap-4">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
               <Input
                 placeholder={tStep('search_placeholder')}
                 value={searchTerm}
@@ -463,7 +463,7 @@ export default function AccountMappingStep({
             </div>
             <Select value={filter} onValueChange={(v) => handleFilterChange(v as FilterType)}>
               <SelectTrigger className="w-48">
-                <Filter className="h-4 w-4 mr-2" />
+                <FunnelIcon className="h-4 w-4 mr-2" />
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
@@ -517,7 +517,7 @@ export default function AccountMappingStep({
                       )}
                     </TableCell>
                     <TableCell className="!px-0">
-                      <ArrowRight className="mx-auto h-4 w-4 text-muted-foreground" />
+                      <ArrowRightIcon className="mx-auto h-4 w-4 text-muted-foreground" />
                     </TableCell>
                     <TableCell>
                       <TargetAccountSelect
@@ -685,7 +685,7 @@ export default function AccountMappingStep({
                                 mapping.defaultVatRate ?? null,
                               )}
                             >
-                              <Check className="h-4 w-4" />
+                              <CheckIcon className="h-4 w-4" />
                             </Button>
                           </TooltipTrigger>
                           <TooltipContent side="left">{t('vat_treatment_confirm')}</TooltipContent>
@@ -752,7 +752,7 @@ export default function AccountMappingStep({
               variant="outline"
               onClick={onConfirmAllVatTreatments}
             >
-              <CheckCircle className="mr-2 h-4 w-4" />
+              <CheckCircleIcon className="mr-2 h-4 w-4" />
               {t('vat_review_confirm_all', { count: stats.vatReview })}
             </Button>
           )}
@@ -762,7 +762,7 @@ export default function AccountMappingStep({
               : stats.unmapped > 0
                 ? tStep('unmapped_remaining', { count: stats.unmapped })
                 : tStep('vat_review_remaining', { count: stats.vatReview })}
-            <ArrowRight className="ml-2 h-4 w-4" />
+            <ArrowRightIcon className="ml-2 h-4 w-4" />
           </Button>
         </div>
       </div>

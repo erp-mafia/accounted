@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Bot, Check } from 'lucide-react'
+import { CheckIcon, CpuChipIcon } from '@/components/icons'
 import { useBranding } from '@/lib/branding/brand-context'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, unknownAgentOnly, type AiClient, type AiConnection } from '@/lib/onboarding/ai-clients'
 import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
@@ -45,10 +45,10 @@ export function AgentChips({ connection, onConnect }: {
     return (
       <div className="agent-chips">
         <span className="agent-chip is-on">
-          <Bot size={14} aria-hidden="true" />
+          <CpuChipIcon className="size-3.5" aria-hidden="true" />
           <span className="n">{t('ai_agent')}</span>
           <span className="st" role="status">
-            <Check size={12} aria-hidden="true" />
+            <CheckIcon className="size-3" aria-hidden="true" />
             {t('ai_connected')}
           </span>
         </span>
@@ -69,7 +69,7 @@ export function AgentChips({ connection, onConnect }: {
             <span className="n">{c.name}</span>
             {on ? (
               <span className="st" role="status">
-                <Check size={12} aria-hidden="true" />
+                <CheckIcon className="size-3" aria-hidden="true" />
                 {t('ai_connected')}
               </span>
             ) : (

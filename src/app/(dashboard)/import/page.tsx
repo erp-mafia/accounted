@@ -28,7 +28,16 @@ import {
 } from '@/components/ui/dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowLeft, CreditCard, Landmark, Loader2, ChevronRight, Download, ShoppingBag, ShoppingCart } from 'lucide-react'
+import {
+  ArrowDownTrayIcon,
+  ArrowLeftIcon,
+  BuildingLibraryIcon,
+  ChevronRightIcon,
+  CreditCardIcon,
+  ShoppingBagIcon,
+  ShoppingCartIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { cn, formatDate } from '@/lib/utils'
 import { createClient } from '@/lib/supabase/client'
 import { fetchSessionUser } from '@/lib/auth/session-client'
@@ -80,7 +89,7 @@ import BankSyncStatusChip from '@/components/transactions/BankSyncStatusChip'
 
 const MigrationWizard = dynamic(
   () => import('@/components/extensions/general/ArcimMigrationWorkspace'),
-  { ssr: false, loading: () => <div className="flex items-center gap-3 text-muted-foreground p-6"><Loader2 className="h-5 w-5 animate-spin" />Laddar migreringsverktyg...</div> }
+  { ssr: false, loading: () => <div className="flex items-center gap-3 text-muted-foreground p-6"><SpinnerIcon className="h-5 w-5 animate-spin" />Laddar migreringsverktyg...</div> }
 )
 // Renders nothing unless the company moved invoices from Visma, so no
 // loading placeholder: it would flash on every other company's landing.
@@ -92,7 +101,7 @@ const MigratedDeductionCard = dynamic(
 function ImportStepLoading() {
   return (
     <div className="flex min-h-48 items-center justify-center" role="status">
-      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <SpinnerIcon className="h-5 w-5 animate-spin text-muted-foreground" />
     </div>
   )
 }
@@ -2012,7 +2021,7 @@ export default function ImportPage() {
                   }}
                   disabled={!exportPeriodId}
                 >
-                  <Download className="mr-2 h-4 w-4" />
+                  <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
                   {t('export_sie_button')}
                 </Button>
               </DialogFooter>
@@ -2024,7 +2033,7 @@ export default function ImportPage() {
       {/* The file wizards carry this as their rail's first crumb. */}
       {mode !== null && !WIZARD_MODES.has(mode) && (
         <Button variant="ghost" size="sm" onClick={backToChoices}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           {t('back_to_choices')}
         </Button>
       )}
@@ -2034,7 +2043,7 @@ export default function ImportPage() {
           <BankingPanel />
         ) : (
           <EmptyState
-            icon={Landmark}
+            icon={BuildingLibraryIcon}
             title={t('psd2_not_enabled_title')}
             description={t('psd2_not_enabled_description')}
           >
@@ -2049,7 +2058,7 @@ export default function ImportPage() {
           <StripePanel />
         ) : (
           <EmptyState
-            icon={CreditCard}
+            icon={CreditCardIcon}
             title={t('stripe_not_enabled_title')}
             description={t('stripe_not_enabled_description')}
           />
@@ -2060,7 +2069,7 @@ export default function ImportPage() {
           <WooCommercePanel />
         ) : (
           <EmptyState
-            icon={ShoppingCart}
+            icon={ShoppingCartIcon}
             title={t('woocommerce_not_enabled_title')}
             description={t('woocommerce_not_enabled_description')}
           />
@@ -2071,7 +2080,7 @@ export default function ImportPage() {
           <ShopifyPanel />
         ) : (
           <EmptyState
-            icon={ShoppingBag}
+            icon={ShoppingBagIcon}
             title={t('shopify_not_enabled_title')}
             description={t('shopify_not_enabled_description')}
           />
@@ -2082,7 +2091,7 @@ export default function ImportPage() {
           <ZettlePanel />
         ) : (
           <EmptyState
-            icon={ShoppingBag}
+            icon={ShoppingBagIcon}
             title={t('zettle_not_enabled_title')}
             description={t('zettle_not_enabled_description')}
           />
@@ -2151,7 +2160,7 @@ function ImportRow({
         <span className="mt-0.5 block text-xs leading-5 text-muted-foreground">{sub}</span>
         {chips && <span className="mt-2 flex flex-wrap gap-2">{chips}</span>}
       </span>
-      <ChevronRight
+      <ChevronRightIcon
         className={cn(
           'h-4 w-4 shrink-0 text-muted-foreground/40 transition-transform duration-150',
           'group-hover:translate-x-0.5 group-hover:text-muted-foreground',

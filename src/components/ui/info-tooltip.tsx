@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import * as TooltipPrimitive from '@radix-ui/react-tooltip'
-import { Info, HelpCircle } from 'lucide-react'
+import { InformationCircleIcon, QuestionMarkCircleIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { POPOVER_SURFACE_CLASS, RADIX_POPOVER_MOTION_CLASS } from '@/components/ui/popover-surface'
 
@@ -70,7 +70,7 @@ function InfoTooltip({
   variant = 'info',
   maxWidth = '280px',
 }: InfoTooltipProps) {
-  const Icon = variant === 'help' ? HelpCircle : Info
+  const Icon = variant === 'help' ? QuestionMarkCircleIcon : InformationCircleIcon
 
   return (
       <Tooltip>

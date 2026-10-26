@@ -17,7 +17,13 @@ import {
   SettingsRowEnd,
   SettingsRowNote,
 } from '@/components/settings/SettingsRows'
-import { CheckCircle2, ExternalLink, ShieldOff, FlaskConical, ShieldAlert, Landmark } from 'lucide-react'
+import {
+  ArrowTopRightOnSquareIcon,
+  BeakerIcon,
+  BuildingLibraryIcon,
+  CheckCircleIcon,
+  ShieldExclamationIcon,
+} from '@/components/icons'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useOmbudAppointWithToasts } from '@/components/skatteverket/ombud-appoint'
@@ -272,7 +278,7 @@ function SkatteverketPersonalConnectionCard() {
       <SettingsGroup>
         <SettingsRow label={
           <span className="inline-flex items-center gap-2">
-            <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
+            <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
             {t('title')}
           </span>
         } help={connectHelp} borderless>
@@ -288,7 +294,7 @@ function SkatteverketPersonalConnectionCard() {
         {status?.disabled && <WarningLine>{t('disabled_message')}</WarningLine>}
         <SettingsRow label={
           <span className="inline-flex items-center gap-2">
-            <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
+            <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
             {t('title')}
           </span>
         } help={connectHelp} borderless={!hasSkatteverket}>
@@ -306,7 +312,7 @@ function SkatteverketPersonalConnectionCard() {
                   : undefined
               }
             >
-              <ExternalLink className="mr-2 h-4 w-4" />
+              <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('connect_with_bankid')}
             </Button>
           </SettingsRowEnd>
@@ -342,7 +348,7 @@ function SkatteverketPersonalConnectionCard() {
 
       <SettingsRow label={
           <span className="inline-flex items-center gap-2">
-            <Landmark className="h-3.5 w-3.5" aria-hidden="true" />
+            <BuildingLibraryIcon className="h-3.5 w-3.5" aria-hidden="true" />
             {t('title')}
           </span>
         } help={connectHelp}>
@@ -350,7 +356,7 @@ function SkatteverketPersonalConnectionCard() {
           <Badge variant="warning">{t('expired')}</Badge>
         ) : (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <CheckCircle2 className="h-3.5 w-3.5" />
+            <CheckCircleIcon className="h-3.5 w-3.5" />
             {t('connected')}
           </span>
         )}
@@ -372,7 +378,7 @@ function SkatteverketPersonalConnectionCard() {
                   : undefined
               }
             >
-              <ExternalLink className="mr-2 h-4 w-4" />
+              <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
               {connecting ? t('connect_waiting') : t('reconnect')}
             </Button>
           )}
@@ -382,7 +388,7 @@ function SkatteverketPersonalConnectionCard() {
             onClick={disconnect}
             disabled={disconnecting || connecting}
           >
-            <ShieldOff className="mr-2 h-4 w-4" />
+            <ShieldExclamationIcon className="mr-2 h-4 w-4" />
             {disconnecting ? t('disconnecting') : t('disconnect')}
           </Button>
         </SettingsRowEnd>
@@ -524,7 +530,7 @@ function SkatteverketSystemConnectionCard() {
       case 'granted':
         return (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <CheckCircle2 className="h-3.5 w-3.5" />
+            <CheckCircleIcon className="h-3.5 w-3.5" />
             {t('system_status_granted')}
           </span>
         )
@@ -565,7 +571,7 @@ function SkatteverketSystemConnectionCard() {
 
       <div className="flex flex-wrap items-center gap-4 px-1 py-3">
         <Button size="sm" variant="outline" onClick={() => void appoint()} loading={linking || checking} title={t('system_deeplink_hint', { appName })}>
-          {!linking && <ExternalLink className="mr-2 h-4 w-4" />}
+          {!linking && <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />}
           {linking ? t('system_deeplink_loading') : t('system_deeplink', { appName })}
         </Button>
         {state.grant_url && (
@@ -575,7 +581,7 @@ function SkatteverketSystemConnectionCard() {
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors duration-150 hover:text-foreground"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             {t('system_open_ombud')}
           </a>
         )}
@@ -592,7 +598,7 @@ function EnvironmentBadge({ environment, disabled }: { environment?: Environment
   if (disabled) {
     return (
       <Badge variant="destructive">
-        <ShieldAlert className="mr-1 h-3 w-3" />
+        <ShieldExclamationIcon className="mr-1 h-3 w-3" />
         {t('env_disabled')}
       </Badge>
     )
@@ -600,7 +606,7 @@ function EnvironmentBadge({ environment, disabled }: { environment?: Environment
   if (environment === 'test') {
     return (
       <Badge variant="warning">
-        <FlaskConical className="mr-1 h-3 w-3" />
+        <BeakerIcon className="mr-1 h-3 w-3" />
         {t('env_test')}
       </Badge>
     )

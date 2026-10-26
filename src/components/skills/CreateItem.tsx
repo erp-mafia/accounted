@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import useSWR, { useSWRConfig } from 'swr'
-import { ArrowLeft, Plus, X } from 'lucide-react'
+import { ArrowLeftIcon, PlusIcon, XMarkIcon } from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useUnsavedChanges } from '@/lib/hooks/use-unsaved-changes'
@@ -323,8 +323,8 @@ function Create({ companyId, companyName, backHref, edit }: { companyId: string;
     <div className={styles.apage}>
       <PageHeader title={t('title')} />
       {edit
-        ? <button type="button" className={styles.back} onClick={edit.onCancel}><ArrowLeft className="h-4 w-4" aria-hidden />{t('edit_back')}</button>
-        : <Link href={back} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>}
+        ? <button type="button" className={styles.back} onClick={edit.onCancel}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('edit_back')}</button>
+        : <Link href={back} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>}
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={edit ? t('edit') : t('create_manual')}>
@@ -380,11 +380,11 @@ function Create({ companyId, companyName, backHref, edit }: { companyId: string;
                                 aria-label={t('create_step_label', { n: i + 1 })}
                               />
                               {/* The cursor goes to the step before, not back to the top of the page. */}
-                              {steps.length > 1 && <button type="button" className={styles.chipX} aria-label={t('create_step_remove', { n: i + 1 })} onClick={() => { setSteps((c) => c.filter((_, j) => j !== i)); focusStep.current = Math.max(0, i - 1) }}><X className="h-3 w-3" aria-hidden /></button>}
+                              {steps.length > 1 && <button type="button" className={styles.chipX} aria-label={t('create_step_remove', { n: i + 1 })} onClick={() => { setSteps((c) => c.filter((_, j) => j !== i)); focusStep.current = Math.max(0, i - 1) }}><XMarkIcon className="h-3 w-3" aria-hidden /></button>}
                             </li>
                           ))}
                         </ol>
-                        <button type="button" className={styles.addStep} onClick={() => { setSteps((c) => [...c, '']); focusStep.current = steps.length }}><Plus className="h-3.5 w-3.5" aria-hidden />{t('create_step_add')}</button>
+                        <button type="button" className={styles.addStep} onClick={() => { setSteps((c) => [...c, '']); focusStep.current = steps.length }}><PlusIcon className="h-3.5 w-3.5" aria-hidden />{t('create_step_add')}</button>
                       </div>
                     )}
                   </Field>

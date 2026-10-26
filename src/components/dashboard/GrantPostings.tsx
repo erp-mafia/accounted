@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Zap } from 'lucide-react'
+import { BoltIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -151,7 +151,7 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
           return (
             <div key={p.use_id} className="flex items-center gap-3 border-b border-border px-1 py-3 text-[13px]">
               <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
-                <Zap className="h-[15px] w-[15px]" />
+                <BoltIcon className="h-[15px] w-[15px]" />
               </span>
               <span className="shrink-0 tabular-nums text-muted-foreground">{formatDate(p.entry_date)}</span>
               <span className="min-w-0 flex-1 truncate">

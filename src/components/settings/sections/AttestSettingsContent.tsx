@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check } from 'lucide-react'
+import { CheckIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -312,7 +312,7 @@ export function AttestSettingsContent() {
         </Button>
         {saved ? (
           <span className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Check className="h-3.5 w-3.5" />
+            <CheckIcon className="h-3.5 w-3.5" />
             {t('saved')}
           </span>
         ) : (

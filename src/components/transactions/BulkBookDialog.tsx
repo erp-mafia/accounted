@@ -29,7 +29,14 @@ import { applyTemplate } from '@/lib/bookkeeping/template-library'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import DuplicateBookingDialog from '@/components/transactions/DuplicateBookingDialog'
-import { FileText, AlertTriangle, Check, Plus, Trash2, Paperclip } from 'lucide-react'
+import {
+  CheckIcon,
+  DocumentTextIcon,
+  ExclamationTriangleIcon,
+  PaperClipIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@/components/icons'
 import type { BookingTemplateLibraryLine } from '@/types'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -469,7 +476,7 @@ export default function BulkBookDialog({
             </div>
 
             <div className="flex items-start gap-2 text-xs text-destructive">
-              <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+              <ExclamationTriangleIcon className="h-3.5 w-3.5 flex-shrink-0" />
               <span>{t('mixed_currency_blocked')}</span>
             </div>
           </div>
@@ -552,7 +559,7 @@ export default function BulkBookDialog({
                       <div className="flex items-center justify-between gap-3">
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2">
-                            <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                            <DocumentTextIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                             <span className="text-sm font-medium truncate">{tpl.name}</span>
                             {tpl.is_system && (
                               <span className="flex-shrink-0 text-[11px] text-muted-foreground">
@@ -623,7 +630,7 @@ export default function BulkBookDialog({
                     size="sm"
                     onClick={addManualLine}
                   >
-                    <Plus className="mr-1 h-3.5 w-3.5" />
+                    <PlusIcon className="mr-1 h-3.5 w-3.5" />
                     {t('manual_add_line')}
                   </Button>
                 </div>
@@ -692,7 +699,7 @@ export default function BulkBookDialog({
                               onClick={() => removeManualLine(line.id)}
                               aria-label={t('manual_remove_line')}
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
+                              <TrashIcon className="h-3.5 w-3.5" />
                             </Button>
                           </td>
                         </tr>
@@ -737,7 +744,7 @@ export default function BulkBookDialog({
               when the count is non-zero to avoid clutter. */}
           {docCount > 0 && tabReady && (
             <div className="flex items-center gap-2 rounded-lg border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
-              <Paperclip className="h-3.5 w-3.5 flex-shrink-0" />
+              <PaperClipIcon className="h-3.5 w-3.5 flex-shrink-0" />
               <span>{t('docs_inherit_hint', { count: docCount })}</span>
             </div>
           )}
@@ -766,12 +773,12 @@ export default function BulkBookDialog({
               <div className="space-y-1">
                 {isBalanced ? (
                   <div className="flex items-center gap-2 text-xs text-success">
-                    <Check className="h-3.5 w-3.5" />
+                    <CheckIcon className="h-3.5 w-3.5" />
                     <span>{t('balance_ok')}</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-xs text-destructive">
-                    <AlertTriangle className="h-3.5 w-3.5" />
+                    <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                     <span>{t('balance_off', {
                       delta: formatCurrency(Math.abs(previewTotals.debit - previewTotals.credit)),
                     })}</span>
@@ -779,12 +786,12 @@ export default function BulkBookDialog({
                 )}
                 {bankMatches ? (
                   <div className="flex items-center gap-2 text-xs text-success">
-                    <Check className="h-3.5 w-3.5" />
+                    <CheckIcon className="h-3.5 w-3.5" />
                     <span>{t('bank_ok')}</span>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2 text-xs text-destructive">
-                    <AlertTriangle className="h-3.5 w-3.5" />
+                    <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                     <span>{t('bank_off')}</span>
                   </div>
                 )}

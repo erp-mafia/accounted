@@ -6,14 +6,13 @@ import { cn } from '@/lib/utils'
 import { isDeadlineOverdue, parseDate, startOfDay } from '@/lib/calendar/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
-  CalendarClock,
-  Check,
-  FileText,
-  Landmark,
-  Pencil,
-  ReceiptText,
-  Truck,
-} from 'lucide-react'
+  BuildingLibraryIcon,
+  CalendarDaysIcon,
+  CheckIcon,
+  DocumentTextIcon,
+  PencilIcon,
+  TruckIcon,
+} from '@/components/icons'
 
 interface DeadlineRowProps {
   deadline: Deadline
@@ -29,12 +28,12 @@ function daysFromToday(dateStr: string): number {
   return Math.round((target.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
 }
 
-const TYPE_ICONS: Record<Deadline['deadline_type'], typeof CalendarClock> = {
-  tax: Landmark,
-  invoicing: ReceiptText,
-  delivery: Truck,
-  report: FileText,
-  other: CalendarClock,
+const TYPE_ICONS: Record<Deadline['deadline_type'], typeof CalendarDaysIcon> = {
+  tax: BuildingLibraryIcon,
+  invoicing: DocumentTextIcon,
+  delivery: TruckIcon,
+  report: DocumentTextIcon,
+  other: CalendarDaysIcon,
 }
 
 // Statutory company-law deadlines carry Bolagsverket's mark. Tax-shaped ones
@@ -69,7 +68,7 @@ export function DeadlineMark({
   if (completed) {
     return (
       <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground/60">
-        <Check className="h-3.5 w-3.5" aria-hidden="true" />
+        <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
       </span>
     )
   }
@@ -82,7 +81,7 @@ export function DeadlineMark({
       </span>
     )
   }
-  const Icon = TYPE_ICONS[deadline.deadline_type] ?? CalendarClock
+  const Icon = TYPE_ICONS[deadline.deadline_type] ?? CalendarDaysIcon
   return (
     <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground">
       <Icon className="h-3.5 w-3.5" aria-hidden="true" />
@@ -198,7 +197,7 @@ export function DeadlineRow({ deadline, onEdit, onRequestToggle }: DeadlineRowPr
           </button>
         )}
         {onEdit && (
-          <Pencil
+          <PencilIcon
             className="h-3.5 w-3.5 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/50"
             aria-hidden="true"
           />

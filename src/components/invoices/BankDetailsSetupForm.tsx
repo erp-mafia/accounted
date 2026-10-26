@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { useForm } from 'react-hook-form'
 import { zodResolver } from '@hookform/resolvers/zod'
 import { z } from 'zod'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -230,9 +230,9 @@ export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupF
             aria-expanded={showInternational}
           >
             {showInternational ? (
-              <ChevronDown className="h-3.5 w-3.5" />
+              <ChevronDownIcon className="h-3.5 w-3.5" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRightIcon className="h-3.5 w-3.5" />
             )}
             {t('international_toggle')}
           </button>
@@ -268,9 +268,9 @@ export function BankDetailsSetupForm({ onComplete, onCancel }: BankDetailsSetupF
             aria-expanded={showNumbering}
           >
             {showNumbering ? (
-              <ChevronDown className="h-3.5 w-3.5" />
+              <ChevronDownIcon className="h-3.5 w-3.5" />
             ) : (
-              <ChevronRight className="h-3.5 w-3.5" />
+              <ChevronRightIcon className="h-3.5 w-3.5" />
             )}
             {t('numbering_toggle')}
           </button>

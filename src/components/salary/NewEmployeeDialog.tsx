@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Save } from 'lucide-react'
+import { ArrowDownOnSquareIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { vacationDaysFromInput, vacationPayRateFromPercentInput } from '@/lib/salary/vacation-pay-rate'
 import { useToast } from '@/components/ui/use-toast'
@@ -570,7 +570,7 @@ function NewEmployeeForm({ onCreated, onCancel }: { onCreated: () => void; onCan
           Avbryt
         </Button>
         <Button type="submit" disabled={saving}>
-          <Save className="mr-2 h-4 w-4" />
+          <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" />
           {saving ? 'Sparar...' : 'Spara'}
         </Button>
       </div>

@@ -13,7 +13,7 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import { cn, formatDate } from '@/lib/utils'
-import { ChevronRight, Loader2, MoreHorizontal } from 'lucide-react'
+import { ChevronRightIcon, EllipsisHorizontalIcon, SpinnerIcon } from '@/components/icons'
 import { switchDeepLink } from '@/lib/bank-feed/switch-link'
 import { getConnectionUiState, offersAccountChoice, type SunsetPath } from '../lib/connection-state'
 import { describeClaimedElsewhere, describeMirrorCards, partitionAccounts } from '../lib/claimed-accounts'
@@ -125,7 +125,7 @@ export function BankConnectionStatus({
       <div className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 border-b border-border px-1 py-3">
         <span className="text-sm font-medium">{connection.bank_name}</span>
         <span className="flex items-center gap-2 text-xs text-muted-foreground">
-          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
           Väntar på banken…
         </span>
         <span className="ml-auto shrink-0">
@@ -279,7 +279,7 @@ export function BankConnectionStatus({
                 className="text-muted-foreground hover:text-foreground"
                 aria-label={`Fler åtgärder för ${connection.bank_name}`}
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <EllipsisHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -375,7 +375,7 @@ export function BankConnectionStatus({
               aria-expanded={detailsOpen}
               className="flex min-h-9 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
             >
-              <ChevronRight
+              <ChevronRightIcon
                 className={cn('h-3.5 w-3.5 transition-transform duration-150', detailsOpen && 'rotate-90')}
               />
               <span className="tabular-nums">

@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { BankNameCombobox } from '@/components/settings/BankNameCombobox'
 import {
@@ -681,7 +681,7 @@ export function InvoicePaymentAccountsSettings({
     <SettingsGroup label={t('heading')} help={t('description')}>
       {isLoading ? (
         <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+          <SpinnerIcon className="h-4 w-4 animate-spin" aria-hidden="true" />
           {t('loading')}
         </div>
       ) : (

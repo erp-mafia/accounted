@@ -5,7 +5,7 @@ import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { Landmark } from 'lucide-react'
+import { BuildingLibraryIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Button } from '@/components/ui/button'
@@ -400,7 +400,7 @@ export function PaymentOrdersPage() {
 
       {(available || hasOrders) && !hasOrders && (
         <EmptyState
-          icon={Landmark}
+          icon={BuildingLibraryIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={t('empty_action')}

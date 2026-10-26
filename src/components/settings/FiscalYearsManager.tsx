@@ -14,7 +14,13 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
-import { Plus, Lock, Unlock, Eraser, Pencil } from 'lucide-react'
+import {
+  BackspaceIcon,
+  LockClosedIcon,
+  LockOpenIcon,
+  PencilIcon,
+  PlusIcon,
+} from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
 import CreatePeriodDialog from '@/components/bookkeeping/CreatePeriodDialog'
@@ -205,7 +211,7 @@ export function FiscalYearsManager() {
                     disabled={isMutating}
                     onClick={() => openEdit(p, 'edit')}
                   >
-                    <Pencil className="mr-1.5 h-4 w-4" />
+                    <PencilIcon className="mr-1.5 h-4 w-4" />
                     {t('fy_action_edit')}
                   </Button>
                 )}
@@ -217,7 +223,7 @@ export function FiscalYearsManager() {
                     disabled={isMutating}
                     onClick={() => openEdit(p, 'start')}
                   >
-                    <Pencil className="mr-1.5 h-4 w-4" />
+                    <PencilIcon className="mr-1.5 h-4 w-4" />
                     {t('fy_action_correct_start')}
                   </Button>
                 )}
@@ -229,7 +235,7 @@ export function FiscalYearsManager() {
                     loading={isMutating}
                     onClick={() => handleLock(p)}
                   >
-                    {!isMutating && <Lock className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockClosedIcon className="mr-1.5 h-4 w-4" />}
                     {t('fy_action_lock')}
                   </Button>
                 )}
@@ -241,7 +247,7 @@ export function FiscalYearsManager() {
                     disabled={isMutating}
                     onClick={() => setResetTarget(p)}
                   >
-                    <Eraser className="mr-1.5 h-4 w-4" />
+                    <BackspaceIcon className="mr-1.5 h-4 w-4" />
                     {t('fy_action_reset')}
                   </Button>
                 )}
@@ -253,7 +259,7 @@ export function FiscalYearsManager() {
                     loading={isMutating}
                     onClick={() => handleUnlock(p)}
                   >
-                    {!isMutating && <Unlock className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockOpenIcon className="mr-1.5 h-4 w-4" />}
                     {t('fy_action_unlock')}
                   </Button>
                 )}
@@ -265,7 +271,7 @@ export function FiscalYearsManager() {
                     loading={isMutating}
                     onClick={() => handleReopen(p)}
                   >
-                    {!isMutating && <Unlock className="mr-1.5 h-4 w-4" />}
+                    {!isMutating && <LockOpenIcon className="mr-1.5 h-4 w-4" />}
                     {t('fy_action_reopen')}
                   </Button>
                 )}
@@ -277,7 +283,7 @@ export function FiscalYearsManager() {
                     disabled={isMutating}
                     onClick={() => setReopenTarget(p)}
                   >
-                    <Unlock className="mr-1.5 h-4 w-4" />
+                    <LockOpenIcon className="mr-1.5 h-4 w-4" />
                     {t('fy_action_reopen')}
                   </Button>
                 )}
@@ -296,7 +302,7 @@ export function FiscalYearsManager() {
           onClick={() => setDialogOpen(true)}
           disabled={isLoading}
         >
-          <Plus className="mr-1.5 h-4 w-4" />
+          <PlusIcon className="mr-1.5 h-4 w-4" />
           {t('fy_create')}
         </Button>
       </div>

@@ -15,7 +15,14 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Trash2, Search, Check, BookmarkPlus, Tags } from 'lucide-react'
+import {
+  BookmarkIcon,
+  CheckIcon,
+  HashtagIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { cn, formatCurrency, formatAmount } from '@/lib/utils'
 import { roundOre, formatAmountInput } from '@/lib/money'
@@ -658,7 +665,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
             </div>
             <div className="space-y-2">
               <div className="relative">
-                <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                 <Input
                   placeholder="Sök på beskrivning…"
                   value={txSearch}
@@ -702,7 +709,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           >
                             <span className="shrink-0 w-4 flex items-center justify-center">
                               {isSelected ? (
-                                <Check className="h-3.5 w-3.5 text-primary" />
+                                <CheckIcon className="h-3.5 w-3.5 text-primary" />
                               ) : null}
                             </span>
                             <div className="min-w-0 flex-1">
@@ -833,7 +840,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                               title={tJournal('row_dimensions_aria')}
                               className={cn('shrink-0', line.dimensions != null ? 'text-foreground' : 'text-muted-foreground')}
                             >
-                              <Tags className="h-3.5 w-3.5" />
+                              <HashtagIcon className="h-3.5 w-3.5" />
                             </Button>
                           )}
                         </div>
@@ -873,7 +880,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                           disabled={isSubmitting || lines.length <= 2}
                           aria-label="Ta bort rad"
                         >
-                          <Trash2 className="h-3.5 w-3.5" />
+                          <TrashIcon className="h-3.5 w-3.5" />
                         </Button>
                       </td>
                     </tr>,
@@ -944,7 +951,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                   onClick={addLine}
                   disabled={isSubmitting}
                 >
-                  <Plus className="h-3.5 w-3.5 mr-1.5" />
+                  <PlusIcon className="h-3.5 w-3.5 mr-1.5" />
                   Lägg till rad
                 </Button>
                 <TemplateApplyButton
@@ -974,7 +981,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
                       : undefined
                   }
                 >
-                  <BookmarkPlus className="h-3.5 w-3.5 mr-1.5" />
+                  <BookmarkIcon className="h-3.5 w-3.5 mr-1.5" />
                   Spara som mall
                 </Button>
               </div>

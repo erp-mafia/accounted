@@ -81,12 +81,22 @@ describe('findInSource', () => {
     expect(rules(`const a = <div className="h-7">x</div>`)).toEqual([])
   })
 
-  it('flags a Loader2 rendered inside a Button', () => {
+  it('flags a SpinnerIcon rendered inside a Button', () => {
     expect(
-      rules(`const a = <Button disabled={busy}>{busy && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}Spara</Button>`),
+      rules(`const a = <Button disabled={busy}>{busy && <SpinnerIcon className="mr-2 h-4 w-4 animate-spin" />}Spara</Button>`),
     ).toEqual(['button-spinner'])
     expect(rules(`const a = <Button loading={busy}>Spara</Button>`)).toEqual([])
-    expect(rules(`const a = <div>{busy && <Loader2 className="h-4 w-4 animate-spin" />}</div>`)).toEqual([])
+    expect(rules(`const a = <div>{busy && <SpinnerIcon className="h-4 w-4 animate-spin" />}</div>`)).toEqual([])
+  })
+
+  it('flags an icon inside a <p>, however deep or however it is named', () => {
+    expect(rules(`const a = <p className="flex gap-2"><ExclamationCircleIcon className="h-4 w-4" />Fel</p>`)).toEqual([
+      'icon-in-paragraph',
+    ])
+    expect(rules(`const a = <p><span>{ok && <Icon className="h-4 w-4" />}</span>Klart</p>`)).toEqual(['icon-in-paragraph'])
+    expect(rules(`const a = <p><item.icon className="h-4 w-4" /></p>`)).toEqual(['icon-in-paragraph'])
+    expect(rules(`const a = <div className="flex gap-2"><ExclamationCircleIcon className="h-4 w-4" />Fel</div>`)).toEqual([])
+    expect(rules(`const a = <p>Bara text, <strong>ingen</strong> ikon.</p>`)).toEqual([])
   })
 
   it('flags a button that is not toolbar-sized beside a picker, and accepts sm / icon-sm', () => {

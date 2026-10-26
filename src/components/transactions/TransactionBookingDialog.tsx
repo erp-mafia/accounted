@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { ArrowUpRight, ArrowDownRight, Inbox } from 'lucide-react'
+import { ArrowDownRightIcon, ArrowUpRightIcon, InboxIcon } from '@/components/icons'
 import JournalEntryForm from '@/components/bookkeeping/JournalEntryForm'
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
@@ -306,7 +306,7 @@ export default function TransactionBookingDialog({
       onClick={() => setInboxPickerOpen(true)}
       className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground"
     >
-      <Inbox className="h-4 w-4" />
+      <InboxIcon className="h-4 w-4" />
       <span>{t('doc_pick_existing_inline')}</span>
     </button>
   )
@@ -361,9 +361,9 @@ export default function TransactionBookingDialog({
             }`}
           >
             {isIncome ? (
-              <ArrowUpRight className="h-4 w-4" />
+              <ArrowUpRightIcon className="h-4 w-4" />
             ) : (
-              <ArrowDownRight className="h-4 w-4" />
+              <ArrowDownRightIcon className="h-4 w-4" />
             )}
           </div>
           <div className="flex-1 min-w-0">

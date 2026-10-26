@@ -4,7 +4,20 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Banknote, ChevronRight, File, FileOutput, FileQuestion, FileSignature, FileText, Paperclip, ScrollText, ShoppingBag, Stamp, type LucideIcon } from 'lucide-react'
+import {
+  BanknotesIcon,
+  CheckBadgeIcon,
+  ChevronRightIcon,
+  DocumentArrowDownIcon,
+  DocumentChartBarIcon,
+  DocumentIcon,
+  DocumentMagnifyingGlassIcon,
+  DocumentTextIcon,
+  PaperClipIcon,
+  PencilSquareIcon,
+  ShoppingBagIcon,
+  type Icon as AppIcon,
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -31,17 +44,17 @@ const PICKER_CLASS = 'h-8 w-auto gap-1.5 rounded-full px-3.5 text-[13px]'
 const PAGE = 25
 
 // Myndigheter is a stamp, not a bank; a receipt is a purchase already paid, so a bag, not a till slip (founder, 2026-09-24).
-const ICONS: Record<FolderKey, LucideIcon> = {
-  agreements: FileSignature,
-  authority: Stamp,
-  corporate: ScrollText,
-  receipts: ShoppingBag,
-  supplier_invoices: FileText,
-  customer_invoices: FileOutput,
-  bank_statements: Banknote,
-  other: File,
-  booked: Paperclip,
-  untyped: FileQuestion,
+const ICONS: Record<FolderKey, AppIcon> = {
+  agreements: PencilSquareIcon,
+  authority: CheckBadgeIcon,
+  corporate: DocumentChartBarIcon,
+  receipts: ShoppingBagIcon,
+  supplier_invoices: DocumentTextIcon,
+  customer_invoices: DocumentArrowDownIcon,
+  bank_statements: BanknotesIcon,
+  other: DocumentIcon,
+  booked: PaperClipIcon,
+  untyped: DocumentMagnifyingGlassIcon,
 }
 
 interface FolderPage {
@@ -189,7 +202,7 @@ export function ArkivTree({ refreshKey = 0 }: { refreshKey?: number }) {
                 className="border-b border-border"
               >
                 <summary className="flex cursor-pointer list-none items-center gap-2 py-3 text-[13px] [&::-webkit-details-marker]:hidden">
-                  <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 ${folderOpen ? 'rotate-90' : ''}`} aria-hidden="true" />
+                  <ChevronRightIcon className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 ${folderOpen ? 'rotate-90' : ''}`} aria-hidden="true" />
                   <Icon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   <span className="font-medium">{t(`folder_${folder.key}` as never)}</span>
                   {mix ? <span className="truncate text-[12.5px] text-muted-foreground">{mix}</span> : null}

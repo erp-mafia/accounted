@@ -8,7 +8,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
-import { Download, CheckCircle2, ExternalLink } from 'lucide-react'
+import { ArrowDownTrayIcon, ArrowTopRightOnSquareIcon, CheckCircleIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { postAction } from '@/lib/browser/post-action'
@@ -184,7 +184,7 @@ export function TaxPaymentPanel({
             className={cn(QUIET_LINK_CLASS, 'inline-flex items-center gap-1')}
           >
             {t('tax_skattekonto_button')}
-            <ExternalLink className="h-3 w-3" />
+            <ArrowTopRightOnSquareIcon className="h-3 w-3" />
           </a>
         ) : undefined
       }
@@ -252,7 +252,7 @@ export function TaxPaymentPanel({
             />
           )}
           <Button onClick={handleDownload} disabled={marking} loading={downloading}>
-            {!downloading && <Download className="mr-2 h-4 w-4" />}
+            {!downloading && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
             {t('tax_download_button')}
           </Button>
           {!taxPaidAt && (
@@ -262,7 +262,7 @@ export function TaxPaymentPanel({
               disabled={downloading}
               loading={marking}
             >
-              {!marking && <CheckCircle2 className="mr-2 h-4 w-4" />}
+              {!marking && <CheckCircleIcon className="mr-2 h-4 w-4" />}
               {t('tax_mark_paid_button')}
             </Button>
           )}

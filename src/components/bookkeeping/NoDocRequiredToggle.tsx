@@ -6,7 +6,7 @@ import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
 import { Input } from '@/components/ui/input'
 import { Button } from '@/components/ui/button'
-import { Loader2, CircleSlash, Lock } from 'lucide-react'
+import { LockClosedIcon, NoSymbolIcon, SpinnerIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
@@ -169,9 +169,9 @@ export default function NoDocRequiredToggle({
           htmlFor={`no-doc-${entryId}`}
           className="text-sm cursor-pointer flex items-center gap-1.5"
         >
-          {!canWrite && <Lock className="h-3 w-3" />}
-          {saving && <Loader2 className="h-3 w-3 animate-spin" />}
-          {!saving && exempt && <CircleSlash className="h-3.5 w-3.5 text-muted-foreground" />}
+          {!canWrite && <LockClosedIcon className="h-3 w-3" />}
+          {saving && <SpinnerIcon className="h-3 w-3 animate-spin" />}
+          {!saving && exempt && <NoSymbolIcon className="h-3.5 w-3.5 text-muted-foreground" />}
           {t('no_doc_required_toggle')}
         </Label>
       </div>

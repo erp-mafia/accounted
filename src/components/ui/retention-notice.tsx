@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { getBranding } from '@/lib/branding/service'
 
@@ -65,7 +65,7 @@ export function RetentionNotice({ variant, className }: RetentionNoticeProps) {
       )}
     >
       <div className="flex gap-3">
-        <AlertTriangle className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
+        <ExclamationTriangleIcon className="h-5 w-5 text-destructive shrink-0 mt-0.5" />
         <div className="space-y-1 text-sm">
           <p className="font-medium text-destructive">{copy.title}</p>
           <p className="text-muted-foreground">{copy.body}</p>

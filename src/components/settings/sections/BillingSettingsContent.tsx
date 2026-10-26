@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check, ChevronDown } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -127,7 +127,7 @@ export function BillingSettingsContent() {
 function CheckItem({ label, gloss }: { label: string; gloss?: string }) {
   return (
     <li className="flex items-start gap-2 text-[13px]">
-      <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+      <CheckIcon aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
       <span>
         <span>{label}</span>
         {gloss && <span className="block text-xs text-muted-foreground">{gloss}</span>}
@@ -400,10 +400,10 @@ function BillingCoreContent() {
     // yet: confirm instead of re-showing the sell pitch to someone who paid.
     paidFooter = (
       <div className="space-y-1">
-        <p className="flex items-start gap-2 text-[13px]">
-          <Check aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
+        <div className="flex items-start gap-2 text-[13px]">
+          <CheckIcon aria-hidden="true" className="mt-1 h-3.5 w-3.5 shrink-0 text-foreground" />
           <span>{t('paid_just_now')}</span>
-        </p>
+        </div>
         <p className="text-xs text-muted-foreground">{t('paid_just_now_note')}</p>
       </div>
     )
@@ -540,7 +540,7 @@ function BillingCoreContent() {
         className="mt-4 inline-flex items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground pointer-coarse:min-h-10"
       >
         {t('compare_plans')}
-        <ChevronDown
+        <ChevronDownIcon
           className={cn('h-3.5 w-3.5 transition-transform duration-150', comparing && 'rotate-180')}
           aria-hidden="true"
         />

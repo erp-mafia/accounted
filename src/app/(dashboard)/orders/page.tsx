@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { MoreHorizontal, ShoppingCart } from 'lucide-react'
+import { EllipsisHorizontalIcon, ShoppingCartIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -301,14 +301,14 @@ export default function OrdersPage() {
         // A live region so a filter change that empties the list is announced.
         <div role="status" aria-live="polite">
           <EmptyState
-            icon={ShoppingCart}
+            icon={ShoppingCartIcon}
             title={t('empty_filtered_title')}
             description={t('empty_filtered_description')}
           />
         </div>
       ) : visibleRows.length === 0 ? (
         <EmptyState
-          icon={ShoppingCart}
+          icon={ShoppingCartIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={t('empty_action')}
@@ -630,7 +630,7 @@ function OrderRow({
                   className={cn('shrink-0', HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')}
                   aria-label={t('row_menu_aria', { number: order.order_number })}
                 >
-                  <MoreHorizontal className="h-4 w-4 text-muted-foreground" />
+                  <EllipsisHorizontalIcon className="h-4 w-4 text-muted-foreground" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

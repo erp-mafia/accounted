@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { Sparkles, ArrowRight } from 'lucide-react'
+import { ArrowRightIcon, SparklesIcon } from '@/components/icons'
 import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 
@@ -37,7 +37,7 @@ export default function SandboxAgentPreview({
         <div className="mx-auto max-w-md space-y-6">
           <div className="rounded-lg border border-border bg-secondary/40 p-5">
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Sparkles className="h-4 w-4" />
+              <SparklesIcon className="h-4 w-4" />
               Förhandsvisning i sandlådan
             </div>
             <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
@@ -87,7 +87,7 @@ export default function SandboxAgentPreview({
             onClick={handleCreateAccount}
           >
             Skapa konto för att använda {name}
-            <ArrowRight className="ml-1.5 h-4 w-4" />
+            <ArrowRightIcon className="ml-1.5 h-4 w-4" />
           </Button>
         </div>
         <p className="mt-2 text-[11px] text-muted-foreground">

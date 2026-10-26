@@ -19,7 +19,13 @@ import {
   PRIORITY_LABELS,
   PRIORITY_COLORS,
 } from '@/lib/calendar/utils'
-import { FileText, CheckCircle, Clock, AlertTriangle, Plus } from 'lucide-react'
+import {
+  CheckCircleIcon,
+  ClockIcon,
+  DocumentTextIcon,
+  ExclamationTriangleIcon,
+  PlusIcon,
+} from '@/components/icons'
 
 interface DayDetailModalProps {
   date: Date | null
@@ -87,11 +93,11 @@ export function DayDetailModal({
                         <div className="flex items-start justify-between gap-2">
                           <div className="flex items-start gap-2">
                             {overdue ? (
-                              <AlertTriangle className="h-4 w-4 text-destructive mt-0.5" />
+                              <ExclamationTriangleIcon className="h-4 w-4 text-destructive mt-0.5" />
                             ) : paid ? (
-                              <CheckCircle className="h-4 w-4 text-success mt-0.5" />
+                              <CheckCircleIcon className="h-4 w-4 text-success mt-0.5" />
                             ) : (
-                              <FileText className="h-4 w-4 text-muted-foreground mt-0.5" />
+                              <DocumentTextIcon className="h-4 w-4 text-muted-foreground mt-0.5" />
                             )}
                             <div>
                               <p className="font-medium text-sm">
@@ -137,7 +143,7 @@ export function DayDetailModal({
                 size="sm"
                 onClick={() => onAddDeadline(date)}
               >
-                <Plus className="h-4 w-4 mr-1" />
+                <PlusIcon className="h-4 w-4 mr-1" />
                 Lägg till
               </Button>
             </div>
@@ -171,11 +177,11 @@ export function DayDetailModal({
                             className="mt-0.5"
                           >
                             {completed ? (
-                              <CheckCircle className="h-4 w-4 text-success" />
+                              <CheckCircleIcon className="h-4 w-4 text-success" />
                             ) : overdue ? (
-                              <AlertTriangle className="h-4 w-4 text-destructive" />
+                              <ExclamationTriangleIcon className="h-4 w-4 text-destructive" />
                             ) : (
-                              <Clock className="h-4 w-4 text-muted-foreground" />
+                              <ClockIcon className="h-4 w-4 text-muted-foreground" />
                             )}
                           </button>
                           <div>
@@ -218,7 +224,7 @@ export function DayDetailModal({
           {/* Empty state */}
           {dayInvoices.length === 0 && dayDeadlines.length === 0 && (
             <div className="text-center py-6">
-              <Clock className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+              <ClockIcon className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">
                 Inga händelser denna dag
               </p>
@@ -228,7 +234,7 @@ export function DayDetailModal({
                 className="mt-2"
                 onClick={() => onAddDeadline(date)}
               >
-                <Plus className="h-4 w-4 mr-1" />
+                <PlusIcon className="h-4 w-4 mr-1" />
                 Lägg till deadline
               </Button>
             </div>

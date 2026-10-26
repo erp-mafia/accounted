@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { FileDown, Receipt, Trash2 } from 'lucide-react'
+import { DocumentArrowDownIcon, ReceiptRefundIcon, TrashIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { EmployeeMasked, SalaryRunEmployee } from '@/types'
@@ -312,7 +312,7 @@ export function RunEmployeesTable({
                             title={t('add_expense_claims_title')}
                             aria-label={t('add_expense_claims_aria', { name })}
                           >
-                            {!addingClaims && <Receipt className="mr-2 h-4 w-4" />}
+                            {!addingClaims && <ReceiptRefundIcon className="mr-2 h-4 w-4" />}
                             <span className="tabular-nums">
                               {t('add_expense_claims', {
                                 count: openClaims.count,
@@ -335,7 +335,7 @@ export function RunEmployeesTable({
                           title={t('view_payslip_title')}
                           aria-label={t('view_payslip_title')}
                         >
-                          <FileDown className="h-4 w-4" />
+                          <DocumentArrowDownIcon className="h-4 w-4" />
                         </a>
                         {canRemoveEmployee && (
                           <Button
@@ -350,7 +350,7 @@ export function RunEmployeesTable({
                             aria-label={t('remove_employee_aria', { name })}
                             title={t('remove_employee_title')}
                           >
-                            {!removing && <Trash2 className="h-4 w-4" />}
+                            {!removing && <TrashIcon className="h-4 w-4" />}
                           </Button>
                         )}
                       </span>

@@ -18,7 +18,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { Skeleton } from '@/components/ui/skeleton'
-import { CalendarPlus, Lock, MoreHorizontal } from 'lucide-react'
+import { CalendarIcon, EllipsisHorizontalIcon, LockClosedIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { FiscalPeriod, YearEndPreview, YearEndResult } from '@/types'
@@ -295,7 +295,7 @@ export default function YearEndPage() {
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-sm" aria-label="Fler åtgärder">
-                  <MoreHorizontal className="h-4 w-4" />
+                  <EllipsisHorizontalIcon className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
@@ -374,13 +374,13 @@ export default function YearEndPage() {
       {periods !== null && periods.length === 0 && (
         hasAnyPeriods ? (
           <EmptyState
-            icon={Lock}
+            icon={LockClosedIcon}
             title="Inga perioder att stänga"
             description="Det finns ingen öppen räkenskapsperiod vars slutdatum redan har passerat. Bokslut görs efter att periodens slutdatum är passerat."
           />
         ) : (
           <EmptyState
-            icon={CalendarPlus}
+            icon={CalendarIcon}
             title="Inget räkenskapsår ännu"
             description="Bokslut görs per räkenskapsår. Skapa företagets räkenskapsår i bokföringsinställningarna för att komma igång."
             actionLabel="Öppna bokföringsinställningar"

@@ -23,7 +23,7 @@ import { Deadline, DeadlineType, DeadlinePriority } from '@/types'
 import { formatDateISO, DEADLINE_TYPE_LABELS, PRIORITY_LABELS } from '@/lib/calendar/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
 
 /**
  * Only the fields the form actually manages. Both API routes whitelist to
@@ -301,7 +301,7 @@ export function DeadlineForm({
                 disabled={isLoading || !formData.title || !canWrite}
                 title={!canWrite ? 'Du har endast läsbehörighet i detta företag' : undefined}
               >
-                {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
                 {isLoading ? 'Sparar...' : initialData?.id ? 'Spara' : 'Skapa'}
               </Button>
             </div>

@@ -17,7 +17,7 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { ArrowLeft, ArrowRight, AlertTriangle } from 'lucide-react'
+import { ArrowLeftIcon, ArrowRightIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency, cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
@@ -105,7 +105,7 @@ export default function SkattekontoFilePreviewStep({
         <Card className="border-destructive/40">
           <CardHeader className="py-3">
             <CardTitle className="text-sm flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-4 w-4" />
+              <ExclamationTriangleIcon className="h-4 w-4" />
               {t('skattekonto_org_mismatch_title')}
             </CardTitle>
           </CardHeader>
@@ -133,7 +133,7 @@ export default function SkattekontoFilePreviewStep({
         <Card className="border-destructive/40">
           <CardHeader className="py-3">
             <CardTitle className="text-sm flex items-center gap-2 text-destructive">
-              <AlertTriangle className="h-4 w-4" />
+              <ExclamationTriangleIcon className="h-4 w-4" />
               {t('skattekonto_sum_gap_title')}
             </CardTitle>
           </CardHeader>
@@ -242,12 +242,12 @@ export default function SkattekontoFilePreviewStep({
 
       <div className="flex justify-between">
         <Button variant="outline" onClick={onBack} disabled={isLoading}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           {t('skattekonto_back')}
         </Button>
         <Button onClick={onExecute} disabled={isLoading || importBlocked || newCount === 0}>
           {t('skattekonto_import_button', { count: newCount })}
-          <ArrowRight className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="ml-2 h-4 w-4" />
         </Button>
       </div>
     </div>

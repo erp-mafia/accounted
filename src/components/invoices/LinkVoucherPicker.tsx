@@ -13,7 +13,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { parseVoucherNumber, voucherNumberMatches } from '@/lib/invoices/voucher-label'
 import { formatAmountInput, roundOre } from '@/lib/money'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Search } from 'lucide-react'
+import { MagnifyingGlassIcon } from '@/components/icons'
 import {
   canChooseAmount,
   checkLinkAmount,
@@ -283,7 +283,7 @@ export default function LinkVoucherPicker({
       <p className="text-sm text-muted-foreground">{t(introKey)}</p>
 
       <div className="relative">
-        <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+        <MagnifyingGlassIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
           value={search}
           onChange={(e) => setSearch(e.target.value)}

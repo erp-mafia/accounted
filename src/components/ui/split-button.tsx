@@ -7,12 +7,12 @@ import { cn } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { Button, type ButtonProps } from '@/components/ui/button'
 import { rememberCreateMode } from '@/lib/ui-state/client'
-import { Check, ChevronDown, Loader2, type LucideIcon } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon, SpinnerIcon, type Icon } from '@/components/icons'
 
 export interface SplitButtonOption {
   key: string
   label: string
-  icon?: LucideIcon
+  icon?: Icon
   /** Muted second line in the menu describing what the mode does. */
   description?: string
   /** Disable the option (e.g. viewers): renders inert with disabledTitle
@@ -145,7 +145,7 @@ export function SplitButton({
         )}
         onClick={() => setOpen((v) => !v)}
       >
-        <ChevronDown className="h-4 w-4" />
+        <ChevronDownIcon className="h-4 w-4" />
       </Button>
 
       {open &&
@@ -176,7 +176,7 @@ export function SplitButton({
                   )}
                 >
                   {option.busy ? (
-                    <Loader2 className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin" />
+                    <SpinnerIcon className="mt-0.5 h-4 w-4 flex-shrink-0 animate-spin" />
                   ) : (
                     option.icon && (
                       <option.icon className="mt-0.5 h-4 w-4 flex-shrink-0" />
@@ -191,7 +191,7 @@ export function SplitButton({
                     )}
                   </span>
                   {option.key === activeKey && (
-                    <Check className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                    <CheckIcon className="mt-0.5 h-3.5 w-3.5 flex-shrink-0 text-primary" />
                   )}
                 </button>
               ))}

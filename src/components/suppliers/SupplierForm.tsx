@@ -11,7 +11,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Lock, X } from 'lucide-react'
+import { LockClosedIcon, XMarkIcon } from '@/components/icons'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { AttnLine } from '@/components/ui/attn-line'
 import { lookupCreditorName, probeCreditorLookup, type CreditorLookupResult } from '@/components/payments/payments-client'
@@ -458,7 +458,7 @@ export default function SupplierForm({
                       aria-label={t('default_account_clear')}
                       onClick={() => field.onChange('')}
                     >
-                      <X className="h-4 w-4" />
+                      <XMarkIcon className="h-4 w-4" />
                     </Button>
                   ) : null}
                 </div>
@@ -542,7 +542,7 @@ export default function SupplierForm({
             t('submit_saving')
           ) : !canWrite ? (
             <>
-              <Lock className="mr-2 h-4 w-4" />
+              <LockClosedIcon className="mr-2 h-4 w-4" />
               {t('submit_save')}
             </>
           ) : (

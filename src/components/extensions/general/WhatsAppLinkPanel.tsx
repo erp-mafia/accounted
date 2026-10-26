@@ -15,7 +15,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2, ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, SpinnerIcon } from '@/components/icons'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -188,7 +188,7 @@ export function WhatsAppLinkPanel() {
   if (isLoading) {
     return (
       <div className="flex items-center gap-2 px-1 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+        <SpinnerIcon className="h-4 w-4 animate-spin" aria-hidden="true" />
         {t('loading')}
       </div>
     )
@@ -302,7 +302,7 @@ export function WhatsAppLinkPanel() {
                   <a href={minted.waLink} target="_blank" rel="noreferrer">
                     <WhatsAppMark size={16} className="mr-1.5" />
                     {t('open_whatsapp')}
-                    <ExternalLink className="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
+                    <ArrowTopRightOnSquareIcon className="ml-1.5 h-3.5 w-3.5" aria-hidden="true" />
                   </a>
                 </Button>
               ) : null}

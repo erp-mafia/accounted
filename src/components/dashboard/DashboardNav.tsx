@@ -1,23 +1,23 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, type ComponentType } from 'react'
 import { NavLink } from './NavLink'
 import { usePathname, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
 import {
-  LayoutDashboard,
-  Home,
-  ArrowLeftRight,
-  Settings,
-  LogOut,
-  Menu,
-  X,
-  HelpCircle,
-  Sparkles,
-  ArrowLeft,
-} from 'lucide-react'
+  ArrowLeftIcon,
+  ArrowRightStartOnRectangleIcon,
+  ArrowsRightLeftIcon,
+  Bars3Icon,
+  Cog6ToothIcon,
+  HomeIcon,
+  QuestionMarkCircleIcon,
+  SparklesIcon,
+  XMarkIcon,
+  type Icon,
+} from '@/components/icons'
 import { getBranding } from '@/lib/branding/service'
 import { BrandHomeLink } from '@/components/branding/BrandHomeLink'
 import { ENABLED_EXTENSION_IDS as _ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -132,7 +132,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
   const { company, capabilities, byraTeam } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
-  // generic Sparkles glyph.
+  // generic sparkles glyph.
   const { identity: agentIdentity } = useAgentSheet()
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
@@ -328,11 +328,11 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
 
   // Render a nav item's leading glyph. The "Assistent" entry (/chat) shows
   // the agent's chosen avatar once built; everything else (and the
-  // pre-onboarding /chat) uses its lucide icon. The passed className carries
+  // pre-onboarding /chat) uses its menu icon. The passed className carries
   // size + margin + active color; tailwind-merge lets the explicit h/w win
   // over AgentAvatar's default box size.
   const renderNavIcon = (
-    item: { href: string; icon: typeof LayoutDashboard },
+    item: { href: string; icon: ComponentType<{ className?: string }> },
     className: string,
   ) => {
     if (item.href === '/chat' && agentIdentity.avatarId) {
@@ -414,13 +414,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     return badgeFor(href)
   }
 
-  const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: typeof LayoutDashboard }[] = cockpitMode
+  const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: Icon }[] = cockpitMode
     ? cockpitNavItems.map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
     : [
         // The phone bar names the page the way the sidebar does: Att göra.
-        { href: '/', labelKey: 'v2_todo' as NavLabelKey, icon: Home },
-        { href: '/chat', labelKey: 'assistant', icon: Sparkles },
-        { href: '/transactions', labelKey: 'transactions', icon: ArrowLeftRight },
+        { href: '/', labelKey: 'v2_todo' as NavLabelKey, icon: HomeIcon },
+        { href: '/chat', labelKey: 'assistant', icon: SparklesIcon },
+        { href: '/transactions', labelKey: 'transactions', icon: ArrowsRightLeftIcon },
       ]
 
   const renderBadge = (item: { comingSoon?: boolean; devBadge?: boolean; betaBadge?: boolean; newBadge?: boolean }) => {
@@ -467,7 +467,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                   title={cockpitHint ?? undefined}
                   className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
                 >
-                  <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
+                  <ArrowLeftIcon className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
                   <span className="flex-1 min-w-0">
                     <span className="block">{tNav('back_to_clients')}</span>
                     <span className="block truncate text-[11px] text-muted-foreground">{cockpitHint}</span>
@@ -478,7 +478,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                   href={cockpitHref}
                   className="group flex items-center rounded-lg px-3 py-[7px] text-[13px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
                 >
-                  <ArrowLeft className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
+                  <ArrowLeftIcon className="mr-2.5 h-[15px] w-[15px] flex-shrink-0" />
                   <span className="flex-1">{tNav('back_to_clients')}</span>
                 </NavLink>
               )}
@@ -561,7 +561,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
             aria-label={tNav('open_menu')}
             className="flex flex-col items-center justify-center flex-1 h-full text-xs text-muted-foreground transition-colors duration-150"
           >
-            <Menu className="h-5 w-5 mb-1" />
+            <Bars3Icon className="h-5 w-5 mb-1" />
             <span>{tNav('menu')}</span>
           </button>
         </div>
@@ -608,7 +608,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                 onClick={closeMobileMenu}
                 aria-label={tNav('close_menu')}
               >
-                <X className="h-4 w-4" />
+                <XMarkIcon className="h-4 w-4" />
               </Button>
             </div>
 
@@ -625,7 +625,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                       onClick={closeMobileMenu}
                       className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground active:bg-muted/60 transition-colors"
                     >
-                      <ArrowLeft className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
+                      <ArrowLeftIcon className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
                       <span className="flex-1 min-w-0">
                         <span className="block text-sm">{tNav('back_to_clients')}</span>
                         {/* Visible cross-host hint: touch has no title tooltip. */}
@@ -640,7 +640,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                       onClick={closeMobileMenu}
                       className="flex items-center gap-3 px-3 min-h-[44px] rounded-lg text-foreground active:bg-muted/60 transition-colors"
                     >
-                      <ArrowLeft className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
+                      <ArrowLeftIcon className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
                       <span className="text-sm flex-1">{tNav('back_to_clients')}</span>
                     </NavLink>
                   )}
@@ -818,9 +818,9 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                   {
                     href: cockpitMode ? '/settings/account?ctx=byra' : '/settings',
                     labelKey: (cockpitMode ? 'account_settings' : 'settings') as NavLabelKey,
-                    icon: Settings,
+                    icon: Cog6ToothIcon,
                   },
-                  { href: '/help', labelKey: 'help' as NavLabelKey, icon: HelpCircle },
+                  { href: '/help', labelKey: 'help' as NavLabelKey, icon: QuestionMarkCircleIcon },
                 ]).map((item) => {
                   const active = isActive(item.href)
                   const enabled = isItemEnabled(item.href)
@@ -873,7 +873,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
                   handleLogout()
                 }}
               >
-                <LogOut className="mr-3 h-[18px] w-[18px]" />
+                <ArrowRightStartOnRectangleIcon className="mr-3 h-[18px] w-[18px]" />
                 {isSandbox ? tNav('logout_sandbox') : tCommon('logout')}
               </Button>
             </div>

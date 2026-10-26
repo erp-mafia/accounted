@@ -14,7 +14,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { CheckCircle, Loader2, Upload } from 'lucide-react'
+import { ArrowUpTrayIcon, CheckCircleIcon, SpinnerIcon } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { createClient } from '@/lib/supabase/client'
 import { fetchSessionUser } from '@/lib/auth/session-client'
@@ -744,11 +744,11 @@ export default function BankingSettingsPanel() {
       return (
         <div className="flex h-32 flex-col items-center justify-center gap-3">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <CheckCircle className="h-4 w-4 text-success" />
+            <CheckCircleIcon className="h-4 w-4 text-success" />
             <span>Banken är ansluten</span>
           </div>
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
             <span>Hämtar dina konton…</span>
           </div>
         </div>
@@ -901,7 +901,7 @@ export default function BankingSettingsPanel() {
           kept visible as a compact line instead of a boxed strip. */}
       {showCsvFallback && (
         <div className="flex items-start gap-2 px-1 pt-6">
-          <Upload className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <ArrowUpTrayIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
           <p className="text-[12.5px] leading-relaxed text-muted-foreground">
             Har du problem med bankanslutningen? Du kan{' '}
             <Link href="/import?mode=bank" className="underline underline-offset-2 hover:text-foreground">

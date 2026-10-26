@@ -4,27 +4,27 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
-  ReceiptText,
-  ArrowLeftRight,
-  Users,
-  Wallet,
-  BookOpen,
-  ListTree,
-  BarChart3,
-  Upload,
-  Package,
-  ClipboardCheck,
-  HandCoins,
-  Wand2,
-  Inbox,
-  TrendingUp,
-  Settings,
-  HelpCircle,
-  ArrowRight,
-  Scale,
-  type LucideIcon,
-  Truck,
-} from 'lucide-react'
+  ArrowRightIcon,
+  ArrowTrendingUpIcon,
+  ArrowUpTrayIcon,
+  ArrowsRightLeftIcon,
+  BanknotesIcon,
+  BookOpenIcon,
+  ChartBarIcon,
+  ClipboardDocumentCheckIcon,
+  Cog6ToothIcon,
+  CubeIcon,
+  DocumentTextIcon,
+  InboxIcon,
+  QuestionMarkCircleIcon,
+  QueueListIcon,
+  ScaleIcon,
+  SparklesIcon,
+  TruckIcon,
+  UsersIcon,
+  WalletIcon,
+  type Icon as AppIcon,
+} from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
@@ -35,7 +35,7 @@ type Entry = {
   id: string
   label: string
   hint?: string
-  icon: LucideIcon
+  icon: AppIcon
   href: string
   keywords?: string
   /** The extension a page outside /e/ needs, for the capability gate below. */
@@ -43,26 +43,26 @@ type Entry = {
 }
 
 const ACTION_ENTRIES: Entry[] = [
-  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: ReceiptText, href: '/invoices/new', keywords: 'fakturera ny invoice send create' },
-  { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till transaktionsinkorgen', icon: ArrowLeftRight, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
-  { id: 'new-customer', label: 'Lägg till kund', icon: Users, href: '/customers', keywords: 'kund customer ny lägg till' },
-  { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: Wallet, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
-  { id: 'reports', label: 'Visa resultaträkning', hint: 'Rapporter', icon: BarChart3, href: '/reports', keywords: 'rapport resultat balans report' },
+  { id: 'new-invoice', label: 'Ny faktura', hint: 'Skapa & skicka faktura', icon: DocumentTextIcon, href: '/invoices/new', keywords: 'fakturera ny invoice send create' },
+  { id: 'book-transaction', label: 'Boka transaktion', hint: 'Gå till transaktionsinkorgen', icon: ArrowsRightLeftIcon, href: '/transactions', keywords: 'transaktion bokför kategorisera categorize' },
+  { id: 'new-customer', label: 'Lägg till kund', icon: UsersIcon, href: '/customers', keywords: 'kund customer ny lägg till' },
+  { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: WalletIcon, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
+  { id: 'reports', label: 'Visa resultaträkning', hint: 'Rapporter', icon: ChartBarIcon, href: '/reports', keywords: 'rapport resultat balans report' },
 ]
 
 const PAGE_ENTRIES: Entry[] = [
-  { id: 'kunder', label: 'Kunder', icon: Users, href: '/customers' },
-  { id: 'leverantörer', label: 'Leverantörer', icon: Truck, href: '/suppliers' },
-  { id: 'kundfakturor', label: 'Kundfakturor', icon: ReceiptText, href: '/invoices', keywords: 'fakturor fakturering invoices kundfaktura' },
-  { id: 'leverantörsfakturor', label: 'Leverantörsfakturor', icon: Wallet, href: '/supplier-invoices' },
-  { id: 'bokföring', label: 'Bokföring', icon: BookOpen, href: '/bookkeeping', keywords: 'verifikat journal ledger' },
-  { id: 'kontoplan', label: 'Kontoplan', icon: ListTree, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
-  { id: 'anläggningstillgångar', label: 'Anläggningstillgångar', icon: Package, href: '/assets', keywords: 'tillgångar assets' },
-  { id: 'rapporter', label: 'Rapporter', icon: BarChart3, href: '/reports' },
-  { id: 'rapport-resultatrapport', label: 'Visa rapport: Resultatrapport', icon: BarChart3, href: '/reports/resultatrapport', keywords: 'rapport resultat intäkter kostnader' },
-  { id: 'rapport-balansrapport', label: 'Visa rapport: Balansrapport', icon: BarChart3, href: '/reports/balansrapport', keywords: 'rapport balans tillgångar skulder saldo per konto' },
-  { id: 'rapport-saldobalans', label: 'Visa rapport: Saldobalans', icon: BarChart3, href: '/reports/trial-balance', keywords: 'rapport saldobalans trial balance saldo per konto' },
-  { id: 'rapport-moms', label: 'Visa rapport: Momsdeklaration', icon: BarChart3, href: '/reports/vat-declaration', keywords: 'rapport moms vat deklaration' },
+  { id: 'kunder', label: 'Kunder', icon: UsersIcon, href: '/customers' },
+  { id: 'leverantörer', label: 'Leverantörer', icon: TruckIcon, href: '/suppliers' },
+  { id: 'kundfakturor', label: 'Kundfakturor', icon: DocumentTextIcon, href: '/invoices', keywords: 'fakturor fakturering invoices kundfaktura' },
+  { id: 'leverantörsfakturor', label: 'Leverantörsfakturor', icon: WalletIcon, href: '/supplier-invoices' },
+  { id: 'bokföring', label: 'Bokföring', icon: BookOpenIcon, href: '/bookkeeping', keywords: 'verifikat journal ledger' },
+  { id: 'kontoplan', label: 'Kontoplan', icon: QueueListIcon, href: '/chart-of-accounts', keywords: 'kontoplan konton bas chart of accounts konto' },
+  { id: 'anläggningstillgångar', label: 'Anläggningstillgångar', icon: CubeIcon, href: '/assets', keywords: 'tillgångar assets' },
+  { id: 'rapporter', label: 'Rapporter', icon: ChartBarIcon, href: '/reports' },
+  { id: 'rapport-resultatrapport', label: 'Visa rapport: Resultatrapport', icon: ChartBarIcon, href: '/reports/resultatrapport', keywords: 'rapport resultat intäkter kostnader' },
+  { id: 'rapport-balansrapport', label: 'Visa rapport: Balansrapport', icon: ChartBarIcon, href: '/reports/balansrapport', keywords: 'rapport balans tillgångar skulder saldo per konto' },
+  { id: 'rapport-saldobalans', label: 'Visa rapport: Saldobalans', icon: ChartBarIcon, href: '/reports/trial-balance', keywords: 'rapport saldobalans trial balance saldo per konto' },
+  { id: 'rapport-moms', label: 'Visa rapport: Momsdeklaration', icon: ChartBarIcon, href: '/reports/vat-declaration', keywords: 'rapport moms vat deklaration' },
   // "verifikat" is the word a bookkeeper reaches for ("verifikat per konto"),
   // and matches() requires every typed token, so leaving it out made the exact
   // phrase return nothing even though this report is precisely the answer.
@@ -70,18 +70,18 @@ const PAGE_ENTRIES: Entry[] = [
   // auto-selects the first hit and huvudbok is listed above Bankavstämning, so
   // those words would hijack Enter from the reconciliation page. They live in
   // ReportDescriptor.searchTerms instead, where the library shows a list.
-  { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpen, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
-  { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: Users, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
-  { id: 'avstamning', label: 'Avstämning', hint: 'Stäm av bank och skattekonto', icon: Scale, href: '/accounts', keywords: 'avstämning stäm av bank skattekonto matcha reconcile reconciliation 1630 1930' },
-  { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowLeftRight, href: '/accounts', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
-  { id: 'importera', label: 'Importera', icon: Upload, href: '/import' },
-  { id: 'granskning', label: 'Granskning', icon: ClipboardCheck, href: '/pending', keywords: 'pending review' },
-  { id: 'löner', label: 'Löner', icon: HandCoins, href: '/salary' },
-  { id: 'anställda', label: 'Anställda', icon: Users, href: '/salary/employees' },
-  { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: Inbox, href: LEGACY_INBOX_HREF, keywords: INBOX_SEARCH_KEYWORDS },
-  { id: 'nyckeltal', label: 'Nyckeltal', icon: TrendingUp, href: '/kpi' },
-  { id: 'inställningar', label: 'Inställningar', icon: Settings, href: '/settings' },
-  { id: 'hjälp', label: 'Hjälp', icon: HelpCircle, href: '/help' },
+  { id: 'rapport-huvudbok', label: 'Visa rapport: Huvudbok', icon: BookOpenIcon, href: '/reports/huvudbok', keywords: 'rapport huvudbok ledger general konto saldo transaktioner per konto verifikat verifikationer verifikationer per konto kontoutdrag kontoanalys kontokort kontohistorik balance account statement transactions vouchers' },
+  { id: 'rapport-kundreskontra', label: 'Visa rapport: Kundreskontra', icon: UsersIcon, href: '/reports/kundreskontra', keywords: 'rapport kundreskontra ar kundfordringar' },
+  { id: 'avstamning', label: 'Avstämning', hint: 'Stäm av bank och skattekonto', icon: ScaleIcon, href: '/accounts', keywords: 'avstämning stäm av bank skattekonto matcha reconcile reconciliation 1630 1930' },
+  { id: 'rapport-bankavstamning', label: 'Bankavstämning', hint: 'Stäm av bank mot bokföring', icon: ArrowsRightLeftIcon, href: '/accounts', keywords: 'avstämning stäm av bank matcha banktransaktioner reconcile reconciliation 1930' },
+  { id: 'importera', label: 'Importera', icon: ArrowUpTrayIcon, href: '/import' },
+  { id: 'granskning', label: 'Granskning', icon: ClipboardDocumentCheckIcon, href: '/pending', keywords: 'pending review' },
+  { id: 'löner', label: 'Löner', icon: BanknotesIcon, href: '/salary' },
+  { id: 'anställda', label: 'Anställda', icon: UsersIcon, href: '/salary/employees' },
+  { id: 'dokumentinkorg', label: 'Dokumentinkorg', icon: InboxIcon, href: LEGACY_INBOX_HREF, keywords: INBOX_SEARCH_KEYWORDS },
+  { id: 'nyckeltal', label: 'Nyckeltal', icon: ArrowTrendingUpIcon, href: '/kpi' },
+  { id: 'inställningar', label: 'Inställningar', icon: Cog6ToothIcon, href: '/settings' },
+  { id: 'hjälp', label: 'Hjälp', icon: QuestionMarkCircleIcon, href: '/help' },
 ]
 
 /**
@@ -186,13 +186,13 @@ export default function CommandPalette({
       ? {
           id: 'assistant-fallback',
           label: `Fråga ${assistantName}: "${query.trim()}"`,
-          icon: Wand2,
+          icon: SparklesIcon,
           href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
         }
       : {
           id: 'assistant-followup',
           label: `Fråga ${assistantName} istället: "${query.trim()}"`,
-          icon: Wand2,
+          icon: SparklesIcon,
           href: `/chat/new?prompt=${encodeURIComponent(query.trim())}`,
         }
 
@@ -345,7 +345,7 @@ function Row({
       <Icon className="h-4 w-4 text-muted-foreground flex-shrink-0" />
       <span className="flex-1 truncate">{entry.label}</span>
       {entry.hint && <span className="text-xs text-muted-foreground">{entry.hint}</span>}
-      {active && <ArrowRight className="h-3.5 w-3.5 text-muted-foreground" />}
+      {active && <ArrowRightIcon className="h-3.5 w-3.5 text-muted-foreground" />}
     </button>
   )
 }

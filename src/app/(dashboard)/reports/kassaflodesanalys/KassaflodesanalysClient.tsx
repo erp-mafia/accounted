@@ -11,7 +11,7 @@ import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
-import { Download, AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { ArrowDownTrayIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatAmount } from '@/lib/utils'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
@@ -161,7 +161,7 @@ export function KassaflodesanalysClient() {
               disabled={!report || isLoadingReport}
               loading={isDownloadingPdf}
             >
-              {!isDownloadingPdf && <Download className="mr-2 h-4 w-4" />}
+              {!isDownloadingPdf && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
               {t('download_pdf')}
             </Button>
             <FyPicker
@@ -324,9 +324,9 @@ export function KassaflodesanalysClient() {
             <CardContent className="p-6 space-y-3">
               <div className="flex items-center gap-2">
                 {report.reconciliation.is_reconciled ? (
-                  <CheckCircle2 className="h-5 w-5 text-success" />
+                  <CheckCircleIcon className="h-5 w-5 text-success" />
                 ) : (
-                  <AlertTriangle className="h-5 w-5 text-destructive" />
+                  <ExclamationTriangleIcon className="h-5 w-5 text-destructive" />
                 )}
                 <span className="font-medium">
                   {report.reconciliation.is_reconciled

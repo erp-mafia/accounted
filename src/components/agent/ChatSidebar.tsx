@@ -3,7 +3,16 @@
 import { useEffect, useState, useTransition } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
-import { Pin, PinOff, Archive, Pencil, Search, X, PanelLeftOpen, PanelLeftClose } from 'lucide-react'
+import {
+  ArchiveBoxIcon,
+  BookmarkIcon,
+  BookmarkSlashIcon,
+  ChevronDoubleLeftIcon,
+  ChevronDoubleRightIcon,
+  MagnifyingGlassIcon,
+  PencilIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { useRenderedNow } from '@/lib/hooks/use-clock-value'
 import { useAgentSheet } from './AgentSheetProvider'
@@ -89,7 +98,7 @@ export default function ChatSidebar({ initialConversations, renderedAt }: Props)
         title="Visa konversationer"
         className="inline-flex h-9 w-9 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
       >
-        <PanelLeftOpen className="h-4 w-4" />
+        <ChevronDoubleRightIcon className="h-4 w-4" />
       </button>
       <div className="h-px w-6 bg-border" />
       <button
@@ -131,7 +140,7 @@ export default function ChatSidebar({ initialConversations, renderedAt }: Props)
             title="Dölj konversationer"
             className="hidden md:inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
           >
-            <PanelLeftClose className="h-4 w-4" />
+            <ChevronDoubleLeftIcon className="h-4 w-4" />
           </button>
           <button
             onClick={() => openAgentSheet({ intentId: 'general.help' })}
@@ -141,7 +150,7 @@ export default function ChatSidebar({ initialConversations, renderedAt }: Props)
           </button>
         </div>
         <div className="relative">
-          <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+          <MagnifyingGlassIcon className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
             type="text"
             value={query}
@@ -156,7 +165,7 @@ export default function ChatSidebar({ initialConversations, renderedAt }: Props)
               aria-label="Rensa sökning"
               className="absolute right-1 top-1/2 -translate-y-1/2 inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
             >
-              <X className="h-3 w-3" />
+              <XMarkIcon className="h-3 w-3" />
             </button>
           )}
         </div>
@@ -238,7 +247,7 @@ export default function ChatSidebar({ initialConversations, renderedAt }: Props)
                             aria-label="Byt namn på konversation"
                             className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
                           >
-                            <Pencil className="h-3 w-3" />
+                            <PencilIcon className="h-3 w-3" />
                           </button>
                           <button
                             onClick={(e) => {
@@ -256,9 +265,9 @@ export default function ChatSidebar({ initialConversations, renderedAt }: Props)
                             )}
                           >
                             {c.pinned ? (
-                              <Pin className="h-3 w-3" fill="currentColor" />
+                              <BookmarkIcon className="h-3 w-3" fill="currentColor" />
                             ) : (
-                              <PinOff className="h-3 w-3" />
+                              <BookmarkSlashIcon className="h-3 w-3" />
                             )}
                           </button>
                           <button
@@ -271,7 +280,7 @@ export default function ChatSidebar({ initialConversations, renderedAt }: Props)
                             aria-label="Arkivera konversation"
                             className="inline-flex h-8 w-8 items-center justify-center rounded-sm text-muted-foreground/50 hover:text-foreground hover:bg-secondary/60 transition-colors"
                           >
-                            <Archive className="h-3 w-3" />
+                            <ArchiveBoxIcon className="h-3 w-3" />
                           </button>
                         </div>
                       </Link>

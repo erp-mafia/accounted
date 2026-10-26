@@ -24,7 +24,7 @@ import {
   SlideOverFooter,
   SlideOverHeader,
 } from '@/components/ui/slide-over'
-import { FileText } from 'lucide-react'
+import { DocumentTextIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { downloadFile } from '@/lib/browser/download-file'
@@ -257,7 +257,7 @@ export default function PaymentFilesPage() {
         </div>
       ) : batches.length === 0 ? (
         <EmptyState
-          icon={FileText}
+          icon={DocumentTextIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={t('empty_action')}

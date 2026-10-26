@@ -66,28 +66,27 @@ import { isInvoiceResendEligible } from '@/lib/invoices/resend-eligibility'
 import { downloadFile, RENDERED_DOWNLOAD_TIMEOUT_MS } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import {
-  Loader2,
-  Send,
-  CheckCircle,
-  FileCheck2,
-  FileText,
-  Download,
-  Eye,
-  XCircle,
-  Mail,
-  ReceiptText,
-  AlertTriangle,
-  Trash2,
-  Lock,
-  CalendarClock,
-  Pencil,
-  Copy,
-  MoreHorizontal,
-  ClipboardList,
-  ExternalLink,
-  Gavel,
-  HandCoins,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowTopRightOnSquareIcon,
+  BanknotesIcon,
+  CalendarDaysIcon,
+  CheckCircleIcon,
+  ClipboardDocumentListIcon,
+  DocumentCheckIcon,
+  DocumentTextIcon,
+  EllipsisHorizontalIcon,
+  EnvelopeIcon,
+  ExclamationTriangleIcon,
+  EyeIcon,
+  LockClosedIcon,
+  PaperAirplaneIcon,
+  PencilIcon,
+  ScaleIcon,
+  SpinnerIcon,
+  Square2StackIcon,
+  TrashIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -2199,7 +2198,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
             )}
             {hasAccruedItems && (
               <Badge variant="outline" className="gap-1">
-                <CalendarClock className="h-3 w-3" />
+                <CalendarDaysIcon className="h-3 w-3" />
                 {t('badge_accrued')}
               </Badge>
             )}
@@ -2217,7 +2216,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {isEditableDraft && canWrite && (
             <Button size="sm" variant="outline" asChild>
               <Link href={`/invoices/${invoice.id}/edit`}>
-                <Pencil className="mr-2 h-4 w-4" />
+                <PencilIcon className="mr-2 h-4 w-4" />
                 {t('edit_draft')}
               </Link>
             </Button>
@@ -2225,7 +2224,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           {/* Review in the browser (#1190); the download lives in the menu. */}
           {offersOwnPdf && (
             <Button size="sm" variant="outline" onClick={() => previewPDF()}>
-              <Eye className="mr-2 h-4 w-4" />
+              <EyeIcon className="mr-2 h-4 w-4" />
               {t('preview_pdf')}
             </Button>
           )}
@@ -2246,9 +2245,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {isConverting ? null : !canWrite ? (
-                <Lock className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="mr-2 h-4 w-4" />
               ) : (
-                <FileText className="mr-2 h-4 w-4" />
+                <DocumentTextIcon className="mr-2 h-4 w-4" />
               )}
               {t('convert_to_invoice')}
             </Button>
@@ -2261,7 +2260,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               loading={isDeciding}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {!isDeciding && <CheckCircle className="mr-2 h-4 w-4" />}
+              {!isDeciding && <CheckCircleIcon className="mr-2 h-4 w-4" />}
               {t('quote_accept')}
             </Button>
           )}
@@ -2273,9 +2272,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {isConverting ? null : !canWrite ? (
-                <Lock className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="mr-2 h-4 w-4" />
               ) : (
-                <FileText className="mr-2 h-4 w-4" />
+                <DocumentTextIcon className="mr-2 h-4 w-4" />
               )}
               {t(quoteInvoice ? 'quote_invoice_rest' : 'quote_create_invoice')}
             </Button>
@@ -2286,7 +2285,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               disabled={isFinalizing || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <FileText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <DocumentTextIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('finalize_action')}
             </Button>
           )}
@@ -2297,7 +2296,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
-                {canWrite ? <Mail className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+                {canWrite ? <EnvelopeIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
                 {t(issuesByBooking ? 'send_via_email_and_book' : 'send_via_email')}
               </Button>
             ) : (
@@ -2306,7 +2305,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 disabled={!canWrite}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
-                {canWrite ? <Send className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+                {canWrite ? <PaperAirplaneIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
                 {t(issuesByBooking ? 'mark_sent_and_book' : 'mark_as_sent')}
               </Button>
             )
@@ -2317,7 +2316,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <AlertTriangle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <ExclamationTriangleIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('complete_credit_bookkeeping')}
             </Button>
           )}
@@ -2329,9 +2328,9 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {isUpdating ? null : canWrite ? (
-                <Send className="mr-2 h-4 w-4" />
+                <PaperAirplaneIcon className="mr-2 h-4 w-4" />
               ) : (
-                <Lock className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="mr-2 h-4 w-4" />
               )}
               {t('mark_as_sent')}
             </Button>
@@ -2344,7 +2343,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               disabled={isUpdating || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <CheckCircle className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <CheckCircleIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('mark_as_paid')}
             </Button>
           )}
@@ -2354,7 +2353,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
               disabled={isUpdating || !canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {canWrite ? <HandCoins className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <BanknotesIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('record_refund')}
             </Button>
           )}
@@ -2374,7 +2373,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       loading={isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder || correction?.isLoading}
                     >
                       {isDownloading || isDownloadingPeppol || isPreparingPeppol || isCreatingOrder || correction?.isLoading ? null : (
-                        <MoreHorizontal className="h-4 w-4" />
+                        <EllipsisHorizontalIcon className="h-4 w-4" />
                       )}
                     </Button>
                   </DropdownMenuTrigger>
@@ -2386,7 +2385,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         onSelect={acceptQuote}
                         disabled={isDeciding || isConverting || !canWrite}
                       >
-                        <CheckCircle className="h-4 w-4" />
+                        <CheckCircleIcon className="h-4 w-4" />
                         {t('quote_accept')}
                       </DropdownMenuItem>
                     )}
@@ -2395,7 +2394,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         onSelect={startQuoteConvert}
                         disabled={isDeciding || isConverting || !canWrite}
                       >
-                        <FileText className="h-4 w-4" />
+                        <DocumentTextIcon className="h-4 w-4" />
                         {t('quote_create_invoice')}
                       </DropdownMenuItem>
                     )}
@@ -2406,7 +2405,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           onSelect={() => void (isQuote ? startQuoteOrder() : convertToOrder())}
                           disabled={isCreatingOrder || isConverting || isDeciding || !canWrite}
                         >
-                          <ClipboardList className="h-4 w-4" />
+                          <ClipboardDocumentListIcon className="h-4 w-4" />
                           {t('create_order')}
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
@@ -2418,7 +2417,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           onSelect={() => setShowQuotePartDialog(true)}
                           disabled={isConverting || isDeciding || !canWrite}
                         >
-                          <FileText className="h-4 w-4" />
+                          <DocumentTextIcon className="h-4 w-4" />
                           {t('quote_create_part')}
                         </DropdownMenuItem>
                         <DropdownMenuSeparator />
@@ -2426,14 +2425,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     )}
                     {offersOwnPdf && (
                       <DropdownMenuItem onSelect={() => void downloadPDF()} disabled={isDownloading}>
-                        <Download className="h-4 w-4" />
+                        <ArrowDownTrayIcon className="h-4 w-4" />
                         {t('download_pdf')}
                       </DropdownMenuItem>
                     )}
                     {isCopyable && canWrite && (
                       <DropdownMenuItem asChild>
                         <Link href={newEditorHref({ copyFromId: invoice.id })}>
-                          <Copy className="h-4 w-4" />
+                          <Square2StackIcon className="h-4 w-4" />
                           {t('copy_invoice')}
                         </Link>
                       </DropdownMenuItem>
@@ -2446,7 +2445,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         disabled={!canWrite}
                         className="items-start"
                       >
-                        <Send className="mt-0.5 h-4 w-4" />
+                        <PaperAirplaneIcon className="mt-0.5 h-4 w-4" />
                         <span className="min-w-0">
                           <span className="block">{t(booksOnIssue ? 'mark_sent_and_book' : 'mark_as_sent')}</span>
                           <span className="block text-[11px] leading-snug text-muted-foreground">
@@ -2461,7 +2460,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                         disabled={!canWrite || !customerHasEmail || !canEmail}
                         className="items-start"
                       >
-                        <Mail className="mt-0.5 h-4 w-4" />
+                        <EnvelopeIcon className="mt-0.5 h-4 w-4" />
                         <span className="min-w-0">
                           <span className="block">{t('resend_action')}</span>
                           <span className="block text-[11px] leading-snug text-muted-foreground">
@@ -2473,32 +2472,32 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     {canCreateCreditNote && (
                       <DropdownMenuItem asChild>
                         <Link href={`/invoices/${invoice.id}/credit`}>
-                          <ReceiptText className="h-4 w-4" />
+                          <DocumentTextIcon className="h-4 w-4" />
                           {t('create_credit_note')}
                         </Link>
                       </DropdownMenuItem>
                     )}
                     {correction && (
                       <DropdownMenuItem onSelect={correction.open} disabled={correction.isLoading}>
-                        <Pencil className="h-4 w-4" />
+                        <PencilIcon className="h-4 w-4" />
                         {correction.isLoading ? t('correction_loading') : t('correction_menu_item')}
                       </DropdownMenuItem>
                     )}
                     {showCollectionItem && (
                       <DropdownMenuItem onSelect={() => setShowCollectionDialog(true)} disabled={!canWrite}>
-                        <Gavel className="h-4 w-4" />
+                        <ScaleIcon className="h-4 w-4" />
                         {tCollections('menu_send')}
                       </DropdownMenuItem>
                     )}
                     {showCustomerLossItem && (
                       <DropdownMenuItem onSelect={() => setShowLossDialog(true)} disabled={!canWrite}>
-                        <HandCoins className="h-4 w-4" />
+                        <BanknotesIcon className="h-4 w-4" />
                         {tLoss('menu')}
                       </DropdownMenuItem>
                     )}
                     {showRecoveryItem && (
                       <DropdownMenuItem onSelect={() => setShowRecoveryDialog(true)} disabled={!canWrite}>
-                        <HandCoins className="h-4 w-4" />
+                        <BanknotesIcon className="h-4 w-4" />
                         {tLoss('recovery_menu')}
                       </DropdownMenuItem>
                     )}
@@ -2509,14 +2508,14 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           onSelect={() => void downloadPeppolXml()}
                           disabled={isDownloadingPeppol || !invoice.invoice_number}
                         >
-                          <FileText className="h-4 w-4" />
+                          <DocumentTextIcon className="h-4 w-4" />
                           {t('download_peppol_xml')}
                         </DropdownMenuItem>
                         <DropdownMenuItem
                           onSelect={() => void preparePeppolDelivery()}
                           disabled={isPreparingPeppol || !canWrite || !invoice.invoice_number}
                         >
-                          <FileCheck2 className="h-4 w-4" />
+                          <DocumentCheckIcon className="h-4 w-4" />
                           {t('prepare_peppol_delivery')}
                         </DropdownMenuItem>
                         {peppolTransportAvailable && peppolSendGranted && peppolSendsLeft ? (
@@ -2524,12 +2523,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             onSelect={() => setShowPeppolSendDialog(true)}
                             disabled={isSendingPeppol || !canWrite || !canSendPeppol}
                           >
-                            <Send className="h-4 w-4" />
+                            <PaperAirplaneIcon className="h-4 w-4" />
                             {t('send_via_peppol')}
                           </DropdownMenuItem>
                         ) : peppolTransportAvailable ? (
                           <DropdownMenuItem disabled className="items-start">
-                            <Send className="mt-0.5 h-4 w-4" />
+                            <PaperAirplaneIcon className="mt-0.5 h-4 w-4" />
                             <span className="min-w-0">
                               <span className="block">{t('send_via_peppol')}</span>
                               <span className="block text-[11px] leading-snug text-muted-foreground">
@@ -2539,7 +2538,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           </DropdownMenuItem>
                         ) : (
                           <DropdownMenuItem disabled className="items-start">
-                            <Send className="mt-0.5 h-4 w-4" />
+                            <PaperAirplaneIcon className="mt-0.5 h-4 w-4" />
                             <span className="min-w-0">
                               <span className="block">{t('send_via_peppol')}</span>
                               <span className="block text-[11px] leading-snug text-muted-foreground">
@@ -2558,7 +2557,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           return action.blockedBy ? (
                             // A disabled item takes no hover, so it says why on itself.
                             <DropdownMenuItem key={action.provider} disabled className="items-start">
-                              <Send className="mt-0.5 h-4 w-4" />
+                              <PaperAirplaneIcon className="mt-0.5 h-4 w-4" />
                               <span className="min-w-0">
                                 <span className="block">{label}</span>
                                 <span className="block text-[11px] leading-snug text-muted-foreground">
@@ -2572,7 +2571,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                               onSelect={() => setMailboxConfirmProvider(action.provider)}
                               disabled={isSendingMailbox || !canWrite}
                             >
-                              <Send className="h-4 w-4" />
+                              <PaperAirplaneIcon className="h-4 w-4" />
                               {label}
                             </DropdownMenuItem>
                           )
@@ -2586,7 +2585,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                           onSelect={() => void setQuoteDecision('declined')}
                           disabled={isDeciding || isConverting || !canWrite}
                         >
-                          <XCircle className="h-4 w-4" />
+                          <XCircleIcon className="h-4 w-4" />
                           {t('quote_decline')}
                         </DropdownMenuItem>
                       </>
@@ -2606,7 +2605,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             disabled={isUpdating || !canWrite}
                             className="text-destructive focus:text-destructive"
                           >
-                            <XCircle className="h-4 w-4" />
+                            <XCircleIcon className="h-4 w-4" />
                             {t('cancel_action')}
                           </DropdownMenuItem>
                         ) : (
@@ -2615,7 +2614,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                             disabled={isDeleting || !canWrite}
                             className="text-destructive focus:text-destructive"
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <TrashIcon className="h-4 w-4" />
                             {isUnnumberedDraft
                               ? t('remove_action')
                               : t(isCreditNote ? 'remove_credit_draft' : 'delete_draft')}
@@ -3021,7 +3020,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                 : t.rich('registered_note_unnamed', { link: registrationVoucherLink })}
             </p>
             {registrationDocuments && registrationDocuments.length > 0 && (
-              <p className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+              <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                 <span>{t('registered_original_label')}</span>
                 {registrationDocuments.map((doc) => (
                   <a
@@ -3032,10 +3031,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                     className={cn(ROW_ACTION_CLASS, 'inline-flex max-w-full items-center gap-1 text-foreground')}
                   >
                     <span className="truncate">{doc.file_name}</span>
-                    <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
+                    <ArrowTopRightOnSquareIcon className="h-3 w-3 shrink-0 text-muted-foreground" aria-hidden />
                   </a>
                 ))}
-              </p>
+              </div>
             )}
             {registrationDocuments?.length === 0 && <p>{t('registered_original_missing')}</p>}
           </div>
@@ -3268,7 +3267,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   title={t('payment_confirmation_hint')}
                   className={cn(ROW_ACTION_CLASS, 'inline-flex items-center gap-1')}
                 >
-                  {isDownloadingConfirmation && <Loader2 className="h-3 w-3 animate-spin" />}
+                  {isDownloadingConfirmation && <SpinnerIcon className="h-3 w-3 animate-spin" />}
                   {t('payment_confirmation_download_short')}
                 </button>
                 <button

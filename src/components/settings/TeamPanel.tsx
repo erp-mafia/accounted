@@ -2,7 +2,7 @@
 
 import { useLocale, useTranslations } from 'next-intl'
 import { useState, useEffect, useCallback } from 'react'
-import { Mail, Plus, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowPathIcon, EnvelopeIcon, PlusIcon, TrashIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -387,7 +387,7 @@ export function TeamPanel() {
                 aria-label={t('remove_aria', { email: member.email })}
                 onClick={() => setRemoveTarget(member)}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <TrashIcon className="h-3.5 w-3.5" />
               </Button>
             )}
           </div>
@@ -404,7 +404,7 @@ export function TeamPanel() {
               className="flex items-center gap-3 border-b border-border px-1 py-3"
             >
               <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-border">
-                <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+                <EnvelopeIcon className="h-3.5 w-3.5 text-muted-foreground" />
               </div>
               <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
                 {inv.email}
@@ -427,7 +427,7 @@ export function TeamPanel() {
                 disabled={revokingId === inv.id}
                 loading={resendingId === inv.id}
               >
-                {resendingId !== inv.id && <RefreshCw className="h-3.5 w-3.5" />}
+                {resendingId !== inv.id && <ArrowPathIcon className="h-3.5 w-3.5" />}
               </Button>
               <Button
                 variant="ghost"
@@ -438,7 +438,7 @@ export function TeamPanel() {
                 disabled={resendingId === inv.id}
                 loading={revokingId === inv.id}
               >
-                {revokingId !== inv.id && <Trash2 className="h-3.5 w-3.5" />}
+                {revokingId !== inv.id && <TrashIcon className="h-3.5 w-3.5" />}
               </Button>
             </div>
           )
@@ -503,7 +503,7 @@ export function TeamPanel() {
             </SelectContent>
           </Select>
           <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
-            {!isSending && <Plus className="mr-2 h-4 w-4" />}
+            {!isSending && <PlusIcon className="mr-2 h-4 w-4" />}
             {t('invite_button')}
           </Button>
         </form>

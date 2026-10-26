@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Check, ChevronDown, ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, CheckIcon, ChevronDownIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -130,7 +130,7 @@ export function KvittojaktenButton({
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button type="button" variant="outline" size="icon-sm" disabled={disabled} aria-label={t('ai_fix_first_other')}>
-              <ChevronDown className="h-3.5 w-3.5" aria-hidden />
+              <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden />
             </Button>
           </DropdownMenuTrigger>
           <DropdownMenuContent align="end">
@@ -154,7 +154,7 @@ export function KvittojaktenButton({
         </DialogHeader>
         <ul className="space-y-3 text-[13px]">
           <li className="flex items-center gap-2">
-            <Check className="h-4 w-4 shrink-0 text-success" aria-hidden />
+            <CheckIcon className="h-4 w-4 shrink-0 text-success" aria-hidden />
             <span>{t('ai_kvittojakten_prereq_done', { client: pendingClient?.name ?? '' })}</span>
           </li>
           <li className="flex items-center gap-2">
@@ -169,7 +169,7 @@ export function KvittojaktenButton({
             <Button type="button" variant="outline" asChild>
               <a href={pendingClient.home} target="_blank" rel="noopener noreferrer">
                 {t('ai_kvittojakten_prereq_open', { client: pendingClient.name })}
-                <ExternalLink className="ml-2 h-4 w-4" aria-hidden />
+                <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" aria-hidden />
               </a>
             </Button>
           )}

@@ -12,7 +12,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { CheckCircle2, AlertTriangle } from 'lucide-react'
+import { CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import Link from 'next/link'
 import type { YearEndResult, ContinuityDiscrepancy } from '@/types'
 import { formatCurrency } from '@/lib/utils'
@@ -64,7 +64,7 @@ export function ResultStep({ result }: ResultStepProps) {
     <div className="space-y-6">
       <div className="space-y-4 py-6 text-center">
           <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-full bg-success/10">
-            <CheckCircle2 className="h-7 w-7 text-success" />
+            <CheckCircleIcon className="h-7 w-7 text-success" />
           </div>
           <h2 className="font-display text-2xl">Bokslutet är klart</h2>
           <p className="text-muted-foreground">
@@ -112,7 +112,7 @@ export function ResultStep({ result }: ResultStepProps) {
 
       {result.resultAppropriationFailed && (
         <div className="flex items-start gap-3 px-1 py-2 text-destructive">
-            <AlertTriangle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
             <p className="text-sm">
               <span className="font-medium">
                 Omföringen av föregående års resultat{carryLabel ? ` ${carryLabel}` : ''} kunde
@@ -257,12 +257,12 @@ function ContinuityPanel({ discrepancies, checkedAccounts }: ContinuityPanelProp
         <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">IB/UB-avstämning</h3>
         {hasIssues ? (
           <Badge variant="destructive" className="gap-1">
-            <AlertTriangle className="h-3 w-3" />
+            <ExclamationTriangleIcon className="h-3 w-3" />
             Avvikelser
           </Badge>
         ) : (
           <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-            <CheckCircle2 className="h-3.5 w-3.5" />
+            <CheckCircleIcon className="h-3.5 w-3.5" />
             Stämmer
           </span>
         )}

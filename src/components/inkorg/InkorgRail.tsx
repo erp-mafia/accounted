@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { CircleAlert, FileQuestion, Plus } from 'lucide-react'
+import { DocumentMagnifyingGlassIcon, ExclamationCircleIcon, PlusIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { BrandMark } from '@/components/parties/BrandMark'
 import { cn } from '@/lib/utils'
@@ -59,7 +59,7 @@ export function InkorgRail({
         <RailRow
           active={active === 'need'}
           onClick={() => onView({ kind: 'need' })}
-          icon={<CircleAlert aria-hidden="true" className="h-[15px] w-[15px] shrink-0 text-muted-foreground" />}
+          icon={<ExclamationCircleIcon aria-hidden="true" className="h-[15px] w-[15px] shrink-0 text-muted-foreground" />}
           label={t('view_need')}
           count={needCount}
           emphasis={(needCount ?? 0) > 0}
@@ -67,14 +67,14 @@ export function InkorgRail({
         <RailRow
           active={active === 'missing'}
           onClick={() => onView({ kind: 'missing' })}
-          icon={<FileQuestion aria-hidden="true" className="h-[15px] w-[15px] shrink-0 text-muted-foreground" />}
+          icon={<DocumentMagnifyingGlassIcon aria-hidden="true" className="h-[15px] w-[15px] shrink-0 text-muted-foreground" />}
           label={t('view_missing')}
           count={missingCount}
         />
         <li className="hidden items-center justify-between pl-3 pt-4 md:flex">
           <span className={SECTION_LABEL_CLASS}>{t('rail_mailboxes')}</span>
           <Button type="button" variant="ghost" size="icon-sm" onClick={onAddMailbox} aria-label={t('add_mailbox')}>
-            <Plus className="h-[15px] w-[15px]" />
+            <PlusIcon className="h-[15px] w-[15px]" />
           </Button>
         </li>
         {doors.map((row) => (
@@ -93,7 +93,7 @@ export function InkorgRail({
         {/* On a phone the heading is gone, so the + rides at the end of the doors. */}
         <li className="shrink-0 md:hidden">
           <Button type="button" variant="ghost" size="icon-sm" onClick={onAddMailbox} aria-label={t('add_mailbox')}>
-            <Plus className="h-[15px] w-[15px]" />
+            <PlusIcon className="h-[15px] w-[15px]" />
           </Button>
         </li>
         {portals.length > 0 && (

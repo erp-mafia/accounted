@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -208,7 +208,7 @@ export function VoucherSeriesPerCashAccountForm({ settings }: Props) {
       <SettingsGroup label={t('per_account_heading')} help={t('per_account_help')}>
         {isLoading ? (
           <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+            <SpinnerIcon className="h-4 w-4 animate-spin" aria-hidden="true" />
             {t('per_account_loading')}
           </div>
         ) : cashAccounts.length === 0 ? (

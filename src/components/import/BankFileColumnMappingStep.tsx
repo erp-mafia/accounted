@@ -20,7 +20,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import { ArrowLeft, ArrowRight } from 'lucide-react'
+import { ArrowLeftIcon, ArrowRightIcon } from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
 import { getCSVPreview, normalizeMinusSign, suggestColumnMapping } from '@/lib/import/bank-file/formats/generic-csv'
 import type { GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
@@ -424,12 +424,12 @@ export default function BankFileColumnMappingStep({
       {/* Navigation */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
         <Button onClick={handleConfirm} disabled={!isValid}>
           Fortsätt
-          <ArrowRight className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="ml-2 h-4 w-4" />
         </Button>
       </div>
     </div>

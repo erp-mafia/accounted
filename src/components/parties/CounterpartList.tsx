@@ -2,7 +2,7 @@
 
 import { Fragment } from 'react'
 import { useTranslations } from 'next-intl'
-import { MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -146,7 +146,7 @@ export function CounterpartList({
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button variant="ghost" size="icon-sm" className={cn(HOVER_REVEAL_CLASS, 'data-[state=open]:opacity-100')} aria-label={row.name}>
-                          <MoreHorizontal className="h-4 w-4" />
+                          <EllipsisHorizontalIcon className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">

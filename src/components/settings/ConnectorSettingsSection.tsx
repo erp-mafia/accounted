@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { RefreshCw } from 'lucide-react'
+import { ArrowPathIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -174,7 +174,7 @@ export function ConnectorSettingsSection() {
             {status.configured ? (
               <SettingsRowEnd>
                 <Button variant="outline" size="sm" loading={syncing} onClick={runSync}>
-                  {!syncing && <RefreshCw aria-hidden="true" className="h-3.5 w-3.5" />}
+                  {!syncing && <ArrowPathIcon aria-hidden="true" className="h-3.5 w-3.5" />}
                   <span>{syncing ? t('connector_sync_button_busy') : t('connector_sync_button')}</span>
                 </Button>
               </SettingsRowEnd>

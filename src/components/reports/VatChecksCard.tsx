@@ -19,13 +19,13 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import {
-  AlertTriangle,
-  CheckCircle2,
-  ChevronDown,
-  ChevronRight,
-  Loader2,
-  ShieldAlert,
-} from 'lucide-react'
+  CheckCircleIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ExclamationTriangleIcon,
+  ShieldExclamationIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import type { VatDeclarationCheck } from '@/lib/reports/vat-declaration-checks'
 import type { RcBasisGap } from '@/lib/reports/rc-basis-gaps'
 import type { RcBasisGapWithDefault } from '@/lib/vat/rc-basis-supplier-default'
@@ -497,13 +497,13 @@ export function VatChecksCard({
     <div className="space-y-4">
         {checks.length === 0 && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 text-success" />
+            <CheckCircleIcon className="h-4 w-4 text-success" />
             Inga fel hittades i underlaget för perioden.
           </div>
         )}
         {checks.length > 0 && unreviewed.length === 0 && (
           <div className="flex items-center gap-2 text-sm text-muted-foreground">
-            <CheckCircle2 className="h-4 w-4 text-success" />
+            <CheckCircleIcon className="h-4 w-4 text-success" />
             {t('vat_check_all_reviewed')}
           </div>
         )}
@@ -519,11 +519,11 @@ export function VatChecksCard({
                   className="flex items-start gap-2 border-b border-border py-3 text-[13px] leading-5 last:border-b-0"
                 >
                   {c.review ? (
-                    <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                    <CheckCircleIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                   ) : c.status === 'ERROR' ? (
-                    <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
+                    <ShieldExclamationIcon className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-hidden="true" />
                   ) : (
-                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
+                    <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
                   )}
                   <div className="min-w-0 flex-1 space-y-1.5">
                     <div className="flex min-w-0 items-start gap-1.5">
@@ -623,7 +623,7 @@ export function VatChecksCard({
 
             {gapsLoading ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <SpinnerIcon className="h-4 w-4 animate-spin" />
                 Söker berörda verifikationer...
               </div>
             ) : gapsFailed ? (
@@ -684,7 +684,7 @@ export function VatChecksCard({
                     disabled={busy}
                   />
                   <Button size="sm" onClick={handleFixAll} disabled={!canWrite || busy} loading={bulkProgress !== null}>
-                    {bulkProgress === null && <CheckCircle2 className="h-4 w-4 mr-2" />}
+                    {bulkProgress === null && <CheckCircleIcon className="h-4 w-4 mr-2" />}
                     Korrigera alla ({verifikatCount})
                   </Button>
                 </div>
@@ -743,7 +743,7 @@ export function VatChecksCard({
                               className={cn(QUIET_LINK_CLASS, 'inline-flex items-center disabled:cursor-not-allowed disabled:opacity-50')}
                             >
                               {fixingId === gap.entryId && (
-                                <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                                <SpinnerIcon className="mr-1.5 h-3.5 w-3.5 animate-spin" aria-hidden="true" />
                               )}
                               Korrigera
                             </button>
@@ -763,9 +763,9 @@ export function VatChecksCard({
                               }}
                             >
                               {expanded ? (
-                                <ChevronDown className="h-4 w-4" />
+                                <ChevronDownIcon className="h-4 w-4" />
                               ) : (
-                                <ChevronRight className="h-4 w-4" />
+                                <ChevronRightIcon className="h-4 w-4" />
                               )}
                             </Button>
                           </>

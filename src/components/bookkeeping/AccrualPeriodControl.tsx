@@ -1,7 +1,7 @@
 'use client'
 
 import { useLocale, useTranslations } from 'next-intl'
-import { X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -174,7 +174,7 @@ export default function AccrualPeriodControl({
           onClick={onRemove}
           aria-label={t('remove_aria')}
         >
-          <X className="h-3.5 w-3.5 text-muted-foreground" />
+          <XMarkIcon className="h-3.5 w-3.5 text-muted-foreground" />
         </Button>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">

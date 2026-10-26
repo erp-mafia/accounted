@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { Banknote } from 'lucide-react'
+import { BanknotesIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
@@ -174,7 +174,7 @@ export default function SettlementsPage() {
 
       {overview && attention > 0 && <p className="attn text-[12.5px]">{t('attention', { count: attention })}</p>}
 
-      {empty && <EmptyState icon={Banknote} title={t('empty_title')} description={tw('empty_description')} />}
+      {empty && <EmptyState icon={BanknotesIcon} title={t('empty_title')} description={tw('empty_description')} />}
 
       {overview && !empty && (
         <>

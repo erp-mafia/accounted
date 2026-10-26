@@ -1,7 +1,7 @@
 'use client'
 
 import { UUID_RE } from '@/lib/invariants/uuid'
-import { ExternalLink, Paperclip } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, PaperClipIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -76,7 +76,7 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
       >
         {/* Icon-only, the glyph names the thing (the attached underlag);
             the tooltip says it opens. */}
-        <Paperclip className="h-4 w-4" aria-hidden />
+        <PaperClipIcon className="h-4 w-4" aria-hidden />
       </Button>
     )
   }
@@ -91,7 +91,7 @@ export function DocumentViewButton({ documentId, label = 'Visa dokument', classN
     >
       {/* It opens a new tab, which is what this glyph says; the eye it
           replaced reads as a show/hide toggle (crm#1003). */}
-      <ExternalLink className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+      <ArrowTopRightOnSquareIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden />
       {label}
     </Button>
   )

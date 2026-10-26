@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Lock, Trash2 } from 'lucide-react'
+import { LockClosedIcon, TrashIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -245,7 +245,7 @@ export function EditAssetDialog({
 
           {basisLocked && (
             <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-              <Lock className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <LockClosedIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
                 Anskaffningsdatum, anskaffningsvärde och kategori är låsta eftersom avskrivningar
                 redan har bokförts. Återför avskrivningen (storno) eller använd avyttring för att
@@ -324,7 +324,7 @@ export function EditAssetDialog({
               onClick={onDelete}
               disabled={submitting}
             >
-              <Trash2 className="mr-2 h-4 w-4" />
+              <TrashIcon className="mr-2 h-4 w-4" />
               {t('action_delete')}
             </Button>
           ) : (
@@ -342,7 +342,7 @@ export function EditAssetDialog({
                 !canWrite ? 'Endast användare med skrivrättigheter kan ändra tillgångar.' : undefined
               }
             >
-              {!canWrite && <Lock className="mr-1 h-4 w-4" />}
+              {!canWrite && <LockClosedIcon className="mr-1 h-4 w-4" />}
               {submitting ? (
                 'Sparar…'
               ) : (

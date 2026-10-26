@@ -17,7 +17,12 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatDate } from '@/lib/utils'
-import { Plus, Repeat, Lock, AlertTriangle } from 'lucide-react'
+import {
+  ArrowPathRoundedSquareIcon,
+  ExclamationTriangleIcon,
+  LockClosedIcon,
+  PlusIcon,
+} from '@/components/icons'
 import NewRecurringScheduleDialog from '@/components/invoices/NewRecurringScheduleDialog'
 import type { RecurringInvoiceSchedule, Customer } from '@/types'
 
@@ -176,12 +181,12 @@ export default function RecurringInvoicesPage() {
         action={
           canWrite ? (
             <Button size="sm" onClick={openNewSchedule}>
-              <Plus className="mr-2 h-4 w-4" />
+              <PlusIcon className="mr-2 h-4 w-4" />
               {t('new_schedule')}
             </Button>
           ) : (
             <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-              <Lock className="mr-2 h-4 w-4" />
+              <LockClosedIcon className="mr-2 h-4 w-4" />
               {t('new_schedule')}
             </Button>
           )
@@ -196,7 +201,7 @@ export default function RecurringInvoicesPage() {
         </div>
       ) : schedules.length === 0 ? (
         <EmptyState
-          icon={Repeat}
+          icon={ArrowPathRoundedSquareIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('new_schedule') : undefined}
@@ -245,7 +250,7 @@ export default function RecurringInvoicesPage() {
                         s.name
                       )}
                       {s.last_run_warning && (
-                        <AlertTriangle
+                        <ExclamationTriangleIcon
                           className="h-4 w-4 text-attn"
                           aria-label={s.last_run_warning}
                         />

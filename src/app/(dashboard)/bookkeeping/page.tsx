@@ -24,7 +24,7 @@ import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { resolveInitialMode } from '@/lib/ui-state/client'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, LayoutTemplate, Sparkles } from 'lucide-react'
+import { PlusIcon, RectangleGroupIcon, SparklesIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry, JournalEntryLine } from '@/types'
@@ -261,7 +261,7 @@ export default function BookkeepingPage() {
                 label: nextVoucher
                   ? `${t('create_tomt')} (${nextVoucher.series}${nextVoucher.next})`
                   : t('create_tomt'),
-                icon: Plus,
+                icon: PlusIcon,
                 description: t('create_tomt_desc'),
                 onSelect: () => {
                   setCopyPrefill(null)
@@ -272,14 +272,14 @@ export default function BookkeepingPage() {
               {
                 key: 'mall',
                 label: t('create_mall'),
-                icon: LayoutTemplate,
+                icon: RectangleGroupIcon,
                 description: t('create_mall_desc'),
                 onSelect: () => setShowTemplateDialog(true),
               },
               {
                 key: 'assistent',
                 label: t('create_with_assistant'),
-                icon: Sparkles,
+                icon: SparklesIcon,
                 description: t('create_assistent_desc'),
                 onSelect: () =>
                   openAgentSheet({

@@ -15,7 +15,7 @@ import {
   getInvoiceMatchTargetState,
   getSupplierInvoiceMatchTargetState,
 } from '@/lib/bookkeeping/matchable-statuses'
-import { CheckCircle2, AlertTriangle } from 'lucide-react'
+import { CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import type { LineDimensions } from '@/components/bookkeeping/payment-line-dimensions'
 import type { PaymentLinePayload, PaymentPreviewLine } from '@/components/bookkeeping/payment-preview-lines'
 import { ORE_ROUNDING_ACCOUNT, parseDecimalInput } from '@/lib/money'
@@ -385,7 +385,7 @@ export default function InvoiceMatchDialog({
             {!targetBlocked && candidate && isCustomerInvoice && (
               <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
+                  <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
                   <div className="text-sm space-y-1">
                     <p className="font-medium text-attn">{t('duplicate_title')}</p>
                     {/* candidate.amount is the voucher leg's SEK debit
@@ -533,7 +533,7 @@ export default function InvoiceMatchDialog({
                 const isSettled = targetMatchState === 'settled'
                 return (
                   <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
-                    <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                     <div className="text-sm">
                       <p className="font-medium">
                         {t(isSettled ? 'target_settled_title' : 'target_not_open_title')}
@@ -558,7 +558,7 @@ export default function InvoiceMatchDialog({
                 return (
                   <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                     <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
+                      <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
                       <div className="text-sm space-y-1">
                         <p className="font-medium">
                           {t('customer_overpayment_title', {
@@ -625,7 +625,7 @@ export default function InvoiceMatchDialog({
                 return (
                   <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                     <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
+                      <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
                       <div className="text-sm space-y-1">
                         <p className="font-medium">
                           {t('payment_fee_title', { amount: formatCurrency(customerFee.fee, 'SEK') })}
@@ -715,7 +715,7 @@ export default function InvoiceMatchDialog({
               if (amountsMatch) {
                 return (
                   <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 text-success">
-                    <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                    <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
                     <p className="text-sm font-medium">{t('amounts_match')}</p>
                   </div>
                 )
@@ -724,7 +724,7 @@ export default function InvoiceMatchDialog({
               if (isOreRounding) {
                 return (
                   <div className="flex items-start gap-2 p-3 rounded-lg bg-success/10 text-success">
-                    <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <CheckCircleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                     <p className="text-sm font-medium">
                       {t('ore_rounding_note', {
                         amount: formatCurrency(diff, transaction.currency),
@@ -737,7 +737,7 @@ export default function InvoiceMatchDialog({
               if (bankFeeSek > 0) {
                 return (
                   <div className="flex items-start gap-2 p-3 rounded-lg bg-success/10 text-success">
-                    <CheckCircle2 className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                    <CheckCircleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                     <div>
                       <p className="text-sm font-medium">
                         {t('bank_fee_note', {
@@ -752,7 +752,7 @@ export default function InvoiceMatchDialog({
 
               return (
                 <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
-                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                  <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                   <div className="text-sm">
                     <p className="font-medium">{t('amounts_differ')}</p>
                     <p>
@@ -790,7 +790,7 @@ export default function InvoiceMatchDialog({
             {!targetBlocked && invoiceRateMissing && (
               <div className="rounded-lg border border-border bg-muted/30 p-4">
                 <div className="flex items-start gap-2">
-                  <AlertTriangle className="h-4 w-4 mt-0.5 text-attn flex-shrink-0" />
+                  <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-attn flex-shrink-0" />
                   <div className="flex-1 text-sm">
                     {/* Untinted title, matching the sibling
                         fx_rate_unavailable panel below: the ochre lives in the
@@ -829,7 +829,7 @@ export default function InvoiceMatchDialog({
                 return (
                   <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
                     <div className="flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 mt-0.5 text-attn flex-shrink-0" />
+                      <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-attn flex-shrink-0" />
                       <div className="flex-1 text-sm">
                         <p className="font-medium">{t('fx_rate_unavailable_title')}</p>
                         <p className="text-muted-foreground mt-1">

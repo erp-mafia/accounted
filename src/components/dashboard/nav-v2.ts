@@ -1,5 +1,20 @@
-import type { LucideIcon } from 'lucide-react'
-import { Archive, ArrowLeftRight, BarChart3, BookOpen, CheckSquare, FileCheck, HandCoins, Inbox, Landmark, Percent, ReceiptText, Sparkles, Wallet, Workflow } from 'lucide-react'
+import {
+  ArchiveBoxIcon,
+  ArrowsRightLeftIcon,
+  BanknotesIcon,
+  BookOpenIcon,
+  BuildingLibraryIcon,
+  ChartBarIcon,
+  CheckCircleIcon,
+  ClipboardDocumentListIcon,
+  DocumentCheckIcon,
+  DocumentTextIcon,
+  InboxIcon,
+  PercentBadgeIcon,
+  SparklesIcon,
+  WalletIcon,
+  type Icon,
+} from '@/components/icons'
 import { EXTENSION_REQUIRED_CAPABILITY, type CapabilityKey } from '@/lib/entitlements/keys'
 import type { ModuleId } from '@/lib/modules/manifest'
 import type { EntityType } from '@/types'
@@ -63,7 +78,7 @@ export interface NavGateFlags {
  */
 export interface NavV2Item extends NavGateFlags {
   labelKey: string
-  icon?: LucideIcon
+  icon?: Icon
   sub?: NavV2Item[]
 }
 
@@ -72,7 +87,7 @@ export const NAV_V2_TOP: NavV2Item[] = [
     href: '/',
     module: 'platform',
     labelKey: 'v2_todo',
-    icon: CheckSquare,
+    icon: CheckCircleIcon,
     sub: [{ href: '/pending', module: 'platform', labelKey: 'v2_proposals' }],
   },
   // Inkorg, lifted out of Inköp to sit under Att göra (founder decision
@@ -84,7 +99,7 @@ export const NAV_V2_TOP: NavV2Item[] = [
     href: '/inkorg',
     module: 'inbox',
     labelKey: 'inkorg',
-    icon: Inbox,
+    icon: InboxIcon,
     requiresInkorgV2: true,
     requiredCapability: EXTENSION_REQUIRED_CAPABILITY['general/invoice-inbox'],
   },
@@ -92,10 +107,10 @@ export const NAV_V2_TOP: NavV2Item[] = [
     href: '/chat',
     module: 'agent',
     labelKey: 'assistant',
-    icon: Sparkles,
+    icon: SparklesIcon,
     sub: [{ href: '/agent-knowledge', module: 'agent', labelKey: 'agent_knowledge' }],
   },
-  { href: '/skills', module: 'agent', labelKey: 'skills', icon: Workflow, newBadge: true, requiresAgents: true },
+  { href: '/skills', module: 'agent', labelKey: 'skills', icon: ClipboardDocumentListIcon, newBadge: true, requiresAgents: true },
 ]
 
 export const NAV_V2_COMPANY: NavV2Item[] = [
@@ -103,7 +118,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/accounts',
     module: 'ledger',
     labelKey: 'v2_accounts',
-    icon: Landmark,
+    icon: BuildingLibraryIcon,
     // One list, no sub-items (founder decision 2026-10-18): Avstämning was a
     // second list of the same accounts, so it merged into Konton. Each row
     // opens the account's reconciliation at /reconciliation?account=, which
@@ -113,7 +128,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/transactions',
     module: 'transactions',
     labelKey: 'transactions',
-    icon: ArrowLeftRight,
+    icon: ArrowsRightLeftIcon,
     // Regler stays off the nav until there is a rules engine worth a page
     // (founder call 2026-09-07); the route exists for the ones who need it.
     sub: [
@@ -124,7 +139,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/invoices',
     module: 'invoicing',
     labelKey: 'v2_invoicing',
-    icon: ReceiptText,
+    icon: DocumentTextIcon,
     sub: [
       // A quote is not an invoice (founder direction 2026-09-12): its own row
       // above Kundfakturor, shown while quotes are switched on in settings.
@@ -147,7 +162,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/supplier-invoices',
     module: 'supplier-invoices',
     labelKey: 'v2_purchases',
-    icon: Wallet,
+    icon: WalletIcon,
     sub: [
       { href: '/supplier-invoices', module: 'supplier-invoices', labelKey: 'supplier_invoices' },
       {
@@ -172,7 +187,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/arkiv',
     module: 'inbox',
     labelKey: 'arkiv',
-    icon: Archive,
+    icon: ArchiveBoxIcon,
     requiresArkiv: true,
     sub: [
       { href: '/arkiv', module: 'inbox', labelKey: 'arkiv_all' },
@@ -184,7 +199,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/bookkeeping',
     module: 'ledger',
     labelKey: 'bookkeeping',
-    icon: BookOpen,
+    icon: BookOpenIcon,
     sub: [
       { href: '/bookkeeping', module: 'ledger', labelKey: 'v2_vouchers' },
       { href: '/chart-of-accounts', module: 'ledger', labelKey: 'chart_of_accounts' },
@@ -198,7 +213,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/salary',
     module: 'payroll',
     labelKey: 'salary',
-    icon: HandCoins,
+    icon: BanknotesIcon,
     sub: [
       { href: '/salary', module: 'payroll', labelKey: 'v2_salary_runs' },
       { href: '/salary/employees', module: 'payroll', labelKey: 'employees' },
@@ -208,7 +223,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/reports/vat-declaration',
     module: 'vat',
     labelKey: 'v2_tax',
-    icon: Percent,
+    icon: PercentBadgeIcon,
     sub: [
       { href: '/reports/vat-declaration', module: 'vat', labelKey: 'vat_declaration' },
       { href: '/deadlines', module: 'deadlines', labelKey: 'deadlines' },
@@ -218,7 +233,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/reports',
     module: 'ledger',
     labelKey: 'reports',
-    icon: BarChart3,
+    icon: ChartBarIcon,
     sub: [
       { href: '/reports', module: 'ledger', labelKey: 'reports' },
       { href: '/kpi', module: 'ledger', labelKey: 'kpi' },
@@ -228,7 +243,7 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
     href: '/bookkeeping/year-end',
     module: 'year-end',
     labelKey: 'v2_closing',
-    icon: FileCheck,
+    icon: DocumentCheckIcon,
     sub: [
       { href: '/bookkeeping/year-end', module: 'year-end', labelKey: 'year_end' },
       { href: '/bookkeeping/year-end/arsredovisning', module: 'year-end', labelKey: 'annual_report', entityOnly: ['aktiebolag', 'ekonomisk_forening'] },

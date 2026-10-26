@@ -27,7 +27,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
-import { Plus, Tags, Trash2, Type } from 'lucide-react'
+import { Bars3BottomLeftIcon, HashtagIcon, PlusIcon, TrashIcon } from '@/components/icons'
 import { CURRENCIES, type Currency, type RecurringInvoiceSchedule } from '@/types'
 import CustomerCombobox from '@/components/customers/CustomerCombobox'
 import { formatCurrency, formatDate } from '@/lib/utils'
@@ -739,7 +739,7 @@ function NewRecurringScheduleForm({
               className="grid grid-cols-12 gap-2 items-start"
             >
               <div className="col-span-10 sm:col-span-11 flex items-center gap-2">
-                <Type className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
+                <Bars3BottomLeftIcon className="h-4 w-4 text-muted-foreground shrink-0" aria-hidden="true" />
                 <Input
                   placeholder={t('text_row_placeholder')}
                   aria-label={t('text_row_label')}
@@ -754,7 +754,7 @@ function NewRecurringScheduleForm({
                   onClick={() => remove(index)}
                   aria-label={t('remove_row')}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <TrashIcon className="h-4 w-4" />
                 </Button>
               </div>
             </div>
@@ -782,7 +782,7 @@ function NewRecurringScheduleForm({
                     onClick={() => toggleItemDimensions(index)}
                     aria-expanded={isDimOpen(index)}
                   >
-                    <Tags className="mr-2 h-4 w-4" />
+                    <HashtagIcon className="mr-2 h-4 w-4" />
                     {isDimOpen(index)
                       ? tInvoice('row_menu_remove_dimensions')
                       : tInvoice('row_menu_set_dimensions')}
@@ -849,7 +849,7 @@ function NewRecurringScheduleForm({
                   onClick={() => fields.length > 1 && remove(index)}
                   aria-label={t('remove_row')}
                 >
-                  <Trash2 className="h-4 w-4" />
+                  <TrashIcon className="h-4 w-4" />
                 </Button>
               </div>
               {/* Per-item dims override: merged over the schedule default on
@@ -881,7 +881,7 @@ function NewRecurringScheduleForm({
                 append({ line_type: 'product', description: '', quantity: 1, unit: 'st', unit_price: 0, vat_rate: null })
               }
             >
-              <Plus className="mr-2 h-4 w-4" />
+              <PlusIcon className="mr-2 h-4 w-4" />
               {t('add_row')}
             </Button>
             <Button
@@ -892,7 +892,7 @@ function NewRecurringScheduleForm({
                 append({ line_type: 'text', description: '', quantity: 0, unit: '', unit_price: 0, vat_rate: null })
               }
             >
-              <Type className="mr-2 h-4 w-4" />
+              <Bars3BottomLeftIcon className="mr-2 h-4 w-4" />
               {t('add_text_row')}
             </Button>
           </div>

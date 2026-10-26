@@ -32,27 +32,25 @@ import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialo
 import { usePendingCollectionsRun } from '@/components/collections/collections-run-client'
 import { capitalizeFirst } from '@/components/collections/collections-client'
 import {
-  ArrowLeftRight,
-  BookOpen,
-  CalendarClock,
-  CheckCircle2,
-  ChevronRight,
-  FileSignature,
-  FileWarning,
-  Link2,
-  HandCoins,
-  Inbox,
-  Landmark,
-  ReceiptText,
-  Scale,
-  Send,
-  ShieldAlert,
-  ShieldCheck,
-  Stamp,
-  FileQuestion,
-  Gavel,
-  Banknote,
-} from 'lucide-react'
+  ArrowsRightLeftIcon,
+  BanknotesIcon,
+  BookOpenIcon,
+  BuildingLibraryIcon,
+  CalendarDaysIcon,
+  CheckBadgeIcon,
+  CheckCircleIcon,
+  ChevronRightIcon,
+  DocumentMagnifyingGlassIcon,
+  DocumentTextIcon,
+  ExclamationTriangleIcon,
+  InboxIcon,
+  LinkIcon,
+  PaperAirplaneIcon,
+  PencilSquareIcon,
+  ScaleIcon,
+  ShieldCheckIcon,
+  ShieldExclamationIcon,
+} from '@/components/icons'
 import type {
   BankSwitchDue,
   ExpensePayoutDue,
@@ -253,7 +251,7 @@ function WorklistRow({ href, icon: Icon, label, detail, hint, count, badge, acti
         {count !== undefined && (
           <span className="min-w-[3ch] text-right text-xs tabular-nums text-muted-foreground">{count}</span>
         )}
-        <ChevronRight className="h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
+        <ChevronRightIcon className="h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100" />
       </span>
     </div>
   )
@@ -456,7 +454,7 @@ export default function AttGoraSection({
     <WorklistRow
       key="payments-verification"
       href={PAYMENTS_PAGE_PATH}
-      icon={ShieldCheck}
+      icon={ShieldCheckIcon}
       label={
         item.state === 'not_started'
           ? t('row_payments_verification_start')
@@ -489,7 +487,7 @@ export default function AttGoraSection({
       <WorklistRow
         key={`invoice-set-${item.transaction_id}`}
         href={`/transactions?highlight=${item.transaction_id}`}
-        icon={Link2}
+        icon={LinkIcon}
         label={label}
         hint={t('row_invoice_set_hint')}
         detail={
@@ -518,7 +516,7 @@ export default function AttGoraSection({
     <WorklistRow
       key={`payee-${item.supplier_invoice_id}`}
       href={`/supplier-invoices/${item.supplier_invoice_id}`}
-      icon={ShieldAlert}
+      icon={ShieldExclamationIcon}
       label={t('row_supplier_payee_change', { supplier: item.supplier_name })}
       detail={
         item.old_payee
@@ -541,7 +539,7 @@ export default function AttGoraSection({
     <WorklistRow
       key={item.connection_id}
       href={switchDeepLink(item.connection_id)}
-      icon={Landmark}
+      icon={BuildingLibraryIcon}
       label={
         item.passed
           ? t('row_bank_switch_stopped', { bank: item.bank_name })
@@ -576,14 +574,14 @@ export default function AttGoraSection({
           {allClear ? (
             // One quiet line, not a hero: the kopplingar row under it is what
             // an empty list should draw the eye to (founder direction 2026-09-14).
-            <p className="flex items-center gap-3 border-b border-border px-1 py-3.5 text-[13px] text-muted-foreground">
+            <div className="flex items-center gap-3 border-b border-border px-1 py-3.5 text-[13px] text-muted-foreground">
               <span className="flex w-[18px] shrink-0 justify-center" aria-hidden>
                 {emptyLedger
-                  ? <BookOpen className="h-[15px] w-[15px]" />
-                  : <CheckCircle2 className="h-[15px] w-[15px]" />}
+                  ? <BookOpenIcon className="h-[15px] w-[15px]" />
+                  : <CheckCircleIcon className="h-[15px] w-[15px]" />}
               </span>
               {emptyLedger ? t('att_gora_new_body') : t('att_gora_empty_body')}
-            </p>
+            </div>
           ) : (
             <div className="pb-2">
               {(urgentSwitches.length > 0 || verificationExpired || payeeChanges.length > 0) && (
@@ -605,7 +603,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href="/transactions"
                         action={aiAction('book_transaction', counts.book_transaction)}
-                        icon={ArrowLeftRight}
+                        icon={ArrowsRightLeftIcon}
                         label={t('row_book_transactions')}
                         count={counts.book_transaction}
                       />
@@ -614,7 +612,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href="/transactions?source=skatteverket"
                         action={aiAction('book_skattekonto', counts.book_skattekonto)}
-                        icon={Landmark}
+                        icon={BuildingLibraryIcon}
                         label={t('row_book_skattekonto')}
                         count={counts.book_skattekonto}
                       />
@@ -623,7 +621,7 @@ export default function AttGoraSection({
                     {otherSuggestedMatches > 0 && (
                       <WorklistRow
                         href="/transactions"
-                        icon={Link2}
+                        icon={LinkIcon}
                         label={t('row_suggested_matches')}
                         count={otherSuggestedMatches}
                       />
@@ -633,7 +631,7 @@ export default function AttGoraSection({
                         // The company's inbox: the new Inkorg in the rollout, else the workspace under Inköp.
                         href={worklist.inboxHref ?? LEGACY_INBOX_HREF}
                         action={aiAction('inbox_document', counts.inbox_document)}
-                        icon={Inbox}
+                        icon={InboxIcon}
                         label={t('row_inbox_documents')}
                         hint={t('row_inbox_documents_detail')}
                         count={counts.inbox_document}
@@ -650,7 +648,7 @@ export default function AttGoraSection({
                     {skattekontoPayment && (
                       <WorklistRow
                         href="/skattekonto?betala=1"
-                        icon={Landmark}
+                        icon={BuildingLibraryIcon}
                         label={t('row_skattekonto_payment')}
                         detail={
                           skattekontoPayment.ocr
@@ -675,7 +673,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         key={p.key}
                         href="/expenses"
-                        icon={HandCoins}
+                        icon={BanknotesIcon}
                         label={t('row_expense_payout', { name: p.claimant_name })}
                         detail={
                           p.claim_count === 1
@@ -704,7 +702,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         key={`sign-${d.signer_id}`}
                         href={`/signering/${d.signer_id}`}
-                        icon={FileSignature}
+                        icon={PencilSquareIcon}
                         label={t('row_document_to_sign', { title: d.title })}
                         detail={
                           d.role_label
@@ -717,7 +715,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         key={a.supplier_invoice_id}
                         href={`/supplier-invoices/${a.supplier_invoice_id}`}
-                        icon={Stamp}
+                        icon={CheckBadgeIcon}
                         label={tAttest('row_label', {
                           supplier: a.supplier_name ?? tAttest('supplier_fallback'),
                           amount: formatCurrency(a.total, a.currency),
@@ -729,7 +727,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href="/supplier-invoices"
                         action={aiAction('supplier_invoice_approval', counts.supplier_invoice_approval)}
-                        icon={Stamp}
+                        icon={CheckBadgeIcon}
                         label={t('row_supplier_approval')}
                         count={counts.supplier_invoice_approval}
                       />
@@ -738,7 +736,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href="/bookkeeping?missingUnderlag=true"
                         action={aiAction('verifikat_missing_document', counts.verifikat_missing_document)}
-                        icon={FileWarning}
+                        icon={ExclamationTriangleIcon}
                         label={t('row_missing_underlag')}
                         detail={missingUnderlagDetail}
                         count={counts.verifikat_missing_document}
@@ -747,7 +745,7 @@ export default function AttGoraSection({
                     {counts.pending_operations > 0 && (
                       <WorklistRow
                         href="/pending"
-                        icon={ShieldCheck}
+                        icon={ShieldCheckIcon}
                         label={t('row_pending_ops')}
                         count={counts.pending_operations}
                       />
@@ -755,7 +753,7 @@ export default function AttGoraSection({
                     {counts.document_relevance > 0 && (
                       <WorklistRow
                         href="/arkiv"
-                        icon={FileQuestion}
+                        icon={DocumentMagnifyingGlassIcon}
                         label={t('row_document_relevance')}
                         hint={t('row_document_relevance_detail')}
                         count={counts.document_relevance}
@@ -764,7 +762,7 @@ export default function AttGoraSection({
                     {counts.document_unclassified > 0 && (
                       <WorklistRow
                         href="/arkiv/granska#typ"
-                        icon={FileQuestion}
+                        icon={DocumentMagnifyingGlassIcon}
                         label={t('row_document_unclassified')}
                         count={counts.document_unclassified}
                       />
@@ -772,7 +770,7 @@ export default function AttGoraSection({
                     {counts.document_field_review > 0 && (
                       <WorklistRow
                         href="/arkiv/granska#falt"
-                        icon={FileQuestion}
+                        icon={DocumentMagnifyingGlassIcon}
                         label={t('row_document_field_review')}
                         hint={t('row_document_field_review_detail')}
                         count={counts.document_field_review}
@@ -781,7 +779,7 @@ export default function AttGoraSection({
                     {counts.arkiv_finding > 0 && (
                       <WorklistRow
                         href="/arkiv/granska#fynd"
-                        icon={FileQuestion}
+                        icon={DocumentMagnifyingGlassIcon}
                         label={t('row_arkiv_finding')}
                         hint={t('row_arkiv_finding_detail')}
                         count={counts.arkiv_finding}
@@ -790,7 +788,7 @@ export default function AttGoraSection({
                     {counts.peppol_delivery_failed > 0 && (
                       <WorklistRow
                         href="/invoices"
-                        icon={Send}
+                        icon={PaperAirplaneIcon}
                         label={t('row_peppol_delivery_failed')}
                         hint={t('row_peppol_delivery_failed_detail')}
                         count={counts.peppol_delivery_failed}
@@ -799,7 +797,7 @@ export default function AttGoraSection({
                     {counts.collection_decision > 0 && (
                       <WorklistRow
                         href="/invoices?status=collections"
-                        icon={Gavel}
+                        icon={ScaleIcon}
                         label={t('row_collection_decision')}
                         hint={t('row_collection_decision_detail')}
                         count={counts.collection_decision}
@@ -808,7 +806,7 @@ export default function AttGoraSection({
                     {counts.collection_attention > 0 && (
                       <WorklistRow
                         href="/invoices?status=collections"
-                        icon={Gavel}
+                        icon={ScaleIcon}
                         label={t('row_collection_attention')}
                         hint={t('row_collection_attention_detail')}
                         count={counts.collection_attention}
@@ -817,7 +815,7 @@ export default function AttGoraSection({
                     {counts.collection_settlements_to_book > 0 && (
                       <WorklistRow
                         href="/invoices/settlements"
-                        icon={Banknote}
+                        icon={BanknotesIcon}
                         label={t('row_collection_settlements_to_book')}
                         hint={t('row_collection_settlements_to_book_detail')}
                         count={counts.collection_settlements_to_book}
@@ -826,7 +824,7 @@ export default function AttGoraSection({
                     {counts.collected_payments_to_book > 0 && (
                       <WorklistRow
                         href="/invoices/settlements"
-                        icon={Banknote}
+                        icon={BanknotesIcon}
                         label={t('row_collected_payments_to_book')}
                         hint={t('row_collected_payments_to_book_detail')}
                         count={counts.collected_payments_to_book}
@@ -836,7 +834,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href={BATCH_REVIEW_HREF}
                         onSelect={collectionsRun.run ? () => setCollectionsRunOpen(true) : undefined}
-                        icon={Gavel}
+                        icon={ScaleIcon}
                         label={capitalizeFirst(
                           tCollections(batchRowKey(collectionsRun.run?.items ?? []), { count: counts.collection_batch_ready }),
                         )}
@@ -880,7 +878,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href="/deadlines"
                         action={aiAction('deadline_action', counts.deadline_action)}
-                        icon={CalendarClock}
+                        icon={CalendarDaysIcon}
                         label={t('row_deadlines')}
                         count={counts.deadline_action}
                       />
@@ -893,7 +891,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href="/invoices?status=overdue"
                         action={aiAction('overdue_invoice', overdueInvoices.count)}
-                        icon={ReceiptText}
+                        icon={DocumentTextIcon}
                         label={t('row_overdue_invoices_group', { count: overdueInvoices.count })}
                         detail={
                           overdueInvoices.unconverted_count > 0
@@ -914,7 +912,7 @@ export default function AttGoraSection({
                     {counts.agreement_payment_missed > 0 && (
                       <WorklistRow
                         href="/arkiv/avtal"
-                        icon={CalendarClock}
+                        icon={CalendarDaysIcon}
                         label={t('row_agreement_payment_missed')}
                         hint={t('row_agreement_payment_missed_detail')}
                         count={counts.agreement_payment_missed}
@@ -924,7 +922,7 @@ export default function AttGoraSection({
                       <WorklistRow
                         href="/reconciliation"
                         action={aiAction('reconciliation_due', counts.reconciliation_due)}
-                        icon={Scale}
+                        icon={ScaleIcon}
                         label={t('row_reconciliation_due')}
                         hint={t('row_reconciliation_due_detail')}
                         count={counts.reconciliation_due}
@@ -935,7 +933,7 @@ export default function AttGoraSection({
                     {expiringBankConnections.length > 0 && (
                       <WorklistRow
                         href="/settings/banking"
-                        icon={Landmark}
+                        icon={BuildingLibraryIcon}
                         label={t('bank_consent_expiring')}
                         detail={
                           expiringBankConnections[0].days_left === 1

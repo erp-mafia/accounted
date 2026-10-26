@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Pencil, Trash2 } from 'lucide-react'
+import { PencilIcon, TrashIcon } from '@/components/icons'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import { Button } from '@/components/ui/button'
 import {
@@ -222,11 +222,11 @@ export function TaxAssessmentNoticesPanel() {
           </div>
           <div className="flex shrink-0 gap-2">
             <Button type="button" variant="outline" size="sm" onClick={() => editNotice(notice)} disabled={saving}>
-              <Pencil className="mr-2 h-4 w-4" />
+              <PencilIcon className="mr-2 h-4 w-4" />
               {t('edit')}
             </Button>
             <Button type="button" variant="outline" size="sm" onClick={() => void archiveNotice(notice)} disabled={saving}>
-              <Trash2 className="mr-2 h-4 w-4" />
+              <TrashIcon className="mr-2 h-4 w-4" />
               {t('archive')}
             </Button>
           </div>

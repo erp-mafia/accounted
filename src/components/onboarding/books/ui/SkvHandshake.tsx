@@ -1,6 +1,5 @@
 'use client'
 
-import { Landmark } from 'lucide-react'
 import type { SkvPhase } from '@/lib/onboarding-books/reducer'
 
 /**
@@ -20,7 +19,10 @@ export function SkvHandshake({ phase, holdText }: { phase: SkvPhase; holdText: s
         <circle className="wait" cx="120" cy="88" r="56" />
         <circle className="chip" cx="120" cy="88" r="44" />
         <g className="mark">
-          <Landmark x="100" y="68" size={40} strokeWidth={1.5} />
+          {/* Heroicons building-library drawn inline: an icon component renders HTML, which cannot sit inside this svg. */}
+          <svg x="100" y="68" width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinecap="round" strokeLinejoin="round">
+            <path d="M8.25 12.75v8.25M12 12.75v8.25M15.75 12.75v8.25M3 9l9-6 9 6m-1.5 12V10.332A48.36 48.36 0 0 0 12 9.75c-2.551 0-5.056.2-7.5.582V21M3 21h18M12 6.75h.008v.008H12V6.75Z" />
+          </svg>
         </g>
         <circle className="ring" cx="120" cy="88" r="44" pathLength="1" transform="rotate(-90 120 88)" />
         <g transform="translate(152 120)">

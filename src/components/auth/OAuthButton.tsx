@@ -4,7 +4,7 @@ import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { startOAuthSignIn } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
-import { KeyRound } from 'lucide-react'
+import { KeyIcon } from '@/components/icons'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { GitHubMark, GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import type { ResolvedProvider } from '@/lib/auth/gotrue-providers'
@@ -17,7 +17,7 @@ function ProviderMark({ provider }: { provider: ResolvedProvider }) {
   if (provider.id === 'google') return <GoogleMark />
   else if (provider.id === 'azure') return <MicrosoftMark />
   else if (provider.id === 'github') return <GitHubMark />
-  else return <KeyRound className="h-4 w-4 text-muted-foreground" />
+  else return <KeyIcon className="h-4 w-4 text-muted-foreground" />
 }
 
 /**

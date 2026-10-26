@@ -1,6 +1,6 @@
 'use client'
 
-import { Plus, Trash2 } from 'lucide-react'
+import { PlusIcon, TrashIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -49,7 +49,7 @@ export function ManualAccrualsEditor({ entries, onChange }: ManualAccrualsEditor
             onClick={() => add(t)}
             className="justify-start text-left h-auto px-3"
           >
-            <Plus className="mr-2 h-3.5 w-3.5 shrink-0" />
+            <PlusIcon className="mr-2 h-3.5 w-3.5 shrink-0" />
             <span className="flex-1 min-w-0 py-2">
               <span className="block font-medium">{t.name}</span>
               <span className="block text-xs text-muted-foreground truncate">{t.hint}</span>
@@ -102,7 +102,7 @@ function ManualAccrualEntryEditor({
       <div className="flex items-center justify-between">
         <p className="text-sm font-medium">{template.name}</p>
         <Button variant="ghost" size="icon-sm" onClick={onRemove} aria-label="Ta bort">
-          <Trash2 className="h-3.5 w-3.5" />
+          <TrashIcon className="h-3.5 w-3.5" />
         </Button>
       </div>
       <div className="grid grid-cols-2 gap-3">

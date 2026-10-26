@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -191,7 +191,7 @@ export function FiscalYearReopenDialog({
 
         {isLoading ? (
           <div className="flex min-h-40 items-center justify-center text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <SpinnerIcon className="mr-2 h-4 w-4 animate-spin" />
             {t('fy_reopen_closed_checking')}
           </div>
         ) : loadError ? (
@@ -203,7 +203,7 @@ export function FiscalYearReopenDialog({
             {eligibility.blockers.length > 0 ? (
               <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-destructive">
-                  <AlertTriangle className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="h-4 w-4" />
                   {t('fy_reopen_closed_blocked_title')}
                 </div>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">
@@ -250,7 +250,7 @@ export function FiscalYearReopenDialog({
 
             {eligibility.annual_report.agm_date ? (
               <div className="flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/5 p-3 text-sm">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                 <span>
                   {t('fy_reopen_closed_agm_warning', { date: formatDate(eligibility.annual_report.agm_date) })}
                 </span>

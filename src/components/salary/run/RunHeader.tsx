@@ -27,16 +27,16 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 import {
-  AlertTriangle,
-  ArrowLeftCircle,
-  Download,
-  Eye,
-  FileDown,
-  MoreHorizontal,
-  Send,
-  Trash2,
-  Undo2,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowLeftCircleIcon,
+  ArrowUturnLeftIcon,
+  DocumentArrowDownIcon,
+  EllipsisHorizontalIcon,
+  ExclamationTriangleIcon,
+  EyeIcon,
+  PaperAirplaneIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import { hasCustomDeviationWindow, runDeviationWindow } from '@/lib/salary/deviation-period'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -293,7 +293,7 @@ export function RunHeader({
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-sm" aria-label={t('more_actions')} loading={menuBusy}>
-                  {!menuBusy && <MoreHorizontal className="h-4 w-4" />}
+                  {!menuBusy && <EllipsisHorizontalIcon className="h-4 w-4" />}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">
@@ -302,7 +302,7 @@ export function RunHeader({
                     onSelect={onPreview}
                     disabled={busy || !isCalculated}
                   >
-                    <Eye className="h-4 w-4" />
+                    <EyeIcon className="h-4 w-4" />
                     {t('action_preview')}
                   </DropdownMenuItem>
                 )}
@@ -321,7 +321,7 @@ export function RunHeader({
                     }}
                     disabled={busy || !hasEmailSend}
                   >
-                    <Send className="h-4 w-4" />
+                    <PaperAirplaneIcon className="h-4 w-4" />
                     <span className="min-w-0 flex-1">
                       {deliveries && deliveries.sent > 0
                         ? t('action_send_payslips_again')
@@ -336,19 +336,19 @@ export function RunHeader({
                 )}
                 {showDownloadPayslips && (
                   <DropdownMenuItem onSelect={onDownloadPayslips} disabled={busy}>
-                    <FileDown className="h-4 w-4" />
+                    <DocumentArrowDownIcon className="h-4 w-4" />
                     {t('action_download_payslips')}
                   </DropdownMenuItem>
                 )}
                 {showDownloadAgi && (
                   <DropdownMenuItem onSelect={onDownloadAgi} disabled={busy}>
-                    <Download className="h-4 w-4" />
+                    <ArrowDownTrayIcon className="h-4 w-4" />
                     {t('action_download_agi')}
                   </DropdownMenuItem>
                 )}
                 {showForaReport && (
                   <DropdownMenuItem onSelect={() => onOpenForaReport?.()} disabled={busy}>
-                    <Download className="h-4 w-4" />
+                    <ArrowDownTrayIcon className="h-4 w-4" />
                     {t('action_fora_report', { period: formatAgiPeriodDashed(agiPeriod) })}
                   </DropdownMenuItem>
                 )}
@@ -357,7 +357,7 @@ export function RunHeader({
                     <DropdownMenuSeparator />
                     {showRevert && (
                       <DropdownMenuItem onSelect={onRevert} disabled={busy}>
-                        <ArrowLeftCircle className="h-4 w-4" />
+                        <ArrowLeftCircleIcon className="h-4 w-4" />
                         {t('action_revert')}
                       </DropdownMenuItem>
                     )}
@@ -367,7 +367,7 @@ export function RunHeader({
                         the AGI has reached Skatteverket. */}
                     {showUnapprove && (
                       <DropdownMenuItem onSelect={onUnapprove} disabled={busy}>
-                        <ArrowLeftCircle className="h-4 w-4" />
+                        <ArrowLeftCircleIcon className="h-4 w-4" />
                         {t('action_unapprove')}
                       </DropdownMenuItem>
                     )}
@@ -382,13 +382,13 @@ export function RunHeader({
                         disabled={busy}
                         className="text-destructive focus:text-destructive"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <TrashIcon className="h-4 w-4" />
                         {t('action_delete_draft')}
                       </DropdownMenuItem>
                     )}
                     {showCorrect && (
                       <DropdownMenuItem onSelect={() => setCorrectOpen(true)} disabled={busy}>
-                        <Undo2 className="h-4 w-4" />
+                        <ArrowUturnLeftIcon className="h-4 w-4" />
                         {t('action_correct')}
                       </DropdownMenuItem>
                     )}
@@ -454,7 +454,7 @@ export function RunHeader({
               <span className="block">{t('correct_dialog_body', { period: periodLabel })}</span>
               {run.agi_generated_at && (
                 <span className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
-                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <ExclamationTriangleIcon className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                   <span>{t('correct_dialog_agi_warning')}</span>
                 </span>
               )}

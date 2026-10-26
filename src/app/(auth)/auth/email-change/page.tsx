@@ -1,6 +1,6 @@
 import Link from 'next/link'
 import { headers } from 'next/headers'
-import { MailCheck, MailWarning, Mails } from 'lucide-react'
+import { EnvelopeIcon, EnvelopeOpenIcon, InboxStackIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { createClient } from '@/lib/supabase/server'
 import { resolveLandingDestination } from '@/lib/company/landing-server'
@@ -76,7 +76,7 @@ export default async function EmailChangeStatusPage({
     }
   }
   const Icon =
-    resolved === 'done' ? MailCheck : resolved === 'partial' ? Mails : MailWarning
+    resolved === 'done' ? EnvelopeOpenIcon : resolved === 'partial' ? InboxStackIcon : EnvelopeIcon
 
   return (
     <div className="min-h-dvh flex flex-col items-center justify-center bg-background p-4">

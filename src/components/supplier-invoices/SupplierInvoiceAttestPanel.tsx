@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import useSWR from 'swr'
 import { useLocale, useTranslations } from 'next-intl'
-import { XCircle } from 'lucide-react'
+import { XCircleIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
@@ -134,7 +134,7 @@ export function SupplierInvoiceAttestPanel({
       aside={
         showReject ? (
           <Button size="sm" variant="outline" onClick={() => setRejectOpen(true)} disabled={busy !== null}>
-            <XCircle className="mr-2 h-4 w-4" />
+            <XCircleIcon className="mr-2 h-4 w-4" />
             {t('reject')}
           </Button>
         ) : null

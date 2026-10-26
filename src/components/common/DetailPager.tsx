@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeftIcon, ChevronRightIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -47,7 +47,7 @@ export function DetailPager({
         disabled={!pager.prevId}
         aria-label={t('pager_previous')}
       >
-        <ChevronLeft className="h-4 w-4" />
+        <ChevronLeftIcon className="h-4 w-4" />
       </Button>
       <span className="min-w-12 whitespace-nowrap px-1 text-center text-xs tabular-nums text-muted-foreground">
         {t('pager_position', { index: pager.index, total: pager.total })}
@@ -60,7 +60,7 @@ export function DetailPager({
         disabled={!pager.nextId}
         aria-label={t('pager_next')}
       >
-        <ChevronRight className="h-4 w-4" />
+        <ChevronRightIcon className="h-4 w-4" />
       </Button>
     </div>
   )

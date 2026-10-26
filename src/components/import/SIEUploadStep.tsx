@@ -7,7 +7,14 @@ import { FileDropzone } from '@/components/ui/file-dropzone'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
-import { Upload, AlertCircle, CheckCircle, Loader2, XCircle, RefreshCw } from 'lucide-react'
+import {
+  ArrowPathIcon,
+  ArrowUpTrayIcon,
+  CheckCircleIcon,
+  ExclamationCircleIcon,
+  SpinnerIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import { hasSIEFileExtension, SIE_FILE_EXTENSIONS_EN, SIE_FILE_EXTENSIONS_SV } from '@/lib/import/sie-file-extensions'
 
 const LOADING_PHASES = [
@@ -80,7 +87,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
         <Card>
           <CardContent className="pt-8 pb-8">
             <div className="flex flex-col items-center text-center space-y-6">
-              <Loader2 className="h-10 w-10 text-primary animate-spin" />
+              <SpinnerIcon className="h-10 w-10 text-primary animate-spin" />
               <div className="space-y-1">
                 <p className="font-medium text-lg">{t(phase.message)}</p>
                 <p className="text-sm text-muted-foreground">
@@ -103,7 +110,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
       <Card>
         <CardHeader>
           <CardTitle className="flex items-center gap-2">
-            <Upload className="h-5 w-5" />
+            <ArrowUpTrayIcon className="h-5 w-5" />
             {t('title')}
             {/* Format primer and per-system export paths live behind the "?"
                 (convention 7), not as three info cards under the drop zone. */}
@@ -139,7 +146,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
 
             {selectedFile ? (
               <div className="space-y-4">
-                <CheckCircle className="mx-auto h-12 w-12 text-success" />
+                <CheckCircleIcon className="mx-auto h-12 w-12 text-success" />
                 <div>
                   <p className="font-medium">{selectedFile.name}</p>
                   <p className="text-sm text-muted-foreground">
@@ -149,7 +156,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
               </div>
             ) : (
               <div className="space-y-4">
-                <Upload className="mx-auto h-12 w-12 text-muted-foreground" />
+                <ArrowUpTrayIcon className="mx-auto h-12 w-12 text-muted-foreground" />
                 <div>
                   <p className="font-medium hidden sm:block">{t('drop_here')}</p>
                   <p className="font-medium sm:hidden">{t('tap_to_choose')}</p>
@@ -163,7 +170,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
           {/* Rejected file type (client-side, before upload) */}
           {fileTypeError && (
             <div className="mt-4 p-4 rounded-lg flex gap-3 bg-destructive/10 border border-destructive/20">
-              <AlertCircle className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
+              <ExclamationCircleIcon className="h-5 w-5 flex-shrink-0 mt-0.5 text-destructive" />
               <div className="space-y-1.5 min-w-0">
                 <p className="font-medium text-destructive">{t('file_unusable')}</p>
                 <p className="text-sm text-muted-foreground">{fileTypeError}</p>
@@ -179,7 +186,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                   ? 'bg-muted/30 border border-border'
                   : 'bg-destructive/10 border border-destructive/20'
               }`}>
-                <AlertCircle className={`h-5 w-5 flex-shrink-0 mt-0.5 ${
+                <ExclamationCircleIcon className={`h-5 w-5 flex-shrink-0 mt-0.5 ${
                   errorType === 'duplicate' || errorType === 'duplicate_period'
                     ? 'text-warning'
                     : 'text-destructive'
@@ -213,7 +220,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                             {isReplacing ? (
                               t('replacing')
                             ) : (
-                              <><RefreshCw className="h-4 w-4 mr-2" />{t('replace')}</>
+                              <><ArrowPathIcon className="h-4 w-4 mr-2" />{t('replace')}</>
                             )}
                           </Button>
                         )}
@@ -239,7 +246,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                   <div className="space-y-1.5 max-h-48 overflow-y-auto">
                     {validationErrors.map((err, i) => (
                       <div key={i} className="text-sm flex gap-2">
-                        <XCircle className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
+                        <XCircleIcon className="h-4 w-4 text-destructive flex-shrink-0 mt-0.5" />
                         <span className="text-muted-foreground">{err}</span>
                       </div>
                     ))}
@@ -254,7 +261,7 @@ export default function SIEUploadStep({ onFileSelect, isLoading, error, errorTyp
                   <div className="space-y-1.5 max-h-32 overflow-y-auto">
                     {validationWarnings.map((warn, i) => (
                       <div key={i} className="text-sm flex gap-2">
-                        <AlertCircle className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
+                        <ExclamationCircleIcon className="h-4 w-4 text-warning flex-shrink-0 mt-0.5" />
                         <span className="text-muted-foreground">{warn}</span>
                       </div>
                     ))}

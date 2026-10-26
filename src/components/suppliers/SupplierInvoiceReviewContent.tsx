@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { CalendarClock } from 'lucide-react'
+import { CalendarDaysIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -256,15 +256,15 @@ export function SupplierInvoiceReviewContent({
                   <td className="py-2">
                     {item.description}
                     {itemHasAccrual(item) && (
-                      <p className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
-                        <CalendarClock className="h-3 w-3 shrink-0" />
+                      <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground">
+                        <CalendarDaysIcon className="h-3 w-3 shrink-0" />
                         <span className="tabular-nums">
                           {t('review_accrual_line_info', {
                             from: accrualMonth(item.accrual_period_start!),
                             to: accrualMonth(item.accrual_period_end!),
                           })}
                         </span>
-                      </p>
+                      </div>
                     )}
                   </td>
                   <td className="py-2 text-right tabular-nums">{formatAmount(item.amount)}</td>
@@ -286,15 +286,15 @@ export function SupplierInvoiceReviewContent({
                 <AccountNumber number={item.account_number} size="sm" />
               </div>
               {itemHasAccrual(item) && (
-                <p className="flex items-center gap-1 text-xs text-muted-foreground">
-                  <CalendarClock className="h-3 w-3 shrink-0" />
+                <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                  <CalendarDaysIcon className="h-3 w-3 shrink-0" />
                   <span className="tabular-nums">
                     {t('review_accrual_line_info', {
                       from: accrualMonth(item.accrual_period_start!),
                       to: accrualMonth(item.accrual_period_end!),
                     })}
                   </span>
-                </p>
+                </div>
               )}
               <div className="flex items-center justify-between text-muted-foreground">
                 <span>{formatAmount(item.amount)} kr</span>

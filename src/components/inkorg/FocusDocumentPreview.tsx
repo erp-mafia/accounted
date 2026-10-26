@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { AlertTriangle, FileText } from 'lucide-react'
+import { DocumentTextIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
@@ -92,7 +92,7 @@ export function FocusDocumentPreview({
   if (state === 'none') {
     return (
       <div className={cn(frame, 'items-center justify-center gap-2 text-[13px] text-muted-foreground')}>
-        <FileText aria-hidden="true" className="h-5 w-5" />
+        <DocumentTextIcon aria-hidden="true" className="h-5 w-5" />
         {tInk('no_document')}
       </div>
     )
@@ -100,7 +100,7 @@ export function FocusDocumentPreview({
   if (state === 'error' || !meta) {
     return (
       <div className={cn(frame, 'flex-col items-center justify-center gap-3 px-6 text-center text-[13px] text-muted-foreground')}>
-        <AlertTriangle aria-hidden="true" className="h-5 w-5 text-attn" />
+        <ExclamationTriangleIcon aria-hidden="true" className="h-5 w-5 text-attn" />
         <span>{t('document_load_failed')}</span>
         <Button variant="outline" size="sm" onClick={onRetry}>
           {t('retry')}

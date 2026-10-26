@@ -90,7 +90,15 @@ import {
   type RotRutListState,
 } from '@/lib/invoices/rot-rut-list-status'
 import { listContextKey, writeListContext } from '@/lib/navigation/list-context'
-import { Plus, ReceiptText, Repeat, FileInput, FileDown, FileText, FileClock, SlidersHorizontal } from 'lucide-react'
+import {
+  AdjustmentsHorizontalIcon,
+  ArrowPathRoundedSquareIcon,
+  DocumentArrowDownIcon,
+  DocumentArrowUpIcon,
+  DocumentIcon,
+  DocumentTextIcon,
+  PlusIcon,
+} from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -760,7 +768,7 @@ export default function InvoicesPage() {
     {
       key: 'faktura',
       label: t('new_invoice'),
-      icon: Plus,
+      icon: PlusIcon,
       description: t('create_invoice_desc'),
       disabled: !canWrite,
       disabledTitle: t('viewer_disabled_tooltip'),
@@ -771,7 +779,7 @@ export default function InvoicesPage() {
           {
             key: 'proforma',
             label: t('create_proforma'),
-            icon: FileClock,
+            icon: DocumentIcon,
             description: t('create_proforma_desc'),
             disabled: !canWrite,
             disabledTitle: t('viewer_disabled_tooltip'),
@@ -784,7 +792,7 @@ export default function InvoicesPage() {
           {
             key: 'aterkommande',
             label: t('create_recurring'),
-            icon: Repeat,
+            icon: ArrowPathRoundedSquareIcon,
             description: t('create_recurring_desc'),
             onSelect: () => router.push('/invoices/recurring'),
           } satisfies SplitButtonOption,
@@ -795,7 +803,7 @@ export default function InvoicesPage() {
           {
             key: 'sjalvfaktura',
             label: t('create_self'),
-            icon: FileInput,
+            icon: DocumentArrowUpIcon,
             description: t('create_self_desc'),
             disabled: !canWrite,
             disabledTitle: t('viewer_disabled_tooltip'),
@@ -864,7 +872,7 @@ export default function InvoicesPage() {
               variant="outline"
               onClick={() => router.push('/invoices/rot-rut')}
             >
-              <FileDown className="mr-2 h-4 w-4" />
+              <DocumentArrowDownIcon className="mr-2 h-4 w-4" />
               {t('rot_rut_payout_action')}
             </Button>
           )}
@@ -876,7 +884,7 @@ export default function InvoicesPage() {
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              <FileText className="mr-2 h-4 w-4" />
+              <DocumentTextIcon className="mr-2 h-4 w-4" />
               {t('create_quote')}
             </Button>
           ) : (
@@ -981,7 +989,7 @@ export default function InvoicesPage() {
                 aria-label={t('group_picker_aria')}
                 title={t('group_by')}
               >
-                <SlidersHorizontal className="h-4 w-4" />
+                <AdjustmentsHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -1057,7 +1065,7 @@ export default function InvoicesPage() {
       ) : filteredInvoices.length === 0 ? (
         searchTerm ? (
           <DataListEmpty
-            icon={<ReceiptText className="h-6 w-6" />}
+            icon={<DocumentTextIcon className="h-6 w-6" />}
             title={t('no_search_results_title')}
             description={
               <span data-ph-mask="">
@@ -1080,7 +1088,7 @@ export default function InvoicesPage() {
           </div>
         ) : (
           <DataListEmpty
-            icon={isQuotesList ? <FileText className="h-6 w-6" /> : <ReceiptText className="h-6 w-6" />}
+            icon={isQuotesList ? <DocumentTextIcon className="h-6 w-6" /> : <DocumentTextIcon className="h-6 w-6" />}
             title={t(
               isQuotesList
                 ? 'no_quotes_title'

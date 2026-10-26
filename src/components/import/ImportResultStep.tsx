@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { DefList, DefRow } from '@/components/arkiv/DefList'
-import { ExternalLink, RotateCcw, Undo2 } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, ArrowUturnLeftIcon } from '@/components/icons'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -433,12 +433,12 @@ export default function ImportResultStep({
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" onClick={onNewImport}>
-            <RotateCcw className="mr-2 h-4 w-4" />
+            <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
             {tStep('new_import')}
           </Button>
           {result.success && result.importId && onUndo && (
             <Button variant="outline" className="text-destructive hover:text-destructive" onClick={handleUndoClick}>
-              <Undo2 className="mr-2 h-4 w-4" />
+              <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
               {tStep('undo_import')}
             </Button>
           )}
@@ -449,13 +449,13 @@ export default function ImportResultStep({
               <Button variant="outline" asChild>
                 <Link href="/bookkeeping">
                   {tStep('view_bookkeeping')}
-                  <ExternalLink className="ml-2 h-4 w-4" />
+                  <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
               <Button asChild>
                 <Link href="/reports">
                   {tStep('view_reports')}
-                  <ExternalLink className="ml-2 h-4 w-4" />
+                  <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
                 </Link>
               </Button>
             </>

@@ -11,7 +11,7 @@ import { Badge } from '@/components/ui/badge'
 import { Switch } from '@/components/ui/switch'
 import { EmptyState } from '@/components/ui/empty-state'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
-import { Plus, UserCircle } from 'lucide-react'
+import { PlusIcon, UserCircleIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency } from '@/lib/utils'
 import { useEmployees } from '@/lib/reference-data/hooks'
@@ -67,7 +67,7 @@ export default function EmployeesPage() {
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         {canWrite && (
           <Button size="sm" onClick={openNewEmployee}>
-            <Plus className="mr-2 h-4 w-4" />
+            <PlusIcon className="mr-2 h-4 w-4" />
             {t('new_employee')}
           </Button>
         )}
@@ -96,7 +96,7 @@ export default function EmployeesPage() {
         </div>
       ) : visibleEmployees.length === 0 ? (
         <EmptyState
-          icon={UserCircle}
+          icon={UserCircleIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('add_employee') : undefined}

@@ -3,7 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { EmptyState } from '@/components/ui/empty-state'
 import { StartCard } from '@/components/dashboard/StartCard'
-import { Check } from 'lucide-react'
+import { CheckIcon } from '@/components/icons'
 
 interface InboxZeroStateProps {
   hasTransactions: boolean
@@ -35,5 +35,5 @@ export default function InboxZeroState({ hasTransactions }: InboxZeroStateProps)
   // All transactions categorized: inbox zero. Importing more and creating
   // one by hand are the header split button's options, so the empty state
   // does not repeat them.
-  return <EmptyState icon={Check} title={t('done_title')} description={t('done_description')} />
+  return <EmptyState icon={CheckIcon} title={t('done_title')} description={t('done_description')} />
 }

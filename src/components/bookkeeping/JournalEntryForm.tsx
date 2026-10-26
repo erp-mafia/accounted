@@ -13,7 +13,15 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { AttnLine } from '@/components/ui/attn-line'
-import { AlertTriangle, Loader2, Lock, CalendarPlus, Eraser, Tags, BookmarkPlus } from 'lucide-react'
+import {
+  BackspaceIcon,
+  BookmarkIcon,
+  CalendarIcon,
+  ExclamationTriangleIcon,
+  HashtagIcon,
+  LockClosedIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
@@ -1605,7 +1613,7 @@ export default function JournalEntryForm({
                   min="0"
                 />
                 {isFetchingRate && (
-                  <Loader2 className="absolute right-2 top-1.5 h-4 w-4 animate-spin text-muted-foreground" />
+                  <SpinnerIcon className="absolute right-2 top-1.5 h-4 w-4 animate-spin text-muted-foreground" />
                 )}
               </div>
             </div>
@@ -1662,7 +1670,7 @@ export default function JournalEntryForm({
 
         {periodMismatch === 'no_period' && (
           <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3">
-            <AlertTriangle className="h-5 w-5 text-attn mt-0.5 shrink-0" />
+            <ExclamationTriangleIcon className="h-5 w-5 text-attn mt-0.5 shrink-0" />
             <div className="flex-1 text-sm text-attn">
               <p className="font-medium">{t('no_period_warning', { date: entryDate })}</p>
               <p className="mt-0.5">
@@ -1682,7 +1690,7 @@ export default function JournalEntryForm({
                 onClick={() => setEntryDate(preFyClampTarget.period_start)}
                 className="shrink-0"
               >
-                <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+                <CalendarIcon className="h-3.5 w-3.5 mr-1.5" />
                 {t('pre_fy_book_on_first_day', { date: preFyClampTarget.period_start })}
               </Button>
             ) : (
@@ -1692,7 +1700,7 @@ export default function JournalEntryForm({
                 onClick={() => setShowCreatePeriod(true)}
                 className="shrink-0"
               >
-                <CalendarPlus className="h-3.5 w-3.5 mr-1.5" />
+                <CalendarIcon className="h-3.5 w-3.5 mr-1.5" />
                 {t('create_period')}
               </Button>
             )}
@@ -1789,7 +1797,7 @@ export default function JournalEntryForm({
                     aria-expanded={dimPopoverRow === index}
                     title={t('row_dimensions_aria')}
                   >
-                    <Tags className="h-3.5 w-3.5" />
+                    <HashtagIcon className="h-3.5 w-3.5" />
                   </Button>
                   {dimPopoverRow === index && (
                     <div
@@ -1857,7 +1865,7 @@ export default function JournalEntryForm({
               disabled={derivedTemplateLines.length < 2}
               title={derivedTemplateLines.length < 2 ? t('save_template_disabled_hint') : undefined}
             >
-              <BookmarkPlus className="h-3 w-3 mr-1" />
+              <BookmarkIcon className="h-3 w-3 mr-1" />
               {t('save_as_template')}
             </Button>
           </>
@@ -1900,7 +1908,7 @@ export default function JournalEntryForm({
               loading={canWrite && isSavingDraft}
               title={!canWrite ? t('read_only_tooltip') : undefined}
             >
-              {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+              {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('save_edit')}
             </Button>
           ) : (
@@ -1912,7 +1920,7 @@ export default function JournalEntryForm({
                   disabled={!hasContent || isSubmitting || isSavingDraft}
                   title={t('clear_all_tooltip')}
                 >
-                  <Eraser className="mr-2 h-4 w-4" />
+                  <BackspaceIcon className="mr-2 h-4 w-4" />
                   {t('clear_all')}
                 </Button>
               )}
@@ -1928,7 +1936,7 @@ export default function JournalEntryForm({
                   loading={canWrite && isSavingDraft}
                   title={!canWrite ? t('read_only_tooltip') : t('save_draft_tooltip')}
                 >
-                  {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                  {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
                   {t('save_draft')}
                 </Button>
               )}
@@ -1937,7 +1945,7 @@ export default function JournalEntryForm({
                 disabled={isSubmitting || isSavingDraft || isUploading || !canWrite}
                 title={!canWrite ? t('read_only_tooltip') : undefined}
               >
-                {!canWrite && <Lock className="mr-2 h-4 w-4" />}
+                {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
                 {t('review_and_create')}
               </Button>
             </>
@@ -2114,7 +2122,7 @@ export default function JournalEntryForm({
                 setShowClearConfirm(false)
               }}
             >
-              <Eraser className="mr-2 h-4 w-4" />
+              <BackspaceIcon className="mr-2 h-4 w-4" />
               {t('clear_all_confirm')}
             </Button>
           </DialogFooter>

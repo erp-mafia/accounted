@@ -26,7 +26,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import {
@@ -382,7 +382,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           {accountsStatus !== 'ready' && (
             <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground">
               <span className="flex items-center gap-2">
-                {accountsStatus === 'loading' && <Loader2 className="h-4 w-4 animate-spin" />}
+                {accountsStatus === 'loading' && <SpinnerIcon className="h-4 w-4 animate-spin" />}
                 {accountsStatus === 'loading' ? t('accounts_loading') : t('accounts_load_failed')}
               </span>
               {accountsStatus === 'error' && (

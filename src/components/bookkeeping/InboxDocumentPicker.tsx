@@ -19,7 +19,13 @@ import type { ArkivDocumentRow } from '@/app/api/arkiv/documents/route'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
-import { FileText, ImageIcon, Loader2, Search, Inbox } from 'lucide-react'
+import {
+  DocumentTextIcon,
+  InboxIcon,
+  MagnifyingGlassIcon,
+  PhotoIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 // InboxDocumentPicker
@@ -93,9 +99,9 @@ interface LinkedElsewhereDoc {
 
 function DocIcon({ mime, fileName }: { mime: string | null; fileName: string }) {
   if (documentPreviewKind(mime, fileName) === 'image') {
-    return <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+    return <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
   }
-  return <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+  return <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
 }
 
 export default function InboxDocumentPicker({ open, onClose, journalEntryId, onLinked, onSelect }: Props) {
@@ -293,7 +299,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
           )}
 
           <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
@@ -318,7 +324,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
             ) : showingLinked ? (
               linkedFiltered.length === 0 ? (
                 <div className="py-10 flex flex-col items-center gap-2 text-center">
-                  <FileText className="h-6 w-6 text-muted-foreground" />
+                  <DocumentTextIcon className="h-6 w-6 text-muted-foreground" />
                   <p className="text-sm text-muted-foreground">
                     {hasSearch ? t('picker_empty_search', { query: search.trim() }) : t('picker_linked_empty')}
                   </p>
@@ -350,7 +356,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
               )
             ) : filtered.length === 0 ? (
               <div className="py-10 flex flex-col items-center gap-2 text-center">
-                <Inbox className="h-6 w-6 text-muted-foreground" />
+                <InboxIcon className="h-6 w-6 text-muted-foreground" />
                 <p className="text-sm text-muted-foreground">
                   {hasSearch ? t('picker_empty_search', { query: search.trim() }) : t('picker_empty')}
                 </p>
@@ -392,7 +398,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
                         </span>
                       )}
                       {isLinking && (
-                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+                        <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
                       )}
                     </button>
                     <Button

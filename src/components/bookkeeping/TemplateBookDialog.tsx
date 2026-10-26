@@ -32,7 +32,7 @@ import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEdi
 import { useCompany } from '@/contexts/CompanyContext'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { parseAmountInput } from '@/lib/money'
-import { ArrowLeft, Check, RotateCcw } from 'lucide-react'
+import { ArrowLeftIcon, ArrowUturnLeftIcon, CheckIcon } from '@/components/icons'
 import type { BookingTemplateLibrary } from '@/types'
 import { useAccounts, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
@@ -218,7 +218,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
               onClick={() => setSelected(null)}
               className="inline-flex items-center gap-1.5 text-xs text-muted-foreground transition-colors hover:text-foreground"
             >
-              <ArrowLeft className="h-3.5 w-3.5" />
+              <ArrowLeftIcon className="h-3.5 w-3.5" />
               {t('tpl_back')}
             </button>
 
@@ -294,7 +294,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
                   toolbar={
                     edited ? (
                       <Button type="button" variant="ghost" size="sm" onClick={() => setEdits(null)}>
-                        <RotateCcw className="mr-1 h-3.5 w-3.5" aria-hidden />
+                        <ArrowUturnLeftIcon className="mr-1 h-3.5 w-3.5" aria-hidden />
                         {t('tpl_reset_lines')}
                       </Button>
                     ) : undefined
@@ -307,7 +307,7 @@ export default function TemplateBookDialog({ open, onOpenChange, onCreated }: Pr
                   )}
                 >
                   <span className="inline-flex items-center gap-1.5">
-                    {balanced && <Check className="h-3.5 w-3.5" />}
+                    {balanced && <CheckIcon className="h-3.5 w-3.5" />}
                     {balanced
                       ? t('tpl_balances')
                       : check.incomplete > 0

@@ -11,15 +11,15 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import {
-  ArrowLeft,
-  Loader2,
-  Play,
-  FileText,
-  Link2,
-  Calendar,
-  Landmark,
-  AlertCircle,
-} from 'lucide-react'
+  ArrowLeftIcon,
+  BuildingLibraryIcon,
+  CalendarIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+  LinkIcon,
+  PlayIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
 import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
@@ -99,7 +99,7 @@ export default function BankFileConfirmStep({
     return (
       <div className="flex flex-col items-center justify-center py-24 space-y-6">
         <div className="relative">
-          <Loader2 className="h-12 w-12 animate-spin text-primary" />
+          <SpinnerIcon className="h-12 w-12 animate-spin text-primary" />
         </div>
         <div className="text-center space-y-2">
           <p className="text-lg font-medium">Importerar transaktioner...</p>
@@ -127,7 +127,7 @@ export default function BankFileConfirmStep({
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <FileText className="h-4 w-4" />
+                <DocumentTextIcon className="h-4 w-4" />
                 <span className="text-xs">Transaktioner</span>
               </div>
               <p className="text-xl font-display tabular-nums">{stats.parsed_rows}</p>
@@ -140,7 +140,7 @@ export default function BankFileConfirmStep({
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <Calendar className="h-4 w-4" />
+                <CalendarIcon className="h-4 w-4" />
                 <span className="text-xs">Period</span>
               </div>
               <p className="text-sm font-medium">
@@ -175,7 +175,7 @@ export default function BankFileConfirmStep({
           {bankAccounts.length > 1 && (
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
-                <Landmark className="h-4 w-4 text-muted-foreground" />
+                <BuildingLibraryIcon className="h-4 w-4 text-muted-foreground" />
                 Bankkonto
               </Label>
               <Select value={selectedAccount} onValueChange={setSelectedAccount}>
@@ -202,11 +202,11 @@ export default function BankFileConfirmStep({
           {accountMatch && parseResult.account && matchedAccount && (
             <div className="space-y-1">
               {bankAccounts.length <= 1 && (
-                <p className="flex items-center gap-2 text-sm font-medium">
-                  <Landmark className="h-4 w-4 text-muted-foreground" />
+                <div className="flex items-center gap-2 text-sm font-medium">
+                  <BuildingLibraryIcon className="h-4 w-4 text-muted-foreground" />
                   <span className="font-mono">{matchedAccount.account_number}</span>
                   {matchedAccount.account_name}
-                </p>
+                </div>
               )}
               <p className="text-xs text-muted-foreground">
                 {t('import_file_account_matched', {
@@ -221,7 +221,7 @@ export default function BankFileConfirmStep({
           {/* Additional info */}
           {refsCount > 0 && (
             <div className="flex items-center gap-2 text-xs text-muted-foreground">
-              <Link2 className="h-3 w-3" />
+              <LinkIcon className="h-3 w-3" />
               {refsCount} med OCR/referens
             </div>
           )}
@@ -242,7 +242,7 @@ export default function BankFileConfirmStep({
 
       {error && (
         <div className="p-4 bg-destructive/10 border border-destructive/20 rounded-lg flex gap-3">
-          <AlertCircle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+          <ExclamationCircleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
           <p className="text-sm text-muted-foreground">{error}</p>
         </div>
       )}
@@ -250,7 +250,7 @@ export default function BankFileConfirmStep({
       {/* Actions */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack} disabled={isLoading}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
         <Button
@@ -267,7 +267,7 @@ export default function BankFileConfirmStep({
             'Importerar...'
           ) : (
             <>
-              <Play className="mr-2 h-4 w-4" />
+              <PlayIcon className="mr-2 h-4 w-4" />
               Importera {stats.parsed_rows - duplicateCount} transaktioner
             </>
           )}

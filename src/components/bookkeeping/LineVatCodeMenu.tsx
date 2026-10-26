@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Percent } from 'lucide-react'
+import { PercentBadgeIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import {
@@ -77,7 +77,7 @@ export function LineVatCodeMenu({ rule, code, onChange }: LineVatCodeMenuProps) 
           title={label}
           className={code ? 'text-foreground' : 'text-muted-foreground'}
         >
-          <Percent className="h-3.5 w-3.5" />
+          <PercentBadgeIcon className="h-3.5 w-3.5" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-72">

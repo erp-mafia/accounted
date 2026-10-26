@@ -2,7 +2,7 @@
 
 import { useTranslations, useLocale } from 'next-intl'
 import { useState, useCallback, useRef, type ChangeEvent } from 'react'
-import { Loader2, Trash2, Upload } from 'lucide-react'
+import { ArrowUpTrayIcon, SpinnerIcon, TrashIcon } from '@/components/icons'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
@@ -274,9 +274,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
             className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-60"
           >
             {isUploadingFont ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
             ) : (
-              <Upload className="h-3.5 w-3.5" />
+              <ArrowUpTrayIcon className="h-3.5 w-3.5" />
             )}
             {settings.invoice_custom_font_path ? t('font_replace') : t('font_upload')}
           </button>
@@ -288,9 +288,9 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
               className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-destructive disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isDeletingFont ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
               ) : (
-                <Trash2 className="h-3.5 w-3.5" />
+                <TrashIcon className="h-3.5 w-3.5" />
               )}
               {t('font_remove')}
             </button>

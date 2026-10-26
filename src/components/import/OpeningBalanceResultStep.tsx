@@ -2,7 +2,7 @@
 
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { CheckCircle2, XCircle, ArrowRight } from 'lucide-react'
+import { ArrowRightIcon, CheckCircleIcon, XCircleIcon } from '@/components/icons'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import type { OpeningBalanceExecuteResult } from '@/lib/import/opening-balance/types'
@@ -26,9 +26,9 @@ export default function OpeningBalanceResultStep({
       <CardHeader>
         <div className="flex items-center gap-3">
           {result.success ? (
-            <CheckCircle2 className="h-6 w-6 text-success" />
+            <CheckCircleIcon className="h-6 w-6 text-success" />
           ) : (
-            <XCircle className="h-6 w-6 text-destructive" />
+            <XCircleIcon className="h-6 w-6 text-destructive" />
           )}
           <CardTitle>
             {result.success
@@ -90,14 +90,14 @@ export default function OpeningBalanceResultStep({
               {onResumeSieImport && (
                 <Button onClick={onResumeSieImport}>
                   {t('ob_result_resume_sie')}
-                  <ArrowRight className="h-4 w-4 ml-2" />
+                  <ArrowRightIcon className="h-4 w-4 ml-2" />
                 </Button>
               )}
               {result.journal_entry_id && (
                 <Button asChild variant={onResumeSieImport ? 'outline' : 'default'}>
                   <Link href={`/bookkeeping/${result.journal_entry_id}`}>
                     Visa verifikation
-                    <ArrowRight className="h-4 w-4 ml-2" />
+                    <ArrowRightIcon className="h-4 w-4 ml-2" />
                   </Link>
                 </Button>
               )}

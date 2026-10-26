@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useLocale } from 'next-intl'
-import { Brain, Pin, Plus } from 'lucide-react'
+import { BookmarkIcon, LightBulbIcon, PlusIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -252,7 +252,7 @@ export function AgentMemoryPanel() {
         </HelpPopover>
         {canWrite && (
           <Button size="sm" className="ml-auto" onClick={() => setShowAdd((v) => !v)} disabled={adding}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+            <PlusIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden />
             Lägg till minne
           </Button>
         )}
@@ -323,7 +323,7 @@ export function AgentMemoryPanel() {
 
       {rows && rows.length === 0 && (
         <EmptyState
-          icon={Brain}
+          icon={LightBulbIcon}
           title="Inga minnen ännu"
           description="När du lär assistenten saker (eller när den noterar saker själv med ditt godkännande) dyker de upp här."
         />
@@ -349,11 +349,11 @@ export function AgentMemoryPanel() {
                     aria-label={row.is_pinned ? 'Lossa' : 'Fäst'}
                     title={row.is_pinned ? 'Lossa' : 'Fäst: minnet skickas alltid med'}
                   >
-                    <Pin className={cn('h-3.5 w-3.5', row.is_pinned && 'fill-current')} />
+                    <BookmarkIcon className={cn('h-3.5 w-3.5', row.is_pinned && 'fill-current')} />
                   </button>
                 ) : (
                   <span className="mt-0.5 shrink-0 p-1">
-                    {row.is_pinned && <Pin className="h-3.5 w-3.5 fill-current text-foreground" />}
+                    {row.is_pinned && <BookmarkIcon className="h-3.5 w-3.5 fill-current text-foreground" />}
                   </span>
                 )}
                 <div className="min-w-0 flex-1">

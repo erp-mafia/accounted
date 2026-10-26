@@ -18,7 +18,15 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { AttnLine } from '@/components/ui/attn-line'
 import { needsUnderlagPrompt, templateVatMismatch, vatDisagrees, vatTreatmentAfterAccountChange } from '@/lib/transactions/underlag-read'
 import { linkDocuments, formatFailedDocumentNames } from '@/lib/documents/link-documents'
-import { ArrowUpRight, ArrowDownRight, Check, Paperclip, ChevronDown, ChevronUp, Inbox } from 'lucide-react'
+import {
+  ArrowDownRightIcon,
+  ArrowUpRightIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  InboxIcon,
+  PaperClipIcon,
+} from '@/components/icons'
 import { resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 import { accountProposal, businessAccount, carriedCategory, categorizeBodyFor, inReverseChargeBox, PROPOSAL_REVERSE_CHARGE_KINDS, reverseChargeBoxDispute, reverseChargeBoxesOf, reverseChargeBoxNumber, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal } from '@/lib/bookkeeping/proposal'
@@ -898,9 +906,9 @@ export default function QuickReviewDialog({
             className={`h-9 w-9 rounded-full flex items-center justify-center flex-shrink-0 ${isIncome ? 'text-success' : 'text-destructive'}`}
           >
             {isIncome ? (
-              <ArrowUpRight className="h-4 w-4" />
+              <ArrowUpRightIcon className="h-4 w-4" />
             ) : (
-              <ArrowDownRight className="h-4 w-4" />
+              <ArrowDownRightIcon className="h-4 w-4" />
             )}
           </div>
           <div className="flex-1 min-w-0">
@@ -1204,7 +1212,7 @@ export default function QuickReviewDialog({
             className="flex items-center justify-between w-full px-3 py-2.5 text-sm hover:bg-secondary/60 transition-colors"
           >
             <div className="flex items-center gap-2">
-              <Paperclip className="h-4 w-4 text-muted-foreground" />
+              <PaperClipIcon className="h-4 w-4 text-muted-foreground" />
               <span className="font-medium">{t('doc_label')}</span>
               {attachedCount > 0 && (
                 <span className="text-xs text-muted-foreground">
@@ -1213,9 +1221,9 @@ export default function QuickReviewDialog({
               )}
             </div>
             {showUploadZone ? (
-              <ChevronUp className="h-4 w-4 text-muted-foreground" />
+              <ChevronUpIcon className="h-4 w-4 text-muted-foreground" />
             ) : (
-              <ChevronDown className="h-4 w-4 text-muted-foreground" />
+              <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
             )}
           </button>
           {showUploadZone && (
@@ -1250,7 +1258,7 @@ export default function QuickReviewDialog({
                 onClick={() => setInboxPickerOpen(true)}
                 className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-muted-foreground/25 px-3 py-2 text-[13px] text-muted-foreground transition-colors duration-150 hover:border-primary/50 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
               >
-                <Inbox className="h-4 w-4" />
+                <InboxIcon className="h-4 w-4" />
                 <span>{t('doc_pick_existing_inline')}</span>
               </button>
             </div>
@@ -1292,7 +1300,7 @@ export default function QuickReviewDialog({
                 underlagState.busy
               }
             >
-              <Check className="mr-2 h-4 w-4" />
+              <CheckIcon className="mr-2 h-4 w-4" />
               {isProcessing ? t('booking') : rateLoading ? t('fetching_rate') : bookingWithoutUnderlag ? t('book_without_underlag') : t('book')}
             </Button>
           </DialogFooter>

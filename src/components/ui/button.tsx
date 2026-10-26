@@ -1,7 +1,7 @@
 import * as React from "react"
 import { Slot } from "@radix-ui/react-slot"
 import { cva, type VariantProps } from "class-variance-authority"
-import { Loader2 } from "lucide-react"
+import { SpinnerIcon } from '@/components/icons'
 import { cn } from "@/lib/utils"
 
 // Buttons are pills (radius 99px): a deliberate app-wide divergence from the
@@ -58,7 +58,7 @@ export interface ButtonProps
   asChild?: boolean
   /** Shows the spinner and disables the button while an action runs. The
    *  button owns the spinner's size and spacing; call sites never render
-   *  their own Loader2 inside a Button. */
+   *  their own SpinnerIcon inside a Button. */
   loading?: boolean
 }
 
@@ -93,7 +93,7 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
           children
         ) : (
           <>
-            <Loader2
+            <SpinnerIcon
               className={cn(
                 "h-3.5 w-3.5 shrink-0 animate-spin",
                 !loading && "hidden",

@@ -14,7 +14,7 @@ import { TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/componen
 import { useUrlSort } from '@/lib/hooks/use-url-sort'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { Plus, Users, Lock } from 'lucide-react'
+import { LockClosedIcon, PlusIcon, UsersIcon } from '@/components/icons'
 import { EmptyCustomers, EmptyState } from '@/components/ui/empty-state'
 import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { cn } from '@/lib/utils'
@@ -243,9 +243,9 @@ function CustomersPageInner() {
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? (
-                  <Plus className="mr-2 h-4 w-4" />
+                  <PlusIcon className="mr-2 h-4 w-4" />
                 ) : (
-                  <Lock className="mr-2 h-4 w-4" />
+                  <LockClosedIcon className="mr-2 h-4 w-4" />
                 )}
                 {t('new_customer')}
               </Button>
@@ -289,7 +289,7 @@ function CustomersPageInner() {
       ) : sortedCustomers.length === 0 ? (
         searchTerm ? (
           <EmptyState
-            icon={Users}
+            icon={UsersIcon}
             title={t('no_search_results_title')}
             description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />

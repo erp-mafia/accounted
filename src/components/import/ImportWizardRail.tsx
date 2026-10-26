@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronLeft } from 'lucide-react'
+import { ChevronLeftIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { StepRail } from '@/components/bokslut/StepRail'
 
@@ -38,7 +38,7 @@ export function ImportWizardRail<S extends string>({
           onClick={onBack}
           className="inline-flex shrink-0 items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground pointer-coarse:min-h-10"
         >
-          <ChevronLeft className="h-3.5 w-3.5" aria-hidden="true" />
+          <ChevronLeftIcon className="h-3.5 w-3.5" aria-hidden="true" />
           {t('back_to_choices')}
         </button>
       )}

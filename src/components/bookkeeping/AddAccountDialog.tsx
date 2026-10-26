@@ -14,7 +14,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
 import { classifyAccountClient as classifyAccount } from '@/lib/bookkeeping/account-classifier-client'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
@@ -201,7 +201,7 @@ export function AddAccountDialog({
         <div className="space-y-4 py-2">
           {isBASMatch && (
             <div className="flex items-start gap-2 rounded-lg bg-muted/30 border border-border p-3">
-              <AlertTriangle className="h-4 w-4 text-attn mt-0.5 shrink-0" />
+              <ExclamationTriangleIcon className="h-4 w-4 text-attn mt-0.5 shrink-0" />
               <p className="text-sm text-attn">
                 Kontonummer {accountNumber} finns i BAS-standarden. Använd &quot;BAS-katalog&quot;-fliken för att aktivera standardkonton istället.
               </p>

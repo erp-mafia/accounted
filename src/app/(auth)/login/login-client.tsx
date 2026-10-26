@@ -12,14 +12,14 @@ import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
 import { AttnLine } from '@/components/ui/attn-line'
 import {
-  Mail,
-  ArrowLeft,
-  KeyRound,
-  ExternalLink,
-  CircleAlert,
-  Eye,
-  EyeOff,
-} from 'lucide-react'
+  ArrowLeftIcon,
+  ArrowTopRightOnSquareIcon,
+  EnvelopeIcon,
+  ExclamationCircleIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  KeyIcon,
+} from '@/components/icons'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
@@ -476,7 +476,7 @@ export function LoginClient({
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <Mail className="h-7 w-7 text-primary" />
+              <EnvelopeIcon className="h-7 w-7 text-primary" />
             </div>
           </div>
 
@@ -508,7 +508,7 @@ export function LoginClient({
                   {tAuth(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
                     provider: webmailHint.name,
                   })}
-                  <ExternalLink className="ml-2 h-4 w-4" />
+                  <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
                 </a>
               </Button>
             )}
@@ -520,7 +520,7 @@ export function LoginClient({
                 setShowResetPassword(false)
               }}
             >
-              <ArrowLeft className="mr-2 h-4 w-4" />
+              <ArrowLeftIcon className="mr-2 h-4 w-4" />
               {tCommon('back')}
             </Button>
           </div>
@@ -537,7 +537,7 @@ export function LoginClient({
           <div className="text-center mb-10">
             <div className="flex justify-center mb-4">
               <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-                <KeyRound className="h-7 w-7 text-primary" />
+                <KeyIcon className="h-7 w-7 text-primary" />
               </div>
             </div>
             <h1 className="text-2xl tracking-tight">{tAuth('reset_title')}</h1>
@@ -595,7 +595,7 @@ export function LoginClient({
             className="w-full mt-4 text-muted-foreground"
             onClick={closeResetForm}
           >
-            <ArrowLeft className="mr-2 h-4 w-4" />
+            <ArrowLeftIcon className="mr-2 h-4 w-4" />
             {tAuth('back_to_login')}
           </Button>
         </div>
@@ -741,18 +741,18 @@ export function LoginClient({
                       aria-pressed={showPassword}
                     >
                       {showPassword ? (
-                        <EyeOff className="h-4 w-4" aria-hidden="true" />
+                        <EyeSlashIcon className="h-4 w-4" aria-hidden="true" />
                       ) : (
-                        <Eye className="h-4 w-4" aria-hidden="true" />
+                        <EyeIcon className="h-4 w-4" aria-hidden="true" />
                       )}
                     </button>
                   </div>
                   {formLevelError && (
-                    <p
+                    <div
                       role="alert"
                       className="animate-fade-in flex items-start gap-2 pt-1 text-[13px] leading-5 text-destructive"
                     >
-                      <CircleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                      <ExclamationCircleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                       <span>
                         {formLevelError.message}
                         {formLevelError.kind === 'invalid_credentials' && failedAttempts >= 2 && (
@@ -768,7 +768,7 @@ export function LoginClient({
                           </>
                         )}
                       </span>
-                    </p>
+                    </div>
                   )}
                 </div>
                 <TurnstileChallenge
@@ -807,7 +807,7 @@ export function LoginClient({
                       loading={isLoading}
                     >
                       {!isLoading && (
-                        <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                        <KeyIcon className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
                       )}
                       {tAuth('continue_with_provider', { provider: 'SAML' })}
                     </Button>
@@ -823,7 +823,7 @@ export function LoginClient({
                   loading={isLoading}
                 >
                   {!isLoading && (
-                    <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <KeyIcon className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
                   )}
                   {tAuth('continue_with_provider', { provider: 'SAML' })}
                 </Button>
@@ -881,7 +881,7 @@ export function LoginClient({
                     className="w-full gap-2"
                     onClick={() => switchMethod('email')}
                   >
-                    <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <EnvelopeIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     {tAuth('method_email_chip')}
                   </Button>
                 )}
@@ -894,7 +894,7 @@ export function LoginClient({
                     loading={isLoading}
                   >
                     {!isLoading && (
-                      <KeyRound className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                      <KeyIcon className="mr-2 h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     )}
                     {tAuth('continue_with_provider', { provider: 'SAML' })}
                   </Button>

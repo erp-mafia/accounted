@@ -40,18 +40,18 @@ import { createClient } from '@/lib/supabase/client'
 import { collectPages } from '@/lib/lists/collect-pages'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
-  ClipboardCheck,
-  Bot,
-  Check,
-  ChevronRight,
-  Loader2,
-  Lock,
-  MessageSquare,
-  AlertTriangle,
-  X,
-  ArrowDownUp,
-  Gavel,
-} from 'lucide-react'
+  ArrowsUpDownIcon,
+  ChatBubbleLeftIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  ClipboardDocumentCheckIcon,
+  CpuChipIcon,
+  ExclamationTriangleIcon,
+  LockClosedIcon,
+  ScaleIcon,
+  SpinnerIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import type {
   PendingOperation,
   PendingOperationRejectionCategory,
@@ -252,7 +252,7 @@ function PeriodLockBanner({ period }: { period: PeriodStatusShape }) {
   const lockedThrough = period.lock_date ? formatDate(period.lock_date) : null
   return (
     <div className="flex items-start gap-2 rounded-lg border border-destructive/40 bg-destructive/5 px-3 py-2 text-sm">
-      <Lock className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+      <LockClosedIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
       <div className="flex-1">
         <p className="font-medium text-destructive">
           {period.status === 'closed'
@@ -854,7 +854,7 @@ export default function PendingOperationsPage() {
       {conversationFilter && (
         <div className="flex items-center justify-between rounded-lg border bg-muted/30 px-3 py-2 text-sm">
           <div className="flex items-center gap-2">
-            <MessageSquare className="h-4 w-4 text-muted-foreground" />
+            <ChatBubbleLeftIcon className="h-4 w-4 text-muted-foreground" />
             <span>
               {t('conversation_filter_label')}{' '}
               <span className="font-mono">#{conversationFilter.slice(0, 8)}</span>
@@ -898,14 +898,14 @@ export default function PendingOperationsPage() {
             aria-pressed={sortOrder === 'asc'}
             title={sortOrder === 'asc' ? t('sort_oldest_first') : t('sort_newest_first')}
           >
-            <ArrowDownUp className="h-3.5 w-3.5" aria-hidden="true" />
+            <ArrowsUpDownIcon className="h-3.5 w-3.5" aria-hidden="true" />
             {sortOrder === 'asc' ? t('sort_oldest_first') : t('sort_newest_first')}
           </Button>
         )}
         {/* Quiet cue that a background reconcile is running (post-action or
             realtime): the list itself never swaps to a spinner for it. */}
         {isRefreshing && !isLoading && (
-          <Loader2
+          <SpinnerIcon
             className="h-3.5 w-3.5 animate-spin text-muted-foreground"
             aria-label={t('refreshing')}
           />
@@ -976,7 +976,7 @@ export default function PendingOperationsPage() {
           activeTab === 'pending' ? (
             /* Concept empty state: the queue is the good news. */
             <div className="flex flex-col items-center px-6 py-16 text-center">
-              <Check className="h-9 w-9 text-success" strokeWidth={2.5} aria-hidden />
+              <CheckIcon className="h-9 w-9 text-success" strokeWidth={2} aria-hidden />
               <p className="mt-3 font-display text-xl">{t('empty_pending_title')}</p>
               <p className="mt-1.5 max-w-[44ch] text-[13px] text-muted-foreground">
                 {t('empty_pending_description')}
@@ -984,7 +984,7 @@ export default function PendingOperationsPage() {
             </div>
           ) : (
             <DataListEmpty
-              icon={<ClipboardCheck className="h-6 w-6" />}
+              icon={<ClipboardDocumentCheckIcon className="h-6 w-6" />}
               title={t('empty_history_title')}
               description={t('empty_finished_description')}
             />
@@ -1043,7 +1043,7 @@ export default function PendingOperationsPage() {
                       className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"
                       aria-hidden
                     >
-                      {isAgent ? <Bot className="h-3.5 w-3.5" /> : <ClipboardCheck className="h-3.5 w-3.5" />}
+                      {isAgent ? <CpuChipIcon className="h-3.5 w-3.5" /> : <ClipboardDocumentCheckIcon className="h-3.5 w-3.5" />}
                     </span>
                     {/* Chips mark exceptions: an approved operation is the
                         normal outcome and reads as muted text. */}
@@ -1086,7 +1086,7 @@ export default function PendingOperationsPage() {
                         </p>
                       )}
                     </div>
-                    <ChevronRight
+                    <ChevronRightIcon
                       className={cn(
                         'mt-1 h-3.5 w-3.5 shrink-0 text-muted-foreground transition-opacity',
                         detailOpId === op.id ? 'opacity-100' : HOVER_REVEAL_CLASS,
@@ -1149,11 +1149,11 @@ export default function PendingOperationsPage() {
                     aria-hidden
                   >
                     {isCollectionsBatch ? (
-                      <Gavel className="h-3.5 w-3.5" />
+                      <ScaleIcon className="h-3.5 w-3.5" />
                     ) : isAgent ? (
-                      <Bot className="h-3.5 w-3.5" />
+                      <CpuChipIcon className="h-3.5 w-3.5" />
                     ) : (
-                      <ClipboardCheck className="h-3.5 w-3.5" />
+                      <ClipboardDocumentCheckIcon className="h-3.5 w-3.5" />
                     )}
                   </span>
                   <span className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
@@ -1173,7 +1173,7 @@ export default function PendingOperationsPage() {
                         className="flex min-w-[35%] flex-1 items-center gap-1 text-[12.5px] text-attn"
                         title={complianceWarningText(complianceWarning)}
                       >
-                        <AlertTriangle className="h-3 w-3 shrink-0" aria-hidden />
+                        <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
                         <span className="min-w-0 truncate">{complianceWarningText(complianceWarning)}</span>
                       </span>
                     )}
@@ -1217,7 +1217,7 @@ export default function PendingOperationsPage() {
                         }
                       }}
                     >
-                      <Check className="h-4 w-4" />
+                      <CheckIcon className="h-4 w-4" />
                     </Button>
                     <Button
                       size="icon-sm"
@@ -1231,7 +1231,7 @@ export default function PendingOperationsPage() {
                         openRejectDialog(op)
                       }}
                     >
-                      <X className="h-4 w-4" />
+                      <XMarkIcon className="h-4 w-4" />
                     </Button>
                   </span>
                 </div>

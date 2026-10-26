@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -297,7 +297,7 @@ export function PairRow({
                   aria-label={t('v2_more')}
                   disabled={anyBusy}
                 >
-                  <MoreHorizontal className="h-4 w-4" />
+                  <EllipsisHorizontalIcon className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

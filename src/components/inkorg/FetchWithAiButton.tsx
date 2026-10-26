@@ -1,7 +1,14 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Bot, Check, ChevronDown, Globe, Monitor, type LucideIcon } from 'lucide-react'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ComputerDesktopIcon,
+  CpuChipIcon,
+  GlobeAltIcon,
+  type Icon as AppIcon,
+} from '@/components/icons'
 import { Button, type ButtonProps } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
@@ -11,7 +18,7 @@ import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
 import { AI_CLIENTS, aiConnectAction, openAiConnector, pickConnectedAiClient, type AiClient } from '@/lib/onboarding/ai-clients'
 
-const TARGET_ICONS: Record<ClaudeTarget, LucideIcon> = { web: Globe, desktop: Monitor, cowork: Bot }
+const TARGET_ICONS: Record<ClaudeTarget, AppIcon> = { web: GlobeAltIcon, desktop: ComputerDesktopIcon, cowork: CpuChipIcon }
 
 function Logo({ src }: { src: string }) {
   // eslint-disable-next-line @next/next/no-img-element
@@ -108,7 +115,7 @@ export function FetchWithAiButton({
       <DropdownMenuTrigger asChild>
         <Button variant={variant} size={size} className={className}>
           {label}
-          <ChevronDown aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
+          <ChevronDownIcon aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="min-w-64" aria-label={tSkills('start_where')}>
@@ -128,7 +135,7 @@ export function FetchWithAiButton({
                 <span className="block text-[13px] text-foreground">{tSkills(`open_in_${where}`)}</span>
                 <span className="block text-[11px] leading-snug text-muted-foreground">{tSkills(`open_in_${where}_note`)}</span>
               </span>
-              {where === target && <Check aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
+              {where === target && <CheckIcon aria-hidden="true" className="mt-0.5 h-3.5 w-3.5 shrink-0" />}
             </DropdownMenuItem>
           )
         })}

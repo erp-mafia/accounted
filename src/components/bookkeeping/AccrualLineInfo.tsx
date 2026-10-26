@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { CalendarClock } from 'lucide-react'
+import { CalendarDaysIcon } from '@/components/icons'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import {
   AccrualReplanDialog,
@@ -96,7 +96,7 @@ export function AccrualLineInfo({ start, end, balanceAccount, schedule, canWrite
   const to = (schedule?.period_end ?? end).slice(0, 7)
   return (
     <span className="mt-0.5 flex flex-wrap items-center gap-1 text-xs text-muted-foreground tabular-nums">
-      <CalendarClock className="h-3 w-3 shrink-0" />
+      <CalendarDaysIcon className="h-3 w-3 shrink-0" />
       {t('line_info', { from, to })}
       {balanceAccount && ` · ${balanceAccount}`}
       {canWrite && onReplan && schedule && canReplanSchedule(schedule) && (

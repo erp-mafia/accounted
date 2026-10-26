@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
 import { BRANCH_PROVIDERS } from '@/lib/onboarding-journey/branch'
 import Question from '@/components/onboarding/journey/Question'
 import { Pill } from '../ui/Pills'
@@ -54,7 +54,7 @@ export function SourceStep({ ctx }: { ctx: BooksCtx }) {
         <p className="trust-line">{t('trust_line')}</p>
         <ul className="trust-chips">
           <li><SwedishFlag />{t('trust_region')}</li>
-          <li><Lock size={14} aria-hidden="true" />{t('trust_encryption')}</li>
+          <li><LockClosedIcon className="size-3.5" aria-hidden="true" />{t('trust_encryption')}</li>
         </ul>
       </div>
     </Question>

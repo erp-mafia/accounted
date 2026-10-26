@@ -4,7 +4,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
-import { ArrowLeft, ArrowRight, Lock } from 'lucide-react'
+import { ArrowLeftIcon, ArrowRightIcon, LockClosedIcon } from '@/components/icons'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -283,7 +283,7 @@ export default function PeriodiseringWizardPage() {
         action={
           <Button size="sm" variant="outline" asChild>
             <Link href="/bookkeeping/year-end">
-              <ArrowLeft className="mr-2 h-4 w-4" /> Tillbaka till bokslut
+              <ArrowLeftIcon className="mr-2 h-4 w-4" /> Tillbaka till bokslut
             </Link>
           </Button>
         }
@@ -306,7 +306,7 @@ export default function PeriodiseringWizardPage() {
 
       {periods !== null && periods.length === 0 && (
         <EmptyState
-          icon={Lock}
+          icon={LockClosedIcon}
           title="Inga perioder att periodisera"
           description="Periodiseringar görs efter att räkenskapsperiodens slutdatum har passerat. Det finns ingen sådan öppen period."
         />
@@ -476,7 +476,7 @@ function VacationStep({
       </Card>
       <div className="flex justify-end">
         <Button onClick={onNext}>
-          Nästa <ArrowRight className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="ml-1 h-4 w-4" />
         </Button>
       </div>
     </div>
@@ -555,7 +555,7 @@ function AuditStep({
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Nästa <ArrowRight className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="ml-1 h-4 w-4" />
         </Button>
       </div>
     </div>
@@ -654,7 +654,7 @@ function AutoStep({
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Nästa <ArrowRight className="ml-1 h-4 w-4" />
+          Nästa <ArrowRightIcon className="ml-1 h-4 w-4" />
         </Button>
       </div>
     </div>
@@ -690,7 +690,7 @@ function ManualStep({
           Tillbaka
         </Button>
         <Button onClick={onNext}>
-          Granska <ArrowRight className="ml-1 h-4 w-4" />
+          Granska <ArrowRightIcon className="ml-1 h-4 w-4" />
         </Button>
       </div>
     </div>
@@ -818,7 +818,7 @@ function ReviewStep({
         >
           {!canWrite ? (
             <>
-              <Lock className="mr-2 h-4 w-4" /> Posta alla
+              <LockClosedIcon className="mr-2 h-4 w-4" /> Posta alla
             </>
           ) : posting ? (
             'Bokför…'

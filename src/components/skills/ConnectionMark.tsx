@@ -1,6 +1,6 @@
 'use client'
 
-import { FileText, Globe, Landmark } from 'lucide-react'
+import { BuildingLibraryIcon, DocumentTextIcon, GlobeAltIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { cashAccountLogoUrl } from '@/lib/cash-accounts/labels'
@@ -13,11 +13,11 @@ function ConnectionMark({ kind }: { kind: AgentConnection }) {
   const { cashAccounts } = useCashAccounts({ enabledOnly: true })
   const bank = cashAccounts.map(cashAccountLogoUrl).find((url): url is string => !!url)
   /* eslint-disable @next/next/no-img-element */
-  if (kind === 'skatteverket') return <Landmark className="h-4 w-4" aria-hidden />
+  if (kind === 'skatteverket') return <BuildingLibraryIcon className="h-4 w-4" aria-hidden />
   if (kind === 'mail') return <GmailMark />
-  if (kind === 'bank') return bank ? <img src={bank} alt="" /> : <Landmark className="h-4 w-4" aria-hidden />
-  if (kind === 'peppol') return <FileText className="h-4 w-4" aria-hidden />
-  return <Globe className="h-4 w-4" aria-hidden />
+  if (kind === 'bank') return bank ? <img src={bank} alt="" /> : <BuildingLibraryIcon className="h-4 w-4" aria-hidden />
+  if (kind === 'peppol') return <DocumentTextIcon className="h-4 w-4" aria-hidden />
+  return <GlobeAltIcon className="h-4 w-4" aria-hidden />
   /* eslint-enable @next/next/no-img-element */
 }
 

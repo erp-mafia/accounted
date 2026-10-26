@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { cn, formatAmount } from '@/lib/utils'
 import { KONTERING_ICON_WIDTH_CLASS, konteringGridColumns } from '@/components/bookkeeping/kontering-grid'
-import { Plus, Trash2 } from 'lucide-react'
+import { PlusIcon, TrashIcon } from '@/components/icons'
 import type { BASAccount } from '@/types'
 import type { SearchableAccount } from '@/lib/bookkeeping/account-search'
 
@@ -271,7 +271,7 @@ export function KonteringLinesEditor({
               disabled={lines.length <= minLines}
               aria-label={labels.removeRow}
             >
-              <Trash2 className="h-3.5 w-3.5" />
+              <TrashIcon className="h-3.5 w-3.5" />
             </Button>
           </div>
           {readOnlyRows(index)}
@@ -302,7 +302,7 @@ export function KonteringLinesEditor({
 
       <div className="flex flex-wrap gap-2">
         <Button type="button" variant="outline" size="sm" onClick={onAdd} className={cn(!toolbar && 'w-full sm:w-auto')}>
-          <Plus className="mr-1 h-3.5 w-3.5" />
+          <PlusIcon className="mr-1 h-3.5 w-3.5" />
           {labels.addRow}
         </Button>
         {toolbar}

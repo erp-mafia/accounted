@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useId, useRef } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Printer, Settings2 } from 'lucide-react'
+import { AdjustmentsHorizontalIcon, PrinterIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { PageHeader } from '@/components/ui/page-header'
@@ -188,7 +188,7 @@ export default function KpiPage() {
                 disabled={!report || isLoadingReport}
                 title={t('print_hint')}
               >
-                <Printer className="h-3.5 w-3.5" />
+                <PrinterIcon className="h-3.5 w-3.5" />
                 {t('print')}
               </Button>
               {preferences ? (
@@ -208,7 +208,7 @@ export default function KpiPage() {
                   disabled
                   aria-describedby={prefsError ? prefsStatusId : undefined}
                 >
-                  <Settings2 className="h-3.5 w-3.5" />
+                  <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
                   {t('customize')}
                 </Button>
               )}

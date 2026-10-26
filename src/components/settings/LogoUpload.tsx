@@ -5,7 +5,7 @@ import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { FileDropzone } from '@/components/ui/file-dropzone'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, Upload, Trash2 } from 'lucide-react'
+import { ArrowUpTrayIcon, SpinnerIcon, TrashIcon } from '@/components/icons'
 import {
   SettingsGroup,
   SettingsRow,
@@ -110,7 +110,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
                   className="max-h-10 max-w-32 object-contain"
                 />
               </span>
-              {isUploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <span className="px-1">{t('logo_change')}</span>}
+              {isUploading ? <SpinnerIcon className="h-4 w-4 animate-spin" /> : <span className="px-1">{t('logo_change')}</span>}
             </FileDropzone>
             <Button
               variant="outline"
@@ -119,7 +119,7 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
               loading={isDeleting}
               className="text-muted-foreground hover:text-destructive"
             >
-              {!isDeleting && <Trash2 className="mr-2 h-3.5 w-3.5" />}
+              {!isDeleting && <TrashIcon className="mr-2 h-3.5 w-3.5" />}
               {t('logo_remove')}
             </Button>
           </>
@@ -132,9 +132,9 @@ export function LogoUpload({ logoUrl, onUpdate }: LogoUploadProps) {
             className="inline-flex min-h-10 items-center gap-2 border px-4 py-2 text-sm text-muted-foreground"
           >
             {isUploading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
             ) : (
-              <Upload className="h-4 w-4 text-muted-foreground/60" />
+              <ArrowUpTrayIcon className="h-4 w-4 text-muted-foreground/60" />
             )}
             {isUploading ? t('logo_uploading') : t('logo_pick_or_drop')}
           </FileDropzone>

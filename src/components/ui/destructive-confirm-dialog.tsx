@@ -10,7 +10,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 interface DestructiveConfirmDialogProps {
@@ -65,7 +65,7 @@ export function DestructiveConfirmDialog({
                   : 'bg-muted text-attn'
               )}
             >
-              <AlertTriangle className="h-5 w-5" />
+              <ExclamationTriangleIcon className="h-5 w-5" />
             </div>
             <div className="space-y-1">
               {/* data-ph-mask: confirm dialogs describe the object being

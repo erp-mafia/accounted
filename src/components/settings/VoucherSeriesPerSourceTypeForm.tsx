@@ -5,7 +5,7 @@ import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
 import {
   SettingsGroup,
   SettingsReveal,
@@ -215,7 +215,7 @@ export function VoucherSeriesPerSourceTypeForm({ settings, onSettingsUpdated }: 
         aria-expanded={showAll}
         className="flex items-center gap-1.5 px-1 py-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
       >
-        <ChevronDown
+        <ChevronDownIcon
           aria-hidden="true"
           className={cn('h-3.5 w-3.5 transition-transform duration-150', showAll && 'rotate-180')}
         />

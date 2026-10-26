@@ -20,7 +20,18 @@ import { Badge } from '@/components/ui/badge'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate, cn, isValidExchangeRate, chunk } from '@/lib/utils'
-import { Search, X, Plus, Check, AlertTriangle, Link2, Loader2, ClipboardPaste, ChevronDown, FileUp } from 'lucide-react'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  ClipboardDocumentIcon,
+  DocumentArrowUpIcon,
+  ExclamationTriangleIcon,
+  LinkIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  SpinnerIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
 import {
   PASTE_OPEN_INVOICES_MAX,
@@ -770,7 +781,7 @@ export default function MatchAllocationDialog({
               aria-live="polite"
             >
               <div className="flex items-start gap-2">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
+                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
                 <div className="min-w-0 flex-1 space-y-1 text-sm">
                   <p className="font-medium text-attn">
                     {explainingAcknowledged
@@ -826,7 +837,7 @@ export default function MatchAllocationDialog({
                       loading={linking}
                       className="sm:flex-1"
                     >
-                      {!linking && <Link2 className="mr-2 h-4 w-4" />}
+                      {!linking && <LinkIcon className="mr-2 h-4 w-4" />}
                       {t('already_booked_link', { labels: explainingLabels })}
                     </Button>
                   ) : (
@@ -858,9 +869,9 @@ export default function MatchAllocationDialog({
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
               {isSearching ? (
-                <Loader2 className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
+                <SpinnerIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 animate-spin text-muted-foreground" />
               ) : (
-                <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                <MagnifyingGlassIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               )}
               <Input
                 value={search}
@@ -876,7 +887,7 @@ export default function MatchAllocationDialog({
               aria-expanded={pasteOpen}
               aria-controls="match-allocation-paste"
             >
-              <ClipboardPaste className="mr-2 h-4 w-4" />
+              <ClipboardDocumentIcon className="mr-2 h-4 w-4" />
               {t('paste_toggle')}
             </Button>
           </div>
@@ -919,7 +930,7 @@ export default function MatchAllocationDialog({
                       disabled={pasting || submitting || settingsLoading}
                       title={t('paste_beslut_help')}
                     >
-                      <FileUp className="mr-2 h-4 w-4" />
+                      <DocumentArrowUpIcon className="mr-2 h-4 w-4" />
                       {t('paste_beslut_file')}
                     </Button>
                   </>
@@ -958,7 +969,7 @@ export default function MatchAllocationDialog({
                   onClick={() => setPasteResult(null)}
                   aria-label={t('paste_close')}
                 >
-                  <X className="h-4 w-4" />
+                  <XMarkIcon className="h-4 w-4" />
                 </Button>
               </div>
               {pasteResult.skipped.length > 0 && (
@@ -1003,7 +1014,7 @@ export default function MatchAllocationDialog({
                 aria-expanded={pickedExpanded}
                 className="flex min-w-0 items-center gap-2 rounded-sm text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
-                <ChevronDown
+                <ChevronDownIcon
                   className={cn('h-4 w-4 shrink-0 transition-transform duration-150', !pickedExpanded && '-rotate-90')}
                 />
                 <span className="truncate tabular-nums">
@@ -1047,7 +1058,7 @@ export default function MatchAllocationDialog({
                           <span className="text-sm font-medium tabular-nums">{c.label}</span>
                           {isSelected && (
                             <Badge variant="secondary" className="gap-1">
-                              <Check className="h-3 w-3" />
+                              <CheckIcon className="h-3 w-3" />
                               {t('selected_badge')}
                             </Badge>
                           )}
@@ -1066,7 +1077,7 @@ export default function MatchAllocationDialog({
                             settled. A hint, not a block: prepayments exist. */}
                         {c.invoiceDate && c.invoiceDate > transaction.date && (
                           <Badge variant="warning" className="gap-1">
-                            <AlertTriangle className="h-3 w-3" />
+                            <ExclamationTriangleIcon className="h-3 w-3" />
                             {t('invoiced_after_payment_badge', { date: formatDate(c.invoiceDate) })}
                           </Badge>
                         )}
@@ -1089,7 +1100,7 @@ export default function MatchAllocationDialog({
                               onClick={() => removeAllocation(c.id)}
                               aria-label={t('remove_aria', { label: c.label })}
                             >
-                              <X className="h-4 w-4" />
+                              <XMarkIcon className="h-4 w-4" />
                             </Button>
                           </div>
                           {/* FX hint: appears only for cross-currency rows
@@ -1117,7 +1128,7 @@ export default function MatchAllocationDialog({
                           variant="outline"
                           onClick={() => addAllocation(c)}
                         >
-                          <Plus className="mr-1 h-3.5 w-3.5" />
+                          <PlusIcon className="mr-1 h-3.5 w-3.5" />
                           {t('add_button')}
                         </Button>
                       )}
@@ -1159,7 +1170,7 @@ export default function MatchAllocationDialog({
             </div>
             {overLimit && (
               <div className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0" />
                 <p>
                   {t('over_limit_warning', { max: MAX_BANK_ROW_SPLIT, excess: pickedCount - MAX_BANK_ROW_SPLIT })}
                 </p>
@@ -1167,7 +1178,7 @@ export default function MatchAllocationDialog({
             )}
             {overshoot ? (
               <div className="flex items-center gap-2 rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0" />
                 <p>
                   {t('overshoot_warning', {
                     excess: formatCurrency(Math.abs(leftover), transaction.currency),
@@ -1176,7 +1187,7 @@ export default function MatchAllocationDialog({
               </div>
             ) : balanced ? (
               <div className="flex items-center gap-2 rounded-lg bg-success/10 p-3 text-sm text-success">
-                <Check className="h-4 w-4 flex-shrink-0" />
+                <CheckIcon className="h-4 w-4 flex-shrink-0" />
                 <p>{t('balanced_message')}</p>
               </div>
             ) : undershoot && Object.keys(drafts).length > 0 ? (
@@ -1185,7 +1196,7 @@ export default function MatchAllocationDialog({
               // breaks. The user must allocate the full amount or remove
               // selections. PR #607 round-1 review fix.
               <div className="flex items-start gap-2 rounded-lg bg-muted/30 p-3 text-sm text-attn">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                 <p>
                   {t('undershoot_warning', {
                     amount: formatCurrency(leftover, transaction.currency),

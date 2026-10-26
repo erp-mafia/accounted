@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { KeyRound, Link2, ShoppingCart } from 'lucide-react'
+import { KeyIcon, LinkIcon, ShoppingCartIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -51,7 +51,7 @@ export default function WooCommerceSettingsPanel() {
     <FeedConnectorPanel<WooCommerceConnectionStatusView, WooSyncPayload>
       extensionId="woocommerce"
       namespace="woocommerce"
-      icon={ShoppingCart}
+      icon={ShoppingCartIcon}
       request={wooRequest}
       syncTimeoutMs={WOO_SYNC_TIMEOUT_MS}
       maxBackfillYears={MAX_BACKFILL_YEARS}
@@ -209,7 +209,7 @@ export default function WooCommerceSettingsPanel() {
                     disabled={!storeUrl || !consumerKey || !consumerSecret}
                     loading={connecting}
                   >
-                    {!connecting && <KeyRound className="mr-2 h-4 w-4" />}
+                    {!connecting && <KeyIcon className="mr-2 h-4 w-4" />}
                     {connecting ? tf('connecting') : t('manual_connect')}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => setManualMode(false)} disabled={connecting}>
@@ -221,7 +221,7 @@ export default function WooCommerceSettingsPanel() {
               <div>
                 <div className="flex items-center gap-2">
                   <Button onClick={handleConnect} disabled={!storeUrl} loading={connecting}>
-                    {!connecting && <Link2 className="mr-2 h-4 w-4" />}
+                    {!connecting && <LinkIcon className="mr-2 h-4 w-4" />}
                     {connecting ? tf('connecting') : t('connect')}
                   </Button>
                   <Button variant="ghost" size="sm" onClick={() => setManualMode(true)} disabled={connecting}>

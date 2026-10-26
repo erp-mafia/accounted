@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -181,7 +181,7 @@ export function ForaReportDialog({ open, onOpenChange, year, month }: ForaReport
             <ul className="space-y-2">
               {state.issues.map((issue, i) => (
                 <li key={`${issue.code}-${i}`} className="flex items-start gap-2 text-sm text-muted-foreground">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                  <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   <span>{issueText(issue)}</span>
                 </li>
               ))}
@@ -226,7 +226,7 @@ export function ForaReportDialog({ open, onOpenChange, year, month }: ForaReport
               <ul className="space-y-2">
                 {state.report.warnings.map((w, i) => (
                   <li key={`${w.code}-${i}`} className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
-                    <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                    <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                     <span>{warningText(w)}</span>
                   </li>
                 ))}

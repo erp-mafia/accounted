@@ -5,7 +5,13 @@ import { createPortal } from 'react-dom'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Upload, FileText, ImageIcon, X, Loader2 } from 'lucide-react'
+import {
+  ArrowUpTrayIcon,
+  DocumentTextIcon,
+  PhotoIcon,
+  SpinnerIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 import { DOCUMENT_UPLOAD_ACCEPT, isAllowedDocumentFile } from '@/lib/documents/upload-types'
 import { addUploads, finishUpload, removeUpload, type UploadedFilesUpdate } from './upload-list'
@@ -354,7 +360,7 @@ export default function DocumentUploadZone({
             style={{ top: surfaceRect.top, left: surfaceRect.left, width: surfaceRect.width, height: surfaceRect.height }}
           >
             <div className="flex flex-col items-center gap-2 text-center">
-              <Upload className="h-8 w-8 text-primary" />
+              <ArrowUpTrayIcon className="h-8 w-8 text-primary" />
               <p className="text-sm font-medium text-foreground">{t('drop_surface_prompt')}</p>
               <p className="text-xs text-muted-foreground">{t('format_hint')}</p>
             </div>
@@ -386,7 +392,7 @@ export default function DocumentUploadZone({
         />
 
         <div className={compact ? 'flex items-center justify-center gap-2' : 'space-y-2'}>
-          <Upload className={compact ? 'h-4 w-4 text-muted-foreground' : 'mx-auto h-8 w-8 text-muted-foreground'} />
+          <ArrowUpTrayIcon className={compact ? 'h-4 w-4 text-muted-foreground' : 'mx-auto h-8 w-8 text-muted-foreground'} />
           <div>
             <p className={compact ? 'text-sm text-muted-foreground' : 'text-sm font-medium'}>
               {compact ? t('compact_prompt') : t('prompt')}
@@ -409,9 +415,9 @@ export default function DocumentUploadZone({
               className="flex min-w-0 items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50"
             >
               {isImageType(file.file.type) ? (
-                <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
               ) : (
-                <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
               )}
               <TruncatedFileName fileName={file.fileName} />
               <span className="text-xs text-muted-foreground shrink-0">
@@ -419,7 +425,7 @@ export default function DocumentUploadZone({
               </span>
 
               {file.status === 'uploading' && (
-                <Loader2 className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
+                <SpinnerIcon className="h-3.5 w-3.5 animate-spin text-primary shrink-0" />
               )}
               {file.status === 'uploaded' && (
                 <span className="text-xs text-muted-foreground shrink-0">
@@ -450,7 +456,7 @@ export default function DocumentUploadZone({
                 // locks it while it links what the list held when it began.
                 disabled={disabled || file.status === 'uploading'}
               >
-                <X className="h-3 w-3" />
+                <XMarkIcon className="h-3 w-3" />
               </Button>
             </div>
           ))}

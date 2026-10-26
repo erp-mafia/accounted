@@ -1,6 +1,6 @@
 'use client'
 
-import { FileText, X } from 'lucide-react'
+import { DocumentTextIcon, XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 
 /**
@@ -21,7 +21,7 @@ export default function UnderlagFileRow({
 }) {
   return (
     <div className="flex min-w-0 items-center gap-2 rounded-sm bg-muted/50 px-2 py-1.5 text-sm">
-      <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span data-ph-mask="" className="min-w-0 flex-1 truncate" title={name}>
         {name}
       </span>
@@ -33,7 +33,7 @@ export default function UnderlagFileRow({
         disabled={disabled}
         onClick={onRemove}
       >
-        <X className="h-3 w-3" />
+        <XMarkIcon className="h-3 w-3" />
       </Button>
     </div>
   )

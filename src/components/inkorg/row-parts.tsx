@@ -1,5 +1,5 @@
 import type { ReactNode } from 'react'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRightIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 /**
@@ -49,6 +49,6 @@ export function RowTitle({ name, meta, muted = false }: { name: ReactNode; meta?
 
 export function RowChevron() {
   return (
-    <ChevronRight aria-hidden="true" className="hidden h-4 w-4 text-muted-foreground sm:block" />
+    <ChevronRightIcon aria-hidden="true" className="hidden h-4 w-4 text-muted-foreground sm:block" />
   )
 }

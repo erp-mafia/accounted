@@ -16,7 +16,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -1196,7 +1196,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           </DialogHeader>
           {approveOverride && approveOverride.length > 0 && (
             <div className="flex items-start gap-2 rounded-lg border border-border p-3 text-xs">
-              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
+              <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-warning" />
               <ul className="space-y-1">
                 {approveOverride.map((reason, i) => (
                   <li key={i}>{reason}</li>

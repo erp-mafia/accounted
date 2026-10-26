@@ -9,7 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { Trash2, Plus } from 'lucide-react'
+import { PlusIcon, TrashIcon } from '@/components/icons'
 import { convertLibraryToBookingTemplate, applyTemplate, templateShareLines } from '@/lib/bookkeeping/template-library'
 import { deriveLibraryCategory } from '@/lib/bookkeeping/template-groups'
 import { InfoTooltip } from '@/components/ui/info-tooltip'
@@ -255,7 +255,7 @@ export function TemplateForm({
                   disabled={lines.length <= 2}
                   className="shrink-0"
                 >
-                  <Trash2 className="h-3.5 w-3.5" />
+                  <TrashIcon className="h-3.5 w-3.5" />
                 </Button>
               </div>
               <div className="flex items-center gap-2">
@@ -311,7 +311,7 @@ export function TemplateForm({
             </div>
           )})}
           <Button type="button" variant="outline" size="sm" onClick={addLine}>
-            <Plus className="h-3 w-3 mr-1" />
+            <PlusIcon className="h-3 w-3 mr-1" />
             {t('add_line')}
           </Button>
         </div>

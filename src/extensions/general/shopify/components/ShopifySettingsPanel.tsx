@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { KeyRound, ShoppingBag } from 'lucide-react'
+import { KeyIcon, ShoppingBagIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -47,7 +47,7 @@ export default function ShopifySettingsPanel() {
     <FeedConnectorPanel<ConnectionInfo, ShopifySyncPayload>
       extensionId="shopify"
       namespace="shopify"
-      icon={ShoppingBag}
+      icon={ShoppingBagIcon}
       request={shopifyRequest}
       syncTimeoutMs={SHOPIFY_SYNC_TIMEOUT_MS}
       maxBackfillYears={MAX_BACKFILL_YEARS}
@@ -140,7 +140,7 @@ export default function ShopifySettingsPanel() {
               disabled={!shopDomain || !clientId || !clientSecret}
               loading={connecting}
             >
-              {!connecting && <KeyRound className="mr-2 h-4 w-4" />}
+              {!connecting && <KeyIcon className="mr-2 h-4 w-4" />}
               {connecting ? tf('connecting') : t('connect')}
             </Button>
           </div>

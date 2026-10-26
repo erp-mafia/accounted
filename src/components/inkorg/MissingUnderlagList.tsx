@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { FileQuestion } from 'lucide-react'
+import { DocumentMagnifyingGlassIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -116,7 +116,7 @@ export function MissingUnderlagList({
     return (
       <div className="space-y-8">
         <EmptyState
-          icon={FileQuestion}
+          icon={DocumentMagnifyingGlassIcon}
           title={portal ? t('portal_empty_title', { vendor: portal }) : t('missing_empty_title')}
           description={portal ? t('portal_empty_body', { vendor: portal }) : t('missing_empty_body')}
         />

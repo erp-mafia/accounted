@@ -2,7 +2,7 @@
 
 import React, { useState, useCallback, useMemo } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight, AlertCircle } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, ExclamationCircleIcon } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatAmount, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -100,9 +100,9 @@ export function ReportRowExpansion({
           className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
         >
           {expanded ? (
-            <ChevronDown className="h-4 w-4" />
+            <ChevronDownIcon className="h-4 w-4" />
           ) : (
-            <ChevronRight className="h-4 w-4" />
+            <ChevronRightIcon className="h-4 w-4" />
           )}
         </button>
       </td>
@@ -175,9 +175,9 @@ function RowExpansionToggle({
       className="inline-flex h-6 w-6 items-center justify-center rounded-sm text-muted-foreground hover:text-foreground hover:bg-secondary/60 transition-colors"
     >
       {expanded ? (
-        <ChevronDown className="h-4 w-4" />
+        <ChevronDownIcon className="h-4 w-4" />
       ) : (
-        <ChevronRight className="h-4 w-4" />
+        <ChevronRightIcon className="h-4 w-4" />
       )}
     </button>
   )
@@ -255,7 +255,7 @@ function ExpansionContent({
   if (error) {
     return (
       <div className="px-4 py-3 flex items-center gap-2 text-sm text-destructive">
-        <AlertCircle className="h-4 w-4" />
+        <ExclamationCircleIcon className="h-4 w-4" />
         {error}
       </div>
     )

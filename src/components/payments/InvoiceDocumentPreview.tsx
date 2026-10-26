@@ -2,7 +2,7 @@
 
 import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { FileText } from 'lucide-react'
+import { DocumentTextIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
@@ -129,7 +129,7 @@ export function InvoiceDocumentThumbnail({ facts, className }: { facts: InvoiceD
     return (
       <div className={cn('grid place-items-center rounded-lg border border-border p-4 text-center text-[12.5px] text-muted-foreground', className)}>
         <span className="flex items-center gap-2">
-          <FileText className="h-4 w-4" aria-hidden />
+          <DocumentTextIcon className="h-4 w-4" aria-hidden />
           {t('no_document')}
         </span>
       </div>
@@ -226,7 +226,7 @@ export function InvoiceDocumentButton({ payment, onOpen }: { payment: PaymentAga
       title={t('show_document', { supplier: payment.supplier })}
       onClick={() => onOpen(payment.key)}
     >
-      <FileText className="h-4 w-4" aria-hidden />
+      <DocumentTextIcon className="h-4 w-4" aria-hidden />
     </Button>
   )
 }

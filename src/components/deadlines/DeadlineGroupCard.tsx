@@ -6,7 +6,7 @@ import { cn } from '@/lib/utils'
 import { isDeadlineOverdue } from '@/lib/calendar/utils'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { DeadlineMark, deadlineDateLabel } from './DeadlineRow'
-import { Pencil } from 'lucide-react'
+import { PencilIcon } from '@/components/icons'
 
 /**
  * System tax deadlines that legally share the skattekonto date ("den 12:e"):
@@ -93,7 +93,7 @@ export function DeadlineGroupCard({ deadlines, onEdit, onRequestToggle }: Deadli
                 {t('group_mark_done')}
               </button>
               {onEdit && (
-                <Pencil
+                <PencilIcon
                   className="h-3.5 w-3.5 shrink-0 text-muted-foreground/0 transition-colors group-hover:text-muted-foreground/50"
                   aria-hidden="true"
                 />

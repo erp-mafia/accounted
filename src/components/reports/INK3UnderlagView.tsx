@@ -2,7 +2,15 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertCircle, AlertTriangle, ChevronDown, ChevronRight, Info, Pencil, RotateCcw } from 'lucide-react'
+import {
+  ArrowUturnLeftIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+  PencilIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -200,7 +208,7 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
   if (error) {
     return (
       <div className="flex flex-wrap items-center gap-3 py-4 text-destructive">
-        <AlertCircle className="h-4 w-4 shrink-0" />
+        <ExclamationCircleIcon className="h-4 w-4 shrink-0" />
         <span className="text-sm">{error}</span>
         <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
           {t('retry')}
@@ -258,7 +266,7 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
           <HelpPopover>{t('help')}</HelpPopover>
         </div>
         <div className="flex items-start gap-2">
-          <Info className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+          <InformationCircleIcon className="mt-1 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
           <p className="text-[13px] leading-6 text-muted-foreground">
             {t('filing_note')}{' '}
             <a
@@ -273,7 +281,7 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
         </div>
         {saveError && (
           <div role="alert" className="flex items-start gap-2 text-sm text-destructive">
-            <AlertCircle className="mt-1 h-4 w-4 shrink-0" />
+            <ExclamationCircleIcon className="mt-1 h-4 w-4 shrink-0" />
             {saveError}
           </div>
         )}
@@ -300,7 +308,7 @@ export function INK3UnderlagView({ periodId }: { periodId: string }) {
 
       {data.warnings.length > 0 && (
         <div className="flex items-start gap-2 px-1">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
           <div className="space-y-1">
             <p className="text-[12.5px] font-medium leading-5 text-attn">
               {t('warnings_count', { count: data.warnings.length })}
@@ -548,7 +556,7 @@ function AccountsToggle({ ruta, field }: { ruta: string; field: Ink3Field | null
         onClick={() => setOpen((v) => !v)}
         className="ml-1 inline-flex h-6 w-6 items-center justify-center rounded-sm align-middle text-muted-foreground hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        {open ? <ChevronDownIcon className="h-4 w-4" /> : <ChevronRightIcon className="h-4 w-4" />}
       </button>
       {open && (
         <span className="mt-1 block space-y-0.5 pl-4 text-xs text-muted-foreground">
@@ -618,7 +626,7 @@ function ValueCell({
         <Badge variant="outline">{t('overridden')}</Badge>
         {input}
         <Button variant="ghost" size="icon-sm" aria-label={t('reset_amount', { ruta: label })} onClick={() => onChange(undefined)}>
-          <RotateCcw className="h-4 w-4" />
+          <ArrowUturnLeftIcon className="h-4 w-4" />
         </Button>
       </span>
     )
@@ -634,7 +642,7 @@ function ValueCell({
         aria-label={t('edit_amount', { ruta: label })}
         onClick={() => onChange(String(field.computed ?? 0))}
       >
-        <Pencil className="h-4 w-4" />
+        <PencilIcon className="h-4 w-4" />
       </Button>
     </span>
   )

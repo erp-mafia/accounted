@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import {
@@ -84,7 +84,7 @@ export function SystemNoticeBanner({ until }: { until: number }) {
         className="absolute right-1 top-1/2 -translate-y-1/2"
         aria-label={t('dismiss')}
       >
-        <X className="h-4 w-4" />
+        <XMarkIcon className="h-4 w-4" />
       </Button>
     </div>
   )

@@ -2,7 +2,7 @@
 
 import React, { useMemo, useState } from 'react'
 import Link from 'next/link'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -284,9 +284,9 @@ export default function ARLedgerView({ periodId }: { periodId: string }) {
                       >
                         <td className="py-2">
                           {isExpanded ? (
-                            <ChevronDown className="h-4 w-4" />
+                            <ChevronDownIcon className="h-4 w-4" />
                           ) : (
-                            <ChevronRight className="h-4 w-4" />
+                            <ChevronRightIcon className="h-4 w-4" />
                           )}
                         </td>
                         <td className="py-2">{entry.customer_name}</td>

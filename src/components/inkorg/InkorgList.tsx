@@ -2,7 +2,7 @@
 
 import { useEffect } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { FileQuestion, Inbox } from 'lucide-react'
+import { DocumentMagnifyingGlassIcon, InboxIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -64,9 +64,9 @@ export function InkorgList({
 
   if (items.length === 0) {
     return view.kind === 'need' ? (
-      <EmptyState icon={Inbox} title={t('empty_need_title')} description={t('empty_need_body')} />
+      <EmptyState icon={InboxIcon} title={t('empty_need_title')} description={t('empty_need_body')} />
     ) : (
-      <EmptyState icon={Inbox} title={t('empty_door_title')} description={t('empty_door_body')} />
+      <EmptyState icon={InboxIcon} title={t('empty_door_title')} description={t('empty_door_body')} />
     )
   }
 
@@ -148,7 +148,7 @@ function InkorgRow({
           <BrandMark name={headline.name} variant="mark" size={28} logoUrl={item.logo_url} />
         ) : (
           <GlyphMark size={28}>
-            <FileQuestion aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground" />
+            <DocumentMagnifyingGlassIcon aria-hidden="true" className="h-3.5 w-3.5 text-muted-foreground" />
           </GlyphMark>
         )}
         <RowTitle

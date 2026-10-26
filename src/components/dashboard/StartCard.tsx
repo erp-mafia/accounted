@@ -2,7 +2,7 @@
 
 import type { CSSProperties, ReactNode } from 'react'
 import Link from 'next/link'
-import { X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { START_CARDS, type StartCardName } from './startkort-assets'
@@ -229,7 +229,7 @@ export function StartCard({
           aria-label={dismissLabel}
           className="absolute right-4 top-3 z-[3] p-1 text-[var(--startcard-dismiss)]/50 transition-colors duration-150 hover:text-[var(--startcard-dismiss)]"
         >
-          <X className="h-4 w-4" />
+          <XMarkIcon className="h-4 w-4" />
         </button>
       )}
 

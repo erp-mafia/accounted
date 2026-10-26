@@ -11,7 +11,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Loader2, CheckCircle2, AlertTriangle } from 'lucide-react'
+import { CheckCircleIcon, ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { daysBetween } from '@/lib/company/fiscal-year'
 import type { StoredAccount } from '../types'
 
@@ -170,7 +170,7 @@ export function BankSyncProgressDialog({
         {state.kind === 'syncing' && (
           <div className="space-y-3 py-2">
             <div className="flex flex-col items-center justify-center gap-2 py-6">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+              <SpinnerIcon className="h-8 w-8 animate-spin text-muted-foreground" />
               <span className="text-xs text-muted-foreground tabular-nums" aria-live="polite">
                 {formatElapsed(elapsedSec)}
               </span>
@@ -248,7 +248,7 @@ function DoneBody({
   return (
     <div className="space-y-3 py-2">
       <div className="flex items-center gap-3 rounded-lg border border-border bg-muted/30 p-4">
-        <CheckCircle2 className="h-6 w-6 shrink-0 text-foreground" />
+        <CheckCircleIcon className="h-6 w-6 shrink-0 text-foreground" />
         <div className="text-sm">
           <p>
             <span className="tabular-nums font-medium">{summary.imported}</span> nya transaktioner
@@ -275,7 +275,7 @@ function DoneBody({
 
       {wasTruncated && (
         <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
           <span>
             Banken returnerade kortare historik än begärt. För äldre data, använd{' '}
             <Link href="/import?mode=sie" className="text-foreground underline underline-offset-2">

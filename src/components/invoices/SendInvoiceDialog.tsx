@@ -41,7 +41,7 @@ import { explainVatTreatment, requiresSwedishVatAcknowledgement } from '@/lib/in
 import { VatTreatmentNotice } from '@/components/invoices/VatTreatmentNotice'
 import { InvoiceAttachmentsSection } from '@/components/invoices/InvoiceAttachmentsSection'
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
-import { Landmark, Mail, Send } from 'lucide-react'
+import { BuildingLibraryIcon, EnvelopeIcon, PaperAirplaneIcon } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import type { FormLine } from '@/components/bookkeeping/JournalEntryForm'
 import type { Customer, EntityType } from '@/types'
@@ -646,7 +646,7 @@ export default function SendInvoiceDialog({
             )}
             {foreignPayee && !cashAccountsLoading && (
               <div className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5 text-sm">
-                <Landmark className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+                <BuildingLibraryIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
                 <div className="min-w-0 flex-1 leading-5">
                   <p className="text-muted-foreground">
                     {tPay(foreignPayee.options.length > 0 ? 'foreign_missing' : 'foreign_missing_no_iban', {
@@ -897,9 +897,9 @@ export default function SendInvoiceDialog({
             }
           >
             {!isSubmitting && (mode === 'email' ? (
-              <Mail className="mr-2 h-4 w-4" />
+              <EnvelopeIcon className="mr-2 h-4 w-4" />
             ) : (
-              <Send className="mr-2 h-4 w-4" />
+              <PaperAirplaneIcon className="mr-2 h-4 w-4" />
             ))}
             {t(
               isCreditRepair

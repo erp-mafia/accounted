@@ -7,7 +7,11 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
-import { AlertTriangle, CreditCard, ExternalLink } from 'lucide-react'
+import {
+  ArrowTopRightOnSquareIcon,
+  CreditCardIcon,
+  ExclamationTriangleIcon,
+} from '@/components/icons'
 import { getSettingsPanel } from '@/lib/extensions/settings-panel-registry'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { SettingsBackLink, SettingsSectionHeader } from '@/components/settings/SettingsRows'
@@ -123,7 +127,7 @@ export function BankingSettingsContent() {
           page flow, as compact warning-tone lines instead of a bordered box. */}
       {bankConnectionError && (
         <div role="alert" className="mt-6 flex items-start gap-2 px-1">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
           <div className="min-w-0 flex-1 space-y-1 text-[12.5px] leading-relaxed">
             <p className="text-attn">{bankConnectionError}</p>
             {isAccessDenied && failedBankName && (
@@ -176,13 +180,13 @@ export function BankingSettingsContent() {
       ) : showOpSection ? null : (
         <div className="pt-8">
           <EmptyState
-            icon={CreditCard}
+            icon={CreditCardIcon}
             title={t('not_enabled_title')}
             description={t('not_enabled_description')}
           >
             <Button variant="outline" asChild>
               <Link href="/extensions">
-                <ExternalLink className="mr-2 h-4 w-4" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" />
                 {t('go_to_extensions')}
               </Link>
             </Button>

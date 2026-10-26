@@ -6,7 +6,17 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import useSWR from 'swr'
-import { ArrowLeft, ArrowUpRight, Check, ChevronLeft, ChevronRight, Pencil, Plus, Search, X } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  ArrowUpRightIcon,
+  CheckIcon,
+  ChevronLeftIcon,
+  ChevronRightIcon,
+  MagnifyingGlassIcon,
+  PencilIcon,
+  PlusIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -113,7 +123,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
     return (
       <div className={styles.apage}>
         <PageHeader title={t('title')} />
-        <Link href={backHref} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+        <Link href={backHref} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
         <p className={styles.muted}>{t('not_found')}</p>
       </div>
     )
@@ -216,7 +226,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
   return (
     <div className={styles.apage}>
       <PageHeader title={t('title')} />
-      <Link href={backHref} className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      <Link href={backHref} className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
       {!canWrite && <p className={styles.viewerNote}>{t('viewer_note_item')}</p>}
       <div className={styles.agrid2}>
         <section className={styles.stage} aria-label={name}>
@@ -233,7 +243,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={AI_CLIENTS.find((c) => c.id === (disconnected ? 'claude' : client))!.logo} alt="" width={16} height={16} className={styles.btnLogo} />
                 {disconnected ? t('connect_client', { client: 'Claude' }) : t('run_agent', { client: clientName })}
-                <ArrowUpRight className="h-4 w-4" aria-hidden />
+                <ArrowUpRightIcon className="h-4 w-4" aria-hidden />
               </Button>
             )}
             {/* A routine is scheduled in Claude, and never for a draft. */}
@@ -264,7 +274,7 @@ function Detail({ companyId, companyName, agentId, backHref }: { companyId: stri
               </Field>
 
               {own?.draft && (
-                <div><Button disabled={!canWrite} onClick={() => { trackInstructions('instructions_draft_added', { kind: 'workflow' }); void patchOwn({ action: 'add' }) }}><Plus className="h-4 w-4" aria-hidden />{t('add_draft_workflow')}</Button></div>
+                <div><Button disabled={!canWrite} onClick={() => { trackInstructions('instructions_draft_added', { kind: 'workflow' }); void patchOwn({ action: 'add' }) }}><PlusIcon className="h-4 w-4" aria-hidden />{t('add_draft_workflow')}</Button></div>
               )}
 
               <div className={styles.rows}>
@@ -339,8 +349,8 @@ export function Row({ label, children, onAdd, addLabel, onOpen }: { label: strin
       <span className={styles.rowLabel}>{label}</span>
       <div className={styles.rowContent}>{children}</div>
       <span className={styles.rowAction}>
-        {onAdd && <Button variant="outline" size="icon" aria-label={addLabel} onClick={onAdd}><Plus className="h-4 w-4" aria-hidden /></Button>}
-        {onOpen && <ChevronRight className="h-4 w-4 text-muted-foreground" aria-hidden />}
+        {onAdd && <Button variant="outline" size="icon" aria-label={addLabel} onClick={onAdd}><PlusIcon className="h-4 w-4" aria-hidden /></Button>}
+        {onOpen && <ChevronRightIcon className="h-4 w-4 text-muted-foreground" aria-hidden />}
       </span>
     </>
   )
@@ -378,7 +388,7 @@ export function Field({ label, note, copy, children }: {
 /** "Redigera" on an own item: opens Skriv själv filled in with what was saved. */
 export function EditOwnButton({ disabled, onClick }: { disabled: boolean; onClick: () => void }) {
   const t = useTranslations('skills_registry')
-  return <Button variant="outline" size="sm" className="gap-2" disabled={disabled} onClick={onClick}><Pencil className="h-3.5 w-3.5" aria-hidden />{t('edit')}</Button>
+  return <Button variant="outline" size="sm" className="gap-2" disabled={disabled} onClick={onClick}><PencilIcon className="h-3.5 w-3.5" aria-hidden />{t('edit')}</Button>
 }
 
 /** A panel sub-view: back to the agent, a title, its content. `backLabel` names the way out where "Klar" would read as saved. */
@@ -386,7 +396,7 @@ export function SubView({ title, onBack, backLabel, children }: { title: string;
   const t = useTranslations('skills_registry')
   return (
     <div className="flex flex-col gap-4">
-      <button type="button" className={styles.back} onClick={onBack}><ChevronLeft className="h-4 w-4" aria-hidden />{backLabel ?? t('knowledge_picker_done')}</button>
+      <button type="button" className={styles.back} onClick={onBack}><ChevronLeftIcon className="h-4 w-4" aria-hidden />{backLabel ?? t('knowledge_picker_done')}</button>
       <h2 className={styles.subTitle}>{title}</h2>
       {children}
     </div>
@@ -441,7 +451,7 @@ export function KnowledgeChip({ knowledge, href, canEdit, onRemove }: { knowledg
       {knowledge.source === 'added' && <small>{t('knowledge_added_tag')}</small>}
       {canEdit && (
         <button type="button" className={styles.chipX} aria-label={t('knowledge_remove', { name: label })} disabled={busy} onClick={() => { setBusy(true); void onRemove().finally(() => setBusy(false)) }}>
-          <X className="h-3 w-3" aria-hidden />
+          <XMarkIcon className="h-3 w-3" aria-hidden />
         </button>
       )}
     </span>
@@ -487,14 +497,14 @@ export function KnowledgePanel({ held, options, onBack, onChange, initialFailed 
   }
   return (
     <div className="flex flex-col gap-4">
-      <button type="button" className={styles.back} onClick={onBack}><ChevronLeft className="h-4 w-4" aria-hidden />{t('knowledge_picker_done')}</button>
+      <button type="button" className={styles.back} onClick={onBack}><ChevronLeftIcon className="h-4 w-4" aria-hidden />{t('knowledge_picker_done')}</button>
       <SegmentedControl aria-label={t('sources_label')} className={styles.sourceSwitch} value={source} onChange={setSource} options={[
         { value: 'accounted' as const, label: t('tab_accounted') },
         { value: 'own' as const, label: t('tab_own') },
         ...(COMMUNITY_OPEN ? [{ value: 'community' as const, label: t('tab_community') }] : []),
       ]} />
       <label className={styles.search}>
-        <Search className="h-4 w-4 text-muted-foreground" aria-hidden />
+        <MagnifyingGlassIcon className="h-4 w-4 text-muted-foreground" aria-hidden />
         <input id="agent-knowledge-search" type="search" value={query} placeholder={t('knowledge_search')} aria-label={t('knowledge_search')} onChange={(e) => setQuery(e.target.value)} />
       </label>
       {failed && <p role="alert" className={styles.muted}>{t('knowledge_save_failed')}</p>}
@@ -507,7 +517,7 @@ export function KnowledgePanel({ held, options, onBack, onChange, initialFailed 
                 <div className={styles.kcardTop}>
                   <b>{name(o.id, o.title)}</b>
                   <Button variant={has ? 'default' : 'outline'} size="icon-sm" loading={busy === o.id} disabled={busy !== null && busy !== o.id} aria-label={has ? t('knowledge_remove', { name: name(o.id, o.title) }) : t('knowledge_add')} onClick={() => void toggle(o.id)}>
-                    {has ? <Check className="h-4 w-4" aria-hidden /> : <Plus className="h-4 w-4" aria-hidden />}
+                    {has ? <CheckIcon className="h-4 w-4" aria-hidden /> : <PlusIcon className="h-4 w-4" aria-hidden />}
                   </Button>
                 </div>
                 <p>{describe(o.id, o.summary)}</p>

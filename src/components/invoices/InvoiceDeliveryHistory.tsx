@@ -1,7 +1,7 @@
 'use client'
 
 import { useFormatter, useTranslations } from 'next-intl'
-import { ChevronRight, ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, ChevronRightIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { DetailSection } from '@/components/ui/detail-section'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -159,7 +159,7 @@ export function InvoiceDeliveryHistory({
             return (
               <details key={delivery.id} className="group">
                 <summary className="flex min-h-11 cursor-pointer list-none items-center gap-3 py-2 text-sm transition-colors duration-150 hover:bg-secondary/35 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring [&::-webkit-details-marker]:hidden">
-                  <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
+                  <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90" />
                   <span className="tabular-nums text-muted-foreground">{formatTimestamp(occurredAt)}</span>
                   <span className="min-w-0 flex-1 truncate">
                     {isManual ? t('delivery_channel_manual') : t('delivery_channel_email')}
@@ -276,7 +276,7 @@ export function InvoiceDeliveryHistory({
                               <span className="truncate">
                                 {delivery.attachment_filename || t('delivery_pdf_fallback')}
                               </span>
-                              <ExternalLink className="h-3 w-3 shrink-0 text-muted-foreground" />
+                              <ArrowTopRightOnSquareIcon className="h-3 w-3 shrink-0 text-muted-foreground" />
                             </a>
                           </dd>
                         </>

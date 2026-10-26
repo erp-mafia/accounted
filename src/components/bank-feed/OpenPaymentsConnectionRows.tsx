@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Landmark, MoreHorizontal } from 'lucide-react'
+import { BuildingLibraryIcon, EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -29,7 +29,7 @@ export function BankTile({ bankName }: { bankName: string | null }) {
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt="" className="h-5 w-5 object-contain" />
       ) : (
-        <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />
+        <BuildingLibraryIcon className="h-4 w-4 text-foreground" aria-hidden="true" />
       )}
     </span>
   )
@@ -124,7 +124,7 @@ export function OpenPaymentsConnectionRow({ connection, flow, onChanged, canRene
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
-                  <MoreHorizontal className="h-[15px] w-[15px]" />
+                  <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

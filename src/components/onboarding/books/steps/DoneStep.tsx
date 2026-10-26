@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import useSWR from 'swr'
 import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
@@ -148,7 +148,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
         <div className="found">
           <Button variant="ghost" className="found-toggle gap-2 text-muted-foreground" aria-expanded={open} onClick={() => setOpen((o) => !o)}>
             {t('tasks_found', { count: tasks.length })}
-            <ChevronDown size={14} aria-hidden="true" className="chev" />
+            <ChevronDownIcon aria-hidden="true" className="size-3.5 chev" />
           </Button>
           {open && (
             <ul className="found-list">
@@ -181,7 +181,7 @@ export function DoneStep({ ctx, onLeave, leaving }: {
       <div className="done-door">
         <Button variant="ghost" size="sm" className="gap-1 text-muted-foreground" disabled={leaving} onClick={() => onLeave('done')}>
           {t('open_app', { appName })}
-          <ChevronRight size={13} aria-hidden="true" />
+          <ChevronRightIcon className="size-[13px]" aria-hidden="true" />
         </Button>
       </div>
     </div>

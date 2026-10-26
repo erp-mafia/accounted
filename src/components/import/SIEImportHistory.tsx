@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Undo2 } from 'lucide-react'
+import { ArrowUturnLeftIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -221,7 +221,7 @@ export default function SIEImportHistory() {
                       className="text-destructive hover:text-destructive"
                       onClick={() => setPendingUndo(row)}
                     >
-                      <Undo2 className="mr-2 h-4 w-4" />
+                      <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
                       {t('sie_history_undo_button')}
                     </Button>
                   )}
