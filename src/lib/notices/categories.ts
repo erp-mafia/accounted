@@ -212,10 +212,12 @@ function deadlineParam(deadline: string): number {
  * waits for (lib/bank-feed/switch-campaign.ts, the same computation the Att
  * göra row and the mails read). One notice however many connections: the
  * single one links straight into Koppla banken in switch mode, several link
- * to Kopplingar, where each row offers the switch. Past the deadline the
- * wording is the broken connection's: the feed has stopped. The id carries
- * the connection ids, the deadline and whether it has passed, so a dismissal
- * before the deadline resurfaces when the feed stops.
+ * to Kopplingar, where each row offers the switch. Before the deadline the
+ * line is one plain call to action, "Uppdatera din bankkoppling här" with
+ * "här" as the link; the date is the Att göra row's and the mails'. Past the
+ * deadline the wording is the broken connection's: the feed has stopped. The
+ * id carries the connection ids, the deadline and whether it has passed, so a
+ * dismissal before the deadline resurfaces when the feed stops.
  */
 export async function detectBankSwitchNeeded(
   supabase: SupabaseClient,
@@ -276,9 +278,9 @@ export function bankSwitchNeededNotice(state: CompanySwitchState): Notice | null
     id: `bank_switch_needed:${discriminator}`,
     category: 'bank_switch_needed',
     severity: 'warning',
-    messageKey: one ? (bankName ? 'bank_switch_one' : 'bank_switch_one_unnamed') : 'bank_switch_many',
+    messageKey: one ? 'bank_switch_update_one' : 'bank_switch_update_many',
     messageParams: params,
-    actionKey: 'bank_switch_action',
+    actionKey: 'bank_switch_here',
     actionHref: one ? switchDeepLink(one.connection_id) : '/settings/connections',
   }
 }
