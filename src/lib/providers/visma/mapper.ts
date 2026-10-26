@@ -129,6 +129,16 @@ function deriveSupplierInvoiceStatus(
   return 'booked';
 }
 
+function nonEmptyString(value: unknown): string | undefined {
+  return typeof value === 'string' && value.trim() ? value.trim() : undefined;
+}
+
+/**
+ * A customer (CustomerApi) or supplier (SupplierApi) record as a party. The
+ * customer names its postal address Invoice*, country included
+ * (InvoiceCountryCode); the supplier names it plainly (CountryCode). Reading
+ * CountryCode alone left every Visma customer without a country (crm#1436).
+ */
 function buildParty(name: string, orgNumber?: string, raw?: Record<string, unknown>): PartyDto {
   return {
     name,
@@ -138,7 +148,7 @@ function buildParty(name: string, orgNumber?: string, raw?: Record<string, unkno
       additionalStreetName: (raw['InvoiceAddress2'] ?? raw['Address2']) as string | undefined,
       cityName: (raw['InvoiceCity'] ?? raw['City']) as string | undefined,
       postalZone: (raw['InvoicePostalCode'] ?? raw['PostalCode']) as string | undefined,
-      countryCode: raw['CountryCode'] as string | undefined,
+      countryCode: nonEmptyString(raw['InvoiceCountryCode']) ?? nonEmptyString(raw['CountryCode']),
     } : undefined,
     legalEntity: orgNumber ? {
       registrationName: name,
@@ -146,10 +156,30 @@ function buildParty(name: string, orgNumber?: string, raw?: Record<string, unkno
       companyIdSchemeId: 'SE:ORGNR',
     } : undefined,
     contact: {
-      email: (raw?.['EmailAddress'] ?? raw?.['Email']) as string | undefined,
-      telephone: (raw?.['Telephone'] ?? raw?.['Phone']) as string | undefined,
+      name: nonEmptyString(raw?.['ContactPersonName']),
+      email: raw?.['EmailAddress'] as string | undefined,
+      // The landline first, then the mobile: many records carry only one.
+      telephone: nonEmptyString(raw?.['Telephone']) ?? nonEmptyString(raw?.['MobilePhone']),
     },
   };
+}
+
+/**
+ * A customer's terms in days. Only Normal terms (type 0) are a number of days
+ * net; CurrentMonth counts from the month's end, and the others are paid on
+ * the spot, so they keep the default.
+ */
+function termsOfPaymentDays(terms: unknown): number | undefined {
+  if (!terms || typeof terms !== 'object') return undefined;
+  const { TermsOfPaymentTypeId: type, NumberOfDays: days } = terms as Record<string, unknown>;
+  return type === 0 && typeof days === 'number' && Number.isInteger(days) && days >= 0 && days <= 365 ? days : undefined;
+}
+
+/** The CC addresses a customer's invoice e-mails go to. */
+function emailAddresses(value: unknown): string[] | undefined {
+  if (!Array.isArray(value)) return undefined;
+  const addresses = value.flatMap((item) => nonEmptyString(item) ?? []);
+  return addresses.length > 0 ? addresses : undefined;
 }
 
 export function mapVismaToSalesInvoice(raw: Record<string, unknown>): SalesInvoiceDto {
@@ -331,7 +361,10 @@ export function mapVismaToCustomer(raw: Record<string, unknown>): CustomerDto {
       raw['CorporateIdentityNumber'] as string | undefined,
       raw,
     ),
+    invoiceEmailCcAddresses: emailAddresses(raw['EmailAddresses']),
     active: raw['IsActive'] !== false,
+    vatNumber: nonEmptyString(raw['VatNumber']),
+    defaultPaymentTermsDays: termsOfPaymentDays(raw['TermsOfPayment']),
     note: raw['Note'] as string | undefined,
     updatedAt: raw['ChangedUtc'] as string | undefined,
     _raw: raw,
@@ -348,9 +381,13 @@ export function mapVismaToSupplier(raw: Record<string, unknown>): SupplierDto {
       raw,
     ),
     active: raw['IsActive'] !== false,
+    vatNumber: nonEmptyString(raw['VatNumber']),
     bankAccount: raw['BankAccountNumber'] as string | undefined,
-    bankGiro: raw['BankGiro'] as string | undefined,
-    plusGiro: raw['PlusGiro'] as string | undefined,
+    // SupplierApi spells them BankgiroNumber and PlusgiroNumber; BankGiro and
+    // PlusGiro were read instead and found nothing (crm#1436).
+    bankGiro: nonEmptyString(raw['BankgiroNumber']),
+    plusGiro: nonEmptyString(raw['PlusgiroNumber']),
+    note: raw['Note'] as string | undefined,
     updatedAt: raw['ModifiedUtc'] as string | undefined,
     _raw: raw,
   };
