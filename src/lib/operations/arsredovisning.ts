@@ -16,6 +16,10 @@
  * below is a different check: the Bolagsverket kontrollera rules on the
  * generated iXBRL document.
  *
+ * The board's BankID signing: arsredovisning.request-signatures sends a locked
+ * version to its signers (the MCP door stages it); each board member signs in
+ * person, and their signature fills their slot. No door here signs.
+ *
  * No MCP binding, on purpose:
  *   - arsredovisning.record-signature: it records that a named board member
  *     signed the legal document (evidence of a paper original or an
@@ -50,6 +54,7 @@ import { defineOperation, type OperationOutcome } from './types'
  * graph nobody else on those paths needs.
  */
 const workflow = () => import('@/lib/bokslut/arsredovisning/workflow-service')
+const boardSigning = () => import('@/lib/bokslut/arsredovisning/bankid-signing')
 const files = () => import('@/lib/bokslut/arsredovisning/file-service')
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
@@ -495,13 +500,15 @@ export const arsredovisningRecordSignature = defineOperation({
     description:
       'status signed records the evidence of a signature made outside the product (a paper original or an advanced e-signature): the ready_for_signature version it is for, the method, where the original is kept (evidence_reference) and the signing time. status declined marks the slot declined. Only a pending slot of this period transitions, once. ÅRL requires each signer to date their signature; the date must fall between the version\'s finalization and today. Idempotent. Dry-runnable.',
     useWhen: 'The board has signed the printed or e-signed document and the signatures are to be registered.',
-    doNotUseFor: 'Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing (not available here).',
+    doNotUseFor: 'Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing in Accounted (POST .../versions/{versionId}/signing-request).',
     pitfalls: [
       'A version that is not ready_for_signature answers 409 ARSREDOVISNING_VERSION_NOT_SIGNABLE.',
       'A slot already signed or declined, bound to another version, or of another period answers 409 SIGNATURE_INVALID_TRANSITION.',
       'A signed_at before finalization or in the future answers 400 ARSREDOVISNING_SIGNATURE_DATE_INVALID.',
       'evidence_reference is archive:<ref>, document:<id> or receipt:<ref>, not free text.',
       'Recorded signatures cannot be undone: finalize a new version instead.',
+      'signing_method bankid answers 422 SIGNING_METHOD_RESERVED: it is set only when the board signs with BankID in Accounted. A BankID signature made in another service is advanced_e_signature.',
+      'A slot covered by an open or partly signed BankID signing request answers 409 ARSREDOVISNING_SIGNING_TRACK_MIXED: a version is signed one way.',
     ],
     example: {
       request: {
@@ -549,6 +556,8 @@ export const arsredovisningRecordSignature = defineOperation({
     'ARSREDOVISNING_VERSION_NOT_SIGNABLE',
     'SIGNATURE_INVALID_TRANSITION',
     'ARSREDOVISNING_SIGNATURE_DATE_INVALID',
+    'SIGNING_METHOD_RESERVED',
+    'ARSREDOVISNING_SIGNING_TRACK_MIXED',
   ],
   http: {
     method: 'PATCH',
@@ -574,6 +583,123 @@ export const arsredovisningRecordSignature = defineOperation({
       signatureOut,
     )
   },
+})
+
+const BoardSignerIn = z
+  .object({
+    signature_id: SIGNATURE_ID,
+    email: z.string().trim().email().max(254).nullish().describe('Where the board member gets their link. Without one, the answer carries the link for you to hand over.'),
+    user_id: z.string().uuid().nullish().describe('The board member is a member of the company: they can sign in the app, locked to their own BankID.'),
+  })
+  .strict()
+
+export const arsredovisningRequestSignatures = defineOperation({
+  id: 'arsredovisning.request-signatures',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'medium',
+  reversible: false,
+  docs: {
+    summary: 'Send a locked årsredovisning version to the board for BankID signing: one link per signer slot.',
+    description:
+      'For a ready_for_signature version. Renders the copy the board signs (no dates or lines to fill in: each date is in the BankID signature), archives it and creates a signing request with one signer per pending slot, mailed when an email is given. ' +
+      'Each BankID signature fills its slot (signing_method bankid, the signing time); when the last one lands the version is signed and can be filed. The signer\'s BankID name must match the slot\'s name, or the signature is refused (Bolagsverket checks the names). ' +
+      'Read progress with GET /signing-requests/{id}. The fastställelseintyg is signed at Bolagsverket after the årsstämma, not here. Dry-runnable.',
+    useWhen: 'The årsredovisning is locked and every board member and the VD can sign with Swedish BankID.',
+    doNotUseFor: 'A board where someone lacks Swedish BankID (sign elsewhere and record each signature with PATCH .../signatures/{signatureId}), or the fastställelseintyg.',
+    pitfalls: [
+      'Every pending slot gets a signer; list them with GET .../signatures. A slot you leave out is still included, without an email.',
+      'ARSREDOVISNING_SIGNING_TRACK_MIXED: a slot already has a signature recorded by hand; this version is signed that way.',
+      'SIGNING_REQUEST_ALREADY_OPEN: the version already waits in another request (details.signing_request_id).',
+      'A name in the roster that differs from the signer\'s BankID name is refused at signing (SIGNING_NAME_MISMATCH): fix the name and lock a new version.',
+      'Locking a new version cancels this request; signatures already made stay on the old version.',
+    ],
+    example: {
+      request: { signers: [{ signature_id: '7c1a…', email: 'anna@example.se' }] },
+      response: {
+        data: {
+          signing_request_id: '8e1d…',
+          status: 'open',
+          title: 'Årsredovisning för räkenskapsåret 2026-01-01 till 2026-12-31',
+          document_id: '4f1c…',
+          document_sha256: '9b2e…',
+          expires_at: '2027-03-19T09:00:00.000Z',
+          signers: [{ signer_id: '2c7b…', position: 1, name: 'Anna Svensson', email: 'anna@example.se', annual_report_signature_id: '7c1a…', lock: 'none', email_sent: true, url: null }],
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z
+    .object({
+      fiscal_period_id: FISCAL_PERIOD_ID,
+      version_id: z.string().uuid().describe('The ready_for_signature version (annual_report_version_id).'),
+      signers: z.array(BoardSignerIn).max(20).describe('Per slot: where its link goes. Slots not listed are included without an email.'),
+      message: z.string().max(1000).nullish().describe('A message to the board, shown in the mail and on the page.'),
+      expires_in_days: z.number().int().min(1).max(90).nullish().describe('How long the links work. Default 14.'),
+      send_email: z.boolean().optional().describe('Mail each signer with an email (default true).'),
+    })
+    .strict(),
+  output: z.object({
+    signing_request_id: z.string().uuid(),
+    status: z.literal('open'),
+    title: z.string(),
+    document_id: z.string().uuid(),
+    document_sha256: z.string(),
+    expires_at: z.string(),
+    signers: z.array(
+      z.object({
+        signer_id: z.string().uuid(),
+        position: z.number().int(),
+        name: z.string(),
+        email: z.string().nullable(),
+        annual_report_signature_id: z.string().uuid().nullable(),
+        lock: z.enum(['none', 'member', 'personnummer']),
+        email_sent: z.boolean(),
+        url: z.string().nullable().describe('The signer\'s link, only when no mail reached them. The credential itself.'),
+      }),
+    ),
+  }),
+  errorCodes: [
+    'SIGNING_UNAVAILABLE',
+    'ARSREDOVISNING_VERSION_NOT_SIGNABLE',
+    'ARSREDOVISNING_SIGNING_TRACK_MIXED',
+    'SIGNING_REQUEST_ALREADY_OPEN',
+    'SIGNING_SIGNERS_INVALID',
+    'PERIOD_NOT_FOUND',
+    'NOT_FOUND',
+  ],
+  http: {
+    method: 'POST',
+    path: `${BASE}/versions/:versionId/signing-request`,
+    pathParams: { id: 'fiscal_period_id', versionId: 'version_id' },
+  },
+  mcp: {
+    name: 'gnubok_request_arsredovisning_signatures',
+    title: 'Request Annual Report Signatures',
+    description:
+      'Stage sending a locked årsredovisning version to the board for BankID signing, one link per signer slot, mailed at approval. Each board member signs in person; the last signature makes the version signed.',
+    visibility: 'search',
+    keywords: ['signera årsredovisning', 'styrelsen signerar', 'underskrift årsredovisning', 'bankid årsredovisning', 'skicka årsredovisning för underskrift'],
+    stage: {
+      pendingType: 'request_arsredovisning_signatures',
+      title: () => 'Skicka årsredovisningen till styrelsen för underskrift med BankID',
+    },
+  },
+  run: async (ctx, input, { dryRun }) =>
+    (await boardSigning()).requestArsredovisningSignatures(
+      ctx,
+      {
+        fiscalPeriodId: input.fiscal_period_id,
+        versionId: input.version_id,
+        signers: input.signers.map((s) => ({ signatureId: s.signature_id, email: s.email ?? null, userId: s.user_id ?? null })),
+        message: input.message ?? null,
+        expiresInDays: input.expires_in_days ?? null,
+        sendEmail: input.send_email,
+        createdVia: ctx.pendingOperationId ? 'mcp' : 'api',
+      },
+      { dryRun },
+    ),
 })
 
 export const arsredovisningRemoveSignatory = defineOperation({

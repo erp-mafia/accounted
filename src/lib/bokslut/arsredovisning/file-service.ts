@@ -31,7 +31,7 @@ import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 import { buildCanonicalAnnualReport } from './model'
 import { getAnnualReportVersion } from './version-service'
 import { getVersionIxbrlInput } from './version-ixbrl'
-import { pdfModeForVersionStatus } from './signature-pages'
+import { pdfModeForVersionStatus, type ArsredovisningPdfMode } from './signature-pages'
 import type { ArsredovisningData } from './types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
@@ -64,6 +64,70 @@ function failed(error: unknown): Failure {
 
 function leased<T>(ctx: OperationContext, lease: boolean, read: () => Promise<T>): Promise<T> {
   return lease ? withSIEPeriodRead(ctx.supabase, ctx.companyId, 'report_export', read) : read()
+}
+
+/**
+ * One of the PDF renders (signature-pages.ts) of report data. React-pdf and
+ * the templates load here, not with every route that reaches this module
+ * through the operations registry.
+ */
+async function renderArsredovisningPdf(data: ArsredovisningData, mode: ArsredovisningPdfMode): Promise<Uint8Array> {
+  const [{ renderToBuffer }, { ArsredovisningPDF }, { ArsredovisningK3PDF }] = await Promise.all([
+    import('@react-pdf/renderer'),
+    import('./arsredovisning-pdf'),
+    import('./arsredovisning-k3-pdf'),
+  ])
+  const PdfComponent = data.accounting_framework === 'k3' ? ArsredovisningK3PDF : ArsredovisningPDF
+  return new Uint8Array(await renderToBuffer(PdfComponent({ data, mode })))
+}
+
+/** A version's frozen report data with its version-bound signer slots overlaid (role, name, signed_at). */
+async function versionReportWithSignatures(ctx: OperationContext, fiscalPeriodId: string, versionId: string) {
+  const version = await getAnnualReportVersion(ctx.supabase, ctx.companyId, fiscalPeriodId, versionId)
+  if (!version) return null
+  const data = structuredClone(version.report_data)
+  const { data: signatureRows, error: signatureError } = await ctx.supabase
+    .from('arsredovisning_signature_requests')
+    .select('role, signer_name, signed_at')
+    .eq('company_id', ctx.companyId)
+    .eq('fiscal_period_id', fiscalPeriodId)
+    .eq('annual_report_version_id', versionId)
+    .order('created_at', { ascending: true })
+  if (signatureError) throw new Error(`Failed to load version signatures: ${signatureError.message}`)
+  data.signatures = (signatureRows ?? []).map((signature) => ({
+    role: signature.role,
+    name: signature.signer_name,
+    signed_at: signature.signed_at,
+  }))
+  return { version, data }
+}
+
+/**
+ * The copy of a locked version the board signs with BankID (render
+ * 'e_signing'): no dates and no lines to fill in, so the bytes do not change
+ * as signatures land. Only a version waiting for signatures.
+ */
+export async function getArsredovisningESigningPdf(
+  ctx: OperationContext,
+  query: { fiscal_period_id: string; version_id: string },
+): Promise<OperationOutcome<ArsredovisningFile>> {
+  try {
+    const loaded = await versionReportWithSignatures(ctx, query.fiscal_period_id, query.version_id)
+    if (!loaded) return { ok: false, code: 'NOT_FOUND' }
+    if (loaded.version.summary.status !== 'ready_for_signature') return { ok: false, code: 'SIGNING_SUBJECT_CHANGED' }
+    const safePeriodEnd = loaded.data.fiscal_period.period_end.replace(/[^\w.-]/g, '_')
+    return {
+      ok: true,
+      data: {
+        filename: `arsredovisning-${safePeriodEnd}-for-signering.pdf`,
+        contentType: 'application/pdf',
+        bytes: await renderArsredovisningPdf(loaded.data, 'e_signing'),
+        versionId: query.version_id,
+      },
+    }
+  } catch (error) {
+    return failed(error)
+  }
 }
 
 export async function getArsredovisningPdfFile(

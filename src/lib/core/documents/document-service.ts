@@ -393,6 +393,10 @@ export function validateDocumentMagicBytes(
   }
   const detected = detectFileMagic(new Uint8Array(buffer))
   if (detected === 'application/zip') {
+    // A plain archive declared as one: the signing evidence package
+    // (lib/signing/seal.ts). User doors never declare it: application/zip is
+    // not in ALLOWED_DOCUMENT_TYPES, which validateDocumentFile checks first.
+    if (declaredMimeType === 'application/zip') return null
     if (zipMatchesDeclaredType(new Uint8Array(buffer), declaredMimeType)) return null
     return `Filinnehållet matchar inte den angivna filtypen (förväntade ${declaredMimeType}, hittade ett ZIP-arkiv utan det formatets innehåll).`
   }

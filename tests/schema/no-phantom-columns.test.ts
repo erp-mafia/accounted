@@ -293,7 +293,16 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // which inserts one autogiro_debits row per invoice of the file in one
 // request, built by a map: the one-live-debit index must refuse the whole
 // file at once, before any file row exists.
-const UNRESOLVED_CEILING = 439
+// 443 (2026-10-25): +4 for BankID signing (lib/signing, lib/documents/deletion):
+// the signers of a request and their personnummer locks are each inserted in
+// one request built by a map (a failed insert takes the request with it), the
+// poll lease is a lease-free-or-expired .or(), and a document is found as the
+// signed original, its signed copy or its evidence package with one .or().
+// 444 (2026-10-26): +1, the fifth signing site the 443 entry did not count:
+// the signing request list filtered by document (lib/signing/requests.ts)
+// matches original, signed copy or evidence package with the same .or() as
+// lib/documents/deletion.ts. Surfaced when main grew to its own ceiling.
+const UNRESOLVED_CEILING = 444
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

@@ -47,8 +47,10 @@ import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycl
 import { currentRound, invoiceNeedsAttest, mayAttest } from '@/lib/supplier-invoices/attest-policy'
 import { loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
+import { signingSwitchedOn } from '@/lib/signing/switched-on'
 import type {
   BankSwitchDue,
+  DocumentToSignDue,
   ExpensePayoutDue,
   InvoiceSetAllocation,
   OverdueInvoicesDue,
@@ -1513,6 +1515,73 @@ export async function listSupplierPayeeChangesDue(
 /** How many supplier invoices wait for a decision on their bank details (see listSupplierPayeeChangesDue). */
 export async function countSupplierPayeeChangesDue(supabase: SupabaseClient, companyId: string): Promise<number> {
   return (await listSupplierPayeeChangesDue(supabase, companyId)).length
+}
+
+/** How many of one person's pending signer rows a list reads; nobody has more open at once. */
+const DOCUMENTS_TO_SIGN_SCAN_CAP = 100
+
+/**
+ * The documents waiting for this user's BankID signature in the company
+ * (lib/worklist/types.ts documents_to_sign), soonest expiry first: one Att
+ * göra row each, "Signera {rubrik}", opening /signering/<signerId>. Empty
+ * while signing is switched off (nobody could sign them). Reads only the
+ * columns the session is granted (never the token or the BankID session).
+ * Soft-fails to an empty list, like every count here.
+ */
+export async function listDocumentsToSign(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  now: Date = new Date(),
+): Promise<DocumentToSignDue[]> {
+  try {
+    if (!signingSwitchedOn()) return []
+    const { data: signers, error } = await supabase
+      .from('signing_request_signers')
+      .select('id, signing_request_id, role_label')
+      .eq('company_id', companyId)
+      .eq('user_id', userId)
+      .eq('status', 'pending')
+      .limit(DOCUMENTS_TO_SIGN_SCAN_CAP)
+    if (error) {
+      logAndZero('documents_to_sign', companyId, error)
+      return []
+    }
+    const rows = (signers ?? []) as Array<{ id: string; signing_request_id: string; role_label: string | null }>
+    if (rows.length === 0) return []
+    const { data: requests, error: requestError } = await supabase
+      .from('signing_requests')
+      .select('id, title, expires_at')
+      .eq('company_id', companyId)
+      .eq('status', 'open')
+      .gt('expires_at', now.toISOString())
+      .in('id', [...new Set(rows.map((r) => r.signing_request_id))])
+    if (requestError) {
+      logAndZero('documents_to_sign', companyId, requestError)
+      return []
+    }
+    const open = new Map(((requests ?? []) as Array<{ id: string; title: string; expires_at: string }>).map((r) => [r.id, r]))
+    return rows
+      .filter((r) => open.has(r.signing_request_id))
+      .map((r) => {
+        const request = open.get(r.signing_request_id)!
+        return { signer_id: r.id, signing_request_id: r.signing_request_id, title: request.title, role_label: r.role_label, expires_at: request.expires_at }
+      })
+      .sort((a, b) => a.expires_at.localeCompare(b.expires_at))
+  } catch (err) {
+    logAndZero('documents_to_sign', companyId, err as { message?: string })
+    return []
+  }
+}
+
+/** How many documents wait for this user's signature (see listDocumentsToSign). */
+export async function countDocumentsToSign(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  now: Date = new Date(),
+): Promise<number> {
+  return (await listDocumentsToSign(supabase, companyId, userId, now)).length
 }
 
 /** 1 when the payments verification is due to start or renew, else 0 (see listPaymentsVerificationDue). */

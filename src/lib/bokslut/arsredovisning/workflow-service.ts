@@ -37,6 +37,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { buildCanonicalAnnualReport } from './model'
+import { cancelSigningForSupersededVersions, slotCoveredByBankIdSigning } from './bankid-signing'
 import { getAnnualReportCapabilities } from './capabilities'
 import { upsertAnnualReportProfile } from './profile-service'
 import { upsertNarrative, type NarrativeRow } from './narrative-service'
@@ -279,12 +280,15 @@ export async function createArsredovisningVersion(
 
     // Finalizing binds the signer roster to the version through an RPC only
     // the trusted service role may call (create_annual_report_version_with_signatures).
-    const data = await createAnnualReportVersion(
-      finalize ? createServiceClient() : ctx.supabase,
-      ctx.userId,
-      model,
-      finalize,
-    )
+    const writer = finalize ? createServiceClient() : ctx.supabase
+    const data = await createAnnualReportVersion(writer, ctx.userId, model, finalize)
+    // A re-lock supersedes the previous version: its open BankID signing can
+    // no longer be recorded, so it is cancelled (signatures made stay).
+    if (finalize) {
+      await cancelSigningForSupersededVersions(writer, ctx.companyId, fiscalPeriodId).catch((error) =>
+        ctx.log.warn('open BankID signing of a superseded version not cancelled', { message: error instanceof Error ? error.message : String(error) }),
+      )
+    }
     return { ok: true, data, created: true }
   } catch (error) {
     return failed(error)
@@ -371,6 +375,13 @@ export async function recordArsredovisningSignature(
   { dryRun }: { dryRun: boolean },
 ): Promise<OperationOutcome<SignatureRequest>> {
   try {
+    // 'bankid' is the evidence our own BankID signing writes
+    // (record_signing_signature); nobody types it. A BankID signature made in
+    // another service is an advanced e-signature.
+    if (input.status === 'signed' && input.signing_method === 'bankid') return { ok: false, code: 'SIGNING_METHOD_RESERVED' }
+    // One track per version: a slot a BankID request covers takes no
+    // evidence, and no decline, recorded by hand.
+    if (await slotCoveredByBankIdSigning(ctx, signatureId)) return { ok: false, code: 'ARSREDOVISNING_SIGNING_TRACK_MIXED' }
     if (input.status === 'signed') {
       const { data: version, error: versionError } = await ctx.supabase
         .from('annual_report_versions')
@@ -382,6 +393,18 @@ export async function recordArsredovisningSignature(
         .maybeSingle()
       if (versionError) throw new Error(`Failed to load annual report version: ${versionError.message}`)
       if (!version?.finalized_at) return { ok: false, code: 'ARSREDOVISNING_VERSION_NOT_SIGNABLE' }
+      // A version that carries a BankID signature stays on that track, also
+      // after its signing request was cancelled.
+      const { data: bankidSigned, error: bankidError } = await ctx.supabase
+        .from('arsredovisning_signature_requests')
+        .select('id')
+        .eq('company_id', ctx.companyId)
+        .eq('annual_report_version_id', input.annual_report_version_id)
+        .eq('status', 'signed')
+        .eq('signing_method', 'bankid')
+        .limit(1)
+      if (bankidError) throw new Error(`Failed to read the version's signatures: ${bankidError.message}`)
+      if (Array.isArray(bankidSigned) && bankidSigned.length > 0) return { ok: false, code: 'ARSREDOVISNING_SIGNING_TRACK_MIXED' }
 
       const { data: requestRow, error: requestError } = await ctx.supabase
         .from('arsredovisning_signature_requests')

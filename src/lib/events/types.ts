@@ -44,6 +44,14 @@ export type CoreEvent =
   | { type: 'document.uploaded'; payload: { document: DocumentAttachment; userId: string; companyId: string; extractionOwner?: DocumentExtractionOwner } }
   | { type: 'document.accessed'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
   | { type: 'document.deleted'; payload: { document: { id: string; file_name: string }; userId: string; companyId: string } }
+  // BankID document signing (lib/signing). Payloads carry ids, positions and
+  // times only: never a name typed by the sender, an address or a personnummer.
+  // userId is the person who sent the request.
+  | { type: 'signing.requested'; payload: { signingRequestId: string; documentId: string; signerCount: number; createdVia: 'app' | 'api' | 'mcp'; annualReportVersionId: string | null; userId: string; companyId: string } }
+  | { type: 'signing.signer_signed'; payload: { signingRequestId: string; signerId: string; position: number; signedAt: string; userId: string; companyId: string } }
+  | { type: 'signing.declined'; payload: { signingRequestId: string; signerId: string; position: number; userId: string; companyId: string } }
+  | { type: 'signing.completed'; payload: { signingRequestId: string; documentId: string; signedDocumentId: string | null; evidenceDocumentId: string | null; annualReportVersionId: string | null; userId: string; companyId: string } }
+  | { type: 'signing.cancelled'; payload: { signingRequestId: string; userId: string; companyId: string } }
   /** Arkiv said what a document is (a model or a person). The invoice inbox routes it into or out of the Underlag queue on this. */
   | { type: 'document.classified'; payload: { document: { id: string; file_name: string }; companyId: string; userId: string; docType: string; admission: 'admitted' | 'held'; decidedBy: 'model' | 'human' } }
   // Invoicing

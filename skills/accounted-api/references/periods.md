@@ -2315,7 +2315,7 @@ Example response `200`:
 status signed records the evidence of a signature made outside the product (a paper original or an advanced e-signature): the ready_for_signature version it is for, the method, where the original is kept (evidence_reference) and the signing time. status declined marks the slot declined. Only a pending slot of this period transitions, once. ÅRL requires each signer to date their signature; the date must fall between the version's finalization and today. Idempotent. Dry-runnable.
 
 **Use when:** The board has signed the printed or e-signed document and the signatures are to be registered.
-**Do not use for:** Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing (not available here).
+**Do not use for:** Adding signers (POST .../signatures), filing with Bolagsverket, or BankID signing in Accounted (POST .../versions/{versionId}/signing-request).
 
 **Pitfalls:**
 - A version that is not ready_for_signature answers 409 ARSREDOVISNING_VERSION_NOT_SIGNABLE.
@@ -2323,6 +2323,8 @@ status signed records the evidence of a signature made outside the product (a pa
 - A signed_at before finalization or in the future answers 400 ARSREDOVISNING_SIGNATURE_DATE_INVALID.
 - evidence_reference is archive:<ref>, document:<id> or receipt:<ref>, not free text.
 - Recorded signatures cannot be undone: finalize a new version instead.
+- signing_method bankid answers 422 SIGNING_METHOD_RESERVED: it is set only when the board signs with BankID in Accounted. A BankID signature made in another service is advanced_e_signature.
+- A slot covered by an open or partly signed BankID signing request answers 409 ARSREDOVISNING_SIGNING_TRACK_MIXED: a version is signed one way.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2547,6 +2549,109 @@ Example response `200`:
     "entry_point": "k2-ab-risbs-2024-09-12",
     "finalized_at": "2027-03-02T09:00:00Z",
     "created_at": "2027-03-02T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/versions/{versionId}/signing-request`
+
+**Send a locked årsredovisning version to the board for BankID signing: one link per signer slot.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run`
+
+For a ready_for_signature version. Renders the copy the board signs (no dates or lines to fill in: each date is in the BankID signature), archives it and creates a signing request with one signer per pending slot, mailed when an email is given. Each BankID signature fills its slot (signing_method bankid, the signing time); when the last one lands the version is signed and can be filed. The signer's BankID name must match the slot's name, or the signature is refused (Bolagsverket checks the names). Read progress with GET /signing-requests/{id}. The fastställelseintyg is signed at Bolagsverket after the årsstämma, not here. Dry-runnable.
+
+**Use when:** The årsredovisning is locked and every board member and the VD can sign with Swedish BankID.
+**Do not use for:** A board where someone lacks Swedish BankID (sign elsewhere and record each signature with PATCH .../signatures/{signatureId}), or the fastställelseintyg.
+
+**Pitfalls:**
+- Every pending slot gets a signer; list them with GET .../signatures. A slot you leave out is still included, without an email.
+- ARSREDOVISNING_SIGNING_TRACK_MIXED: a slot already has a signature recorded by hand; this version is signed that way.
+- SIGNING_REQUEST_ALREADY_OPEN: the version already waits in another request (details.signing_request_id).
+- A name in the roster that differs from the signer's BankID name is refused at signing (SIGNING_NAME_MISMATCH): fix the name and lock a new version.
+- Locking a new version cancels this request; signatures already made stay on the old version.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `versionId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{
+  signers: { signature_id: string, email?: string | null, user_id?: string | null }[],
+  message?: string | null,
+  expires_in_days?: number | null,
+  send_email?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "signers": [
+    {
+      "signature_id": "7c1a…",
+      "email": "anna@example.se"
+    }
+  ]
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    signing_request_id: string,
+    status: "open",
+    title: string,
+    document_id: string,
+    document_sha256: string,
+    expires_at: string,
+    signers: { signer_id: string, position: number, name: string, email: string | null, annual_report_signature_id: string | null, lock: "none" | "member" | "personnummer", email_sent: boolean, url: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "signing_request_id": "8e1d…",
+    "status": "open",
+    "title": "Årsredovisning för räkenskapsåret 2026-01-01 till 2026-12-31",
+    "document_id": "4f1c…",
+    "document_sha256": "9b2e…",
+    "expires_at": "2027-03-19T09:00:00.000Z",
+    "signers": [
+      {
+        "signer_id": "2c7b…",
+        "position": 1,
+        "name": "Anna Svensson",
+        "email": "anna@example.se",
+        "annual_report_signature_id": "7c1a…",
+        "lock": "none",
+        "email_sent": true,
+        "url": null
+      }
+    ]
   },
   "meta": {
     "request_id": "req_…",

@@ -123,6 +123,11 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   rules: null,
   sandbox: null,
   settings: null,
+  // BankID signing of archive documents (lib/signing, the ledger kernel): the
+  // requests, the signer's link and the member's own signing.
+  signera: null,
+  signing: null,
+  'signing-requests': null,
   skatteverket: null,
   skills: null,
   stripe: null,

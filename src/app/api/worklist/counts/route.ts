@@ -11,10 +11,11 @@ import { getWorklistCounts } from '@/lib/worklist'
  *
  * Response: { data: { counts: Record<WorklistCategory, number>, total,
  * overdueInvoices } }: overdueInvoices is the grouped overdue row's facts
- * (lib/worklist OverdueInvoicesDue) or null.
+ * (lib/worklist OverdueInvoicesDue) or null. The per-person rows
+ * (documents_to_sign) are counted for the caller.
  */
 export const GET = withRouteContext('worklist.counts', async (_request, ctx) => {
-  const { supabase, companyId } = ctx
-  const data = await getWorklistCounts(supabase, companyId)
+  const { supabase, companyId, user } = ctx
+  const data = await getWorklistCounts(supabase, companyId, { userId: user.id })
   return NextResponse.json({ data })
 })

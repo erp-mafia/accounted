@@ -33,6 +33,7 @@ vi.mock('../categories', () => ({
   countBankSwitchDue: vi.fn().mockResolvedValue(0),
   countPaymentsVerificationDue: vi.fn().mockResolvedValue(0),
   countSupplierPayeeChangesDue: vi.fn().mockResolvedValue(0),
+  countDocumentsToSign: vi.fn().mockResolvedValue(0),
 }))
 
 vi.mock('@/lib/suggestions/list', () => ({
@@ -89,6 +90,7 @@ describe('getWorklistCounts', () => {
       bank_switch: 0,
       payments_verification_renewal: 0,
       supplier_payee_change: 0,
+      documents_to_sign: 0,
     })
   })
 

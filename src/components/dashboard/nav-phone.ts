@@ -57,6 +57,7 @@ export type NavLabelKey =
   | 'arkiv'
   | 'arkiv_all'
   | 'arkiv_history'
+  | 'arkiv_signings'
   | 'invoices'
   | 'quotes'
   | 'sales_orders'

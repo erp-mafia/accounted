@@ -1,0 +1,1 @@
+[2026-10-25] Signing request expiry is read lazily (an open request past expires_at reads as expired and its links refuse); no cron closes it: nothing depends on the stored status flipping, and a cron is one more moving part.

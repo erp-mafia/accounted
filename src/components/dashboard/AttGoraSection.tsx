@@ -15,7 +15,7 @@ import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { visibleWorklistTotal } from '@/lib/worklist/visible-total'
 import type { AiTaskCategory } from '@/lib/worklist/ai-task'
-import type { PaymentsVerificationDue, SuggestedMatch, SupplierPayeeChangeDue } from '@/lib/worklist/types'
+import type { DocumentToSignDue, PaymentsVerificationDue, SuggestedMatch, SupplierPayeeChangeDue } from '@/lib/worklist/types'
 import { PayeeChangeDialog } from '@/components/payments/PayeeChangeDialog'
 import type { AllocationTransaction } from '@/components/transactions/MatchAllocationDialog'
 import { PAYMENTS_PAGE_PATH } from '@/lib/payments/orders/page-path'
@@ -37,6 +37,7 @@ import {
   CalendarClock,
   CheckCircle2,
   ChevronRight,
+  FileSignature,
   FileWarning,
   Link2,
   HandCoins,
@@ -97,6 +98,12 @@ interface AttGoraSectionProps {
    * "Attestera {leverantör} {belopp}", above the company's attest count.
    */
   attestsDue?: SupplierInvoiceAttestDue[]
+  /**
+   * Documents waiting for this user's BankID signature (lib/worklist
+   * documents_to_sign): one Granska row each, "Signera {rubrik}", opening the
+   * member signing page.
+   */
+  documentsToSign?: DocumentToSignDue[]
   /** The next skattekonto charge the balance does not cover: one Betala row. */
   skattekontoPayment?: SkattekontoPaymentDue | null
   /**
@@ -264,6 +271,7 @@ export default function AttGoraSection({
   worklist,
   expensePayouts = [],
   attestsDue = [],
+  documentsToSign = [],
   skattekontoPayment = null,
   bankSwitches = [],
   paymentsVerification = null,
@@ -366,6 +374,7 @@ export default function AttGoraSection({
     otherSuggestedMatches > 0
   const betalaRows = expensePayouts.length > 0 || skattekontoPayment !== null
   const granskaRows =
+    documentsToSign.length > 0 ||
     attestsDue.length > 0 ||
     counts.supplier_invoice_approval > 0 ||
     counts.verifikat_missing_document > 0 ||
@@ -691,6 +700,19 @@ export default function AttGoraSection({
                 <div>
                   <BandHeader>{t('band_granska')}</BandHeader>
                   <div>
+                    {documentsToSign.map((d) => (
+                      <WorklistRow
+                        key={`sign-${d.signer_id}`}
+                        href={`/signering/${d.signer_id}`}
+                        icon={FileSignature}
+                        label={t('row_document_to_sign', { title: d.title })}
+                        detail={
+                          d.role_label
+                            ? t('row_document_to_sign_detail_role', { role: d.role_label, date: formatDateLong(d.expires_at) })
+                            : t('row_document_to_sign_detail', { date: formatDateLong(d.expires_at) })
+                        }
+                      />
+                    ))}
                     {attestsDue.map((a) => (
                       <WorklistRow
                         key={a.supplier_invoice_id}

@@ -26,6 +26,10 @@ import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { FyPicker } from '@/components/common/FyPicker'
 import { DigitalInlamning, INLAMNING_COMING_SOON } from '@/components/bokslut/DigitalInlamning'
+import { ArsredovisningBankIdSigning, useVersionSigningRequests } from '@/components/bokslut/ArsredovisningBankIdSigning'
+import { useSigningAvailability } from '@/components/signing/use-signing-availability'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { deriveArsredovisningSigningTrack } from '@/lib/bokslut/arsredovisning/signing-track'
 import {
   AnnualReportStudio,
   type AnnualReportComplianceSummary,
@@ -87,6 +91,7 @@ export default function ArsredovisningPage() {
   const tNotes = useTranslations('annualReportNotes')
   const tSteps = useTranslations('annualReportSteps')
   const tHelp = useTranslations('annualReportHelp')
+  const tSign = useTranslations('annualReportSigning')
   const { appName } = useBranding()
   const { periods: fiscalPeriods, isLoading: periodsLoading } = useFiscalPeriods()
 
@@ -166,9 +171,10 @@ export default function ArsredovisningPage() {
   const [signerRole, setSignerRole] = useState('Styrelseledamot')
   const [versions, setVersions] = useState<AnnualReportVersionSummary[]>([])
   const [selectedSignatureVersionId, setSelectedSignatureVersionId] = useState('')
-  const [signingMethod, setSigningMethod] = useState<
-    'paper_original' | 'advanced_e_signature' | 'bankid'
-  >('paper_original')
+  // Evidence recorded by hand: a paper original, or an e-signature made in
+  // another service (Scrive with BankID and the like). 'bankid' is written
+  // only by the board's BankID signing in the app (SIGNING_METHOD_RESERVED).
+  const [signingMethod, setSigningMethod] = useState<'paper_original' | 'advanced_e_signature'>('paper_original')
   const [signatureEvidence, setSignatureEvidence] = useState('')
   const [signatureDate, setSignatureDate] = useState(() => todayIsoStockholm())
   // The signed copy is picked from (or uploaded into) the archive: the
@@ -178,6 +184,22 @@ export default function ArsredovisningPage() {
   const [uploadingEvidence, setUploadingEvidence] = useState(false)
   const evidenceFileInput = useRef<HTMLInputElement>(null)
   const hasLockedVersion = versions.some((version) => version.status === 'ready_for_signature')
+  // The board's BankID signing (lib/bokslut/arsredovisning/bankid-signing.ts):
+  // offered only where signing is open here, and one track per version.
+  const signingAvailable = useSigningAvailability()
+  const [signingReload, setSigningReload] = useState(0)
+  const [manualOpen, setManualOpen] = useState(false)
+  // A version the board signed with BankID is no longer a locked one: its
+  // panel stays, to say what comes next.
+  const bankIdSignedVersionId =
+    !selectedSignatureVersionId &&
+    signatures.length > 0 &&
+    signatures.every((sig) => sig.status === 'signed') &&
+    signatures.some((sig) => sig.signing_method === 'bankid')
+      ? signatures[0]!.annual_report_version_id
+      : null
+  const signingVersionId = selectedSignatureVersionId || bankIdSignedVersionId || null
+  const versionSigningRequests = useVersionSigningRequests(signingVersionId, signingReload)
 
   // The compliance check as the studio last loaded it (null while loading)
   // and a counter that makes the studio reload it after a signer change:
@@ -709,6 +731,31 @@ export default function ArsredovisningPage() {
     [periodId, refreshCompliance, tStudio, toast],
   )
 
+  // A BankID request was sent, reminded or cancelled, or a signature landed:
+  // the slots, the requests and the compliance check are read again.
+  const reloadSigning = useCallback(() => {
+    if (!periodId) return
+    fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures`)
+      .then((response) => response.json())
+      .then((body: { data?: SignatureRequest[] }) => {
+        if (Array.isArray(body?.data)) setSignatures(body.data)
+      })
+      .catch(() => undefined)
+    setSigningReload((n) => n + 1)
+    refreshCompliance()
+  }, [periodId, refreshCompliance])
+
+  // A deep link to a step (#ar-step-agm from the member signing page) lands
+  // there once the page has rendered its sections.
+  const scrolledToHash = useRef(false)
+  useEffect(() => {
+    if (loading || scrolledToHash.current) return
+    const hash = typeof window === 'undefined' ? '' : window.location.hash.slice(1)
+    if (!hash.startsWith('ar-step-')) return
+    scrolledToHash.current = true
+    document.getElementById(hash)?.scrollIntoView({ block: 'start' })
+  }, [loading])
+
   // A rail step scrolls to its section; the bokslut lives on its own page.
   const goToStep = useCallback(
     (key: string) => {
@@ -813,6 +860,13 @@ export default function ArsredovisningPage() {
       ? documentId
       : null
   })()
+  const signingSlots = signingVersionId ? signatures.filter((sig) => sig.annual_report_version_id === signingVersionId) : []
+  const signingTrack = deriveArsredovisningSigningTrack(signingSlots, versionSigningRequests ?? [])
+  // One track per version: a BankID request open, or a BankID signature
+  // made, closes recording by hand; while both ways are open and BankID is
+  // available, recording by hand is the secondary way, folded away.
+  const manualBlocked = signingTrack.kind === 'bankid'
+  const manualFolded = signingAvailable && signingTrack.kind === 'none' && !manualOpen
   const signReadinessHint = !selectedSignatureVersionId
     ? 'Välj en låst version ovan, sedan går det att markera underskrifter.'
     : !SIGNATURE_EVIDENCE_REFERENCE_PATTERN.test(signatureEvidence.trim())
@@ -1405,6 +1459,7 @@ export default function ArsredovisningPage() {
         }
         boardSection={
           <div className="space-y-4 px-1 pt-2">
+            {signingAvailable && <p className="text-xs leading-5 text-muted-foreground">{tSign('board_name_rule')}</p>}
             {signatures.length === 0 ? (
               <p className="text-sm text-muted-foreground italic">{tSteps('board_empty')}</p>
             ) : (
@@ -1517,23 +1572,45 @@ export default function ArsredovisningPage() {
                 </p>
               )}
             </div>
+          </div>
+          {signingVersionId && (signingAvailable || signingTrack.kind === 'bankid') && (
+            <ArsredovisningBankIdSigning
+              fiscalPeriodId={periodId}
+              versionId={signingVersionId}
+              slots={signingSlots}
+              requests={versionSigningRequests}
+              track={signingTrack}
+              available={signingAvailable}
+              onChanged={reloadSigning}
+            />
+          )}
+          {manualBlocked ? (
+            <p className="text-[13px] text-muted-foreground">{tSign('manual_blocked_bankid')}</p>
+          ) : (
+            <>
+              {signingAvailable && signingTrack.kind === 'none' && (
+                <div className="space-y-1">
+                  <button type="button" className={QUIET_LINK_CLASS} aria-expanded={manualOpen} onClick={() => setManualOpen((open) => !open)}>
+                    {manualOpen ? tSign('manual_hide') : tSign('manual_show')}
+                  </button>
+                  <p className="text-[12.5px] text-muted-foreground">{tSign('manual_when')}</p>
+                </div>
+              )}
+              {!manualFolded && (
+                <>
+          <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
               <Label htmlFor="signature-method">Underskriftsmetod</Label>
               <Select
                 value={signingMethod}
-                onValueChange={(next) =>
-                  setSigningMethod(
-                    next as 'paper_original' | 'advanced_e_signature' | 'bankid',
-                  )
-                }
+                onValueChange={(next) => setSigningMethod(next as 'paper_original' | 'advanced_e_signature')}
               >
                 <SelectTrigger id="signature-method">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="paper_original">Undertecknat original på papper</SelectItem>
-                  <SelectItem value="advanced_e_signature">Avancerad e-signatur</SelectItem>
-                  <SelectItem value="bankid">BankID via extern signeringstjänst</SelectItem>
+                  <SelectItem value="paper_original">{tSign('method_paper')}</SelectItem>
+                  <SelectItem value="advanced_e_signature">{tSign('method_e_signature')}</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1649,6 +1726,10 @@ export default function ArsredovisningPage() {
               </div>
             </div>
           ))}
+                </>
+              )}
+            </>
+          )}
         </div>
       </section>
 

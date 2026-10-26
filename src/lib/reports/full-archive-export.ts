@@ -1385,6 +1385,19 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'annual_report_versions', file: 'annual_report_versions.json', orderBy: 'created_at' },
   { name: 'annual_report_validation_runs', file: 'annual_report_validation_runs.json', orderBy: 'created_at' },
   { name: 'arsredovisning_signature_requests', file: 'arsredovisning_signature_requests.json', orderBy: 'created_at' },
+  // BankID signing (lib/signing): which document was sent for signing, to
+  // whom, and who signed when with which BankID name. The signed copy and the
+  // evidence package (the signatures themselves) are archive documents and
+  // export with the documents. The signer projection leaves out the link's
+  // token hash and the live BankID session.
+  { name: 'signing_requests', file: 'signing_requests.json', orderBy: 'created_at' },
+  {
+    name: 'signing_request_signers',
+    file: 'signing_request_signers.json',
+    orderBy: 'created_at',
+    columns:
+      'id, company_id, signing_request_id, position, name, email, role_label, user_id, lock_kind, annual_report_signature_id, link_sent_at, last_reminded_at, status, signed_at, bankid_given_name, bankid_surname, user_visible_data, declined_at, decline_reason, created_at, updated_at',
+  },
   { name: 'arsredovisning_submissions', file: 'arsredovisning_submissions.json' },
   // The förenklat årsbokslut's own inputs per räkenskapsår (BFNAR 2010:1):
   // the eligibility confirmation with who and when, tilläggsupplysningar and
@@ -1454,6 +1467,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
     'non-human principals and their sponsors (API access control), not räkenskapsinformation; their creation and revocation are in audit_log and every write names the account by label',
   bank_connect_invites: 'signatory link tokens (secrets, hashed) for a bank consent; expire in 7 days, not räkenskapsinformation',
   supplier_invoice_attest_links: 'attest mail link tokens (secrets, hashed) for one attester and one invoice; expire in 7 days, not räkenskapsinformation (every decision made through them is exported in supplier_invoice_attestations)',
+  signing_signer_private: 'per signer the personnummer lock (hash and ciphertext) and the BankID signature with the full personnummer; operational personal data, never exported as a table (the signatures are in each completed request\'s evidence package, an archive document)',
   payment_signing_links: 'signing link tokens (secrets, hashed) for a basket of bank payments; expire in 72 hours, not räkenskapsinformation (the payment orders and their events, who approved and who signed, are exported)',
   bank_connections: 'PSD2 connection state and tokens, not portable',
   bank_connection_psus: 'the personnummer (encrypted) a bank consent was created with, kept only to send it again on later calls to that consent; operational personal data, never exported, not räkenskapsinformation',

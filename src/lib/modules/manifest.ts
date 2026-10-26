@@ -227,6 +227,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'dimensions',
       'dimension-rules',
       'documents',
+      // BankID signing of archived documents (lib/operations/signing-requests.ts).
+      'signing-requests',
       'settings',
       'cash-accounts',
       'measures',
@@ -243,6 +245,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'reports',
       'dimensions',
       'documents',
+      'signing-requests',
       'settings',
       'compliance',
       'cash-accounts',

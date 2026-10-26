@@ -149,6 +149,13 @@ const RISK_TIERS = {
   // The payment signing link mints a 72-hour credential URL (and may mail it); the
   // payments are still signed by the firmatecknare with BankID at the bank.
   request_payment_signature: 'medium',
+  // A signing request mints one credential link per signer (up to 90 days) and
+  // mails it; each signer still signs in person with BankID. A reminder mails
+  // a pending signer a new link.
+  request_signature: 'medium',
+  remind_signature: 'low',
+  // The board's årsredovisning: the same links, one per signer slot.
+  request_arsredovisning_signatures: 'medium',
   // Approving new bank details an invoice states releases payment to that
   // account (and by default writes it on the supplier card): the step an
   // invoice fraud needs. High, and approvable in the web UI only.

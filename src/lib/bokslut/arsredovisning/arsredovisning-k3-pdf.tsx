@@ -8,7 +8,9 @@ import {
   CERTIFICATE_SIGNER_LINE,
   DRAFT_NO_SIGNERS,
   DRAFT_SIGNATURES_NOTE,
+  E_SIGNING_SIGNATURES_NOTE,
   draftCertificateNote,
+  eSigningCertificateNote,
   signatureDate,
   type ArsredovisningPdfMode,
 } from './signature-pages'
@@ -638,6 +640,17 @@ export function ArsredovisningK3PDF({
               })
             )}
           </>
+        ) : mode === 'e_signing' ? (
+          <>
+            <Text style={styles.paragraph}>{E_SIGNING_SIGNATURES_NOTE}</Text>
+            {data.company.registered_office && <Text style={styles.paragraph}>{data.company.registered_office}</Text>}
+            {data.signatures.map((sig, i) => (
+              <View key={i} style={styles.draftSigner}>
+                <Text style={styles.colLabel}>{sig.name}</Text>
+                <Text style={styles.signatureRole}>{sig.role}</Text>
+              </View>
+            ))}
+          </>
         ) : (
           <>
             <Text style={styles.paragraph}>
@@ -677,6 +690,7 @@ export function ArsredovisningK3PDF({
         <PageChrome data={data} pageLabel="Fastställelseintyg" />
         <Text style={styles.sectionTitle}>Fastställelseintyg</Text>
         {mode === 'draft' && <Text style={styles.draftNote}>{draftCertificateNote('årsstämman')}</Text>}
+        {mode === 'e_signing' && <Text style={styles.draftNote}>{eSigningCertificateNote('årsstämman')}</Text>}
         {(mode === 'signing' || data.forvaltningsberattelse.agm_date) && (
           <>
             <Text style={styles.paragraph}>

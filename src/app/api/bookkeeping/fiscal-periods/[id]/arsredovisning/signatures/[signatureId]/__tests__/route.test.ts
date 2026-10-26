@@ -97,8 +97,44 @@ describe('annual report signature transition', () => {
     expect(response.status).toBe(409)
   })
 
+  it('refuses bankid typed by hand: only the BankID signing in Accounted sets it', async () => {
+    setup()
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await PATCH(createMockRequest('/x', { method: 'PATCH', body: { ...signedBody, signing_method: 'bankid' } }), params),
+    )
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('SIGNING_METHOD_RESERVED')
+    expect(createServiceClientMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses evidence by hand on a version that already carries a BankID signature, also after its request was cancelled', async () => {
+    const { enqueue } = setup()
+    enqueue({ data: [] })
+    enqueue({ data: { id: versionId, status: 'ready_for_signature', finalized_at: '2026-03-01T08:00:00.000Z' } })
+    enqueue({ data: [{ id: 'signature-2' }] })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await PATCH(createMockRequest('/x', { method: 'PATCH', body: signedBody }), params),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('ARSREDOVISNING_SIGNING_TRACK_MIXED')
+    expect(createServiceClientMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses evidence by hand on a slot a BankID signing request covers', async () => {
+    const { enqueue } = setup()
+    enqueue({ data: [{ signing_request_id: 'request-1', status: 'pending' }] })
+    enqueue({ data: [{ id: 'request-1' }] })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
+      await PATCH(createMockRequest('/x', { method: 'PATCH', body: signedBody }), params),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('ARSREDOVISNING_SIGNING_TRACK_MIXED')
+  })
+
   it('stores version-bound signature evidence', async () => {
     const { enqueue } = setup()
+    // No BankID signing request covers the slot (slotCoveredByBankIdSigning).
+    enqueue({ data: [] })
     enqueue({
       data: {
         id: versionId,
@@ -106,6 +142,8 @@ describe('annual report signature transition', () => {
         finalized_at: '2026-03-01T08:00:00.000Z',
       },
     })
+    // No slot of the version carries a BankID signature.
+    enqueue({ data: [] })
     enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending' } })
     enqueue({
       data: {
@@ -133,6 +171,8 @@ describe('annual report signature transition', () => {
 
   it('rejects a signature date before the version was finalized', async () => {
     const { enqueue } = setup()
+    // No BankID signing request covers the slot (slotCoveredByBankIdSigning).
+    enqueue({ data: [] })
     enqueue({
       data: {
         id: versionId,
@@ -140,6 +180,8 @@ describe('annual report signature transition', () => {
         finalized_at: '2026-03-02T08:00:00.000Z',
       },
     })
+    // No slot of the version carries a BankID signature.
+    enqueue({ data: [] })
     enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending' } })
     const { status, body } = await parseJsonResponse<{ error: { code: string } }>(
       await PATCH(
@@ -154,6 +196,8 @@ describe('annual report signature transition', () => {
 
   it('rejects a future signature date', async () => {
     const { enqueue } = setup()
+    // No BankID signing request covers the slot (slotCoveredByBankIdSigning).
+    enqueue({ data: [] })
     enqueue({
       data: {
         id: versionId,
@@ -161,6 +205,8 @@ describe('annual report signature transition', () => {
         finalized_at: '2026-03-01T08:00:00.000Z',
       },
     })
+    // No slot of the version carries a BankID signature.
+    enqueue({ data: [] })
     enqueue({ data: { id: 'signature-1', annual_report_version_id: versionId, status: 'pending' } })
     const response = await PATCH(
       createMockRequest('/x', {

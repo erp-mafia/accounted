@@ -108,10 +108,11 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'documents.md',
     title: 'Documents',
-    members: ['documents', 'inbox-items'],
+    members: ['documents', 'inbox-items', 'signing-requests'],
     blurb:
       'The WORM document archive (7-year legal retention: uploads are permanent) and inbox-item stamping. ' +
-      'Link every uploaded receipt/invoice document to its journal entry.',
+      'Link every uploaded receipt/invoice document to its journal entry. ' +
+      'Signing requests send an archived PDF for BankID signing; each signer signs in person, and the signed copy and evidence package land in the archive.',
   },
   {
     file: 'banking.md',

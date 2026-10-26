@@ -331,6 +331,22 @@ export const WORKLIST_CATEGORIES = [
    *           given the account, or the invoice is paid or credited.
    */
   'supplier_payee_change',
+  /**
+   * Documents waiting for the signed-in user's BankID signature ("Signera
+   * {rubrik}"), one item per signer row, opening /signering/<signerId>.
+   * Per person, like the attest rows: counted only for whoever is asked.
+   * Pending:  a signing_request_signers row of the active company with
+   *           user_id = the user and status = 'pending', on a request that
+   *           is open and not past expires_at, while signing is switched
+   *           on (lib/signing/switched-on.ts); a row nobody can sign is no
+   *           work.
+   * Done:     the user signs (record_signing_signature sets the row signed)
+   *           or declines, or the request completes, is declined by someone
+   *           else, is cancelled by the sender or runs past its expiry.
+   * A signer asked by address only (no member) is not counted: they sign
+   * through the mailed link.
+   */
+  'documents_to_sign',
 ] as const
 
 export type WorklistCategory = (typeof WORKLIST_CATEGORIES)[number]
@@ -356,6 +372,21 @@ export interface SupplierPayeeChangeDue {
   old_payee: string | null
   /** The account the invoice states, as a label. */
   new_payee: string
+}
+
+/**
+ * One document waiting for the signed-in user's BankID signature: the Att
+ * göra row "Signera {rubrik}", which opens the member signing page
+ * /signering/<signerId> (no mailed link needed).
+ */
+export interface DocumentToSignDue {
+  signer_id: string
+  signing_request_id: string
+  title: string
+  /** The signer's role on the request ("Styrelseledamot"), when the sender gave one. */
+  role_label: string | null
+  /** When the request stops taking signatures (ISO timestamp). */
+  expires_at: string
 }
 
 /**
