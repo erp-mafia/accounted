@@ -1,0 +1,1 @@
+[2026-10-25] A storno + rättelse may not move a bank-linked verifikat's bank leg to another bank account: the bank row says where the money moved, and a released row invited booking it twice; a leg taken out (to 2440) still releases the row.

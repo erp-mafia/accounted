@@ -45,6 +45,7 @@ import {
   EntryAlreadyReversedError,
   EntryDateOutsideFiscalPeriodError,
   ImportVatWithoutBaseError,
+  CorrectionBankAccountChangedError,
   MigratedDeductionHeldByRequestError,
   ReversalHookMissingError,
   FiscalPeriodNotFoundError,
@@ -703,6 +704,9 @@ export function extractBookkeepingDetails(err: unknown): { code: string; details
   }
   if (err instanceof ImportVatWithoutBaseError) {
     return { code: err.code, details: { import_vat_accounts: err.importVatAccounts } }
+  }
+  if (err instanceof CorrectionBankAccountChangedError) {
+    return { code: err.code, details: { bank_account: err.bankAccount, moved_to: err.movedTo } }
   }
   // Without this arm a required-dimension refusal (account_dimension_rules)
   // fell through to the INTERNAL_ERROR default: a 500 that never said which

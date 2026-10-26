@@ -28,6 +28,7 @@ import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import { findKontantmetodCarry } from '@/lib/bookkeeping/kontantmetod-carry-guard'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
+import { assertCorrectionKeepsBankAccount } from '@/lib/core/bookkeeping/correction-bank-leg'
 import {
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
@@ -354,10 +355,13 @@ export async function correctEntry(
   }
 
   // Importmoms keeps its ruta 50 base in the corrected verifikat (#94), as at
-  // the booking doors. A pure move (recordate: the same lines on another date)
-  // writes no new line and is not judged. Refused before anything is written.
+  // the booking doors, and a bank row's money stays on the bank row's own
+  // account (correction-bank-leg.ts). A pure move (recordate: the same lines
+  // on another date) writes no new line and is not judged. Refused before
+  // anything is written.
   if (!(dateOrPeriodChanged && isIdenticalToOriginal(correctedLines, originalLines))) {
     await assertCorrectedImportVatBase(supabase, companyId, original.source_type, correctedLines)
+    await assertCorrectionKeepsBankAccount(supabase, companyId, original.id, originalLines, correctedLines)
   }
 
   // When re-booking elsewhere, validate the corrected date falls within the
@@ -659,13 +663,14 @@ export async function correctEntry(
     originalEntryId,
     correctedEntry!.id
   )
-  // A correction that moves the bank leg (to 2440 for a purchase rebooked as
-  // a supplier invoice, or to another bank account) leaves the bank row
-  // nothing to anchor: guard_cash_transaction_binding refuses the move. Left
-  // on the reversed original, the row read as booked and could be neither
-  // unlinked nor stornoed (crm#1433). It is released the way a storno
-  // releases it, back to Att bokföra, to be matched to the verifikat that now
-  // books the payment.
+  // A correction that takes the bank leg out (to 2440 for a purchase rebooked
+  // as a supplier invoice) leaves the bank row nothing to anchor:
+  // guard_cash_transaction_binding refuses the move. Left on the reversed
+  // original, the row read as booked and could be neither unlinked nor
+  // stornoed (crm#1433). It is released the way a storno releases it, back to
+  // Att bokföra, to be matched to the verifikat that now books the payment.
+  // A correction that moves the leg to another bank account never gets here
+  // (assertCorrectionKeepsBankAccount refuses it up front).
   if (transactionRelinkError) {
     await releaseBankRowsOfReversedEntry(supabase, companyId, originalEntryId)
   }

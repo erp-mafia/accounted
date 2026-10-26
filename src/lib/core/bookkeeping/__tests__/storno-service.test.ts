@@ -4,6 +4,7 @@ import { makeJournalEntry, makeJournalEntryLine } from '@/tests/helpers'
 import type { CreateJournalEntryLineInput } from '@/types'
 import {
   BookkeepingDatabaseError,
+  CorrectionBankAccountChangedError,
   CorrectionChainTooDeepError,
   ImportVatWithoutBaseError,
   MeaninglessCorrectionError,
@@ -85,6 +86,14 @@ vi.mock('@/lib/bookkeeping/account-backfill', () => ({
   backfillStandardBASAccounts: (...args: unknown[]) => mockBackfill(...args),
 }))
 
+// A bank row's money stays on its own account (correction-bank-leg.test.ts
+// covers the rule): passes here, one test below makes it refuse. Consumes no
+// queued result.
+const mockAssertBankAccount = vi.fn()
+vi.mock('@/lib/core/bookkeeping/correction-bank-leg', () => ({
+  assertCorrectionKeepsBankAccount: (...args: unknown[]) => mockAssertBankAccount(...args),
+}))
+
 import { correctEntry } from '../storno-service'
 import { CORRECTION_COLUMN_POLICY } from '../correction-column-policy'
 import {
@@ -109,6 +118,7 @@ beforeEach(() => {
   })
   vi.mocked(cancelOrphanedEntry).mockResolvedValue({ error: null })
   mockBackfill.mockResolvedValue([])
+  mockAssertBankAccount.mockResolvedValue(undefined)
   mockFetchDynamic.mockResolvedValue({ mappingByAccount: new Map(), explicitAccounts: new Set() })
 })
 
@@ -867,6 +877,33 @@ describe('correctEntry', () => {
       expect(result.corrected.id).toBe('corrected-1')
       expect(releaseBankRowsOfReversedEntry).toHaveBeenCalledTimes(1)
       expect(releaseBankRowsOfReversedEntry).toHaveBeenCalledWith(supabase, 'company-1', 'orig-1')
+    })
+
+    it('refuses a correction that moves the bank leg to another bank account before anything is written', async () => {
+      // 1930 to 1931: the bank row says the money moved on 1930. Released, the
+      // row would invite booking the same money a second time.
+      setupResults()
+      const refusal = new CorrectionBankAccountChangedError('1930', ['1931'], 'Behåll beloppet på 1930.')
+      mockAssertBankAccount.mockRejectedValueOnce(refusal)
+      const movedLines = [
+        { account_number: '5410', debit_amount: 1000, credit_amount: 0 },
+        { account_number: '1931', debit_amount: 0, credit_amount: 1000 },
+      ]
+      const supabase = makeClient()
+
+      await expect(
+        correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', movedLines),
+      ).rejects.toBe(refusal)
+      expect(mockAssertBankAccount).toHaveBeenCalledWith(
+        supabase,
+        'company-1',
+        'orig-1',
+        originalEntry.lines,
+        movedLines,
+      )
+      expect(inserts).toEqual([])
+      expect(commitStornoOrCorrectionDraft).not.toHaveBeenCalled()
+      expect(releaseBankRowsOfReversedEntry).not.toHaveBeenCalled()
     })
   })
 })

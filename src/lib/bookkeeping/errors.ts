@@ -51,6 +51,7 @@ export const CUTOFF_CARRY_REVERSAL_DATE = 'CUTOFF_CARRY_REVERSAL_DATE' as const
 export const KONTANTMETOD_CARRY_HAS_SETTLEMENTS = 'KONTANTMETOD_CARRY_HAS_SETTLEMENTS' as const
 export const CUTOFF_CARRY_CORRECTION_REFUSED = 'CUTOFF_CARRY_CORRECTION_REFUSED' as const
 export const IMPORT_VAT_WITHOUT_BASE = 'IMPORT_VAT_WITHOUT_BASE' as const
+export const CORRECTION_BANK_ACCOUNT_CHANGED = 'CORRECTION_BANK_ACCOUNT_CHANGED' as const
 
 // ============================================================================
 // AccountsNotInChartError: kept for back-compat (many existing call sites)
@@ -587,6 +588,24 @@ export class ImportVatWithoutBaseError extends Error {
   }
 }
 
+/**
+ * A storno + rättelse that moves the bank leg of a bank row the original
+ * anchors to another bank account (lib/core/bookkeeping/correction-bank-leg.ts):
+ * the bank row says which account the money moved on. The message is the
+ * Swedish sentence naming both accounts and what to do instead.
+ */
+export class CorrectionBankAccountChangedError extends Error {
+  readonly code = CORRECTION_BANK_ACCOUNT_CHANGED
+  constructor(
+    public readonly bankAccount: string,
+    public readonly movedTo: string[],
+    messageSv: string,
+  ) {
+    super(messageSv)
+    this.name = 'CorrectionBankAccountChangedError'
+  }
+}
+
 export class InvalidMappingResultError extends Error {
   readonly code = INVALID_MAPPING_RESULT
   constructor(
@@ -754,6 +773,7 @@ export function isBookkeepingError(err: unknown): boolean {
     err instanceof KontantmetodCarryHasSettlementsError ||
     err instanceof CutoffCarryCorrectionRefusedError ||
     err instanceof ImportVatWithoutBaseError ||
+    err instanceof CorrectionBankAccountChangedError ||
     err instanceof DimensionValidationError ||
     err instanceof MandatoryDimensionMissingError
   )
@@ -1117,6 +1137,19 @@ export function bookkeepingErrorResponse(err: unknown): NextResponse | null {
         },
       },
       { status: 400 }
+    )
+  }
+
+  if (err instanceof CorrectionBankAccountChangedError) {
+    return NextResponse.json(
+      {
+        error: {
+          code: err.code,
+          message: err.message,
+          details: { bank_account: err.bankAccount, moved_to: err.movedTo },
+        },
+      },
+      { status: 409 }
     )
   }
 
