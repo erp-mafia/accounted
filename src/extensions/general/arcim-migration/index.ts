@@ -40,7 +40,6 @@ import {
 } from './lib/sie-fetcher'
 import { mapCompanyInfo } from './lib/entity-mapper'
 import { executeMigration } from './lib/migration-orchestrator'
-import { fiscalYearScopeFromImports, type FiscalYearScope } from './lib/invoice-scope'
 import {
   FortnoxDocumentScopesRequiredError,
   ProviderConnectionRefusedError,
@@ -1610,7 +1609,13 @@ export const arcimMigrationExtension: Extension = {
       },
     },
 
-    // ── Execute entity migration (customers, suppliers, invoices) ──
+    // ── Company information and the asset register ──
+    // Customers, suppliers and invoices are imported by the background job
+    // (POST /migration-jobs), which reads every record in full. This route
+    // read each Fortnox customer's and supplier's own record for at most 90
+    // seconds and saved the rest from Fortnox's short list, without type,
+    // active flag, VAT number, country or terms, so a large register came in
+    // with its private customers as companies (crm#1436). It refuses them.
     {
       method: 'POST',
       path: '/migrate',
@@ -1620,13 +1625,21 @@ export const arcimMigrationExtension: Extension = {
 
         const companyId = ctx.companyId
 
+        const body = await request.json() as {
+          consentId: string
+          importCompanyInfo?: boolean
+          importCustomers?: boolean
+          importSuppliers?: boolean
+          importSalesInvoices?: boolean
+          importSupplierInvoices?: boolean
+          importAssets?: boolean
+          reconcileVouchers?: boolean
+          suggestParties?: boolean
+          grantProven?: boolean
+        }
         const {
           consentId,
           importCompanyInfo = true,
-          importCustomers = true,
-          importSuppliers = true,
-          importSalesInvoices = true,
-          importSupplierInvoices = true,
           // New option: an omitted field must behave exactly as it did before
           // this option existed, so it defaults OFF. An older client that omits
           // it neither imports assets nor trips the SIE guard below; the wizard
@@ -1640,21 +1653,13 @@ export const arcimMigrationExtension: Extension = {
           // Set by the wizard once an earlier per-step request received rows
           // on this grant; only changes how a 403 is classified.
           grantProven = false,
-        } = await request.json() as {
-          consentId: string
-          importCompanyInfo?: boolean
-          importCustomers?: boolean
-          importSuppliers?: boolean
-          importSalesInvoices?: boolean
-          importSupplierInvoices?: boolean
-          importAssets?: boolean
-          reconcileVouchers?: boolean
-          suggestParties?: boolean
-          grantProven?: boolean
-        }
+        } = body
 
         if (!consentId) {
           return NextResponse.json({ error: 'consentId is required' }, { status: 400 })
+        }
+        if (body.importCustomers || body.importSuppliers || body.importSalesInvoices || body.importSupplierInvoices) {
+          return errorResponseFromCode('PROVIDER_REGISTERS_VIA_JOB', moduleLog)
         }
 
         try {
@@ -1693,11 +1698,7 @@ export const arcimMigrationExtension: Extension = {
           // The asset register counts as entity data for this gate: its rows
           // carry BAS account triples and depreciation plans that only mean
           // something against an imported chart of accounts.
-          const importsEntities = importCustomers ||
-            importSuppliers ||
-            importSalesInvoices ||
-            importSupplierInvoices ||
-            importAssets
+          const importsEntities = importAssets
           const { count: completedSieImports } = importsEntities
             ? await supabase
                 .from('sie_imports')
@@ -1727,31 +1728,6 @@ export const arcimMigrationExtension: Extension = {
             })
           }
 
-          // The invoice steps only pay for invoices whose ledger is here: the
-          // fiscal years the completed SIE imports cover. Read only when an
-          // invoice step runs; no completed import (Fortnox pulls SIE over the
-          // API, or the guard above was not triggered) means no filter.
-          let fiscalYearScope: FiscalYearScope | null = null
-          if (importSalesInvoices || importSupplierInvoices) {
-            const { data: importedYears, error: importedYearsError } = await supabase
-              .from('sie_imports')
-              .select('fiscal_year_start, fiscal_year_end')
-              .eq('company_id', companyId)
-              .eq('status', 'completed')
-            if (importedYearsError) {
-              // A failed read must not degrade into "no scope, import the
-              // whole register": that is the slow path this scope exists
-              // to avoid, and it would run without the user knowing.
-              log.error('arcim migrate: could not read the imported fiscal years', importedYearsError)
-              return errorResponseFromCode('PROVIDER_MIGRATE_FAILED', moduleLog, {
-                details: { reason: importedYearsError.message },
-              })
-            }
-            fiscalYearScope = fiscalYearScopeFromImports(
-              importedYears as { fiscal_year_start: string | null; fiscal_year_end: string | null }[] | null,
-            )
-          }
-
           log.info(`Starting migration for user ${ctx.userId} from ${consent.provider}`)
 
           const migrationOptions = {
@@ -1760,7 +1736,7 @@ export const arcimMigrationExtension: Extension = {
             userId: ctx.userId,
             supabase,
             suggestParties,
-            fiscalYearScope,
+            fiscalYearScope: null,
             grantProven: grantProven === true,
             // The behandlingshistorik rows the sales-invoice step writes need
             // the service role (processing_history has no INSERT policy);
@@ -1768,10 +1744,10 @@ export const arcimMigrationExtension: Extension = {
             createHistoryClient: async () =>
               (await import('@/lib/supabase/server')).createServiceClient(),
             importCompanyInfo,
-            importCustomers,
-            importSuppliers,
-            importSalesInvoices,
-            importSupplierInvoices,
+            importCustomers: false,
+            importSuppliers: false,
+            importSalesInvoices: false,
+            importSupplierInvoices: false,
             importAssets,
             reconcileVouchers,
             deadlineMs: Date.now() + MIGRATE_RUN_BUDGET_MS,

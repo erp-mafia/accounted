@@ -23,9 +23,11 @@ import { InsightPanel } from '../ui/InsightPanel'
 import { Pill, Pills } from '../ui/Pills'
 import { OptRow, OptRows, Sentence, Switch } from '../ui/Sentence'
 import {
-  openProviderWindow, pointWindow, providerAccept, providerConnect, providerImportSie, providerMigrate, providerPreview, providerSieData,
-  providerSubmitToken, takeReturnedConsentId, useProviderMessage, type ProviderPreview, type ProviderSieData,
+  openProviderWindow, pointWindow, providerAccept, providerConnect, providerImportRegisters, providerImportSie, providerMigrate,
+  providerPreview, providerSieData, providerSubmitToken, takeReturnedConsentId, useProviderMessage, type MigrateResults,
+  type ProviderPreview, type ProviderSieData,
 } from '../lib/provider'
+import type { MigrationResource } from '@/lib/providers/migration-contract'
 import type { BooksCtx } from '../context'
 import { trackMigrationConnectClicked, trackMigrationConnectFinished, type MigrationConnectOutcome } from '@/components/extensions/general/arcim-connect-track'
 import { watchArcimOAuthPopup } from '@/components/extensions/general/arcim-document-import-flow'
@@ -412,9 +414,23 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
       setShown(4)
       if (wantsRegisters) {
         setRegText(t('reg_running'))
-        const results = await providerMigrate(consentId, { importCustomers: opts.kunder, importSuppliers: opts.lev, importSalesInvoices: opts.kf, importSupplierInvoices: opts.lf, importAssets: opts.anl }, (step) => {
-          if (step) setRegText(step)
-        })
+        // Customers, suppliers and invoices go through the background import,
+        // which reads every record in full (crm#1436); /migrate keeps the
+        // asset register.
+        const resources = ([
+          opts.kunder && 'customers', opts.lev && 'suppliers', opts.kf && 'salesInvoices', opts.lf && 'supplierInvoices',
+        ] as const).filter((resource): resource is MigrationResource => !!resource)
+        const results: MigrateResults = resources.length > 0
+          ? await providerImportRegisters(consentId, resources, (imported, total) => {
+            setRegText(total > 0 ? t('reg_progress', { imported, total }) : t('reg_running'))
+          })
+          : {}
+        if (opts.anl) {
+          const assets = await providerMigrate(consentId, {
+            importCustomers: false, importSuppliers: false, importSalesInvoices: false, importSupplierInvoices: false, importAssets: true,
+          }, (step) => { if (step) setRegText(step) })
+          if (assets.stepErrors?.length) results.stepErrors = assets.stepErrors
+        }
         const invoices = (results.salesInvoices?.imported ?? 0) + (results.supplierInvoices?.imported ?? 0)
         setRegText(t('reg_summary', { customers: results.customers?.imported ?? 0, suppliers: results.suppliers?.imported ?? 0, invoices }))
         await new Promise<void>((resolve) => {

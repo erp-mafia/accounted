@@ -13261,6 +13261,7 @@
     "reg_link": "Kopplas till verifikaten",
     "reg_link_sub": "{count} av {count}",
     "reg_running": "Hämtar …",
+    "reg_progress": "{imported} av {total} poster importerade",
     "reg_summary": "{customers} kunder · {suppliers} leverantörer · {invoices} fakturor",
     "reg_skipped": "Hoppade över",
     "reg_card_title": "Logga in hos {provider}",

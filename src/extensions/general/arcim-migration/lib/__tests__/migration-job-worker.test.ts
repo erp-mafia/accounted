@@ -483,14 +483,14 @@ describe('Fortnox customers take their terms from the detail form (crm#1245)', (
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
     expect(committed(db)).toEqual([{ id: 'c1', skip: 'inactive' }])
   })
-  it('still imports the customer from its list form when the detail cannot be read', async () => {
+  it('never saves a customer from its list form: one whose detail cannot be read is retried (crm#1436)', async () => {
     const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
     db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
     mocks.hydrateCustomers.mockResolvedValueOnce({ customers: [listed('1001')], unhydratedIds: new Set(['1001']),
       hydration: { needed: 1, hydrated: 0, failed: 1, skippedForBudget: 0 } })
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
-    expect(committed(db)).toEqual([expect.objectContaining({ id: 'c1', row: { name: 'Listed 1001' } })])
-    expect(db.rows.map(row => row.state)).toEqual(['done'])
+    expect(committed(db)).toEqual([{ id: 'c1', error: 'MIGRATION_DETAIL_RETRY' }])
+    expect(db.rows.map(row => row.state)).toEqual(['needs_attention'])
   })
 
   it('leaves the customer pending when only the invocation time runs out', async () => {
@@ -528,14 +528,14 @@ describe('Fortnox suppliers take their country and VAT number from the detail fo
     expect(db.rows.map(row => row.state)).toEqual(['done'])
   })
 
-  it('still imports the supplier from its list form when the detail cannot be read', async () => {
+  it('never saves a supplier from its list form: one whose detail cannot be read is retried', async () => {
     const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
     db.rows.push({ id: 's1', source_id: '7', resource: 'suppliers', state: 'pending', ...sealMigrationPayload(listed('7')) })
     mocks.hydrateSuppliers.mockResolvedValueOnce({ suppliers: [listed('7')], unhydratedIds: new Set(['7']),
       hydration: { needed: 1, hydrated: 0, failed: 1, skippedForBudget: 0 } })
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
-    expect(committed(db)).toEqual([expect.objectContaining({ id: 's1', row: { name: 'Listed 7' } })])
-    expect(db.rows.map(row => row.state)).toEqual(['done'])
+    expect(committed(db)).toEqual([{ id: 's1', error: 'MIGRATION_DETAIL_RETRY' }])
+    expect(db.rows.map(row => row.state)).toEqual(['needs_attention'])
   })
 
   it('leaves the supplier pending when only the invocation time runs out', async () => {

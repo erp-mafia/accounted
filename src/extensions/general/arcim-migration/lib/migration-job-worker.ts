@@ -104,10 +104,11 @@ function mappedParty(job: ProviderMigrationJob, resource: MigrationResource, dto
 
 /**
  * The listed customer in its detail form where the provider lists a short one
- * (Fortnox, see hydrateCustomers; crm#1245). A customer whose detail cannot
- * be read still imports from its list form, with the default terms as before:
- * its card is worth more than its absence, and the invoices that name it
- * would otherwise make a bare stub. Running out of time leaves it pending.
+ * (Fortnox, see hydrateCustomers; crm#1245). A customer is never saved from
+ * the short list, which has no type, active flag, VAT number, country or
+ * terms: a privatperson saved from it became a company with its personnummer
+ * as org number (crm#1436). One whose detail cannot be read is a record to
+ * retry, and running out of time leaves it pending.
  */
 async function customerWithDetail(job: ProviderMigrationJob, listed: CustomerDto,
   connection: ResolvedConsent, deadline: number): Promise<CustomerDto> {
@@ -115,7 +116,7 @@ async function customerWithDetail(job: ProviderMigrationJob, listed: CustomerDto
   const hydrated = await hydrateCustomers(job.provider as ProviderName, connection.accessToken,
     connection.providerCompanyId, [listed], budget)
   if (!hydrated.unhydratedIds.has(listed.id)) return hydrated.customers[0]
-  return partyWithoutDetail(listed, hydrated, budget, job, connection, deadline)
+  return partyWithoutDetail(hydrated, budget, job, connection, deadline)
 }
 
 /**
@@ -128,21 +129,21 @@ async function supplierWithDetail(job: ProviderMigrationJob, listed: SupplierDto
   const hydrated = await hydrateSuppliers(job.provider as ProviderName, connection.accessToken,
     connection.providerCompanyId, [listed], budget)
   if (!hydrated.unhydratedIds.has(listed.id)) return hydrated.suppliers[0]
-  return partyWithoutDetail(listed, hydrated, budget, job, connection, deadline)
+  return partyWithoutDetail(hydrated, budget, job, connection, deadline)
 }
 
 /**
  * A party the detail pass did not reach: pending when only this invocation
  * ran out of time, the provider's refusal when it refused the token, and
- * otherwise its list form.
+ * otherwise a record to retry, never its list form.
  */
-async function partyWithoutDetail<T>(listed: T, hydrated: { hydration: HydrationReport; authError?: unknown },
-  budget: number, job: ProviderMigrationJob, connection: ResolvedConsent, deadline: number): Promise<T> {
+async function partyWithoutDetail(hydrated: { hydration: HydrationReport; authError?: unknown },
+  budget: number, job: ProviderMigrationJob, connection: ResolvedConsent, deadline: number): Promise<never> {
   if (hydrated.hydration.abortedBy === 'budget' && budget < MAX_DETAIL_BUDGET_MS) throw new Error('MIGRATION_DEADLINE')
   if (hydrated.hydration.abortedBy === 'auth') {
     throw await readProviderRefusal(hydrated.authError ?? new Error('PROVIDER_AUTH_EXPIRED'), job, connection, deadline)
   }
-  return listed
+  throw new Error('MIGRATION_DETAIL_RETRY')
 }
 
 /**
