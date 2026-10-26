@@ -187,15 +187,24 @@ function deriveInvoiceStatus(raw: Record<string, unknown>, isCreditNote: boolean
   return 'draft';
 }
 
-function buildParty(name: string, orgNumber?: string, address?: Record<string, unknown>): PartyDto {
+/**
+ * A customer's invoices go to EmailInvoice; Email, the general contact, is
+ * the fallback and must not override an invoice-specific address. A supplier
+ * record has only Email.
+ */
+const CUSTOMER_EMAIL = ['EmailInvoice', 'Email'] as const;
+const SUPPLIER_EMAIL = ['Email'] as const;
+
+function buildParty(name: string, orgNumber?: string, address?: Record<string, unknown>,
+  emailFields: readonly string[] = CUSTOMER_EMAIL): PartyDto {
   return {
     name,
     identifications: orgNumber ? [{ id: orgNumber, schemeId: 'SE:ORGNR' }] : [],
     postalAddress: address ? {
-      streetName: (address['Address1'] ?? address['Address']) as string | undefined,
+      streetName: address['Address1'] as string | undefined,
       additionalStreetName: address['Address2'] as string | undefined,
-      cityName: (address['City'] ?? address['CityName']) as string | undefined,
-      postalZone: (address['ZipCode'] ?? address['PostalCode']) as string | undefined,
+      cityName: address['City'] as string | undefined,
+      postalZone: address['ZipCode'] as string | undefined,
       // A customer or supplier record names its country twice: CountryCode
       // (ISO, "DE") and Country, the name Fortnox shows ("Tyskland"). The
       // code needs no translating; an invoice carries only the name.
@@ -208,9 +217,7 @@ function buildParty(name: string, orgNumber?: string, address?: Record<string, u
     } : undefined,
     contact: {
       name: nonEmptyString(address?.['YourReference']),
-      // EmailInvoice is the delivery address. Email is the general contact
-      // fallback and must not override an invoice-specific address.
-      email: nonEmptyString(address?.['EmailInvoice']) ?? nonEmptyString(address?.['Email']),
+      email: emailFields.map((field) => nonEmptyString(address?.[field])).find((email) => email !== undefined),
       // The single record names it Phone1; the customer and supplier lists
       // name the same number Phone (crm#1436).
       telephone: nonEmptyString(address?.['Phone1']) ?? nonEmptyString(address?.['Phone']),
@@ -497,7 +504,7 @@ export function mapFortnoxToSupplier(raw: Record<string, unknown>): SupplierDto 
   return {
     id: String(raw['SupplierNumber'] ?? ''),
     supplierNumber: String(raw['SupplierNumber'] ?? ''),
-    party: buildParty(name, orgNumber, raw),
+    party: buildParty(name, orgNumber, raw, SUPPLIER_EMAIL),
     active: raw['Active'] !== false,
     vatNumber: raw['VATNumber'] as string | undefined,
     bankAccount: raw['BankAccountNumber'] as string | undefined,
