@@ -96,7 +96,8 @@ describe('a Swedish party from every provider is typed swedish_business with cou
     ['Björn Lundén (Swedish name)', () => mapBLToCustomer({ id: '1', name: 'Kund AB', organisationNumber: '556055-1234', country: 'Sverige' })],
     ['Bokio (code)', () => mapBokioToCustomer({ id: 'c1', name: 'Kund AB', type: 'company', orgNumber: '556055-1234', address: { country: 'SE' } })],
     ['Bokio (name)', () => mapBokioToCustomer({ id: 'c2', name: 'Kund AB', type: 'company', address: { country: 'Sverige' } })],
-    ['Visma (code)', () => mapVismaToCustomer({ Id: 'v1', CustomerNumber: '1', Name: 'Kund AB', CorporateIdentityNumber: '556055-1234', CountryCode: 'SE' })],
+    // CustomerApi names it InvoiceCountryCode; SupplierApi names it CountryCode.
+    ['Visma (code)', () => mapVismaToCustomer({ Id: 'v1', CustomerNumber: '1', Name: 'Kund AB', CorporateIdentityNumber: '556055-1234', InvoiceCountryCode: 'SE' })],
     ['WINT (code)', () => mapWintToCustomer({ Id: 1, Name: 'Kund AB', Type: 'Company', OrgNumber: '556055-1234', BillingAddress: { CountryCode: 'SE' } })],
   ]
 
@@ -152,5 +153,12 @@ describe('a Swedish party from every provider is typed swedish_business with cou
     const row = mapCustomer(mapBokioToCustomer({ id: 'c3', name: 'Kund AB', type: 'company', orgNumber: '556055-1234', address: { country: '' } }), 'u', 'c')
     expect(row.country).toBeNull()
     expect(row.customer_type).toBe('swedish_business')
+  })
+})
+
+describe('a Visma customer names its country InvoiceCountryCode (crm#1436)', () => {
+  it('is typed by it', () => {
+    expect(mapCustomer(mapVismaToCustomer({ Id: 'v2', CustomerNumber: '2', Name: 'Kunde', InvoiceCountryCode: 'DE' }), 'u', 'c'))
+      .toMatchObject({ customer_type: 'eu_business', country: 'DE' })
   })
 })
