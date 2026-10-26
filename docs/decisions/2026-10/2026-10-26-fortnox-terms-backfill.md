@@ -1,0 +1,1 @@
+[2026-10-26] Fortnox cards imported before !747/!874 get Fortnox's payment terms by a one-off operator route, read from Fortnox's detail form and written only while the card is still on 30; not inferred from invoice due dates, which are per invoice and a guess (crm#1245).
