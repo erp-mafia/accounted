@@ -207,6 +207,16 @@ function errorCodeOf(error: unknown): string {
   return error instanceof PaymentProviderError ? error.code : 'UNEXPECTED_ERROR'
 }
 
+/**
+ * The code a refused create is reported with. A bankgiro under hard OCR
+ * control takes OCR references only; the bank answers OCR_REF_INVALID also
+ * when the payment carried a message instead (the invoice had no OCR), and
+ * then the fix is to add the OCR, not to correct one.
+ */
+function createRefusalCode(code: string, order: PaymentOrderRow): string {
+  return code === 'OCR_REF_INVALID' && order.reference_type !== 'ocr' ? 'OCR_REF_REQUIRED' : code
+}
+
 function httpStatusOf(error: unknown): number | null {
   return error instanceof PaymentProviderError ? error.httpStatus : null
 }
@@ -747,7 +757,7 @@ async function sendAndSign(
       created = await provider.createPayment(party, instructionFor(order, attempts.get(order.id) ?? 1))
     } catch (error) {
       const outcome = providerWriteOutcome(error)
-      const code = errorCodeOf(error)
+      const code = outcome === 'refused' ? createRefusalCode(errorCodeOf(error), order) : errorCodeOf(error)
       ctx.log.warn('payment creation at the bank failed', { orderId: order.id, code, outcome })
       if (outcome === 'unknown') await holdOutcomeUnknown(writer, ctx, batch.id, order, code)
       else if (outcome === 'refused') await failOrder(writer, ctx, batch.id, order, code, sanitizedProviderMessage(error))

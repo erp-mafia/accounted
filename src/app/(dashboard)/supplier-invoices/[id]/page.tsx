@@ -62,6 +62,7 @@ import {
 } from '@/lib/supplier-invoices/lifecycle'
 import { DetailPager } from '@/components/common/DetailPager'
 import { SupplierPaymentDialog } from '@/components/supplier-invoices/SupplierPaymentDialog'
+import { PaymentReferenceDialog } from '@/components/supplier-invoices/PaymentReferenceDialog'
 import { SupplierInvoiceAttestPanel, useSupplierInvoiceAttest } from '@/components/supplier-invoices/SupplierInvoiceAttestPanel'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
@@ -192,6 +193,7 @@ export default function SupplierInvoiceDetailPage() {
   const isProcessing = processingAction !== null
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false)
   const [isBankDialogOpen, setIsBankDialogOpen] = useState(false)
+  const [isOcrDialogOpen, setIsOcrDialogOpen] = useState(false)
   // Betala via banken is offered where bank payments are switched on for the
   // company (GET /api/payments/availability), beside the payment file.
   const [bankPaymentsAvailable, setBankPaymentsAvailable] = useState(false)
@@ -473,6 +475,9 @@ export default function SupplierInvoiceDetailPage() {
 
   // Not while the payment dialog is open: its booking rows are the ones in play.
   const lineAccountEditable = canWrite && isUnsettledSupplierInvoiceStatus(invoice.status) && !isPayDialogOpen
+  // The OCR can be added or corrected until the invoice is paid: a payee
+  // under hard OCR control refuses a payment without it.
+  const ocrEditable = canWrite && isUnsettledSupplierInvoiceStatus(invoice.status) && !invoice.is_credit_note
   async function changeLineAccount(itemId: string, account: string) {
     try {
       const res = await fetch(`/api/supplier-invoices/${params.id}/items/${itemId}`, {
@@ -864,9 +869,19 @@ export default function SupplierInvoiceDetailPage() {
             {t('fortnox_number_label')} <span className="tabular-nums text-foreground">{invoice.fortnox_number}</span>
           </span>
         )}
-        {invoice.payment_reference && (
+        {(invoice.payment_reference || ocrEditable) && (
           <span>
-            {t('ocr_reference_label')} <span className="tabular-nums text-foreground">{invoice.payment_reference}</span>
+            {t('ocr_reference_label')}{' '}
+            {invoice.payment_reference && <span className="tabular-nums text-foreground">{invoice.payment_reference}</span>}
+            {ocrEditable && (
+              <button
+                type="button"
+                onClick={() => setIsOcrDialogOpen(true)}
+                className={cn('text-foreground underline-offset-2 hover:underline', invoice.payment_reference && 'ml-1.5 text-muted-foreground')}
+              >
+                {invoice.payment_reference ? t('ocr_edit') : t('ocr_add')}
+              </button>
+            )}
           </span>
         )}
         {invoice.reverse_charge && <span>{t('reverse_charge_badge')}</span>}
@@ -1116,6 +1131,16 @@ export default function SupplierInvoiceDetailPage() {
             setIsFileDialogOpen(false)
             void mutateLifecycle()
           }}
+        />
+      )}
+      {isOcrDialogOpen && (
+        <PaymentReferenceDialog
+          invoiceId={invoice.id}
+          current={invoice.payment_reference ?? null}
+          onOpenChange={(open) => {
+            if (!open) setIsOcrDialogOpen(false)
+          }}
+          onSaved={() => void fetchInvoice()}
         />
       )}
       <DestructiveConfirmDialog {...confirmDialogProps} />
