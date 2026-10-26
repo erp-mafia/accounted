@@ -1683,6 +1683,24 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det finns inget kvar att lösa upp.',
     message_en: 'There is nothing left to dissolve on this accrual schedule.',
   },
+  // details.reason names the rule (lib/bookkeeping/accruals/errors.ts); the
+  // Swedish message the service answers names it in words.
+  ACCRUAL_REPLAN_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Periodiseringen kan inte planeras om så här.',
+    message_en: 'The accrual schedule cannot be re-planned this way.',
+  },
+  ACCRUAL_REPLAN_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Periodiseringen ändrades samtidigt, till exempel bokfördes en månad. Försök igen.',
+    message_en: 'The accrual schedule changed at the same time, for example a month was booked. Try again.',
+    retryable: true,
+  },
+  ACCRUAL_REPLAN_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Periodiseringen kunde inte planeras om.',
+    message_en: 'The accrual schedule could not be re-planned.',
+  },
   INVOICE_CREATE_ROT_RUT_PERSONNUMMER_INVALID: {
     httpStatus: 400,
     message_sv: 'Personnumret för skattereduktionen är ogiltigt.',

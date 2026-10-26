@@ -26,7 +26,10 @@ export default async function MemberSigningPage({ params }: { params: Promise<{ 
 
   const service = createServiceClientNoCookies()
   const log = createLogger('signering-page').child({ signerId })
-  const resolved = await resolveMemberSigner(service, signerId, user.id).catch(() => null)
+  const resolved = await resolveMemberSigner(service, signerId, user.id).catch((err) => {
+    log.warn('member signer could not be resolved', err)
+    return null
+  })
   const message = (title: string, body: string) => (
     <div className="space-y-8">
       <PageHeader title={title} />

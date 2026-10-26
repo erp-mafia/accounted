@@ -17,6 +17,7 @@
  * A supplier invoice without a document is not a third source: it surfaces as
  * its registration verifikat, which is where its underlag has to land.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
@@ -395,7 +396,7 @@ export async function resolveAgentWorklist(
         kind: 'verifikat',
         journal_entry_id: v.journal_entry_id,
         transaction_id: null,
-        voucher: v.voucher_series ? `${v.voucher_series}${v.voucher_number}` : String(v.voucher_number),
+        voucher: v.voucher_series ? formatVoucher(v) : String(v.voucher_number),
         date: v.entry_date,
         amount: ctx?.amount ?? v.gross_amount,
         currency: ctx?.currency ?? 'SEK',

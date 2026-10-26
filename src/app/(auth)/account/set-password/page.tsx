@@ -10,6 +10,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { KeyRound } from 'lucide-react'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 export default function SetPasswordPage() {
   return (
@@ -92,7 +93,7 @@ function SetPasswordContent() {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         toast({
           title: 'Kunde inte spara lösenord',
-          description: body.error || 'Försök igen senare.',
+          description: getErrorMessage(body, { fallback: 'Försök igen senare.' }),
           variant: 'destructive',
         })
         return

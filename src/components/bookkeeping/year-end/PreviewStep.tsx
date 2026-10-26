@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/table'
 import { formatCurrency } from '@/lib/utils'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import type { YearEndPreview } from '@/types'
 
 interface PreviewStepProps {
@@ -160,13 +161,7 @@ export function PreviewStep({ preview, isLoading, error, onBack, onContinue }: P
         </p>
         {/* Swedish in both locales: the year-end wizard is a statutory surface. */}
         <VoucherLinesTable
-          lines={preview.closingLines.map((line, i) => ({
-            key: i,
-            account_number: line.account_number,
-            description: line.line_description,
-            debit_amount: line.debit_amount,
-            credit_amount: line.credit_amount,
-          }))}
+          lines={voucherLineViews(preview.closingLines)}
           withCurrency
           swedish
         />

@@ -1,13 +1,15 @@
 import { randomUUID } from 'node:crypto'
 import { describe, expect, it } from 'vitest'
 import { getPool, withUserContext } from './setup'
-import { seedCompany, insertAuthUser, insertDraftJournalEntry } from './fixtures'
+import { seedCompany, insertAuthUser, insertCompanyMember, insertDraftJournalEntry } from './fixtures'
 
 // pg-real coverage for 20260623120000_accrual_schedules.sql: CHECK
 // constraints, the posted-installment immutability trigger, the FK RESTRICT
 // on dissolution verifikat, RLS isolation, and the audit-preserving DELETE
 // policies on both tables. 20261016004700_accrued_costs_on_supplier_invoices
 // widens the expense account range to 17xx or 29xx (upplupna kostnader).
+// 20261026230000_accrual_schedule_release_day_and_replan adds release_day and
+// the replan_accrual_installments RPC ("Ändra periodisering").
 
 async function insertSupplier(companyId: string, userId: string): Promise<string> {
   const id = randomUUID()
@@ -411,5 +413,166 @@ describe('invoice item accrual columns', () => {
         `'2025-10-01', '2025-12-31', '1930'`,
       ),
     ).rejects.toThrow(/account_range/i)
+  })
+})
+
+// A 12 000 schedule over 2026: January posted (linked to a verifikat),
+// February to December pending at 1 000 each.
+async function seedReplanSchedule() {
+  const ctx = await seedScheduleContext()
+  const scheduleId = await insertSchedule(ctx)
+  const entryId = await insertDraftJournalEntry(ctx)
+  const postedId = await insertInstallment({ ...ctx, scheduleId, periodMonth: '2026-01-01', status: 'posted', journalEntryId: entryId })
+  for (let m = 2; m <= 12; m++) {
+    await insertInstallment({ ...ctx, scheduleId, periodMonth: `2026-${String(m).padStart(2, '0')}-01` })
+  }
+  return { ...ctx, scheduleId, postedId }
+}
+
+const replanMonths = (from: number, to: number, amount: number) =>
+  JSON.stringify(
+    Array.from({ length: to - from + 1 }, (_, i) => ({
+      period_month: `2026-${String(from + i).padStart(2, '0')}-01`,
+      amount,
+    })),
+  )
+
+const REPLAN_SQL = `SELECT public.replan_accrual_installments($1, $2, $3, $4, $5, $6::jsonb) AS result`
+
+describe('accrual_schedules.release_day', () => {
+  it('accepts 1-31 or null on a deferral and refuses anything else', async () => {
+    const ctx = await seedScheduleContext()
+    const scheduleId = await insertSchedule(ctx)
+    for (const day of [null, 1, 14, 31]) {
+      await expect(
+        getPool().query(`UPDATE public.accrual_schedules SET release_day = $1 WHERE id = $2`, [day, scheduleId]),
+      ).resolves.toBeDefined()
+    }
+    for (const day of [0, 32]) {
+      await expect(
+        getPool().query(`UPDATE public.accrual_schedules SET release_day = $1 WHERE id = $2`, [day, scheduleId]),
+      ).rejects.toThrow(/release_day_valid/)
+    }
+  })
+
+  it('refuses a release day on an upplupen kostnad, which books each month end', async () => {
+    const ctx = await seedScheduleContext()
+    const scheduleId = await insertSchedule({ ...ctx, balanceAccount: '2990' })
+    await expect(
+      getPool().query(`UPDATE public.accrual_schedules SET release_day = 14 WHERE id = $1`, [scheduleId]),
+    ).rejects.toThrow(/release_day_valid/)
+  })
+
+  it('refuses a release day on an upplupen intäkt, which books each month end too', async () => {
+    const ctx = await seedScheduleContext()
+    const invoiceId = await insertCustomerInvoice(ctx.companyId, ctx.userId)
+    const scheduleId = await insertSchedule({
+      ...ctx,
+      direction: 'revenue',
+      supplierInvoiceIdOverride: null,
+      invoiceId,
+      balanceAccount: '1790',
+      targetAccount: '3001',
+    })
+    await expect(
+      getPool().query(`UPDATE public.accrual_schedules SET release_day = 14 WHERE id = $1`, [scheduleId]),
+    ).rejects.toThrow(/release_day_valid/)
+  })
+})
+
+describe('replan_accrual_installments', () => {
+  it('replaces the pending months, keeps the posted one and updates the period', async () => {
+    const ctx = await seedReplanSchedule()
+
+    await withUserContext(ctx.userId, async (client) => {
+      const { rows } = await client.query(REPLAN_SQL, [
+        ctx.companyId, ctx.scheduleId, ctx.userId, '2026-06-30', 14, replanMonths(2, 6, 2200),
+      ])
+      expect(rows[0].result).toEqual({ months: 6, pending_months: 5 })
+
+      const installments = await client.query(
+        `SELECT period_month::text AS month, amount::numeric AS amount, status, journal_entry_id
+           FROM public.accrual_schedule_installments WHERE schedule_id = $1 ORDER BY period_month`,
+        [ctx.scheduleId],
+      )
+      expect(installments.rows.map((r) => [r.month, Number(r.amount), r.status])).toEqual([
+        ['2026-01-01', 1000, 'posted'],
+        ['2026-02-01', 2200, 'pending'],
+        ['2026-03-01', 2200, 'pending'],
+        ['2026-04-01', 2200, 'pending'],
+        ['2026-05-01', 2200, 'pending'],
+        ['2026-06-01', 2200, 'pending'],
+      ])
+      expect(installments.rows[0].journal_entry_id).not.toBeNull()
+
+      const schedule = await client.query(
+        `SELECT period_end::text AS period_end, months, release_day FROM public.accrual_schedules WHERE id = $1`,
+        [ctx.scheduleId],
+      )
+      expect(schedule.rows[0]).toEqual({ period_end: '2026-06-30', months: 6, release_day: 14 })
+    })
+  })
+
+  it('refuses a plan that no longer adds up or covers a posted month, and changes nothing', async () => {
+    const ctx = await seedReplanSchedule()
+
+    await withUserContext(ctx.userId, async (client) => {
+      await client.query('SAVEPOINT s')
+      // 5 x 2 000 + 1 000 posted is 11 000, not the total 12 000.
+      await expect(
+        client.query(REPLAN_SQL, [ctx.companyId, ctx.scheduleId, ctx.userId, '2026-06-30', null, replanMonths(2, 6, 2000)]),
+      ).rejects.toThrow(/ACCRUAL_REPLAN_CONFLICT/)
+      await client.query('ROLLBACK TO SAVEPOINT s')
+      // January is posted: a plan that books it again is refused.
+      await expect(
+        client.query(REPLAN_SQL, [ctx.companyId, ctx.scheduleId, ctx.userId, '2026-06-30', null, replanMonths(1, 6, 2000)]),
+      ).rejects.toThrow(/ACCRUAL_REPLAN_CONFLICT/)
+      await client.query('ROLLBACK TO SAVEPOINT s')
+
+      const pending = await client.query(
+        `SELECT count(*)::int AS n FROM public.accrual_schedule_installments WHERE schedule_id = $1 AND status = 'pending'`,
+        [ctx.scheduleId],
+      )
+      expect(pending.rows[0].n).toBe(11)
+    })
+  })
+
+  it('refuses a schedule that is not active', async () => {
+    const ctx = await seedReplanSchedule()
+    await getPool().query(`UPDATE public.accrual_schedules SET status = 'completed' WHERE id = $1`, [ctx.scheduleId])
+
+    await withUserContext(ctx.userId, async (client) => {
+      await expect(
+        client.query(REPLAN_SQL, [ctx.companyId, ctx.scheduleId, ctx.userId, '2026-06-30', null, replanMonths(2, 6, 2200)]),
+      ).rejects.toThrow(/ACCRUAL_SCHEDULE_NOT_ACTIVE/)
+    })
+  })
+
+  it('refuses a viewer, a stranger and a caller attributing another user', async () => {
+    const ctx = await seedReplanSchedule()
+    const viewer = await insertAuthUser()
+    await insertCompanyMember({ companyId: ctx.companyId, userId: viewer, role: 'viewer' })
+    const stranger = await insertAuthUser()
+    const args = (userId: string) => [ctx.companyId, ctx.scheduleId, userId, '2026-06-30', null, replanMonths(2, 6, 2200)]
+
+    await withUserContext(viewer, async (client) => {
+      await expect(client.query(REPLAN_SQL, args(viewer))).rejects.toThrow(/unauthorized/)
+    })
+    await withUserContext(stranger, async (client) => {
+      await expect(client.query(REPLAN_SQL, args(stranger))).rejects.toThrow(/unauthorized/)
+    })
+    await withUserContext(stranger, async (client) => {
+      await expect(client.query(REPLAN_SQL, args(ctx.userId))).rejects.toThrow(/unauthorized/)
+    })
+  })
+
+  it('leaves the posted month frozen by the immutability trigger', async () => {
+    const ctx = await seedReplanSchedule()
+    await withUserContext(ctx.userId, async (client) => {
+      await client.query(REPLAN_SQL, [ctx.companyId, ctx.scheduleId, ctx.userId, '2026-06-30', null, replanMonths(2, 6, 2200)])
+    })
+    await expect(
+      getPool().query(`UPDATE public.accrual_schedule_installments SET amount = 999 WHERE id = $1`, [ctx.postedId]),
+    ).rejects.toThrow(/posted accrual installment/i)
   })
 })

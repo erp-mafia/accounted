@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { DOCUMENT_TEXT_NOTICE, fenceDocumentText, fenceNullable } from '@/lib/arkiv/untrusted'
@@ -487,7 +488,7 @@ async function readLinksPart(
       ? {
           journal_entry_id: doc.journal_entry_id,
           journal_entry_line_id: doc.journal_entry_line_id,
-          voucher: e ? `${e.voucher_series ?? ''}${e.voucher_number ?? ''}` : '',
+          voucher: e ? formatVoucher(e) : '',
           entry_date: e?.entry_date ?? null,
           status: e?.status ?? null,
           description: e?.description ?? null,

@@ -16,13 +16,15 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
 import { useLearnedExpenseAccount } from '@/components/expenses/use-learned-expense-account'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
+import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { roundOre, parseAmountInput, formatAmountInput } from '@/lib/money'
 import { ACCOUNT_NUMBER_RE, ISO_DATE_RE } from '@/lib/invariants'
 import { ownerFallbackName, resolveExpenseLiabilityAccount, type ExpensePayer } from '@/lib/expenses/payer'
@@ -198,22 +200,17 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
     (payer === 'owner' || !!employeeId)
 
   // The verifikat the answer books, in the receipt's currency (the service
-  // converts at the date's rate).
+  // converts at the date's rate). The reverse-charge rows come from the
+  // service's own builder; the cost, moms and liability rows mirror
+  // planExpenseClaim (lib/expenses/expense-claims-service.ts).
   const previewLines = useMemo(() => {
     if (vatCase === null || reverseChargeLines === null || !(amount > 0) || vatAmount >= amount) return []
-    const lines: Array<{ account: string; side: 'D' | 'K'; amount: number }> = [
-      { account: expenseAccount || '____', side: 'D', amount: net },
-    ]
-    if (vatAmount > 0) lines.push({ account: '2641', side: 'D', amount: vatAmount })
-    for (const line of reverseChargeLines) {
-      lines.push(
-        line.debit_amount > 0
-          ? { account: line.account_number, side: 'D', amount: line.debit_amount }
-          : { account: line.account_number, side: 'K', amount: line.credit_amount },
-      )
-    }
-    lines.push({ account: liabilityAccount, side: 'K', amount })
-    return lines
+    return voucherLineViews([
+      { account_number: expenseAccount || '____', debit_amount: net, credit_amount: 0 },
+      ...(vatAmount > 0 ? [{ account_number: '2641', debit_amount: vatAmount, credit_amount: 0 }] : []),
+      ...reverseChargeLines,
+      { account_number: liabilityAccount, debit_amount: 0, credit_amount: amount },
+    ])
   }, [vatCase, reverseChargeLines, amount, vatAmount, net, expenseAccount, liabilityAccount])
 
   const handleSubmit = useCallback(async () => {
@@ -416,18 +413,15 @@ export default function RegisterExpenseDialog({ open, onOpenChange, item, payer,
           )}
 
           {previewLines.length > 0 && (
-            <div className="rounded-lg border border-border px-4 py-3 text-xs text-muted-foreground space-y-1">
-              <p className="tabular-nums">
-                {previewLines
-                  .map((line) => `${line.account} ${line.side} ${formatCurrency(line.amount, currency)}`)
-                  .join(' · ')}
-              </p>
+            <div className="rounded-lg border border-border px-4 py-3 text-xs text-muted-foreground space-y-2">
+              {/* Kronor only for a receipt in the ledger currency: the rows are in the receipt's currency until the service converts them. */}
+              <VoucherLinesTable lines={previewLines} withCurrency={isLedgerCurrency(currency)} />
               {payer === 'owner' && ownerIsTheCompany ? (
                 <p>{t('expense_outcome_ef')}</p>
               ) : (
                 claimantName && <p>{t('expense_outcome_att_gora', { name: claimantName })}</p>
               )}
-              {currency !== 'SEK' && <p>{t('expense_fx_note')}</p>}
+              {!isLedgerCurrency(currency) && <p>{t('expense_fx_note')}</p>}
             </div>
           )}
         </div>

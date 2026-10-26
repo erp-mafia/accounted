@@ -173,10 +173,10 @@ describe('GET /api/salary/runs/[id]/preview', () => {
     // The voucher label rides beside the description, not inside it: the page
     // turns it into a link to /bookkeeping/<entry id>.
     expect(data.salaryEntry.description).toBe('Lön 2026-07')
-    expect(data.salaryEntry.voucher).toBe('A-214')
+    expect(data.salaryEntry.voucher).toBe('A214')
     expect(data.salaryEntry.journal_entry_id).toBe('je-1')
     expect(data.avgifterEntry.description).toBe('Lön 2026-07: Arbetsgivaravgifter')
-    expect(data.avgifterEntry.voucher).toBe('A-215')
+    expect(data.avgifterEntry.voucher).toBe('A215')
     expect(data.avgifterEntry.journal_entry_id).toBe('je-2')
     const avgifterLines = data.avgifterEntry.lines as Array<{ account_number: string; credit_amount: number }>
     expect(avgifterLines.find((l) => l.account_number === '2731')?.credit_amount).toBe(16073.84)

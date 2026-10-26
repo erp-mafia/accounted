@@ -19,6 +19,7 @@
  * MCP: the three corrections, the batch flag, the draft cancel and the note
  * (gnubok_set_voucher_note) stage; gnubok_correct_entry stays the storno tool.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { z } from 'zod'
 import { CreateJournalEntrySchema, InlineRattelseLineSchema } from '@/lib/api/schemas'
 import { isoDateSchema } from '@/lib/invariants/zod'
@@ -616,7 +617,12 @@ export const journalEntriesCancelDraft = defineOperation({
 
 /** "A142", or "utkast" for a draft that holds no voucher number yet. */
 function voucherLabel(preview: Record<string, unknown>): string {
-  return preview.voucher_number ? `${preview.voucher_series ?? ''}${preview.voucher_number}` : 'utkast'
+  return preview.voucher_number
+    ? formatVoucher({
+        voucher_series: preview.voucher_series as string | null | undefined,
+        voucher_number: preview.voucher_number as number | null | undefined,
+      })
+    : 'utkast'
 }
 
 export const journalEntriesSetNote = defineOperation({

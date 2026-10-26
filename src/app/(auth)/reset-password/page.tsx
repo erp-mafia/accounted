@@ -2,7 +2,7 @@
 
 import { useEffect, useState, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { fetchSessionUser, verifyOtp } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -12,6 +12,7 @@ import { KeyRound } from 'lucide-react'
 import { Skeleton } from '@/components/ui/skeleton'
 import { INVITE_PROBLEM_MESSAGE_KEYS } from '@/lib/auth/consume-invite-cookie'
 import { handoffPendingInvite } from './invite-handoff'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 /**
  * Three entry modes:
@@ -34,6 +35,7 @@ type Mode = 'loading' | 'set-password' | 'confirm-link' | 'enter-code'
 
 function ResetPasswordInner() {
   const t = useTranslations('reset_password')
+  const errorLocale = useLocale() as ErrorLocale
   const tInvite = useTranslations('invite')
   const searchParams = useSearchParams()
   const tokenHash = searchParams.get('token_hash')
@@ -150,7 +152,7 @@ function ResetPasswordInner() {
         const body = (await res.json().catch(() => ({}))) as { error?: string }
         toast({
           title: t('save_failed_title'),
-          description: body.error || t('save_failed_description'),
+          description: getErrorMessage(body, { locale: errorLocale, fallback: t('save_failed_description') }),
           variant: 'destructive',
         })
         return

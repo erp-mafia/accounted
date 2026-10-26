@@ -31,6 +31,7 @@
  * #2805). The moms accounts are reconciled against the declared and
  * transferred amounts in Phase 1 of the bokslut (swedish-year-end-closing).
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { addDaysIso } from '@/lib/dates/iso'
 import { toHandle } from '@/lib/handles'
 import { roundOre } from '@/lib/money'
@@ -258,7 +259,7 @@ async function run(ctx: CheckContext): Promise<CheckRun<VatSource>[]> {
 
 /** "A13": the voucher a person finds the verifikat by. */
 function voucherOf(entry: { voucher_series: string | null; voucher_number: number | null }): string {
-  return `${entry.voucher_series ?? ''}${entry.voucher_number ?? ''}`
+  return formatVoucher(entry)
 }
 
 async function explain(_ctx: CheckContext, run: CheckRun<VatSource>): Promise<CheckBreakdown> {

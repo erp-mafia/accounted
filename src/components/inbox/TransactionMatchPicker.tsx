@@ -16,6 +16,7 @@ import { Loader2, Search } from 'lucide-react'
 import { Input } from '@/components/ui/input'
 import type { InvoiceExtractionResult } from '@/types'
 import { useUnderlagBankCandidates } from './use-underlag-bank-candidates'
+import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 // TransactionMatchPicker
 //
@@ -140,7 +141,7 @@ export default function TransactionMatchPicker({
       if (!res.ok) {
         toast({
           title: 'Kunde inte matcha',
-          description: json.error ?? `HTTP ${res.status}`,
+          description: getErrorMessage(json, { statusCode: res.status }),
           variant: 'destructive',
         })
         return

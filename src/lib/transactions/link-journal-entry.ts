@@ -25,6 +25,7 @@
  * kontantmetoden, before the sale is planned. The match log records
  * 'linked_to_existing_voucher' for audit on success.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { eventBus } from '@/lib/events/bus'
@@ -126,26 +127,6 @@ export type LinkTransactionJournalEntryOutcome =
   // A link refusal, or the Bokför step's code when the sale the link books
   // first was refused (details.sale_first).
   | { ok: false; code: LinkTransactionJournalEntryErrorCode | SaleFirstRefusal['code']; details?: Record<string, unknown> }
-
-/**
- * Canonical verifikat-label format: `${series}-${number}` (e.g. "A-12").
- * Centralised so the MCP staging preview and the committed result can't
- * diverge: divergence is a BFL 5 kap 7§ traceability hazard because the
- * verifikationsserie label that ends up in the audit trail must match the
- * label the user saw at approval time.
- *
- * Fallbacks ('A' series, empty number) are defensive only; in practice a
- * posted verifikat always has both. Callers should never construct this
- * string inline: import this helper instead.
- */
-export function formatVoucherLabel(
-  voucherSeries: string | null | undefined,
-  voucherNumber: number | string | null | undefined,
-): string {
-  const series = voucherSeries ?? 'A'
-  const num = voucherNumber ?? ''
-  return num === '' ? series : `${series}-${num}`
-}
 
 // The liveness predicate lives with the bank link core; re-exported for the
 // re-booking guards that import it from here.
@@ -372,10 +353,10 @@ export async function linkTransactionToJournalEntry(
       result: {
         transactionId,
         journalEntryId,
-        voucherLabel: formatVoucherLabel(
-          journalEntry.voucher_series as string | null,
-          journalEntry.voucher_number as number | null,
-        ),
+        // "A-12": the form the v1 voucher_label is documented in. The dry run
+        // and the commit format it the same way, so the label the approver saw
+        // is the label the audit trail keeps (BFL 5 kap 7 §).
+        voucherLabel: formatVoucher(journalEntry, { separator: '-' }),
         invoiceId: invoiceId ?? null,
         invoiceStatus: invoice ? newStatus : null,
         paidAmount: invoice ? newPaidAmount : null,
@@ -645,10 +626,7 @@ export async function linkTransactionToJournalEntry(
     })
   }
 
-  const voucherLabel = formatVoucherLabel(
-    journalEntry.voucher_series as string | null,
-    journalEntry.voucher_number as number | null,
-  )
+  const voucherLabel = formatVoucher(journalEntry, { separator: '-' })
 
   return {
     ok: true,

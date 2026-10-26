@@ -3,20 +3,25 @@ import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateQuery } from '@/lib/api/validate'
 import { errorResponse } from '@/lib/errors/get-structured-error'
-import { firstOfMonth } from '@/lib/bookkeeping/accruals/compute'
+import { installmentDueDate } from '@/lib/bookkeeping/accruals/service'
 import type { AccrualSchedule, AccrualScheduleInstallment } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 const ListQuerySchema = z.object({
   status: z.enum(['active', 'completed', 'cancelled', 'all']).default('active'),
+  // The schedules of one invoice, for its page's "Ändra periodisering".
+  supplier_invoice_id: z.string().uuid().optional(),
+  invoice_id: z.string().uuid().optional(),
 })
 
 /**
  * GET /api/bookkeeping/accruals?status=active|completed|cancelled|all
+ *   [&supplier_invoice_id=…|&invoice_id=…]
  *
- * Schedules with their installments for the periodiseringar page, plus a
- * `due_count` of pending installments whose month has begun (drives the
- * "Bokför förfallna" banner).
+ * Schedules with their installments for the periodiseringar page and the
+ * invoice pages, plus a `due_count` of pending installments whose day has
+ * come (drives the "Bokför förfallna" banner), by the same rule the posting
+ * run books by (installmentDueDate).
  */
 export const GET = withRouteContext(
   'accruals.list',
@@ -28,7 +33,7 @@ export const GET = withRouteContext(
       operation: 'accruals.list',
     })
     if (!validated.success) return validated.response
-    const { status } = validated.data
+    const { status, supplier_invoice_id, invoice_id } = validated.data
 
     let query = supabase
       .from('accrual_schedules')
@@ -39,6 +44,8 @@ export const GET = withRouteContext(
     if (status !== 'all') {
       query = query.eq('status', status)
     }
+    if (supplier_invoice_id) query = query.eq('supplier_invoice_id', supplier_invoice_id)
+    if (invoice_id) query = query.eq('invoice_id', invoice_id)
 
     const { data, error } = await query
     if (error) {
@@ -46,7 +53,7 @@ export const GET = withRouteContext(
       return errorResponse(error, log, { requestId })
     }
 
-    const todayMonth = firstOfMonth(todayIsoStockholm())
+    const today = todayIsoStockholm()
     let dueCount = 0
     const schedules = ((data ?? []) as Array<
       AccrualSchedule & { installments: AccrualScheduleInstallment[] }
@@ -56,7 +63,7 @@ export const GET = withRouteContext(
       )
       if (schedule.status === 'active') {
         dueCount += installments.filter(
-          (i) => i.status === 'pending' && i.period_month <= todayMonth,
+          (i) => i.status === 'pending' && installmentDueDate(schedule, i.period_month) <= today,
         ).length
       }
       return { ...schedule, installments }

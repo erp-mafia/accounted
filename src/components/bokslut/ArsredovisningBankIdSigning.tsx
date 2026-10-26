@@ -182,7 +182,7 @@ export function ArsredovisningBankIdSigning({ fiscalPeriodId, versionId, slots, 
     try {
       // An open request past its expiry still blocks a new one: it is cancelled first.
       for (const expired of expiredBlockingRequests(requests ?? [])) {
-        await cancelSigningRequest(expired.signing_request_id).catch(() => undefined)
+        await cancelSigningRequest(expired.signing_request_id).catch(() => undefined) // still open: the request below then answers why
       }
       const result = await requestArsredovisningSigning(fiscalPeriodId, versionId, {
         signers: pending.map((slot) => {

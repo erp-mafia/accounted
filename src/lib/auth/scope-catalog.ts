@@ -389,6 +389,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_undo_bank_import: 'transactions:write',
   gnubok_correct_entry_metadata: 'bookkeeping:write',
   gnubok_correct_entry_lines: 'bookkeeping:write',
+  gnubok_replan_accrual_schedule: 'bookkeeping:write',
   gnubok_redate_entry: 'bookkeeping:write',
   gnubok_mark_no_document_required: 'bookkeeping:write',
   gnubok_get_rattelse_log: 'reports:read',

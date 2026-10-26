@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useMemo, useRef } from 'react'
 import { useAccounts } from '@/lib/reference-data/hooks'
-import { useParams, useRouter } from 'next/navigation'
+import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -20,6 +20,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, CalendarClock, MoreHorizontal, Landmark } from 'lucide-react'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { isCreditableSupplierInvoiceStatus } from '@/lib/bookkeeping/creditable-statuses'
 import { formatDate, cn } from '@/lib/utils'
 import Link from 'next/link'
 import { AccountNumber } from '@/components/ui/account-number'
@@ -36,6 +37,7 @@ import { AccountChip } from '@/components/ui/account-chip'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
 import TemplatePicker from '@/components/transactions/TemplatePicker'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
+import { AccrualLineInfo, useInvoiceAccrualSchedules } from '@/components/bookkeeping/AccrualLineInfo'
 import { useCompanySettings } from '@/components/settings/useSettings'
 import useSWR from 'swr'
 import { StageSteps } from '@/components/supplier-invoices/StageSteps'
@@ -72,7 +74,6 @@ import type { BASAccount, EntityType } from '@/types'
 const itemHasAccrual = (item: SupplierInvoiceItem): boolean =>
   !!(item.accrual_period_start && item.accrual_period_end)
 
-const accrualMonth = (date: string): string => date.slice(0, 7)
 
 /**
  * The account of one invoice line, editable in place the way a category chip
@@ -172,6 +173,11 @@ export default function SupplierInvoiceDetailPage() {
   const tList = useTranslations('supplier_invoices')
   const [invoice, setInvoice] = useState<SupplierInvoice | null>(null)
   const [isLoading, setIsLoading] = useState(true)
+  // The rows' periodisering schedules, for "Ändra periodisering".
+  const accrualSchedules = useInvoiceAccrualSchedules(
+    { supplierInvoiceId: invoiceIdParam },
+    !!invoice?.items?.some((item) => itemHasAccrual(item as SupplierInvoiceItem)),
+  )
   const [isPayDialogOpen, setIsPayDialogOpen] = useState(false)
   // Chart of accounts for the row account cells, from the session cache
   // (lib/reference-data): one request per session at most, shared with
@@ -436,6 +442,20 @@ export default function SupplierInvoiceDetailPage() {
     }
   }
 
+  // ?action=credit, from a verifikat this invoice owns (Kreditera fakturan in
+  // OwnedVoucherActionDialog): the Kreditera confirm opens once the invoice
+  // is loaded, when this page offers it, and the parameter is dropped so a
+  // reload does not ask again.
+  const searchParams = useSearchParams()
+  const creditOnArrival = searchParams.get('action') === 'credit'
+  const creditOnArrivalHandled = useRef(false)
+  useEffect(() => {
+    if (!creditOnArrival || creditOnArrivalHandled.current || !invoice || invoice.id !== params.id) return
+    creditOnArrivalHandled.current = true
+    router.replace(`/supplier-invoices/${invoice.id}`, { scroll: false })
+    if (canWrite && isCreditableSupplierInvoiceStatus(invoice.status)) void handleCredit()
+  }, [creditOnArrival, invoice, params.id, canWrite, router, handleCredit])
+
   if (isLoading) {
     return <DetailPageSkeleton cards={3} />
   }
@@ -591,7 +611,12 @@ export default function SupplierInvoiceDetailPage() {
   const showBankEntered =
     canMarkSupplierInvoiceBankEntered(invoice, companySettings?.accounting_method) &&
     (canWrite || !!invoice.bank_entered_at)
-  const canCredit = canMarkPaid && invoice.status !== 'partially_paid'
+  // Kreditera on the statuses the shared rule names (creditable-statuses.ts);
+  // a kontantmetod company has no attest step, so its registered invoice is
+  // creditable as it stands, as it is payable (payableSupplierInvoiceStatuses).
+  const canCredit =
+    isCreditableSupplierInvoiceStatus(invoice.status) ||
+    (invoice.status === 'registered' && !companyAttestsSupplierInvoices(companySettings?.accounting_method))
   const canUncredit = invoice.status === 'credited' && !invoice.is_credit_note
   // Delete is allowed while nothing would be orphaned: no booking, no
   // payments (server re-checks). 'approved'/'overdue' are included because
@@ -634,14 +659,14 @@ export default function SupplierInvoiceDetailPage() {
 
   const accrualInfo = (item: SupplierInvoiceItem) =>
     itemHasAccrual(item) ? (
-      <span className="mt-0.5 flex items-center gap-1 text-xs text-muted-foreground tabular-nums">
-        <CalendarClock className="h-3 w-3 shrink-0" />
-        {t('accrual_line_info', {
-          from: accrualMonth(item.accrual_period_start!),
-          to: accrualMonth(item.accrual_period_end!),
-        })}
-        {item.accrual_balance_account && ` · ${item.accrual_balance_account}`}
-      </span>
+      <AccrualLineInfo
+        start={item.accrual_period_start!}
+        end={item.accrual_period_end!}
+        balanceAccount={item.accrual_balance_account}
+        schedule={accrualSchedules.scheduleForItem(item.id)}
+        canWrite={canWrite}
+        onReplan={accrualSchedules.openReplan}
+      />
     ) : null
 
   return (
@@ -1094,6 +1119,7 @@ export default function SupplierInvoiceDetailPage() {
         />
       )}
       <DestructiveConfirmDialog {...confirmDialogProps} />
+      {accrualSchedules.replanDialog}
 
       <SupplierPaymentDialog
         invoice={invoice}

@@ -1,0 +1,1 @@
+[2026-10-18] Ändra periodisering re-plans only months not yet posted (new end, release_day 1-31 clamped to month end) with today's equal monthly split, never moving a posted verifikat; upplupen kostnad (29xx expense) is refused, it books month ends before its invoice. The swedish-* skills set no day-weighting rule.

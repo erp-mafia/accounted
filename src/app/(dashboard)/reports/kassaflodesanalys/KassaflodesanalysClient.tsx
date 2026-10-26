@@ -67,7 +67,7 @@ export function KassaflodesanalysClient() {
       const res = await fetch(`/api/reports/kassaflodesanalys?period_id=${periodId}`)
       if (!res.ok) {
         const body = await res.json().catch(() => ({}))
-        throw new Error(body.error || t('cash_flow_load_failed'))
+        throw new Error(getUserErrorMessage(body, { locale: locale, fallback: t('cash_flow_load_failed') }))
       }
       const { data } = await res.json()
       setReport(data)

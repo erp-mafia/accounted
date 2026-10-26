@@ -114,7 +114,7 @@ export function useUnderlagBankCandidates({
         if (cancelled) return
         if (!res.ok) {
           setRows([])
-          setError(json.error ?? `HTTP ${res.status}`)
+          setError(getErrorMessage(json, { statusCode: res.status }))
           return
         }
         const loaded = (Array.isArray(json.data) ? json.data : []) as UnbookedBankRow[]

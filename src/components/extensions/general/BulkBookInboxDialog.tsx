@@ -1,7 +1,7 @@
 'use client'
 
 import { useMemo, useState, useEffect } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -19,7 +19,7 @@ import { formatCurrency } from '@/lib/utils'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import type { InvoiceExtractionResult, VatTreatment } from '@/types'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { summarizeUnderlagTotals } from './bulk-book-inbox-totals'
 
 // Minimal shape the dialog needs from the workspace's inbox items.
@@ -102,6 +102,7 @@ function isBookable(it: BulkBookInboxItem): boolean {
 export default function BulkBookInboxDialog({ open, onOpenChange, items, onSuccess }: Props) {
   const { toast } = useToast()
   const t = useTranslations('inbox_bulk_book')
+  const errorLocale = useLocale() as ErrorLocale
   const [category, setCategory] = useState<string>('')
   const [vatTreatment, setVatTreatment] = useState<VatTreatment | 'auto'>('auto')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -189,7 +190,7 @@ export default function BulkBookInboxDialog({ open, onOpenChange, items, onSucce
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) {
-        throw new Error(json.error ?? `HTTP ${res.status}`)
+        throw new Error(getUserErrorMessage(json, { locale: errorLocale, statusCode: res.status }))
       }
       const bookedCount: number = json.data?.booked_count ?? 0
       const skippedCount: number = json.data?.skipped_count ?? 0

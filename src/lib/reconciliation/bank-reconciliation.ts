@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import type { Transaction, ReconciliationMethod } from '@/types'
@@ -1635,7 +1636,7 @@ export async function linkTransactionToVouchers(
   const entryById = new Map(entries.map((e) => [e.id, e]))
   const labelOf = (id: string): string => {
     const e = entryById.get(id)
-    return e && e.voucher_number != null ? `${e.voucher_series ?? 'A'}-${e.voucher_number}` : id.slice(0, 8)
+    return e && e.voucher_number != null ? formatVoucher(e) : id.slice(0, 8)
   }
   for (const id of journalEntryIds) {
     const entry = entryById.get(id)

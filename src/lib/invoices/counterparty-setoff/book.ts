@@ -13,6 +13,7 @@
  * kvittningsavräkning archived as underlag, the paid events, the stale match
  * suggestions and a befarad kundförlust reserve the payment made unnecessary.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import type { SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
@@ -268,7 +269,7 @@ async function archiveSetoffNote(
     ])
     const company = (settingsRes.data ?? {}) as { company_name?: string | null; org_number?: string | null }
     const party = (partyRes.data ?? {}) as { display_name?: string | null; legal_name?: string | null; org_number?: string | null }
-    const voucherLabel = result.voucher_series && result.voucher_number ? `${result.voucher_series}${result.voucher_number}` : null
+    const voucherLabel = result.voucher_series && result.voucher_number ? formatVoucher(result) : null
     // Loaded here, not at the top: react-pdf stays out of every module that
     // reaches this service (the operation registry among them) until a note
     // is rendered.

@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import {
   AlertTriangle,
@@ -81,9 +82,6 @@ function mapKey(dims: Record<string, string>): string {
   )
 }
 
-function voucherLabel(v: TaggingVoucher): string {
-  return `${v.voucher_series ?? ''}${v.voucher_number ?? ''}`
-}
 
 /**
  * Distinct non-empty bags across a voucher's lines (insertion order), plus
@@ -305,7 +303,7 @@ export default function BulkTagWorkbench() {
     const ids = new Set(missingPairLineIds)
     const labels = new Set<string>()
     for (const v of vouchers) {
-      if (v.lines.some((l) => ids.has(l.id))) labels.add(voucherLabel(v))
+      if (v.lines.some((l) => ids.has(l.id))) labels.add(formatVoucher(v))
     }
     return [...labels]
   }, [vouchers, missingPairLineIds])
@@ -622,7 +620,7 @@ export default function BulkTagWorkbench() {
                             e.stopPropagation()
                             toggleVoucher(index, e.shiftKey)
                           }}
-                          aria-label={`Markera verifikat ${voucherLabel(voucher)}`}
+                          aria-label={`Markera verifikat ${formatVoucher(voucher)}`}
                         />
                         <Button
                           variant="ghost"
@@ -633,8 +631,8 @@ export default function BulkTagWorkbench() {
                           }}
                           aria-label={
                             isExpanded
-                              ? `Dölj rader för ${voucherLabel(voucher)}`
-                              : `Visa rader för ${voucherLabel(voucher)}`
+                              ? `Dölj rader för ${formatVoucher(voucher)}`
+                              : `Visa rader för ${formatVoucher(voucher)}`
                           }
                           aria-expanded={isExpanded}
                         >
@@ -652,7 +650,7 @@ export default function BulkTagWorkbench() {
                   >
                     <DataListPrimary className="flex items-center gap-2">
                       <span className="shrink-0 font-mono text-xs text-muted-foreground">
-                        {voucherLabel(voucher)}
+                        {formatVoucher(voucher)}
                       </span>
                       <span className="truncate">{voucher.description}</span>
                       {voucher.annulled && (
@@ -723,7 +721,7 @@ export default function BulkTagWorkbench() {
                                   e.stopPropagation()
                                   toggleLine(line.id)
                                 }}
-                                aria-label={`Markera rad ${line.account_number} på ${voucherLabel(voucher)}`}
+                                aria-label={`Markera rad ${line.account_number} på ${formatVoucher(voucher)}`}
                               />
                             </div>
                           }

@@ -1152,6 +1152,57 @@ describe('gnubok_correct_entry / gnubok_reverse_journal_entry: chain-depth guard
   })
 })
 
+describe('gnubok_reverse_journal_entry: the verifikat an invoice owns', () => {
+  // Advice, never a refusal: agents and bulk flows reverse invoice vouchers
+  // on purpose, so the storno stages as asked and the preview names the
+  // invoice, the tool that credits it and a warning for the approver.
+  it('stages the storno and names the owner in the preview', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({
+      data: {
+        id: '33333333-3333-4333-8333-333333333333',
+        status: 'posted',
+        entry_date: '2026-09-09',
+        description: 'Leverantörsfaktura 3744267',
+        voucher_number: 2,
+        voucher_series: 'D',
+        fiscal_period_id: 'fp-1',
+        correction_of_id: null,
+        reverses_id: null,
+        source_type: 'supplier_invoice_registered',
+        source_id: 'si-1',
+        fiscal_periods: { name: '2026', is_closed: false, locked_at: null },
+        lines: [
+          { account_number: '1710', debit_amount: 1000, credit_amount: 0, line_description: null },
+          { account_number: '2440', debit_amount: 0, credit_amount: 1000, line_description: null },
+        ],
+      },
+      error: null,
+    })
+    // The storno target check: the original's open 2026, no company lock date.
+    enqueue({ data: { name: '2026', period_start: '2026-01-01', period_end: '2026-12-31' }, error: null })
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    // The owner.
+    enqueue({ data: { id: 'si-1', supplier_invoice_number: '3744267', status: 'approved', credited_invoice_id: null }, error: null })
+    // Staging's own period check, then the pending operation.
+    enqueue({ data: { bookkeeping_locked_through: null }, error: null })
+    enqueue({ data: { id: 'fp-1', is_closed: false, locked_at: null }, error: null })
+    enqueue({ data: { id: 'op-owned-1' }, error: null })
+
+    const result = (await reverseEntry.execute(
+      { entry_id: '33333333-3333-4333-8333-333333333333' },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { preview: { owned_by?: { kind: string; tool: string | null }; warnings?: string[] } }
+
+    expect(findCall('pending_operations', 'insert')).toBeDefined()
+    expect(result.preview.owned_by).toMatchObject({ kind: 'supplier_invoice', tool: 'gnubok_credit_supplier_invoice' })
+    expect(result.preview.warnings?.some((w) => w.includes('leverantörsfaktura 3744267'))).toBe(true)
+  })
+})
+
 describe('gnubok_reverse_journal_entry: staging gates', () => {
   it('is registered with bookkeeping:write scope and is not read-only', async () => {
     const { TOOL_SCOPE_MAP } = await import('@/lib/auth/api-keys')

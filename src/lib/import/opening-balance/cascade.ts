@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Logger } from '@/lib/logger'
 import type { CreateJournalEntryLineInput } from '@/types'
@@ -371,7 +372,7 @@ export async function cascadeOpeningBalanceCorrection(
     // the base correction.
     const voucherLabel =
       period.opening_balance_entry?.voucher_series && period.opening_balance_entry?.voucher_number
-        ? `${period.opening_balance_entry.voucher_series}${period.opening_balance_entry.voucher_number}`
+        ? formatVoucher(period.opening_balance_entry)
         : null
     const description = voucherLabel
       ? `Ingående balanser (korrigerade, rättelse av ${voucherLabel})`

@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { AlertCircle, Check, ChevronDown, FileCode, FileDown, Percent } from 'lucide-react'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Card, CardContent } from '@/components/ui/card'
@@ -43,7 +43,7 @@ import {
 } from '@/lib/vat/filing-record'
 import { cn, formatAmount, formatDate } from '@/lib/utils'
 import { formatDateISO } from '@/lib/calendar/utils'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { runVatDeclarationChecks } from '@/lib/reports/vat-declaration-checks'
 import { rcInputTotalsFromDeclaration } from '@/lib/reports/vat-declaration'
@@ -576,6 +576,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   const [pickedFiscalPeriodId, setPickedFiscalPeriodId] = useState('')
   const { periods: fiscalPeriods } = useFiscalPeriods()
   const tReports = useTranslations('reports')
+  const errorLocale = useLocale() as ErrorLocale
   const tPay = useTranslations('skattekonto_bank_payment')
   // Latest fetch outcome, tagged with the fetch key it was requested under.
   // loading / error / data are all derived by comparing that tag with the
@@ -797,7 +798,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
           setResult({
             key: fetchKey,
             error:
-              typeof json?.error === 'string' ? json.error : 'Kunde inte hämta momsdeklaration',
+              getErrorMessage(json, { locale: errorLocale, fallback: 'Kunde inte hämta momsdeklaration' }),
           })
         } else {
           setResult({ key: fetchKey, declaration: json.data })
@@ -1635,7 +1636,7 @@ function makeVatFetcher(
       `/api/reports/vat-declaration/ruta/${encodeURIComponent(ruta)}/sources?${params.toString()}`
     )
     const json = await res.json()
-    if (!res.ok) throw new Error(json.error || 'Kunde inte hämta verifikat')
+    if (!res.ok) throw new Error(getErrorMessage(json, { fallback: 'Kunde inte hämta verifikat' }))
     const lines: ReportSourceLine[] = json.data?.lines || []
     return { lines, next_cursor: json.data?.next_cursor ?? null }
   }

@@ -239,7 +239,7 @@ describe("linkTransactionToJournalEntry: the verifikat's bank leg must have room
       ok: false,
       code: 'VOUCHER_BANK_LEG_CONSUMED',
       details: {
-        reason: expect.stringContaining('Verifikat A-17 bokför 2800 på 1930'),
+        reason: expect.stringContaining('Verifikat A17 bokför 2800 på 1930'),
         booked: 2800,
         held: 2800,
         remaining: 0,

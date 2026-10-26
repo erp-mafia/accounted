@@ -7,6 +7,7 @@
  * verifikat must book is each ledger's own.
  */
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { z } from 'zod'
 import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { ORE_TOLERANCE, roundOre } from '@/lib/money'
@@ -91,7 +92,7 @@ export function registrationVoucherLabel(voucher: {
   voucher_number: number | null
 }): string {
   return voucher.voucher_series && voucher.voucher_number != null
-    ? `${voucher.voucher_series}${voucher.voucher_number}`
+    ? formatVoucher(voucher)
     : voucher.id.slice(0, 8)
 }
 

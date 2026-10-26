@@ -1,12 +1,12 @@
 'use client'
 
 import { useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { ChevronRight } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import type { BillingPlan } from '@/lib/stripe/client'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency } from '@/lib/utils'
 import { PLAN_PRICES } from '@/components/settings/billing-plans'
 
@@ -35,6 +35,7 @@ export function BillingActions({
   className?: string
 }) {
   const t = useTranslations('settings_billing')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [loading, setLoading] = useState(false)
 
@@ -50,8 +51,7 @@ export function BillingActions({
         url?: string
         error?: string | { message?: string }
       }
-      const errorMessage = typeof data.error === 'string' ? data.error : data.error?.message
-      if (!res.ok || !data.url) throw new Error(errorMessage || t('checkout_failed'))
+      if (!res.ok || !data.url) throw new Error(getUserErrorMessage(data, { locale: errorLocale, fallback: t('checkout_failed') }))
       window.location.href = data.url
     } catch (e) {
       toast({

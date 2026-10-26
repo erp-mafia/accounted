@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import { eventBus } from '@/lib/events'
@@ -223,7 +224,9 @@ async function getOriginalVoucherRef(
   }
 
   if (!data?.voucher_series || data.voucher_number == null) return undefined
-  return `${data.voucher_series}-${data.voucher_number}`
+  // Written into the credit note's verifikationstext ("avser verifikation
+  // B-8"): ledger text keeps the hyphen every earlier credit note carries.
+  return formatVoucher(data, { separator: '-' })
 }
 
 async function findExistingCreditJournalEntry(

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { generateGeneralLedger } from '@/lib/reports/general-ledger'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -109,7 +110,7 @@ export const GET = withRouteContext('report.general_ledger.xlsx', async (request
           // Preserve the original ISO string in the cell if parsing fails (avoids
           // NaN dates polluting the workbook).
           date: parseCellDate(line.date) ?? line.date,
-          voucher: `${line.voucher_series}${line.voucher_number}`,
+          voucher: formatVoucher(line),
           description: line.description,
           source_type: line.source_type,
           debit: line.debit,

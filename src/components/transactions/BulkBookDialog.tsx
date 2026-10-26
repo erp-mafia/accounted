@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useEffect, useMemo, useState } from 'react'
 import { useBookingTemplates, useCashAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { useTranslations } from 'next-intl'
@@ -17,6 +18,7 @@ import {
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -408,7 +410,7 @@ export default function BulkBookDialog({
       }
       const voucherLabel =
         body.data.voucher_series && body.data.voucher_number != null
-          ? `${body.data.voucher_series}-${body.data.voucher_number}`
+          ? formatVoucher(body.data)
           : t('unknown_voucher')
       toast({
         title: t('success_title'),
@@ -757,12 +759,7 @@ export default function BulkBookDialog({
                 withCurrency
                 showTotals
                 maxRows={30}
-                lines={previewLines.map((line) => ({
-                  account_number: line.account_number,
-                  description: line.line_description,
-                  debit_amount: line.debit_amount,
-                  credit_amount: line.credit_amount,
-                }))}
+                lines={voucherLineViews(previewLines)}
               />
 
               {/* Invariant indicators */}

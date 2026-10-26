@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState, useCallback } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
@@ -23,7 +23,7 @@ import { FiscalYearReopenDialog } from '@/components/settings/FiscalYearReopenDi
 import { FiscalYearEditDialog } from '@/components/settings/FiscalYearEditDialog'
 import { SIEOpeningBalanceReview } from '@/components/settings/SIEOpeningBalanceReview'
 import { fiscalYearShortName, suggestSeedDate } from '@/lib/bookkeeping/suggest-fiscal-period'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /** Status of a fiscal period, in legal precedence: closed > locked > open. */
@@ -42,6 +42,7 @@ const STATUS_VARIANT: Record<'closed' | 'locked', 'secondary' | 'warning'> = {
 
 export function FiscalYearsManager() {
   const t = useTranslations('settings_bookkeeping')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { role } = useCompany()
   const { dialogProps, confirm } = useDestructiveConfirm()
@@ -85,7 +86,7 @@ export function FiscalYearsManager() {
       if (!res.ok) {
         // Surface the backend's message verbatim: e.g. "X affärstransaktion(er)
         // saknar bokföring", which tells the user exactly what to fix first.
-        throw new Error(body?.error?.message || t('fy_action_error'))
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('fy_action_error') }))
       }
       toast({
         title:

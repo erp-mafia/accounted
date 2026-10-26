@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
 
 export interface JournalEntryPreviewProps {
@@ -43,11 +44,8 @@ export default function JournalEntryPreview({ lines, loading = false, error = nu
     >
       <p className="text-xs font-medium text-muted-foreground mb-1.5">Verifikation</p>
       <VoucherLinesTable
-        lines={lines.map((line, i) => ({
-          key: i,
-          account_number: line.account,
-          debit_amount: line.side === 'debet' ? line.amount : 0,
-          credit_amount: line.side === 'debet' ? 0 : line.amount,
+        lines={lines.map((line) => ({
+          ...voucherLineView(line),
           extra: changedAccounts?.includes(line.account) ? (
             <span className="rounded-sm bg-attn/15 px-1 text-[11px] font-medium uppercase tracking-wide text-attn">ny</span>
           ) : undefined,

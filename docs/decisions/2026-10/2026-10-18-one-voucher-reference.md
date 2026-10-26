@@ -1,0 +1,1 @@
+[2026-10-18] formatVoucher ("A113", "-" for drafts) is the one voucher reference format; formatVoucherLabel and the local copies go, and a hand-built-voucher-ref ratchet holds the rest at 4 (matching keys, a React key). "A-12" stays only on the three v1 fields documented that way, via formatVoucher's separator option: they are a public contract.

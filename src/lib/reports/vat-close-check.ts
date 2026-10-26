@@ -13,6 +13,7 @@
  * first. Moved here from the MCP server, where the v1 door could not reach it
  * (core never imports an extension).
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { type EntryLinesQuery, fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
 import { fiscalYearLockedToCalendar, isEntityType } from '@/lib/company/entity-type'
@@ -36,7 +37,6 @@ import { formatCurrency } from '@/lib/utils'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
-import { formatVoucherLabel } from '@/lib/transactions/link-journal-entry'
 import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import type { KontantmetodCutoffVatFacts, VatDeclaration, VatDeclarationRutor } from '@/types'
 import { createLogger } from '@/lib/logger'
@@ -176,14 +176,14 @@ async function listExcludedSettlementEntries(
   const entries: VatExcludedSettlementEntry[] = [
     ...tagged.map((e) => ({
       journal_entry_id: e.id,
-      voucher_label: formatVoucherLabel(e.voucher_series, e.voucher_number),
+      voucher_label: formatVoucher(e, { separator: '-' }),
       entry_date: e.entry_date ?? '',
       source_type: e.source_type,
       detected_by: 'tagged' as const,
     })),
     ...shapedEntries.map((e) => ({
       journal_entry_id: e.id,
-      voucher_label: formatVoucherLabel(e.voucher_series, e.voucher_number),
+      voucher_label: formatVoucher(e, { separator: '-' }),
       entry_date: e.entry_date ?? '',
       source_type: e.source_type,
       detected_by: hasNetAccountLine.has(e.id)

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody } from '@/lib/api/validate'
@@ -108,7 +109,7 @@ export const POST = withRouteContext<Params>(
         reversed: result.reversed.map((entry) => ({
           id: entry.id,
           kind: entry.kind,
-          voucher: `${entry.voucher_series ?? 'A'}${entry.voucher_number ?? ''}`,
+          voucher: formatVoucher(entry),
         })),
         supersededVersions: result.supersededVersions,
       },

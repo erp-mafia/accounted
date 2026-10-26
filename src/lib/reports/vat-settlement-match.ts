@@ -18,6 +18,7 @@
  * (vat-settlement.ts) reads these primitives, and the booking guard and the
  * vat_declared_not_settled check read the proposal.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
@@ -147,7 +148,7 @@ export async function summarizeSettlements(
       source_type: e.head.source_type,
       voucher_series: e.head.voucher_series,
       voucher_number: e.head.voucher_number,
-      label: `${e.head.voucher_series ?? ''}${e.head.voucher_number ?? ''} ${e.head.description ?? ''}`.trim(),
+      label: `${e.head.voucher_number ? formatVoucher(e.head) : ''} ${e.head.description ?? ''}`.trim(),
       cleared: roundOre(e.cleared),
       net: roundOre(e.hasNet ? e.toNet : e.toOther),
       via: e.hasNet ? ('net_account' as const) : ('tax_account' as const),

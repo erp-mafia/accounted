@@ -235,6 +235,8 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       // The unexplained queue (lib/unexplained, infrastructure): expected-zero
       // checks over the ledger and the blocks that feed it, read-only.
       'unexplained',
+      // Periodiseringar (lib/bookkeeping/accruals): re-planning a schedule.
+      'accrual-schedules',
     ],
     v1Segments: [
       'journal-entries',
@@ -251,6 +253,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'cash-accounts',
       'measures',
       'unexplained',
+      'accrual-schedules',
     ],
     jurisdictions: SE,
   },

@@ -585,6 +585,7 @@ export async function fetchGrantedScopes(session: ShopifySession): Promise<strin
       .map((scope) => scope?.handle)
       .filter((handle): handle is string => typeof handle === 'string' && handle.length > 0)
   } catch {
+    // Only enriches a connect error: unreadable scopes leave out the scope hint.
     return null
   }
 }

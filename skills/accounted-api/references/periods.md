@@ -2,7 +2,7 @@
 
 # Periods and registers endpoints
 
-Fiscal periods and their lock/close/year-end lifecycle (async operations), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, and reading filed VAT declarations (and beslut) from Skatteverket.
+Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, and reading filed VAT declarations (and beslut) from Skatteverket.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -528,6 +528,104 @@ Example response `200`:
     ],
     "skipped_inactive": 0,
     "unknown": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/accrual-schedules/{id}/replan`
+
+**Re-plan the months of a periodisering that are not yet posted: a new period end and/or the day each month books on.**
+`scope:bookkeeping:write · risk:low · idempotent · dry-run · reversible`
+
+Ändra periodisering. Posted months and their verifikat stay exactly as they are; what remains (total minus posted) is split equally over the calendar months of the new period that have no posted month, the same split a new schedule gets. release_day sets the day each month books on (1-31, clamped to the month end, so 31 is the last day; null is the first of the month). Months whose day has already come are booked at once. A deferral only (förutbetald kostnad 17xx, förutbetald intäkt 29xx): an upplupen kostnad is refused. Dry-runnable: the dry run answers the months before and after and writes nothing.
+
+**Use when:** The service period of a periodiserad invoice line changed (a contract ends early or runs longer), or the months should book on the day the period starts, e.g. the 14th for a rent running 14th to 13th.
+**Do not use for:** Changing months already posted (correct those verifikat, or credit the invoice), booking the whole remainder now (Lös upp nu), or an upplupen kostnad on 29xx.
+
+**Pitfalls:**
+- period_end must be on or after the last posted month and leave at least one unposted month: 400 ACCRUAL_REPLAN_INVALID with details.reason otherwise.
+- A schedule a credit is still settling (cancelled months) or that is not active cannot be re-planned.
+- A month the posting run books between the dry run and the commit makes the commit answer 409 ACCRUAL_REPLAN_CONFLICT: re-read and retry.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Request body:
+```ts
+{ period_end?: string, release_day?: number | null }
+```
+
+Example request:
+```json
+{
+  "period_end": "2027-06-30",
+  "release_day": 14
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    accrual_schedule_id: string,
+    period_start: string,
+    period_end_before: string,
+    period_end_after: string,
+    release_day_before: number | null,
+    release_day_after: number | null,
+    remaining_amount: number,
+    before: { period_month: string, amount: number, booking_date: string }[],
+    after: { period_month: string, amount: number, booking_date: string }[],
+    posted_now?: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "accrual_schedule_id": "7f3c…",
+    "period_start": "2026-07-01",
+    "period_end_before": "2026-12-31",
+    "period_end_after": "2027-06-30",
+    "release_day_before": null,
+    "release_day_after": 14,
+    "remaining_amount": 4000,
+    "before": [
+      {
+        "period_month": "2026-11-01",
+        "amount": 2000,
+        "booking_date": "2026-11-01"
+      }
+    ],
+    "after": [
+      {
+        "period_month": "2026-11-01",
+        "amount": 500,
+        "booking_date": "2026-11-14"
+      }
+    ],
+    "posted_now": 0
   },
   "meta": {
     "request_id": "req_…",

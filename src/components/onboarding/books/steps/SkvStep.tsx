@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Landmark } from 'lucide-react'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useFormat } from '@/lib/hooks/use-format'
@@ -13,6 +13,7 @@ import { SkvHandshake } from '../ui/SkvHandshake'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
 import { openOmbudDeepLink, verifyOmbudGrant } from '@/components/skatteverket/ombud-appoint'
+import type { ErrorLocale } from '@/lib/errors/get-error-message'
 
 const RETURN_TO = '/onboarding/books?station=skv'
 const AUTHORIZE_URL = `/api/extensions/ext/skatteverket/authorize?return_to=${encodeURIComponent(RETURN_TO)}`
@@ -34,6 +35,7 @@ const AUTHORIZE_URL = `/api/extensions/ext/skatteverket/authorize?return_to=${en
  */
 export function SkvStep({ ctx }: { ctx: BooksCtx }) {
   const t = useTranslations('books')
+  const errorLocale = useLocale() as ErrorLocale
   const { appName } = useBranding()
   const { state, dispatch, flags, findings, loadFindings, landedError } = ctx
   const phase = state.skvPhase
@@ -126,7 +128,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       if (document.visibilityState !== 'visible' || !awaitingOmbud.current) return
       if (phaseRef.current !== 'leaving' && phaseRef.current !== 'away') return
       awaitingOmbud.current = false
-      const outcome = await verifyOmbudGrant()
+      const outcome = await verifyOmbudGrant(errorLocale)
       if (outcome.result === 'granted') {
         arrive()
         return
@@ -142,7 +144,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
     }
     document.addEventListener('visibilitychange', onVisible)
     return () => document.removeEventListener('visibilitychange', onVisible)
-  }, [arrive, dispatch, t])
+  }, [arrive, dispatch, errorLocale, t])
 
   async function appointOmbud() {
     setAttn(null)
@@ -151,7 +153,7 @@ export function SkvStep({ ctx }: { ctx: BooksCtx }) {
       if (phaseRef.current === 'leaving') dispatch({ type: 'SKV_PHASE', phase: 'away' })
     })
     // Opens the tab inside this click, before its first await (popup blockers).
-    const opened = await openOmbudDeepLink()
+    const opened = await openOmbudDeepLink(errorLocale)
     if (!opened.ok) {
       setAttn(opened.error ?? t('skv_ombud_link_failed'))
       dispatch({ type: 'SKV_PHASE', phase: 'open' })

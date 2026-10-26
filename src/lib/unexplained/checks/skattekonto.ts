@@ -16,6 +16,7 @@
  * skattekonto-and-owner; swedish-year-end-closing Phase 1: 1630 against the
  * Skatteverket kontoutdrag).
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { toHandle } from '@/lib/handles'
 import { roundOre } from '@/lib/money'
 import { getSkattekontoReconciliationStatus, type SkattekontoReconciliationResult } from '@/lib/reconciliation/skattekonto-reconciliation'
@@ -153,7 +154,7 @@ function itemOf(item: ReconciliationItem, part: string): CheckItem {
     date: item.date,
     label: external
       ? item.description
-      : `${item.voucher_series ?? ''}${item.voucher_number ?? ''} ${item.description}`.trim(),
+      : `${formatVoucher(item)} ${item.description}`.trim(),
     // An event on Skatteverket's side moves the saldo, a verifikat moves the books: the saldo minus the books.
     amount: roundOre(external ? item.amount : -item.amount),
     currency: item.currency,

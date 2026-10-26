@@ -10,6 +10,7 @@ import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { cn } from '@/lib/utils'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 /**
  * The single-call chat console for general.help (audit Option A / rip).
@@ -177,7 +178,7 @@ export default function AskConsole({
           let message = 'Något gick fel. Försök igen.'
           try {
             const b = (await res.json()) as { error?: unknown }
-            if (typeof b?.error === 'string') message = b.error
+            if (b?.error) message = getErrorMessage(b, { locale: locale as ErrorLocale, fallback: message })
           } catch {
             // keep the default
           }

@@ -52,6 +52,7 @@ export async function opensWithoutPassword(bytes: Uint8Array): Promise<boolean> 
     await PDFDocument.load(bytes, { updateMetadata: false })
     return true
   } catch {
+    // Encrypted or unreadable: either way the PDF cannot be signed as is.
     return false
   }
 }

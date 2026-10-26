@@ -2,12 +2,13 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsRow, SettingsRowNote, SettingsSeg } from '@/components/settings/SettingsRows'
 import { formatCurrency } from '@/lib/utils'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 type Account = '1630' | '2012'
 
@@ -23,11 +24,6 @@ interface ErrorEnvelope {
   error?: { message?: string } | string
 }
 
-function errorText(json: ErrorEnvelope, fallback: string): string {
-  if (typeof json.error === 'string') return json.error
-  return json.error?.message ?? fallback
-}
-
 /**
  * Kopplingar → Skatteverket: which account the skattekonto runs on in the
  * books (PH 175). Shown only for a form with a choice (an enskild firma:
@@ -37,6 +33,7 @@ function errorText(json: ErrorEnvelope, fallback: string): string {
  */
 export function SkattekontoAccountSetting() {
   const t = useTranslations('settings_skattekonto_account')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [state, setState] = useState<AccountState | null>(null)
   const [pending, setPending] = useState<Account | null>(null)
@@ -76,7 +73,7 @@ export function SkattekontoAccountSetting() {
       })
       const json = (await res.json()) as { data?: { state: AccountState } } & ErrorEnvelope
       if (!res.ok || !json.data) {
-        toast({ title: t('save_failed'), description: errorText(json, t('save_failed')), variant: 'destructive' })
+        toast({ title: t('save_failed'), description: getErrorMessage(json, { locale: errorLocale, fallback: t('save_failed') }), variant: 'destructive' })
         return
       }
       setState(json.data.state)
@@ -100,7 +97,7 @@ export function SkattekontoAccountSetting() {
       })
       const json = (await res.json()) as { data?: { journal_entry_id: string } } & ErrorEnvelope
       if (!res.ok || !json.data) {
-        toast({ title: t('draft_failed'), description: errorText(json, t('draft_failed')), variant: 'destructive' })
+        toast({ title: t('draft_failed'), description: getErrorMessage(json, { locale: errorLocale, fallback: t('draft_failed') }), variant: 'destructive' })
         return
       }
       setDraftId(json.data.journal_entry_id)

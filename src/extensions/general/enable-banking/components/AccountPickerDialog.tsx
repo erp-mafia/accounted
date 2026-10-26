@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -48,6 +48,7 @@ import {
   type SyncProgressState,
 } from './BankSyncProgressDialog'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { classifyInitialSyncError } from '@/lib/bank-sync/initial-sync-error'
 
 interface AccountPickerDialogProps {
@@ -168,6 +169,7 @@ export function AccountPickerDialog({
   // reason beside the account. Empty for an account without such evidence,
   // whose default is unchanged. Read while the dialog is open only.
   const tLedger = useTranslations('bank_ledger_suggestion')
+  const errorLocale = useLocale() as ErrorLocale
   const { suggestions: ledgerSuggestions } = useBankLedgerSuggestions({ enabled: open, connectionId })
   const suggestedByUid = useMemo(
     () => pickerPreselection(ledgerSuggestions, connectionId),
@@ -527,10 +529,7 @@ export function AccountPickerDialog({
         // validation): nothing was persisted and no sync started. Surface the
         // server's message inside the still-open picker; the progress modal's
         // failed state would wrongly claim "we retry in the background".
-        // Route validation answers { error: string }; database refusals
-        // answer the structured envelope { error: { code, message } }.
-        const message = typeof data?.error === 'string' ? data.error : data?.error?.message
-        setSaveError(typeof message === 'string' && message ? message : 'Kunde inte spara kontoval')
+        setSaveError(getErrorMessage(data, { locale: errorLocale, fallback: 'Kunde inte spara kontoval' }))
         if (isInitialSelection) setProgressOpen(false)
         return
       }

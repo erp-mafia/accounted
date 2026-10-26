@@ -171,7 +171,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       // Any other failure is not "not found": show what the server said, so
       // a timeout or a refused read does not read as a missing run.
       const body = (await res.json().catch(() => null)) as { error?: string } | null
-      setRunError(body?.error || t('load_failed'))
+      setRunError(getErrorMessage(body, { locale: errorLocale, fallback: t('load_failed') }))
     } else {
       setRunError(null)
     }

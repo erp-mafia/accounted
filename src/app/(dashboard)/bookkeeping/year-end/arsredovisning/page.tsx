@@ -521,7 +521,7 @@ export default function ArsredovisningPage() {
         .then((refreshed) => {
           if (refreshed?.data) setData(refreshed.data as ArsredovisningData)
         })
-        .catch(() => undefined)
+        .catch(() => undefined) // a refresh: the save stands, the next load shows it
       setNarrativeRevision(
         typeof body.data?.updated_at === 'string' ? body.data.updated_at : null,
       )
@@ -740,7 +740,7 @@ export default function ArsredovisningPage() {
       .then((body: { data?: SignatureRequest[] }) => {
         if (Array.isArray(body?.data)) setSignatures(body.data)
       })
-      .catch(() => undefined)
+      .catch(() => undefined) // a refresh: the list reloads on the next visit
     setSigningReload((n) => n + 1)
     refreshCompliance()
   }, [periodId, refreshCompliance])

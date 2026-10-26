@@ -166,6 +166,12 @@ describe('formatVoucher', () => {
   it('uppercases the series', () => {
     expect(formatVoucher({ voucher_series: 'b', voucher_number: 3 })).toBe('B3')
   })
+
+  it('gives the hyphenated form only when asked, for the v1 fields documented as "A-12"', () => {
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: 12 }, { separator: '-' })).toBe('A-12')
+    expect(formatVoucher({ voucher_series: null, voucher_number: 7 }, { separator: '-' })).toBe('A-7')
+    expect(formatVoucher({ voucher_series: 'A', voucher_number: 0 }, { separator: '-' })).toBe('-')
+  })
 })
 
 describe('parseVoucher', () => {

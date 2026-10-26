@@ -571,6 +571,25 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       company_settings: { bookkeeping_locked_through: null },
     },
   },
+  // Ändra periodisering: an active 17xx schedule with January posted and
+  // February to December pending; the preview reads the schedule and the
+  // lock date, never the replan RPC or the engine.
+  gnubok_replan_accrual_schedule: {
+    args: { release_day: 14 },
+    rows: {
+      accrual_schedules: {
+        id: SOME_UUID, status: 'active', direction: 'expense', balance_account: '1790', target_account: '5010',
+        total_amount: 1200, period_start: '2026-01-01', period_end: '2026-12-31', posting_floor_date: '2026-01-15',
+        release_day: null,
+        installments: Array.from({ length: 12 }, (_, i) => ({
+          period_month: `2026-${String(i + 1).padStart(2, '0')}-01`,
+          amount: 100,
+          status: i === 0 ? 'posted' : 'pending',
+        })),
+      },
+      company_settings: { bookkeeping_locked_through: null },
+    },
+  },
   // Cancel a draft verifikat in an open, unlocked 2026 (agent feedback seq
   // 978933): the preview reads the entry and the lock, never the engine.
   gnubok_cancel_draft_entry: {

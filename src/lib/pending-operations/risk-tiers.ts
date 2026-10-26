@@ -97,6 +97,8 @@ const RISK_TIERS = {
   undo_bank_import: 'high',
   correct_entry_metadata: 'high',
   correct_entry_lines_inline: 'high',
+  // Re-plans months not yet posted; posted verifikat never change.
+  replan_accrual_schedule: 'low',
   redate_entry: 'high',
   mark_no_document_required: 'medium',
   book_vat_settlement: 'high',

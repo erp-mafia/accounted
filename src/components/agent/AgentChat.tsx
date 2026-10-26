@@ -18,12 +18,12 @@ import {
 import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useAssistantAvailable, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import ApprovalCard from './ApprovalCard'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { StoredStagedOperation } from '@/types'
 import type { AgentStatusEvent } from './agent-status'
 import { sendFeedback, type FeedbackSentiment } from './feedback-client'
@@ -257,6 +257,7 @@ export default function AgentChat({
   // resumed thread or a deep link: never fire an invoke that answers 503.
   const assistantAvailable = useAssistantAvailable()
   const tChat = useTranslations('agent_chat')
+  const errorLocale = useLocale() as ErrorLocale
   const [input, setInput] = useState('')
   const [streaming, setStreaming] = useState(false)
   // Turn boundaries for the status channel are derived from the streaming flag
@@ -439,8 +440,8 @@ export default function AgentChat({
       let msg = 'Kunde inte nå assistenten. Försök igen om en stund.'
       try {
         const errBody = await response.json()
-        if (errBody && typeof errBody.error === 'string' && errBody.error.trim()) {
-          msg = errBody.error
+        if (errBody?.error) {
+          msg = getUserErrorMessage(errBody, { locale: errorLocale, fallback: msg })
         }
       } catch {
         // non-JSON / empty body: keep the generic message

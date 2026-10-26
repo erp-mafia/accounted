@@ -12,6 +12,7 @@
  * reconciliation method and emits transaction.reconciled; the other settles
  * an invoice on the same voucher and has a dry run.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import {
@@ -415,7 +416,7 @@ export async function prepareBankLink(
   const verdict = fitsBankLeg(room, amount, params.bankLegOverrun ?? 0)
   if (!verdict.fits) {
     const voucherLabel =
-      entry.voucher_number != null ? `${entry.voucher_series ?? 'A'}-${entry.voucher_number}` : journalEntryId
+      entry.voucher_number != null ? formatVoucher(entry) : journalEntryId
     log.warn('refused a link to a verifikat whose bank leg other rows already hold', {
       companyId,
       transactionId,

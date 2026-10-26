@@ -38,6 +38,7 @@
  * {@link resolveTransactionAmountSek} for why, and for what happens when a bank
  * line cannot be expressed in SEK at all.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { isKronorCurrency, resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
@@ -47,6 +48,9 @@ import { idsProveDistinctBookings, type TransactionIdentity } from '@/lib/transa
 import { BANK_LEG_ROOM_TOLERANCE, holdersOnAccount, readBankLegHolders } from '@/lib/transactions/voucher-bank-leg'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { chunk } from '@/lib/utils'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('transactions/booking-duplicate-detection')
 
 /** Integer öre: representation-agnostic amount key (mirrors the ingest dedup). */
 function toOre(amount: number | string): number {
@@ -490,7 +494,7 @@ export async function detectBookedDuplicateTransaction(
     .maybeSingle()
   if (je) {
     const j = je as { voucher_series: string | null; voucher_number: number | null; entry_date: string | null }
-    voucherLabel = `${j.voucher_series ?? 'A'}${j.voucher_number ?? ''}`
+    voucherLabel = formatVoucher(j)
     entryDate = j.entry_date ?? best.date
   }
 
@@ -884,7 +888,7 @@ export async function detectLedgerDuplicateVoucher(
     // (the de-excluded shape above); null for a true ledger-only orphan.
     transaction_id: survivors[0].twinTransactionId,
     journal_entry_id: best.journal_entry.id,
-    voucher_label: `${best.journal_entry.voucher_series ?? 'A'}${best.journal_entry.voucher_number ?? ''}`,
+    voucher_label: formatVoucher(best.journal_entry),
     entry_date: best.journal_entry.entry_date,
     description: best.journal_entry.description,
     // Always the leg's SEK figure, matched or not, so the UI never prints a
@@ -1097,7 +1101,7 @@ export async function detectCoveringVoucher(
     return {
       transaction_id: null,
       journal_entry_id: entry.id,
-      voucher_label: `${entry.voucher_series ?? 'A'}${entry.voucher_number ?? ''}`,
+      voucher_label: formatVoucher(entry),
       entry_date: entry.entry_date,
       description: entry.description,
       amount: facts.booked,
@@ -1108,7 +1112,8 @@ export async function detectCoveringVoucher(
       unverified_reason: null,
       covering: facts,
     }
-  } catch {
+  } catch (err) {
+    log.warn('covering voucher probe failed: no covering warning shown', err)
     return null
   }
 }

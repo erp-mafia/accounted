@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { withRouteContext } from '@/lib/api/with-route-context'
@@ -151,7 +152,7 @@ export const GET = withRouteContext('arkiv.documents', async (request, ctx) => {
   const voucherOf = new Map(
     entryRows.map((e) => [
       e.id,
-      `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`,
+      formatVoucher(e),
     ]),
   )
   const expectedCount = new Map<string, number>()

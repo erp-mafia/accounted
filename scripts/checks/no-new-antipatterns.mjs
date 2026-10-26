@@ -55,6 +55,9 @@
  *   5. raw-user-error: raw caught-error messages passed to API response fields,
  *      client error state, or toast fields. Engine, database, and upstream
  *      messages must pass through getErrorMessage() or errorResponse().
+ *   5b. hand-read-api-error: client code that reads `body.error` by hand instead of
+ *      getErrorMessage(body, { locale, fallback }). Rationale and allowlist in
+ *      hand-read-api-error.mjs. No baseline: the count is 0 today.
  *   6. sek-labelled-amount: a single-argument formatCurrency() call on a value
  *      read off a record the same file reads `.currency` from, which prints a
  *      foreign amount with the SEK symbol. Implementation and rationale in
@@ -234,6 +237,15 @@
  *      new file may not introduce one. Surfaces that stay Swedish by rule are
  *      listed with their reason in SWEDISH_BY_DESIGN. Implementation and
  *      rationale in swedish-ui-literal.mjs.
+ *   28. duplicate-block: a block of 10+ meaningful lines copied between two
+ *      files under src (tests and generated files excluded). Ratchet per
+ *      file pair on shared lines: a new pair fails, a pair may not grow. The
+ *      failure names both locations. Implementation and rationale (GitClear
+ *      2026: duplicated blocks +81%) in duplicate-blocks.mjs.
+ *   29. error-masking: an error caught and dropped without a trace (empty
+ *      catch, a catch that only returns, `.catch(() => {})` / `=> null`).
+ *      Per-file count ratchet. Implementation and exemptions in
+ *      error-masking.mjs.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -254,8 +266,10 @@ import { fileURLToPath } from 'node:url'
 import ts from 'typescript'
 import { findSekLabelledFxAmounts } from './format-currency-sek-label.mjs'
 import { findRawReferenceFetches } from './raw-reference-fetch.mjs'
+import { findHandReadErrors, HAND_READ_ERROR_HINT } from './hand-read-api-error.mjs'
 import { findUtcTodaySites, UTC_TODAY_ALLOWED } from './utc-today.mjs'
 import { findLiteralLegalForms } from './literal-legal-form.mjs'
+import { findHandBuiltVoucherRefs } from './hand-built-voucher-ref.mjs'
 import { findClientNodeBuiltins } from './client-node-builtin.mjs'
 import { findClientServerOnlyReachers } from './client-server-only.mjs'
 import { findConsentTokenAccess, CONSENT_TOKEN_HINT } from './consent-token-access.mjs'
@@ -292,6 +306,8 @@ import {
   POSTING_PORT_BYPASS_HINT,
 } from './posting-port-bypass.mjs'
 import { findSwedishUiLiterals, SWEDISH_UI_LITERAL_HINT } from './swedish-ui-literal.mjs'
+import { findDuplicateBlocks, formatDuplicateBlock, WINDOW as DUPLICATE_WINDOW } from './duplicate-blocks.mjs'
+import { findErrorMasking, formatErrorMasking } from './error-masking.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..')
 const SOURCE_ROOT = path.join(ROOT, 'src')
@@ -1293,11 +1309,13 @@ const current = {
   dialogOverflowRisk: findDialogOverflowRisks(),
   directAiClients: findDirectAiClients(),
   rawReferenceFetch: findRawReferenceFetches(SOURCE_ROOT),
+  handReadErrors: findHandReadErrors(SOURCE_ROOT),
   clientNodeBuiltins: findClientNodeBuiltins(SOURCE_ROOT),
   clientServerOnly: findClientServerOnlyReachers(SOURCE_ROOT),
   consentTokenAccess: findConsentTokenAccess(SOURCE_ROOT),
   ambiguousEmbeds: findAmbiguousEmbeds(ROOT, SOURCE_ROOT),
   literalLegalForm: findLiteralLegalForms(SOURCE_ROOT),
+  handBuiltVoucherRef: findHandBuiltVoucherRefs(SOURCE_ROOT),
   uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
   tableWithoutGrant: findTablesWithoutGrant(ROOT),
   limitsAbovePage: findLimitsAbovePage(SOURCE_ROOT),
@@ -1310,6 +1328,8 @@ const current = {
   jurisdictionWelds: findJurisdictionWelds(SOURCE_ROOT),
   postingPort: findPostingPortBypasses(ROOT),
   swedishUiLiterals: findSwedishUiLiterals(SOURCE_ROOT),
+  duplicateBlocks: findDuplicateBlocks(SOURCE_ROOT),
+  errorMasking: findErrorMasking(SOURCE_ROOT),
 }
 
 const dialogOverflowFiles = [...new Set(current.dialogOverflowRisk.map((f) => f.file))].sort()
@@ -1322,6 +1342,9 @@ const kernelImportEdgeCount = Object.values(kernelImportEdges).reduce((n, mods) 
 const postingBypassEdges = current.postingPort.bypasses
 const postingBypassEdgeCount = countEdges(postingBypassEdges)
 const swedishUiLiteralCounts = countByFile(current.swedishUiLiterals)
+const duplicatePairs = current.duplicateBlocks.pairs
+const duplicateLineCount = Object.values(duplicatePairs).reduce((n, v) => n + v, 0)
+const errorMaskingCounts = countByFile(current.errorMasking)
 
 const isUpdate = process.argv.includes('--update')
 
@@ -1354,6 +1377,7 @@ if (isUpdate) {
     naiveOreRound: { count: current.naiveOreRound },
     handRolledInvariants: { count: current.handRolledInvariants },
     literalLegalForm: { count: current.literalLegalForm.length },
+    handBuiltVoucherRef: { count: current.handBuiltVoucherRef.length },
     ledgerScanningReports: {
       count: current.ledgerScanningReports.length,
       files: current.ledgerScanningReports,
@@ -1398,6 +1422,15 @@ if (isUpdate) {
     swedishUiLiteral: {
       count: current.swedishUiLiterals.length,
       files: swedishUiLiteralCounts,
+    },
+    duplicateBlocks: {
+      count: duplicateLineCount,
+      window: DUPLICATE_WINDOW,
+      pairs: duplicatePairs,
+    },
+    errorMasking: {
+      count: current.errorMasking.length,
+      files: errorMaskingCounts,
     },
   }
   // The jurisdiction-weld ratchets may only be raised with a decision file
@@ -1628,6 +1661,18 @@ if (current.rawUserErrors.length) {
     '  → map the error through getErrorMessage(), or throw it inside withRouteContext so\n' +
       '    errorResponse() produces the canonical structured envelope.',
   )
+}
+
+// 1d2. hand-read-api-error: client code reads an API error through the one
+// reader (hand-read-api-error.mjs). No baseline: every hand read was moved to
+// getErrorMessage, and files whose `.error` is not an envelope are allowlisted.
+if (current.handReadErrors.length) {
+  failed = true
+  console.error(
+    `\n✗ hand-read-api-error: ${current.handReadErrors.length} client site(s) read an API error by hand:`,
+  )
+  current.handReadErrors.forEach((finding) => console.error(`    ${finding}`))
+  console.error(HAND_READ_ERROR_HINT)
 }
 
 // 1e. sek-labelled-amount: a foreign amount must never be printed with the SEK
@@ -2063,6 +2108,25 @@ if (newFunctiondefPatch.length) {
   FUNCTIONDEF_PATCH_HINT.forEach((l, i) => console.error(`  ${i === 0 ? '→' : ' '} ${l}`))
 }
 
+// 1f. hand-built-voucher-ref: count may not increase. A voucher reference
+// spelled at a call site drifts ("A113", "A-113", "113" for one verifikat);
+// formatVoucher is the one format (see hand-built-voucher-ref.mjs).
+const handBuiltVoucherRefBaseline = baseline.handBuiltVoucherRef?.count ?? Infinity
+if (current.handBuiltVoucherRef.length > handBuiltVoucherRefBaseline) {
+  failed = true
+  console.error(
+    `\n✗ hand-built-voucher-ref: ${current.handBuiltVoucherRef.length} voucher reference(s) built from series and number by hand ` +
+      `(baseline ${handBuiltVoucherRefBaseline}, +${current.handBuiltVoucherRef.length - handBuiltVoucherRefBaseline}):`,
+  )
+  for (const f of current.handBuiltVoucherRef) console.error(`    ${f.file}:${f.line}`)
+  console.error(
+    "  → format it with formatVoucher(entry) from '@/lib/bookkeeping/voucher-series-resolver': \"A113\",\n" +
+      "    'A' for a row without a series, \"-\" for a draft. Guard the draft yourself when the field must be null\n" +
+      "    (entry.voucher_number ? formatVoucher(entry) : null). { separator: '-' } is only for the v1 fields\n" +
+      '    documented as "A-12".',
+  )
+}
+
 // 1e. literal-legal-form: count may not increase. A legal form named as a
 // string at a call site (see literal-legal-form.mjs) sends every later form
 // down the branch it was not written for; docs/LEGAL-FORMS.md has the
@@ -2207,6 +2271,54 @@ if (swedishUiLiteralRatchet.grown.length) {
   console.error(NEVER_RAISE)
 }
 
+// 1m. duplicate-block: shared normalised lines per file pair from
+// duplicate-blocks.mjs. A pair above its baseline, or a pair the baseline
+// does not have, is a new copy. The pair's blocks are printed because a count
+// cannot say which one is new.
+const duplicateRatchet = compareFileCounts(baseline.duplicateBlocks?.pairs ?? {}, duplicatePairs)
+if (baseline.duplicateBlocks && baseline.duplicateBlocks.window !== DUPLICATE_WINDOW) {
+  failed = true
+  console.error(
+    `\n✗ duplicate-block: the baseline was measured with a window of ${baseline.duplicateBlocks.window} lines, ` +
+      `the check now uses ${DUPLICATE_WINDOW}. Re-baseline with --update and say why in a decision file.`,
+  )
+} else if (baseline.duplicateBlocks && duplicateRatchet.grown.length) {
+  failed = true
+  console.error(`\n✗ duplicate-block: ${duplicateRatchet.grown.length} file pair(s) share more copied code than before:`)
+  for (const g of duplicateRatchet.grown) {
+    console.error(`    ${g.file}: ${g.current} shared line(s) (baseline ${g.baseline})`)
+    const [a, b] = g.file.split(' <-> ')
+    const inPair = current.duplicateBlocks.blocks.filter((blk) => blk.a === a && blk.b === b)
+    inPair.slice(0, 10).forEach((blk) => console.error(`        ${formatDuplicateBlock(blk)}`))
+    if (inPair.length > 10) console.error(`        ... ${inPair.length - 10} more`)
+    if (g.baseline > 0) console.error('        (a count cannot say which block is new: find it in your diff of these files)')
+  }
+  console.error(
+    '  → Duplicated code drifts: the copy that misses the next fix is the bug (October 2026: twelve posting-line\n' +
+      '    types, five payment dialogs). Call the existing code, or extract the shared part into one module both\n' +
+      '    files import. A copy you cannot avoid (a generated file, a deliberate fork) needs a decision file\n' +
+      '    (docs/decisions/YYYY-MM/) and --update in the same PR.\n' +
+      NEVER_RAISE,
+  )
+}
+
+// 1n. error-masking: swallowed errors per file from error-masking.mjs.
+const errorMaskingRatchet = compareFileCounts(baseline.errorMasking?.files ?? {}, errorMaskingCounts)
+if (baseline.errorMasking && errorMaskingRatchet.grown.length) {
+  failed = true
+  console.error(`\n✗ error-masking: ${errorMaskingRatchet.grown.length} file(s) swallow more errors than before:`)
+  for (const g of errorMaskingRatchet.grown) {
+    console.error(`    ${g.file}: ${g.current} (baseline ${g.baseline})`)
+    const inFile = current.errorMasking.filter((s) => s.file === g.file)
+    inFile.slice(0, 20).forEach((s) => console.error(`        ${formatErrorMasking(s)}`))
+    if (g.baseline > 0) console.error('        (a count cannot say which site is new: find it in your diff of this file)')
+  }
+  console.error(
+    '  → A caught error must leave a trace, or the failure turns into wrong data nobody can find.\n' +
+      NEVER_RAISE,
+  )
+}
+
 // 2. naive-ore-round: count may not increase.
 if (current.naiveOreRound > baseline.naiveOreRound.count) {
   failed = true
@@ -2230,8 +2342,11 @@ if (
   kernelImportRatchet.removed.length ||
   postingBypassRatchet.removed.length ||
   swedishUiLiteralRatchet.shrunk.length ||
+  duplicateRatchet.shrunk.length ||
+  errorMaskingRatchet.shrunk.length ||
   current.naiveOreRound < baseline.naiveOreRound.count ||
-  current.literalLegalForm.length < literalLegalFormBaseline
+  current.literalLegalForm.length < literalLegalFormBaseline ||
+  current.handBuiltVoucherRef.length < handBuiltVoucherRefBaseline
 ) {
   console.log('\n✓ Progress since baseline:')
   const shrunkBy = (r) => r.shrunk.reduce((n, s) => n + s.baseline - s.current, 0)
@@ -2249,12 +2364,24 @@ if (
     console.log(
       `    swedish-ui-literal: -${shrunkBy(swedishUiLiteralRatchet)} site(s) in ${swedishUiLiteralRatchet.shrunk.length} file(s)`,
     )
+  if (duplicateRatchet.shrunk.length)
+    console.log(
+      `    duplicate-block: -${shrunkBy(duplicateRatchet)} shared line(s) in ${duplicateRatchet.shrunk.length} file pair(s)`,
+    )
+  if (errorMaskingRatchet.shrunk.length)
+    console.log(
+      `    error-masking: -${shrunkBy(errorMaskingRatchet)} site(s) in ${errorMaskingRatchet.shrunk.length} file(s)`,
+    )
   if (postingBypassRatchet.removed.length) {
     console.log(
       `    posting-port-bypass: -${postingBypassRatchet.removed.length} edge(s), now through the posting port or gone:`,
     )
     postingBypassRatchet.removed.forEach((e) => console.log(`        ${e.file}: ${e.module}`))
   }
+  if (current.handBuiltVoucherRef.length < handBuiltVoucherRefBaseline)
+    console.log(
+      `    hand-built-voucher-ref: -${handBuiltVoucherRefBaseline - current.handBuiltVoucherRef.length} site(s)`,
+    )
   if (current.literalLegalForm.length < literalLegalFormBaseline)
     console.log(
       `    literal-legal-form: -${literalLegalFormBaseline - current.literalLegalForm.length} site(s)`,
@@ -2327,5 +2454,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), decision-log: 0, script-init-condition: 0).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, hand-built-voucher-ref: ${current.handBuiltVoucherRef.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, hand-read-api-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), decision-log: 0, script-init-condition: 0, duplicate-block: ${duplicateLineCount} shared line(s) in ${Object.keys(duplicatePairs).length} file pair(s), error-masking: ${current.errorMasking.length} in ${Object.keys(errorMaskingCounts).length} file(s)).`,
 )

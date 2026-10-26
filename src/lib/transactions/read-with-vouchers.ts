@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 import { TRANSACTION_DETAIL_COLUMNS } from '@/lib/transactions/detail-columns'
@@ -200,7 +201,7 @@ export async function readTransactionWithVouchers(
     .sort((a, b) => entryIds.indexOf(a.id) - entryIds.indexOf(b.id))
     .map((e) => ({
       journal_entry_id: e.id,
-      voucher: `${e.voucher_series ?? ''}${e.voucher_number ?? ''}`,
+      voucher: formatVoucher(e),
       entry_date: e.entry_date,
       status: e.status,
       description: e.description,

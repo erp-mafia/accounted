@@ -25,6 +25,7 @@ import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { AccrualReplanDialog, canReplanSchedule } from '@/components/bookkeeping/AccrualReplanDialog'
 import type {
   AccrualSchedule,
   AccrualScheduleInstallment,
@@ -65,6 +66,7 @@ export default function AccrualSchedulesPage() {
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
+  const tAccruals = useTranslations('accruals')
 
   const [statusFilter, setStatusFilter] = useState<StatusFilter>('active')
   const [schedules, setSchedules] = useState<ScheduleWithInstallments[]>([])
@@ -75,6 +77,7 @@ export default function AccrualSchedulesPage() {
   const [isPosting, setIsPosting] = useState(false)
   const [postConfirmOpen, setPostConfirmOpen] = useState(false)
   const [dissolveTarget, setDissolveTarget] = useState<ScheduleWithInstallments | null>(null)
+  const [replanTarget, setReplanTarget] = useState<ScheduleWithInstallments | null>(null)
 
   const fetchSchedules = useCallback(async (filter: StatusFilter) => {
     setIsLoading(true)
@@ -241,7 +244,7 @@ export default function AccrualSchedulesPage() {
                   <th className={cn(TH_CLASS, 'text-right')}>{t('col_total')}</th>
                   <th className={cn(TH_CLASS, 'text-right')}>{t('col_remaining')}</th>
                   <th className={TH_CLASS}>{t('col_status')}</th>
-                  <th className={cn(TH_CLASS, 'w-28')} />
+                  <th className={cn(TH_CLASS, 'w-56')} />
                 </tr>
               </thead>
               <tbody className="stagger-enter">
@@ -297,6 +300,18 @@ export default function AccrualSchedulesPage() {
                           )}
                         </td>
                         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right')}>
+                          {canWrite && canReplanSchedule(schedule) && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                setReplanTarget(schedule)
+                              }}
+                              className={cn(QUIET_LINK_CLASS, HOVER_REVEAL_CLASS, 'mr-4')}
+                            >
+                              {tAccruals('replan_action')}
+                            </button>
+                          )}
                           {canWrite && schedule.status === 'active' && remaining > 0 && (
                             <button
                               type="button"
@@ -386,6 +401,15 @@ export default function AccrualSchedulesPage() {
           </div>
         </>
       )}
+
+      <AccrualReplanDialog
+        schedule={replanTarget}
+        onOpenChange={(open) => !open && setReplanTarget(null)}
+        onReplanned={() => {
+          setReplanTarget(null)
+          void fetchSchedules(statusFilter)
+        }}
+      />
 
       <ConfirmDialog
         open={postConfirmOpen}

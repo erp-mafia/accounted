@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
@@ -9,6 +10,8 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { AttnLine } from '@/components/ui/attn-line'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -85,7 +88,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
         if (res.status === 409) void load()
         return
       }
-      const voucher = json.data?.voucher_series && json.data?.voucher_number ? `${json.data.voucher_series}${json.data.voucher_number}` : ''
+      const voucher = json.data?.voucher_series && json.data?.voucher_number ? formatVoucher(json.data) : ''
       toast({ title: t('booked_toast', { date: formatDate(day.business_date), voucher }) })
       onBooked()
     } catch {
@@ -97,8 +100,6 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
 
   const tendered = day ? day.tenders.reduce((sum, x) => sum + x.amount, 0) : 0
   const lines = detail?.proposal.lines ?? []
-  const totalDebit = lines.reduce((sum, l) => sum + l.debit_amount, 0)
-  const totalCredit = lines.reduce((sum, l) => sum + l.credit_amount, 0)
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -218,32 +219,7 @@ export default function PosDayDialog({ dayId, open, onOpenChange, onBooked }: Pr
                 <h3 className="font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
                   {booked ? t('section_lines_booked') : t('section_lines')}
                 </h3>
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>{t('col_account')}</TableHead>
-                      <TableHead>{t('col_text')}</TableHead>
-                      <TableHead className="text-right">{t('col_debit')}</TableHead>
-                      <TableHead className="text-right">{t('col_credit')}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {lines.map((l, i) => (
-                      <TableRow key={i}>
-                        <TableCell className="tabular-nums">{l.account_number}</TableCell>
-                        <TableCell className="text-muted-foreground">{l.line_description ?? ''}</TableCell>
-                        <TableCell className={NUM}>{l.debit_amount ? formatCurrency(l.debit_amount) : ''}</TableCell>
-                        <TableCell className={NUM}>{l.credit_amount ? formatCurrency(l.credit_amount) : ''}</TableCell>
-                      </TableRow>
-                    ))}
-                    <TableRow>
-                      <TableCell />
-                      <TableCell className="font-medium">{t('total')}</TableCell>
-                      <TableCell className={cn(NUM, 'font-medium')}>{formatCurrency(totalDebit)}</TableCell>
-                      <TableCell className={cn(NUM, 'font-medium')}>{formatCurrency(totalCredit)}</TableCell>
-                    </TableRow>
-                  </TableBody>
-                </Table>
+                <VoucherLinesTable lines={voucherLineViews(lines)} withCurrency showTotals />
               </section>
             ) : null}
 

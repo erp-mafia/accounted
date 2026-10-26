@@ -1,14 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { Loader2, Palette, Trash2, Upload } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings/SettingsRows'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { LOGO_UPLOAD_MAX_BYTES } from '@/lib/invoices/branding-constants'
 
 const ALLOWED_TYPES = ['image/png', 'image/jpeg', 'image/webp']
@@ -32,6 +32,7 @@ interface ByraBrand {
  */
 export function BrandSettingsContent() {
   const t = useTranslations('settings_brand')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [brand, setBrand] = useState<ByraBrand | null>(null)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -78,7 +79,7 @@ export function BrandSettingsContent() {
       })
       const result = await response.json()
       if (!response.ok) {
-        throw new Error(result.error || t('app_name_save_failed'))
+        throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('app_name_save_failed') }))
       }
       setBrand((prev) => (prev ? { ...prev, appName: result.data.app_name } : prev))
       setAppNameDraft(result.data.app_name)
@@ -112,7 +113,7 @@ export function BrandSettingsContent() {
       const response = await fetch('/api/byra/brand/logo', { method: 'POST', body: formData })
       const result = await response.json()
       if (!response.ok) {
-        throw new Error(result.error || t('logo_upload_failed'))
+        throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('logo_upload_failed') }))
       }
       setBrand((prev) => (prev ? { ...prev, logoUrl: result.data.logo_url } : prev))
     } catch (error) {

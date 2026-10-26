@@ -34,6 +34,11 @@ vi.mock('@/lib/core/bookkeeping/storno-service', () => ({
   correctEntry: (...args: unknown[]) => mockCorrectEntry(...args),
 }))
 
+const mockVoucherOwner = vi.fn()
+vi.mock('@/lib/core/bookkeeping/voucher-owner', () => ({
+  voucherOwnerOrNull: (...args: unknown[]) => mockVoucherOwner(...args),
+}))
+
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { POST } from '../route'
 
@@ -42,6 +47,7 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
 
   beforeEach(() => {
     vi.clearAllMocks()
+    mockVoucherOwner.mockResolvedValue(null)
     mockCreateClient.mockResolvedValue({
       auth: { getUser: vi.fn().mockResolvedValue({ data: { user: mockUser } }), mfa: { listFactors: async () => ({ data: { all: [], totp: [], phone: [] }, error: null }) } },
     })
@@ -123,6 +129,28 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     expect(mockCorrectEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'entry-1', lines, {
       description: undefined,
     })
+  })
+
+  it('corrects an owned verifikat and names its owner in owned_by, never refusing', async () => {
+    const reversal = makeJournalEntry({ id: 'reversal-1', reverses_id: 'entry-1', source_type: 'storno' })
+    const corrected = makeJournalEntry({ id: 'corrected-1', correction_of_id: 'entry-1', source_type: 'correction' })
+    mockCorrectEntry.mockResolvedValue({ reversal, corrected })
+    mockVoucherOwner.mockResolvedValue({ kind: 'accrual_schedule', owner_id: 'sched-1', action: 'open_accrual' })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', {
+      method: 'POST',
+      body: {
+        lines: [
+          { account_number: '5010', debit_amount: 1000, credit_amount: 0 },
+          { account_number: '1710', debit_amount: 0, credit_amount: 1000 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ owned_by: { kind: string } | null }>(response)
+
+    expect(status).toBe(200)
+    expect(body.owned_by).toMatchObject({ kind: 'accrual_schedule', owner_id: 'sched-1' })
   })
 
   it('threads an optional description through to correctEntry (issue #1031)', async () => {

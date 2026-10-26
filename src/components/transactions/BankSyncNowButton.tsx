@@ -2,7 +2,7 @@
 
 import { useEffect, useSyncExternalStore } from 'react'
 import { useRouter } from 'next/navigation'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
 import { createClient } from '@/lib/supabase/client'
@@ -22,7 +22,7 @@ import {
 } from '@/lib/transactions/bank-sync-store'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { chooseAccountsHref, isOpenPaymentsRow, renewOpenPaymentsHref } from '@/lib/bank-feed/connection-links'
 import { isBankBusy, isSyncCooldown, OpenPaymentsClientError, syncOpenPaymentsConnection } from '@/components/bank-feed/open-payments-client'
 
@@ -41,6 +41,7 @@ export type { BankConn }
  */
 export function useBankSync() {
   const t = useTranslations('transactions')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const router = useRouter()
   const { company } = useCompany()
@@ -102,7 +103,7 @@ export function useBankSync() {
         }),
       })
       const data = await res.json()
-      if (!res.ok) throw new Error(data.error || 'Reconnect failed')
+      if (!res.ok) throw new Error(getUserErrorMessage(data, { locale: errorLocale, fallback: 'Reconnect failed' }))
       window.location.href = data.authorization_url
     } catch (error) {
       toast({
@@ -185,7 +186,7 @@ export function useBankSync() {
           markConnectionStatus(conn.id, 'expired')
           return
         }
-        throw new Error(data.error || 'Sync failed')
+        throw new Error(getUserErrorMessage(data, { locale: errorLocale, fallback: 'Sync failed' }))
       }
       // A read the bank had not finished is said as such, never as a plain
       // count that reads like a complete sync (PH 195).

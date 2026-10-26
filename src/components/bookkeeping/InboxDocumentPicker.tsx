@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useMemo } from 'react'
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import {
   Dialog,
   DialogContent,
@@ -20,6 +20,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { FileText, ImageIcon, Loader2, Search, Inbox } from 'lucide-react'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 // InboxDocumentPicker
 //
@@ -99,6 +100,7 @@ function DocIcon({ mime, fileName }: { mime: string | null; fileName: string }) 
 
 export default function InboxDocumentPicker({ open, onClose, journalEntryId, onLinked, onSelect }: Props) {
   const t = useTranslations('journal_attachments')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
 
   const [loading, setLoading] = useState(true)
@@ -190,7 +192,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
       })
       if (!res.ok) {
         const json = (await res.json().catch(() => ({}))) as { error?: string | { message?: string } }
-        const description = typeof json.error === 'string' ? json.error : json.error?.message
+        const description = json.error ? getErrorMessage(json, { locale: errorLocale }) : undefined
         toast({ title: t('picker_link_failed'), description, variant: 'destructive' })
         return
       }
@@ -240,8 +242,7 @@ export default function InboxDocumentPicker({ open, onClose, journalEntryId, onL
         const json = (await res.json().catch(() => ({}))) as {
           error?: string | { message?: string }
         }
-        const description =
-          typeof json.error === 'string' ? json.error : json.error?.message
+          const description = json.error ? getErrorMessage(json, { locale: errorLocale }) : undefined
         toast({ title: t('picker_link_failed'), description, variant: 'destructive' })
         return
       }

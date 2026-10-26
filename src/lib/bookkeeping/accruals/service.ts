@@ -32,6 +32,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   AccrualDirection,
+  AccrualReplanResult,
   AccrualSchedule,
   AccrualScheduleInstallment,
   CreateJournalEntryLineInput,
@@ -43,16 +44,21 @@ import {
 } from '@/lib/bookkeeping/errors'
 import {
   AccrualNothingToDissolveError,
+  AccrualReplanInvalidError,
   AccrualScheduleNotActiveError,
   AccrualScheduleNotFoundError,
 } from '@/lib/bookkeeping/accruals/errors'
 import {
   computeInstallments,
   dayAfter,
+  deferralReleaseDate,
   firstOfMonth,
   lastOfMonth,
+  listCalendarMonths,
   maxIsoDate,
+  replanPendingInstallments,
 } from '@/lib/bookkeeping/accruals/compute'
+import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { isAccruedCostAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { isAccruedIncomeAccount } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -184,19 +190,40 @@ interface InstallmentPosting {
 }
 
 /**
+ * The day a month of `schedule` falls due: its release day for a deferral
+ * (the first of the month unless the schedule names another day), the first
+ * of the month for an upplupen kostnad or intäkt, whose months lie before the
+ * invoice and book on their last day as soon as they are due. One rule for
+ * the posting runs and the list's due count.
+ */
+export function installmentDueDate(
+  schedule: Pick<ScheduleRow, 'direction' | 'balance_account' | 'release_day'>,
+  periodMonth: string,
+): string {
+  return isAccruedSchedule(schedule)
+    ? firstOfMonth(periodMonth)
+    : deferralReleaseDate(periodMonth, schedule.release_day)
+}
+
+/**
  * A deferral (förutbetald kostnad 17xx, förutbetald intäkt 29xx) dissolves
- * on max(period month, posting floor, lock date + 1): never before the
+ * on max(release date, posting floor, lock date + 1): never before the
  * origin entry put the amount on the interim account, so the interim
  * account cannot go negative, and a closed year clamps to the next open one.
+ * The release date is the month's release day, the first unless set.
  */
 async function deferralPosting(
   supabase: SupabaseClient,
   companyId: string,
   periodMonth: string,
-  schedule: Pick<ScheduleRow, 'posting_floor_date'>,
+  schedule: Pick<ScheduleRow, 'posting_floor_date' | 'release_day'>,
   lockFloor: string | null,
 ): Promise<InstallmentPosting> {
-  const entryDate = maxIsoDate(periodMonth, schedule.posting_floor_date, lockFloor)
+  const entryDate = maxIsoDate(
+    deferralReleaseDate(periodMonth, schedule.release_day),
+    schedule.posting_floor_date,
+    lockFloor,
+  )
   const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
   if (fiscalPeriodId) return { entryDate, fiscalPeriodId }
   // The computed date can fall inside a CLOSED fiscal period (bokslut
@@ -433,8 +460,12 @@ export async function postDueInstallments(
     throw new Error(`Failed to load due accrual installments: ${error.message}`)
   }
 
+  // The query takes every month that has begun; a month whose release day
+  // is still ahead waits for it.
   const due = ((data ?? []) as InstallmentRow[]).filter(
-    (installment) => installment.schedule?.status === 'active',
+    (installment) =>
+      installment.schedule?.status === 'active' &&
+      installmentDueDate(installment.schedule, installment.period_month) <= today,
   )
   if (due.length === 0) return result
 
@@ -777,6 +808,185 @@ async function stornoInstallmentDissolution(
     if (isAlreadyReversed(error)) return false
     throw error
   }
+}
+
+export interface AccrualReplanInput {
+  /** The period's new last day; the current one when omitted. */
+  periodEnd?: string
+  /**
+   * The day each month books on (1-31, clamped to the month's last day, so
+   * 31 is the last day), null for the first of the month; unchanged when
+   * omitted.
+   */
+  releaseDay?: number | null
+}
+
+interface PlannedReplan {
+  result: AccrualReplanResult
+  plan: Array<{ period_month: string; amount: number }>
+}
+
+async function planReplan(
+  ctx: OperationContext,
+  scheduleId: string,
+  input: AccrualReplanInput,
+): Promise<PlannedReplan> {
+  const { data, error } = await ctx.supabase
+    .from('accrual_schedules')
+    .select('*, installments:accrual_schedule_installments(period_month, amount, status)')
+    .eq('company_id', ctx.companyId)
+    .eq('id', scheduleId)
+    .maybeSingle()
+  if (error) throw new Error(`Failed to load accrual schedule: ${error.message}`)
+  if (!data) throw new AccrualScheduleNotFoundError()
+
+  const schedule = data as ScheduleRow & {
+    installments?: Array<{ period_month: string; amount: number; status: string }>
+  }
+  if (schedule.status !== 'active') throw new AccrualScheduleNotActiveError(schedule.status)
+  if (isAccruedSchedule(schedule)) {
+    throw new AccrualReplanInvalidError(schedule.direction === 'expense' ? 'accrued_cost' : 'accrued_income')
+  }
+
+  const installments = [...(schedule.installments ?? [])]
+    .map((i) => ({ ...i, amount: Number(i.amount) }))
+    .sort((a, b) => a.period_month.localeCompare(b.period_month))
+  // A credit cancels the pending months before it stornoes the posted ones;
+  // a schedule left active with cancelled months is a credit still settling.
+  if (installments.some((i) => i.status === 'cancelled')) throw new AccrualReplanInvalidError('cancelled_months')
+  const pending = installments.filter((i) => i.status === 'pending')
+  const posted = installments.filter((i) => i.status === 'posted')
+  if (pending.length === 0) throw new AccrualReplanInvalidError('nothing_pending')
+
+  const periodEnd = input.periodEnd ?? schedule.period_end
+  const releaseDayBefore = schedule.release_day ?? null
+  const releaseDay = input.releaseDay === undefined ? releaseDayBefore : input.releaseDay
+  if (periodEnd < schedule.period_start) throw new AccrualReplanInvalidError('end_before_start')
+  if (periodEnd === schedule.period_end && releaseDay === releaseDayBefore) {
+    throw new AccrualReplanInvalidError('no_change')
+  }
+  const lastMonth = firstOfMonth(periodEnd)
+  if (posted.some((i) => i.period_month > lastMonth)) throw new AccrualReplanInvalidError('end_before_posted')
+
+  const remaining = roundOre(schedule.total_amount - sumOre(posted.map((i) => i.amount)))
+  const postedMonths = new Set(posted.map((i) => i.period_month))
+  const openMonths = listCalendarMonths(schedule.period_start, periodEnd).filter((m) => !postedMonths.has(m))
+  if (openMonths.length === 0) throw new AccrualReplanInvalidError('no_month_left')
+  if (Math.round(remaining * 100) < openMonths.length) throw new AccrualReplanInvalidError('amount_too_small')
+
+  const plan = replanPendingInstallments({
+    totalAmount: schedule.total_amount,
+    periodStart: schedule.period_start,
+    periodEnd,
+    posted,
+  })
+
+  const lockFloor = await fetchLockDateFloor(ctx.supabase, ctx.companyId)
+  const bookingDate = (periodMonth: string, day: number | null) =>
+    maxIsoDate(deferralReleaseDate(periodMonth, day), schedule.posting_floor_date, lockFloor)
+
+  return {
+    plan,
+    result: {
+      accrual_schedule_id: schedule.id,
+      period_start: schedule.period_start,
+      period_end_before: schedule.period_end,
+      period_end_after: periodEnd,
+      release_day_before: releaseDayBefore,
+      release_day_after: releaseDay,
+      remaining_amount: remaining,
+      before: pending.map((i) => ({
+        period_month: i.period_month,
+        amount: i.amount,
+        booking_date: bookingDate(i.period_month, releaseDayBefore),
+      })),
+      after: plan.map((i) => ({
+        period_month: i.period_month,
+        amount: i.amount,
+        booking_date: bookingDate(i.period_month, releaseDay),
+      })),
+    },
+  }
+}
+
+function replanRpcFailure(
+  ctx: OperationContext,
+  scheduleId: string,
+  error: { code?: string; message?: string },
+): OperationOutcome<AccrualReplanResult> {
+  const message = error.message ?? ''
+  if (message.includes('ACCRUAL_SCHEDULE_NOT_FOUND')) return { ok: false, code: 'ACCRUAL_NOT_FOUND' }
+  if (message.includes('ACCRUAL_SCHEDULE_NOT_ACTIVE')) return { ok: false, code: 'ACCRUAL_NOT_ACTIVE' }
+  // The posting run booked a month, or another re-plan won, between the
+  // read and the write: the RPC refuses rather than replace a changed plan.
+  if (message.includes('ACCRUAL_REPLAN_CONFLICT')) return { ok: false, code: 'ACCRUAL_REPLAN_CONFLICT' }
+  if (error.code === '42501') return { ok: false, code: 'FORBIDDEN' }
+  ctx.log.error('replan_accrual_installments failed', new Error(message || 'replan_accrual_installments'), {
+    scheduleId,
+  })
+  return { ok: false, code: 'ACCRUAL_REPLAN_FAILED' }
+}
+
+/**
+ * "Ändra periodisering": re-plan the months of a schedule that are not yet
+ * posted, with a new period end and/or a new release day. Posted months and
+ * their verifikat stay exactly as they are; what remains (total minus posted)
+ * is split equally over the calendar months of the new period that have no
+ * posted month, the same split a new schedule gets. A deferral only: an
+ * upplupen kostnad books each month's last day before its invoice.
+ *
+ * The replacement is atomic (replan_accrual_installments, which also checks
+ * that the months cover the period exactly once and add up to the total).
+ * Months whose day has already come are then booked at once, as at
+ * creation. The one service behind the dashboard route, the v1 endpoint and
+ * the staged MCP tool (operation accrual-schedules.replan); a dry run
+ * answers the before and after months and writes nothing.
+ */
+export async function replanRemainingInstallments(
+  ctx: OperationContext,
+  scheduleId: string,
+  input: AccrualReplanInput,
+  options: { dryRun?: boolean; today?: string } = {},
+): Promise<OperationOutcome<AccrualReplanResult>> {
+  let planned: PlannedReplan
+  try {
+    planned = await planReplan(ctx, scheduleId, input)
+  } catch (err) {
+    if (err instanceof AccrualScheduleNotFoundError) return { ok: false, code: 'ACCRUAL_NOT_FOUND' }
+    if (err instanceof AccrualScheduleNotActiveError) {
+      return { ok: false, code: 'ACCRUAL_NOT_ACTIVE', details: { currentStatus: err.currentStatus } }
+    }
+    if (err instanceof AccrualReplanInvalidError) {
+      return { ok: false, code: 'ACCRUAL_REPLAN_INVALID', details: { reason: err.reason }, messageSv: err.message }
+    }
+    throw err
+  }
+
+  if (options.dryRun) return { ok: true, dryRun: true, preview: { ...planned.result } }
+
+  const { error } = await ctx.supabase.rpc('replan_accrual_installments', {
+    p_company_id: ctx.companyId,
+    p_schedule_id: scheduleId,
+    p_user_id: ctx.userId,
+    p_period_end: planned.result.period_end_after,
+    p_release_day: planned.result.release_day_after,
+    p_installments: planned.plan,
+  })
+  if (error) return replanRpcFailure(ctx, scheduleId, error)
+
+  const catchUp = await postDueInstallments(ctx.supabase, ctx.companyId, {
+    userId: ctx.userId,
+    scheduleId,
+    today: options.today,
+  })
+  if (catchUp.failed > 0) {
+    log.warn('accrual catch-up posting after re-plan failed for some installments', {
+      companyId: ctx.companyId,
+      scheduleId,
+      failed: catchUp.failed,
+    })
+  }
+  return { ok: true, data: { ...planned.result, posted_now: catchUp.posted } }
 }
 
 /**

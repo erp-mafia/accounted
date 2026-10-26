@@ -10,6 +10,7 @@
  * the reveal. Confirmed parties are read here only for counts and for the
  * dossier; the user sees them as suppliers and customers.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import { roundOre } from '@/lib/money'
@@ -513,7 +514,7 @@ export async function getDossier(supabase: SupabaseClient, companyId: string, pa
       id: e.id,
       entryDate: e.entry_date,
       description: e.description,
-      voucher: e.voucher_series && e.voucher_number != null ? `${e.voucher_series}-${e.voucher_number}` : '',
+      voucher: e.voucher_series && e.voucher_number != null ? formatVoucher(e) : '',
       amount: roundOre(
         (e.journal_entry_lines ?? [])
           .filter((l) => /^[3-8][0-9]{3}$/.test(l.account_number))

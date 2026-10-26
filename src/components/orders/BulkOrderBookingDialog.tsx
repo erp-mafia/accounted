@@ -15,7 +15,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
   DEFAULT_REVENUE_ACCOUNT_BY_RATE,
   ROUNDING_ACCOUNT,
@@ -359,9 +359,7 @@ export default function BulkOrderBookingDialog({
                     <span className="tabular-nums">{r.order_number ?? r.order_id}</span>
                     {': '}
                     <span className="text-muted-foreground">
-                      {locale === 'en' && r.error?.message_en
-                        ? r.error.message_en
-                        : (r.error?.message ?? t('bulk_unknown_error'))}
+                        {getErrorMessage(r.error, { locale: locale as ErrorLocale, fallback: t('bulk_unknown_error') })}
                     </span>
                   </li>
                 ))}

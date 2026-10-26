@@ -134,6 +134,7 @@ import { EditorPreviewPane } from '@/components/invoices/editor/EditorPreviewPan
 import { EditorEmailPreview, type EmailTextOverride } from '@/components/invoices/editor/EditorEmailPreview'
 import { EditorStatusLine } from '@/components/invoices/editor/EditorStatusLine'
 import { SendConfirmDialog, type ConfirmVoucher } from '@/components/invoices/editor/SendConfirmDialog'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import type { InvoiceAttachmentFile, InvoiceAttachmentsTarget } from '@/components/invoices/InvoiceAttachmentsSection'
 import { offersInvoiceAttachments } from '@/lib/invoices/invoice-attachment-limits'
 import { useInvoicePdfPreview } from '@/components/invoices/editor/use-editor-previews'
@@ -3500,7 +3501,6 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
   }
   const entityType: EntityType =
     (companySettings?.entity_type as EntityType | null | undefined) ?? company?.entity_type ?? 'enskild_firma'
-  const accountNames = new Map(activeAccounts.map((account) => [account.account_number, account.account_name]))
   // The voucher is stated in kronor only for a SEK invoice (the rate is the send's).
   const confirmInForeignCurrency = confirmCurrency !== 'SEK'
   let confirmVoucher: ConfirmVoucher | null = null
@@ -3530,12 +3530,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         ? {
             kind: 'lines',
             date: confirmData.invoice_date,
-            lines: lines.map((line) => ({
-              account: line.account_number,
-              name: accountNames.get(line.account_number) ?? '',
-              debit: line.debit_amount,
-              credit: line.credit_amount,
-            })),
+            lines: voucherLineViews(lines),
           }
         : {
             kind: 'note',
@@ -3570,12 +3565,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
         confirmVoucher = {
           kind: 'lines',
           date: confirmData.invoice_date,
-          lines: lines.map((line) => ({
-            account: line.account_number,
-            name: accountNames.get(line.account_number) ?? line.line_description,
-            debit: parseFloat(line.debit_amount) || 0,
-            credit: parseFloat(line.credit_amount) || 0,
-          })),
+          lines: voucherLineViews(lines),
         }
       }
     }

@@ -118,7 +118,7 @@ describe('getLinkedJournalEntryIds', () => {
 describe('embeddedVoucherLabel', () => {
   it('formats series and number, and returns null without an embedded voucher', () => {
     expect(embeddedVoucherLabel({ journal_entry_id: 'x', journal_entry: { voucher_series: 'V', voucher_number: 200 } })).toBe('V200')
-    expect(embeddedVoucherLabel({ journal_entry_id: 'x', journal_entry: { voucher_series: null, voucher_number: 7 } })).toBe('7')
+    expect(embeddedVoucherLabel({ journal_entry_id: 'x', journal_entry: { voucher_series: null, voucher_number: 7 } })).toBe('A7')
     expect(embeddedVoucherLabel({ journal_entry_id: 'x' })).toBeNull()
     expect(embeddedVoucherLabel({ journal_entry_id: 'x', journal_entry: { voucher_series: 'A', voucher_number: null } })).toBeNull()
   })

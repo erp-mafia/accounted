@@ -77,7 +77,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
         body: JSON.stringify({ reviewToken: period.opening_balance_review_token, expectedEntryId: period.opening_balance_entry_id }),
       })
       const body = await response.json()
-      if (!response.ok) throw new Error(body.error || t('ib_review_failed'))
+      if (!response.ok) throw new Error(getErrorMessage(body, { locale: locale, fallback: t('ib_review_failed') }))
       await invalidateReferenceData('ref:fiscal-periods')
       toast({ title: t('ib_review_saved') })
       setOpen(false)

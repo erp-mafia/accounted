@@ -219,7 +219,7 @@ export function useInboxPrefill({
         if (!res.ok) {
           toast({
             title: t('inbox_load_failed_title'),
-            description: json?.error || t('inbox_load_failed_description'),
+            description: getErrorMessage(json, { fallback: t('inbox_load_failed_description') }),
             variant: 'destructive',
           })
           setIsLoadingInbox(false)

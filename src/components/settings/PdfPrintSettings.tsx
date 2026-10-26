@@ -1,6 +1,6 @@
 'use client'
 
-import { useTranslations } from 'next-intl'
+import { useTranslations, useLocale } from 'next-intl'
 import { useState, useCallback, useRef, type ChangeEvent } from 'react'
 import { Loader2, Trash2, Upload } from 'lucide-react'
 import { Switch } from '@/components/ui/switch'
@@ -16,7 +16,7 @@ import {
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
 import { INVOICE_FONT_FAMILIES } from '@/lib/invoices/branding-constants'
-import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn } from '@/lib/utils'
 import { INVOICE_QR_MODES, type CompanySettings, type InvoiceFontFamily, type InvoiceQrMode } from '@/types'
 
@@ -117,6 +117,7 @@ export function QrModeRadioGroup<T extends string = InvoiceQrMode>({
 
 export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) {
   const t = useTranslations('settings_pdf_print')
+  const errorLocale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const saveSettings = useSaveSettings()
   const [lateFeeText, setLateFeeText] = useState(settings.invoice_late_fee_text || '')
@@ -162,7 +163,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
         body: formData,
       })
       const result = await response.json()
-      if (!response.ok) throw new Error(result.error || t('font_upload_failed'))
+      if (!response.ok) throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('font_upload_failed') }))
       onUpdate(result.data as Partial<CompanySettings>)
     } catch (error) {
       toast({
@@ -181,7 +182,7 @@ export function PdfPrintSettings({ settings, onUpdate }: PdfPrintSettingsProps) 
     try {
       const response = await fetch('/api/settings/invoice-font', { method: 'DELETE' })
       const result = await response.json()
-      if (!response.ok) throw new Error(result.error || t('font_delete_failed'))
+      if (!response.ok) throw new Error(getUserErrorMessage(result, { locale: errorLocale, fallback: t('font_delete_failed') }))
       onUpdate(result.data as Partial<CompanySettings>)
     } catch (error) {
       toast({

@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { dbError } from '@/lib/errors/db-error'
 
@@ -35,6 +36,8 @@ interface ChainEntryRow {
   reverses_id?: string | null
   voucher_series?: string | null
   voucher_number?: number | null
+  source_type?: string | null
+  source_id?: string | null
 }
 
 export interface CorrectionChainInfo {
@@ -44,17 +47,28 @@ export interface CorrectionChainInfo {
   rootVoucher: string | null
 }
 
+/** The original a rättelse chain starts from, with the source columns it was booked with. */
+export interface CorrectionChainRoot {
+  id: string
+  source_type: string | null
+  source_id: string | null
+}
+
 /**
- * Walk `correction_of_id`/`reverses_id` backwards from `entry` and return the
- * chain depth plus the root voucher ref. One query per hop, capped at
- * MAX_CHAIN_WALK; a broken link (parent not found) or a cycle ends the walk.
- * An entry with no links costs zero queries.
+ * Walk `correction_of_id`/`reverses_id` backwards from `entry`. One query per
+ * hop, capped at MAX_CHAIN_WALK; a broken link (parent not found) or a cycle
+ * ends the walk. An entry with no links costs zero queries. `reachedRoot` is
+ * true only when the last node has no backward link: when the walk stopped
+ * early, `root` is just the last node reached. `withSource` adds the source
+ * columns the root walk needs; both selects stay literal so the
+ * no-phantom-columns guard can check them.
  */
-export async function correctionChainDepth(
+async function walkToChainRoot(
   supabase: SupabaseClient,
   companyId: string,
-  entry: ChainEntryRow
-): Promise<CorrectionChainInfo> {
+  entry: ChainEntryRow,
+  withSource: boolean,
+): Promise<{ depth: number; root: ChainEntryRow; reachedRoot: boolean }> {
   const visited = new Set<string>([entry.id])
   let depth = 0
   let root: ChainEntryRow = entry
@@ -64,27 +78,44 @@ export async function correctionChainDepth(
     if (visited.has(parentId)) break
     visited.add(parentId)
 
-    const { data: parent, error } = await supabase
-      .from('journal_entries')
-      .select('id, correction_of_id, reverses_id, voucher_series, voucher_number')
-      .eq('id', parentId)
-      .eq('company_id', companyId)
-      .single()
+    const { data: parent, error } = withSource
+      ? await supabase
+          .from('journal_entries')
+          .select('id, correction_of_id, reverses_id, voucher_series, voucher_number, source_type, source_id')
+          .eq('id', parentId)
+          .eq('company_id', companyId)
+          .single()
+      : await supabase
+          .from('journal_entries')
+          .select('id, correction_of_id, reverses_id, voucher_series, voucher_number')
+          .eq('id', parentId)
+          .eq('company_id', companyId)
+          .single()
 
     if (error || !parent) break
 
     depth++
-    root = parent as ChainEntryRow
+    root = parent as unknown as ChainEntryRow
     parentId = root.correction_of_id ?? root.reverses_id ?? null
   }
 
-  // Only a node with no backward link is the genuine chain root. When the
-  // walk stopped early (broken link, cycle, MAX_CHAIN_WALK), `root` is just
-  // the last node reached: presenting its voucher as the root would mislead.
-  const reachedRoot = (root.correction_of_id ?? root.reverses_id) == null
+  return { depth, root, reachedRoot: (root.correction_of_id ?? root.reverses_id) == null }
+}
+
+/**
+ * Walk `correction_of_id`/`reverses_id` backwards from `entry` and return the
+ * chain depth plus the root voucher ref (walkToChainRoot).
+ */
+export async function correctionChainDepth(
+  supabase: SupabaseClient,
+  companyId: string,
+  entry: ChainEntryRow
+): Promise<CorrectionChainInfo> {
+  const { depth, root, reachedRoot } = await walkToChainRoot(supabase, companyId, entry, false)
+  // Presenting a node short of the root as the root would mislead.
   const rootVoucher =
     depth > 0 && reachedRoot && root.voucher_series && root.voucher_number != null
-      ? `${root.voucher_series}${root.voucher_number}`
+      ? formatVoucher(root)
       : null
 
   return { depth, rootVoucher }
@@ -143,4 +174,21 @@ export async function liveEntryOf(
     currentId = next[0].id
   }
   return { none: true }
+}
+
+/**
+ * The original a storno or correction descends from, with its own source
+ * columns: a storno is booked as source_type 'storno' and a correction as
+ * 'correction', so what the chain books (an invoice, a periodisering) is read
+ * off its root. An entry outside any chain is its own root. Null when the
+ * walk stopped before the root (broken link, cycle, MAX_CHAIN_WALK).
+ */
+export async function correctionChainRoot(
+  supabase: SupabaseClient,
+  companyId: string,
+  entry: ChainEntryRow,
+): Promise<CorrectionChainRoot | null> {
+  const { root, reachedRoot } = await walkToChainRoot(supabase, companyId, entry, true)
+  if (!reachedRoot) return null
+  return { id: root.id, source_type: root.source_type ?? null, source_id: root.source_id ?? null }
 }

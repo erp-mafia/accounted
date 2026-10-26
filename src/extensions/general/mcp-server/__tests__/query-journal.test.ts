@@ -1219,7 +1219,7 @@ describe('gnubok_query_journal: totals_note when the sum crosses an IB verifikat
 
     // The sum itself is unchanged: the note explains it, it does not "fix" it.
     expect(result.totals.debit).toBe(2000)
-    expect(result.totals_note).toMatch(/opening-balance \(IB\) verifikat \(A-1\)/)
+    expect(result.totals_note).toMatch(/opening-balance \(IB\) verifikat \(A1\)/)
     expect(result.totals_note).toMatch(/account 1930\b/)
     expect(result.totals_note).toMatch(/gnubok_get_balance_sheet/)
     expect(result.totals_note).toMatch(/2026-01-01/)

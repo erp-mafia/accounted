@@ -1,5 +1,6 @@
 'use client'
 
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
@@ -176,7 +177,7 @@ export default function RotRutLinkVoucherDialog({
             <dd className="text-right tabular-nums">{formatCurrency(rounding)}</dd>
             <dd className="col-span-2 mt-2 text-xs text-muted-foreground">
               {t('link_voucher_no_new_entry', {
-                voucher: `${selected.voucher_series}${selected.voucher_number}`,
+                voucher: formatVoucher(selected),
               })}
             </dd>
           </dl>

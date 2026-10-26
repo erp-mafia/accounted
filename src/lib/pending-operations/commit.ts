@@ -14,6 +14,7 @@
  * The executor functions previously lived in the commit route. They are kept
  * private to this module: call `commitPendingOperation()` to invoke them.
  */
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { releaseDoubtfulReserveAfterChange } from '@/lib/customer-loss/doubtful'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -6339,7 +6340,7 @@ async function commitBookMileagePeriod(
     return {
       data: {
         journal_entry_id: result.journalEntryId,
-        voucher: `${result.voucherSeries ?? ''}${result.voucherNumber ?? ''}`,
+        voucher: formatVoucher({ voucher_series: result.voucherSeries, voucher_number: result.voucherNumber }),
         trip_count: result.tripCount,
         total_amount: result.totalAmount,
         summaries: result.summaries,

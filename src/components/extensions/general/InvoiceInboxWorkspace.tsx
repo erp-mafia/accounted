@@ -104,6 +104,8 @@ import { todayIsoStockholm } from '@/lib/dates/iso'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { DocumentPreview as DocumentPreviewBody } from '@/components/bookkeeping/DocumentPreview'
 import BookingWhy from '@/components/bookkeeping/BookingWhy'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { parseAmountInput } from '@/lib/money'
 
 /**
@@ -2804,47 +2806,18 @@ function ProposedBooking({
         <h3 className="text-xs">{t('proposal_title')}</h3>
         {data.entry_date && (
           <span className="text-[11px] text-muted-foreground tabular-nums">
-            Bokförs {formatDate(data.entry_date)}
+            {t('proposal_entry_date', { date: formatDate(data.entry_date) })}
           </span>
         )}
       </div>
 
-      <table className="w-full border-collapse text-xs">
-        <thead>
-          <tr className="text-[11px] uppercase tracking-wider text-muted-foreground">
-            <th className="pb-1 pr-2 text-left font-medium" colSpan={2}>
-              Konto
-            </th>
-            <th className="pb-1 text-right font-medium w-20">Debet</th>
-            <th className="pb-1 pl-2 text-right font-medium w-20">Kredit</th>
-          </tr>
-        </thead>
-        <tbody>
-          {data.lines.map((l, i) => (
-            <tr key={`${l.account_number}-${i}`} className="border-b border-border last:border-0">
-              <td className="py-1 pr-2 tabular-nums text-muted-foreground w-10">{l.account_number}</td>
-              <td className="py-1 pr-2 truncate" title={l.description}>
-                {l.description}
-              </td>
-              <td className="py-1 text-right tabular-nums whitespace-nowrap w-20">
-                {l.debit_amount ? formatCurrency(l.debit_amount) : ''}
-              </td>
-              <td className="py-1 pl-2 text-right tabular-nums whitespace-nowrap w-20 text-muted-foreground">
-                {l.credit_amount ? formatCurrency(l.credit_amount) : ''}
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
+      <VoucherLinesTable lines={voucherLineViews(data.lines)} withCurrency showTotals />
 
       {/* Balance is stated rather than assumed: the builder balances by
           construction, so a mismatch here means something upstream is wrong
-          and the user should see it before booking. */}
-      {!balanced && (
-        <p className="text-[11px] text-warning">
-          Debet {formatCurrency(debit)} · Kredit {formatCurrency(credit)}
-        </p>
-      )}
+          and the user should see it (the Summa row shows both sides) before
+          booking. */}
+      {!balanced && <p className="text-[11px] text-warning">{t('proposal_unbalanced')}</p>}
 
       {(SUGGESTION_SOURCE_LABEL[data.source] || data.requires_review || data.direction_mismatch) && (
         <details className="text-[11px] text-muted-foreground">

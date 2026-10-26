@@ -4,8 +4,11 @@ import {
   cancelSchedulesForSource,
   createAccrualSchedule,
   dissolveScheduleNow,
+  installmentDueDate,
   postDueInstallments,
+  replanRemainingInstallments,
 } from '@/lib/bookkeeping/accruals/service'
+import type { OperationContext } from '@/lib/operations/types'
 import {
   createJournalEntry,
   findFiscalPeriod,
@@ -1050,5 +1053,175 @@ describe('upplupen kostnad (expense schedule on 29xx)', () => {
     for (const month of ['jul', 'aug', 'sep']) {
       expect(mockReverseEntry).toHaveBeenCalledWith(expect.anything(), COMPANY, USER, `je-${month}`, '2026-11-02')
     }
+  })
+})
+
+// Ändra periodisering: the months not yet posted, re-planned.
+describe('replanRemainingInstallments', () => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn(), child: vi.fn() }
+  const ctxOf = (supabase: unknown): OperationContext => ({
+    supabase: supabase as OperationContext['supabase'],
+    companyId: COMPANY,
+    userId: USER,
+    log: log as unknown as OperationContext['log'],
+  })
+  // 12 000 over 2026, January posted, February to December pending.
+  const months = (postedThrough: number, statusOf: (i: number) => string = (i) => (i < postedThrough ? 'posted' : 'pending')) =>
+    Array.from({ length: 12 }, (_, i) => ({
+      period_month: `2026-${String(i + 1).padStart(2, '0')}-01`,
+      amount: 1000,
+      status: statusOf(i),
+    }))
+  const scheduleWith = (overrides: Record<string, unknown> = {}) =>
+    makeSchedule({ release_day: null, installments: months(1), ...overrides })
+
+  it('dry run: answers the months before and after on the new release day and writes nothing', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: scheduleWith() },
+      { data: { bookkeeping_locked_through: null } },
+    ])
+
+    const outcome = await replanRemainingInstallments(ctxOf(supabase), 'sched-1', { releaseDay: 14 }, { dryRun: true })
+
+    expect(outcome.ok && outcome.dryRun).toBe(true)
+    if (!outcome.ok || !outcome.dryRun) return
+    const preview = outcome.preview as {
+      before: Array<{ period_month: string; booking_date: string }>
+      after: Array<{ period_month: string; amount: number; booking_date: string }>
+      remaining_amount: number
+      release_day_after: number | null
+    }
+    expect(preview.remaining_amount).toBe(11000)
+    expect(preview.release_day_after).toBe(14)
+    expect(preview.before[0]).toMatchObject({ period_month: '2026-02-01', booking_date: '2026-02-01' })
+    expect(preview.after).toHaveLength(11)
+    expect(preview.after[0]).toEqual({ period_month: '2026-02-01', amount: 1000, booking_date: '2026-02-14' })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('commits a new end through the replan RPC, then books the months already due', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: scheduleWith() },
+      { data: { bookkeeping_locked_through: null } },
+      { data: { months: 6, pending_months: 5 } }, // replan_accrual_installments
+      { data: [] }, // catch-up: nothing due
+    ])
+
+    const outcome = await replanRemainingInstallments(ctxOf(supabase), 'sched-1', { periodEnd: '2026-06-30' }, { today: '2026-01-20' })
+
+    expect(outcome.ok).toBe(true)
+    if (!outcome.ok || outcome.dryRun) return
+    expect(outcome.data.posted_now).toBe(0)
+    expect(supabase.rpc).toHaveBeenCalledWith('replan_accrual_installments', {
+      p_company_id: COMPANY,
+      p_schedule_id: 'sched-1',
+      p_user_id: USER,
+      p_period_end: '2026-06-30',
+      p_release_day: null,
+      p_installments: ['02', '03', '04', '05', '06'].map((m) => ({ period_month: `2026-${m}-01`, amount: 2200 })),
+    })
+  })
+
+  it('answers a conflict when the RPC finds the plan changed underneath', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: scheduleWith() },
+      { data: { bookkeeping_locked_through: null } },
+      { error: { code: 'P0001', message: 'ACCRUAL_REPLAN_CONFLICT: the months no longer cover the period once' } },
+    ])
+
+    const outcome = await replanRemainingInstallments(ctxOf(supabase), 'sched-1', { releaseDay: 14 })
+
+    expect(outcome).toEqual({ ok: false, code: 'ACCRUAL_REPLAN_CONFLICT' })
+  })
+
+  it.each([
+    ['a missing schedule', { data: null }, {}, 'ACCRUAL_NOT_FOUND', undefined],
+    ['a completed schedule', { data: scheduleWith({ status: 'completed' }) }, { releaseDay: 14 }, 'ACCRUAL_NOT_ACTIVE', undefined],
+    [
+      'an upplupen kostnad (29xx expense)',
+      { data: scheduleWith({ balance_account: '2990' }) },
+      { releaseDay: 14 },
+      'ACCRUAL_REPLAN_INVALID',
+      'accrued_cost',
+    ],
+    ['nothing pending', { data: scheduleWith({ installments: months(12) }) }, { releaseDay: 14 }, 'ACCRUAL_REPLAN_INVALID', 'nothing_pending'],
+    ['no change', { data: scheduleWith() }, { periodEnd: '2026-12-31', releaseDay: null }, 'ACCRUAL_REPLAN_INVALID', 'no_change'],
+    [
+      'an end before a posted month',
+      { data: scheduleWith({ installments: months(3) }) },
+      { periodEnd: '2026-02-28' },
+      'ACCRUAL_REPLAN_INVALID',
+      'end_before_posted',
+    ],
+    [
+      'an end that leaves no unposted month',
+      { data: scheduleWith({ installments: months(3) }) },
+      { periodEnd: '2026-03-31' },
+      'ACCRUAL_REPLAN_INVALID',
+      'no_month_left',
+    ],
+    [
+      'a credit still settling (cancelled months)',
+      { data: scheduleWith({ installments: months(1, (i) => (i === 0 ? 'posted' : 'cancelled')) }) },
+      { releaseDay: 14 },
+      'ACCRUAL_REPLAN_INVALID',
+      'cancelled_months',
+    ],
+  ])('refuses %s', async (_label, row, input, code, reason) => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([row, { data: { bookkeeping_locked_through: null } }])
+
+    const outcome = await replanRemainingInstallments(ctxOf(supabase), 'sched-1', input, { dryRun: true })
+
+    expect(outcome.ok).toBe(false)
+    if (outcome.ok) return
+    expect(outcome.code).toBe(code)
+    if (reason) expect(outcome.details).toEqual({ reason })
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+})
+
+describe('release day', () => {
+  it('a deferral month falls due on its release day, an upplupen kostnad on the first', () => {
+    expect(installmentDueDate({ direction: 'expense', balance_account: '1790', release_day: 14 }, '2026-02-01')).toBe('2026-02-14')
+    expect(installmentDueDate({ direction: 'expense', balance_account: '1790', release_day: null }, '2026-02-01')).toBe('2026-02-01')
+    expect(installmentDueDate({ direction: 'revenue', balance_account: '2970', release_day: 31 }, '2026-02-01')).toBe('2026-02-28')
+    expect(installmentDueDate({ direction: 'expense', balance_account: '2990', release_day: null }, '2026-02-01')).toBe('2026-02-01')
+  })
+
+  it('waits for the release day before posting a month', async () => {
+    const schedule = makeSchedule({ release_day: 14, posting_floor_date: '2026-01-15' })
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([{ data: [makeInstallment({ period_month: '2026-02-01', schedule })] }])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-02-10',
+    })
+
+    expect(result).toMatchObject({ posted: 0, failed: 0 })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('posts the month on its release day once the day has come', async () => {
+    const schedule = makeSchedule({ release_day: 14, posting_floor_date: '2026-01-15' })
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    enqueueMany([
+      { data: [makeInstallment({ period_month: '2026-02-01', schedule })] },
+      { data: { bookkeeping_locked_through: null } },
+      { data: [{ id: 'inst-1' }] }, // CAS claim
+      { count: 3 }, // pending months left
+    ])
+
+    const result = await postDueInstallments(supabase as unknown as SupabaseClient, COMPANY, {
+      userId: USER,
+      today: '2026-02-20',
+    })
+
+    expect(result).toMatchObject({ posted: 1, failed: 0 })
+    expect(mockCreateJournalEntry.mock.calls[0][3].entry_date).toBe('2026-02-14')
   })
 })

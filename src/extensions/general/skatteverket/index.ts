@@ -886,7 +886,10 @@ export const skatteverketExtension: Extension = {
         // instead of the sync failing silently every hour (B07).
         const unavailable = await ctx.settings
           .get<SkattekontoUnavailableState>(SKATTEKONTO_UNAVAILABLE_KEY)
-          .catch(() => null)
+          .catch((err) => {
+            log.warn('skattekonto unavailable state unreadable', err)
+            return null
+          })
 
         return NextResponse.json({
           connected: true,

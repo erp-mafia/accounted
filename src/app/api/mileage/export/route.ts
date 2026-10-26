@@ -1,3 +1,4 @@
+import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { ISO_DATE_RE } from '@/lib/invariants'
@@ -31,7 +32,7 @@ export const GET = withRouteContext('mileage.export', async (request, { supabase
       .eq('company_id', companyId)
       .in('id', entryIds)
     for (const entry of entries || []) {
-      voucherLabels.set(entry.id, `${entry.voucher_series}${entry.voucher_number}`)
+      voucherLabels.set(entry.id, formatVoucher(entry))
     }
   }
 

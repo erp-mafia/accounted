@@ -5,23 +5,18 @@ import { useTranslations } from 'next-intl'
 import { AccountNumber } from '@/components/ui/account-number'
 import { VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
+import type { VoucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 import { roundOre } from '@/lib/money'
 import { cn, formatAmount, formatCurrency } from '@/lib/utils'
 
-export interface VoucherTableLine {
-  /** Row key; the index when absent. */
-  key?: string | number
-  account_number: string
-  /** The account's name when the caller knows it (a staged account not yet in the chart); else the chart's or BAS's. */
-  account_name?: string | null
-  /** The line's own text. Hidden when it only repeats the account name or one of `redundantTexts`. */
-  description?: string | null
-  debit_amount: number | string | null | undefined
-  credit_amount: number | string | null | undefined
-  /** The original amount of a foreign-currency line, e.g. "100,00 EUR", shown under the SEK amount. */
-  foreignAmount?: string | null
-  /** Struck by an inline rättelse: shown crossed out and muted. */
-  struck?: boolean
+/**
+ * A row of the table: the shared posting-line view, which voucherLineView
+ * (lib/bookkeeping/voucher-line-view.ts) builds from any line shape. The
+ * description is hidden when it only repeats the account name or one of
+ * `redundantTexts`; a foreign amount shows under the SEK amount; a struck row
+ * is crossed out and muted.
+ */
+export interface VoucherTableLine extends VoucherLineView {
   /** Content after the text: a marker chip, a dimension tag, a row action. */
   extra?: ReactNode
 }

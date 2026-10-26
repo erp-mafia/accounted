@@ -122,7 +122,7 @@ describe('buildSalaryRunUnderlag', () => {
     expect(data.declaredAvgifter).toBeNull()
 
     expect(data.entries).toHaveLength(2)
-    expect(data.entries[0].voucher).toBe('L-8')
+    expect(data.entries[0].voucher).toBe('L8')
     expect(data.entries[0].lines[0]).toEqual({
       account_number: '7210',
       account_name: 'Löner till tjänstemän',
@@ -167,7 +167,7 @@ describe('buildSalaryRunUnderlag', () => {
     enqueue({ data: [] })
     const corrected = await buildSalaryRunUnderlag(db, 'company-1', 'run-1')
     expect(corrected.ok && corrected.data.corrected).toBe(true)
-    expect(corrected.ok && corrected.data.entries.map((e) => e.voucher)).toEqual(['L-8', 'L-9'])
+    expect(corrected.ok && corrected.data.entries.map((e) => e.voucher)).toEqual(['L8', 'L9'])
   })
 
   it('marks a correction run, and skips the account-name lookup when nothing was posted', async () => {
