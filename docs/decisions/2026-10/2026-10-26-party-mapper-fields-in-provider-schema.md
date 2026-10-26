@@ -1,0 +1,1 @@
+[2026-10-26] Import: a customer or supplier mapper reads only fields its provider's published schema names (provider-party-schemas.test.ts): a name the provider does not use reads as nothing, which lost phone, country, VAT and giro numbers on import (crm#1436).

@@ -134,21 +134,40 @@ function nonEmptyString(value: unknown): string | undefined {
 }
 
 /**
- * A customer (CustomerApi) or supplier (SupplierApi) record as a party. The
- * customer names its postal address Invoice*, country included
- * (InvoiceCountryCode); the supplier names it plainly (CountryCode). Reading
- * CountryCode alone left every Visma customer without a country (crm#1436).
+ * Where a record keeps its postal address. A customer (CustomerApi) names it
+ * Invoice*, country included; a supplier (SupplierApi) names it plainly. Each
+ * record is read under its own names: the customer's country was read as the
+ * supplier's CountryCode, and no Visma customer had one (crm#1436).
  */
-function buildParty(name: string, orgNumber?: string, raw?: Record<string, unknown>): PartyDto {
+interface AddressFields {
+  street: string;
+  additionalStreet: string;
+  city: string;
+  postalZone: string;
+  country: string;
+}
+
+const CUSTOMER_ADDRESS: AddressFields = {
+  street: 'InvoiceAddress1', additionalStreet: 'InvoiceAddress2', city: 'InvoiceCity',
+  postalZone: 'InvoicePostalCode', country: 'InvoiceCountryCode',
+};
+
+const SUPPLIER_ADDRESS: AddressFields = {
+  street: 'Address1', additionalStreet: 'Address2', city: 'City', postalZone: 'PostalCode', country: 'CountryCode',
+};
+
+/** A customer or supplier record as a party; an invoice names only the party's name. */
+function buildParty(name: string, orgNumber?: string, record?: { raw: Record<string, unknown>; address: AddressFields }): PartyDto {
+  const raw = record?.raw;
   return {
     name,
     identifications: orgNumber ? [{ id: orgNumber, schemeId: 'SE:ORGNR' }] : [],
-    postalAddress: raw ? {
-      streetName: (raw['InvoiceAddress1'] ?? raw['Address1']) as string | undefined,
-      additionalStreetName: (raw['InvoiceAddress2'] ?? raw['Address2']) as string | undefined,
-      cityName: (raw['InvoiceCity'] ?? raw['City']) as string | undefined,
-      postalZone: (raw['InvoicePostalCode'] ?? raw['PostalCode']) as string | undefined,
-      countryCode: nonEmptyString(raw['InvoiceCountryCode']) ?? nonEmptyString(raw['CountryCode']),
+    postalAddress: record ? {
+      streetName: record.raw[record.address.street] as string | undefined,
+      additionalStreetName: record.raw[record.address.additionalStreet] as string | undefined,
+      cityName: record.raw[record.address.city] as string | undefined,
+      postalZone: record.raw[record.address.postalZone] as string | undefined,
+      countryCode: nonEmptyString(record.raw[record.address.country]),
     } : undefined,
     legalEntity: orgNumber ? {
       registrationName: name,
@@ -359,7 +378,7 @@ export function mapVismaToCustomer(raw: Record<string, unknown>): CustomerDto {
     party: buildParty(
       (raw['Name'] as string) ?? '',
       raw['CorporateIdentityNumber'] as string | undefined,
-      raw,
+      { raw, address: CUSTOMER_ADDRESS },
     ),
     invoiceEmailCcAddresses: emailAddresses(raw['EmailAddresses']),
     active: raw['IsActive'] !== false,
@@ -378,7 +397,7 @@ export function mapVismaToSupplier(raw: Record<string, unknown>): SupplierDto {
     party: buildParty(
       (raw['Name'] as string) ?? '',
       raw['CorporateIdentityNumber'] as string | undefined,
-      raw,
+      { raw, address: SUPPLIER_ADDRESS },
     ),
     active: raw['IsActive'] !== false,
     vatNumber: nonEmptyString(raw['VatNumber']),
