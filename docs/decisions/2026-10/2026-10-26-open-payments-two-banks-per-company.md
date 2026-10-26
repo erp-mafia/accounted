@@ -1,0 +1,1 @@
+[2026-10-26] Open Payments: two bank connections per company (hosted Connect key limits.bank_connections_per_company 1 to 2, Emil): billing is per read month, not per consent (2026-10-22), and 26 companies hold 2 to 4 banks on Enable Banking; supersedes the one-per-company rule of 2026-10-15.
