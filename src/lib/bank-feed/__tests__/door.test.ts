@@ -5,7 +5,7 @@ vi.mock('@/lib/entitlements/has-capability', () => ({ hasCapability: vi.fn() }))
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { setBankFeedConnectForTests, type BankFeedConnect } from '../connect'
-import { bankFeedPilot, bankFeedPilotAdmits, openBankFeedDoor, startingGrants } from '../door'
+import { bankFeedPilot, bankFeedPilotAdmits, openBankFeedDoor, reachesUncoveredBanks, startingGrants } from '../door'
 
 const COMPANY = '11111111-1111-4111-8111-111111111111'
 const supabase = {} as SupabaseClient
@@ -87,5 +87,16 @@ describe('openBankFeedDoor', () => {
     expect(await openBankFeedDoor({ supabase, companyId: COMPANY })).toEqual({ ok: false, reason: 'subscription' })
     expect(entitled).toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync', {})
     expect(entitled).not.toHaveBeenCalledWith(supabase, COMPANY, 'bank_sync', { excludeTrial: true })
+  })
+})
+
+describe('reachesUncoveredBanks', () => {
+  it('is off when unset or empty and lets exactly the listed companies through to a held-back bank', () => {
+    expect(reachesUncoveredBanks(COMPANY, {})).toBe(false)
+    expect(reachesUncoveredBanks(COMPANY, { OPENPAYMENTS_UNCOVERED_PILOT_COMPANY_IDS: ' , ' })).toBe(false)
+    expect(reachesUncoveredBanks(COMPANY, { OPENPAYMENTS_UNCOVERED_PILOT_COMPANY_IDS: `co-2, ${COMPANY} ` })).toBe(true)
+    expect(reachesUncoveredBanks('co-3', { OPENPAYMENTS_UNCOVERED_PILOT_COMPANY_IDS: `co-2, ${COMPANY}` })).toBe(false)
+    // Never a wildcard: the list is for proving a fix with one company, not opening a bank.
+    expect(reachesUncoveredBanks(COMPANY, { OPENPAYMENTS_UNCOVERED_PILOT_COMPANY_IDS: '*' })).toBe(false)
   })
 })

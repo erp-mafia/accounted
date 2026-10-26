@@ -21,6 +21,8 @@ export interface OpenPaymentsBank {
   decoupled: boolean | null
   /** The bank signs on its own page: the browser goes there and comes back. */
   redirect: boolean | null
+  /** Open Payments reaches the bank for this company (lib/bank-feed/bank-coverage.ts bankReached); absent from an older server. */
+  reached?: boolean
 }
 
 /** One bank's details as GET /api/bank/open-payments/banks/:bic answers (service BankDetailsView). */

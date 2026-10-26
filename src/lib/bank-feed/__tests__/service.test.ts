@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const mocks = vi.hoisted(() => ({
   door: vi.fn(),
+  uncoveredPilot: vi.fn(),
   connect: vi.fn(),
   serviceRpc: vi.fn(),
   resolveLedger: vi.fn(),
@@ -15,7 +16,7 @@ const mocks = vi.hoisted(() => ({
   storedPsu: vi.fn(),
   rememberPsu: vi.fn(),
 }))
-vi.mock('../door', () => ({ openBankFeedDoor: (...a: unknown[]) => mocks.door(...a) }))
+vi.mock('../door', () => ({ openBankFeedDoor: (...a: unknown[]) => mocks.door(...a), reachesUncoveredBanks: (...a: unknown[]) => mocks.uncoveredPilot(...a) }))
 vi.mock('../connect', async (importOriginal) => ({
   ...(await importOriginal<typeof import('../connect')>()),
   getBankFeedConnect: () => mocks.connect(),
@@ -119,6 +120,7 @@ beforeEach(() => {
   mocks.rememberPsu.mockResolvedValue(undefined)
   mocks.emit.mockResolvedValue(undefined)
   mocks.resolveLedger.mockResolvedValue({ ledgerAccount: '1931', reuseCashAccountId: null, source: 'allocated' })
+  mocks.uncoveredPilot.mockReturnValue(false)
 })
 
 describe('helpers', () => {
@@ -147,7 +149,23 @@ describe('listBankFeedBanks', () => {
 
   it('forwards the provider\'s bank names unchanged', async () => {
     mocks.door.mockResolvedValue({ ok: true, connect: fakeConnect() })
-    expect(await listBankFeedBanks(ctx)).toEqual({ ok: true, data: { banks: [{ bic: 'SWEDSESS', name: 'Swedbank', logo_url: null, decoupled: true, redirect: null }] } })
+    expect(await listBankFeedBanks(ctx)).toEqual({ ok: true, data: { banks: [{ bic: 'SWEDSESS', name: 'Swedbank', logo_url: null, decoupled: true, redirect: null, reached: true }] } })
+  })
+
+  it('says a bank on the coverage list is not reached, unless the company is in the pilot for those', async () => {
+    const banks = vi.fn().mockResolvedValue([
+      { bic: 'SWEDSESS', name: 'Swedbank', logoUrl: null, decoupled: true, redirect: null },
+      { bic: 'SVEASESS', name: 'Svea Bank', logoUrl: null, decoupled: false, redirect: true },
+    ])
+    mocks.door.mockResolvedValue({ ok: true, connect: fakeConnect({ banks }) })
+    const reached = async () => {
+      const outcome = await listBankFeedBanks(ctx)
+      return outcome.ok && !outcome.dryRun ? outcome.data.banks.map((b) => [b.bic, b.reached]) : outcome
+    }
+    expect(await reached()).toEqual([['SWEDSESS', true], ['SVEASESS', false]])
+    mocks.uncoveredPilot.mockReturnValue(true)
+    expect(await reached()).toEqual([['SWEDSESS', true], ['SVEASESS', true]])
+    expect(mocks.uncoveredPilot).toHaveBeenCalledWith('co-1')
   })
 })
 

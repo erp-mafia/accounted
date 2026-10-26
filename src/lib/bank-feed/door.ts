@@ -82,6 +82,25 @@ export async function openBankFeedDoor(ctx: Pick<OperationContext, 'supabase' | 
   return { ok: false, reason: 'subscription' }
 }
 
+export const UNCOVERED_PILOT_ENV = 'OPENPAYMENTS_UNCOVERED_PILOT_COMPANY_IDS'
+
+/**
+ * Whether a company may connect a bank the coverage list holds back
+ * (lib/bank-feed/bank-coverage.ts) through Open Payments anyway:
+ * OPENPAYMENTS_UNCOVERED_PILOT_COMPANY_IDS, comma-separated company ids, off
+ * when unset. A fix at such a bank is proven with a company that has nothing
+ * to lose before the bank comes off the list for everyone (Svea's consent,
+ * 2026-10-26: the one company whose Svea feed is already gone).
+ */
+export function reachesUncoveredBanks(companyId: string, env: BankFeedEnv = process.env): boolean {
+  const raw = env[UNCOVERED_PILOT_ENV]?.trim()
+  if (!raw) return false
+  return raw
+    .split(',')
+    .map((v) => v.trim())
+    .includes(companyId)
+}
+
 /**
  * The pilot's answer for a company without the plan check: the cron asks the
  * capability for a whole batch at once (getCompanyIdsWithCapability) and

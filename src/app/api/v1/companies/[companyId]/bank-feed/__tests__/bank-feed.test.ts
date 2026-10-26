@@ -31,7 +31,7 @@ vi.mock('@/lib/entitlements/multi-user', async () => {
   const actual = await vi.importActual<typeof import('@/lib/entitlements/multi-user')>('@/lib/entitlements/multi-user')
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'active' }), isMembershipDormant: () => false }
 })
-const door = vi.hoisted(() => ({ openBankFeedDoor: vi.fn() }))
+const door = vi.hoisted(() => ({ openBankFeedDoor: vi.fn(), reachesUncoveredBanks: vi.fn(() => false) }))
 vi.mock('@/lib/bank-feed/door', () => door)
 const switchCampaign = vi.hoisted(() => ({ getBankSwitchProgress: vi.fn() }))
 vi.mock('@/lib/bank-feed/switch-campaign', () => switchCampaign)
@@ -153,8 +153,8 @@ describe('GET /bank-feed/banks', () => {
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.banks).toEqual([
-      { bic: 'SWEDSESS', name: 'Swedbank', logo_url: null, decoupled: true, redirect: true },
-      { bic: 'ESSESESS', name: 'SEB', logo_url: null, decoupled: true, redirect: false },
+      { bic: 'SWEDSESS', name: 'Swedbank', logo_url: null, decoupled: true, redirect: true, reached: true },
+      { bic: 'ESSESESS', name: 'SEB', logo_url: null, decoupled: true, redirect: false, reached: true },
     ])
     expect(body.meta.request_id).toMatch(/^req_/)
     expect(connect.banks).toHaveBeenCalledWith(COMPANY_ID)

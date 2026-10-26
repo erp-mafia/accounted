@@ -6,7 +6,7 @@ import { AttnLine } from '@/components/ui/attn-line'
 import { DialogFooter } from '@/components/ui/dialog'
 import { SettingsSeg } from '@/components/settings/SettingsRows'
 import { BankList, OpenPaymentsBankMark } from '../BankList'
-import { bankCoveredByOpenPayments } from '@/lib/bank-feed/bank-coverage'
+import { bankReached } from '@/lib/bank-feed/bank-coverage'
 import { bankGuideUrl, bankPrerequisiteKey } from '../bank-help'
 import type { FlowAction, FlowState } from '../connect-flow-reducer'
 import type { AccountContext, OpenPaymentsBank } from '../open-payments-client'
@@ -44,8 +44,9 @@ export function BankPickStep({ state, dispatch, banks, banksFailed, soleTrader, 
   const guideUrl = state.bank ? bankGuideUrl(state.bank) : null
   // A bank the provider lists but does not reach yet (lib/bank-feed/bank-coverage.ts)
   // is said so before a BankID that would end at the bank's refusal, with the
-  // way to the earlier connection that still reads it.
-  const notReached = state.bank !== null && bankName !== '' && !bankCoveredByOpenPayments(bankName)
+  // way to the earlier connection that still reads it. The server's answer
+  // for this company decides when the list carried one (a pilot company).
+  const notReached = state.bank !== null && bankName !== '' && !bankReached(bankName, chosen?.reached)
   const canContinue = state.bank !== null && state.bank.bic !== '' && !notReached
   const affiliates = state.bankDetails?.affiliates ?? []
 

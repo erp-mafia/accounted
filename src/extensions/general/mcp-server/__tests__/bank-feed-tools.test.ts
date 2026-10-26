@@ -92,8 +92,8 @@ describe('bank-feed tools', () => {
     const db = createTableMockSupabase()
     const result = (await tool('gnubok_list_bank_feed_banks').execute({}, COMPANY_ID, USER_ID, db.supabase as never)) as { banks: Array<Record<string, unknown>> }
     expect(result.banks).toEqual([
-      { bic: 'SWEDSESS', name: 'Swedbank', logo_url: null, decoupled: true, redirect: true },
-      { bic: 'ESSESESS', name: 'SEB', logo_url: null, decoupled: true, redirect: false },
+      { bic: 'SWEDSESS', name: 'Swedbank', logo_url: null, decoupled: true, redirect: true, reached: true },
+      { bic: 'ESSESESS', name: 'SEB', logo_url: null, decoupled: true, redirect: false, reached: true },
     ])
   })
 

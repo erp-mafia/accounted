@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { enableBankingOffers } from '../bank-coverage'
+import { bankReached, enableBankingOffers } from '../bank-coverage'
 
 describe('enableBankingOffers', () => {
   it('offers every bank while Open Payments is closed to the company', () => {
@@ -17,5 +17,16 @@ describe('enableBankingOffers', () => {
     for (const name of ['Wise', 'PayPal', 'Bank Norwegian', 'Nordea First Card', 'Juni', 'Svea Bank']) {
       expect(offered({ name })).toBe(true)
     }
+  })
+})
+
+describe('bankReached', () => {
+  it("takes the server's answer for the company when the list carried one, else the coverage list", () => {
+    // A pilot company may go on with Svea; the list alone holds it back.
+    expect(bankReached('Svea Bank', true)).toBe(true)
+    expect(bankReached('Svea Bank', undefined)).toBe(false)
+    expect(bankReached('Svea Bank', null)).toBe(false)
+    expect(bankReached('Swedbank', false)).toBe(false)
+    expect(bankReached('Swedbank', undefined)).toBe(true)
   })
 })
