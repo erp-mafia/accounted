@@ -3,7 +3,7 @@
 import { Fragment, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, ChevronRight, FileSignature } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon, PencilSquareIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { RowFoldout, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
@@ -82,7 +82,7 @@ export function SigningRequestsList() {
       </div>
     )
   else if (requests.length === 0)
-    body = <EmptyState icon={FileSignature} title={filter === 'all' ? t('list_empty_title') : t('list_empty_filtered_title')} description={t('list_empty_body')} actionLabel={t('list_empty_action')} actionHref="/arkiv" />
+    body = <EmptyState icon={PencilSquareIcon} title={filter === 'all' ? t('list_empty_title') : t('list_empty_filtered_title')} description={t('list_empty_body')} actionLabel={t('list_empty_action')} actionHref="/arkiv" />
   else
     body = (
       <div className="overflow-x-auto">
@@ -126,7 +126,7 @@ export function SigningRequestsList() {
                         aria-label={open ? t('row_collapse', { title: r.title }) : t('row_expand', { title: r.title })}
                         onClick={() => setExpanded(open ? null : r.signing_request_id)}
                       >
-                        {open ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+                        {open ? <ChevronDownIcon className="h-4 w-4" /> : <ChevronRightIcon className="h-4 w-4" />}
                       </Button>
                     </td>
                   </tr>

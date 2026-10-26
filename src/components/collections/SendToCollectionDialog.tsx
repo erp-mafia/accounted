@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { Check, ChevronRight, CircleAlert } from 'lucide-react'
+import { CheckIcon, ChevronRightIcon, ExclamationCircleIcon } from '@/components/icons'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -49,7 +49,7 @@ interface Props {
 
 /** One line of the checks list: a quiet tick when it holds, an attention mark when the person should look. */
 function CheckLine({ ok, children }: { ok: boolean; children: ReactNode }) {
-  const Icon = ok ? Check : CircleAlert
+  const Icon = ok ? CheckIcon : ExclamationCircleIcon
   return (
     <li className="flex items-start gap-2.5 py-2">
       <Icon aria-hidden className={cn('mt-[3px] h-3.5 w-3.5 shrink-0', ok ? 'text-muted-foreground' : 'text-attn')} />
@@ -321,7 +321,7 @@ export function SendToCollectionDialog({ invoiceId, invoiceNumber, open, onOpenC
 
                 <details className="group text-[12.5px] text-muted-foreground">
                   <summary className="flex cursor-pointer list-none items-center gap-1 text-[13px] text-foreground [&::-webkit-details-marker]:hidden">
-                    <ChevronRight aria-hidden className="h-3.5 w-3.5 transition-transform duration-150 group-open:rotate-90" />
+                    <ChevronRightIcon aria-hidden className="h-3.5 w-3.5 transition-transform duration-150 group-open:rotate-90" />
                     {tp('send_details_summary')}
                   </summary>
                   <div className="mt-2 space-y-2 pl-[18px]">

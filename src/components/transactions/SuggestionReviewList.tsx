@@ -3,7 +3,7 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -155,7 +155,7 @@ export function SuggestionReviewList({
                               disabled={busy || bulkBusy}
                               aria-label={t('row_menu')}
                             >
-                              <MoreHorizontal className="h-4 w-4" />
+                              <EllipsisHorizontalIcon className="h-4 w-4" />
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">

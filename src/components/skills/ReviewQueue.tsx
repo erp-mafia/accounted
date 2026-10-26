@@ -4,7 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, ArrowUpRight, ShieldAlert } from 'lucide-react'
+import { ArrowLeftIcon, ArrowUpRightIcon, ShieldExclamationIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -37,7 +37,7 @@ export function ReviewQueue({ mfaRequired = false }: { mfaRequired?: boolean }) 
     return (
       <div className={styles.apage}>
         <PageHeader title={t('review_title')} />
-        <Link href="/skills" className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+        <Link href="/skills" className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
         <AttnLine action={{ label: t('review_mfa_action'), href: '/settings/security' }}>
           {t('review_mfa_required')}
         </AttnLine>
@@ -47,7 +47,7 @@ export function ReviewQueue({ mfaRequired = false }: { mfaRequired?: boolean }) 
   return (
     <div className={styles.apage}>
       <PageHeader title={t('review_title')} />
-      <Link href="/skills" className={styles.back}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
+      <Link href="/skills" className={styles.back}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_to_agents')}</Link>
       <p className={styles.muted}>{t('review_lede', { repo: COMMUNITY_REPO })}</p>
       {list.error && <p role="alert" className={styles.muted}>{t('load_failed')}</p>}
       {list.data && list.data.submissions.length === 0 && list.data.pending.length === 0 && list.data.withdrawn.length === 0 && <div className={styles.placeEmpty}>{t('review_empty')}</div>}
@@ -80,7 +80,7 @@ export function ReviewQueue({ mfaRequired = false }: { mfaRequired?: boolean }) 
                     <b>{w.title}</b>
                     <small className={styles.muted}>community/{w.slug}</small>
                   </div>
-                  <Button asChild size="sm" variant="outline" className="gap-2"><a href={w.source} target="_blank" rel="noreferrer">{t('review_remove_folder')}<ArrowUpRight className="h-4 w-4" aria-hidden /></a></Button>
+                  <Button asChild size="sm" variant="outline" className="gap-2"><a href={w.source} target="_blank" rel="noreferrer">{t('review_remove_folder')}<ArrowUpRightIcon className="h-4 w-4" aria-hidden /></a></Button>
                 </div>
               </li>
             ))}
@@ -122,15 +122,15 @@ function Submission({ submission: s, onDone }: { submission: ReviewSubmission; o
         </div>
       </div>
       {s.privacy.length > 0 && (
-        <p className={styles.reviewAlert} role="alert">
-          <ShieldAlert className="h-4 w-4" aria-hidden />
+        <div className={styles.reviewAlert} role="alert">
+          <ShieldExclamationIcon className="h-4 w-4" aria-hidden />
           {t('review_privacy', { found: s.privacy.map((p) => `${t(`review_privacy_kinds.${p.kind}`)}: ${p.sample}`).join(', ') })}
-        </p>
+        </div>
       )}
       <pre className={styles.reviewFile} data-ph-mask="">{s.skill_md}</pre>
       <div className="flex flex-wrap items-center gap-2">
         {s.github_url
-          ? <Button asChild size="sm" className="gap-2"><a href={s.github_url} target="_blank" rel="noreferrer" onClick={approve}>{t('review_open_pr')}<ArrowUpRight className="h-4 w-4" aria-hidden /></a></Button>
+          ? <Button asChild size="sm" className="gap-2"><a href={s.github_url} target="_blank" rel="noreferrer" onClick={approve}>{t('review_open_pr')}<ArrowUpRightIcon className="h-4 w-4" aria-hidden /></a></Button>
           : <span className={styles.muted}>{t('review_too_long')}</span>}
         <Button size="sm" variant="outline" onClick={() => void copy()}>{t(copied ? 'copied' : 'review_copy')}</Button>
         <Button size="sm" variant="outline" onClick={() => setSendBack(!sendBack)}>{t('review_send_back')}</Button>
@@ -166,15 +166,15 @@ function Pending({ item, onDone }: { item: PendingItem; onDone: () => void }) {
         </div>
       </div>
       {item.privacy.length > 0 && (
-        <p className={styles.reviewAlert} role="alert">
-          <ShieldAlert className="h-4 w-4" aria-hidden />
+        <div className={styles.reviewAlert} role="alert">
+          <ShieldExclamationIcon className="h-4 w-4" aria-hidden />
           {t('review_privacy', { found: item.privacy.map((p) => `${t(`review_privacy_kinds.${p.kind}`)}: ${p.sample}`).join(', ') })}
-        </p>
+        </div>
       )}
       <pre className={styles.reviewFile} data-ph-mask="">{item.body}</pre>
       <div className="flex flex-wrap items-center gap-2">
         <Button size="sm" loading={state === 'sending'} onClick={() => void publish()}>{t('review_approve')}</Button>
-        <Button asChild size="sm" variant="outline" className="gap-2"><a href={item.source} target="_blank" rel="noreferrer">{t('review_view_source')}<ArrowUpRight className="h-4 w-4" aria-hidden /></a></Button>
+        <Button asChild size="sm" variant="outline" className="gap-2"><a href={item.source} target="_blank" rel="noreferrer">{t('review_view_source')}<ArrowUpRightIcon className="h-4 w-4" aria-hidden /></a></Button>
         {state === 'failed' && <span role="alert" className={styles.muted}>{t('save_failed')}</span>}
         {state === 'changed' && <span role="alert" className={styles.muted}>{t('review_changed')}</span>}
       </div>

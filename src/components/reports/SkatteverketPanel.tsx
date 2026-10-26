@@ -18,17 +18,17 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import {
-  AlertCircle,
-  AlertTriangle,
-  CheckCircle2,
-  ExternalLink,
-  Info,
-  Link2,
-  Loader2,
-  MoreHorizontal,
-  Send,
-  ShieldAlert,
-} from 'lucide-react'
+  ArrowTopRightOnSquareIcon,
+  CheckCircleIcon,
+  EllipsisHorizontalIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+  LinkIcon,
+  PaperAirplaneIcon,
+  ShieldExclamationIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import type { VatPeriodType } from '@/types'
 import { formatRedovisare, formatRedovisningsperiod } from '@/lib/skatteverket/format'
 import { useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
@@ -741,7 +741,7 @@ function SkatteverketPanelInner({
       <section className="space-y-3">
         <ActionRow>
           <Button size="sm" disabled className="gap-2">
-            <Send className="h-4 w-4" />
+            <PaperAirplaneIcon className="h-4 w-4" />
             Skicka till Skatteverket
           </Button>
           {actions}
@@ -763,7 +763,7 @@ function SkatteverketPanelInner({
       <section className="space-y-3">
         <ActionRow>
           <Button size="sm" onClick={handleConnect} className="gap-2">
-            <Link2 className="h-4 w-4" />
+            <LinkIcon className="h-4 w-4" />
             Anslut med BankID
           </Button>
           {actions}
@@ -774,7 +774,7 @@ function SkatteverketPanelInner({
             role="alert"
             className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3"
           >
-            <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
+            <ExclamationCircleIcon className="h-4 w-4 mt-1 shrink-0" />
             <span>{notice.text}</span>
           </div>
         )}
@@ -800,14 +800,14 @@ function SkatteverketPanelInner({
             disabled={!hasData || localBlocked || actionLoading !== null}
             loading={actionLoading === 'submit'}
           >
-            {actionLoading !== 'submit' && <Send className="mr-2 h-4 w-4" />}
+            {actionLoading !== 'submit' && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
             Skicka till Skatteverket
           </Button>
           {actions}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
               <Button variant="ghost" size="icon-sm" aria-label="Fler åtgärder">
-                <MoreHorizontal className="h-4 w-4" />
+                <EllipsisHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="w-72">
@@ -947,7 +947,7 @@ function SkatteverketPanelInner({
             aria-live="polite"
             className="flex items-center gap-2 text-sm text-muted-foreground"
           >
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
             {ACTION_IN_FLIGHT_LABELS[actionLoading]}
           </div>
         )}
@@ -960,7 +960,7 @@ function SkatteverketPanelInner({
               role="alert"
               className="flex items-start gap-2 text-sm text-destructive bg-destructive/5 rounded-lg p-3"
             >
-              <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
+              <ExclamationCircleIcon className="h-4 w-4 mt-1 shrink-0" />
               <span>{notice.text}</span>
             </div>
           ) : (
@@ -970,9 +970,9 @@ function SkatteverketPanelInner({
               className="flex items-start gap-2 text-sm rounded-lg border border-border bg-muted/30 p-3"
             >
               {notice.kind === 'success' ? (
-                <CheckCircle2 className="h-4 w-4 mt-1 shrink-0 text-success" />
+                <CheckCircleIcon className="h-4 w-4 mt-1 shrink-0 text-success" />
               ) : (
-                <Info className="h-4 w-4 mt-1 shrink-0 text-muted-foreground" />
+                <InformationCircleIcon className="h-4 w-4 mt-1 shrink-0 text-muted-foreground" />
               )}
               <span>{notice.text}</span>
             </div>
@@ -995,9 +995,9 @@ function SkatteverketPanelInner({
                 }`}
               >
                 {k.status === 'ERROR' ? (
-                  <ShieldAlert className="h-4 w-4 mt-1 shrink-0" />
+                  <ShieldExclamationIcon className="h-4 w-4 mt-1 shrink-0" />
                 ) : (
-                  <AlertTriangle className="h-4 w-4 mt-1 shrink-0 text-warning" />
+                  <ExclamationTriangleIcon className="h-4 w-4 mt-1 shrink-0 text-warning" />
                 )}
                 <div>
                   <span className="font-mono text-xs mr-2">{k.kod}</span>
@@ -1034,7 +1034,7 @@ function SkatteverketPanelInner({
             <div className="flex flex-wrap gap-2">
               <Button variant="outline" asChild className="gap-2">
                 <a href={signeringslank} target="_blank" rel="noopener noreferrer">
-                  <ExternalLink className="h-4 w-4" />
+                  <ArrowTopRightOnSquareIcon className="h-4 w-4" />
                   Öppna signeringssidan
                 </a>
               </Button>
@@ -1044,7 +1044,7 @@ function SkatteverketPanelInner({
                 disabled={actionLoading !== null}
                 loading={actionLoading === 'check'}
               >
-                {actionLoading !== 'check' && <CheckCircle2 className="mr-2 h-4 w-4" />}
+                {actionLoading !== 'check' && <CheckCircleIcon className="mr-2 h-4 w-4" />}
                 Kontrollera inlämning
               </Button>
             </div>

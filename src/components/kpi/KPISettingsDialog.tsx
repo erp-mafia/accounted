@@ -2,7 +2,12 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Settings2, ChevronDown, ChevronRight, RotateCcw } from 'lucide-react'
+import {
+  AdjustmentsHorizontalIcon,
+  ArrowUturnLeftIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -102,7 +107,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
       <DialogTrigger asChild>
         {/* Same height as the year picker beside it (founder review 2026-09-07). */}
         <Button variant="outline" size="sm" className="gap-1.5">
-          <Settings2 className="h-3.5 w-3.5" />
+          <AdjustmentsHorizontalIcon className="h-3.5 w-3.5" />
           {t('customize')}
         </Button>
       </DialogTrigger>
@@ -139,9 +144,9 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
                     }
                   >
                     {isExpanded ? (
-                      <ChevronDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <ChevronDownIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     ) : (
-                      <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     )}
                     <div className="min-w-0">
                       <p className="text-sm font-medium truncate">
@@ -238,7 +243,7 @@ export function KPISettingsDialog({ preferences, onSave, saving }: KPISettingsDi
             onClick={handleReset}
             className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
           >
-            <RotateCcw className="h-3 w-3" />
+            <ArrowUturnLeftIcon className="h-3 w-3" />
             {t('settings_reset_all')}
           </button>
           <div className="flex gap-2">

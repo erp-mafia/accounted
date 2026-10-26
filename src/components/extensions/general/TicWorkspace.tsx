@@ -17,19 +17,19 @@ import {
 import { useExtensionData } from '@/lib/extensions/use-extension-data'
 import { useToast } from '@/components/ui/use-toast'
 import {
-  CheckCircle,
-  XCircle,
-  MapPin,
-  Mail,
-  Phone,
-  Settings,
-  AlertTriangle,
-  CalendarRange,
-  ShieldCheck,
-  Users,
-  Receipt,
-  Briefcase,
-} from 'lucide-react'
+  BriefcaseIcon,
+  CalendarDateRangeIcon,
+  CheckCircleIcon,
+  Cog6ToothIcon,
+  EnvelopeIcon,
+  ExclamationTriangleIcon,
+  MapPinIcon,
+  PhoneIcon,
+  ReceiptRefundIcon,
+  ShieldCheckIcon,
+  UsersIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import Link from 'next/link'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
@@ -279,7 +279,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
   if (noOrgNumber) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
-        <Settings className="h-12 w-12 text-muted-foreground/40 mb-4" />
+        <Cog6ToothIcon className="h-12 w-12 text-muted-foreground/40 mb-4" />
         <h3 className="text-lg text-foreground">
           {t('no_org_number_title')}
         </h3>
@@ -300,7 +300,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
   if (fetchFailed && !profile) {
     return (
       <div className="flex flex-col items-center justify-center py-16 text-center">
-        <XCircle className="h-12 w-12 text-muted-foreground/40 mb-4" />
+        <XCircleIcon className="h-12 w-12 text-muted-foreground/40 mb-4" />
         <h3 className="text-lg text-foreground">
           {t('fetch_failed_title')}
         </h3>
@@ -335,7 +335,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Briefcase className="h-4 w-4" />
+              <BriefcaseIcon className="h-4 w-4" />
               {/* data-ph-mask: the looked-up company name is user data */}
               <span data-ph-mask="">{profile.companyName}</span>
             </CardTitle>
@@ -351,7 +351,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
           <CardContent className="space-y-3 text-sm">
             {profile.address && (
               <div className="flex items-start gap-2 text-muted-foreground">
-                <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <MapPinIcon className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <span>
                   {[profile.address.street, `${profile.address.postalCode} ${profile.address.city}`]
                     .filter(Boolean)
@@ -361,13 +361,13 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
             )}
             {profile.email && (
               <div className="flex items-center gap-2 text-muted-foreground">
-                <Mail className="h-3.5 w-3.5 shrink-0" />
+                <EnvelopeIcon className="h-3.5 w-3.5 shrink-0" />
                 <span>{profile.email}</span>
               </div>
             )}
             {profile.phone && (
               <div className="flex items-center gap-2 text-muted-foreground">
-                <Phone className="h-3.5 w-3.5 shrink-0" />
+                <PhoneIcon className="h-3.5 w-3.5 shrink-0" />
                 <span>{profile.phone}</span>
               </div>
             )}
@@ -479,7 +479,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <ShieldCheck className="h-4 w-4" />
+              <ShieldCheckIcon className="h-4 w-4" />
               {t('status_section')}
             </CardTitle>
           </CardHeader>
@@ -521,7 +521,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
             <Card>
               <CardHeader>
                 <CardTitle className="flex items-center gap-2 text-base">
-                  <CalendarRange className="h-4 w-4" />
+                  <CalendarDateRangeIcon className="h-4 w-4" />
                   {t('fiscal_year_section')}
                 </CardTitle>
               </CardHeader>
@@ -562,7 +562,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Users className="h-4 w-4" />
+              <UsersIcon className="h-4 w-4" />
               {t('board_section')}
             </CardTitle>
             {profile.board && (
@@ -579,7 +579,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                 )}
                 {profile.board.hasVacancy && (
                   <Badge variant="warning" className="gap-1">
-                    <AlertTriangle className="h-3 w-3" />
+                    <ExclamationTriangleIcon className="h-3 w-3" />
                     {t('board_vacancy')}
                   </Badge>
                 )}
@@ -632,7 +632,7 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">
-              <Receipt className="h-4 w-4" />
+              <ReceiptRefundIcon className="h-4 w-4" />
               {t('payroll_section')}
             </CardTitle>
           </CardHeader>
@@ -730,9 +730,9 @@ export default function TicWorkspace({ userId }: WorkspaceComponentProps) {
                       </TableCell>
                       <TableCell>
                         {report.isAudited === true ? (
-                          <CheckCircle className="h-3.5 w-3.5 text-success" />
+                          <CheckCircleIcon className="h-3.5 w-3.5 text-success" />
                         ) : report.isAudited === false ? (
-                          <XCircle className="h-3.5 w-3.5 text-muted-foreground" />
+                          <XCircleIcon className="h-3.5 w-3.5 text-muted-foreground" />
                         ) : (
                           <span className="text-xs text-muted-foreground">-</span>
                         )}

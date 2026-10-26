@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowUpRight, Loader2, Briefcase } from 'lucide-react'
+import { ArrowUpRightIcon, BriefcaseIcon, SpinnerIcon } from '@/components/icons'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 
@@ -39,7 +39,7 @@ export default function HomeDomainSignpost({
     <div className="stagger-enter mx-auto max-w-lg pt-12">
       <div className="flex flex-col items-center text-center">
         <div className="mb-5 flex h-12 w-12 items-center justify-center rounded-xl bg-muted/60">
-          <Briefcase className="h-5 w-5 text-muted-foreground" />
+          <BriefcaseIcon className="h-5 w-5 text-muted-foreground" />
         </div>
         <h1 className="font-display text-2xl leading-8 tracking-tight">
           {t('title')}
@@ -61,7 +61,7 @@ export default function HomeDomainSignpost({
                   <span className="min-w-0 flex-1 truncate text-[13px] text-foreground">
                     {t('managed_via', { company: entry.name, domain: entry.domain })}
                   </span>
-                  <ArrowUpRight className="h-4 w-4 flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
+                  <ArrowUpRightIcon className="h-4 w-4 flex-shrink-0 text-muted-foreground group-hover:text-foreground" />
                 </a>
               </li>
             ))}
@@ -88,7 +88,7 @@ export default function HomeDomainSignpost({
                     {entry.name}
                   </span>
                   {pendingId === entry.id ? (
-                    <Loader2 className="h-4 w-4 flex-shrink-0 animate-spin text-muted-foreground" />
+                    <SpinnerIcon className="h-4 w-4 flex-shrink-0 animate-spin text-muted-foreground" />
                   ) : (
                     <span className="text-xs text-muted-foreground">{t('open_company')}</span>
                   )}

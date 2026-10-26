@@ -8,7 +8,12 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { formatCurrency, formatDate, cn } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
-import { Search, FileText, Loader2, Landmark } from 'lucide-react'
+import {
+  BuildingLibraryIcon,
+  DocumentTextIcon,
+  MagnifyingGlassIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import type { Invoice, Customer, SupplierInvoice, Supplier } from '@/types'
 import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/bookkeeping/rot-rut-rules'
@@ -211,7 +216,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-8 text-muted-foreground">
-        <Loader2 className="h-5 w-5 animate-spin mr-2" />
+        <SpinnerIcon className="h-5 w-5 animate-spin mr-2" />
         {isSupplier ? t('loading_supplier') : t('loading')}
       </div>
     )
@@ -282,7 +287,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
-                      <Landmark className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                      <BuildingLibraryIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                       <span className="font-medium text-sm">{request.name}</span>
                     </div>
                     <p className="text-xs text-muted-foreground mt-0.5 truncate">
@@ -375,9 +380,9 @@ export default function InvoicePicker(props: InvoicePickerProps) {
       {rotRutSection}
       <div className="relative">
         {isSearching ? (
-          <Loader2 className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
+          <SpinnerIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />
         ) : (
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         )}
         <Input
           placeholder={isSupplier ? t('search_placeholder_supplier') : t('search_placeholder')}
@@ -419,7 +424,7 @@ export default function InvoicePicker(props: InvoicePickerProps) {
             <div className="flex items-start justify-between gap-3">
               <div className="min-w-0 flex-1">
                 <div className="flex items-center gap-2">
-                  <FileText className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
+                  <DocumentTextIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
                   <span className="font-medium text-sm">
                     {rowNumber(invoice) ?? t('no_number')}
                   </span>

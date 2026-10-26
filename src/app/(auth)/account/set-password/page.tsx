@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { KeyRound } from 'lucide-react'
+import { KeyIcon } from '@/components/icons'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -123,7 +123,7 @@ function SetPasswordContent() {
         <div className="text-center mb-10">
           <div className="flex justify-center mb-4">
             <div className="h-14 w-14 rounded-lg bg-secondary flex items-center justify-center">
-              <KeyRound className="h-7 w-7 text-primary" />
+              <KeyIcon className="h-7 w-7 text-primary" />
             </div>
           </div>
           <h1 className="font-display text-3xl tracking-tight">

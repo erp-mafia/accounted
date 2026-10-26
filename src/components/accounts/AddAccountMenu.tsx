@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Landmark, Plus } from 'lucide-react'
+import { BuildingLibraryIcon, PlusIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
@@ -35,7 +35,7 @@ export default function AddAccountMenu() {
   return (
     <>
       <Button size="sm" onClick={() => setOpen(true)}>
-        <Plus className="mr-2 h-4 w-4" />
+        <PlusIcon className="mr-2 h-4 w-4" />
         {t('add_account')}
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
@@ -56,7 +56,7 @@ export default function AddAccountMenu() {
                     <img src={s.logo} alt="" className="h-8 w-8 shrink-0 rounded-sm object-contain" />
                   ) : (
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-sm bg-secondary text-muted-foreground">
-                      <Landmark className="h-4 w-4" />
+                      <BuildingLibraryIcon className="h-4 w-4" />
                     </span>
                   )}
                   <span className="min-w-0">

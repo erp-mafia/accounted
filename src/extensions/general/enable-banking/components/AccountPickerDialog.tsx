@@ -23,7 +23,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { useToast } from '@/components/ui/use-toast'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRightIcon } from '@/components/icons'
 import { cn, formatDate } from '@/lib/utils'
 import { CURRENCY_LEDGER_DEFAULTS } from '@/lib/cash-accounts/ledger-slots'
 import { createClient } from '@/lib/supabase/client'
@@ -1167,7 +1167,7 @@ export function AccountPickerDialog({
               aria-expanded={claimedOpen}
               className="flex min-h-9 items-center gap-1 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
             >
-              <ChevronRight
+              <ChevronRightIcon
                 className={cn('h-3.5 w-3.5 transition-transform duration-150', claimedOpen && 'rotate-90')}
               />
               <span className="tabular-nums" data-ph-mask="">

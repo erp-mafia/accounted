@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { cn, formatCurrency } from '@/lib/utils'
-import { BookOpen, ChevronRight, FileText, HandCoins } from 'lucide-react'
+import { BanknotesIcon, BookOpenIcon, ChevronRightIcon, DocumentTextIcon } from '@/components/icons'
 import type { ResumeItem } from '@/lib/worklist/resume'
 
 /**
@@ -35,7 +35,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
     switch (item.kind) {
       case 'invoice_draft':
         return {
-          icon: FileText,
+          icon: DocumentTextIcon,
           title: t('resume_invoice_draft', { customer: item.context ?? '' }),
           meta: item.amount != null ? formatCurrency(item.amount, item.currency ?? 'SEK') : null,
         }
@@ -43,7 +43,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
       case 'quote_unsent':
       case 'quote_to_invoice':
         return {
-          icon: FileText,
+          icon: DocumentTextIcon,
           title: t(
             item.kind === 'quote_unsent'
               ? 'resume_quote_unsent'
@@ -69,7 +69,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
                 ? 'resume_salary_paid'
                 : 'resume_salary_draft'
         return {
-          icon: HandCoins,
+          icon: BanknotesIcon,
           title: t(key, { period: item.context ?? '' }),
           meta: null,
         }
@@ -77,7 +77,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
       case 'journal_draft':
       default:
         return {
-          icon: BookOpen,
+          icon: BookOpenIcon,
           title: t('resume_journal_draft'),
           meta: item.context,
         }
@@ -120,7 +120,7 @@ export default function ResumePane({ items }: { items: ResumeItem[] }) {
                 >
                   {edited}
                 </span>
-                <ChevronRight
+                <ChevronRightIcon
                   className={cn(
                     'h-3.5 w-3.5 text-muted-foreground opacity-0 transition-opacity duration-150 group-hover:opacity-100',
                   )}

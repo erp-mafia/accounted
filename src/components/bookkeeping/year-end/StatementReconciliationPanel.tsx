@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { AlertTriangle, CheckCircle2 } from 'lucide-react'
+import { CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency } from '@/lib/utils'
@@ -60,12 +60,12 @@ export function StatementReconciliationPanel({ periodId }: StatementReconciliati
         {state.kind === 'ready' &&
           (state.data.isReconciled ? (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <CheckCircle2 className="h-3.5 w-3.5" />
+              <CheckCircleIcon className="h-3.5 w-3.5" />
               Stämmer
             </span>
           ) : (
             <Badge variant="destructive" className="gap-1">
-              <AlertTriangle className="h-3 w-3" />
+              <ExclamationTriangleIcon className="h-3 w-3" />
               Avvikelser
             </Badge>
           ))}
@@ -105,10 +105,10 @@ export function StatementReconciliationPanel({ periodId }: StatementReconciliati
           </div>
 
           {state.data.disagreements.map((text) => (
-            <p key={text} className="flex items-start gap-2 text-sm text-destructive">
-              <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+            <div key={text} className="flex items-start gap-2 text-sm text-destructive">
+              <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
               <span>{text}</span>
-            </p>
+            </div>
           ))}
         </div>
       )}

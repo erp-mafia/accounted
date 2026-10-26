@@ -3,7 +3,7 @@
 import { useRouter } from 'next/navigation'
 import type { ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { Upload, Plus, RefreshCw } from 'lucide-react'
+import { ArrowPathIcon, ArrowUpTrayIcon, PlusIcon } from '@/components/icons'
 import { SplitButton, type SplitButtonOption } from '@/components/ui/split-button'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useUiState } from '@/lib/hooks/use-ui-state'
@@ -44,7 +44,7 @@ export default function TransactionStatusBar({
           {
             key: 'synka',
             label: t('create_synka'),
-            icon: RefreshCw,
+            icon: ArrowPathIcon,
             busy: isBusy,
             busyLabel: t('bank_sync_button_syncing'),
             description: lastSyncedAt
@@ -59,7 +59,7 @@ export default function TransactionStatusBar({
     {
       key: 'importera',
       label: t('action_import'),
-      icon: Upload,
+      icon: ArrowUpTrayIcon,
       description: t('create_import_desc'),
       // Straight to the bank-file step: the option's own description says
       // "CSV- eller SIE-fil från banken", so the chooser in between is a stop
@@ -69,7 +69,7 @@ export default function TransactionStatusBar({
     {
       key: 'manuell',
       label: t('action_new_transaction'),
-      icon: Plus,
+      icon: PlusIcon,
       description: t('create_manual_desc'),
       disabled: !canWrite,
       disabledTitle: t('viewer_disabled_tooltip'),

@@ -20,7 +20,7 @@ import CustomerForm from '@/components/customers/CustomerForm'
 import { CustomerMergeDialog } from '@/components/customers/CustomerMergeDialog'
 import type { CustomerMergeResult } from '@/lib/customers/merge-customers'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
-import { Lock, Eye, EyeOff } from 'lucide-react'
+import { EyeIcon, EyeSlashIcon, LockClosedIcon } from '@/components/icons'
 import { useLocale } from 'next-intl'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { getErrorMessage, getResponseErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -314,7 +314,7 @@ export default function CustomerDetailPage({
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
               {t('edit')}
             </Button>
             <Button
@@ -325,7 +325,7 @@ export default function CustomerDetailPage({
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : t('merge_tooltip')}
             >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
               {t('merge')}
             </Button>
             <Button
@@ -336,7 +336,7 @@ export default function CustomerDetailPage({
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
               {t('delete')}
             </Button>
           </div>
@@ -424,9 +424,9 @@ export default function CustomerDetailPage({
                 title={revealedPersonalNumber ? t('personal_number_hide') : t('personal_number_show')}
               >
                 {isRevealing ? null : revealedPersonalNumber ? (
-                  <EyeOff className="h-4 w-4" />
+                  <EyeSlashIcon className="h-4 w-4" />
                 ) : (
-                  <Eye className="h-4 w-4" />
+                  <EyeIcon className="h-4 w-4" />
                 )}
               </Button>
             )}

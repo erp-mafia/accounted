@@ -11,7 +11,7 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { Loader2, Lock } from 'lucide-react'
+import { LockClosedIcon, SpinnerIcon } from '@/components/icons'
 import { parseDateParts } from '@/lib/bookkeeping/validate-period-duration'
 import { validateFirstPeriod } from '@/components/bookkeeping/FiscalPeriodDateFields'
 import {
@@ -214,7 +214,7 @@ export function FiscalPeriodEditor() {
       <SettingsGroup label={t('fp_heading')} help={help}>
         {isLoading ? (
           <div className="flex items-center gap-2 px-1 py-3 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
             {t('fp_loading')}
           </div>
         ) : loadError ? (
@@ -319,7 +319,7 @@ function BlockedRow({ period }: { period: FiscalPeriod }) {
       }
       borderless
     >
-      <Lock aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+      <LockClosedIcon aria-hidden="true" className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
       <span className="tabular-nums">
         {t('fp_range', { start: formatSwedishDate(period.period_start), end: formatSwedishDate(period.period_end) })}
       </span>

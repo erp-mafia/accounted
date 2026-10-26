@@ -4,7 +4,17 @@ import { useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, ArrowRight, ArrowUpDown, PenLine, Briefcase, Check, Building2, ChevronDown, ChevronUp, Cloud, HardHat, Laptop, Megaphone, Plus, Shuffle, SlidersHorizontal, ShoppingCart, Stethoscope, UserRound, UtensilsCrossed, Store, Truck, Home, Tractor, Palette, GraduationCap, HeartHandshake, User, type LucideIcon } from 'lucide-react'
+import {
+  AdjustmentsHorizontalIcon,
+  ArrowLeftIcon,
+  ArrowRightIcon,
+  ArrowsUpDownIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  PencilSquareIcon,
+  PlusIcon,
+} from '@/components/icons'
 import type { AgentConnectionState, AgentsOverview } from '@/lib/agent-skills/agent-bundle'
 import type { RegistrySkillId } from '@/lib/agent-skills/registry'
 import { AI_CLIENTS, type AiClient } from '@/lib/onboarding/ai-clients'
@@ -39,27 +49,6 @@ const TOP = 6
 const CATEGORIES_SHOWN = 8
 
 /** A category's picture, by the industry or company-form pack it stands for. */
-const CATEGORY_ICONS: Record<string, LucideIcon> = {
-  'bygg-hantverk': HardHat,
-  'e-handel': ShoppingCart,
-  'konsult-it': Laptop,
-  'reklambyra-marknadsforing': Megaphone,
-  'restaurang-cafe': UtensilsCrossed,
-  'vard-halsa': Stethoscope,
-  'software-saas-ai': Cloud,
-  'holding-ab': Building2,
-  'mixed-verksamhet': Shuffle,
-  'single-shareholder-ab-fmb': UserRound,
-  'handel-butik': Store,
-  'transport-logistik': Truck,
-  fastighet: Home,
-  'jordbruk-skog': Tractor,
-  'kreativa-yrken': Palette,
-  utbildning: GraduationCap,
-  'ideell-forening': HeartHandshake,
-  'enskild-firma': User,
-}
-
 type Source = 'accounted' | 'community' | 'own'
 interface Item {
   key: string
@@ -228,7 +217,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
           {view === 'discover' && categories.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" size="icon-sm" aria-label={t('category_label')}><SlidersHorizontal className="h-4 w-4" aria-hidden /></Button>
+                <Button variant="outline" size="icon-sm" aria-label={t('category_label')}><AdjustmentsHorizontalIcon className="h-4 w-4" aria-hidden /></Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuLabel>{t('category_label')}</DropdownMenuLabel>
@@ -241,7 +230,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
           )}
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button variant="outline" size="icon-sm" aria-label={t('sort_label')}><ArrowUpDown className="h-4 w-4" aria-hidden /></Button>
+              <Button variant="outline" size="icon-sm" aria-label={t('sort_label')}><ArrowsUpDownIcon className="h-4 w-4" aria-hidden /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuLabel>{t('sort_label')}</DropdownMenuLabel>
@@ -253,7 +242,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
           </DropdownMenu>
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
-              <Button size="sm" className="gap-1.5" disabled={!canWrite}><Plus className="h-4 w-4" aria-hidden />{t('create_button')}<ChevronDown className="h-3.5 w-3.5" aria-hidden /></Button>
+              <Button size="sm" className="gap-1.5" disabled={!canWrite}><PlusIcon className="h-4 w-4" aria-hidden />{t('create_button')}<ChevronDownIcon className="h-3.5 w-3.5" aria-hidden /></Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem className="gap-2" onSelect={() => onCreate(kind)}>
@@ -261,7 +250,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
                 <img src={AI_CLIENTS.find((c) => c.id === client)!.logo} alt="" width={16} height={16} className={styles.btnLogo} />
                 {t('create_with', { client: clientName })}
               </DropdownMenuItem>
-              <DropdownMenuItem className="gap-2" onSelect={write}><PenLine className="h-4 w-4" aria-hidden />{t('create_manual')}</DropdownMenuItem>
+              <DropdownMenuItem className="gap-2" onSelect={write}><PencilSquareIcon className="h-4 w-4" aria-hidden />{t('create_manual')}</DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -287,7 +276,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
         <section className={styles.catSection}>
           <div className={styles.catHead}>
             <h2>{categoryName ?? (query ? t('search_results') : t(`all_${kind}`))}<span className={styles.catCount}>{listed.length}</span></h2>
-            <button type="button" className={styles.catLink} onClick={() => { setQ(''); go({ kategori: null }) }}><ArrowLeft className="h-4 w-4" aria-hidden />{t('back_overview')}</button>
+            <button type="button" className={styles.catLink} onClick={() => { setQ(''); go({ kategori: null }) }}><ArrowLeftIcon className="h-4 w-4" aria-hidden />{t('back_overview')}</button>
           </div>
           {listed.length === 0
             ? <div className={`${styles.placeEmpty} ${styles.shareInvite}`}>
@@ -307,7 +296,7 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
             <section className={styles.catSection}>
               <div className={styles.catHead}>
                 <h2>{t(`most_used_${kind}`)}</h2>
-                {rest.length > TOP && <button type="button" className={styles.catLink} onClick={() => setShowAll(true)}>{t('show_all')}<ArrowRight className="h-4 w-4" aria-hidden /></button>}
+                {rest.length > TOP && <button type="button" className={styles.catLink} onClick={() => setShowAll(true)}>{t('show_all')}<ArrowRightIcon className="h-4 w-4" aria-hidden /></button>}
               </div>
               {top.length === 0 ? (COMMUNITY_OPEN
                 ? <div className={styles.placeEmpty}>{t(`community_empty_${kind}`)}</div>
@@ -322,17 +311,15 @@ export function Catalog({ hrefBase, catalog, options, overview, usage, own, comp
                 {categories.length > CATEGORIES_SHOWN && (
                   <button type="button" className={styles.catLink} onClick={() => setAllCategories(!allCategories)}>
                     {t(allCategories ? 'show_fewer' : 'show_all_count', { count: categories.length })}
-                    {allCategories ? <ChevronUp className="h-4 w-4" aria-hidden /> : <ChevronDown className="h-4 w-4" aria-hidden />}
+                    {allCategories ? <ChevronUpIcon className="h-4 w-4" aria-hidden /> : <ChevronDownIcon className="h-4 w-4" aria-hidden />}
                   </button>
                 )}
               </div>
               <ul className={styles.categoryGrid}>
                 {(allCategories ? categories : categories.slice(0, CATEGORIES_SHOWN)).map((c) => {
-                  const Icon = CATEGORY_ICONS[c.id.split('/')[1] ?? ''] ?? Briefcase
                   return (
                     <li key={c.id}>
                       <button type="button" className={styles.categoryCard} onClick={() => go({ kategori: c.id })}>
-                        <span className={styles.categoryIcon}><Icon className="h-6 w-6" strokeWidth={1.5} aria-hidden /></span>
                         <span className={styles.categoryName}>{c.name}{c.id === companyIndustry && <small>{t('industry_yours')}</small>}</span>
                         <span className={styles.catCount}>{c.count}</span>
                       </button>
@@ -359,7 +346,7 @@ function CreateButtons({ client, canWrite, onCreate, onWrite }: { client: AiClie
         <img src={ai.logo} alt="" width={14} height={14} className={styles.btnLogo} />
         {t('create_with', { client: ai.name })}
       </Button>
-      <Button size="sm" variant="outline" className="gap-1.5" disabled={!canWrite} onClick={onWrite}><PenLine className="h-4 w-4" aria-hidden />{t('create_manual')}</Button>
+      <Button size="sm" variant="outline" className="gap-1.5" disabled={!canWrite} onClick={onWrite}><PencilSquareIcon className="h-4 w-4" aria-hidden />{t('create_manual')}</Button>
     </span>
   )
 }
@@ -434,7 +421,7 @@ function Featured({ item, industry, client, aiReady, overview }: { item: Item; i
           ))}
           {/* Knowledge does not start: it is read and given to flows on its own page, so say where to go. */}
           {item.kind === 'rules' && (
-            <Button asChild size="sm" variant="outline" className="gap-1.5"><Link href={item.href}>{t('featured_open_rules')}<ArrowRight className="h-4 w-4" aria-hidden /></Link></Button>
+            <Button asChild size="sm" variant="outline" className="gap-1.5"><Link href={item.href}>{t('featured_open_rules')}<ArrowRightIcon className="h-4 w-4" aria-hidden /></Link></Button>
           )}
           {item.connections && item.connections.length > 0 && (
             <span className={styles.featuredUses}>
@@ -460,7 +447,7 @@ function ConnectionBadge({ kind, state, clientName }: { kind: AgentConnection; s
   const label = status === 'in_ai' ? t('badge_in_ai', { conn: t(`conn_${kind}`), client: clientName })
     : status === 'connected' ? t('badge_connected', { conn: t(`conn_${kind}`) })
     : status === 'missing' ? t('badge_missing', { conn: t(`conn_${kind}`) }) : t(`conn_${kind}`)
-  const inner = <><span className={styles.appchip}><ConnectionMark kind={kind} /></span>{status === 'missing' && <small>{t('conn_missing')}</small>}{status === 'connected' && <Check className="h-3 w-3" aria-hidden />}</>
+  const inner = <><span className={styles.appchip}><ConnectionMark kind={kind} /></span>{status === 'missing' && <small>{t('conn_missing')}</small>}{status === 'connected' && <CheckIcon className="h-3 w-3" aria-hidden />}</>
   return status === 'missing' && state?.settings_href
     ? <Link href={state.settings_href} className={styles.connBadge} data-status={status} title={label} aria-label={label}>{inner}</Link>
     : <span className={styles.connBadge} data-status={status} title={label} aria-label={label} role="img">{inner}</span>

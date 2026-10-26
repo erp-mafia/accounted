@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useRef, useState, type DragE
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
 import { useToast } from '@/components/ui/use-toast'
@@ -641,7 +641,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                       <Button asChild variant="secondary" size="sm">
                         <a href={portalUrl} target="_blank" rel="noopener noreferrer">
                           {t('action_open_portal', { vendor: portal })}
-                          <ExternalLink aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
+                          <ArrowTopRightOnSquareIcon aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
                         </a>
                       </Button>
                       {missingContext.handoff && (

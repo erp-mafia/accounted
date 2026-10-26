@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { useAgentSheet } from './AgentSheetProvider'
 import { usePathname, useRouter } from 'next/navigation'
-import { Loader2, X } from 'lucide-react'
+import { SpinnerIcon, XMarkIcon } from '@/components/icons'
 import AgentAvatar from './AgentAvatar'
 import { collapsedStatusLabel } from './agent-status'
 import { routeToIntent } from '@/lib/agent/intents/route-mapping'
@@ -335,7 +335,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
           )}
         </span>
         {working && collapsed && (
-          <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
+          <SpinnerIcon className="h-3.5 w-3.5 shrink-0 animate-spin motion-reduce:animate-none" />
         )}
         <span className="text-sm font-medium truncate">{labelText}</span>
       </button>
@@ -346,7 +346,7 @@ export default function AgentTrigger({ hidden = false }: { hidden?: boolean }) {
           title={hasAi ? t('fab_hide') : undefined}
           className="flex items-center rounded-r-full pl-1 pr-3 text-background/70 hover:text-background hover:bg-background/10 transition-colors duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
         >
-          <X className="h-4 w-4" />
+          <XMarkIcon className="h-4 w-4" />
         </button>
       )}
     </div>

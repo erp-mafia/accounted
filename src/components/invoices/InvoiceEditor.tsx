@@ -6,7 +6,7 @@ import { usePathname, useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { createClient } from '@/lib/supabase/client'
 import { useForm, useFieldArray, Controller, type FieldErrors } from 'react-hook-form'
-import { Reorder } from 'framer-motion'
+import { Reorder } from 'motion/react'
 import { SortableRow } from '@/components/ui/sortable-row'
 import { AutoGrowTextarea } from '@/components/invoices/AutoGrowTextarea'
 import { zodResolver } from '@hookform/resolvers/zod'
@@ -61,7 +61,19 @@ import ArticleCombobox from '@/components/invoices/ArticleCombobox'
 import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { computeLineNet, computeLineVat, hasLineDiscount } from '@/lib/bookkeeping/invoice-line-amounts'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { ChevronDown, Loader2, X, Landmark, MoreVertical, CalendarClock, Tags, Package, Percent, Plus, Trash2 } from 'lucide-react'
+import {
+  BuildingLibraryIcon,
+  CalendarDaysIcon,
+  ChevronDownIcon,
+  CubeIcon,
+  EllipsisVerticalIcon,
+  HashtagIcon,
+  PercentBadgeIcon,
+  PlusIcon,
+  SpinnerIcon,
+  TrashIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -967,7 +979,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     name: 'items',
   })
 
-  // Drag-to-reorder (grip handle left of each row). framer-motion hands back
+  // Drag-to-reorder (grip handle left of each row). Motion hands back
   // the fully reordered array; we translate the single displacement into a
   // react-hook-form move() so the registered inputs follow. The persisted
   // sort_order is the array index at create time, so reordering here is all
@@ -4238,7 +4250,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                     onClick={() => remove(index)}
                                     aria-label={removeLabel}
                                   >
-                                    <X className="h-4 w-4" />
+                                    <XMarkIcon className="h-4 w-4" />
                                   </button>
                                 </span>
                               </div>
@@ -4470,7 +4482,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                           : item?.deduction_type === 'gron_teknik'
                                             ? tForm('deduction_short_gron')
                                             : tForm('deduction_short_none')}
-                                      <ChevronDown className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                                      <ChevronDownIcon className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                                     </button>
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end">
@@ -4501,12 +4513,12 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                 <DropdownMenu>
                                   <DropdownMenuTrigger asChild>
                                     <button type="button" className={ROW_ICON_BUTTON_CLASS} aria-label={t('row_actions_aria')}>
-                                      <MoreVertical className="h-4 w-4" />
+                                      <EllipsisVerticalIcon className="h-4 w-4" />
                                     </button>
                                   </DropdownMenuTrigger>
                                   <DropdownMenuContent align="end" className="min-w-56">
                                     <DropdownMenuItem onSelect={() => toggleArticlePicker(index)} className="py-2">
-                                      <Package className="h-4 w-4" />
+                                      <CubeIcon className="h-4 w-4" />
                                       {t('row_menu_pick_article')}
                                     </DropdownMenuItem>
                                     {canSaveAsArticle && (
@@ -4515,7 +4527,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                         disabled={savingArticleIndex === index}
                                         className="py-2"
                                       >
-                                        <Plus className="h-4 w-4" />
+                                        <PlusIcon className="h-4 w-4" />
                                         {t('save_as_article')}
                                       </DropdownMenuItem>
                                     )}
@@ -4523,7 +4535,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onSelect={() => toggleDiscount(index)} className="py-2">
-                                          <Percent className="h-4 w-4" />
+                                          <PercentBadgeIcon className="h-4 w-4" />
                                           {discountRows.has(index) || hasLineDiscount(item?.discount_percent)
                                             ? t('row_menu_remove_discount')
                                             : t('row_menu_add_discount')}
@@ -4556,7 +4568,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onSelect={() => toggleAccrual(index)} className="py-2">
-                                          <CalendarClock className="h-4 w-4" />
+                                          <CalendarDaysIcon className="h-4 w-4" />
                                           {item?.accrual_balance_account != null
                                             ? ta('row_menu_remove')
                                             : ta('row_menu_add')}
@@ -4567,7 +4579,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onSelect={() => toggleAccountOverride(index)} className="py-2">
-                                          <Landmark className="h-4 w-4" />
+                                          <BuildingLibraryIcon className="h-4 w-4" />
                                           {(accountOverrideRows.has(index) || item?.revenue_account)
                                             ? t('row_menu_remove_account')
                                             : t('row_menu_set_account')}
@@ -4578,7 +4590,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       <>
                                         <DropdownMenuSeparator />
                                         <DropdownMenuItem onSelect={() => toggleItemDimensions(index)} className="py-2">
-                                          <Tags className="h-4 w-4" />
+                                          <HashtagIcon className="h-4 w-4" />
                                           {(dimensionOverrideRows.has(index) || hasDimensionValues(item?.dimensions))
                                             ? t('row_menu_remove_dimensions')
                                             : t('row_menu_set_dimensions')}
@@ -4591,7 +4603,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                       className="py-2 text-destructive focus:text-destructive"
                                       aria-label={removeLabel}
                                     >
-                                      <Trash2 className="h-4 w-4" />
+                                      <TrashIcon className="h-4 w-4" />
                                       {tForm('row_menu_remove_row')}
                                     </DropdownMenuItem>
                                   </DropdownMenuContent>
@@ -4601,10 +4613,10 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
 
                             {rowErrorMsg && <p className="px-2 pb-2 text-xs text-destructive">{rowErrorMsg}</p>}
                             {savingArticleIndex === index && (
-                              <p className="flex items-center gap-1 px-2 pb-2 text-xs text-muted-foreground">
-                                <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
+                              <div className="flex items-center gap-1 px-2 pb-2 text-xs text-muted-foreground">
+                                <SpinnerIcon className="h-3 w-3 animate-spin" aria-hidden="true" />
                                 {t('save_as_article')}
-                              </p>
+                              </div>
                             )}
 
                             {/* Article re-link strip (row ⋮ menu): article
@@ -4876,7 +4888,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                           }}
                         >
                           st
-                          <ChevronDown className="h-3 w-3 shrink-0" aria-hidden="true" />
+                          <ChevronDownIcon className="h-3 w-3 shrink-0" aria-hidden="true" />
                         </button>
                       </div>
                       <button

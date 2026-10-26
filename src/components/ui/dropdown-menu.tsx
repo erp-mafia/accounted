@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import * as DropdownMenuPrimitive from "@radix-ui/react-dropdown-menu"
-import { Check } from "lucide-react"
+import { CheckIcon } from '@/components/icons'
 import { cn } from "@/lib/utils"
 import { POPOVER_SURFACE_CLASS, RADIX_POPOVER_MOTION_CLASS } from "@/components/ui/popover-surface"
 
@@ -63,7 +63,7 @@ const DropdownMenuRadioItem = React.forwardRef<
   >
     <span className="absolute left-2 flex h-3.5 w-3.5 items-center justify-center">
       <DropdownMenuPrimitive.ItemIndicator>
-        <Check className="h-3.5 w-3.5 text-primary" strokeWidth={2.5} />
+        <CheckIcon className="h-3.5 w-3.5 text-primary" strokeWidth={2} />
       </DropdownMenuPrimitive.ItemIndicator>
     </span>
     {children}

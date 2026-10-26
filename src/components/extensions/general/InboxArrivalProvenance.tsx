@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Download } from 'lucide-react'
+import { ArrowDownTrayIcon } from '@/components/icons'
 import type { ArrivalSummary } from '@/lib/intake/arrivals'
 import {
   formatOriginalSize,
@@ -284,7 +284,7 @@ function OriginalLink({ url, fileName, children }: { url: string; fileName?: str
   return (
     <Button variant="outline" size="sm" asChild>
       <a href={url} download={fileName ?? true} rel="noopener noreferrer">
-        <Download className="h-3.5 w-3.5 mr-2" />
+        <ArrowDownTrayIcon className="h-3.5 w-3.5 mr-2" />
         {children}
       </a>
     </Button>

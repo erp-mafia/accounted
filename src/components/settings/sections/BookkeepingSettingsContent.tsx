@@ -24,7 +24,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
 import { useCompany } from '@/contexts/CompanyContext'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import type { AccountingFramework, CompanySettings } from '@/types'
 
 import { isEntityType, preparesArsredovisning, supportsAccountingFramework } from '@/lib/company/entity-type'
@@ -222,7 +222,7 @@ export function BookkeepingSettingsContent() {
             href="/bookkeeping/year-end/periodisering"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             {t('periodisering_open_wizard')}
           </Link>
         </SettingsRow>
@@ -237,7 +237,7 @@ export function BookkeepingSettingsContent() {
             href="/chart-of-accounts"
             className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            <ExternalLink className="h-3.5 w-3.5" />
+            <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
             {t('related_chart_of_accounts')}
           </Link>
         </SettingsRow>

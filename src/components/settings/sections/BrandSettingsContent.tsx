@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations, useLocale } from 'next-intl'
-import { Loader2, Palette, Trash2, Upload } from 'lucide-react'
+import { ArrowUpTrayIcon, SpinnerIcon, SwatchIcon, TrashIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '@/components/ui/empty-state'
 import { useToast } from '@/components/ui/use-toast'
@@ -165,7 +165,7 @@ export function BrandSettingsContent() {
   if (!brand.hasBrand) {
     return (
       <EmptyState
-        icon={Palette}
+        icon={SwatchIcon}
         title={t('empty_title')}
         description={t('empty_description')}
       />
@@ -203,7 +203,7 @@ export function BrandSettingsContent() {
                   loading={isDeleting}
                   className="text-muted-foreground hover:text-destructive"
                 >
-                  {!isDeleting && <Trash2 className="mr-2 h-3.5 w-3.5" />}
+                  {!isDeleting && <TrashIcon className="mr-2 h-3.5 w-3.5" />}
                   {t('logo_remove')}
                 </Button>
               </>
@@ -223,9 +223,9 @@ export function BrandSettingsContent() {
             }`}
           >
             {isUploading ? (
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
             ) : (
-              <Upload className="h-4 w-4 text-muted-foreground/60" />
+              <ArrowUpTrayIcon className="h-4 w-4 text-muted-foreground/60" />
             )}
             {isUploading ? t('logo_uploading') : t('logo_pick_or_drop')}
           </button>

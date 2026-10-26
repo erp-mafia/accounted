@@ -1,22 +1,22 @@
 'use client'
 
 import {
-  ArrowLeftRight,
-  AtSign,
-  Building2,
-  FileCode2,
-  FileSpreadsheet,
-  Globe,
-  Landmark,
-  Mail,
-  Mailbox,
-  MessageCircle,
-  Plug,
-  Sparkles,
-  Upload,
-  Wallet,
-  type LucideIcon,
-} from 'lucide-react'
+  ArrowUpTrayIcon,
+  ArrowsRightLeftIcon,
+  AtSymbolIcon,
+  BuildingLibraryIcon,
+  BuildingOfficeIcon,
+  ChatBubbleOvalLeftIcon,
+  CodeBracketSquareIcon,
+  EnvelopeIcon,
+  GlobeAltIcon,
+  InboxArrowDownIcon,
+  LinkIcon,
+  SparklesIcon,
+  TableCellsIcon,
+  WalletIcon,
+  type Icon as AppIcon,
+} from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { BrandMark, GlyphMark } from '@/components/parties/BrandMark'
 import type { IntakeSourceId } from '@/lib/intake/sources'
@@ -26,24 +26,24 @@ import type { VendorKey } from '@/lib/vendor-marks'
 /** A connected mailbox's provider (channel_context.mail_provider), when the items say. */
 export type MailProvider = 'gmail' | 'microsoft' | null
 
-/** One quiet Lucide glyph per door, for the places that stay text-only. */
-const DOOR_ICON: Record<IntakeSourceId, LucideIcon> = {
-  intake_email: AtSign,
-  mailbox: Mail,
-  whatsapp: MessageCircle,
-  upload: Upload,
-  peppol: FileCode2,
-  partner_api: Plug,
-  mcp: Sparkles,
-  migration: ArrowLeftRight,
-  system: Building2,
-  bank_feed: Landmark,
-  bank_file: FileSpreadsheet,
-  sie: FileSpreadsheet,
-  billo: Mailbox,
-  kivra: Mailbox,
-  paypal: Wallet,
-  portal: Globe,
+/** One quiet glyph per door, for the places that stay text-only. */
+const DOOR_ICON: Record<IntakeSourceId, AppIcon> = {
+  intake_email: AtSymbolIcon,
+  mailbox: EnvelopeIcon,
+  whatsapp: ChatBubbleOvalLeftIcon,
+  upload: ArrowUpTrayIcon,
+  peppol: CodeBracketSquareIcon,
+  partner_api: LinkIcon,
+  mcp: SparklesIcon,
+  migration: ArrowsRightLeftIcon,
+  system: BuildingOfficeIcon,
+  bank_feed: BuildingLibraryIcon,
+  bank_file: TableCellsIcon,
+  sie: TableCellsIcon,
+  billo: InboxArrowDownIcon,
+  kivra: InboxArrowDownIcon,
+  paypal: WalletIcon,
+  portal: GlobeAltIcon,
 }
 
 export function DoorIcon({ door, className }: { door: IntakeSourceId; className?: string }) {
@@ -77,8 +77,8 @@ const DOOR_ICON_URL: Partial<Record<IntakeSourceId, string>> = {
   billo: '/logos/billo.png',
 }
 
-const DOOR_GLYPH: Partial<Record<IntakeSourceId, LucideIcon>> = {
-  intake_email: Mail,
+const DOOR_GLYPH: Partial<Record<IntakeSourceId, AppIcon>> = {
+  intake_email: EnvelopeIcon,
 }
 
 export function DoorMark({
@@ -101,7 +101,7 @@ export function DoorMark({
   const glyph = Math.round(size * 0.5)
   return (
     <GlyphMark size={size} className={className}>
-      <Icon aria-hidden="true" style={{ width: glyph, height: glyph }} strokeWidth={1.75} />
+      <Icon aria-hidden="true" style={{ width: glyph, height: glyph }} strokeWidth={1.25} />
     </GlyphMark>
   )
 }

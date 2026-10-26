@@ -1,6 +1,6 @@
 'use client'
 
-import { Check } from 'lucide-react'
+import { CheckIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 /**
@@ -83,7 +83,7 @@ export function StepRail({
                         : 'border-border text-muted-foreground',
                   )}
                 >
-                  {step.state === 'done' ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : i + 1}
+                  {step.state === 'done' ? <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" /> : i + 1}
                 </span>
                 <span className="leading-tight">
                   <span

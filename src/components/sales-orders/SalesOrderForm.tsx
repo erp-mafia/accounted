@@ -3,7 +3,7 @@
 import { Fragment, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { Plus, Tags, Trash2 } from 'lucide-react'
+import { HashtagIcon, PlusIcon, TrashIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -638,7 +638,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
                             title={t('row_dimensions_title')}
                             className={dimsOpen ? 'text-foreground' : 'text-muted-foreground'}
                           >
-                            <Tags className="h-4 w-4" />
+                            <HashtagIcon className="h-4 w-4" />
                           </Button>
                         )}
                         <Button
@@ -650,7 +650,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
                           aria-label={t('remove_row')}
                           className="text-muted-foreground hover:text-destructive"
                         >
-                          <Trash2 className="h-4 w-4" />
+                          <TrashIcon className="h-4 w-4" />
                         </Button>
                       </span>
                     </td>
@@ -692,7 +692,7 @@ export default function SalesOrderForm({ mode, initial }: SalesOrderFormProps) {
             size="sm"
             onClick={() => setLines((prev) => [...prev, blankProductLine(vatPlan.defaultRate)])}
           >
-            <Plus className="mr-2 h-4 w-4" />
+            <PlusIcon className="mr-2 h-4 w-4" />
             {t('add_row')}
           </Button>
           <Button

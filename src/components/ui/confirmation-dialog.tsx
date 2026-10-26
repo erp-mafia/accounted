@@ -12,7 +12,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { ClipboardCheck } from 'lucide-react'
+import { ClipboardDocumentCheckIcon } from '@/components/icons'
 
 interface ConfirmationDialogProps {
   open: boolean
@@ -66,7 +66,7 @@ export function ConfirmationDialog({
         <DialogHeader className="px-4 sm:px-6 pt-4 sm:pt-6 pb-3 sm:pb-4 shrink-0">
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 shrink-0">
-              <ClipboardCheck className="h-5 w-5 text-primary" />
+              <ClipboardDocumentCheckIcon className="h-5 w-5 text-primary" />
             </div>
             <div>
               {/* data-ph-mask on the title: confirm dialogs describe the

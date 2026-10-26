@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertCircle, Palmtree } from 'lucide-react'
+import { ExclamationCircleIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -83,7 +83,7 @@ export function SemesterskuldView({ periodId }: { periodId: string }) {
     return (
       <Card>
         <CardContent className="p-8 text-center text-destructive">
-          <AlertCircle className="h-6 w-6 mx-auto mb-2" />
+          <ExclamationCircleIcon className="h-6 w-6 mx-auto mb-2" />
           {error}
         </CardContent>
       </Card>
@@ -97,7 +97,7 @@ export function SemesterskuldView({ periodId }: { periodId: string }) {
   const hasDifference = !!check && (check.difference2920 !== 0 || check.difference2940 !== 0)
 
   if (data.rows.length === 0 && totals.totalLiability === 0 && (!check || !hasDifference)) {
-    return <EmptyState icon={Palmtree} title={t('ss_empty_title')} description={t('ss_empty_desc')} />
+    return <EmptyState title={t('ss_empty_title')} description={t('ss_empty_desc')} />
   }
 
   return (

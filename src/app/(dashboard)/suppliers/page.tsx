@@ -14,7 +14,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { TH_CLASS, TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter } from '@/components/ui/dry-table'
 import { RegisterActionsMenu } from '@/components/import/RegisterActionsMenu'
 import { useToast } from '@/components/ui/use-toast'
-import { Plus, Lock, Truck } from 'lucide-react'
+import { LockClosedIcon, PlusIcon, TruckIcon } from '@/components/icons'
 import Link from 'next/link'
 import { cn } from '@/lib/utils'
 import { formatOrgNumberDisplay, stripOrgNumberFormatting } from '@/lib/invariants/org-number'
@@ -142,9 +142,9 @@ export default function SuppliersPage() {
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? (
-                  <Plus className="mr-2 h-4 w-4" />
+                  <PlusIcon className="mr-2 h-4 w-4" />
                 ) : (
-                  <Lock className="mr-2 h-4 w-4" />
+                  <LockClosedIcon className="mr-2 h-4 w-4" />
                 )}
                 {t('new_supplier')}
               </Button>
@@ -183,13 +183,13 @@ export default function SuppliersPage() {
       ) : filteredSuppliers.length === 0 ? (
         searchTerm ? (
           <EmptyState
-            icon={Truck}
+            icon={TruckIcon}
             title={t('no_search_results_title')}
             description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : (
           <EmptyState
-            icon={Truck}
+            icon={TruckIcon}
             title={t('empty_title')}
             description={t('empty_description')}
             actionLabel={canWrite ? t('new_supplier') : undefined}

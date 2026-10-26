@@ -13,18 +13,18 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { canOfferSplitMatch } from '@/lib/transactions/split-match'
 import {
-  AlertCircle,
-  ArrowRightLeft,
-  EyeOff,
-  FileSearch,
-  Link2,
-  MoreHorizontal,
-  Paperclip,
-  Pencil,
-  Split,
-  Trash2,
-  Unlink,
-} from 'lucide-react'
+  ArrowsRightLeftIcon,
+  DocumentMagnifyingGlassIcon,
+  EllipsisHorizontalIcon,
+  ExclamationCircleIcon,
+  EyeSlashIcon,
+  LinkIcon,
+  LinkSlashIcon,
+  PaperClipIcon,
+  PencilIcon,
+  ScissorsIcon,
+  TrashIcon,
+} from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -340,22 +340,22 @@ export default function TransactionInboxCard({
   // the same list, in the same order, from one place.
   const overflowItems: DrawerAction[] = []
   if (showInvoiceMatchButton)
-    overflowItems.push({ key: 'invoice', label: invoiceMatchLabel, icon: Link2, onSelect: () => onOpenMatchInvoicePicker(transaction) })
+    overflowItems.push({ key: 'invoice', label: invoiceMatchLabel, icon: LinkIcon, onSelect: () => onOpenMatchInvoicePicker(transaction) })
   if (showMatchVoucherItem)
-    overflowItems.push({ key: 'voucher', label: t('match_voucher_btn'), icon: FileSearch, onSelect: () => onOpenMatchVoucher!(transaction) })
+    overflowItems.push({ key: 'voucher', label: t('match_voucher_btn'), icon: DocumentMagnifyingGlassIcon, onSelect: () => onOpenMatchVoucher!(transaction) })
   if (showMatchExpenseItem)
-    overflowItems.push({ key: 'expense', label: t('match_expense_btn'), icon: FileSearch, onSelect: () => onOpenMatchExpense!(transaction) })
+    overflowItems.push({ key: 'expense', label: t('match_expense_btn'), icon: DocumentMagnifyingGlassIcon, onSelect: () => onOpenMatchExpense!(transaction) })
   if (showAttachDocumentItem)
-    overflowItems.push({ key: 'attach', label: t('attach_document_btn'), icon: Paperclip, onSelect: () => onOpenAttachDocument!(transaction) })
+    overflowItems.push({ key: 'attach', label: t('attach_document_btn'), icon: PaperClipIcon, onSelect: () => onOpenAttachDocument!(transaction) })
   if (showDetachDocumentItem)
-    overflowItems.push({ key: 'detach', label: tDetach('menu_item'), icon: Unlink, onSelect: () => onDetachDocument!(transaction) })
-  if (showSplitItem) overflowItems.push({ key: 'split', label: splitMatchLabel, icon: Split, onSelect: () => onOpenSplitMatch!(transaction) })
-  if (showEditItem) overflowItems.push({ key: 'edit', label: t('edit_title_aria'), icon: Pencil, onSelect: () => onEditTitle!(transaction) })
+    overflowItems.push({ key: 'detach', label: tDetach('menu_item'), icon: LinkSlashIcon, onSelect: () => onDetachDocument!(transaction) })
+  if (showSplitItem) overflowItems.push({ key: 'split', label: splitMatchLabel, icon: ScissorsIcon, onSelect: () => onOpenSplitMatch!(transaction) })
+  if (showEditItem) overflowItems.push({ key: 'edit', label: t('edit_title_aria'), icon: PencilIcon, onSelect: () => onEditTitle!(transaction) })
   if (showMoveAccountItem)
-    overflowItems.push({ key: 'move', label: t('move_account_btn'), icon: ArrowRightLeft, onSelect: () => onMoveCashAccount!(transaction) })
+    overflowItems.push({ key: 'move', label: t('move_account_btn'), icon: ArrowsRightLeftIcon, onSelect: () => onMoveCashAccount!(transaction) })
   const dangerItems: DrawerAction[] = []
-  if (showIgnoreItem) dangerItems.push({ key: 'ignore', label: t('ignore_btn'), icon: EyeOff, onSelect: () => onIgnore!(transaction) })
-  if (showDeleteItem) dangerItems.push({ key: 'delete', label: t('delete_aria'), icon: Trash2, onSelect: () => onDelete!(transaction.id), destructive: true })
+  if (showIgnoreItem) dangerItems.push({ key: 'ignore', label: t('ignore_btn'), icon: EyeSlashIcon, onSelect: () => onIgnore!(transaction) })
+  if (showDeleteItem) dangerItems.push({ key: 'delete', label: t('delete_aria'), icon: TrashIcon, onSelect: () => onDelete!(transaction.id), destructive: true })
   const showDangerSeparator =
     (showIgnoreItem || showDeleteItem) && (showMatchVoucherItem || showAttachDocumentItem || showSplitItem || showEditItem || showMoveAccountItem)
 
@@ -451,7 +451,7 @@ export default function TransactionInboxCard({
             )}
             {skvCounterpartDate && (
               <Badge variant="warning" className="hidden h-4 shrink-0 gap-1 px-1.5 py-0 text-[11px] md:inline-flex">
-                <AlertCircle className="h-3 w-3" />
+                <ExclamationCircleIcon className="h-3 w-3" />
                 Möjlig bank↔skattekonto
               </Badge>
             )}
@@ -547,7 +547,7 @@ export default function TransactionInboxCard({
                     title={t('more_actions_aria')}
                     disabled={isProcessing || isDisabled}
                   >
-                    <MoreHorizontal className="h-4 w-4" />
+                    <EllipsisHorizontalIcon className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[14rem]">

@@ -2,7 +2,7 @@
 
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import {
   POPOVER_ENTER_CLASS,
@@ -406,7 +406,7 @@ export default function AccountCombobox({ value, accounts, onChange, onCommit, o
             onCreateAccount(search.trim())
           }}
         >
-          <Plus className="h-3.5 w-3.5 shrink-0" />
+          <PlusIcon className="h-3.5 w-3.5 shrink-0" />
           <span className="truncate">Skapa konto &quot;{search.trim()}&quot;</span>
         </button>
       )}

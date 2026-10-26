@@ -21,7 +21,15 @@ import {
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { FileDown, Plus, ExternalLink, Save, CheckCircle2, Trash2, Upload } from 'lucide-react'
+import {
+  ArrowDownOnSquareIcon,
+  ArrowTopRightOnSquareIcon,
+  ArrowUpTrayIcon,
+  CheckCircleIcon,
+  DocumentArrowDownIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency } from '@/lib/utils'
 import { FyPicker } from '@/components/common/FyPicker'
@@ -1433,7 +1441,7 @@ export default function ArsredovisningPage() {
                     <span>Ändringar sparas inte automatiskt.</span>
                   ) : narrativeRevision ? (
                     <span className="inline-flex items-center gap-1 text-success">
-                      <CheckCircle2 className="h-3.5 w-3.5" /> Sparat
+                      <CheckCircleIcon className="h-3.5 w-3.5" /> Sparat
                     </span>
                   ) : (
                     <span>Alla ändringar är sparade.</span>
@@ -1449,7 +1457,7 @@ export default function ArsredovisningPage() {
                     'Sparar…'
                   ) : (
                     <>
-                      <Save className="mr-2 h-4 w-4" /> Spara texten
+                      <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" /> Spara texten
                     </>
                   )}
                 </Button>
@@ -1480,7 +1488,7 @@ export default function ArsredovisningPage() {
                       aria-label={tStudio('remove_signer')}
                       onClick={() => void handleRemoveSigner(sig.id)}
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <TrashIcon className="h-4 w-4" />
                     </Button>
                   )}
                 </div>
@@ -1521,7 +1529,7 @@ export default function ArsredovisningPage() {
                 onClick={handleAddSigner}
                 disabled={!signerName.trim()}
               >
-                <Plus className="mr-1 h-4 w-4" /> Lägg till
+                <PlusIcon className="mr-1 h-4 w-4" /> Lägg till
               </Button>
             </div>
           </div>
@@ -1667,7 +1675,7 @@ export default function ArsredovisningPage() {
                   disabled={!hasLockedVersion}
                   loading={uploadingEvidence}
                 >
-                  {!uploadingEvidence && <Upload className="mr-2 h-4 w-4" />}
+                  {!uploadingEvidence && <ArrowUpTrayIcon className="mr-2 h-4 w-4" />}
                   {uploadingEvidence
                     ? tSteps('signature_document_uploading')
                     : tSteps('signature_document_upload')}
@@ -1792,7 +1800,7 @@ export default function ArsredovisningPage() {
               disabled={!hasUnsavedNarrative}
               loading={savingNarrative}
             >
-              {!savingNarrative && <Save className="mr-2 h-4 w-4" />}
+              {!savingNarrative && <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" />}
               {tSteps('save_agm')}
             </Button>
           </div>
@@ -1811,7 +1819,7 @@ export default function ArsredovisningPage() {
           <div className="flex flex-wrap gap-3">
             <Button variant="outline" asChild>
               <Link href={pdfUrl} target="_blank" rel="noopener noreferrer">
-                <FileDown className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
+                <DocumentArrowDownIcon className="mr-2 h-4 w-4" /> Ladda ner PDF (utkast)
               </Link>
             </Button>
             {/* Bolagsverket-delarna blurras tills integrationen är godkänd:
@@ -1831,7 +1839,7 @@ export default function ArsredovisningPage() {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  <ExternalLink className="mr-2 h-4 w-4" /> Bolagsverket om årsredovisning
+                  <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> Bolagsverket om årsredovisning
                 </Link>
               </Button>
             </span>

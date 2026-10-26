@@ -1,4 +1,4 @@
-import { Puzzle } from 'lucide-react'
+import { PuzzlePieceIcon } from '@/components/icons'
 
 interface EmptyExtensionStateProps {
   title?: string
@@ -13,7 +13,7 @@ export default function EmptyExtensionState({
 }: EmptyExtensionStateProps) {
   return (
     <div className="flex flex-col items-center justify-center py-16 text-center">
-      {icon ?? <Puzzle className="h-12 w-12 text-muted-foreground/40 mb-4" />}
+      {icon ?? <PuzzlePieceIcon className="h-12 w-12 text-muted-foreground/40 mb-4" />}
       <h3 className="text-lg text-foreground">{title}</h3>
       <p className="text-sm text-muted-foreground mt-1 max-w-md">{description}</p>
     </div>

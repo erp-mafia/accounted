@@ -10,7 +10,7 @@ import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatAmount, formatDate } from '@/lib/utils'
 import SupplierForm from '@/components/suppliers/SupplierForm'
@@ -220,7 +220,7 @@ export default function SupplierDetailPage() {
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
               {t('edit')}
             </Button>
             <Button
@@ -231,7 +231,7 @@ export default function SupplierDetailPage() {
               disabled={!canWrite}
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
-              {!canWrite && <Lock className="h-4 w-4 mr-1" />}
+              {!canWrite && <LockClosedIcon className="h-4 w-4 mr-1" />}
               {t('delete')}
             </Button>
           </div>

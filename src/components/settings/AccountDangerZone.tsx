@@ -17,7 +17,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { RetentionNotice } from '@/components/ui/retention-notice'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { SupportLink } from '@/components/ui/support-link'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -230,7 +230,7 @@ export function AccountDangerZone() {
           <SettingsRowEnd>
             <Button variant="outline" size="sm" asChild>
               <Link href="/reports?type=sie">
-                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {t('export_sie')}
               </Link>
             </Button>

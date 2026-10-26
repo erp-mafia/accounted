@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations, useLocale } from 'next-intl'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import type { BillingPlan } from '@/lib/stripe/client'
@@ -93,7 +93,7 @@ export function BillingActions({
       className={cn('w-full sm:w-auto', className)}
     >
       {label}
-      {!loading && <ChevronRight className="h-4 w-4" />}
+      {!loading && <ChevronRightIcon className="h-4 w-4" />}
     </Button>
   )
 }

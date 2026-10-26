@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -107,7 +107,7 @@ export function EditorEmailPreview({
                 className={cn(QUIET_LINK_CLASS, 'inline-flex items-center gap-1')}
                 onClick={() => setCopiesOpen(true)}
               >
-                <Plus className="h-3.5 w-3.5" aria-hidden="true" />
+                <PlusIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 {t('email_add_copy')}
               </button>
             )}

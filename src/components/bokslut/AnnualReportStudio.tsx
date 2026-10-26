@@ -2,7 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { AlertCircle, CheckCircle2, FileClock, LockKeyhole, Save } from 'lucide-react'
+import {
+  ArrowDownOnSquareIcon,
+  CheckCircleIcon,
+  DocumentIcon,
+  ExclamationCircleIcon,
+  LockClosedIcon,
+} from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -90,7 +96,7 @@ function IssueList({ issues }: { issues: AnnualReportComplianceIssue[] }) {
     <ul className="space-y-3">
       {issues.map((issue, index) => (
         <li key={`${issue.code}-${index}`} className="flex gap-3 text-sm">
-          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+          <ExclamationCircleIcon className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
           <div>
             <p>{issue.message}</p>
             {issue.remediation && <p className="mt-1 text-xs text-muted-foreground">{issue.remediation}</p>}
@@ -538,7 +544,7 @@ export function AnnualReportStudio({
 
               <div className="flex justify-end">
                 <Button variant={variantFor('save_scope')} onClick={() => void saveProfile()} loading={saving}>
-                  {!saving && <Save className="mr-2 h-4 w-4" />}
+                  {!saving && <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" />}
                   {t('save_scope')}
                 </Button>
               </div>
@@ -559,7 +565,7 @@ export function AnnualReportStudio({
                 onClick={() => void confirmNarrative()}
                 disabled={saving || hasUnsavedNarrative || Boolean(profile.narrative_confirmed_at)}
               >
-                <CheckCircle2 className="mr-2 h-4 w-4" />
+                <CheckCircleIcon className="mr-2 h-4 w-4" />
                 {profile.narrative_confirmed_at ? t('content_confirmed') : t('confirm_content')}
               </Button>
             </div>
@@ -579,7 +585,7 @@ export function AnnualReportStudio({
                 onClick={() => void confirmSignerRoster()}
                 disabled={saving || Boolean(profile.signer_roster_confirmed_at)}
               >
-                <CheckCircle2 className="mr-2 h-4 w-4" />
+                <CheckCircleIcon className="mr-2 h-4 w-4" />
                 {profile.signer_roster_confirmed_at
                   ? t('signer_roster_confirmed')
                   : t('confirm_signer_roster')}
@@ -597,7 +603,7 @@ export function AnnualReportStudio({
           <div className="space-y-4 px-1 pt-2">
             {blockingIssues.length === 0 ? (
               <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                <CheckCircle2 className="h-4 w-4" /> {t('no_blockers')}
+                <CheckCircleIcon className="h-4 w-4" /> {t('no_blockers')}
               </div>
             ) : (
               <IssueList issues={issuesFor('lock')} />
@@ -629,7 +635,7 @@ export function AnnualReportStudio({
                   disabled={creatingVersion !== null}
                   loading={creatingVersion === 'snapshot'}
                 >
-                  {creatingVersion !== 'snapshot' && <FileClock className="mr-2 h-4 w-4" />}
+                  {creatingVersion !== 'snapshot' && <DocumentIcon className="mr-2 h-4 w-4" />}
                   {t('create_snapshot')}
                 </Button>
               </div>
@@ -652,7 +658,7 @@ export function AnnualReportStudio({
                   disabled={creatingVersion !== null || blockingIssues.length > 0 || hasUnsavedNarrative}
                   loading={creatingVersion === 'finalize'}
                 >
-                  {creatingVersion !== 'finalize' && <LockKeyhole className="mr-2 h-4 w-4" />}
+                  {creatingVersion !== 'finalize' && <LockClosedIcon className="mr-2 h-4 w-4" />}
                   {t('lock_version')}
                 </Button>
               </div>

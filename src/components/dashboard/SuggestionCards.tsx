@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Lightbulb, MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon, LightBulbIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -109,7 +109,7 @@ export function SuggestionCards({
             className="flex items-center gap-3 border-b border-border px-1 py-3.5"
           >
             <span className="w-[18px] shrink-0 text-muted-foreground" aria-hidden>
-              <Lightbulb className="h-[15px] w-[15px]" />
+              <LightBulbIcon className="h-[15px] w-[15px]" />
             </span>
             <p id={titleId} className="min-w-0 flex-1 text-[13px]">
               {s.reason ? (
@@ -151,7 +151,7 @@ export function SuggestionCards({
                   disabled={working}
                   aria-label={tCommon('more_options')}
                 >
-                  <MoreHorizontal className="h-4 w-4" />
+                  <EllipsisHorizontalIcon className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

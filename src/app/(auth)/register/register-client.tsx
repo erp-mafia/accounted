@@ -11,7 +11,14 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, Mail, ArrowLeft, ExternalLink, Eye, EyeOff } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  ArrowTopRightOnSquareIcon,
+  CheckIcon,
+  EnvelopeIcon,
+  EyeIcon,
+  EyeSlashIcon,
+} from '@/components/icons'
 import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
@@ -487,7 +494,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <Mail className="h-7 w-7 text-primary" />
+              <EnvelopeIcon className="h-7 w-7 text-primary" />
             </div>
           </div>
 
@@ -510,7 +517,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
             <Button className="w-full" asChild>
               <a href={canonicalRegisterHref}>
                 {t('invite_only_cta')}
-                <ExternalLink className="ml-2 h-4 w-4" />
+                <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
               </a>
             </Button>
             <Button
@@ -518,7 +525,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               className="w-full text-muted-foreground"
               onClick={() => setInviteOnlyBlocked(false)}
             >
-              <ArrowLeft className="mr-2 h-4 w-4" />
+              <ArrowLeftIcon className="mr-2 h-4 w-4" />
               {t('back')}
             </Button>
           </div>
@@ -533,7 +540,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <Mail className="h-7 w-7 text-primary" />
+              <EnvelopeIcon className="h-7 w-7 text-primary" />
             </div>
           </div>
 
@@ -569,7 +576,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
               className="w-full text-muted-foreground"
               onClick={() => setDuplicateEmail(null)}
             >
-              <ArrowLeft className="mr-2 h-4 w-4" />
+              <ArrowLeftIcon className="mr-2 h-4 w-4" />
               {t('back')}
             </Button>
           </div>
@@ -586,7 +593,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
         <div className="w-full max-w-sm animate-slide-up space-y-8">
           <div className="flex justify-center">
             <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <Mail className="h-7 w-7 text-primary" />
+              <EnvelopeIcon className="h-7 w-7 text-primary" />
             </div>
           </div>
 
@@ -613,13 +620,13 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   {t(webmailHint.hasSearch ? 'open_webmail_search' : 'open_webmail_inbox', {
                     provider: webmailHint.name,
                   })}
-                  <ExternalLink className="ml-2 h-4 w-4" />
+                  <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
                 </a>
               </Button>
             )}
             <Button variant="ghost" className="w-full text-muted-foreground" asChild>
               <Link href="/login">
-                <ArrowLeft className="mr-2 h-4 w-4" />
+                <ArrowLeftIcon className="mr-2 h-4 w-4" />
                 {t('back_to_login')}
               </Link>
             </Button>
@@ -735,7 +742,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   }
                 }}
               >
-                <ArrowLeft className="mr-2 h-4 w-4" />
+                <ArrowLeftIcon className="mr-2 h-4 w-4" />
                 {t('back')}
               </Button>
             </form>
@@ -801,9 +808,9 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                   aria-pressed={showPassword}
                 >
                   {showPassword ? (
-                    <EyeOff className="h-4 w-4" aria-hidden="true" />
+                    <EyeSlashIcon className="h-4 w-4" aria-hidden="true" />
                   ) : (
-                    <Eye className="h-4 w-4" aria-hidden="true" />
+                    <EyeIcon className="h-4 w-4" aria-hidden="true" />
                   )}
                 </button>
               </div>
@@ -824,7 +831,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                       className="flex h-3 w-3 items-center justify-center"
                     >
                       {check.met ? (
-                        <Check className="h-3 w-3" />
+                        <CheckIcon className="h-3 w-3" />
                       ) : (
                         <span className="h-1 w-1 rounded-full bg-current opacity-60" />
                       )}
@@ -940,7 +947,7 @@ export function RegisterClient({ authSettings }: { authSettings: GoTrueAuthSetti
                     className="w-full gap-2"
                     onClick={() => switchMethod('email')}
                   >
-                    <Mail className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+                    <EnvelopeIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
                     {tAuth('method_email_chip')}
                   </Button>
                 )}

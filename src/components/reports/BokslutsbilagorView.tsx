@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertCircle, FolderArchive } from 'lucide-react'
+import { ExclamationCircleIcon, FolderIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -66,14 +66,14 @@ export function BokslutsbilagorView({ periodId }: BokslutsbilagorViewProps) {
     return (
       <Card>
         <CardContent className="py-8 text-center text-sm text-destructive">
-          <AlertCircle className="mx-auto mb-2 h-6 w-6" />
+          <ExclamationCircleIcon className="mx-auto mb-2 h-6 w-6" />
           {error}
         </CardContent>
       </Card>
     )
   }
   if (!report || report.accounts.length === 0) {
-    return <EmptyState icon={FolderArchive} title={t('empty_title')} description={t('empty_desc')} actionLabel={t('open_reconciliation')} actionHref="/reconciliation" />
+    return <EmptyState icon={FolderIcon} title={t('empty_title')} description={t('empty_desc')} actionLabel={t('open_reconciliation')} actionHref="/reconciliation" />
   }
 
   const money = (n: number | null) => (n == null ? '-' : formatCurrency(n, 'SEK'))

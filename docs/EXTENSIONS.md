@@ -113,7 +113,7 @@ Abridged from `src/extensions/general/enable-banking/manifest.json`:
 | `workspace` | Import path of a default-exported React component, or `null` |
 | `branding` | Optional. `true` only for an extension that calls `registerBrandingService()` at module load: it is then listed in `_generated/branding-list.ts`. |
 | `requiredEnvVars`, `optionalEnvVars`, `npmDependencies` | See [Enabling extensions](#enabling-extensions) |
-| `definition` | Marketplace metadata. Required: `name`, `category`, `icon` (a Lucide name listed in `src/lib/extensions/icon-resolver.tsx`; any other name renders as `Puzzle`), `dataPattern` (`core`, `manual` or `both`), `description`, `longDescription`. Optional: `readsCoreTables`, `hasOwnData`, `quickAction` (`{ label, description, icon, href?, event?, order? }`), `subscriptionNotice`. |
+| `definition` | Marketplace metadata. Required: `name`, `category`, `icon` (a name listed in `src/lib/extensions/icon-resolver.tsx`, which maps it to a Heroicon; any other name renders as `Puzzle`), `dataPattern` (`core`, `manual` or `both`), `description`, `longDescription`. Optional: `readsCoreTables`, `hasOwnData`, `quickAction` (`{ label, description, icon, href?, event?, order? }`), `subscriptionNotice`. |
 
 ## The Extension object
 

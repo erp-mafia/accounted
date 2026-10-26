@@ -1,8 +1,8 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
-import { motion, AnimatePresence, useReducedMotion, animate } from 'framer-motion'
-import { RotateCw } from 'lucide-react'
+import { motion, AnimatePresence, useReducedMotion, animate } from 'motion/react'
+import { ArrowPathIcon } from '@/components/icons'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
 import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { useTranslations } from 'next-intl'
@@ -336,7 +336,7 @@ export function LedgerGraph({ deep, companyName }: { deep: DeepLedgerContext; co
             className="inline-flex shrink-0 items-center gap-2 rounded-full border px-3 py-1.5 text-xs transition-colors"
             style={{ borderColor: HAIR_STRONG, color: MUTED }}
           >
-            <RotateCw className="h-3.5 w-3.5" />
+            <ArrowPathIcon className="h-3.5 w-3.5" />
             {t('graph_replay')}
           </button>
         )}

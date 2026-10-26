@@ -3,7 +3,7 @@
 import { Invoice, Deadline } from '@/types'
 import { cn, formatCurrency } from '@/lib/utils'
 import { Button } from '@/components/ui/button'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import {
   formatDateISO,
   isSameDay,
@@ -75,7 +75,7 @@ export function CalendarDayView({
           size="sm"
           onClick={() => onAddDeadline(date)}
         >
-          <Plus className="h-4 w-4 mr-1" />
+          <PlusIcon className="h-4 w-4 mr-1" />
           Lägg till deadline
         </Button>
       </div>

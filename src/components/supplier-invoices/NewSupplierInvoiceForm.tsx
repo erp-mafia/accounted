@@ -68,7 +68,19 @@ import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-sup
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
 import { ExpenseClaimantFields } from '@/components/expenses/ExpenseClaimantFields'
 import { isPersonPayer } from '@/lib/expenses/payer'
-import { ArrowLeft, Plus, Trash2, Loader2, Lock, AlertCircle, AlertTriangle, MessageCircle, CalendarClock, Tags, FileText } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  CalendarDaysIcon,
+  ChatBubbleOvalLeftIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+  HashtagIcon,
+  LockClosedIcon,
+  PlusIcon,
+  SpinnerIcon,
+  TrashIcon,
+} from '@/components/icons'
 import type { Supplier, InvoiceExtractionResult } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 
@@ -1056,7 +1068,7 @@ export default function NewSupplierInvoiceForm({
         role="status"
         className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
       >
-        <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+        <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
         <p className="flex-1 text-sm">
           {t('slp_hint', { amount: formatAmount(slpAmount) })}
         </p>
@@ -1725,7 +1737,7 @@ export default function NewSupplierInvoiceForm({
             onClick={() => router.push(inboxItemId ? '/e/general/invoice-inbox' : '/supplier-invoices')}
             aria-label={inboxItemId ? t('back_aria_inbox') : t('back_aria')}
           >
-            <ArrowLeft className="h-5 w-5" />
+            <ArrowLeftIcon className="h-5 w-5" />
           </Button>
           <div>
             <h1 className="font-display text-2xl leading-8 tracking-tight">{t('page_title')}</h1>
@@ -1736,7 +1748,7 @@ export default function NewSupplierInvoiceForm({
       {isLoadingInbox && (
         <Card className="mb-6">
           <CardContent className="py-4 flex items-center gap-3 text-sm text-muted-foreground">
-            <Loader2 className="h-4 w-4 animate-spin" />
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
             {t('loading_inbox')}
           </CardContent>
         </Card>
@@ -1749,29 +1761,29 @@ export default function NewSupplierInvoiceForm({
             <SectionLabel>{t('section_underlag')}</SectionLabel>
             {inboxItemId ? (
               <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
-                <FileText className="h-4 w-4 shrink-0" />
+                <DocumentTextIcon className="h-4 w-4 shrink-0" />
                 {t('underlag_caption_inbox')}
               </div>
             ) : selfBilled ? (
               // Our own document: the server refuses an uploaded underlag on a
               // självfaktura, so none is offered (crm#1367).
               <div className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px] text-muted-foreground">
-                <FileText className="h-4 w-4 shrink-0" />
+                <DocumentTextIcon className="h-4 w-4 shrink-0" />
                 {t('underlag_caption_self_billed')}
               </div>
             ) : underlagFile ? (
               <div className="flex items-center justify-between gap-3 rounded-lg border border-border px-4 py-3">
                 <div className="flex min-w-0 items-center gap-3">
-                  <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <DocumentTextIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
                   <div className="min-w-0">
                     <p className="truncate text-[13px]">{underlagFile.fileName}</p>
                     {(underlagFile.status === 'uploading' || extractionPhase === 'processing') && (
-                      <p className="flex items-center gap-2 text-xs text-muted-foreground">
-                        <Loader2 className="h-3 w-3 animate-spin" />
+                      <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                        <SpinnerIcon className="h-3 w-3 animate-spin" />
                         {underlagFile.status === 'uploading'
                           ? t('underlag_uploading')
                           : t('underlag_processing')}
-                      </p>
+                      </div>
                     )}
                     {underlagFile.status === 'error' && (
                       <p className="text-xs text-destructive">{underlagFile.error}</p>
@@ -1852,7 +1864,7 @@ export default function NewSupplierInvoiceForm({
               <div className="mb-3 rounded-lg border border-border bg-muted/30 p-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                   <div className="flex items-start gap-3">
-                    <MessageCircle className="h-5 w-5 text-primary shrink-0 mt-0.5" />
+                    <ChatBubbleOvalLeftIcon className="h-5 w-5 text-primary shrink-0 mt-0.5" />
                     <div>
                       <p className="text-sm font-medium">
                         {t('ai_suggested_supplier', { name: extractedData?.supplier?.name ?? '' })}
@@ -1866,7 +1878,7 @@ export default function NewSupplierInvoiceForm({
                     </div>
                   </div>
                   <Button type="button" size="sm" onClick={openSupplierDialogPrefilled}>
-                    <Plus className="mr-2 h-4 w-4" />
+                    <PlusIcon className="mr-2 h-4 w-4" />
                     {t('create_and_select')}
                   </Button>
                 </div>
@@ -2144,7 +2156,7 @@ export default function NewSupplierInvoiceForm({
                 role="alert"
                 className="mt-4 flex items-start gap-3 rounded-lg border border-destructive/40 bg-destructive/10 p-3"
               >
-                <AlertCircle className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
+                <ExclamationCircleIcon className="h-5 w-5 text-destructive mt-0.5 shrink-0" />
                 <div className="flex-1 text-sm text-destructive">
                   <p className="font-medium">{t('no_period_warning', { date: bookedDateHere })}</p>
                   <p className="mt-0.5">{t('no_period_help')}</p>
@@ -2182,7 +2194,7 @@ export default function NewSupplierInvoiceForm({
                 role="status"
                 className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
               >
-                <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <p className="text-sm text-muted-foreground">
                   {t('rc_account_warning', {
                     count: rcAccountWarningRows.length,
@@ -2200,7 +2212,7 @@ export default function NewSupplierInvoiceForm({
                 role="status"
                 className="mb-3 flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3"
               >
-                <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+                <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
                 <p className="text-sm text-muted-foreground">
                   {t('foreign_zero_vat_warning', {
                     count: foreignZeroVatRows.length,
@@ -2332,7 +2344,7 @@ export default function NewSupplierInvoiceForm({
                                 title={t('row_dimensions_title')}
                                 className={ROW_ICON_BTN_CLASS}
                               >
-                                <Tags
+                                <HashtagIcon
                                   className={cn(
                                     'h-3.5 w-3.5',
                                     isDimOpen(index) ? 'text-foreground' : undefined,
@@ -2349,7 +2361,7 @@ export default function NewSupplierInvoiceForm({
                                 title={ta('row_toggle')}
                                 className={ROW_ICON_BTN_CLASS}
                               >
-                                <CalendarClock
+                                <CalendarDaysIcon
                                   className={cn(
                                     'h-3.5 w-3.5',
                                     isAccrualOpen(index) ? 'text-foreground' : undefined,
@@ -2367,7 +2379,7 @@ export default function NewSupplierInvoiceForm({
                               })}
                               className={cn(ROW_ICON_BTN_CLASS, 'hover:text-destructive')}
                             >
-                              <Trash2 className="h-3.5 w-3.5" />
+                              <TrashIcon className="h-3.5 w-3.5" />
                             </button>
                           </span>
                         </td>
@@ -2660,7 +2672,7 @@ export default function NewSupplierInvoiceForm({
                 t('registering')
               ) : !canWrite ? (
                 <>
-                  <Lock className="mr-2 h-4 w-4" />
+                  <LockClosedIcon className="mr-2 h-4 w-4" />
                   {primaryLabel}
                 </>
               ) : (
@@ -2831,7 +2843,7 @@ export default function NewSupplierInvoiceForm({
         <DialogContent>
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
-              <AlertCircle className="h-5 w-5 text-destructive" />
+              <ExclamationCircleIcon className="h-5 w-5 text-destructive" />
               {t('duplicate_dialog_title')}
             </DialogTitle>
             {/* data-ph-mask: the conflict message carries the invoice number */}

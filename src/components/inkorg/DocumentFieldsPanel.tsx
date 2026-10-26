@@ -2,7 +2,7 @@
 
 import { useEffect, useId, useMemo, useState, type FormEvent, type KeyboardEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { ChevronRight } from 'lucide-react'
+import { ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
@@ -246,7 +246,7 @@ export function DocumentFieldsPanel({ itemId, reading, locked = false, defaultOp
   return (
     <details className="group" open={defaultOpen || undefined}>
       <summary className="flex cursor-pointer list-none items-center gap-1 text-[13px] font-medium text-foreground transition-colors duration-150 hover:text-foreground/80 [&::-webkit-details-marker]:hidden">
-        <ChevronRight className="h-4 w-4 transition-transform duration-150 group-open:rotate-90" aria-hidden />
+        <ChevronRightIcon className="h-4 w-4 transition-transform duration-150 group-open:rotate-90" aria-hidden />
         {t('title')}
       </summary>
       {body}

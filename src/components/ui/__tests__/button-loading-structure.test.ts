@@ -34,8 +34,10 @@ describe('Button loading toggle', () => {
   it('keeps the spinner mounted but hidden while idle, and shows it while loading', () => {
     const idle = markup(false)
     const busy = markup(true)
-    expect(idle).toMatch(/<svg[^>]*class="[^"]*\bhidden\b/)
-    expect(busy).not.toMatch(/<svg[^>]*class="[^"]*\bhidden\b/)
+    // The spinner's box is the icon module's <span data-icon>, which carries the class.
+    expect(idle).toMatch(/<span data-icon=""[^>]*class="[^"]*\bhidden\b/)
+    expect(busy).not.toMatch(/<span data-icon=""[^>]*class="[^"]*\bhidden\b/)
+    expect(busy).toMatch(/<span data-icon=""[^>]*class="[^"]*\banimate-spin\b/)
     expect(busy).toContain('aria-busy="true"')
     expect(idle).toContain('Bokför')
     expect(busy).toContain('Bokför')

@@ -11,7 +11,7 @@ import { SplitButton, type SplitButtonOption } from '@/components/ui/split-butto
 import { EmptyState } from '@/components/ui/empty-state'
 import { StartCard } from '@/components/dashboard/StartCard'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { HandCoins, Plus, Users } from 'lucide-react'
+import { BanknotesIcon, PlusIcon, UsersIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useCompanySettings, useEmployees } from '@/lib/reference-data/hooks'
@@ -135,7 +135,7 @@ export default function SalaryPage() {
       key,
       // Same YYYY-MM the new run gets in the table below and in its own title.
       label: t('start_run_for_period', { period: key }),
-      icon: Plus,
+      icon: PlusIcon,
       description: choice.hasRun
         ? t('start_run_choice_exists')
         : paymentDate && agiPeriod
@@ -166,7 +166,7 @@ export default function SalaryPage() {
             />
           ) : (
             <Button size="sm" onClick={() => startRun(null)} disabled={loading} loading={startingKey !== null}>
-              {startingKey === null && <Plus className="mr-2 h-4 w-4" />}
+              {startingKey === null && <PlusIcon className="mr-2 h-4 w-4" />}
               {t('start_run')}
             </Button>
           ))}
@@ -204,7 +204,7 @@ export default function SalaryPage() {
             />
           </div>
         ) : (
-          <EmptyState icon={Users} title={t('onboarding_title')} description={t('onboarding_description')} />
+          <EmptyState icon={UsersIcon} title={t('onboarding_title')} description={t('onboarding_description')} />
         )
       ) : (
         <div>
@@ -221,7 +221,7 @@ export default function SalaryPage() {
                 />
               </div>
             ) : (
-              <EmptyState icon={HandCoins} title={t('empty_runs_title')} description={t('empty_runs_description')} />
+              <EmptyState icon={BanknotesIcon} title={t('empty_runs_title')} description={t('empty_runs_description')} />
             )
           ) : (
             <div className="overflow-x-auto">

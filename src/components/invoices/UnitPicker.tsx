@@ -2,7 +2,7 @@
 
 import { forwardRef, useCallback, useId, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -183,7 +183,7 @@ const UnitPicker = forwardRef<HTMLButtonElement, UnitPickerProps>(function UnitP
           <span className={cn('truncate', current === '' && 'text-muted-foreground/60')}>
             {current === '' ? t('empty') : current}
           </span>
-          <ChevronDown
+          <ChevronDownIcon
             aria-hidden="true"
             className={cn('shrink-0 opacity-60', variant === 'cell' ? 'h-3 w-3' : 'h-4 w-4')}
           />

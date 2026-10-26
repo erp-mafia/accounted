@@ -8,7 +8,12 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { EmptyState } from '@/components/ui/empty-state'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { Search, FileDown, ExternalLink, ChevronDown } from 'lucide-react'
+import {
+  ArrowTopRightOnSquareIcon,
+  ChevronDownIcon,
+  DocumentArrowDownIcon,
+  MagnifyingGlassIcon,
+} from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { SupportLink } from '@/components/ui/support-link'
 
@@ -232,7 +237,7 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
             <span className="truncate text-[13px] text-muted-foreground">{term.simpleTerm}</span>
           )}
         </span>
-        <ChevronDown
+        <ChevronDownIcon
           className={cn(
             'h-4 w-4 shrink-0 text-muted-foreground transition-transform duration-150',
             isExpanded && 'rotate-180',
@@ -256,7 +261,7 @@ function TermRow({ term, isExpanded, onToggle }: { term: GlossaryTerm; isExpande
           {term.skatteverketUrl && (
             <HelpLink href={term.skatteverketUrl}>
               {t('read_more_skv')}
-              <ExternalLink className="h-3 w-3" />
+              <ArrowTopRightOnSquareIcon className="h-3 w-3" />
             </HelpLink>
           )}
         </div>
@@ -348,7 +353,7 @@ export default function HelpPage() {
       <div>
         {filteredTerms.length === 0 ? (
           <EmptyState
-            icon={Search}
+            icon={MagnifyingGlassIcon}
             title={t('no_results_title')}
             description={<span data-ph-mask="">{t('no_results', { query: searchQuery })}</span>}
           />
@@ -373,14 +378,14 @@ export default function HelpPage() {
           <HelpPopover className="shrink-0">{t('templates_subtitle')}</HelpPopover>
         </h2>
         <a href="/docs/arkivplan-mall.md" download className={LINK_ROW_CLASS}>
-          <FileDown className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <DocumentArrowDownIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Arkivplan</span>
           <span className="truncate text-xs text-muted-foreground">
             Mall enligt BFNAR 2013:2: beskriver var räkenskapsinformation förvaras
           </span>
         </a>
         <a href="/docs/systemdokumentation-mall.md" download className={LINK_ROW_CLASS}>
-          <FileDown className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <DocumentArrowDownIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Systemdokumentation</span>
           <span className="truncate text-xs text-muted-foreground">
             Mall enligt BFL 5 kap. 11 §: beskriver bokföringssystemets uppbyggnad
@@ -397,12 +402,12 @@ export default function HelpPage() {
           href="https://www.skatteverket.se/foretag/foretagarguiden.4.361dc8c15312eff6fd1f87f.html"
           className={LINK_ROW_CLASS}
         >
-          <ExternalLink className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Skatteverkets företagarguide</span>
           <span className="truncate text-xs text-muted-foreground">Omfattande guide för nya företagare</span>
         </HelpLink>
         <HelpLink href="https://www.verksamt.se/" className={LINK_ROW_CLASS}>
-          <ExternalLink className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
+          <ArrowTopRightOnSquareIcon className="h-4 w-4 shrink-0 self-center text-muted-foreground" />
           <span className="shrink-0 font-medium">Verksamt.se</span>
           <span className="truncate text-xs text-muted-foreground">Starta och driva företag i Sverige</span>
         </HelpLink>

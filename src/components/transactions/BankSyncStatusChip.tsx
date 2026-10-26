@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { createClient } from '@/lib/supabase/client'
 import { onBankSyncUpdated } from '@/lib/transactions/bank-sync-signal'
 import { useCompany, useCapability } from '@/contexts/CompanyContext'
@@ -82,7 +82,7 @@ export default function BankSyncStatusChip() {
         href={selfHosted ? '/settings/banking' : '/settings/billing'}
         className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {selfHosted
             ? t('bank_sync_paused_connector_key')
@@ -98,7 +98,7 @@ export default function BankSyncStatusChip() {
         href="/settings/banking"
         className="inline-flex items-center gap-1.5 rounded-full border border-destructive/40 bg-destructive/5 px-2.5 py-1 text-xs text-destructive transition-colors hover:bg-destructive/10"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {state.count === 1
             ? t('bank_sync_attention_one')
@@ -119,7 +119,7 @@ export default function BankSyncStatusChip() {
         href={chooseAccountsHref({ id: state.connectionId, aggregator: state.aggregator })}
         className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {state.count === 1
             ? t('bank_sync_selection_one')
@@ -137,7 +137,7 @@ export default function BankSyncStatusChip() {
         href="/settings/banking"
         className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {state.count === 1
             ? t('bank_sync_expiring_one', { days: state.daysLeft })
@@ -155,7 +155,7 @@ export default function BankSyncStatusChip() {
         href="/settings/banking"
         className="inline-flex items-center gap-1.5 rounded-full border border-border bg-muted/30 px-2.5 py-1 text-xs text-attn transition-colors hover:bg-secondary/60"
       >
-        <AlertTriangle className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         <span>
           {t('bank_sync_stale_warning')}
           <span className="ml-1 tabular-nums opacity-70">({formatAge(state.mostRecent)})</span>

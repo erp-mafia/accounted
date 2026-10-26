@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import {
   Dialog,
   DialogContent,
@@ -190,7 +190,7 @@ export default function MarkOrderBookedDialog({
           />
           {loading ? (
             <div className="flex items-center justify-center gap-2 rounded-lg border border-border py-6 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
               {t('mark_link_loading')}
             </div>
           ) : candidates.length === 0 ? (

@@ -26,7 +26,7 @@ import {
   toggleInSet,
   type PickerCompany,
 } from '@/components/settings/CompanyPickerList'
-import { Plus, AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon, PlusIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import {
   ALL_SCOPES,
@@ -250,7 +250,7 @@ export function ApiKeysPanel({
             onClick={openCreateDialog}
             disabled={keyCount >= MAX_KEYS}
           >
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            <PlusIcon className="mr-1.5 h-3.5 w-3.5" />
             {t('create_key')}
           </Button>
         </SettingsRowEnd>
@@ -358,7 +358,7 @@ export function ApiKeysPanel({
                   role="alert"
                   className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-foreground"
                 >
-                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+                  <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
                   <p className="leading-snug">{t('sod_warning')}</p>
                 </div>
               )}

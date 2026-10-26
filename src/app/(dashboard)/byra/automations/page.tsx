@@ -1,6 +1,13 @@
 import { redirect } from 'next/navigation'
 import { getTranslations } from 'next-intl/server'
-import { BellRing, ListChecks, Mail, PlugZap, Send, Wand2 } from 'lucide-react'
+import {
+  BellAlertIcon,
+  BoltIcon,
+  EnvelopeIcon,
+  ListBulletIcon,
+  PaperAirplaneIcon,
+  SparklesIcon,
+} from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { getByraMembership } from '@/lib/clients/fetch-client-overview'
 import { getDashboardAuthContext } from '../../request-context'
@@ -16,12 +23,12 @@ export const dynamic = 'force-dynamic'
  */
 
 const CARDS = [
-  { key: 'digest', icon: Mail },
-  { key: 'deadlines', icon: BellRing },
-  { key: 'rules', icon: Wand2 },
-  { key: 'connections', icon: PlugZap },
-  { key: 'checklist', icon: ListChecks },
-  { key: 'reports', icon: Send },
+  { key: 'digest', icon: EnvelopeIcon },
+  { key: 'deadlines', icon: BellAlertIcon },
+  { key: 'rules', icon: SparklesIcon },
+  { key: 'connections', icon: BoltIcon },
+  { key: 'checklist', icon: ListBulletIcon },
+  { key: 'reports', icon: PaperAirplaneIcon },
 ] as const
 
 export default async function ByraAutomationsPage() {

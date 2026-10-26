@@ -4,7 +4,7 @@ import { useState, useMemo } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Check, Search, X } from 'lucide-react'
+import { CheckIcon, MagnifyingGlassIcon, XMarkIcon } from '@/components/icons'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { matchesVoucherSearch } from '@/lib/reconciliation/voucher-search'
@@ -149,7 +149,7 @@ export function MatchVerifikationPicker({
           disabled={disabled}
           aria-label="Avmarkera verifikation"
         >
-          <X className="h-3.5 w-3.5" />
+          <XMarkIcon className="h-3.5 w-3.5" />
         </Button>
       </div>
     )
@@ -191,7 +191,7 @@ export function MatchVerifikationPicker({
               onClick={() => pick(line)}
             >
               <span className="w-4 shrink-0" aria-hidden>
-                {picked && <Check className="h-3.5 w-3.5" />}
+                {picked && <CheckIcon className="h-3.5 w-3.5" />}
               </span>
               <span className="font-mono text-xs shrink-0 w-12">{formatVoucher(line)}</span>
               <span className="text-muted-foreground shrink-0 tabular-nums w-24">{formatDate(line.entry_date)}</span>
@@ -226,7 +226,7 @@ export function MatchVerifikationPicker({
 
   const searchBox = (
     <div className="relative">
-      <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+      <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
       <Input
         value={search}
         onChange={(e) => setSearch(e.target.value)}

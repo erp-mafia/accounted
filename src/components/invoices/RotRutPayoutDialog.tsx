@@ -4,14 +4,14 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import {
-  AlertTriangle,
-  Ban,
-  CheckCircle2,
-  ChevronRight,
-  Download,
-  ExternalLink,
-  FileDown,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowTopRightOnSquareIcon,
+  CheckCircleIcon,
+  ChevronRightIcon,
+  DocumentArrowDownIcon,
+  ExclamationTriangleIcon,
+  NoSymbolIcon,
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -512,7 +512,7 @@ export default function RotRutPayoutDialog({
                       ref={candidate.invoice_id === focusInvoiceId ? scrollFocusedRow : undefined}
                     >
                       <summary className="flex min-h-10 cursor-pointer list-none items-center gap-3">
-                        <ChevronRight
+                        <ChevronRightIcon
                           aria-hidden
                           className="h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150 group-open:rotate-90"
                         />
@@ -612,7 +612,7 @@ export default function RotRutPayoutDialog({
 
               {!isGronTeknik && visibleCandidates.length > MAX_CASES_PER_FILE && (
                 <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
-                  <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-attn" />
+                  <ExclamationTriangleIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-attn" />
                   <span>{t('rot_rut_max_cases_help', { count: MAX_CASES_PER_FILE })}</span>
                 </div>
               )}
@@ -623,7 +623,7 @@ export default function RotRutPayoutDialog({
                   <Button asChild type="button" variant="outline" className="w-full sm:w-auto">
                     <a href={SKATTEVERKET_GRON_TEKNIK_URL} target="_blank" rel="noopener noreferrer">
                       {t('gron_teknik_skatteverket_link')}
-                      <ExternalLink className="ml-2 h-3.5 w-3.5" />
+                      <ArrowTopRightOnSquareIcon className="ml-2 h-3.5 w-3.5" />
                     </a>
                   </Button>
                 </div>
@@ -636,7 +636,7 @@ export default function RotRutPayoutDialog({
                     loading={generating}
                     title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
                   >
-                    {!generating && <FileDown className="mr-2 h-4 w-4" />}
+                    {!generating && <DocumentArrowDownIcon className="mr-2 h-4 w-4" />}
                     {t(generating ? 'rot_rut_generating_file' : 'rot_rut_generate_file')}
                   </Button>
                 </div>
@@ -663,7 +663,7 @@ export default function RotRutPayoutDialog({
                 <div className="mt-3 space-y-2">
                   {blocked.map((candidate) => (
                     <div key={candidate.invoice_id} className="flex items-start gap-2 text-xs">
-                      <Ban className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <NoSymbolIcon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                       <span>
                         <span className="font-medium text-foreground">
                           {candidate.invoice_number ?? '-'} · {candidate.customer_name ?? '-'}
@@ -726,7 +726,7 @@ export default function RotRutPayoutDialog({
                                   loading={isDownloading}
                                   onClick={() => void downloadArchivedFile(request)}
                                 >
-                                  {!isDownloading && <Download className="mr-1.5 h-3.5 w-3.5" />}
+                                  {!isDownloading && <ArrowDownTrayIcon className="mr-1.5 h-3.5 w-3.5" />}
                                   {t('rot_rut_download_again')}
                                 </Button>
                               )}
@@ -747,7 +747,7 @@ export default function RotRutPayoutDialog({
                                     loading={isUpdating}
                                     onClick={() => void updateRequest(request.id, 'submitted')}
                                   >
-                                    {!isUpdating && <CheckCircle2 className="mr-1.5 h-3.5 w-3.5" />}
+                                    {!isUpdating && <CheckCircleIcon className="mr-1.5 h-3.5 w-3.5" />}
                                     {t('rot_rut_mark_uploaded')}
                                   </Button>
                                 </>
@@ -762,7 +762,7 @@ export default function RotRutPayoutDialog({
                 <Button asChild type="button" variant="outline" className="w-full sm:w-auto">
                   <a href={SKATTEVERKET_SERVICE_URL} target="_blank" rel="noopener noreferrer">
                     {t('rot_rut_skatteverket_link')}
-                    <ExternalLink className="ml-2 h-3.5 w-3.5" />
+                    <ArrowTopRightOnSquareIcon className="ml-2 h-3.5 w-3.5" />
                   </a>
                 </Button>
               </section>

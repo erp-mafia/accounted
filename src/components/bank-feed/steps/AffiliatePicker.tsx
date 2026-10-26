@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Check, Search } from 'lucide-react'
+import { CheckIcon, MagnifyingGlassIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import type { FlowAffiliate } from '../connect-flow-reducer'
@@ -50,7 +50,7 @@ export function AffiliatePicker({ parentName, affiliates, value, onChange }: Aff
       )}
     >
       <span className="min-w-0 flex-1 truncate">{label}</span>
-      {selected && <Check className="h-4 w-4 shrink-0" aria-hidden="true" />}
+      {selected && <CheckIcon className="h-4 w-4 shrink-0" aria-hidden="true" />}
     </button>
   )
 
@@ -61,7 +61,7 @@ export function AffiliatePicker({ parentName, affiliates, value, onChange }: Aff
           {t('affiliate_label')}
         </span>
         <div className="relative">
-          <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+          <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
           <Input
             type="search"
             autoComplete="off"

@@ -4,7 +4,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { CheckCircle } from 'lucide-react'
+import { CheckCircleIcon } from '@/components/icons'
 
 export interface SkattekontoFileImportResult {
   imported: number
@@ -29,7 +29,7 @@ export default function SkattekontoFileResultStep({
       <Card>
         <CardContent className="pt-6">
           <div className="flex flex-col items-center gap-4 py-6 text-center">
-            <CheckCircle className="h-12 w-12 text-success" />
+            <CheckCircleIcon className="h-12 w-12 text-success" />
             <div>
               <p className="font-display text-xl">{t('skattekonto_result_title')}</p>
               <p className="mt-2 text-sm text-muted-foreground">

@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { RefreshCw } from 'lucide-react'
+import { ArrowPathIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -317,7 +317,7 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
         <div className="flex items-center justify-between gap-4 px-1 py-3" role="alert">
           <p className="text-sm text-destructive">{t('country_rules_load_failed')}</p>
           <Button size="sm" variant="outline" onClick={retryLoad}>
-            <RefreshCw className="mr-2 h-4 w-4" />
+            <ArrowPathIcon className="mr-2 h-4 w-4" />
             {tCommon('retry')}
           </Button>
         </div>

@@ -4,7 +4,14 @@ import React, { useState, useEffect } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useTranslations, useLocale } from 'next-intl'
-import { AlertCircle, Check, ChevronDown, FileCode, FileDown, Percent } from 'lucide-react'
+import {
+  CheckIcon,
+  ChevronDownIcon,
+  CodeBracketSquareIcon,
+  DocumentArrowDownIcon,
+  ExclamationCircleIcon,
+  PercentBadgeIcon,
+} from '@/components/icons'
 import { useFiscalPeriods } from '@/lib/reference-data/hooks'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -100,21 +107,21 @@ function VatFilingDownloadMenu({ xmlHref, pdfHref }: { xmlHref: string; pdfHref:
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="sm" className="gap-2">
-          <FileDown className="h-4 w-4" />
+          <DocumentArrowDownIcon className="h-4 w-4" />
           Ladda ner
-          <ChevronDown className="h-4 w-4 text-muted-foreground" />
+          <ChevronDownIcon className="h-4 w-4 text-muted-foreground" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start">
         <DropdownMenuItem asChild>
           <a href={xmlHref} target="_blank" rel="noopener noreferrer">
-            <FileCode className="h-4 w-4" />
+            <CodeBracketSquareIcon className="h-4 w-4" />
             Fil för uppladdning (XML)
           </a>
         </DropdownMenuItem>
         <DropdownMenuItem asChild>
           <a href={pdfHref} target="_blank" rel="noopener noreferrer">
-            <FileDown className="h-4 w-4" />
+            <DocumentArrowDownIcon className="h-4 w-4" />
             Momsdeklaration (PDF)
           </a>
         </DropdownMenuItem>
@@ -229,7 +236,7 @@ function VatBookingCard({
 
         {booked && (
           <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
-            <AlertCircle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
+            <ExclamationCircleIcon className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>
               Momsen för perioden är redan bokförd:{' '}
               <Link
@@ -244,7 +251,7 @@ function VatBookingCard({
         )}
         {draft && (
           <div className="flex items-start gap-2 text-[13px] leading-6 text-muted-foreground">
-            <AlertCircle className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
+            <ExclamationCircleIcon className="mt-1 h-4 w-4 shrink-0" aria-hidden="true" />
             <p>
               Det finns redan ett{' '}
               <Link
@@ -443,7 +450,7 @@ function VatStepper({
                     : 'border-border text-muted-foreground group-hover:border-foreground/30',
               )}
             >
-              {step.done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : step.n}
+              {step.done ? <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" /> : step.n}
             </span>
             <span className="leading-tight">
               <span
@@ -976,7 +983,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
       <div className="space-y-8">
         {bareHeader}
         <EmptyState
-          icon={Percent}
+          icon={PercentBadgeIcon}
           title="Skatteinställningar saknas"
           description="Momsdeklarationen bygger på företagets skatteinställningar, men inga är angivna ännu. Ange momsregistrering och redovisningsperiod (månad, kvartal eller helår) i inställningarna, så visas deklarationen för rätt period."
           actionLabel="Öppna skatteinställningar"
@@ -991,7 +998,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
       <div className="space-y-8">
         {bareHeader}
         <EmptyState
-          icon={Percent}
+          icon={PercentBadgeIcon}
           title="Företaget är inte momsregistrerat"
           description="Momsdeklarationen bygger på företagets skatteinställningar. Om företaget är momsregistrerat anger du momsregistrering och redovisningsperiod i inställningarna, så visas deklarationen här."
           actionLabel="Öppna skatteinställningar"
@@ -1016,7 +1023,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
         <div className="space-y-8">
           {bareHeader}
           <EmptyState
-            icon={Percent}
+            icon={PercentBadgeIcon}
             title="Redovisningsperiod för moms saknas"
             description="Företaget är momsregistrerat men momsregistreringsnummer och redovisningsperiod (månad, kvartal eller helår) saknas. Ange dem i skatteinställningarna så visas deklarationen för rätt period."
             actionLabel="Öppna skatteinställningar"
@@ -1029,7 +1036,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
       <div className="space-y-8">
         {bareHeader}
         <EmptyState
-          icon={Percent}
+          icon={PercentBadgeIcon}
           title="Välj redovisningsperiod för moms"
           description="Företaget är momsregistrerat men ingen redovisningsperiod är vald, så deklarationen och momsdeadlines kan inte visas. Perioden står i registreringsbeslutet från Skatteverket."
         >
@@ -1184,7 +1191,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
       {error && (
         <Card>
           <CardContent className="flex flex-col items-center p-8 text-center">
-            <AlertCircle className="mb-2 h-6 w-6 text-destructive" />
+            <ExclamationCircleIcon className="mb-2 h-6 w-6 text-destructive" />
             <p className="mb-4 text-sm text-destructive">{error}</p>
             <Button variant="outline" size="sm" onClick={() => setRetryKey((k) => k + 1)}>
               Försök igen

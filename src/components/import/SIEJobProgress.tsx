@@ -11,7 +11,7 @@ import type { SIEJob } from '@/lib/import/sie-job-contract'
 import type { ImportResult } from '@/lib/import/types'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import Link from 'next/link'
-import { LoaderCircle } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 
 export default function SIEJobProgress({importId,onCompleted,onUndone}:{
   importId:string;onCompleted?:(result:ImportResult)=>void;onUndone?:()=>void
@@ -67,10 +67,10 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
   return <section className="space-y-4 rounded-lg border border-border p-6" aria-label={t('title')}>
     <div role="status" aria-live="polite" className="space-y-2">
       <p className="text-sm font-medium">{job?.job_result?.repairOutcome === 'stopped' ? t('repairStopped') : job ? t(`states.${job.job_state}`) : t('loading')}</p>
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
-        {job?.job_state === 'preparing' && <LoaderCircle aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none"/>}
+      <div className="flex items-center gap-2 text-sm text-muted-foreground">
+        {job?.job_state === 'preparing' && <SpinnerIcon aria-hidden="true" className="h-4 w-4 shrink-0 animate-spin motion-reduce:animate-none"/>}
         {progressText}
-      </p>
+      </div>
       {job && job.chunks_total > 0 && <Progress value={100*job.chunks_done/job.chunks_total}/>}
     </div>
     {!terminal && <p className="text-sm text-muted-foreground">{t('durable')}</p>}

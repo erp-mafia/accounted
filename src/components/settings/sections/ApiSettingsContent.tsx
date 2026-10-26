@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
 import { ApiKeysPanel } from '@/components/settings/ApiKeysPanel'
 import { McpConnectionsPanel } from '@/components/settings/McpConnectionsPanel'
 import { OAuthClientsPanel } from '@/components/settings/OAuthClientsPanel'
@@ -45,7 +45,7 @@ export function ApiSettingsContent() {
           onClick={() => setShowOAuthClients(!showOAuthClients)}
           className="flex w-full items-center gap-2 border-b border-border px-1 py-3 text-left text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
         >
-          <ChevronDown
+          <ChevronDownIcon
             className={cn('h-3.5 w-3.5 transition-transform duration-150', !showOAuthClients && '-rotate-90')}
           />
           {t('oauth_clients_toggle')}

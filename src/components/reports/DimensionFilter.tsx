@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import { Label } from '@/components/ui/label'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -109,7 +109,7 @@ export function DimensionFilter({ value, onChange }: Props) {
             onClick={() => onChange(null)}
             aria-label="Rensa dimensionsfilter"
           >
-            <X className="h-4 w-4" />
+            <XMarkIcon className="h-4 w-4" />
           </Button>
         )}
       </div>

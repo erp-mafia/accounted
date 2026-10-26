@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Copy, Link2 } from 'lucide-react'
+import { LinkIcon, Square2StackIcon } from '@/components/icons'
 import {
   Dialog,
   DialogContent,
@@ -95,7 +95,7 @@ export default function NewJournalEntryDialog({
           <>
             {copyPrefill && (
               <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-                <Copy className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+                <Square2StackIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
                 <div className="flex-1">
                   <p className="font-medium">
                     {t('copy_banner_title', {
@@ -108,7 +108,7 @@ export default function NewJournalEntryDialog({
             )}
             {activeSkvPrefill && (
               <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 p-3 text-sm">
-                <Link2 className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+                <LinkIcon className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
                 <div className="flex-1">
                   <p className="font-medium">
                     {t('skv_link_banner_title', { label: activeSkvPrefill.bannerLabel })}

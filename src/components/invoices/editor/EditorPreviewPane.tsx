@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon, ChevronDownIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -112,7 +112,7 @@ export function EditorPreviewPane({
               // fallback content inside the <object> (see below).
               <Button asChild variant="ghost" size="icon-sm" className="text-muted-foreground">
                 <a href={visible} target="_blank" rel="noreferrer" aria-label={t('preview_open')} title={t('preview_open')}>
-                  <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                  <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 </a>
               </Button>
             )}
@@ -123,7 +123,7 @@ export function EditorPreviewPane({
                   className="inline-flex h-8 items-center gap-1 rounded-full px-3 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {zoom === 'page' ? t('zoom_page') : t('zoom_width')}
-                  <ChevronDown className="h-3.5 w-3.5" aria-hidden="true" />
+                  <ChevronDownIcon className="h-3.5 w-3.5" aria-hidden="true" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">

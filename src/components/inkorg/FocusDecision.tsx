@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { ToastAction } from '@/components/ui/toast'
@@ -426,7 +426,7 @@ export function FocusDecision({
             <DropdownMenuTrigger asChild>
               <Button variant={variant} className={width}>
                 {t('action_expense')}
-                <ChevronDown aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
+                <ChevronDownIcon aria-hidden="true" className="ml-1 h-3.5 w-3.5" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">

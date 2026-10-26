@@ -2,7 +2,7 @@
 
 import { useCallback, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { BookOpen } from 'lucide-react'
+import { BookOpenIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { CategoryPopover } from '@/components/transactions/CategoryPopover'
@@ -109,7 +109,7 @@ export default function TemplateApplyButton({ onApply, entityType, defaultAmount
         disabled={disabled}
         onClick={(e) => (anchor ? close() : open(e.currentTarget))}
       >
-        <BookOpen className="mr-1.5 h-3.5 w-3.5" aria-hidden />
+        <BookOpenIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden />
         {t('use_template')}
       </Button>
       {anchor && (

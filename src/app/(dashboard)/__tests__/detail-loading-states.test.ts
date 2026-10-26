@@ -33,9 +33,9 @@ describe('detail and list segments have a route-level loading state', () => {
 
 describe('detail pages do not gate on the bare centred spinner', () => {
   for (const segment of DETAIL_SEGMENTS) {
-    it(`${segment}/page.tsx uses the shared skeleton, not h-64 + Loader2`, () => {
+    it(`${segment}/page.tsx uses the shared skeleton, not h-64 + SpinnerIcon`, () => {
       const source = fs.readFileSync(path.join(APP, segment, 'page.tsx'), 'utf8')
-      expect(source).not.toMatch(/justify-center h-64">\s*<Loader2/)
+      expect(source).not.toMatch(/justify-center h-64">\s*<SpinnerIcon/)
     })
   }
 })

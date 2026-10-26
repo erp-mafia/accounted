@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useLocale } from 'next-intl'
-import { ChevronDown, GraduationCap, Loader2 } from 'lucide-react'
+import { AcademicCapIcon, ChevronDownIcon, SpinnerIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -21,7 +21,7 @@ import { atomLabel } from '@/lib/agent-context/atom-labels'
 const AgentSkillMarkdown = dynamic(() => import('./AgentSkillMarkdown'), {
   loading: () => (
     <div className="flex items-center gap-2 text-xs text-muted-foreground">
-      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+      <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
       Läser in…
     </div>
   ),
@@ -227,7 +227,7 @@ export function AgentSkillsPanel() {
 
       {atoms && atoms.length === 0 && (
         <EmptyState
-          icon={GraduationCap}
+          icon={AcademicCapIcon}
           title="Inga kunskapsområden ännu"
           description="När din assistent har komponerats dyker dess kunskapsområden upp här."
         />
@@ -268,7 +268,7 @@ export function AgentSkillsPanel() {
                           {dormant ? 'Vilande' : 'Aktiv'}
                         </span>
                       )}
-                      <ChevronDown
+                      <ChevronDownIcon
                         className={cn('h-3.5 w-3.5 shrink-0 self-center text-muted-foreground/60 transition-transform', !isOpen && '-rotate-90')}
                         aria-hidden
                       />
@@ -277,7 +277,7 @@ export function AgentSkillsPanel() {
                       <div className="pb-4">
                         {isLoading && (
                           <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                            <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
                             Läser in…
                           </div>
                         )}

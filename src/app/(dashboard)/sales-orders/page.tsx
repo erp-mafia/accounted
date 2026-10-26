@@ -4,7 +4,7 @@ import { Suspense, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { ClipboardList, Lock, Plus } from 'lucide-react'
+import { ClipboardDocumentListIcon, LockClosedIcon, PlusIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -114,12 +114,12 @@ function SalesOrdersPageInner() {
         <Button size="sm" asChild={canWrite} disabled={!canWrite} title={!canWrite ? t('viewer_disabled_tooltip') : undefined}>
           {canWrite ? (
             <Link href="/sales-orders/new">
-              <Plus className="mr-2 h-4 w-4" />
+              <PlusIcon className="mr-2 h-4 w-4" />
               {t('new_order')}
             </Link>
           ) : (
             <span>
-              <Lock className="mr-2 h-4 w-4" />
+              <LockClosedIcon className="mr-2 h-4 w-4" />
               {t('new_order')}
             </span>
           )}
@@ -154,19 +154,19 @@ function SalesOrdersPageInner() {
       ) : filtered.length === 0 ? (
         searchTerm ? (
           <EmptyState
-            icon={ClipboardList}
+            icon={ClipboardDocumentListIcon}
             title={t('no_search_results_title')}
             description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : statusFilter !== ALL ? (
           <EmptyState
-            icon={ClipboardList}
+            icon={ClipboardDocumentListIcon}
             title={t('no_search_results_title')}
             description={t('no_status_results_description')}
           />
         ) : (
           <EmptyState
-            icon={ClipboardList}
+            icon={ClipboardDocumentListIcon}
             title={t('empty_title')}
             description={t('empty_description')}
             actionLabel={canWrite ? t('empty_action') : undefined}

@@ -4,7 +4,7 @@ import { useState, useRef, useEffect, useCallback } from 'react'
 import { createPortal } from 'react-dom'
 import { cn } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
-import { Check, ChevronDown } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon } from '@/components/icons'
 
 export interface ContextPickerItem {
   id: string
@@ -107,7 +107,7 @@ export function ContextPicker({
         )}
       >
         <span className="truncate max-w-[220px]">{triggerLabel}</span>
-        <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+        <ChevronDownIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
       </button>
 
       {open &&
@@ -155,7 +155,7 @@ export function ContextPicker({
                     </span>
                   )}
                   {item.id === value && (
-                    <Check className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
+                    <CheckIcon className="h-3.5 w-3.5 flex-shrink-0 text-primary" />
                   )}
                 </button>
               ))}

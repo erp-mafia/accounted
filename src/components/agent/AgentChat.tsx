@@ -3,18 +3,18 @@
 import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import Link from 'next/link'
 import {
-  Send,
-  Square,
-  RotateCw,
-  BookmarkCheck,
-  BookmarkX,
-  Check,
-  Brain,
-  Copy,
-  ThumbsUp,
-  ThumbsDown,
-  ArrowDown,
-} from 'lucide-react'
+  ArrowDownIcon,
+  ArrowPathIcon,
+  BookmarkIcon,
+  BookmarkSlashIcon,
+  CheckIcon,
+  HandThumbDownIcon,
+  HandThumbUpIcon,
+  LightBulbIcon,
+  PaperAirplaneIcon,
+  Square2StackIcon,
+  StopIcon,
+} from '@/components/icons'
 import dynamic from 'next/dynamic'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
@@ -906,7 +906,7 @@ export default function AgentChat({
           onClick={jumpToLatest}
           className="absolute left-1/2 -translate-x-1/2 bottom-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-border bg-card px-3 py-1.5 text-[11px] text-foreground shadow-[var(--shadow-md)] hover:bg-secondary/60 transition-colors"
         >
-          <ArrowDown className="h-3 w-3" />
+          <ArrowDownIcon className="h-3 w-3" />
           Nytt svar
         </button>
       )}
@@ -981,7 +981,7 @@ export default function AgentChat({
               aria-label="Avbryt"
               title="Avbryt strömning"
             >
-              <Square className="h-3.5 w-3.5 fill-current" />
+              <StopIcon className="h-3.5 w-3.5 fill-current" />
             </Button>
           ) : (
             <Button
@@ -990,7 +990,7 @@ export default function AgentChat({
               disabled={input.trim().length === 0}
               aria-label="Skicka"
             >
-              <Send className="h-4 w-4" />
+              <PaperAirplaneIcon className="h-4 w-4" />
             </Button>
           )}
         </div>
@@ -1083,7 +1083,7 @@ function MessageBubble({
               )}
             >
               {tc.completed ? (
-                <Check className="h-2.5 w-2.5 text-muted-foreground/60" strokeWidth={3} />
+                <CheckIcon className="h-2.5 w-2.5 text-muted-foreground/60" strokeWidth={2.25} />
               ) : (
                 <span className="inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
               )}
@@ -1196,7 +1196,7 @@ function MessageActions({
   return (
     <div className="flex items-center gap-0.5 opacity-0 focus-within:opacity-100 group-hover/msg:opacity-100 transition-opacity">
       <button type="button" onClick={handleCopy} className={btn} title="Kopiera svaret">
-        {copied ? <Check className="h-3 w-3" /> : <Copy className="h-3 w-3" />}
+        {copied ? <CheckIcon className="h-3 w-3" /> : <Square2StackIcon className="h-3 w-3" />}
         {copied ? 'Kopierat' : 'Kopiera'}
       </button>
       <button
@@ -1207,7 +1207,7 @@ function MessageActions({
         title="Bra svar"
         aria-pressed={vote === 'up'}
       >
-        <ThumbsUp className="h-3 w-3" />
+        <HandThumbUpIcon className="h-3 w-3" />
         <span className="sr-only">Bra svar</span>
       </button>
       <button
@@ -1218,12 +1218,12 @@ function MessageActions({
         title="Dåligt svar"
         aria-pressed={vote === 'down'}
       >
-        <ThumbsDown className="h-3 w-3" />
+        <HandThumbDownIcon className="h-3 w-3" />
         <span className="sr-only">Dåligt svar</span>
       </button>
       {onRegenerate && (
         <button type="button" onClick={onRegenerate} className={btn} title="Generera om svaret">
-          <RotateCw className="h-3 w-3" />
+          <ArrowPathIcon className="h-3 w-3" />
           Generera om
         </button>
       )}
@@ -1263,7 +1263,7 @@ function ReasoningBlock({ reasoning, active }: { reasoning: string; active: bool
         {active ? (
           <span className="inline-flex h-1.5 w-1.5 rounded-full bg-foreground/60" />
         ) : (
-          <Brain className="h-3 w-3" />
+          <LightBulbIcon className="h-3 w-3" />
         )}
         {active ? 'Tänker…' : show ? 'Dölj resonemang' : 'Visa resonemang'}
       </button>
@@ -1284,7 +1284,7 @@ const MEMORY_KIND_LABEL: Record<'fact' | 'preference' | 'pattern' | 'correction'
 }
 
 function MemoryChip({ event }: { event: MemoryEvent }) {
-  const Icon = event.action === 'remembered' ? BookmarkCheck : BookmarkX
+  const Icon = event.action === 'remembered' ? BookmarkIcon : BookmarkSlashIcon
   const verb = event.action === 'remembered' ? 'Sparat som minne' : 'Glömt minne'
   const kindLabel = event.memory_kind ? MEMORY_KIND_LABEL[event.memory_kind] : null
   const snippet = event.content

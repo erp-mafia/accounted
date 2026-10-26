@@ -21,7 +21,7 @@ import {
   expectedRotRutPayoutAmount,
   getRotRutPayoutMatchTargetState,
 } from '@/lib/invoices/rot-rut-payout-matching'
-import { CheckCircle2, AlertTriangle } from 'lucide-react'
+import { CheckCircleIcon, ExclamationTriangleIcon } from '@/components/icons'
 import type { DeductionType } from '@/types'
 import { DEDUCTION_TYPE_LABEL_KEYS } from '@/lib/bookkeeping/rot-rut-rules'
 import type { TransactionWithInvoice } from './transaction-types'
@@ -225,7 +225,7 @@ export default function RotRutPayoutMatchDialog({
 
             {targetBlocked ? (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                 <div className="text-sm">
                   <p className="font-medium">
                     {t(blockedState === 'settled' ? 'target_settled_title' : 'target_not_open_title')}
@@ -241,14 +241,14 @@ export default function RotRutPayoutMatchDialog({
               </div>
             ) : amountsMatch ? (
               <div className="flex items-center gap-2 p-3 rounded-lg bg-success/10 text-success">
-                <CheckCircle2 className="h-4 w-4 flex-shrink-0" />
+                <CheckCircleIcon className="h-4 w-4 flex-shrink-0" />
                 <p className="text-sm font-medium">
                   {isSet ? t('amounts_match_set') : t('amounts_match')}
                 </p>
               </div>
             ) : (
               <div className="flex items-start gap-2 p-3 rounded-lg bg-muted/30 text-attn">
-                <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5" />
+                <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5" />
                 <div className="text-sm">
                   <p className="font-medium">{isSet ? t('amounts_differ_set') : t('amounts_differ')}</p>
                   <p>{t('amount_diff', { amount: formatCurrency(diff, currency) })}</p>

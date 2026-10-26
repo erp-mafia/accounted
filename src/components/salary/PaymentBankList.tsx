@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import useSWR from 'swr'
 import { useLocale, useTranslations } from 'next-intl'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
 import { DefRow } from '@/components/ui/detail-section'
 import { Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
@@ -69,7 +69,7 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
             className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
             aria-expanded={open}
           >
-            <ChevronDown className={cn('h-3 w-3 transition-transform duration-150', open && 'rotate-180')} />
+            <ChevronDownIcon className={cn('h-3 w-3 transition-transform duration-150', open && 'rotate-180')} />
             {open ? t('bank_list_hide') : t('bank_list_show')}
           </button>
           <a

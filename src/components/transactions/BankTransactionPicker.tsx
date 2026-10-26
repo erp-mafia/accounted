@@ -11,7 +11,7 @@ import {
   searchUnmatchedOutgoingTransactions,
   type UnmatchedOutgoingTransaction,
 } from '@/lib/transactions/outgoing-transaction-search'
-import { Loader2, Search, ArrowDownRight } from 'lucide-react'
+import { ArrowDownRightIcon, MagnifyingGlassIcon, SpinnerIcon } from '@/components/icons'
 
 /** Pause after the last keystroke before the search goes to the database. */
 const SEARCH_DEBOUNCE_MS = 250
@@ -112,7 +112,7 @@ export default function BankTransactionPicker({
         </DialogHeader>
 
         <div className="relative">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <MagnifyingGlassIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
           <Input
             autoFocus
             placeholder="Sök på beskrivning..."
@@ -125,12 +125,12 @@ export default function BankTransactionPicker({
         <div className="flex-1 overflow-y-auto space-y-2 -mx-1 px-1">
           {isLoading ? (
             <div className="flex items-center justify-center py-12 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+              <SpinnerIcon className="h-4 w-4 animate-spin mr-2" />
               Laddar transaktioner…
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-12 text-sm text-muted-foreground">
-              <ArrowDownRight className="h-8 w-8 mb-2" />
+              <ArrowDownRightIcon className="h-8 w-8 mb-2" />
               {appliedSearch === ''
                 ? 'Inga okategoriserade utgifts­transaktioner hittades.'
                 : `Inga transaktioner matchar "${appliedSearch}".`}

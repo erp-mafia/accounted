@@ -10,21 +10,20 @@ import { VoucherLinesTable, type VoucherTableLine } from '@/components/bookkeepi
 import { voucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 import { Textarea } from '@/components/ui/textarea'
 import {
-  ArrowLeft,
-  Lock,
-  Pencil,
-  Copy,
-  CalendarClock,
-  FileText,
-  RotateCcw,
-  Scissors,
-  PenLine,
-  Bot,
-  MoreHorizontal,
-  Trash2,
-  Users,
-  Split,
-} from 'lucide-react'
+  ArrowLeftIcon,
+  ArrowUturnLeftIcon,
+  CalendarDaysIcon,
+  CpuChipIcon,
+  DocumentTextIcon,
+  EllipsisHorizontalIcon,
+  LockClosedIcon,
+  PencilIcon,
+  PencilSquareIcon,
+  ScissorsIcon,
+  Square2StackIcon,
+  TrashIcon,
+  UsersIcon,
+} from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -414,7 +413,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           href="/bookkeeping"
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           {t('back')}
         </Link>
         <p className="py-12 text-center text-sm text-muted-foreground">{error || t('error_not_found')}</p>
@@ -541,7 +540,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
         aria-label="Ändra dimensioner"
         title="Ändra dimensioner (påverkar endast internredovisningen)"
       >
-        <Pencil className="h-3 w-3" />
+        <PencilIcon className="h-3 w-3" />
       </button>
     ) : null
 
@@ -631,7 +630,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   disabled={!canWrite}
                   title={!canWrite ? t('read_only_tooltip') : undefined}
                 >
-                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                  {!canWrite ? <LockClosedIcon className="mr-2 h-4 w-4" /> : <PencilIcon className="mr-2 h-4 w-4" />}
                   {t('edit_draft')}
                 </Button>
               )}
@@ -642,7 +641,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   loading={isCommitting}
                   title={!canWrite ? t('read_only_tooltip') : undefined}
                 >
-                  {!canWrite && !isCommitting && <Lock className="mr-2 h-4 w-4" />}
+                  {!canWrite && !isCommitting && <LockClosedIcon className="mr-2 h-4 w-4" />}
                   {t('post')}
                 </Button>
               )}
@@ -653,7 +652,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   disabled={!canWrite}
                   title={!canWrite ? t('read_only_tooltip') : undefined}
                 >
-                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Pencil className="mr-2 h-4 w-4" />}
+                  {!canWrite ? <LockClosedIcon className="mr-2 h-4 w-4" /> : <PencilIcon className="mr-2 h-4 w-4" />}
                   {t('correct_opening_balances')}
                 </Button>
               )}
@@ -664,7 +663,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                   disabled={!canWrite}
                   title={!canWrite ? t('read_only_tooltip') : undefined}
                 >
-                  {!canWrite ? <Lock className="mr-2 h-4 w-4" /> : <Scissors className="mr-2 h-4 w-4" />}
+                  {!canWrite ? <LockClosedIcon className="mr-2 h-4 w-4" /> : <ScissorsIcon className="mr-2 h-4 w-4" />}
                   {t('strike_lines')}
                 </Button>
               )}
@@ -672,7 +671,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
-                    <MoreHorizontal className="h-4 w-4" />
+                    <EllipsisHorizontalIcon className="h-4 w-4" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="min-w-[240px]">
@@ -681,7 +680,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                       so it is offered on drafts too, matching the list surfaces. */}
                   <DropdownMenuItem asChild disabled={!canWrite}>
                     <Link href={`/bookkeeping?copy_from=${entry.id}`}>
-                      <Copy className="h-4 w-4" />
+                      <Square2StackIcon className="h-4 w-4" />
                       {t('copy_entry')}
                     </Link>
                   </DropdownMenuItem>
@@ -692,7 +691,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     <>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onSelect={() => setShowSplitIB(true)} disabled={!canWrite}>
-                        <Split className="h-4 w-4" />
+                        <ScissorsIcon className="h-4 w-4" />
                         {t('split_opening_balance_per_project')}
                       </DropdownMenuItem>
                     </>
@@ -708,25 +707,25 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                       )}
                       {canInlineRattelse && (
                         <DropdownMenuItem onSelect={() => setShowStrikeLines(true)} disabled={!canWrite || yearClosed}>
-                          <Scissors className="h-4 w-4" />
+                          <ScissorsIcon className="h-4 w-4" />
                           {t('strike_lines')}
                         </DropdownMenuItem>
                       )}
                       <DropdownMenuItem onSelect={() => setShowCorrectMetadata(true)} disabled={!canWrite || yearClosed}>
-                        <PenLine className="h-4 w-4" />
+                        <PencilSquareIcon className="h-4 w-4" />
                         {t('correct_metadata')}
                       </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_lines') : setShowCorrection(true))} disabled={!canWrite || yearClosed}>
-                        <Pencil className="h-4 w-4" />
+                        <PencilIcon className="h-4 w-4" />
                         {t('correct_lines')}
                       </DropdownMenuItem>
                       <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('correct_date') : setShowRecordate(true))} disabled={!canWrite || yearClosed}>
-                        <CalendarClock className="h-4 w-4" />
+                        <CalendarDaysIcon className="h-4 w-4" />
                         {t('correct_date')}
                       </DropdownMenuItem>
                       <DropdownMenuSeparator />
                       <DropdownMenuItem onSelect={() => (owner ? setOwnedIntent('reverse') : setShowReverseConfirm(true))} disabled={!canWrite || yearClosed}>
-                        <RotateCcw className="h-4 w-4" />
+                        <ArrowUturnLeftIcon className="h-4 w-4" />
                         {t('reverse_action')}
                       </DropdownMenuItem>
                     </>
@@ -749,7 +748,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                         disabled={!canWrite}
                         className="text-destructive focus:text-destructive"
                       >
-                        <Trash2 className="h-4 w-4" />
+                        <TrashIcon className="h-4 w-4" />
                         {entry.status === 'draft' ? t('delete_draft') : t('delete_entry')}
                       </DropdownMenuItem>
                     </>
@@ -797,7 +796,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           {entry.committed_at && entry.committed_actor_type && (
             <DefRow label={t('field_committed_by')}>
               <span className="inline-flex items-center gap-1">
-                {entry.committed_actor_type !== 'user' && <Bot className="h-4 w-4 shrink-0 text-muted-foreground" />}
+                {entry.committed_actor_type !== 'user' && <CpuChipIcon className="h-4 w-4 shrink-0 text-muted-foreground" />}
                 {committedByLabel(entry.committed_actor_type, entry.committed_actor_label, t)}
               </span>
             </DefRow>
@@ -940,7 +939,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
                     : ref.type === 'supplier_invoice'
                       ? t('reference_supplier_invoice', { number })
                       : t('reference_salary_run', { number })
-                const Icon = ref.type === 'salary_run' ? Users : FileText
+                const Icon = ref.type === 'salary_run' ? UsersIcon : DocumentTextIcon
                 return (
                   <li key={`${ref.type}-${ref.id}`} className="py-1 first:pt-0 last:pb-0">
                     <Link href={href} className="inline-flex items-center gap-2 hover:underline">

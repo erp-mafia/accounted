@@ -1,5 +1,5 @@
 import Link from 'next/link'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { isSelfHosted } from '@/lib/env/public-flags'
 
@@ -23,7 +23,7 @@ export function UpgradeNote({ children, className }: { children?: React.ReactNod
         className,
       )}
     >
-      <Lock className="h-4 w-4 mt-0.5 shrink-0" />
+      <LockClosedIcon className="h-4 w-4 mt-0.5 shrink-0" />
       <span>{content}</span>
     </div>
   )

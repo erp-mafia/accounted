@@ -19,18 +19,18 @@ import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
 import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
 import {
-  FileText,
-  ImageIcon,
-  Download,
-  ChevronDown,
-  ChevronUp,
-  Plus,
-  Trash2,
-  RefreshCw,
-  Lock,
-  AlertTriangle,
-  Inbox,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
+  DocumentTextIcon,
+  ExclamationTriangleIcon,
+  InboxIcon,
+  LockClosedIcon,
+  PhotoIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@/components/icons'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
@@ -316,7 +316,7 @@ export default function JournalEntryAttachments({
             size="sm"
             onClick={() => setShowInboxPicker(true)}
           >
-            <Inbox className="h-3 w-3 mr-1" />
+            <InboxIcon className="h-3 w-3 mr-1" />
             {t('choose_from_inbox')}
           </Button>
           <Button
@@ -324,7 +324,7 @@ export default function JournalEntryAttachments({
             size="sm"
             onClick={() => setShowUpload(!showUpload)}
           >
-            <Plus className="h-3 w-3 mr-1" />
+            <PlusIcon className="h-3 w-3 mr-1" />
             {t('add')}
           </Button>
         </div>
@@ -362,20 +362,20 @@ export default function JournalEntryAttachments({
                       className="shrink-0 hover:text-primary transition-colors"
                     >
                       {expandedDoc === doc.id ? (
-                        <ChevronUp className="h-4 w-4" />
+                        <ChevronUpIcon className="h-4 w-4" />
                       ) : (
-                        <ChevronDown className="h-4 w-4" />
+                        <ChevronDownIcon className="h-4 w-4" />
                       )}
                     </button>
                   ) : (
-                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
                   )}
 
                   {previewable && expandedDoc !== doc.id && (
                     kind === 'image' ? (
-                      <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
                     ) : (
-                      <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
                     )
                   )}
 
@@ -400,7 +400,7 @@ export default function JournalEntryAttachments({
                         title={t('replace')}
                         aria-label={t('replace')}
                       >
-                        {!isReplacing && <RefreshCw className="h-3 w-3" />}
+                        {!isReplacing && <ArrowPathIcon className="h-3 w-3" />}
                       </Button>
 
                       <Button
@@ -411,7 +411,7 @@ export default function JournalEntryAttachments({
                         title={t('remove')}
                         aria-label={t('remove')}
                       >
-                        <Trash2 className="h-3 w-3" />
+                        <TrashIcon className="h-3 w-3" />
                       </Button>
                     </>
                   )}
@@ -424,7 +424,7 @@ export default function JournalEntryAttachments({
                     title={t('download')}
                     aria-label={t('download')}
                   >
-                    <Download className="h-3 w-3" />
+                    <ArrowDownTrayIcon className="h-3 w-3" />
                   </Button>
                 </div>
 
@@ -465,7 +465,7 @@ export default function JournalEntryAttachments({
           <DialogHeader>
             <div className="flex items-center gap-3">
               <div className="flex h-10 w-10 items-center justify-center rounded-full bg-muted shrink-0">
-                <Lock className="h-5 w-5 text-attn" />
+                <LockClosedIcon className="h-5 w-5 text-attn" />
               </div>
               <DialogTitle>{t('remove_blocked_title')}</DialogTitle>
             </div>
@@ -476,7 +476,7 @@ export default function JournalEntryAttachments({
 
           <div className="rounded-lg border border-border bg-muted/30 p-3 text-sm">
             <div className="flex items-start gap-2">
-              <AlertTriangle className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+              <ExclamationTriangleIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
               <p className="text-muted-foreground">
                 {blockedDoc !== null && hasDuplicateSibling(blockedDoc)
                   ? t('detach_hint')

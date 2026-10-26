@@ -5,7 +5,12 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Sun, Moon, Monitor, ExternalLink } from 'lucide-react'
+import {
+  ArrowTopRightOnSquareIcon,
+  ComputerDesktopIcon,
+  MoonIcon,
+  SunIcon,
+} from '@/components/icons'
 import { useTheme } from 'next-themes'
 import { createClient } from '@/lib/supabase/client'
 import { fetchSessionUser } from '@/lib/auth/session-client'
@@ -260,7 +265,7 @@ export function AccountSettingsContent() {
                   value: 'light',
                   label: (
                     <span className="inline-flex items-center gap-1.5">
-                      <Sun className="h-3.5 w-3.5" />
+                      <SunIcon className="h-3.5 w-3.5" />
                       {tCommon('theme_light')}
                     </span>
                   ),
@@ -269,7 +274,7 @@ export function AccountSettingsContent() {
                   value: 'dark',
                   label: (
                     <span className="inline-flex items-center gap-1.5">
-                      <Moon className="h-3.5 w-3.5" />
+                      <MoonIcon className="h-3.5 w-3.5" />
                       {tCommon('theme_dark')}
                     </span>
                   ),
@@ -278,7 +283,7 @@ export function AccountSettingsContent() {
                   value: 'system',
                   label: (
                     <span className="inline-flex items-center gap-1.5">
-                      <Monitor className="h-3.5 w-3.5" />
+                      <ComputerDesktopIcon className="h-3.5 w-3.5" />
                       {tCommon('theme_system')}
                     </span>
                   ),
@@ -333,7 +338,7 @@ export function AccountSettingsContent() {
           <SettingsRowEnd>
             <Button variant="outline" size="sm" asChild>
               <Link href="/terms" target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
               </Link>
             </Button>
@@ -343,7 +348,7 @@ export function AccountSettingsContent() {
           <SettingsRowEnd>
             <Button variant="outline" size="sm" asChild>
               <Link href="/privacy" target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
               </Link>
             </Button>
@@ -353,7 +358,7 @@ export function AccountSettingsContent() {
           <SettingsRowEnd>
             <Button variant="outline" size="sm" asChild>
               <Link href="/dpa" target="_blank" rel="noopener noreferrer">
-                <ExternalLink className="mr-2 h-3.5 w-3.5" />
+                <ArrowTopRightOnSquareIcon className="mr-2 h-3.5 w-3.5" />
                 {tCommon('open')}
               </Link>
             </Button>

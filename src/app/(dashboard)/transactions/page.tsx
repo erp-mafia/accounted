@@ -19,7 +19,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { Loader2, SlidersHorizontal, Check } from 'lucide-react'
+import { AdjustmentsHorizontalIcon, CheckIcon, SpinnerIcon } from '@/components/icons'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
@@ -4488,7 +4488,7 @@ export default function TransactionsPage() {
                 aria-label={t('columns_button')}
                 title={t('columns_button')}
               >
-                <SlidersHorizontal className="h-4 w-4" />
+                <AdjustmentsHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end" className="min-w-[12rem]">
@@ -4498,7 +4498,7 @@ export default function TransactionsPage() {
                   onSelect={(e) => e.preventDefault()}
                   onClick={() => toggleColumn(c.id)}
                 >
-                  <Check className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
+                  <CheckIcon className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
                   {t(c.labelKey)}
                 </DropdownMenuItem>
               ))}
@@ -4508,7 +4508,7 @@ export default function TransactionsPage() {
           {/* Quiet cue that a scope change is reconciling behind the rendered
               list (the list itself never swaps to a skeleton for it). */}
           {isScopeRefreshing && (
-            <Loader2
+            <SpinnerIcon
               className="h-3.5 w-3.5 animate-spin text-muted-foreground"
               aria-label={t('refreshing')}
             />
@@ -4590,7 +4590,7 @@ export default function TransactionsPage() {
               >
                 {batchProgress ? (
                   <span className="flex items-center gap-2 text-muted-foreground">
-                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
                     {t('batch_progress', { done: batchProgress.done, total: batchProgress.total })}
                   </span>
                 ) : (

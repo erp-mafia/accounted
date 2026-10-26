@@ -14,7 +14,13 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ArrowUpRight, ArrowDownRight, FileText, Inbox, X } from 'lucide-react'
+import {
+  ArrowDownRightIcon,
+  ArrowUpRightIcon,
+  DocumentTextIcon,
+  InboxIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import DocumentUploadZone from '@/components/bookkeeping/DocumentUploadZone'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import InboxDocumentPicker from '@/components/bookkeeping/InboxDocumentPicker'
@@ -141,9 +147,9 @@ export default function TransactionAttachDocumentDialog({
             }`}
           >
             {isIncome ? (
-              <ArrowUpRight className="h-4 w-4" />
+              <ArrowUpRightIcon className="h-4 w-4" />
             ) : (
-              <ArrowDownRight className="h-4 w-4" />
+              <ArrowDownRightIcon className="h-4 w-4" />
             )}
           </div>
           <div className="flex-1 min-w-0">
@@ -194,7 +200,7 @@ export default function TransactionAttachDocumentDialog({
           />
           {pickedDoc && (
             <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
-              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+              <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
               <span className="truncate flex-1">
                 {pickedDoc.supplier_name ?? pickedDoc.file_name}
               </span>
@@ -210,7 +216,7 @@ export default function TransactionAttachDocumentDialog({
                 aria-label={t('selected_remove')}
                 onClick={() => setPickedDoc(null)}
               >
-                <X className="h-3 w-3" />
+                <XMarkIcon className="h-3 w-3" />
               </Button>
             </div>
           )}
@@ -222,7 +228,7 @@ export default function TransactionAttachDocumentDialog({
             disabled={isAttaching}
             onClick={() => setInboxPickerOpen(true)}
           >
-            <Inbox className="h-4 w-4 mr-2" />
+            <InboxIcon className="h-4 w-4 mr-2" />
             {t('pick_existing')}
           </Button>
         </div>

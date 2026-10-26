@@ -18,7 +18,12 @@ import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Plus, FileInput, Lock, SlidersHorizontal } from 'lucide-react'
+import {
+  AdjustmentsHorizontalIcon,
+  DocumentArrowUpIcon,
+  LockClosedIcon,
+  PlusIcon,
+} from '@/components/icons'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -531,12 +536,12 @@ export default function SupplierInvoicesPage() {
           <SupplierInboxAddress />
           {canWrite ? (
             <Button size="sm" onClick={openNewInvoice}>
-              <Plus className="mr-2 h-4 w-4" />
+              <PlusIcon className="mr-2 h-4 w-4" />
               {t('register_invoice')}
             </Button>
           ) : (
             <Button size="sm" disabled title={t('viewer_disabled_tooltip')}>
-              <Lock className="mr-2 h-4 w-4" />
+              <LockClosedIcon className="mr-2 h-4 w-4" />
               {t('register_invoice')}
             </Button>
           )}
@@ -601,7 +606,7 @@ export default function SupplierInvoicesPage() {
                 aria-label={t('group_picker_aria')}
                 title={t('group_by')}
               >
-                <SlidersHorizontal className="h-4 w-4" />
+                <AdjustmentsHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
@@ -649,7 +654,7 @@ export default function SupplierInvoicesPage() {
         </div>
       ) : filteredInvoices.length === 0 ? (
         <DataListEmpty
-          icon={<FileInput className="h-6 w-6" />}
+          icon={<DocumentArrowUpIcon className="h-6 w-6" />}
           title={t('empty_title')}
           description={
             activeTab === 'all' && !searchTerm

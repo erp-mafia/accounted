@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
-import { Check, Lock } from 'lucide-react'
+import { CheckIcon, LockClosedIcon } from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useSaveSettings } from '@/components/settings/use-save-settings'
 import type { CompanySettings } from '@/types'
@@ -146,7 +146,7 @@ export function SettingsSaveBar({
           t('wrapper_saving')
         ) : !canWrite ? (
           <>
-            <Lock className="mr-2 h-3.5 w-3.5" />
+            <LockClosedIcon className="mr-2 h-3.5 w-3.5" />
             {t('wrapper_save_changes')}
           </>
         ) : (
@@ -156,7 +156,7 @@ export function SettingsSaveBar({
       {secondary}
       {saved ? (
         <span className="flex items-center gap-2 text-sm text-muted-foreground animate-in fade-in duration-150">
-          <Check className="h-3.5 w-3.5" />
+          <CheckIcon className="h-3.5 w-3.5" />
           {t('wrapper_saved')}
         </span>
       ) : (

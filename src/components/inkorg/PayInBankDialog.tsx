@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Check, Copy } from 'lucide-react'
+import { CheckIcon, Square2StackIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -177,7 +177,7 @@ export function CopyRow({ label, value, suffix }: { label: string; value: string
         {state === 'selected' && <span className="block text-[12.5px] text-muted-foreground">{t('pay_copy_selected')}</span>}
       </dd>
       <Button variant="ghost" size="sm" onClick={() => void copy()} aria-label={t('pay_copy_aria', { label })}>
-        {state === 'copied' ? <Check aria-hidden="true" className="mr-1 h-3.5 w-3.5" /> : <Copy aria-hidden="true" className="mr-1 h-3.5 w-3.5" />}
+        {state === 'copied' ? <CheckIcon aria-hidden="true" className="mr-1 h-3.5 w-3.5" /> : <Square2StackIcon aria-hidden="true" className="mr-1 h-3.5 w-3.5" />}
         {state === 'copied' ? t('copied') : t('copy')}
       </Button>
       <span className="sr-only" aria-live="polite">

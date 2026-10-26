@@ -7,7 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/u
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
-import { AlertTriangle } from 'lucide-react'
+import { ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveAccount } from '@/lib/cash-accounts/resolve-account'
@@ -291,7 +291,7 @@ export default function DuplicateBookingDialog({
                   null amount already shows dialog_duplicate_amount_unknown. */}
               {candidate.amount == null && candidate.currency && (
                 <div className="flex items-start gap-2 pt-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+                  <ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-attn leading-snug">
                     {t('dialog_duplicate_sek_unavailable', { currency: candidate.currency })}
                   </p>
@@ -303,7 +303,7 @@ export default function DuplicateBookingDialog({
                   match rests on date + account + direction alone. */}
               {candidate.amount != null && !candidate.amount_verified && (
                 <div className="flex items-start gap-2 pt-1">
-                  <AlertTriangle className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
+                  <ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn flex-shrink-0 mt-0.5" />
                   <p className="text-xs text-attn leading-snug">
                     {t('dialog_duplicate_amount_unverified')}
                   </p>

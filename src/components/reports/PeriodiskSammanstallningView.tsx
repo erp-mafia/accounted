@@ -25,14 +25,14 @@ import {
   TableBody,
 } from '@/components/ui/table'
 import {
-  Download,
-  AlertCircle,
-  AlertTriangle,
-  CheckCircle2,
-  FileText,
-  ExternalLink,
-  RefreshCw,
-} from 'lucide-react'
+  ArrowDownTrayIcon,
+  ArrowPathIcon,
+  ArrowTopRightOnSquareIcon,
+  CheckCircleIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+} from '@/components/icons'
 import { formatCurrency, formatWholeKr } from '@/lib/utils'
 import type {
   PeriodiskSammanstallningReport,
@@ -216,7 +216,7 @@ export function PeriodiskSammanstallningView() {
               onClick={() => setRetryKey((k) => k + 1)}
               disabled={loading}
             >
-              <RefreshCw className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
+              <ArrowPathIcon className={`h-4 w-4 ${loading ? 'animate-spin' : ''}`} />
             </Button>
           </div>
         </CardContent>
@@ -225,7 +225,7 @@ export function PeriodiskSammanstallningView() {
       {error && (
         <Card>
           <CardContent className="p-6 flex flex-wrap items-center gap-3 text-destructive">
-            <AlertCircle className="h-4 w-4 shrink-0" />
+            <ExclamationCircleIcon className="h-4 w-4 shrink-0" />
             <span className="text-sm">{error}</span>
             <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
               Försök igen
@@ -288,7 +288,7 @@ export function PeriodiskSammanstallningView() {
                 <div className="text-sm text-muted-foreground border-t pt-3">
                   {data.reconciliation.matches ? (
                     <span className="text-foreground inline-flex items-start gap-2">
-                      <CheckCircle2 className="h-4 w-4 mt-1 shrink-0 text-success" />
+                      <CheckCircleIcon className="h-4 w-4 mt-1 shrink-0 text-success" />
                       <span>
                         Stämmer mot momsdeklarationen
                         {' '}(Ruta 39: {formatWholeKr(data.reconciliation.ruta39 ?? 0)} kr,
@@ -298,7 +298,7 @@ export function PeriodiskSammanstallningView() {
                     </span>
                   ) : (
                     <span className="text-destructive inline-flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 mt-1 shrink-0" />
+                      <ExclamationTriangleIcon className="h-4 w-4 mt-1 shrink-0" />
                       <span>
                         Avviker från momsdeklarationen: kontrollera bokföringen.
                         {' '}Ruta 39: {formatWholeKr(data.reconciliation.ruta39 ?? 0)} kr,
@@ -330,7 +330,7 @@ export function PeriodiskSammanstallningView() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base text-destructive flex items-center gap-2">
-                  <AlertCircle className="h-4 w-4" />
+                  <ExclamationCircleIcon className="h-4 w-4" />
                   {errors.length} fel måste åtgärdas
                 </CardTitle>
               </CardHeader>
@@ -348,7 +348,7 @@ export function PeriodiskSammanstallningView() {
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2 text-foreground">
-                  <AlertTriangle className="h-4 w-4 text-warning" />
+                  <ExclamationTriangleIcon className="h-4 w-4 text-warning" />
                   Varningar ({cautions.length})
                 </CardTitle>
               </CardHeader>
@@ -374,7 +374,7 @@ export function PeriodiskSammanstallningView() {
                     onClick={downloadCsv}
                     disabled={hasBlockingErrors}
                   >
-                    <Download className="h-4 w-4 mr-2" />
+                    <ArrowDownTrayIcon className="h-4 w-4 mr-2" />
                     Ladda ner CSV (SKV 5740)
                   </Button>
                 </div>
@@ -431,7 +431,7 @@ export function PeriodiskSammanstallningView() {
             // EU sale no buyer can be named for leaves no rows but may still
             // be owed a row, and the cards above name the verifikat.
             <EmptyState
-              icon={FileText}
+              icon={DocumentTextIcon}
               title="Inga EU-försäljningar i perioden"
               description="Inga EU-försäljningar med omvänd skattskyldighet under denna period. Periodisk sammanställning behöver inte lämnas in."
             >
@@ -442,7 +442,7 @@ export function PeriodiskSammanstallningView() {
                 className="text-sm text-muted-foreground hover:text-foreground inline-flex items-center gap-1 underline underline-offset-4"
               >
                 Läs mer hos Skatteverket
-                <ExternalLink className="h-3 w-3" />
+                <ArrowTopRightOnSquareIcon className="h-3 w-3" />
               </a>
             </EmptyState>
           )}

@@ -27,27 +27,29 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import {
-  Inbox,
-  Upload,
-  Mail,
-  FileText,
-  Copy,
-  RotateCcw,
-  Trash2,
-  Check,
-  Loader2,
-  AlertTriangle,
-  ArrowRight,
-  Plus,
-  Link2,
-  ExternalLink,
-  FileQuestion,
-  Search,
-  ChevronDown,
-  ChevronRight,
-  Sparkles,
-  Maximize2,
-  Globe, HelpCircle } from 'lucide-react'
+  ArrowRightIcon,
+  ArrowTopRightOnSquareIcon,
+  ArrowUpTrayIcon,
+  ArrowUturnLeftIcon,
+  ArrowsPointingOutIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  DocumentMagnifyingGlassIcon,
+  DocumentTextIcon,
+  EnvelopeIcon,
+  ExclamationTriangleIcon,
+  GlobeAltIcon,
+  InboxIcon,
+  LinkIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  QuestionMarkCircleIcon,
+  SparklesIcon,
+  SpinnerIcon,
+  Square2StackIcon,
+  TrashIcon,
+} from '@/components/icons'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateTime } from '@/lib/utils'
 import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
@@ -1431,7 +1433,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
       {/* Top bar */}
       <header className="flex items-center justify-between gap-4 border-b px-4 py-2.5 flex-wrap">
         <div className="flex items-center gap-2 min-w-0">
-          <Inbox className="h-4 w-4 text-muted-foreground shrink-0" />
+          <InboxIcon className="h-4 w-4 text-muted-foreground shrink-0" />
           <h1 className="text-sm shrink-0">Dokumentinkorg</h1>
           {/* Where the page's contents come from, behind one chip. The detail
               is a thing people look up when something seems wrong, not
@@ -1450,13 +1452,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               )}
               aria-expanded={sourcesOpen}
             >
-              {mailboxNeedsReconnect && <AlertTriangle className="h-3 w-3 mr-1.5" />}
+              {mailboxNeedsReconnect && <ExclamationTriangleIcon className="h-3 w-3 mr-1.5" />}
               {mailboxNeedsReconnect
                 ? t('source_gmail_reconnect_chip')
                 : sourceCount === 1
                   ? t('sources_one', { count: sourceCount })
                   : t('sources_many', { count: sourceCount })}
-              <ChevronDown className="h-3 w-3 ml-1 opacity-60" />
+              <ChevronDownIcon className="h-3 w-3 ml-1 opacity-60" />
             </Button>
           ) : addressLoadFailed ? (
             // We do not know whether an address exists, so we offer a retry
@@ -1476,7 +1478,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               loading={isRotating}
               className="ml-2 shrink-0"
             >
-              {!isRotating && <Mail className="h-3.5 w-3.5 mr-1.5" />}
+              {!isRotating && <EnvelopeIcon className="h-3.5 w-3.5 mr-1.5" />}
               Aktivera inkorgsadress
             </Button>
           )}
@@ -1502,7 +1504,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             onClick={() => fileInputRef.current?.click()}
             loading={isUploading}
           >
-            {!isUploading && <Plus className="h-3.5 w-3.5 mr-1.5" />}
+            {!isUploading && <PlusIcon className="h-3.5 w-3.5 mr-1.5" />}
             {uploadQueue
               ? `Laddar ${Math.min(uploadQueue.done + 1, uploadQueue.total)} av ${uploadQueue.total}…`
               : isUploading
@@ -1547,7 +1549,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
         <div className="border-b bg-muted/20 text-xs">
           {inboxAddress && (
             <div className="flex items-center gap-3 px-4 py-2 border-b border-border">
-              <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+              <EnvelopeIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
               {/* The address once, where the copy button is. Plus-addressing
                   (#2129) as a rule, not spelled out per variant: the tag is
                   the only part that changes. */}
@@ -1573,12 +1575,12 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               }}
             >
               <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/35">
-                <Inbox className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <InboxIcon className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                 <span className="flex-1 truncate">{t('inbound_mail_title')}</span>
                 {inboundMails !== null && (
                   <span className="tabular-nums text-muted-foreground shrink-0">{inboundMails.length}</span>
                 )}
-                <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
+                <ChevronRightIcon className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
               </summary>
               <div className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-1.5">
                 <p>
@@ -1594,7 +1596,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   </AttnLine>
                 ) : inboundMails === null ? (
                   <span className="flex items-center gap-1.5">
-                    <Loader2 className="h-3 w-3 animate-spin" />
+                    <SpinnerIcon className="h-3 w-3 animate-spin" />
                     {t('inbound_mail_loading')}
                   </span>
                 ) : inboundMails.length === 0 ? (
@@ -1624,7 +1626,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
               <summary className="flex items-center gap-3 px-4 py-2 cursor-pointer list-none hover:bg-secondary/35">
                 <WhatsAppMark className="h-3.5 w-3.5 shrink-0" />
                 <span className="flex-1 truncate">WhatsApp</span>
-                <ChevronRight className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
+                <ChevronRightIcon className="h-3 w-3 text-muted-foreground transition-transform group-open:rotate-90 shrink-0" />
               </summary>
               <dl className="px-4 pb-2.5 pl-11 text-[11px] text-muted-foreground space-y-0.5">
                 <div className="flex gap-2">
@@ -1654,7 +1656,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           {items.length > 0 && (
             <div className="px-3 pb-3 space-y-2 border-b">
               <div className="relative">
-                <Search className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                <MagnifyingGlassIcon className="pointer-events-none absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
                 <Input
                   placeholder="Sök i inkorgen…"
                   value={searchTerm}
@@ -1684,7 +1686,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     : undefined
                 }
               >
-                <Check className="h-3.5 w-3.5 mr-1.5" />
+                <CheckIcon className="h-3.5 w-3.5 mr-1.5" />
                 Bokför valda
               </Button>
               {/* Secondary actions: outlined, so they read as buttons */}
@@ -1703,7 +1705,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                     }
                     disabled={isBulkDeleting}
                   >
-                    <Sparkles className="h-3.5 w-3.5 mr-1.5" />
+                    <SparklesIcon className="h-3.5 w-3.5 mr-1.5" />
                     Fråga assistenten
                   </Button>
                 )}
@@ -1717,7 +1719,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   onClick={handleBulkDelete}
                   loading={isBulkDeleting}
                 >
-                  {!isBulkDeleting && <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
+                  {!isBulkDeleting && <TrashIcon className="h-3.5 w-3.5 mr-1.5" />}
                   Ta bort
                 </Button>
               </div>
@@ -1727,7 +1729,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             // The list read failed. "Inkorgen är tom" would be a claim we
             // cannot back: a mailed-in invoice may be sitting there unread.
             <div className="p-6 text-center text-sm text-muted-foreground space-y-2">
-              <AlertTriangle className="h-5 w-5 mx-auto text-attn" />
+              <ExclamationTriangleIcon className="h-5 w-5 mx-auto text-attn" />
               <p>{t('items_load_failed')}</p>
               <Button
                 variant="outline"
@@ -1759,13 +1761,13 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   />
                 </div>
                 <div className="hidden xl:block p-6 text-center text-sm text-muted-foreground">
-                  <Inbox className="h-6 w-6 mx-auto mb-2 opacity-50" />
+                  <InboxIcon className="h-6 w-6 mx-auto mb-2 opacity-50" />
                   Inkorgen är tom.
                 </div>
               </>
             ) : (
               <div className="p-6 text-center text-sm text-muted-foreground">
-                <Inbox className="h-6 w-6 mx-auto mb-2 opacity-50" />
+                <InboxIcon className="h-6 w-6 mx-auto mb-2 opacity-50" />
                 Inkorgen är tom.
               </div>
             )
@@ -1831,7 +1833,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
             // missing without a place to put it is half an answer.
             <div className="h-full flex items-center justify-center p-8">
               <div className="text-center max-w-sm w-full">
-                <FileQuestion className="h-6 w-6 mx-auto mb-3 text-muted-foreground opacity-60" />
+                <DocumentMagnifyingGlassIcon className="h-6 w-6 mx-auto mb-3 text-muted-foreground opacity-60" />
                 <p className="text-sm">{t('purchase_no_document')}</p>
                 <p className="text-xs text-muted-foreground mt-1.5">
                   {selectedPurchase.portal
@@ -1843,7 +1845,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                   <Button size="sm" variant="outline" className="mt-4" asChild>
                     <a href={selectedPurchase.portal.url} target="_blank" rel="noopener noreferrer">
                       Öppna {selectedPurchase.portal.vendor}
-                      <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
+                      <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 ml-1.5" />
                     </a>
                   </Button>
                 )}
@@ -1872,7 +1874,7 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
                 >
                   {isUploading ? (
                     <span className="flex items-center justify-center gap-2">
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
                       Laddar upp…
                     </span>
                   ) : (
@@ -2225,11 +2227,11 @@ function InboxAddressBar({
           title={t('copy_address')}
         >
           {copyState === 'copied' ? (
-            <Check className="h-3.5 w-3.5 text-success" />
+            <CheckIcon className="h-3.5 w-3.5 text-success" />
           ) : copyState === 'failed' ? (
-            <AlertTriangle className="h-3.5 w-3.5 text-attn" />
+            <ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn" />
           ) : (
-            <Copy className="h-3.5 w-3.5" />
+            <Square2StackIcon className="h-3.5 w-3.5" />
           )}
         </button>
         <button
@@ -2241,9 +2243,9 @@ function InboxAddressBar({
           title={t('rotate_address')}
         >
           {isRotating ? (
-            <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
           ) : (
-            <RotateCcw className="h-3.5 w-3.5" />
+            <ArrowUturnLeftIcon className="h-3.5 w-3.5" />
           )}
         </button>
       </div>
@@ -2349,14 +2351,14 @@ function InboxRow({
       >
         <div className="flex items-center gap-2 min-w-0">
           {isPlaceholder ? (
-            <Loader2 className="h-3 w-3 text-muted-foreground shrink-0 animate-spin" />
+            <SpinnerIcon className="h-3 w-3 text-muted-foreground shrink-0 animate-spin" />
           ) : item.source === 'email' ? (
-            <Mail className="h-3 w-3 text-muted-foreground shrink-0" />
+            <EnvelopeIcon className="h-3 w-3 text-muted-foreground shrink-0" />
           ) : item.source === 'whatsapp' ? (
             <WhatsAppMark className="h-3 w-3 shrink-0" />
           ) : item.source === 'peppol' ? (
             // Received as a structured e-invoice over the Peppol network.
-            <Globe className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Peppol" />
+            <GlobeAltIcon className="h-3 w-3 text-muted-foreground shrink-0" aria-label="Peppol" />
           ) : item.channel_context?.mail_provider === 'gmail' ? (
             // The hunt records which mailbox it pulled a receipt from, so the
             // brand is known rather than guessed. Mail that arrived by
@@ -2365,7 +2367,7 @@ function InboxRow({
           ) : item.channel_context?.mail_provider === 'microsoft' ? (
             <MicrosoftMark className="h-3 w-3 shrink-0" />
           ) : (
-            <Upload className="h-3 w-3 text-muted-foreground shrink-0" />
+            <ArrowUpTrayIcon className="h-3 w-3 text-muted-foreground shrink-0" />
           )}
           <span className="text-sm font-medium truncate flex-1 min-w-0">
             {isPlaceholder
@@ -2373,16 +2375,16 @@ function InboxRow({
               : (supplierName ?? item.email_subject ?? 'Okänt dokument')}
           </span>
           {hasQuestion && (
-            <HelpCircle className="h-3 w-3 text-attn shrink-0" aria-label={tArkiv('question_nub')} />
+            <QuestionMarkCircleIcon className="h-3 w-3 text-attn shrink-0" aria-label={tArkiv('question_nub')} />
           )}
           {isErrored && (
-            <AlertTriangle className="h-3 w-3 text-destructive shrink-0" aria-label="Fel vid bearbetning" />
+            <ExclamationTriangleIcon className="h-3 w-3 text-destructive shrink-0" aria-label="Fel vid bearbetning" />
           )}
           {isLinkedToTransaction && (
-            <Link2 className="h-3 w-3 text-success shrink-0" aria-label="Kopplad till transaktion" />
+            <LinkIcon className="h-3 w-3 text-success shrink-0" aria-label="Kopplad till transaktion" />
           )}
           {isBooked && (
-            <Check className="h-3 w-3 text-success shrink-0" aria-label="Bokförd" />
+            <CheckIcon className="h-3 w-3 text-success shrink-0" aria-label="Bokförd" />
           )}
         </div>
         <div className="flex items-center justify-between gap-2 text-xs text-muted-foreground">
@@ -2399,7 +2401,7 @@ function InboxRow({
               )}
               {isExtracting ? (
                 <Badge variant="outline" className="font-normal">
-                  <Loader2 className="h-2.5 w-2.5 mr-1 animate-spin" />
+                  <SpinnerIcon className="h-2.5 w-2.5 mr-1 animate-spin" />
                   {t('processing_chip')}
                 </Badge>
               ) : (
@@ -2446,7 +2448,7 @@ export function DocumentPreview({
   if (isProcessing) {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-        <Loader2 className="h-6 w-6 animate-spin" />
+        <SpinnerIcon className="h-6 w-6 animate-spin" />
         <span>Tolkar dokument med AI…</span>
       </div>
     )
@@ -2454,7 +2456,7 @@ export function DocumentPreview({
   if (state === 'loading') {
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 text-sm text-muted-foreground">
-        <Loader2 className="h-6 w-6 animate-spin" />
+        <SpinnerIcon className="h-6 w-6 animate-spin" />
         <span>{t('document_loading')}</span>
       </div>
     )
@@ -2464,7 +2466,7 @@ export function DocumentPreview({
     // that there is nothing attached.
     return (
       <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
-        <AlertTriangle className="h-5 w-5 text-attn" />
+        <ExclamationTriangleIcon className="h-5 w-5 text-attn" />
         <span>{t('document_load_failed')}</span>
         {onRetry && (
           <Button variant="outline" size="sm" onClick={onRetry}>
@@ -2477,7 +2479,7 @@ export function DocumentPreview({
   if (!docUrl) {
     return (
       <div className="h-full flex items-center justify-center text-sm text-muted-foreground">
-        <FileText className="h-5 w-5 mr-2" />
+        <DocumentTextIcon className="h-5 w-5 mr-2" />
         Inget underlag bifogat
       </div>
     )
@@ -2530,7 +2532,7 @@ function EmptyPreview({
 }) {
   return (
     <div className="h-full flex flex-col items-center justify-center text-center px-6 gap-3">
-      <Inbox className="h-10 w-10 text-muted-foreground/40" />
+      <InboxIcon className="h-10 w-10 text-muted-foreground/40" />
       <div>
         <p className="text-sm font-medium">
           {onActivateInbox ? 'Aktivera din inkorgsadress' : 'Välj ett dokument från listan'}
@@ -2544,12 +2546,12 @@ function EmptyPreview({
       <div className="flex gap-2">
         {onActivateInbox && (
           <Button size="sm" onClick={onActivateInbox} loading={isActivating}>
-            {!isActivating && <Mail className="h-3.5 w-3.5 mr-1.5" />}
+            {!isActivating && <EnvelopeIcon className="h-3.5 w-3.5 mr-1.5" />}
             Aktivera inkorgsadress
           </Button>
         )}
         <Button variant="outline" size="sm" onClick={onUploadClick}>
-          <Plus className="h-3.5 w-3.5 mr-1.5" />
+          <PlusIcon className="h-3.5 w-3.5 mr-1.5" />
           Ladda upp en fil
         </Button>
       </div>
@@ -2663,7 +2665,7 @@ function PurchaseRail({ purchase }: { purchase: PurchaseWithoutUnderlag }) {
           <Button size="sm" className="w-full" asChild>
             <a href={purchase.portal.url} target="_blank" rel="noopener noreferrer">
               Öppna {purchase.portal.vendor}
-              <ExternalLink className="h-3.5 w-3.5 ml-1.5" />
+              <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5 ml-1.5" />
             </a>
           </Button>
         </div>
@@ -3139,7 +3141,7 @@ function FieldsRail({
       {item.error_message && (
         <div className="border-b border-destructive/30 bg-destructive/5 px-4 py-3 text-xs space-y-2">
           <div className="flex items-start gap-2">
-            <AlertTriangle className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
+            <ExclamationTriangleIcon className="h-3.5 w-3.5 text-destructive shrink-0 mt-0.5" />
             <div>
               <p className="font-medium">Fel vid bearbetning</p>
               <p className="text-muted-foreground mt-0.5">{item.error_message}</p>
@@ -3153,7 +3155,7 @@ function FieldsRail({
               onClick={handleRetry}
               loading={isRetrying}
             >
-              {!isRetrying && <RotateCcw className="h-3 w-3 mr-1.5" />}
+              {!isRetrying && <ArrowUturnLeftIcon className="h-3 w-3 mr-1.5" />}
               Försök igen
             </Button>
           )}
@@ -3233,7 +3235,7 @@ function FieldsRail({
               onClick={handleRetry}
               loading={isRetrying}
             >
-              {!isRetrying && <RotateCcw className="h-3 w-3 mr-1.5" />}
+              {!isRetrying && <ArrowUturnLeftIcon className="h-3 w-3 mr-1.5" />}
               {t('retry_extraction')}
             </Button>
           </div>
@@ -3263,7 +3265,7 @@ function FieldsRail({
 
         <details className="group" open={!isLinkedToTransaction}>
           <summary className="flex items-center gap-1.5 cursor-pointer list-none text-xs uppercase tracking-wide text-muted-foreground font-medium hover:text-foreground">
-            <ChevronRight className="h-3 w-3 transition-transform group-open:rotate-90" />
+            <ChevronRightIcon className="h-3 w-3 transition-transform group-open:rotate-90" />
             <span className="flex-1">{t('fields_summary')}</span>
             {/* A count, not a score. "5 av 12" read as a bad extraction even
                 when a kvitto had given up everything a kvitto has: half those
@@ -3290,7 +3292,7 @@ function FieldsRail({
                 title={t('expand_fields')}
                 className="p-1 -m-1 hover:text-foreground"
               >
-                <Maximize2 className="h-3.5 w-3.5" />
+                <ArrowsPointingOutIcon className="h-3.5 w-3.5" />
               </span>
             )}
           </summary>
@@ -3298,7 +3300,7 @@ function FieldsRail({
         {inFlight ? (
           <div className="space-y-2">
             <div className="text-xs text-muted-foreground italic flex items-center gap-2 mb-2">
-              <Loader2 className="h-3 w-3 animate-spin" />
+              <SpinnerIcon className="h-3 w-3 animate-spin" />
               Tolkar dokument med AI…
             </div>
             {Array.from({ length: 6 }).map((_, i) => (
@@ -3311,7 +3313,7 @@ function FieldsRail({
           // upload and manual entry stay available via the actions below.
           <div className="rounded-lg border border-border bg-secondary/40 px-4 py-3 text-left">
             <div className="flex items-center gap-2 text-sm font-medium">
-              <Sparkles className="h-4 w-4" />
+              <SparklesIcon className="h-4 w-4" />
               AI-tolkning ingår i abonnemanget
             </div>
             <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
@@ -3342,7 +3344,7 @@ function FieldsRail({
         {isProcessed && item.created_supplier_invoice_id ? (
           <Link href={`/supplier-invoices/${item.created_supplier_invoice_id}`} className="block">
             <Button variant="default" size="sm" className="w-full">
-              <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
+              <ArrowRightIcon className="h-3.5 w-3.5 mr-1.5" />
               Öppna leverantörsfaktura
             </Button>
           </Link>
@@ -3350,7 +3352,7 @@ function FieldsRail({
           <>
             <Link href={`/bookkeeping/${bookedEntryId}`} className="block">
               <Button variant="default" size="sm" className="w-full">
-                <ArrowRight className="h-3.5 w-3.5 mr-1.5" />
+                <ArrowRightIcon className="h-3.5 w-3.5 mr-1.5" />
                 Öppna verifikation
               </Button>
             </Link>
@@ -3489,18 +3491,18 @@ function FieldsRail({
                   : undefined
           }
         >
-          {!isDeleting && <Trash2 className="h-3.5 w-3.5 mr-1.5" />}
+          {!isDeleting && <TrashIcon className="h-3.5 w-3.5 mr-1.5" />}
           Ta bort
         </Button>
         {isProcessed && (
           <Badge variant="secondary" className="w-full justify-center text-[11px]">
-            <Check className="h-2.5 w-2.5 mr-1" />
+            <CheckIcon className="h-2.5 w-2.5 mr-1" />
             Bearbetad
           </Badge>
         )}
         {isBookedDirectly && (
           <Badge variant="secondary" className="w-full justify-center text-[11px]">
-            <Check className="h-2.5 w-2.5 mr-1" />
+            <CheckIcon className="h-2.5 w-2.5 mr-1" />
             Bokförd
           </Badge>
         )}
@@ -3514,13 +3516,13 @@ function FieldsRail({
                 variant="secondary"
                 className="w-full justify-center text-[11px] hover:bg-secondary/60"
               >
-                <Link2 className="h-2.5 w-2.5 mr-1" />
+                <LinkIcon className="h-2.5 w-2.5 mr-1" />
                 Kopplad till transaktion
               </Badge>
             </Link>
           ) : (
             <Badge variant="secondary" className="w-full justify-center text-[11px]">
-              <Link2 className="h-2.5 w-2.5 mr-1" />
+              <LinkIcon className="h-2.5 w-2.5 mr-1" />
               Kopplad till transaktion
             </Badge>
           ))}

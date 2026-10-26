@@ -2,7 +2,7 @@
 
 import { useTranslations } from 'next-intl'
 import { useState } from 'react'
-import { ArrowUpRight } from 'lucide-react'
+import { ArrowUpRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -248,7 +248,7 @@ export function ConnectClientDialog({
             <Button asChild>
               <a href={href} target="_blank" rel="noopener noreferrer">
                 {t('connect_open', { name })}
-                <ArrowUpRight className="ml-1.5 h-4 w-4" />
+                <ArrowUpRightIcon className="ml-1.5 h-4 w-4" />
               </a>
             </Button>
           )}

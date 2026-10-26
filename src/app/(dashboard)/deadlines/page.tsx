@@ -20,7 +20,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
-import { CalendarPlus, Lock, MoreHorizontal, Plus } from 'lucide-react'
+import { CalendarIcon, EllipsisHorizontalIcon, LockClosedIcon, PlusIcon } from '@/components/icons'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCompanySettings } from '@/components/settings/useSettings'
@@ -459,20 +459,20 @@ export default function DeadlinesPage() {
             disabled={!canWrite}
             title={!canWrite ? t('read_only_tooltip') : undefined}
           >
-            {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+            {canWrite ? <PlusIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
             {t('new_deadline')}
           </Button>
           {ENABLED_EXTENSION_IDS.has('calendar') && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
-                  <MoreHorizontal className="h-4 w-4" />
+                  <EllipsisHorizontalIcon className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
                 <DropdownMenuItem asChild>
                   <Link href="/settings/account">
-                    <CalendarPlus className="h-4 w-4" />
+                    <CalendarIcon className="h-4 w-4" />
                     {t('subscribe_calendar')}
                   </Link>
                 </DropdownMenuItem>

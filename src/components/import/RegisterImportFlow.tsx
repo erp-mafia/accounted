@@ -3,7 +3,7 @@
 import { useCallback, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { legacyNotices, type ImportNotice } from '@/lib/import/notices'
@@ -25,7 +25,7 @@ import { useRegisterImportConfig, type ReviewRow } from '@/components/import/reg
 function StepLoading() {
   return (
     <div className="flex min-h-48 items-center justify-center" role="status">
-      <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+      <SpinnerIcon className="h-5 w-5 animate-spin text-muted-foreground" />
     </div>
   )
 }

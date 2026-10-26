@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
-import { Check, Loader2, Circle, AlertTriangle } from 'lucide-react'
+import { CheckIcon, CircleIcon, ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
 import { cn } from '@/lib/utils'
@@ -163,7 +163,7 @@ export default function AgentOnboarding({
 
           {errorMessage && (
             <div className="mt-6 flex items-start gap-3 rounded-lg border border-destructive/50 bg-destructive/10 px-4 py-3 text-sm">
-              <AlertTriangle className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
+              <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-destructive shrink-0" />
               <div>
                 <p className="font-medium">Något gick fel</p>
                 <p className="text-muted-foreground mt-1">{errorMessage}</p>
@@ -189,11 +189,11 @@ function StepRow({ step, status }: { step: StepConfig; status: StepStatus }) {
   return (
     <li className="flex items-start gap-3">
       <span className="mt-0.5 shrink-0">
-        {status === 'success' && <Check className="h-4 w-4 text-success" />}
-        {status === 'fallback' && <Check className="h-4 w-4 text-warning" />}
-        {status === 'in_progress' && <Loader2 className="h-4 w-4 animate-spin text-foreground" />}
-        {status === 'pending' && <Circle className="h-4 w-4 text-muted-foreground/50" />}
-        {status === 'error' && <AlertTriangle className="h-4 w-4 text-destructive" />}
+        {status === 'success' && <CheckIcon className="h-4 w-4 text-success" />}
+        {status === 'fallback' && <CheckIcon className="h-4 w-4 text-warning" />}
+        {status === 'in_progress' && <SpinnerIcon className="h-4 w-4 animate-spin text-foreground" />}
+        {status === 'pending' && <CircleIcon className="h-4 w-4 text-muted-foreground/50" />}
+        {status === 'error' && <ExclamationTriangleIcon className="h-4 w-4 text-destructive" />}
       </span>
       <span
         className={cn(

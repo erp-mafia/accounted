@@ -1,6 +1,6 @@
 'use client'
 
-import { ArrowUpRight, Sparkles } from 'lucide-react'
+import { ArrowUpRightIcon, SparklesIcon } from '@/components/icons'
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { useAgentSheet } from './AgentSheetProvider'
@@ -51,7 +51,7 @@ export default function ChatEmptyState() {
         <h1 className="font-display text-2xl tracking-tight mb-2">Fråga {name}</h1>
         <div className="rounded-lg border border-border bg-secondary/40 px-5 py-4 max-w-md mb-6 text-left">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <Sparkles className="h-4 w-4" />
+            <SparklesIcon className="h-4 w-4" />
             Avstängd i sandlådan
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
@@ -75,7 +75,7 @@ export default function ChatEmptyState() {
         <h1 className="font-display text-2xl tracking-tight mb-2">Fråga {name}</h1>
         <div className="rounded-lg border border-border bg-secondary/40 px-5 py-4 max-w-md mb-6 text-left">
           <div className="flex items-center gap-2 text-sm font-medium">
-            <Sparkles className="h-4 w-4" />
+            <SparklesIcon className="h-4 w-4" />
             Ingår i abonnemanget
           </div>
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed">
@@ -111,7 +111,7 @@ export default function ChatEmptyState() {
             <span className="flex-1 text-muted-foreground group-hover:text-foreground transition-colors">
               {s.label}
             </span>
-            <ArrowUpRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60 group-hover:text-foreground transition-colors" />
+            <ArrowUpRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60 group-hover:text-foreground transition-colors" />
           </Link>
         ))}
       </div>

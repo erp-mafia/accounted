@@ -10,7 +10,7 @@ import {
   DialogFooter,
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
-import { Loader2, Plus } from 'lucide-react'
+import { PlusIcon, SpinnerIcon } from '@/components/icons'
 
 export interface ActivateAccountsDialogProps {
   open: boolean
@@ -108,7 +108,7 @@ export function ActivateAccountsDialog({
         <div className="space-y-2 text-sm">
           {loading && (
             <div className="flex items-center gap-2 text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <SpinnerIcon className="h-4 w-4 animate-spin" />
               Hämtar kontouppgifter...
             </div>
           )}
@@ -146,7 +146,7 @@ export function ActivateAccountsDialog({
                       size="sm"
                       onClick={() => onCreateUnknown(r.account_number)}
                     >
-                      <Plus className="mr-1 h-3 w-3" />
+                      <PlusIcon className="mr-1 h-3 w-3" />
                       Skapa <span data-ph-mask="">{r.account_number}</span>
                     </Button>
                   ))}
@@ -165,7 +165,7 @@ export function ActivateAccountsDialog({
               'Aktiverar...'
             ) : (
               <>
-                <Plus className="mr-2 h-4 w-4" />
+                <PlusIcon className="mr-2 h-4 w-4" />
                 {confirmLabel ?? 'Aktivera och bokför'}
               </>
             )}

@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import AgentAvatar from '@/components/agent/AgentAvatar'
@@ -97,11 +97,11 @@ const LINE_CLASS = 'flex flex-wrap items-center gap-x-2 gap-y-1 text-[12.5px] te
 export function AiStatusLine({ text }: { text: string }) {
   const { identity } = useAgentSheet()
   return (
-    <p className={LINE_CLASS}>
+    <div className={LINE_CLASS}>
       <AgentAvatar avatarId={identity.avatarId} size="xs" className="h-4 w-4 flex-none" alt="" />
-      <Loader2 className="h-3.5 w-3.5 flex-none animate-spin" aria-hidden="true" />
+      <SpinnerIcon className="h-3.5 w-3.5 flex-none animate-spin" aria-hidden="true" />
       {text}
-    </p>
+    </div>
   )
 }
 

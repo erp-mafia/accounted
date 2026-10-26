@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Mail } from 'lucide-react'
+import { EnvelopeIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { copyToClipboard } from '@/lib/browser/copy-to-clipboard'
@@ -64,7 +64,7 @@ export function SupplierInboxAddress() {
       title={t('inbox_address_hint')}
       aria-label={t('inbox_address_copy_label', { address: shown })}
     >
-      <Mail className="h-4 w-4 shrink-0" />
+      <EnvelopeIcon className="h-4 w-4 shrink-0" />
       <span className="hidden min-w-0 truncate md:block">{shown}</span>
     </Button>
   )

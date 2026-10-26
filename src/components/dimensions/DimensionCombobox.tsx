@@ -1,7 +1,7 @@
 'use client'
 
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
-import { Loader2, Plus } from 'lucide-react'
+import { PlusIcon, SpinnerIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
@@ -289,7 +289,7 @@ export default function DimensionCombobox({
         >
           {loadState === 'loading' && (
             <div className="flex items-center gap-2 px-2 py-2 text-sm text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
               Laddar…
             </div>
           )}
@@ -348,9 +348,9 @@ export default function DimensionCombobox({
               onMouseEnter={() => setHighlightedIndex(filteredValues.length)}
             >
               {isCreating ? (
-                <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" />
+                <SpinnerIcon className="h-3.5 w-3.5 shrink-0 animate-spin" />
               ) : (
-                <Plus className="h-3.5 w-3.5 shrink-0" />
+                <PlusIcon className="h-3.5 w-3.5 shrink-0" />
               )}
               <span className="truncate">Skapa ny &quot;{createCandidate}&quot;</span>
             </button>

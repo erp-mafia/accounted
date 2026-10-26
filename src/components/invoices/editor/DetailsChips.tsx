@@ -1,7 +1,7 @@
 'use client'
 
 import { useLocale, useTranslations } from 'next-intl'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { formatChipDate, type DetailsChip } from '@/lib/invoices/editor/details'
 
@@ -69,7 +69,7 @@ export function DetailsChips({ chips, isQuote, today, onSelect }: DetailsChipsPr
             className={add ? ADD_CHIP_CLASS : CHIP_CLASS}
             onClick={() => onSelect(chip.kind)}
           >
-            {add && <Plus className="h-3.5 w-3.5" aria-hidden="true" />}
+            {add && <PlusIcon className="h-3.5 w-3.5" aria-hidden="true" />}
             {label}
           </button>
         )

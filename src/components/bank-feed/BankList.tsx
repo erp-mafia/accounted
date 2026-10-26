@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronRight, Landmark, Search } from 'lucide-react'
+import { BuildingLibraryIcon, ChevronRightIcon, MagnifyingGlassIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
 import { bankLogoUrl } from '@/lib/cash-accounts/bank-logos'
@@ -27,7 +27,7 @@ export function OpenPaymentsBankMark({ bank, size = 28 }: { bank: Pick<OpenPayme
         // eslint-disable-next-line @next/next/no-img-element
         <img src={src} alt="" aria-hidden="true" className="h-full w-full object-contain p-[3px]" />
       ) : (
-        <Landmark className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+        <BuildingLibraryIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
       )}
     </span>
   )
@@ -58,7 +58,7 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
   return (
     <div className="space-y-3">
       <div className="relative">
-        <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
+        <MagnifyingGlassIcon className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" aria-hidden="true" />
         <Input
           type="search"
           autoComplete="off"
@@ -112,7 +112,7 @@ export function BankList({ banks, selectedBic, onPick }: BankListProps) {
                   {approach === 'redirect' && <span className="block truncate text-[12.5px] text-muted-foreground">{t('bank_redirect_only')}</span>}
                   {!selectable && <span className="block truncate text-[12.5px] text-muted-foreground">{t('bank_not_connectable')}</span>}
                 </span>
-                {selectable && <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+                {selectable && <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
               </button>
             )
           })}

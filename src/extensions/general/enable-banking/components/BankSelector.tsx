@@ -2,7 +2,12 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronRight, Landmark, Loader2, Search } from 'lucide-react'
+import {
+  BuildingLibraryIcon,
+  ChevronRightIcon,
+  MagnifyingGlassIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { bankMatchesQuery, searchAliasHint } from '@/lib/bank-sync/bank-search'
@@ -58,7 +63,7 @@ function BankMark({ bank, connecting }: { bank: Bank; connecting: boolean }) {
   if (connecting) {
     return (
       <span className="flex h-8 w-8 shrink-0 items-center justify-center">
-        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
+        <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" aria-hidden="true" />
       </span>
     )
   }
@@ -74,7 +79,7 @@ function BankMark({ bank, connecting }: { bank: Bank; connecting: boolean }) {
 
   return (
     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border border-border bg-secondary">
-      <Landmark className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
+      <BuildingLibraryIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />
     </span>
   )
 }
@@ -115,7 +120,7 @@ function BankRow({ bank, isConnecting, connectingBankName, onConnect }: {
           share of the state, the wording lives once in the line below the
           list. */}
       {!connecting && (
-        <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <ChevronRightIcon className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden="true" />
       )}
     </button>
   )
@@ -220,7 +225,7 @@ export function BankSelector({
     <div className={cn('space-y-4', className)}>
       {/* Search input */}
       <div className="relative">
-        <Search
+        <MagnifyingGlassIcon
           className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
           aria-hidden="true"
         />
@@ -316,10 +321,10 @@ export function BankSelector({
           than a tinted bordered panel, and it names the bank so the state is
           still readable when the chosen row has scrolled out of view. */}
       {isConnecting && connectingBankName && (
-        <p role="status" className="flex items-center gap-2 px-1 text-[12.5px] leading-relaxed text-muted-foreground">
-          <Loader2 className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
+        <div role="status" className="flex items-center gap-2 px-1 text-[12.5px] leading-relaxed text-muted-foreground">
+          <SpinnerIcon className="h-4 w-4 shrink-0 animate-spin" aria-hidden="true" />
           Ansluter till {connectingBankName}...
-        </p>
+        </div>
       )}
     </div>
   )

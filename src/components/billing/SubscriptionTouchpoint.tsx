@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ChevronRight, Clock, Lock } from 'lucide-react'
+import { ChevronRightIcon, ClockIcon, LockClosedIcon } from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 
 /**
@@ -65,7 +65,7 @@ export function SubscriptionTouchpoint({
           : 'trial_expired_cta',
       )
     : tNav('trial_days_left', { days: trialDaysLeft ?? 0 })
-  const Icon = lapsed ? Lock : Clock
+  const Icon = lapsed ? LockClosedIcon : ClockIcon
 
   if (variant === 'mobile') {
     return (
@@ -76,7 +76,7 @@ export function SubscriptionTouchpoint({
       >
         <Icon className="h-[18px] w-[18px] flex-shrink-0 text-muted-foreground" />
         <span className="text-sm flex-1">{label}</span>
-        <ChevronRight className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
+        <ChevronRightIcon className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
       </Link>
     )
   }
@@ -89,7 +89,7 @@ export function SubscriptionTouchpoint({
       >
         <Icon className="h-3.5 w-3.5 shrink-0" />
         <span className="flex-1 truncate">{label}</span>
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 opacity-50" />
+        <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 opacity-50" />
       </Link>
     </div>
   )

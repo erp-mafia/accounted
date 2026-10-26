@@ -23,7 +23,7 @@ import { Textarea } from '@/components/ui/textarea'
 import { Switch } from '@/components/ui/switch'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { Plus, X } from 'lucide-react'
+import { PlusIcon, XMarkIcon } from '@/components/icons'
 import DimensionCombobox from '@/components/dimensions/DimensionCombobox'
 import {
   type AccountDimensionRuleDto,
@@ -381,7 +381,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                         size="sm"
                         onClick={() => setAddRuleOpen(true)}
                       >
-                        <Plus className="mr-1 h-3.5 w-3.5" />
+                        <PlusIcon className="mr-1 h-3.5 w-3.5" />
                         Lägg till regel
                       </Button>
                     </div>
@@ -420,7 +420,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                         aria-label={`Ta bort regel för ${rule.dimension_name}`}
                         onClick={() => handleDeleteRule(rule)}
                       >
-                        <X className="h-4 w-4" />
+                        <XMarkIcon className="h-4 w-4" />
                       </Button>
                     </div>
                   ))}
@@ -517,7 +517,7 @@ export function EditAccountDialog({ open, onOpenChange, account, onSaved }: Edit
                         size="sm"
                         onClick={() => setAddRuleOpen(true)}
                       >
-                        <Plus className="mr-1 h-3.5 w-3.5" />
+                        <PlusIcon className="mr-1 h-3.5 w-3.5" />
                         Lägg till regel
                       </Button>
                     )

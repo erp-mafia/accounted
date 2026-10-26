@@ -6,11 +6,11 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Skeleton } from '@/components/ui/skeleton'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import {
-  CheckCircle,
-  AlertCircle,
-  FileText,
-  MessageSquare,
-} from 'lucide-react'
+  ChatBubbleLeftIcon,
+  CheckCircleIcon,
+  DocumentTextIcon,
+  ExclamationCircleIcon,
+} from '@/components/icons'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 
 interface InvoiceData {
@@ -149,7 +149,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
       <div className="min-h-dvh bg-frame flex items-center justify-center p-4">
         <Card className="max-w-md w-full">
           <CardContent className="pt-6 text-center">
-            <AlertCircle className="h-12 w-12 text-destructive mx-auto mb-4" />
+            <ExclamationCircleIcon className="h-12 w-12 text-destructive mx-auto mb-4" />
             <h2 className="text-lg mb-2">Ogiltig länk</h2>
             <p className="text-muted-foreground">{error}</p>
           </CardContent>
@@ -170,7 +170,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
           {invoice.brand && <BrandMark brand={invoice.brand} />}
           <Card className="w-full">
           <CardContent className="pt-6 text-center">
-            <CheckCircle className="h-12 w-12 text-success mx-auto mb-4" />
+            <CheckCircleIcon className="h-12 w-12 text-success mx-auto mb-4" />
             <h2 className="text-lg mb-2">Tack för ditt svar!</h2>
             <p className="text-muted-foreground mb-4">
               {successMessage || (
@@ -220,7 +220,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
         <Card className="mb-6">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <FileText className="h-5 w-5" />
+              <DocumentTextIcon className="h-5 w-5" />
               Fakturainformation
             </CardTitle>
             <CardDescription>
@@ -319,7 +319,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
               onClick={() => handleAction('marked_paid')}
               loading={isSubmitting}
             >
-              {!isSubmitting && <CheckCircle className="h-5 w-5 mr-3 text-success" />}
+              {!isSubmitting && <CheckCircleIcon className="h-5 w-5 mr-3 text-success" />}
               <div className="text-left py-4">
                 <p className="font-medium">Jag har betalat</p>
                 <p className="text-sm text-muted-foreground font-normal">
@@ -334,7 +334,7 @@ export default function InvoiceActionPage({ params }: { params: Promise<{ token:
               onClick={() => handleAction('disputed')}
               loading={isSubmitting}
             >
-              {!isSubmitting && <MessageSquare className="h-5 w-5 mr-3 text-muted-foreground" />}
+              {!isSubmitting && <ChatBubbleLeftIcon className="h-5 w-5 mr-3 text-muted-foreground" />}
               <div className="text-left py-4">
                 <p className="font-medium">Kontakta avsändaren</p>
                 <p className="text-sm text-muted-foreground font-normal">

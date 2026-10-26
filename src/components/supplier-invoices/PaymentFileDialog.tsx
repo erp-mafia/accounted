@@ -15,7 +15,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
 import { HelpPopover } from '@/components/ui/help-popover'
-import { Download } from 'lucide-react'
+import { ArrowDownTrayIcon } from '@/components/icons'
 import { useToast } from '@/components/ui/use-toast'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
@@ -363,7 +363,7 @@ export default function PaymentFileDialog({
                 {t('cancel')}
               </Button>
               <Button onClick={handleCreate} disabled={!canCreate} loading={creating}>
-                {!creating && <Download className="mr-2 h-4 w-4" />}
+                {!creating && <ArrowDownTrayIcon className="mr-2 h-4 w-4" />}
                 {t('create_and_download')}
               </Button>
               {/* The file downloads fine and only fails at the bank if the

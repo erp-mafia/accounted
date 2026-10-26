@@ -8,7 +8,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Input } from '@/components/ui/input'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
-import { Trash2, Users, ChevronDown, Pencil } from 'lucide-react'
+import { ChevronDownIcon, PencilIcon, TrashIcon, UsersIcon } from '@/components/icons'
 import { formatAccountWithName } from '@/lib/bookkeeping/client-account-names'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-template-format'
 import type { CategorizationTemplate } from '@/types'
@@ -148,7 +148,7 @@ export function CounterpartyTemplatesPanel() {
         </div>
       ) : templates.length === 0 ? (
         <EmptyState
-          icon={Users}
+          icon={UsersIcon}
           title={t('empty_title')}
           description={t('empty_help')}
         />
@@ -190,7 +190,7 @@ export function CounterpartyTemplatesPanel() {
                     <span>· {SOURCE_LABELS[tt.source] || tt.source}</span>
                   </span>
                 </div>
-                <ChevronDown
+                <ChevronDownIcon
                   className={`h-4 w-4 shrink-0 text-muted-foreground transition-transform ${isExpanded ? 'rotate-180' : ''}`}
                 />
               </button>
@@ -308,7 +308,7 @@ export function CounterpartyTemplatesPanel() {
                       onClick={() => startRename(tt)}
                       disabled={deletingId === tt.id}
                     >
-                      <Pencil className="mr-1.5 h-3 w-3" />
+                      <PencilIcon className="mr-1.5 h-3 w-3" />
                       {t('rename_button')}
                     </Button>
                     <Button
@@ -318,7 +318,7 @@ export function CounterpartyTemplatesPanel() {
                       loading={deletingId === tt.id}
                       className="text-destructive hover:text-destructive"
                     >
-                      {deletingId !== tt.id && <Trash2 className="mr-1.5 h-3 w-3" />}
+                      {deletingId !== tt.id && <TrashIcon className="mr-1.5 h-3 w-3" />}
                       {t('delete_button')}
                     </Button>
                   </div>

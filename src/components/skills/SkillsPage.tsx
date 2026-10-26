@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import useSWR from 'swr'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -120,7 +120,7 @@ function Registry({ companyId, hrefBase }: { companyId: string; hrefBase: string
   const waitingBanner = state === 'waiting' && waitingFor ? (
     <section className={styles.gateBanner}>
       <div className={styles.pin}>
-        <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />
+        <SpinnerIcon className="h-5 w-5 animate-spin text-muted-foreground" aria-hidden />
         <h2>{waitingFor === 'claude' ? t('wait_claude_title') : t('wait_title', { client: pendingName })}</h2>
         {waitingFor === 'claude' ? <p>{t('wait_claude_body')}</p> : (
           <>

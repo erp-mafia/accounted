@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ArrowDown, ArrowUp, ArrowUpDown } from 'lucide-react'
+import { ArrowDownIcon, ArrowUpIcon, ArrowsUpDownIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 
@@ -89,7 +89,7 @@ interface SortableThProps {
  */
 export function SortableTh({ label, direction, onSort, rank, align = 'left', className }: SortableThProps) {
   const t = useTranslations('common')
-  const SortIcon = direction === 'asc' ? ArrowUp : direction === 'desc' ? ArrowDown : ArrowUpDown
+  const SortIcon = direction === 'asc' ? ArrowUpIcon : direction === 'desc' ? ArrowDownIcon : ArrowsUpDownIcon
   return (
     <th
       className={cn(TH_CLASS, className)}

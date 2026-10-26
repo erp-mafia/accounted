@@ -1,6 +1,11 @@
 'use client'
 
-import { Loader2, Check, AlertCircle, FileWarning } from 'lucide-react'
+import {
+  CheckIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { cn } from '@/lib/utils'
 import type { ExtractionStatus } from '@/lib/hooks/use-document-extraction'
 
@@ -30,7 +35,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
           className,
         )}
       >
-        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+        <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
         {slow ? 'Tar lite längre än vanligt…' : 'Läser dokumentet…'}
       </span>
     )
@@ -44,7 +49,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
           className,
         )}
       >
-        <Check className="h-3.5 w-3.5" />
+        <CheckIcon className="h-3.5 w-3.5" />
         Inläst av AI
       </span>
     )
@@ -58,7 +63,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
           className,
         )}
       >
-        <FileWarning className="h-3.5 w-3.5" />
+        <ExclamationTriangleIcon className="h-3.5 w-3.5" />
         Filtypen kan inte läsas automatiskt
       </span>
     )
@@ -72,7 +77,7 @@ export default function ExtractionStatus({ status, elapsedMs = 0, className }: P
         className,
       )}
     >
-      <AlertCircle className="h-3.5 w-3.5" />
+      <ExclamationCircleIcon className="h-3.5 w-3.5" />
       Kunde inte läsa automatiskt: fyll i manuellt
     </span>
   )

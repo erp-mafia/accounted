@@ -52,11 +52,7 @@ import {
   skvStatusNeedsReconnect,
   type SkvStatusLike,
 } from '@/lib/notices/predicates'
-import {
-  AlertCircle,
-  Copy,
-  RefreshCw,
-} from 'lucide-react'
+import { ArrowPathIcon, ExclamationCircleIcon, Square2StackIcon } from '@/components/icons'
 import { useCapability, useCompany } from '@/contexts/CompanyContext'
 import { createClient } from '@/lib/supabase/client'
 import { SKATTEKONTO_PAYMENT_COVER_STATUSES, skattekontoPaymentsCovering, type SkattekontoPaymentOrderCover } from '@/lib/payments/orders/skattekonto-underway'
@@ -725,12 +721,12 @@ export default function SkattekontoPage() {
       <div className="space-y-8">
         <PageHeader title="Skattekonto" help={helpNode} />
         <EmptyState
-          icon={AlertCircle}
+          icon={ExclamationCircleIcon}
           title="Kunde inte hämta skattekontot"
           description="Något gick fel när saldo och transaktioner skulle hämtas. Försök igen om en stund."
         >
           <Button variant="outline" onClick={() => void reload()}>
-            <RefreshCw className="mr-2 h-4 w-4" />
+            <ArrowPathIcon className="mr-2 h-4 w-4" />
             Försök igen
           </Button>
         </EmptyState>
@@ -776,7 +772,7 @@ export default function SkattekontoPage() {
                 disabled={syncing || !hasSkvCapability}
                 className="text-muted-foreground hover:text-foreground"
               >
-                <RefreshCw className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                <ArrowPathIcon className={`mr-2 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
                 {syncing ? 'Synkroniserar…' : 'Synkronisera nu'}
               </Button>
             </span>
@@ -1073,7 +1069,7 @@ export default function SkattekontoPage() {
                     className="text-muted-foreground transition-colors hover:text-foreground"
                     aria-label="Kopiera OCR"
                   >
-                    <Copy className="h-3.5 w-3.5" />
+                    <Square2StackIcon className="h-3.5 w-3.5" />
                   </button>
                 )}
               </dd>

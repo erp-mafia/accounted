@@ -33,14 +33,14 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { formatDate } from '@/lib/utils'
 import {
-  ExternalLink,
-  FileDown,
-  Loader2,
-  RefreshCcw,
-  SearchCheck,
-  Send,
-  ShieldCheck,
-} from 'lucide-react'
+  ArrowPathIcon,
+  ArrowTopRightOnSquareIcon,
+  DocumentArrowDownIcon,
+  MagnifyingGlassIcon,
+  PaperAirplaneIcon,
+  ShieldCheckIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { CONNECTED_FILING_PUBLIC_RELEASED } from '@/lib/bokslut/arsredovisning/capabilities'
 import type { AnnualReportVersionSummary } from '@/lib/bokslut/arsredovisning/compliance-types'
@@ -454,11 +454,11 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             </Button>
             <Button variant="outline" asChild>
               <a href={downloadUrl}>
-                <FileDown className="mr-2 h-4 w-4" /> Ladda ner tekniskt iXBRL-underlag
+                <DocumentArrowDownIcon className="mr-2 h-4 w-4" /> Ladda ner tekniskt iXBRL-underlag
               </a>
             </Button>
             <Button onClick={() => void handleValidate()} loading={validating}>
-              {!validating && <SearchCheck className="mr-2 h-4 w-4" />}
+              {!validating && <MagnifyingGlassIcon className="mr-2 h-4 w-4" />}
               Validera
             </Button>
           </div>
@@ -518,10 +518,10 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
         </p>
         <div className="space-y-4 px-1 pt-4 text-sm">
           {extensionActive === null && (
-            <p className="text-muted-foreground">
-              <Loader2 className="inline h-4 w-4 animate-spin mr-2" />
+            <div className="text-muted-foreground">
+              <SpinnerIcon className="inline h-4 w-4 animate-spin mr-2" />
               Kontrollerar anslutningen till Bolagsverket …
-            </p>
+            </div>
           )}
 
           {extensionActive === false && (
@@ -538,7 +538,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   target="_blank"
                   rel="noopener noreferrer"
                 >
-                  <ExternalLink className="mr-2 h-4 w-4" /> Lämna in hos Bolagsverket
+                  <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> Lämna in hos Bolagsverket
                 </a>
               </Button>
             </div>
@@ -768,7 +768,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   }
                   loading={submitting}
                 >
-                  {!submitting && <Send className="mr-2 h-4 w-4" />}
+                  {!submitting && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
                   {avtal ? 'Godkänn villkoren och skicka in' : 'Kontrollera och skicka in'}
                 </Button>
                 {utfall && utfall.length > 0 && !utfallHasErrors && (
@@ -786,7 +786,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
               {kvittens && (
                 <div className="space-y-2 border-t border-border pt-4">
                   <div className="flex items-center gap-2">
-                    <ShieldCheck className="h-4 w-4 text-success" />
+                    <ShieldCheckIcon className="h-4 w-4 text-success" />
                     <p className="font-medium">Uppladdad till eget utrymme</p>
                   </div>
                   <p className="text-muted-foreground text-xs">
@@ -795,7 +795,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   </p>
                   <Button variant="outline" size="sm" asChild>
                     <a href={kvittens.url} target="_blank" rel="noopener noreferrer">
-                      <ExternalLink className="mr-2 h-4 w-4" /> Signera hos Bolagsverket
+                      <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> Signera hos Bolagsverket
                     </a>
                   </Button>
                 </div>
@@ -823,7 +823,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                 loading={pollingEvents}
                 onClick={() => void handlePollEvents()}
               >
-                {!pollingEvents && <RefreshCcw className="mr-2 h-4 w-4" />}
+                {!pollingEvents && <ArrowPathIcon className="mr-2 h-4 w-4" />}
                 {pollingEvents ? 'Uppdaterar …' : 'Uppdatera status'}
               </Button>
             </div>
@@ -881,7 +881,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                   {submission.bolagsverket_url && submission.status === 'uploaded' && (
                     <Button variant="outline" size="sm" asChild>
                       <a href={submission.bolagsverket_url} target="_blank" rel="noopener noreferrer">
-                        <ExternalLink className="mr-1 h-3.5 w-3.5" /> Signera
+                        <ArrowTopRightOnSquareIcon className="mr-1 h-3.5 w-3.5" /> Signera
                       </a>
                     </Button>
                   )}

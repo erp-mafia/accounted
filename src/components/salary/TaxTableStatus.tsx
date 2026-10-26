@@ -2,7 +2,13 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Globe, CheckCircle2, AlertTriangle, RefreshCcw, Loader2 } from 'lucide-react'
+import {
+  ArrowPathIcon,
+  CheckCircleIcon,
+  ExclamationTriangleIcon,
+  GlobeAltIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 
 type Source = 'api' | 'fallback' | 'unavailable'
@@ -44,7 +50,7 @@ export function TaxTableStatus({ year, compact = false }: Props) {
   if (loading && !status) {
     return (
       <div className="text-xs text-muted-foreground flex items-center gap-1.5">
-        <Loader2 className="h-3 w-3 animate-spin" />
+        <SpinnerIcon className="h-3 w-3 animate-spin" />
         {t('checking')}
       </div>
     )
@@ -52,7 +58,7 @@ export function TaxTableStatus({ year, compact = false }: Props) {
 
   if (!status) return null
 
-  const Icon = status.source === 'api' ? CheckCircle2 : AlertTriangle
+  const Icon = status.source === 'api' ? CheckCircleIcon : ExclamationTriangleIcon
   const iconColor =
     status.source === 'api' ? 'text-success' :
     status.source === 'fallback' ? 'text-warning' :
@@ -67,10 +73,10 @@ export function TaxTableStatus({ year, compact = false }: Props) {
 
   if (compact) {
     return (
-      <p className="text-xs text-muted-foreground flex items-center gap-1.5">
-        <Globe className="h-3 w-3" />
+      <div className="text-xs text-muted-foreground flex items-center gap-1.5">
+        <GlobeAltIcon className="h-3 w-3" />
         {label}
-      </p>
+      </div>
     )
   }
 
@@ -89,7 +95,7 @@ export function TaxTableStatus({ year, compact = false }: Props) {
         aria-label={t('recheck')}
         className="ml-auto shrink-0"
       >
-        {!loading && <RefreshCcw className="h-3.5 w-3.5" />}
+        {!loading && <ArrowPathIcon className="h-3.5 w-3.5" />}
       </Button>
     </div>
   )

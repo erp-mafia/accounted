@@ -1,6 +1,6 @@
 'use client'
 
-import { ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronLeftIcon, ChevronRightIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { CalendarViewMode } from '@/types'
 import {
@@ -57,10 +57,10 @@ export function CalendarHeader({
     <div className="flex items-center justify-between mb-4">
       <div className="flex items-center gap-2">
         <Button variant="outline" size="icon" onClick={onPrevious}>
-          <ChevronLeft className="h-4 w-4" />
+          <ChevronLeftIcon className="h-4 w-4" />
         </Button>
         <Button variant="outline" size="icon" onClick={onNext}>
-          <ChevronRight className="h-4 w-4" />
+          <ChevronRightIcon className="h-4 w-4" />
         </Button>
         <Button variant="outline" size="sm" onClick={onToday}>
           Idag

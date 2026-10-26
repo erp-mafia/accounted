@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Plus, X } from 'lucide-react'
+import { PlusIcon, XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -218,7 +218,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                         />
                       </div>
                       <Button type="button" variant="ghost" size="icon-sm" onClick={() => removeRow(r.key)} aria-label={t('signer_remove', { n: i + 1 })}>
-                        <X className="h-4 w-4" />
+                        <XMarkIcon className="h-4 w-4" />
                       </Button>
                     </div>
                     {member && <p className="m-0 text-[12.5px] text-muted-foreground">{t('signer_is_member')}</p>}
@@ -247,7 +247,7 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
               {rows.length < SIGNING_MAX_SIGNERS && (
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" variant="secondary" size="sm" onClick={() => addRow()}>
-                    <Plus className="h-4 w-4" />
+                    <PlusIcon className="h-4 w-4" />
                     {t('signer_add')}
                   </Button>
                   {pickable.length > 0 && (

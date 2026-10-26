@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { AlertCircle, History } from 'lucide-react'
+import { ClockIcon, ExclamationCircleIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
 import { EmptyState } from '@/components/ui/empty-state'
@@ -97,7 +97,7 @@ export function BehandlingshistorikView({
     return (
       <Card>
         <CardContent className="p-8 text-center text-destructive">
-          <AlertCircle className="h-6 w-6 mx-auto mb-2" />
+          <ExclamationCircleIcon className="h-6 w-6 mx-auto mb-2" />
           {error}
         </CardContent>
       </Card>
@@ -105,7 +105,7 @@ export function BehandlingshistorikView({
   }
 
   if (!data || data.events.length === 0) {
-    return <EmptyState icon={History} title={t('bh_empty_title')} description={t('bh_empty_desc')} />
+    return <EmptyState icon={ClockIcon} title={t('bh_empty_title')} description={t('bh_empty_desc')} />
   }
 
   const filterOptions = [

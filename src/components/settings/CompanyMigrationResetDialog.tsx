@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertTriangle, Archive, Loader2 } from 'lucide-react'
+import { ArchiveBoxIcon, ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import {
@@ -216,7 +216,7 @@ export function CompanyMigrationResetDialog({
 
         {isLoading ? (
           <div className="flex min-h-40 items-center justify-center text-muted-foreground">
-            <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+            <SpinnerIcon className="mr-2 h-4 w-4 animate-spin" />
             {t('reset_checking')}
           </div>
         ) : loadError ? (
@@ -226,7 +226,7 @@ export function CompanyMigrationResetDialog({
         ) : eligibility ? (
           <div className="space-y-5">
             <div className="flex gap-3 rounded-lg border border-border bg-muted/40 p-4">
-              <Archive className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
+              <ArchiveBoxIcon className="mt-0.5 h-5 w-5 shrink-0 text-muted-foreground" />
               <div className="space-y-1 text-sm">
                 <p className="font-medium text-foreground">{t('reset_archive_title')}</p>
                 <p className="text-muted-foreground">{t('reset_archive_description')}</p>
@@ -236,7 +236,7 @@ export function CompanyMigrationResetDialog({
             {eligibility.blockers.length > 0 ? (
               <div className="space-y-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4">
                 <div className="flex items-center gap-2 text-sm font-medium text-destructive">
-                  <AlertTriangle className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="h-4 w-4" />
                   {t('reset_blocked_title')}
                 </div>
                 <ul className="list-disc space-y-1 pl-5 text-sm text-muted-foreground">

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { AlertCircle, CheckCircle, Loader2 } from 'lucide-react'
+import { CheckCircleIcon, ExclamationCircleIcon, SpinnerIcon } from '@/components/icons'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
@@ -76,15 +76,15 @@ export default function BankDepositSpecStep({ file, onNewImport }: BankDepositSp
         </div>
 
         {!summary && busy && (
-          <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
-            <Loader2 className="h-4 w-4 animate-spin" />
+          <div className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+            <SpinnerIcon className="h-4 w-4 animate-spin" />
             {t('bgmax_loading')}
-          </p>
+          </div>
         )}
 
         {error && (
           <div className="flex gap-3 rounded-lg border border-destructive/20 bg-destructive/10 p-4">
-            <AlertCircle className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" />
+            <ExclamationCircleIcon className="mt-0.5 h-5 w-5 flex-shrink-0 text-destructive" />
             <div>
               <p className="font-medium text-destructive">{t('bgmax_error_title')}</p>
               <p className="text-sm text-muted-foreground">{error}</p>
@@ -104,10 +104,10 @@ export default function BankDepositSpecStep({ file, onNewImport }: BankDepositSp
             </p>
             {summary.applied ? (
               <>
-                <p className="flex items-center gap-2">
-                  <CheckCircle className="h-4 w-4 flex-shrink-0 text-success" />
+                <div className="flex items-center gap-2">
+                  <CheckCircleIcon className="h-4 w-4 flex-shrink-0 text-success" />
                   {t('bgmax_result', { payments: summary.matched_payments, rows: summary.matched_deposits })}
-                </p>
+                </div>
                 {summary.ready_rows > 0 && <p>{t('bgmax_result_ready', { count: summary.ready_rows })}</p>}
               </>
             ) : summary.matched_deposits > 0 ? (

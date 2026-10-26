@@ -12,7 +12,7 @@ import {
 } from '@/lib/auth/session-client'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
-import { Loader2, ShieldCheck, ShieldOff } from 'lucide-react'
+import { ShieldCheckIcon, ShieldExclamationIcon, SpinnerIcon } from '@/components/icons'
 import { isMfaRequired } from '@/lib/auth/mfa'
 import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import { isSelfHosted as readSelfHostedFlag } from '@/lib/env/public-flags'
@@ -258,7 +258,7 @@ export function SecuritySettings() {
         >
           {isLoadingMfa ? (
             <span className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              <SpinnerIcon className="h-3.5 w-3.5 animate-spin" />
               {t('loading')}
             </span>
           ) : hasMfa ? (
@@ -277,7 +277,7 @@ export function SecuritySettings() {
                     onClick={handleUnenrollMfa}
                     loading={isUnenrolling}
                   >
-                    {!isUnenrolling && <ShieldOff className="mr-2 h-3.5 w-3.5" />}
+                    {!isUnenrolling && <ShieldExclamationIcon className="mr-2 h-3.5 w-3.5" />}
                     {isUnenrolling ? t('disabling') : t('disable_mfa')}
                   </Button>
                 )}
@@ -305,7 +305,7 @@ export function SecuritySettings() {
                       router.push(`/mfa/enroll?returnTo=${encodeURIComponent('/settings/account')}`)
                     }
                   >
-                    <ShieldCheck className="mr-2 h-3.5 w-3.5" />
+                    <ShieldCheckIcon className="mr-2 h-3.5 w-3.5" />
                     {t('enable_mfa')}
                   </Button>
                 )}

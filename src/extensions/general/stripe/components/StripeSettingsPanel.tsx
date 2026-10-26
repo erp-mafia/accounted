@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { CreditCard, Link2 } from 'lucide-react'
+import { CreditCardIcon, LinkIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
@@ -36,7 +36,7 @@ export default function StripeSettingsPanel() {
     <FeedConnectorPanel<ConnectionInfo, StripeSyncPayload>
       extensionId="stripe"
       namespace="settings_payments"
-      icon={CreditCard}
+      icon={CreditCardIcon}
       request={stripeRequest}
       syncTimeoutMs={STRIPE_SYNC_TIMEOUT_MS}
       maxBackfillYears={MAX_BACKFILL_YEARS}
@@ -88,7 +88,7 @@ export default function StripeSettingsPanel() {
         return (
           <div>
             <Button onClick={handleConnect} disabled={connecting}>
-              <Link2 className="mr-2 h-4 w-4" />
+              <LinkIcon className="mr-2 h-4 w-4" />
               {connecting ? tf('connecting') : t('connect')}
             </Button>
             <p className="mt-3 text-sm text-muted-foreground">{t('connect_hint')}</p>

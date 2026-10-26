@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertCircle } from 'lucide-react'
+import { ExclamationCircleIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -133,7 +133,7 @@ export function OssUnderlagView() {
       ) : error || !report ? (
         <Card>
           <CardContent className="py-8 text-center text-sm text-destructive">
-            <AlertCircle className="mx-auto mb-2 h-6 w-6" />
+            <ExclamationCircleIcon className="mx-auto mb-2 h-6 w-6" />
             {error ?? t('load_failed')}
           </CardContent>
         </Card>

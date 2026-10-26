@@ -3,7 +3,7 @@
 import { useState, useRef, useEffect, useLayoutEffect, useMemo, useCallback, useId } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslations } from 'next-intl'
-import { Plus } from 'lucide-react'
+import { PlusIcon } from '@/components/icons'
 import { Input } from '@/components/ui/input'
 import { cn } from '@/lib/utils'
 import { useComboboxNavigation } from '@/lib/hooks/use-combobox-navigation'
@@ -307,7 +307,7 @@ export default function CustomerCombobox<T extends SearchableCustomer>({
         onCreateCustomer(trimmedQuery)
       }}
     >
-      <Plus className="h-3.5 w-3.5 shrink-0" />
+      <PlusIcon className="h-3.5 w-3.5 shrink-0" />
       <span className="truncate">
         {trimmedQuery ? t('create_named', { query: trimmedQuery }) : t('create')}
       </span>

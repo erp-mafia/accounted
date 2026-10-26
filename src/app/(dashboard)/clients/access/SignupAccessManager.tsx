@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Plus, X } from 'lucide-react'
+import { PlusIcon, XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -229,7 +229,7 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
               />
             </div>
             <Button type="submit" disabled={!email.trim()} loading={adding}>
-              {!adding && <Plus className="mr-2 h-4 w-4" />}
+              {!adding && <PlusIcon className="mr-2 h-4 w-4" />}
               {t('access_add')}
             </Button>
           </form>
@@ -267,7 +267,7 @@ export default function SignupAccessManager({ canEdit }: { canEdit: boolean }) {
                         loading={removingId === entry.id}
                         onClick={() => void removeEntry(entry.id)}
                       >
-                        {removingId !== entry.id && <X className="h-4 w-4" />}
+                        {removingId !== entry.id && <XMarkIcon className="h-4 w-4" />}
                       </Button>
                     </td>
                   )}

@@ -17,7 +17,14 @@ import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
-import { Box, Cloud, ExternalLink, Loader2, RefreshCw, Unplug } from 'lucide-react'
+import {
+  ArrowPathIcon,
+  ArrowTopRightOnSquareIcon,
+  CloudIcon,
+  CubeIcon,
+  LinkSlashIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 import { useBranding } from '@/lib/branding/brand-context'
 import type {
   CloudBackupStatus,
@@ -35,9 +42,9 @@ const API_BASE = '/api/extensions/ext/cloud-backup'
  * both locales; everything around it is a `{provider}` placeholder so the
  * copy reads naturally whichever destination the row describes.
  */
-const PROVIDER_META: Record<CloudProviderId, { label: string; icon: typeof Cloud }> = {
-  google_drive: { label: 'Google Drive', icon: Cloud },
-  dropbox: { label: 'Dropbox', icon: Box },
+const PROVIDER_META: Record<CloudProviderId, { label: string; icon: typeof CloudIcon }> = {
+  google_drive: { label: 'Google Drive', icon: CloudIcon },
+  dropbox: { label: 'Dropbox', icon: CubeIcon },
 }
 
 export default function CloudBackupCard() {
@@ -276,7 +283,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
   const providerId = status.provider
   const meta = PROVIDER_META[providerId]
   const provider = meta?.label ?? providerId
-  const Icon = meta?.icon ?? Cloud
+  const Icon = meta?.icon ?? CloudIcon
   const qs = `?provider=${encodeURIComponent(providerId)}`
 
   const { isConnecting, connect: handleConnect } = useConnectProvider(providerId, provider)
@@ -459,7 +466,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                     t('ext_cloud_backup_syncing')
                   ) : (
                     <>
-                      <RefreshCw className="mr-2 h-4 w-4" />
+                      <ArrowPathIcon className="mr-2 h-4 w-4" />
                       {t('ext_cloud_backup_sync_now')}
                     </>
                   )}
@@ -469,7 +476,7 @@ function ProviderRow({ status, onChanged }: ProviderRowProps) {
                     t('ext_cloud_backup_disconnecting')
                   ) : (
                     <>
-                      <Unplug className="mr-2 h-4 w-4" />
+                      <LinkSlashIcon className="mr-2 h-4 w-4" />
                       {t('ext_cloud_backup_disconnect')}
                     </>
                   )}
@@ -562,7 +569,7 @@ function LastSyncSummary({
         className="inline-flex items-center gap-1 font-medium underline-offset-4 hover:underline tabular-nums"
       >
         {formatDateTime(lastSync.at)}
-        <ExternalLink className="h-3 w-3 text-muted-foreground" />
+        <ArrowTopRightOnSquareIcon className="h-3 w-3 text-muted-foreground" />
       </a>
       <p className="text-xs text-muted-foreground tabular-nums">
         {formatMb(sizeBytes)}
@@ -716,7 +723,7 @@ function ScheduleSection({
               </option>
             ))}
           </SettingsSelect>
-          {isSaving && <Loader2 className="h-3 w-3 animate-spin text-muted-foreground" />}
+          {isSaving && <SpinnerIcon className="h-3 w-3 animate-spin text-muted-foreground" />}
         </SettingsRow>
       )}
 

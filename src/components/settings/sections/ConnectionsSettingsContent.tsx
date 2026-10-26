@@ -4,7 +4,16 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { AlertTriangle, Check, Copy, HandCoins, Landmark, Mail, MoreHorizontal, Store } from 'lucide-react'
+import {
+  BanknotesIcon,
+  BuildingLibraryIcon,
+  BuildingStorefrontIcon,
+  CheckIcon,
+  EllipsisHorizontalIcon,
+  EnvelopeIcon,
+  ExclamationTriangleIcon,
+  Square2StackIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { BankConnectDialog } from '@/components/bank-feed/BankConnectDialog'
@@ -329,7 +338,7 @@ export function ConnectionsSettingsContent() {
     )
   }
 
-  const bankLandmark = <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />
+  const bankLandmark = <BuildingLibraryIcon className="h-4 w-4 text-foreground" aria-hidden="true" />
 
   // The bank rows when Open Payments reads for this company: one row per
   // connection. An Enable Banking row offers the switch; an Open Payments row
@@ -358,7 +367,7 @@ export function ConnectionsSettingsContent() {
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
-                    <MoreHorizontal className="h-[15px] w-[15px]" />
+                    <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
@@ -439,7 +448,7 @@ export function ConnectionsSettingsContent() {
                       <DropdownMenu>
                         <DropdownMenuTrigger asChild>
                           <Button variant="outline" size="icon-sm" aria-label={t('more_actions')}>
-                            <MoreHorizontal className="h-[15px] w-[15px]" />
+                            <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
                           </Button>
                         </DropdownMenuTrigger>
                         <DropdownMenuContent align="end">
@@ -496,7 +505,7 @@ export function ConnectionsSettingsContent() {
             ? openPaymentsBankRows()
             : hasBanking &&
             row({
-              logo: bankLogo ? <ImgLogo src={bankLogo} /> : <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              logo: bankLogo ? <ImgLogo src={bankLogo} /> : <BuildingLibraryIcon className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('bank'),
               help: t('bank_help'),
               state: status
@@ -525,7 +534,7 @@ export function ConnectionsSettingsContent() {
             })}
           {hasSkatteverket &&
             row({
-              logo: <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              logo: <BuildingLibraryIcon className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('skatteverket'),
               help: t('skatteverket_help'),
               state: status ? (status.skvConnected ? t('connected') : off) : null,
@@ -534,7 +543,7 @@ export function ConnectionsSettingsContent() {
             })}
           {bankPayments &&
             row({
-              logo: <Landmark className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              logo: <BuildingLibraryIcon className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('bank_payments'),
               help: t('bank_payments_help'),
               href: '/settings/bank-payments',
@@ -549,7 +558,7 @@ export function ConnectionsSettingsContent() {
             <SettingsRow
               label={
                 <span className="flex items-center gap-3">
-                  <LogoTile><Mail className="h-4 w-4 text-foreground" aria-hidden="true" /></LogoTile>
+                  <LogoTile><EnvelopeIcon className="h-4 w-4 text-foreground" aria-hidden="true" /></LogoTile>
                   {t('inbox_address')}
                 </span>
               }
@@ -574,11 +583,11 @@ export function ConnectionsSettingsContent() {
                   title={inboxCopyState === 'failed' ? t('inbox_address_copy_failed') : t('inbox_address_copy')}
                 >
                   {inboxCopyState === 'copied' ? (
-                    <Check className="h-3.5 w-3.5 text-success" />
+                    <CheckIcon className="h-3.5 w-3.5 text-success" />
                   ) : inboxCopyState === 'failed' ? (
-                    <AlertTriangle className="h-3.5 w-3.5 text-attn" />
+                    <ExclamationTriangleIcon className="h-3.5 w-3.5 text-attn" />
                   ) : (
-                    <Copy className="h-3.5 w-3.5" />
+                    <Square2StackIcon className="h-3.5 w-3.5" />
                   )}
                 </Button>
                 <Button variant="outline" size="sm" asChild>
@@ -588,7 +597,7 @@ export function ConnectionsSettingsContent() {
             </SettingsRow>
           ) : (
             row({
-              logo: <Mail className="h-4 w-4 text-foreground" aria-hidden="true" />,
+              logo: <EnvelopeIcon className="h-4 w-4 text-foreground" aria-hidden="true" />,
               name: t('inbox_address'),
               help: t('inbox_address_help'),
               state: t('inbox_address_off'),
@@ -629,7 +638,7 @@ export function ConnectionsSettingsContent() {
           {/* Kassasystem: core, not an extension (provider code lives in Accounted Connect). */}
           {!isSandbox &&
             row({
-              logo: <Store className="h-4 w-4 text-muted-foreground" aria-hidden="true" />,
+              logo: <BuildingStorefrontIcon className="h-4 w-4 text-muted-foreground" aria-hidden="true" />,
               name: t('pos'),
               help: t('pos_help'),
               state: status?.pos ? (status.pos.attention ? t('pos_state_attention', { venue: status.pos.label }) : status.pos.label) : null,
@@ -641,7 +650,7 @@ export function ConnectionsSettingsContent() {
             row({
               logo: (
                 <ProviderMarkOr src={collections?.markUrl ?? null}>
-                  <HandCoins className="h-4 w-4 text-foreground" aria-hidden="true" />
+                  <BanknotesIcon className="h-4 w-4 text-foreground" aria-hidden="true" />
                 </ProviderMarkOr>
               ),
               name: t('collections'),

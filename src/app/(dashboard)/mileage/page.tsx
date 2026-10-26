@@ -42,7 +42,16 @@ import { mileageCounterAccounts, type MileageCounterAccount } from '@/lib/mileag
 import { applyRoutePrefill, locationSuggestions } from '@/lib/mileage/route-memory'
 import type { RoutePrefill } from '@/lib/mileage/route-memory'
 import { formatCurrency, formatDate } from '@/lib/utils'
-import { Car, Copy, MoreHorizontal, Plus, Trash2, Pencil, ChevronDown, ChevronUp } from 'lucide-react'
+import {
+  ChevronDownIcon,
+  ChevronUpIcon,
+  EllipsisHorizontalIcon,
+  MapIcon,
+  PencilIcon,
+  PlusIcon,
+  Square2StackIcon,
+  TrashIcon,
+} from '@/components/icons'
 import type { MileageTrip, MileageVehicleType } from '@/types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { parseDecimalInput } from '@/lib/money'
@@ -557,7 +566,7 @@ export default function MileagePage() {
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
                     <Button variant="ghost" size="icon-sm" aria-label={tCommon('more_options')}>
-                      <MoreHorizontal className="h-4 w-4" />
+                      <EllipsisHorizontalIcon className="h-4 w-4" />
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
@@ -580,7 +589,7 @@ export default function MileagePage() {
               )}
               {canWrite && (
                 <Button size="sm" onClick={openCreate}>
-                  <Plus className="mr-2 h-4 w-4" />
+                  <PlusIcon className="mr-2 h-4 w-4" />
                   {t('new_trip')}
                 </Button>
               )}
@@ -617,7 +626,7 @@ export default function MileagePage() {
         </div>
       ) : visibleTrips.length === 0 ? (
         <EmptyState
-          icon={Car}
+          icon={MapIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('new_trip') : undefined}
@@ -674,7 +683,7 @@ export default function MileagePage() {
                         aria-label={t('copy_trip')}
                         onClick={() => openCopy(trip)}
                       >
-                        <Copy className="h-4 w-4" />
+                        <Square2StackIcon className="h-4 w-4" />
                       </Button>
                       {trip.status === 'draft' && (
                         <>
@@ -684,7 +693,7 @@ export default function MileagePage() {
                             aria-label={t('edit_trip')}
                             onClick={() => openEdit(trip)}
                           >
-                            <Pencil className="h-4 w-4" />
+                            <PencilIcon className="h-4 w-4" />
                           </Button>
                           <Button
                             variant="ghost"
@@ -692,7 +701,7 @@ export default function MileagePage() {
                             aria-label={t('delete_trip')}
                             onClick={() => deleteTrip(trip)}
                           >
-                            <Trash2 className="h-4 w-4" />
+                            <TrashIcon className="h-4 w-4" />
                           </Button>
                         </>
                       )}
@@ -864,7 +873,7 @@ export default function MileagePage() {
               className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors duration-150"
               onClick={() => setShowMore(!showMore)}
             >
-              {showMore ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+              {showMore ? <ChevronUpIcon className="h-4 w-4" /> : <ChevronDownIcon className="h-4 w-4" />}
               {t('more_fields')}
             </button>
             {showMore && (

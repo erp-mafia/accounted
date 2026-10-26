@@ -4,7 +4,7 @@ import { useMemo, useState } from 'react'
 import Link from 'next/link'
 import useSWR from 'swr'
 import { useTranslations } from 'next-intl'
-import { MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
@@ -190,7 +190,7 @@ export default function RulesList() {
                           aria-label={t('more')}
                           disabled={busyId === r.id}
                         >
-                          <MoreHorizontal className="h-4 w-4" />
+                          <EllipsisHorizontalIcon className="h-4 w-4" />
                         </Button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">

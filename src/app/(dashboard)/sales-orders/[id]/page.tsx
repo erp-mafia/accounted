@@ -4,7 +4,14 @@ import { use, useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check, ClipboardList, Lock, Pencil, ReceiptText, Truck } from 'lucide-react'
+import {
+  CheckIcon,
+  ClipboardDocumentListIcon,
+  DocumentTextIcon,
+  LockClosedIcon,
+  PencilIcon,
+  TruckIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
@@ -227,12 +234,12 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
             <Button size="sm" variant="outline" asChild={canWrite} disabled={!canWrite} title={lockTitle}>
               {canWrite ? (
                 <Link href={`/sales-orders/${order.id}/edit`}>
-                  <Pencil className="mr-2 h-4 w-4" />
+                  <PencilIcon className="mr-2 h-4 w-4" />
                   {t('action_edit')}
                 </Link>
               ) : (
                 <span>
-                  <Lock className="mr-2 h-4 w-4" />
+                  <LockClosedIcon className="mr-2 h-4 w-4" />
                   {t('action_edit')}
                 </span>
               )}
@@ -245,25 +252,25 @@ export default function SalesOrderDetailPage({ params }: { params: Promise<{ id:
               disabled={!canWrite}
               title={lockTitle}
             >
-              {canWrite ? <Truck className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <TruckIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('action_register_delivery')}
             </Button>
           )}
           {canInvoice && (
             <Button size="sm" onClick={() => setIsInvoiceOpen(true)} disabled={!canWrite} title={lockTitle}>
-              {canWrite ? <ReceiptText className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <DocumentTextIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('action_create_invoice')}
             </Button>
           )}
           {canConfirm && (
             <Button size="sm" onClick={() => setPendingTransition('confirm')} disabled={!canWrite} title={lockTitle}>
-              {canWrite ? <Check className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <CheckIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('action_confirm')}
             </Button>
           )}
           {canReopen && (
             <Button size="sm" onClick={() => setPendingTransition('reopen')} disabled={!canWrite} title={lockTitle}>
-              {canWrite ? <ClipboardList className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <ClipboardDocumentListIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('action_reopen')}
             </Button>
           )}

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check } from 'lucide-react'
+import { CheckIcon } from '@/components/icons'
 import posthog from 'posthog-js'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -680,7 +680,7 @@ function Step({
               : 'border-border text-muted-foreground',
         )}
       >
-        {done ? <Check className="h-3.5 w-3.5" aria-hidden="true" /> : number}
+        {done ? <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" /> : number}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex min-h-9 flex-wrap items-center gap-x-3 gap-y-2">

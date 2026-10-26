@@ -8,7 +8,11 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { AlertTriangle, FileDown, Info } from 'lucide-react'
+import {
+  DocumentArrowDownIcon,
+  ExclamationTriangleIcon,
+  InformationCircleIcon,
+} from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { isFiscalYear } from '@/lib/invariants/fiscal-year'
@@ -211,7 +215,7 @@ export function EfDeclarationSection({
       {/* BFL distinction banner: EF values are declaration-only, never booked. */}
       <Card className="border-border bg-secondary/40">
         <CardContent className="p-4 flex items-start gap-3">
-          <Info className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
+          <InformationCircleIcon className="h-4 w-4 mt-0.5 text-muted-foreground shrink-0" />
           <p className="text-sm text-muted-foreground">
             <span className="font-medium text-foreground">
               Skattemässiga justeringar: NE-bilaga
@@ -229,7 +233,7 @@ export function EfDeclarationSection({
       {noPostedEntries && (
         <Card className="border-border">
           <CardContent className="p-4 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 mt-0.5 text-attn shrink-0" />
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-attn shrink-0" />
             <p className="text-sm">
               <span className="font-medium">Inga verifikat bokförda i perioden.</span>{' '}
               Värdena nedan baseras enbart på NE-bilagans räkenskapsschema (intäkter och
@@ -406,7 +410,7 @@ export function EfDeclarationSection({
       {inputWarnings.map((w, i) => (
         <Card key={i} className="border-border">
           <CardContent className="p-4 flex items-start gap-3">
-            <AlertTriangle className="h-4 w-4 mt-0.5 text-attn shrink-0" />
+            <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 text-attn shrink-0" />
             <p className="text-sm">{w}</p>
           </CardContent>
         </Card>
@@ -511,7 +515,7 @@ export function EfDeclarationSection({
       <Card>
         <CardHeader>
           <CardTitle className="text-base flex items-center gap-2">
-            <Info className="h-4 w-4 text-muted-foreground" />
+            <InformationCircleIcon className="h-4 w-4 text-muted-foreground" />
             NE-bilaga räkenskapsschema (R1-R11)
           </CardTitle>
           <p className="text-sm text-muted-foreground">
@@ -525,7 +529,7 @@ export function EfDeclarationSection({
               href={`/api/reports/ne-bilaga?period_id=${fiscalPeriodId}&format=sru`}
               prefetch={false}
             >
-              <FileDown className="mr-2 h-4 w-4" />
+              <DocumentArrowDownIcon className="mr-2 h-4 w-4" />
               Ladda ner NE-bilaga (SRU)
             </Link>
           </Button>

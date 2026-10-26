@@ -1,7 +1,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { Puzzle } from 'lucide-react'
+import { PuzzlePieceIcon } from '@/components/icons'
 import sv from '@/messages/sv.json'
 import en from '@/messages/en.json'
 import { resolveIcon } from '../icon-resolver'
@@ -35,9 +35,9 @@ const MANIFESTS: Manifest[] = readdirSync(EXTENSIONS_DIR, { withFileTypes: true 
 
 describe('extension icons', () => {
   it.each(MANIFESTS.map((m) => [m.id, m] as const))('%s has its own icon', (_id, manifest) => {
-    expect(resolveIcon(manifest.definition.icon)).not.toBe(Puzzle)
+    expect(resolveIcon(manifest.definition.icon)).not.toBe(PuzzlePieceIcon)
     if (manifest.definition.quickAction?.icon) {
-      expect(resolveIcon(manifest.definition.quickAction.icon)).not.toBe(Puzzle)
+      expect(resolveIcon(manifest.definition.quickAction.icon)).not.toBe(PuzzlePieceIcon)
     }
   })
 })

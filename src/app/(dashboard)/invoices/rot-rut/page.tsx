@@ -5,7 +5,13 @@ import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import dynamic from 'next/dynamic'
-import { AlertTriangle, Download, FileDown, FileUp, Receipt } from 'lucide-react'
+import {
+  ArrowDownTrayIcon,
+  DocumentArrowDownIcon,
+  DocumentArrowUpIcon,
+  ExclamationTriangleIcon,
+  ReceiptRefundIcon,
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { PageHeader } from '@/components/ui/page-header'
@@ -456,11 +462,11 @@ export default function RotRutOverviewPage() {
               onClick={() => fileInputRef.current?.click()}
               title={!canWrite ? t('viewer_disabled_tooltip') : t('import_beslut_help')}
             >
-              {!importing && <FileUp className="mr-2 h-4 w-4" />}
+              {!importing && <DocumentArrowUpIcon className="mr-2 h-4 w-4" />}
               {t('import_beslut')}
             </Button>
             <Button size="sm" type="button" onClick={openNewRequest} disabled={!canWrite}>
-              <FileDown className="mr-2 h-4 w-4" />
+              <DocumentArrowDownIcon className="mr-2 h-4 w-4" />
               {t('new_request')}
             </Button>
           </div>
@@ -517,7 +523,7 @@ export default function RotRutOverviewPage() {
         </div>
       ) : requests.length === 0 ? (
         <EmptyState
-          icon={Receipt}
+          icon={ReceiptRefundIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={canWrite ? t('new_request') : undefined}
@@ -607,7 +613,7 @@ export default function RotRutOverviewPage() {
                     <td className={`${TD_CLASS} text-right tabular-nums`}>
                       {state.splitUnknown ? (
                         <span className="inline-flex items-center gap-1 text-attn" title={t('split_unknown_hint')}>
-                          <AlertTriangle className="h-3.5 w-3.5" />
+                          <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                           {t('split_unknown')}
                         </span>
                       ) : state.refused > 0 ? (
@@ -635,7 +641,7 @@ export default function RotRutOverviewPage() {
                             buttons (touch keeps them visible). */}
                         {request.file_document_id && (
                           <Button type="button" size="sm" variant="ghost" className={HOVER_REVEAL_CLASS} disabled={isBusy} onClick={() => void downloadArchivedFile(request)}>
-                            <Download className="mr-1.5 h-3.5 w-3.5" />
+                            <ArrowDownTrayIcon className="mr-1.5 h-3.5 w-3.5" />
                             {t('download')}
                           </Button>
                         )}

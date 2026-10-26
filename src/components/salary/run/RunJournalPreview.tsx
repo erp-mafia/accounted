@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
-import { Calculator, FileText } from 'lucide-react'
+import { CalculatorIcon, DocumentTextIcon } from '@/components/icons'
 import { formatRunAmount } from './types'
 
 export interface EntryPreviewLine {
@@ -74,13 +74,13 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
       aside={
         onRecalculate ? (
           <Button variant="outline" size="sm" onClick={onRecalculate} loading={recalculating} className="-my-1">
-            {!recalculating && <Calculator className="mr-2 h-4 w-4" />}
+            {!recalculating && <CalculatorIcon className="mr-2 h-4 w-4" />}
             {t('action_recalculate')}
           </Button>
         ) : underlagHref ? (
           <Button variant="outline" size="sm" asChild className="-my-1">
             <a href={underlagHref} target="_blank" rel="noopener noreferrer" title={t('journal_download_underlag_title')}>
-              <FileText className="mr-2 h-4 w-4" />
+              <DocumentTextIcon className="mr-2 h-4 w-4" />
               {t('journal_download_underlag')}
             </a>
           </Button>

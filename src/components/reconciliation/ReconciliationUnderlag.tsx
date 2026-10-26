@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Paperclip } from 'lucide-react'
+import { PaperClipIcon } from '@/components/icons'
 import { QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
@@ -138,7 +138,7 @@ export function ReconciliationUnderlag({ accountKey, throughDate, canWrite = tru
               aria-busy={busy === 'upload'}
               className={cn(QUIET_LINK_CLASS, 'inline-flex items-center gap-1')}
             >
-              <Paperclip className="h-3 w-3" aria-hidden="true" />
+              <PaperClipIcon className="h-3 w-3" aria-hidden="true" />
               {t('attach')}
             </button>
           </>

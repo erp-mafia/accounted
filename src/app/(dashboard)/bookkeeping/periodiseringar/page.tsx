@@ -10,7 +10,7 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { CalendarClock } from 'lucide-react'
+import { CalendarDaysIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -228,7 +228,7 @@ export default function AccrualSchedulesPage() {
         </div>
       ) : schedules.length === 0 ? (
         <EmptyState
-          icon={CalendarClock}
+          icon={CalendarDaysIcon}
           title={t('empty_title')}
           description={t('empty_description')}
         />

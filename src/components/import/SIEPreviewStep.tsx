@@ -9,7 +9,7 @@ import { Switch } from '@/components/ui/switch'
 import { AttnLine } from '@/components/ui/attn-line'
 import { DefList, DefRow } from '@/components/arkiv/DefList'
 import { formatCurrency } from '@/lib/utils'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRightIcon } from '@/components/icons'
 import type { ImportPreview, ParseIssue } from '@/lib/import/types'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { OpeningBalanceDifferencesTable } from '@/components/import/OpeningBalanceDifferencesTable'
@@ -294,7 +294,7 @@ export default function SIEPreviewStep({
           {onOpenManualOpeningBalances && (
             <Button type="button" variant="outline" size="sm" onClick={onOpenManualOpeningBalances}>
               {tStep('manual_opening_balances')}
-              <ArrowRight className="ml-2 h-4 w-4" />
+              <ArrowRightIcon className="ml-2 h-4 w-4" />
             </Button>
           )}
           <label className="flex items-start gap-2 text-[13px] cursor-pointer">
@@ -441,7 +441,7 @@ export default function SIEPreviewStep({
           {preview.mappingStatus.lowConfidence > 0 || preview.mappingStatus.unmapped > 0
             ? tStep('review_mappings')
             : tStep('continue')}
-          <ArrowRight className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="ml-2 h-4 w-4" />
         </Button>
       </div>
     </div>

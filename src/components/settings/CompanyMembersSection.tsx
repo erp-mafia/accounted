@@ -21,7 +21,7 @@ import { PROFILES, isProfileId, latestProfile, packagesOffIn, type ProfileId } f
 import { isInviteExpired } from '@/components/settings/invite-expiry'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatDateLong } from '@/lib/utils'
-import { Plus, RefreshCw, Trash2, Mail } from 'lucide-react'
+import { ArrowPathIcon, EnvelopeIcon, PlusIcon, TrashIcon } from '@/components/icons'
 
 interface CompanyMemberItem {
   id: string
@@ -374,7 +374,7 @@ export function CompanyMembersSection() {
               onClick={() => handleRemoveMember(member.id)}
               loading={removingId === member.id}
             >
-              {removingId !== member.id && <Trash2 className="h-3.5 w-3.5" />}
+              {removingId !== member.id && <TrashIcon className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
@@ -390,7 +390,7 @@ export function CompanyMembersSection() {
           className="flex items-center gap-3 border-b border-border px-1 py-3"
         >
           <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full border border-dashed border-border">
-            <Mail className="h-3.5 w-3.5 text-muted-foreground" />
+            <EnvelopeIcon className="h-3.5 w-3.5 text-muted-foreground" />
           </div>
           <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
             {inv.email}
@@ -416,7 +416,7 @@ export function CompanyMembersSection() {
               disabled={revokingId === inv.id}
               loading={resendingId === inv.id}
             >
-              {resendingId !== inv.id && <RefreshCw className="h-3.5 w-3.5" />}
+              {resendingId !== inv.id && <ArrowPathIcon className="h-3.5 w-3.5" />}
             </Button>
           )}
           {canInvite && (
@@ -429,7 +429,7 @@ export function CompanyMembersSection() {
               disabled={resendingId === inv.id}
               loading={revokingId === inv.id}
             >
-              {revokingId !== inv.id && <Trash2 className="h-3.5 w-3.5" />}
+              {revokingId !== inv.id && <TrashIcon className="h-3.5 w-3.5" />}
             </Button>
           )}
         </div>
@@ -537,7 +537,7 @@ export function CompanyMembersSection() {
               <option value="admin">{t('members_role_admin')}</option>
             </SettingsSelect>
             <Button type="submit" size="sm" disabled={!inviteEmail.trim()} loading={isSending}>
-              {!isSending && <Plus className="mr-2 h-4 w-4" />}
+              {!isSending && <PlusIcon className="mr-2 h-4 w-4" />}
               {t('members_invite_button')}
             </Button>
           </div>

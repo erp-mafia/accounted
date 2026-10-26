@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Loader2, Search } from 'lucide-react'
+import { MagnifyingGlassIcon, SpinnerIcon } from '@/components/icons'
 import { cn, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -136,7 +136,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
     <div className="space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-2 max-w-xs flex-1 rounded-lg border border-border px-3 py-2">
-          <Search className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+          <MagnifyingGlassIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
           <input
             value={query}
             onChange={(e) => setQuery(e.target.value)}
@@ -216,7 +216,7 @@ export default function ClientsTable({ clients, bankSwitchCampaign = null, canEd
                       </span>
                     )}
                     {pendingId === row.companyId && (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      <SpinnerIcon className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                     )}
                   </button>
                 </td>

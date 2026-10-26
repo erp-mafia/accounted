@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations } from 'next-intl'
-import { Brain } from 'lucide-react'
+import { LightBulbIcon } from '@/components/icons'
 import {
   SettingsGroup,
   SettingsRow,
@@ -64,7 +64,7 @@ export function AgentKnowledgeView({
     return (
       <div className="space-y-8">
         <EmptyState
-          icon={Brain}
+          icon={LightBulbIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={t('empty_action')}

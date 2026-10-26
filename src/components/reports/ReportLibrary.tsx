@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { Search, X } from 'lucide-react'
+import { MagnifyingGlassIcon, XMarkIcon } from '@/components/icons'
 import { TH_CLASS, TD_CLASS } from '@/components/ui/dry-table'
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
@@ -68,7 +68,7 @@ export function ReportLibrary({
   return (
     <div className="space-y-4">
       <div className="relative max-w-sm">
-        <Search
+        <MagnifyingGlassIcon
           className="pointer-events-none absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground"
           aria-hidden="true"
         />
@@ -89,7 +89,7 @@ export function ReportLibrary({
             aria-label={t('search_clear')}
             className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground transition-colors duration-150 hover:text-foreground"
           >
-            <X className="h-3.5 w-3.5" aria-hidden="true" />
+            <XMarkIcon className="h-3.5 w-3.5" aria-hidden="true" />
           </button>
         )}
       </div>

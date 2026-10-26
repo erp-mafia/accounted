@@ -33,13 +33,13 @@ import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-messag
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { cn, formatDate } from '@/lib/utils'
 import {
-  Plus,
-  Search,
-  Lock,
-  Tags,
-  ChevronRight,
-  Trash2,
-} from 'lucide-react'
+  ChevronRightIcon,
+  HashtagIcon,
+  LockClosedIcon,
+  MagnifyingGlassIcon,
+  PlusIcon,
+  TrashIcon,
+} from '@/components/icons'
 import DimensionValueForm, {
   type DimensionValueFormInput,
 } from '@/components/dimensions/DimensionValueForm'
@@ -406,7 +406,7 @@ export default function DimensionsManager() {
   if (loadFailed && dimensions.length === 0) {
     return (
       <EmptyState
-        icon={Tags}
+        icon={HashtagIcon}
         title={t('load_failed_title')}
         description={t('load_failed_description')}
         actionLabel={t('retry')}
@@ -478,7 +478,7 @@ export default function DimensionsManager() {
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               onClick={() => setDialog({ mode: 'create' })}
             >
-              {canWrite ? <Plus className="mr-2 h-4 w-4" /> : <Lock className="mr-2 h-4 w-4" />}
+              {canWrite ? <PlusIcon className="mr-2 h-4 w-4" /> : <LockClosedIcon className="mr-2 h-4 w-4" />}
               {t('new_value')}
             </Button>
           </div>
@@ -494,14 +494,14 @@ export default function DimensionsManager() {
       {sortedValues.length === 0 ? (
         searchTerm ? (
           <EmptyState
-            icon={Search}
+            icon={MagnifyingGlassIcon}
             title={t('no_search_results_title')}
             /* data-ph-mask: the search term is user data */
             description={<span data-ph-mask="">{t('no_search_results_description', { term: searchTerm })}</span>}
           />
         ) : (
           <EmptyState
-            icon={Tags}
+            icon={HashtagIcon}
             title={t('empty_title')}
             /* data-ph-mask: the dimension name is user data */
             description={<span data-ph-mask="">{t('empty_description', { dimension: activeDim?.name ?? '' })}</span>}
@@ -755,7 +755,7 @@ function NewDimensionForm({
           className="inline-flex items-center gap-1 text-xs font-medium text-muted-foreground hover:text-foreground transition-colors"
           aria-expanded={showAdvanced}
         >
-          <ChevronRight
+          <ChevronRightIcon
             className={`h-3 w-3 transition-transform ${showAdvanced ? 'rotate-90' : ''}`}
             aria-hidden="true"
           />
@@ -908,7 +908,7 @@ function EditDimensionForm({
             disabled={isSaving}
             onClick={() => setConfirmDeleteOpen(true)}
           >
-            <Trash2 className="mr-2 h-4 w-4" />
+            <TrashIcon className="mr-2 h-4 w-4" />
             {t('delete_dimension')}
           </Button>
         ) : (

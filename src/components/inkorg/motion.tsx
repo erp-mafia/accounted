@@ -1,8 +1,8 @@
 'use client'
 
 import { useId, useState, type ReactNode } from 'react'
-import { AnimatePresence, motion, useReducedMotion } from 'framer-motion'
-import { ChevronRight } from 'lucide-react'
+import { AnimatePresence, motion, useReducedMotion } from 'motion/react'
+import { ChevronRightIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 
 /**
@@ -57,7 +57,7 @@ export function Fold({
           buttonClassName,
         )}
       >
-        <ChevronRight
+        <ChevronRightIcon
           aria-hidden="true"
           className={cn('h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform duration-150', open && 'rotate-90')}
         />

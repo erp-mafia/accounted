@@ -15,7 +15,17 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
-import { Trash2, Plus, ChevronDown, Download, Upload, Pencil, Copy, Eye, EyeOff } from 'lucide-react'
+import {
+  ArrowDownTrayIcon,
+  ArrowUpTrayIcon,
+  ChevronDownIcon,
+  EyeIcon,
+  EyeSlashIcon,
+  PencilIcon,
+  PlusIcon,
+  Square2StackIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { convertLibraryToBookingTemplate } from '@/lib/bookkeeping/template-library'
 import { GROUP_LABEL_KEYS, libraryTemplateGroup } from '@/lib/bookkeeping/template-groups'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
@@ -201,7 +211,7 @@ export function BookingTemplatesPanel() {
               loading={isExporting}
               className="text-muted-foreground hover:text-foreground"
             >
-              {!isExporting && <Download className="mr-1.5 h-3.5 w-3.5" />}
+              {!isExporting && <ArrowDownTrayIcon className="mr-1.5 h-3.5 w-3.5" />}
               {t('export')}
             </Button>
             <Button
@@ -210,7 +220,7 @@ export function BookingTemplatesPanel() {
               onClick={() => importRef.current?.click()}
               className="text-muted-foreground hover:text-foreground"
             >
-              <Upload className="mr-1.5 h-3.5 w-3.5" />
+              <ArrowUpTrayIcon className="mr-1.5 h-3.5 w-3.5" />
               {t('import')}
             </Button>
             <input
@@ -223,7 +233,7 @@ export function BookingTemplatesPanel() {
             <Dialog open={showCreate} onOpenChange={setShowCreate}>
               <DialogTrigger asChild>
                 <Button size="sm">
-                  <Plus className="mr-1.5 h-3.5 w-3.5" />
+                  <PlusIcon className="mr-1.5 h-3.5 w-3.5" />
                   {t('new_template')}
                 </Button>
               </DialogTrigger>
@@ -291,7 +301,7 @@ export function BookingTemplatesPanel() {
               aria-expanded={showHidden}
               className="flex items-center gap-2 px-1 text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
             >
-              <ChevronDown
+              <ChevronDownIcon
                 className={cn('h-4 w-4 shrink-0 transition-transform', !showHidden && '-rotate-90')}
               />
               <span>{t('section_hidden')}</span>
@@ -321,7 +331,7 @@ export function BookingTemplatesPanel() {
                         title={t('unhide')}
                         className="shrink-0 text-muted-foreground hover:text-foreground"
                       >
-                        {hidingId !== tt.id && <Eye className="h-3.5 w-3.5" />}
+                        {hidingId !== tt.id && <EyeIcon className="h-3.5 w-3.5" />}
                       </Button>
                     )}
                   </div>
@@ -451,7 +461,7 @@ function TemplateSection({
                   aria-expanded={isExpanded}
                   className="flex min-w-0 flex-1 items-center gap-3 text-left"
                 >
-                  <ChevronDown
+                  <ChevronDownIcon
                     className={cn(
                       'h-4 w-4 shrink-0 text-muted-foreground transition-transform',
                       !isExpanded && '-rotate-90',
@@ -479,7 +489,7 @@ function TemplateSection({
                     title={t('customize')}
                     className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
-                    <Copy className="h-3.5 w-3.5" />
+                    <Square2StackIcon className="h-3.5 w-3.5" />
                   </Button>
                 )}
                 {canHide && onHide && (
@@ -492,7 +502,7 @@ function TemplateSection({
                     title={t('hide')}
                     className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
-                    {hidingId !== tt.id && <EyeOff className="h-3.5 w-3.5" />}
+                    {hidingId !== tt.id && <EyeSlashIcon className="h-3.5 w-3.5" />}
                   </Button>
                 )}
                 {canEdit && onEdit && (
@@ -504,7 +514,7 @@ function TemplateSection({
                     title={t('edit')}
                     className="shrink-0 text-muted-foreground hover:text-foreground"
                   >
-                    <Pencil className="h-3.5 w-3.5" />
+                    <PencilIcon className="h-3.5 w-3.5" />
                   </Button>
                 )}
                 {canDelete && (
@@ -517,7 +527,7 @@ function TemplateSection({
                     title={tCommon('delete')}
                     className="shrink-0 text-muted-foreground hover:text-destructive"
                   >
-                    {deletingId !== tt.id && <Trash2 className="h-3.5 w-3.5" />}
+                    {deletingId !== tt.id && <TrashIcon className="h-3.5 w-3.5" />}
                   </Button>
                 )}
               </div>

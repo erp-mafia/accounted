@@ -20,7 +20,7 @@ import { HelpPopover } from '@/components/ui/help-popover'
 import { useToast } from '@/components/ui/use-toast'
 import { SettingsGroup } from '@/components/settings/SettingsRows'
 import { formatDateLong } from '@/lib/utils'
-import { Plus, Trash2, Globe } from 'lucide-react'
+import { GlobeAltIcon, PlusIcon, TrashIcon } from '@/components/icons'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 
 interface OAuthClient {
@@ -128,7 +128,7 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
             <HelpPopover className="shrink-0">{t('description')}</HelpPopover>
           </p>
           <Button size="sm" onClick={() => setShowCreateDialog(true)}>
-            <Plus className="mr-1.5 h-3.5 w-3.5" />
+            <PlusIcon className="mr-1.5 h-3.5 w-3.5" />
             {t('register_uri')}
           </Button>
         </div>
@@ -141,7 +141,7 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
           </div>
         ) : clients.length === 0 ? (
           <EmptyState
-            icon={Globe}
+            icon={GlobeAltIcon}
             title={t('empty_title')}
             description={t('empty_help')}
           />
@@ -167,7 +167,7 @@ export function OAuthClientsPanel({ className }: { className?: string } = {}) {
                 onClick={() => handleRevoke(c.id, c.client_name)}
                 aria-label={t('revoke_aria', { name: c.client_name })}
               >
-                <Trash2 className="h-3.5 w-3.5" />
+                <TrashIcon className="h-3.5 w-3.5" />
               </Button>
             </div>
           ))

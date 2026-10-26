@@ -5,7 +5,11 @@ import { useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { Download, AlertCircle, AlertTriangle } from 'lucide-react'
+import {
+  ArrowDownTrayIcon,
+  ExclamationCircleIcon,
+  ExclamationTriangleIcon,
+} from '@/components/icons'
 import {
   DeclarationRutaRow,
   formatWholeKronor,
@@ -91,7 +95,7 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
   if (error) {
     return (
       <div className="flex flex-wrap items-center gap-3 py-4 text-destructive">
-        <AlertCircle className="h-4 w-4 shrink-0" />
+        <ExclamationCircleIcon className="h-4 w-4 shrink-0" />
         <span className="text-sm">{error}</span>
         <Button variant="outline" onClick={() => setRetryKey((k) => k + 1)}>
           Försök igen
@@ -122,13 +126,13 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
           ReportPrintHeader. */}
       <ReportExportMenu>
         <Button size="sm" variant="outline" onClick={downloadSRU} loading={downloading}>
-          {!downloading && <Download className="h-4 w-4 mr-2" />}
+          {!downloading && <ArrowDownTrayIcon className="h-4 w-4 mr-2" />}
           Ladda ner SRU-filer
         </Button>
       </ReportExportMenu>
       {downloadError && (
         <div role="alert" className="flex items-start gap-2 px-1 text-sm text-destructive">
-          <AlertCircle className="h-4 w-4 mt-1 shrink-0" />
+          <ExclamationCircleIcon className="h-4 w-4 mt-1 shrink-0" />
           {downloadError}
         </div>
       )}
@@ -136,7 +140,7 @@ export function INK2DeclarationView({ periodId }: { periodId: string }) {
       {/* Warnings */}
       {data.warnings.length > 0 && (
         <div className="flex items-start gap-2 px-1">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-hidden="true" />
           <div className="space-y-1">
             <p className="text-[12.5px] font-medium leading-5 text-attn">
               {data.warnings.length}{' '}

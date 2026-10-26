@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { KeyRound } from 'lucide-react'
+import { KeyIcon } from '@/components/icons'
 import { Skeleton } from '@/components/ui/skeleton'
 import { INVITE_PROBLEM_MESSAGE_KEYS } from '@/lib/auth/consume-invite-cookie'
 import { handoffPendingInvite } from './invite-handoff'
@@ -221,7 +221,7 @@ function ResetPasswordInner() {
         <div className="text-center mb-10">
           <div className="flex justify-center mb-4">
             <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <KeyRound className="h-7 w-7 text-primary" />
+              <KeyIcon className="h-7 w-7 text-primary" />
             </div>
           </div>
           <h1 className="text-2xl tracking-tight">{t('title')}</h1>

@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
-import { X } from 'lucide-react'
+import { XMarkIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import { useDashShellInert } from './dialog'
 
@@ -115,7 +115,7 @@ function SlideOverHeader({
           aria-label={closeLabel}
           className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
         >
-          <X className="h-4 w-4" />
+          <XMarkIcon className="h-4 w-4" />
         </DialogPrimitive.Close>
       </div>
     </div>

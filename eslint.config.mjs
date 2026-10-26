@@ -60,6 +60,28 @@ const eslintConfig = defineConfig([
       "no-console": "error",
     },
   },
+  // One icon set and one way into Motion (.claude/rules/design.md, "Icons").
+  // Icons come from @/components/icons, the only module that may import the
+  // animated package: its adapter sizes them from className, plays them on
+  // hover of the surrounding control and stills them under reduced motion.
+  {
+    files: ["src/**/*.ts", "src/**/*.tsx"],
+    ignores: ["src/components/icons/**"],
+    rules: {
+      "no-restricted-imports": ["error", {
+        paths: [
+          { name: "lucide-react", message: "Icons come from @/components/icons (Heroicons)." },
+          { name: "framer-motion", message: "Import Motion from motion/react." },
+        ],
+        patterns: [
+          {
+            group: ["@heroicons-animated/react", "@heroicons-animated/react/*"],
+            message: "Import icons from @/components/icons; add a missing one there.",
+          },
+        ],
+      }],
+    },
+  },
   globalIgnores([
     ".next/**",
     "out/**",

@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { ClipboardCheck } from 'lucide-react'
+import { ClipboardDocumentCheckIcon } from '@/components/icons'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
@@ -88,7 +88,7 @@ export function BokslutChecklist({ periodId }: BokslutChecklistProps) {
   return (
     <section>
       <div className="mb-1 flex items-center gap-2 px-1">
-        <ClipboardCheck className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+        <ClipboardDocumentCheckIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
         <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">{t('heading')}</h3>
         <span className="text-[11px] tabular-nums text-muted-foreground" data-ph-mask>
           {t('progress', { done: checklist.summary.done + checklist.summary.not_applicable, total: checklist.summary.total })}

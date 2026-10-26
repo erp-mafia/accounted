@@ -2,17 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import {
-  X,
-  Expand,
-  Shrink,
-  PanelRight,
-  PanelRightClose,
-  PictureInPicture2,
-  Eraser,
-  History,
-  ChevronLeft,
-  Loader2,
-} from 'lucide-react'
+  ArrowsPointingInIcon,
+  ArrowsPointingOutIcon,
+  BackspaceIcon,
+  ChevronDoubleRightIcon,
+  ChevronLeftIcon,
+  ClockIcon,
+  SpinnerIcon,
+  ViewColumnsIcon,
+  WindowIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import AgentChat, {
   attachStagedOperations,
   normalizeStoredMessages,
@@ -664,7 +664,7 @@ export default function AgentSheet({
             aria-label="Tillbaka"
             title="Tillbaka"
           >
-            <ChevronLeft className="h-4 w-4" />
+            <ChevronLeftIcon className="h-4 w-4" />
           </button>
           <h2 className="font-display text-lg tracking-tight truncate">Konversationer</h2>
           <button
@@ -673,7 +673,7 @@ export default function AgentSheet({
             aria-label="Stäng"
             title="Avsluta sessionen"
           >
-            <X className="h-4 w-4" />
+            <XMarkIcon className="h-4 w-4" />
           </button>
         </header>
       ) : (
@@ -693,7 +693,7 @@ export default function AgentSheet({
               aria-label="Tidigare konversationer"
               title="Tidigare konversationer"
             >
-              <History className="h-4 w-4" />
+              <ClockIcon className="h-4 w-4" />
             </button>
           )}
           <AgentAvatar avatarId={identity.avatarId} size="sm" alt={agentName ?? 'Assistent'} />
@@ -723,9 +723,9 @@ export default function AgentSheet({
                 }
               >
                 {floating ? (
-                  <PanelRight className="h-4 w-4" />
+                  <ViewColumnsIcon className="h-4 w-4" />
                 ) : (
-                  <PictureInPicture2 className="h-4 w-4" />
+                  <WindowIcon className="h-4 w-4" />
                 )}
               </button>
             )}
@@ -740,7 +740,7 @@ export default function AgentSheet({
                 aria-label={expanded ? 'Förminska' : 'Förstora'}
                 title={expanded ? 'Förminska' : 'Förstora'}
               >
-                {expanded ? <Shrink className="h-4 w-4" /> : <Expand className="h-4 w-4" />}
+                {expanded ? <ArrowsPointingInIcon className="h-4 w-4" /> : <ArrowsPointingOutIcon className="h-4 w-4" />}
               </button>
             )}
             {/* Labeled (not icon-only) so it isn't mistaken for close/minimize,
@@ -753,7 +753,7 @@ export default function AgentSheet({
                 aria-label="Rensa: börja en ny konversation"
                 title="Rensa: börja en ny konversation"
               >
-                <Eraser className="h-4 w-4" />
+                <BackspaceIcon className="h-4 w-4" />
                 Rensa
               </button>
             )}
@@ -763,7 +763,7 @@ export default function AgentSheet({
               aria-label="Minimera"
               title="Minimera: behåll sessionen"
             >
-              <PanelRightClose className="h-4 w-4" />
+              <ChevronDoubleRightIcon className="h-4 w-4" />
             </button>
             <button
               onClick={onClose}
@@ -771,7 +771,7 @@ export default function AgentSheet({
               aria-label="Stäng"
               title="Avsluta sessionen"
             >
-              <X className="h-4 w-4" />
+              <XMarkIcon className="h-4 w-4" />
             </button>
           </div>
         </header>
@@ -786,7 +786,7 @@ export default function AgentSheet({
         />
       ) : loadingConversation ? (
         <div className="flex flex-1 items-center justify-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="h-4 w-4 animate-spin" /> Öppnar konversation…
+          <SpinnerIcon className="h-4 w-4 animate-spin" /> Öppnar konversation…
         </div>
       ) : loadError ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-3 p-6 text-center text-sm">

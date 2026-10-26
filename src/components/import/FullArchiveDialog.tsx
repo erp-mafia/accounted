@@ -23,7 +23,7 @@ import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { FiscalYearSelector } from '@/components/common/FiscalYearSelector'
 import type { ApiResponse, ArchiveEstimate } from '@/types'
-import { Download } from 'lucide-react'
+import { ArrowDownTrayIcon } from '@/components/icons'
 
 type Scope = 'all' | 'period'
 type ArchiveMode = 'active-company' | 'migration-reset-source'
@@ -317,7 +317,7 @@ export function FullArchiveDialog({
               t('archive_creating')
             ) : (
               <>
-                <Download className="mr-2 h-4 w-4" />
+                <ArrowDownTrayIcon className="mr-2 h-4 w-4" />
                 {t('archive_download_button')}
               </>
             )}

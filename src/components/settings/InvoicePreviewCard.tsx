@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { Eye } from 'lucide-react'
+import { EyeIcon } from '@/components/icons'
 import { useLocale, useTranslations } from 'next-intl'
 import {
   Dialog,
@@ -155,7 +155,7 @@ export function InvoicePreviewCard({ settings }: InvoicePreviewCardProps) {
           type="button"
           className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
         >
-          <Eye className="h-3.5 w-3.5" />
+          <EyeIcon className="h-3.5 w-3.5" />
           {t('preview_button')}
         </button>
       </DialogTrigger>

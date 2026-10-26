@@ -27,22 +27,22 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 
 const branding = getBranding()
 import {
-  AlertCircle,
-  ArrowLeft,
-  ArrowRight,
-  Check,
-  CheckCircle2,
-  ChevronRight,
-  ExternalLink,
-  Info,
-  Loader2,
-  Lock,
-  Paperclip,
-  RefreshCw,
-  RotateCcw,
-  XCircle,
-  type LucideIcon,
-} from 'lucide-react'
+  ArrowLeftIcon,
+  ArrowPathIcon,
+  ArrowRightIcon,
+  ArrowTopRightOnSquareIcon,
+  ArrowUturnLeftIcon,
+  CheckCircleIcon,
+  CheckIcon,
+  ChevronRightIcon,
+  ExclamationCircleIcon,
+  InformationCircleIcon,
+  LockClosedIcon,
+  PaperClipIcon,
+  SpinnerIcon,
+  XCircleIcon,
+  type Icon as AppIcon,
+} from '@/components/icons'
 import type { WorkspaceComponentProps } from '@/lib/extensions/workspace-registry'
 import { supportsUnderlagImport } from '@/lib/providers/underlag-import'
 import { previewCountsForSelection, type ProviderPreviewCounts } from '@/lib/providers/preview-counts'
@@ -547,7 +547,7 @@ function SieFallbackLine({ message, label = 'Ladda upp SIE-fil' }: { message: st
 function SpinnerLine({ children }: { children: React.ReactNode }) {
   return (
     <div className="flex items-center gap-3 text-sm text-muted-foreground">
-      <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+      <SpinnerIcon className="h-4 w-4 animate-spin" aria-hidden="true" />
       <p>{children}</p>
     </div>
   )
@@ -580,7 +580,7 @@ function StepRail({ steps, currentIndex }: { steps: WizardStep[]; currentIndex: 
                   : 'text-muted-foreground/60'
             )}
           >
-            {i < currentIndex && <Check className="h-3 w-3" aria-hidden="true" />}
+            {i < currentIndex && <CheckIcon className="h-3 w-3" aria-hidden="true" />}
             {STEP_LABELS[s]}
           </li>
         ))}
@@ -800,7 +800,7 @@ export function ProviderStep({
           <div className="flex w-full shrink-0 flex-wrap items-center gap-2 sm:w-auto">
             {unfinishedCanRetry && (
               <Button size="sm" onClick={() => onSelect(unfinishedInfo.id)}>
-                <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
                 {t('ext_arcim_unfinished_connect_retry')}
               </Button>
             )}
@@ -881,7 +881,7 @@ export function ProviderStep({
                           size="sm"
                           onClick={() => (onReconnectDocuments ?? onFetchDocuments)(consent.id, consent.provider)}
                         >
-                          <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                          <ArrowPathIcon className="mr-1.5 h-3.5 w-3.5" />
                           {t('ext_arcim_documents_reconnect_provider', { provider: providerInfo?.name ?? consent.provider })}
                         </Button>
                       ) : (
@@ -889,7 +889,7 @@ export function ProviderStep({
                           size="sm"
                           onClick={() => onFetchDocuments(consent.id, consent.provider)}
                         >
-                          <Paperclip className="mr-1.5 h-3.5 w-3.5" />
+                          <PaperClipIcon className="mr-1.5 h-3.5 w-3.5" />
                           {t('ext_arcim_documents_fetch_action')}
                         </Button>
                       )
@@ -897,7 +897,7 @@ export function ProviderStep({
                     {continuesImport(consent.provider) ? (
                       <Button size="sm" onClick={() => onResync(consent.provider, consent.id)}>
                         {connectionAction(consent.provider)}
-                        <ArrowRight className="ml-1.5 h-3.5 w-3.5" />
+                        <ArrowRightIcon className="ml-1.5 h-3.5 w-3.5" />
                       </Button>
                     ) : (
                       <Button
@@ -905,7 +905,7 @@ export function ProviderStep({
                         size="sm"
                         onClick={() => onResync(consent.provider, consent.id)}
                       >
-                        <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                        <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
                         {connectionAction(consent.provider)}
                       </Button>
                     )}
@@ -917,7 +917,7 @@ export function ProviderStep({
                     aria-label={`Koppla från ${providerInfo?.name ?? consent.provider}`}
                     onClick={() => onDisconnect(consent.id)}
                   >
-                    <XCircle className="h-4 w-4" />
+                    <XCircleIcon className="h-4 w-4" />
                   </Button>
                 </div>
               )
@@ -1000,7 +1000,7 @@ export function ProviderStep({
                   </p>
                 </div>
                 {!isDisabled && (
-                  <ChevronRight
+                  <ChevronRightIcon
                     className="h-4 w-4 shrink-0 text-muted-foreground/40 transition-transform duration-150 group-hover:translate-x-0.5 group-hover:text-muted-foreground"
                     aria-hidden="true"
                   />
@@ -1134,7 +1134,7 @@ function ConnectStep({
           </p>
           <Button onClick={() => onOpenProviderWindow(authUrl)}>
             Logga in i {providerName}
-            <ExternalLink className="ml-2 h-4 w-4" />
+            <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
           </Button>
         </div>
       )}
@@ -1146,7 +1146,7 @@ function ConnectStep({
         <div className="space-y-4">
           <Button onClick={() => onOpenProviderWindow(activationUrl)}>
             {t('ext_arcim_bl_activate_button')}
-            <ExternalLink className="ml-2 h-4 w-4" />
+            <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
           </Button>
           {!showManualKey && (
             <Button
@@ -1230,7 +1230,7 @@ function ConnectStep({
               disabled={!canSubmit}
             >
               Anslut
-              <ArrowRight className="ml-2 h-4 w-4" />
+              <ArrowRightIcon className="ml-2 h-4 w-4" />
             </Button>
           </div>
         </div>
@@ -1242,7 +1242,7 @@ function ConnectStep({
 
       <div className="flex border-t border-border pt-6">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
       </div>
@@ -1327,12 +1327,12 @@ function SieFetchErrorNotice({
       </div>
       {action === 'reconnect' ? (
         <Button size="sm" onClick={onReconnect}>
-          <RotateCcw className="mr-2 h-4 w-4" />
+          <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
           {t('ext_arcim_sie_error_reconnect_action', { provider: providerName })}
         </Button>
       ) : (
         <Button size="sm" onClick={onRetry}>
-          <RefreshCw className="mr-2 h-4 w-4" />
+          <ArrowPathIcon className="mr-2 h-4 w-4" />
           {t('ext_arcim_sie_error_retry_action')}
         </Button>
       )}
@@ -1487,7 +1487,7 @@ export function PreviewStep({
           </div>
           {authExpired && (
             <Button size="sm" onClick={onReconnect} disabled={isLoading}>
-              <RotateCcw className="mr-2 h-4 w-4" />
+              <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
               Återanslut {providerName}
             </Button>
           )}
@@ -1525,7 +1525,7 @@ export function PreviewStep({
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
         <Button
@@ -1533,7 +1533,7 @@ export function PreviewStep({
           disabled={isLoading || noYearSelected || tooManySelected || (!!preview && !preview.sieAvailable && !preview.hasSieData)}
         >
           Fortsätt
-          <ArrowRight className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="ml-2 h-4 w-4" />
         </Button>
       </div>
     </div>
@@ -1591,7 +1591,7 @@ function MappingStep({
         <SieFallbackLine message="Om problemet kvarstår kan du importera din SIE-fil manuellt istället." />
         <div className="flex border-t border-border pt-6">
           <Button variant="outline" onClick={onBack}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
+            <ArrowLeftIcon className="mr-2 h-4 w-4" />
             Tillbaka
           </Button>
         </div>
@@ -1861,12 +1861,12 @@ export function OptionsStep({
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
         <Button onClick={() => setShowConfirm(true)} disabled={selectedItems.length === 0 || sieRequiredButUnchecked || isStarting}>
           Starta migrering
-          <ArrowRight className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="ml-2 h-4 w-4" />
         </Button>
       </div>
 
@@ -1964,7 +1964,7 @@ function MigratingStep({ currentStep, progress }: { currentStep: string; progres
       <div className="max-w-md space-y-3">
         <div className="flex items-center justify-between gap-4 text-xs text-muted-foreground">
           <span className="flex min-w-0 items-center gap-2">
-            <Loader2 className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
+            <SpinnerIcon className="h-3.5 w-3.5 shrink-0 animate-spin" aria-hidden="true" />
             <span className="truncate" role="status" aria-live="polite">{currentStep}</span>
           </span>
           <span className="shrink-0 tabular-nums">{progress}%</span>
@@ -2215,7 +2215,7 @@ function DocumentNote({
   action,
   children,
 }: {
-  icon: LucideIcon
+  icon: AppIcon
   action?: React.ReactNode
   children: React.ReactNode
 }) {
@@ -2239,7 +2239,7 @@ function DocumentDisclosure({ summary, children }: { summary: string; children: 
   return (
     <details className="group text-[12.5px] leading-5 text-muted-foreground">
       <summary className="inline-flex cursor-pointer list-none items-center gap-1 rounded-sm transition-colors duration-150 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 [&::-webkit-details-marker]:hidden">
-        <ChevronRight
+        <ChevronRightIcon
           className="h-3 w-3 transition-transform duration-150 group-open:rotate-90"
           aria-hidden="true"
         />
@@ -2399,10 +2399,10 @@ export function DocumentImportFollowUp({
       return (
         <DocumentNote
           key={entry.scope}
-          icon={Info}
+          icon={InformationCircleIcon}
           action={entry.scope === reconnectScope ? (
             <Button variant="outline" size="sm" onClick={onReconnect}>
-              <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+              <ArrowPathIcon className="mr-1.5 h-3.5 w-3.5" />
               {t('ext_arcim_documents_reconnect_action')}
             </Button>
           ) : undefined}
@@ -2440,7 +2440,7 @@ export function DocumentImportFollowUp({
   if (state.phase === 'discovering' || state.phase === 'reconnecting') {
     body = (
       <DocumentState
-        icon={<Loader2 className={cn(DOCUMENT_STATE_ICON, 'animate-spin text-muted-foreground')} aria-hidden="true" />}
+        icon={<SpinnerIcon className={cn(DOCUMENT_STATE_ICON, 'animate-spin text-muted-foreground')} aria-hidden="true" />}
         lead={state.phase === 'discovering'
           ? t('ext_arcim_documents_discovering', { provider })
           : t('ext_arcim_documents_reconnecting', { provider })}
@@ -2455,7 +2455,7 @@ export function DocumentImportFollowUp({
     const progress = documentImportProgress(state)
     body = (
       <DocumentState
-        icon={<Loader2 className={cn(DOCUMENT_STATE_ICON, 'animate-spin text-muted-foreground')} aria-hidden="true" />}
+        icon={<SpinnerIcon className={cn(DOCUMENT_STATE_ICON, 'animate-spin text-muted-foreground')} aria-hidden="true" />}
         lead={t('ext_arcim_documents_importing', { provider })}
         trailing={progress ? (
           <span className="shrink-0 text-[13px] tabular-nums text-muted-foreground">
@@ -2479,7 +2479,7 @@ export function DocumentImportFollowUp({
     const notes = [
       ...(lockedCount > 0
         ? [
-            <DocumentNote key="locked" icon={Lock}>
+            <DocumentNote key="locked" icon={LockClosedIcon}>
               <p>
                 {t('ext_arcim_documents_locked_offer', { count: lockedCount, years: lockedYears })}{' '}
                 {openYearsLink}
@@ -2501,7 +2501,7 @@ export function DocumentImportFollowUp({
         {notes.length > 0 && <ul className="space-y-2">{notes}</ul>}
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
           <Button onClick={onImport}>
-            <Paperclip className="mr-2 h-4 w-4" />
+            <PaperClipIcon className="mr-2 h-4 w-4" />
             {t('ext_arcim_documents_import_action', { count: state.found })}
           </Button>
           {/* Standalone, "not now" is the page's own Tillbaka. */}
@@ -2519,7 +2519,7 @@ export function DocumentImportFollowUp({
         {unreachableNotes.length > 0 && <ul className="space-y-2">{unreachableNotes}</ul>}
         <div>
           <Button variant="outline" onClick={onDiscover}>
-            <RotateCcw className="mr-2 h-4 w-4" />
+            <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
             {t('ext_arcim_documents_retry_discovery')}
           </Button>
         </div>
@@ -2535,7 +2535,7 @@ export function DocumentImportFollowUp({
       const { linked, skipped, unmatched, failed } = state.result
       body = (
         <DocumentState
-          icon={<CheckCircle2 className={cn(DOCUMENT_STATE_ICON, 'text-foreground')} aria-hidden="true" />}
+          icon={<CheckCircleIcon className={cn(DOCUMENT_STATE_ICON, 'text-foreground')} aria-hidden="true" />}
           lead={t('ext_arcim_documents_result_lead', { count: linked })}
           sub={skipped > 0 ? t('ext_arcim_documents_result_skipped', { count: skipped }) : undefined}
         >
@@ -2549,7 +2549,7 @@ export function DocumentImportFollowUp({
                   hint={t('ext_arcim_documents_partial_failure')}
                 >
                   <Button variant="outline" size="sm" onClick={onImport}>
-                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                    <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
                     {t('ext_arcim_documents_retry_import')}
                   </Button>
                 </DocumentOutcomeRow>
@@ -2564,7 +2564,7 @@ export function DocumentImportFollowUp({
                     <Link href="/settings/bookkeeping">{t('ext_arcim_documents_locked_open_years')}</Link>
                   </Button>
                   <Button variant="outline" size="sm" onClick={onDiscover}>
-                    <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                    <ArrowUturnLeftIcon className="mr-1.5 h-3.5 w-3.5" />
                     {t('ext_arcim_documents_retry_discovery')}
                   </Button>
                 </DocumentOutcomeRow>
@@ -2634,7 +2634,7 @@ export function DocumentImportFollowUp({
         >
           <div>
             <Button onClick={onReconnect}>
-              <RefreshCw className="mr-2 h-4 w-4" />
+              <ArrowPathIcon className="mr-2 h-4 w-4" />
               {connectionRefused
                 ? t('ext_arcim_documents_reconnect_provider', { provider })
                 : t('ext_arcim_documents_reconnect_action')}
@@ -2648,7 +2648,7 @@ export function DocumentImportFollowUp({
       // icon, with the sentence in ink and the retry right under it.
       body = (
         <DocumentState
-          icon={<AlertCircle className={cn(DOCUMENT_STATE_ICON, 'text-destructive')} aria-hidden="true" />}
+          icon={<ExclamationCircleIcon className={cn(DOCUMENT_STATE_ICON, 'text-destructive')} aria-hidden="true" />}
           lead={discoveryFailed
             ? standalone
               ? t('ext_arcim_documents_discovery_error_standalone', { provider })
@@ -2663,7 +2663,7 @@ export function DocumentImportFollowUp({
         >
           <div>
             <Button onClick={discoveryFailed ? onDiscover : onImport}>
-              <RotateCcw className="mr-2 h-4 w-4" />
+              <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
               {t('ext_arcim_documents_retry_import')}
             </Button>
           </div>
@@ -2776,7 +2776,7 @@ export function ResultStep({
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" onClick={onDone}>Klar</Button>
           <Button onClick={onRetry}>
-            <RotateCcw className="mr-2 h-4 w-4" />
+            <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
             Försök igen
           </Button>
         </div>
@@ -2826,14 +2826,14 @@ export function ResultStep({
             the files are on them, so no state has two primary actions. */}
         <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
           <Button variant="outline" onClick={onDone}>
-            <ArrowLeft className="mr-2 h-4 w-4" />
+            <ArrowLeftIcon className="mr-2 h-4 w-4" />
             {t('ext_arcim_documents_standalone_back')}
           </Button>
           {documentImportState.phase === 'complete' && (
             <Button asChild>
               <Link href="/bookkeeping">
                 {t('ext_arcim_documents_view_entries')}
-                <ArrowRight className="ml-2 h-4 w-4" />
+                <ArrowRightIcon className="ml-2 h-4 w-4" />
               </Link>
             </Button>
           )}
@@ -3199,20 +3199,20 @@ export function ResultStep({
 
       <div className="flex flex-col-reverse gap-3 border-t border-border pt-6 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onDone}>
-          <RotateCcw className="mr-2 h-4 w-4" />
+          <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
           Ny migrering
         </Button>
         <div className="flex flex-col gap-2 sm:flex-row">
           <Button variant="outline" asChild>
             <Link href="/customers">
               Visa kunder
-              <ExternalLink className="ml-2 h-4 w-4" />
+              <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
             </Link>
           </Button>
           <Button asChild>
             <Link href="/bookkeeping">
               Visa bokföring
-              <ExternalLink className="ml-2 h-4 w-4" />
+              <ArrowTopRightOnSquareIcon className="ml-2 h-4 w-4" />
             </Link>
           </Button>
         </div>

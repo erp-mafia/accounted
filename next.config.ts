@@ -126,8 +126,9 @@ const nextConfig: NextConfig = {
   // from node_modules at runtime, the AWS SDK never enters the bundle.
   serverExternalPackages: ['@firecrawl/anydoc', 'unpdf', 'heic-convert', '@anthropic-ai/bedrock-sdk'],
   experimental: {
-    // recharts and date-fns are on Next's built-in list already.
-    optimizePackageImports: ['framer-motion'],
+    // recharts and date-fns are on Next's built-in list already. motion/react
+    // re-exports framer-motion wholesale, so both barrels are listed.
+    optimizePackageImports: ['motion/react', 'framer-motion'],
     // Client router cache for dynamic routes: a page visited in the last
     // 30 s (back/forward, re-clicking a nav item) re-renders from the cached
     // RSC payload instead of a new server request through the auth proxy.

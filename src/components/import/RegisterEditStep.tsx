@@ -10,7 +10,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { Label } from '@/components/ui/label'
-import { Trash2, AlertTriangle, RefreshCw } from 'lucide-react'
+import { ArrowPathIcon, ExclamationTriangleIcon, TrashIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import type { RegisterImportConfig, ReviewRow } from '@/components/import/register-import-config'
 import {
@@ -111,7 +111,7 @@ export default function RegisterEditStep({
       <CardContent className="space-y-4">
         {matchedCount > 0 && (
           <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/30 px-4 py-3">
-            <RefreshCw className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+            <ArrowPathIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
             <div className="flex-1 space-y-2">
               <p className="text-sm">
                 {tMatch.rich(`${entity}_matched`, {
@@ -179,7 +179,7 @@ export default function RegisterEditStep({
                             className="text-destructive shrink-0"
                             title={t('row_invalid_hint')}
                           >
-                            <AlertTriangle className="h-3.5 w-3.5" />
+                            <ExclamationTriangleIcon className="h-3.5 w-3.5" />
                           </span>
                         )}
                         {possibleDuplicate && row.possible_duplicate && existingId ? (
@@ -225,7 +225,7 @@ export default function RegisterEditStep({
                           aria-label={t('delete_row')}
                           onClick={() => deleteRow(row.id)}
                         >
-                          <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+                          <TrashIcon className="h-3.5 w-3.5 text-muted-foreground" />
                         </Button>
                       </div>
                     </td>
@@ -247,7 +247,7 @@ export default function RegisterEditStep({
 
         {error && (
           <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
-            <AlertTriangle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+            <ExclamationTriangleIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <p className="text-sm text-destructive">{error}</p>
           </div>
         )}

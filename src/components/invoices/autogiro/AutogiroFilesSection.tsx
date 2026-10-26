@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Download } from 'lucide-react'
+import { ArrowDownTrayIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
@@ -141,7 +141,7 @@ export function AutogiroFilesSection({
                           disabled={downloading !== null && downloading !== file.id}
                           onClick={() => void download(file)}
                         >
-                          {downloading !== file.id && <Download className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />}
+                          {downloading !== file.id && <ArrowDownTrayIcon className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />}
                           {t('download')}
                         </Button>
                       )}

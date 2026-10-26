@@ -49,7 +49,7 @@ Every extension has a `manifest.json` in `extensions/<sector>/<name>/`.
 |-------|----------|-------------|
 | `name` | Yes | Display name |
 | `category` | Yes | `"import"` / `"operations"` / `"reports"` / `"accounting"` |
-| `icon` | Yes | Lucide icon name (e.g., `"Camera"`, `"Sparkles"`, `"Bell"`): falls back to `"Puzzle"` |
+| `icon` | Yes | An icon name from the map in `src/lib/extensions/icon-resolver.tsx` (e.g., `"Bell"`, `"Inbox"`, `"Mail"`): falls back to `"Puzzle"`. The names predate the Heroicons switch and stay as they are; each resolves to a Heroicon. |
 | `dataPattern` | Yes | `"core"` (reads core tables) / `"manual"` (own data) / `"both"` |
 | `description` | Yes | Short marketplace card text |
 | `longDescription` | Yes | Longer detail page text |

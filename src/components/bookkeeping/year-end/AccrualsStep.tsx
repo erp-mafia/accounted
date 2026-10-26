@@ -8,7 +8,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { ArrowRight } from 'lucide-react'
+import { ArrowRightIcon } from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
 import { useToast } from '@/components/ui/use-toast'
 import { useCompany } from '@/contexts/CompanyContext'
@@ -257,7 +257,7 @@ export function AccrualsStep({ periodId, onBack, onContinue }: AccrualsStepProps
             'Bokför…'
           ) : (
             <>
-              Fortsätt <ArrowRight className="ml-1 h-4 w-4" />
+              Fortsätt <ArrowRightIcon className="ml-1 h-4 w-4" />
             </>
           )}
         </Button>

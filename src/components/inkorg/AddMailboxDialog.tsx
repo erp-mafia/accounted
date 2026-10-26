@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useId, useState, type FormEvent, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check, Copy, MoreHorizontal } from 'lucide-react'
+import { CheckIcon, EllipsisHorizontalIcon, Square2StackIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -270,7 +270,7 @@ function IntakeAddressRow() {
       }
     >
       <Button variant="secondary" size="sm" onClick={() => void onCopy(state.address)}>
-        {copy === 'copied' ? <Check className="mr-1 h-3.5 w-3.5" /> : <Copy className="mr-1 h-3.5 w-3.5" />}
+        {copy === 'copied' ? <CheckIcon className="mr-1 h-3.5 w-3.5" /> : <Square2StackIcon className="mr-1 h-3.5 w-3.5" />}
         {copy === 'copied' ? t('copied') : t('copy')}
       </Button>
       <span className="sr-only" aria-live="polite">
@@ -587,7 +587,7 @@ function DigitalRowMenu({ provider, onDisconnect }: { provider: DigitalMailboxPr
     <DropdownMenu>
       <DropdownMenuTrigger asChild>
         <Button variant="outline" size="icon-sm" aria-label={t('digital_more', { provider: t(`mailbox_${provider}_name`) })}>
-          <MoreHorizontal className="h-[15px] w-[15px]" />
+          <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
         </Button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">

@@ -13,7 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useToast } from '@/components/ui/use-toast'
-import { ShieldCheck, LogOut } from 'lucide-react'
+import { ArrowRightStartOnRectangleIcon, ShieldCheckIcon } from '@/components/icons'
 import { SupportLink } from '@/components/ui/support-link'
 import { safeReturnTo } from '@/lib/auth/safe-return-to'
 import { resolvePostLoginDestination } from '@/lib/company/post-login-landing'
@@ -180,7 +180,7 @@ function MfaVerifyContent() {
         <div className="text-center mb-10">
           <div className="flex justify-center mb-4">
             <div className="h-14 w-14 rounded-xl bg-primary/8 flex items-center justify-center">
-              <ShieldCheck className="h-7 w-7 text-primary" />
+              <ShieldCheckIcon className="h-7 w-7 text-primary" />
             </div>
           </div>
           <h1 className="text-2xl tracking-tight">{t('verify_title')}</h1>
@@ -231,7 +231,7 @@ function MfaVerifyContent() {
           className="w-full mt-4 text-muted-foreground"
           onClick={handleLogout}
         >
-          <LogOut className="mr-2 h-4 w-4" />
+          <ArrowRightStartOnRectangleIcon className="mr-2 h-4 w-4" />
           {tCommon('logout')}
         </Button>
 

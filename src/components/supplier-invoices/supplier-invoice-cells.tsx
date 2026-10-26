@@ -8,7 +8,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { LEGAL_VAT_RATES } from '@/lib/vat/supplier-invoice-line-checks'
 import { rateToPctString } from '@/lib/supplier-invoices/form-payload'
-import { ChevronDown } from 'lucide-react'
+import { ChevronDownIcon } from '@/components/icons'
 import { parseDecimalInput, parseAmountInput, formatAmountInput } from '@/lib/money'
 
 export function VatRateCell({ value, onChange }: { value: number; onChange: (v: number) => void }) {
@@ -72,7 +72,7 @@ export function VatRateCell({ value, onChange }: { value: number; onChange: (v: 
             className="shrink-0"
             aria-label={t('vat_rate_presets_aria')}
           >
-            <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
+            <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" />
           </Button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="min-w-[6rem]">

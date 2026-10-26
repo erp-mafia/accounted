@@ -3,7 +3,12 @@
 import { useCallback } from 'react'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
-import { Upload, FileSpreadsheet, AlertCircle, Loader2 } from 'lucide-react'
+import {
+  ArrowUpTrayIcon,
+  ExclamationCircleIcon,
+  SpinnerIcon,
+  TableCellsIcon,
+} from '@/components/icons'
 import { FileDropzone } from '@/components/ui/file-dropzone'
 
 interface OpeningBalanceUploadStepProps {
@@ -50,12 +55,12 @@ export default function OpeningBalanceUploadStep({
         >
           {isLoading ? (
             <div className="flex flex-col items-center gap-3">
-              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <SpinnerIcon className="h-8 w-8 animate-spin text-primary" />
               <p className="text-sm text-muted-foreground">Läser fil och identifierar kolumner...</p>
             </div>
           ) : (
             <>
-              <Upload className="h-8 w-8 text-muted-foreground/50 mb-3" />
+              <ArrowUpTrayIcon className="h-8 w-8 text-muted-foreground/50 mb-3" />
               <p className="text-sm font-medium">
                 Dra och släpp din fil här
               </p>
@@ -76,7 +81,7 @@ export default function OpeningBalanceUploadStep({
         {/* Error */}
         {error && (
           <div className="flex items-start gap-3 rounded-lg border border-destructive/30 bg-destructive/5 px-4 py-3">
-            <AlertCircle className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
+            <ExclamationCircleIcon className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
             <div className="space-y-2">
               <p className="text-sm text-destructive">{error}</p>
               {errorAction && (
@@ -90,7 +95,7 @@ export default function OpeningBalanceUploadStep({
 
         {/* Info */}
         <div className="flex items-start gap-3 rounded-lg border border-border bg-muted/50 px-4 py-3">
-          <FileSpreadsheet className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+          <TableCellsIcon className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
           <div className="text-sm text-muted-foreground space-y-1">
             <p className="font-medium text-foreground">Filformat</p>
             <p>

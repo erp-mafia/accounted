@@ -4,7 +4,7 @@ import { useMemo, useState, useTransition } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname, useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { ArrowDown, ArrowUp, Loader2 } from 'lucide-react'
+import { ArrowDownIcon, ArrowUpIcon, SpinnerIcon } from '@/components/icons'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { Badge } from '@/components/ui/badge'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -181,7 +181,7 @@ export default function ByraKpiView({
     { key: 'unbookedCount', label: tClients('col_unbooked'), numeric: true },
   ]
 
-  const SortIcon = sort.desc ? ArrowDown : ArrowUp
+  const SortIcon = sort.desc ? ArrowDownIcon : ArrowUpIcon
 
   return (
     <div className={cn('space-y-8 transition-opacity duration-150', isPending && 'opacity-60')}>
@@ -292,7 +292,7 @@ export default function ByraKpiView({
                       </span>
                     )}
                     {pendingId === row.companyId && (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                      <SpinnerIcon className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
                     )}
                   </span>
                 </td>

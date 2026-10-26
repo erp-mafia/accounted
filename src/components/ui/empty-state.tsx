@@ -5,16 +5,11 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
-import {
-  Users,
-  Plus,
-  TrendingUp,
-  type LucideIcon,
-} from 'lucide-react'
+import { ArrowTrendingUpIcon, PlusIcon, UsersIcon, type Icon as AppIcon } from '@/components/icons'
 import { SupportLink } from '@/components/ui/support-link'
 
 interface EmptyStateProps {
-  icon?: LucideIcon
+  icon?: AppIcon
   /**
    * Usually static i18n strings. The empty state is data-ph-unmask chrome in
    * session replays, so a title or description carrying user data (e.g. an
@@ -75,14 +70,14 @@ export function EmptyState({
           {actionHref && actionLabel && (
             <Link href={actionHref}>
               <Button>
-                <Plus className="mr-2 h-4 w-4" />
+                <PlusIcon className="mr-2 h-4 w-4" />
                 {actionLabel}
               </Button>
             </Link>
           )}
           {onAction && actionLabel && (
             <Button onClick={onAction}>
-              <Plus className="mr-2 h-4 w-4" />
+              <PlusIcon className="mr-2 h-4 w-4" />
               {actionLabel}
             </Button>
           )}
@@ -104,7 +99,7 @@ export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
   const t = useTranslations('empty')
   return (
     <EmptyState
-      icon={Users}
+      icon={UsersIcon}
       title={t('preset_customers_title')}
       description={t('preset_customers_description')}
       actionLabel={t('preset_customers_action')}
@@ -116,9 +111,10 @@ export function EmptyCustomers({ onAction }: { onAction?: () => void } = {}) {
 
 /**
  * Byrå cockpit: no client companies yet. A preset, not a bare <EmptyState
- * icon={TrendingUp} />, because the only caller is a Server Component: a
- * lucide icon is a forwardRef object that cannot cross the RSC boundary as a
- * prop, while a reference to this client component can. The copy lives in the
+ * icon={ArrowTrendingUpIcon} />, because the only caller is a Server
+ * Component: an icon from @/components/icons is a plain function that cannot
+ * cross the RSC boundary as a prop, while a reference to this client
+ * component can. The copy lives in the
  * byra namespace, where the byrå surfaces already keep it.
  */
 export function EmptyByraClients() {
@@ -129,7 +125,7 @@ export function EmptyByraClients() {
   const tByra = useTranslations('byra')
   return (
     <EmptyState
-      icon={TrendingUp}
+      icon={ArrowTrendingUpIcon}
       title={tByra('kpi_empty_title')}
       description={tByra('kpi_empty_description')}
     />

@@ -17,7 +17,7 @@ import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
-import { AlertTriangle, Lock, ArrowRight } from 'lucide-react'
+import { ArrowRightIcon, ExclamationTriangleIcon, LockClosedIcon } from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { JournalEntry } from '@/types'
@@ -212,14 +212,14 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
               {!previewLoading && previewError && (
                 <span className="inline-flex items-center gap-1.5 text-destructive">
-                  <AlertTriangle className="h-4 w-4" />
+                  <ExclamationTriangleIcon className="h-4 w-4" />
                   {previewError}
                 </span>
               )}
 
               {!previewLoading && !previewError && targetOpen && (
                 <span className="inline-flex items-center gap-1.5 text-muted-foreground">
-                  <ArrowRight className="h-4 w-4" />
+                  <ArrowRightIcon className="h-4 w-4" />
                   Flyttas till {preview?.period_name ?? 'rätt räkenskapsår'}
                 </span>
               )}
@@ -241,7 +241,7 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
               {!previewLoading && preview?.status === 'locked' && (
                 <span className="inline-flex items-center gap-1.5 text-destructive">
-                  <Lock className="h-4 w-4" />
+                  <LockClosedIcon className="h-4 w-4" />
                   Perioden är låst{preview?.lock_date ? ` t.o.m. ${formatDate(preview.lock_date)}` : ''}. Lås upp perioden för att flytta verifikationen dit.
                 </span>
               )}
@@ -250,12 +250,12 @@ export default function RecordateEntryDialog({ entry, open, onOpenChange, onMove
 
           {/* Soft advisory: moving into a past period */}
           {targetOpen && movingIntoPast && (
-            <p className="inline-flex items-start gap-1.5 text-sm text-muted-foreground">
-              <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+            <div className="inline-flex items-start gap-1.5 text-sm text-muted-foreground">
+              <ExclamationTriangleIcon className="h-4 w-4 mt-0.5 shrink-0" />
               <span>
                 Om momsen för perioden redan är inlämnad kan du behöva lämna en rättad momsdeklaration.
               </span>
-            </p>
+            </div>
           )}
         </div>
 

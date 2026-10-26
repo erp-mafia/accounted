@@ -4,7 +4,14 @@ import { useCallback, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { AlertTriangle, ArrowLeft, FileDown, Plus, Trash2, XCircle } from 'lucide-react'
+import {
+  ArrowLeftIcon,
+  DocumentArrowDownIcon,
+  ExclamationTriangleIcon,
+  PlusIcon,
+  TrashIcon,
+  XCircleIcon,
+} from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
@@ -262,17 +269,17 @@ export function ForenklatArsbokslutView({ periodId }: { periodId: string | null 
           <FyPicker value={periodId} onChange={switchYear} includeAllOption={false} hideFuturePeriods />
           <Button size="sm" variant="outline" asChild>
             <Link href={`/bookkeeping/year-end?period=${periodId}`}>
-              <ArrowLeft className="mr-2 h-4 w-4" /> {t('back')}
+              <ArrowLeftIcon className="mr-2 h-4 w-4" /> {t('back')}
             </Link>
           </Button>
           {blocked ? (
             <Button size="sm" disabled>
-              <FileDown className="mr-2 h-4 w-4" /> {t('download_pdf')}
+              <DocumentArrowDownIcon className="mr-2 h-4 w-4" /> {t('download_pdf')}
             </Button>
           ) : (
             <Button size="sm" asChild>
               <Link href={pdfUrl} target="_blank" rel="noopener noreferrer">
-                <FileDown className="mr-2 h-4 w-4" /> {t('download_pdf')}
+                <DocumentArrowDownIcon className="mr-2 h-4 w-4" /> {t('download_pdf')}
               </Link>
             </Button>
           )}
@@ -289,13 +296,13 @@ export function ForenklatArsbokslutView({ periodId }: { periodId: string | null 
         )}
         {data.blockers.map((check) => (
           <div key={check.code} className="flex items-start gap-2 text-sm">
-            <XCircle className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-label={t('blocker_label')} />
+            <XCircleIcon className="mt-0.5 h-4 w-4 shrink-0 text-destructive" aria-label={t('blocker_label')} />
             <p className="leading-5">{check.message}</p>
           </div>
         ))}
         {data.warnings.map((check) => (
           <div key={check.code} className="flex items-start gap-2 text-sm">
-            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-label={t('warning_label')} />
+            <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" aria-label={t('warning_label')} />
             <p className="leading-5 text-muted-foreground">{check.message}</p>
           </div>
         ))}
@@ -417,7 +424,7 @@ export function ForenklatArsbokslutView({ periodId }: { periodId: string | null 
                   setDirty(true)
                 }}
               >
-                <Trash2 className="h-4 w-4" />
+                <TrashIcon className="h-4 w-4" />
               </Button>
             </div>
           ))}
@@ -431,7 +438,7 @@ export function ForenklatArsbokslutView({ periodId }: { periodId: string | null 
                 setDirty(true)
               }}
             >
-              <Plus className="mr-2 h-4 w-4" /> {t('signatory_add')}
+              <PlusIcon className="mr-2 h-4 w-4" /> {t('signatory_add')}
             </Button>
             <Button size="sm" disabled={!dirty} loading={saving} onClick={() => void saveDocument()}>
               {t('save')}

@@ -14,7 +14,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { DetailSection, DefRow, DefEmpty } from '@/components/ui/detail-section'
 import { AttnLine } from '@/components/ui/attn-line'
-import { Save } from 'lucide-react'
+import { ArrowDownOnSquareIcon } from '@/components/icons'
 import {
   DestructiveConfirmDialog,
   useDestructiveConfirm,
@@ -1033,7 +1033,7 @@ export default function EmployeeDetailPage({ params }: { params: Promise<{ id: s
                 {t('form_cancel')}
               </Button>
               <Button type="submit" disabled={saving || !canWrite}>
-                <Save className="mr-2 h-4 w-4" />
+                <ArrowDownOnSquareIcon className="mr-2 h-4 w-4" />
                 {saving ? t('form_saving') : t('detail_save_changes')}
               </Button>
             </div>

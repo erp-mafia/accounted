@@ -4,7 +4,7 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
-import { ExternalLink } from 'lucide-react'
+import { ArrowTopRightOnSquareIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Switch } from '@/components/ui/switch'
@@ -105,7 +105,7 @@ export function LegalAcceptanceDialog({ documents, initialAnalytics, company, ca
                 className="inline-flex items-center gap-2 underline underline-offset-4"
               >
                 {t(`doc_${key}`)}
-                <ExternalLink className="h-3.5 w-3.5" aria-hidden="true" />
+                <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" aria-hidden="true" />
               </Link>
             </li>
           ))}

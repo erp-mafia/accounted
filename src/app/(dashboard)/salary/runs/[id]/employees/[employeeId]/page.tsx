@@ -4,7 +4,7 @@ import { effectiveRow, type EffectiveFiguresInput } from '@/lib/salary/effective
 import { use, useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft, Calculator, Loader2, X } from 'lucide-react'
+import { ArrowLeftIcon, CalculatorIcon, SpinnerIcon, XMarkIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Button } from '@/components/ui/button'
@@ -245,7 +245,7 @@ export default function SalaryRunEmployeeDetailPage({
           href={`/salary/runs/${runId}`}
           className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground transition-colors"
         >
-          <ArrowLeft className="h-4 w-4" />
+          <ArrowLeftIcon className="h-4 w-4" />
           {t('back_to_run')}
         </Link>
         <p className="text-sm text-destructive">{error ?? t('error_load_employee')}</p>
@@ -307,7 +307,7 @@ export default function SalaryRunEmployeeDetailPage({
               title={t('back_to_run')}
               className="inline-flex shrink-0 items-center text-muted-foreground transition-colors hover:text-foreground"
             >
-              <ArrowLeft className="h-4 w-4" />
+              <ArrowLeftIcon className="h-4 w-4" />
             </Link>
             <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">
               {employee.first_name} {employee.last_name}
@@ -318,7 +318,7 @@ export default function SalaryRunEmployeeDetailPage({
               <Badge variant={statusDisplay?.chip ?? 'secondary'}>{statusLabel}</Badge>
             )}
             {loading && (
-              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" aria-label={t('loading')} />
+              <SpinnerIcon className="h-4 w-4 animate-spin text-muted-foreground" aria-label={t('loading')} />
             )}
           </div>
           <p className="page-header-meta mt-1 text-sm text-muted-foreground">
@@ -343,7 +343,7 @@ export default function SalaryRunEmployeeDetailPage({
         {run.status === 'draft' && (
           <div className="page-header-action flex shrink-0 items-center gap-2">
             <Button size="sm" onClick={handleCalculate} loading={calculating}>
-              {!calculating && <Calculator className="mr-2 h-4 w-4" />}
+              {!calculating && <CalculatorIcon className="mr-2 h-4 w-4" />}
               {t('calculate')}
             </Button>
           </div>
@@ -495,7 +495,7 @@ export default function SalaryRunEmployeeDetailPage({
                               aria-label={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
                               title={li.source_expense_claim_id ? t('remove_expense_claim_line_aria') : t('remove_line_aria')}
                             >
-                              {removingLineId !== li.id && <X className="h-4 w-4" />}
+                              {removingLineId !== li.id && <XMarkIcon className="h-4 w-4" />}
                             </Button>
                           )}
                         </td>

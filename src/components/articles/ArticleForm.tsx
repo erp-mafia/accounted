@@ -16,7 +16,7 @@ import {
   SettingsSelect,
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
-import { ChevronDown, Lock } from 'lucide-react'
+import { ChevronDownIcon, LockClosedIcon } from '@/components/icons'
 import { cn, formatCurrency } from '@/lib/utils'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { createClient } from '@/lib/supabase/client'
@@ -523,7 +523,7 @@ export default function ArticleForm({
           className="inline-flex items-center gap-2 text-[11px] font-medium uppercase tracking-wider text-muted-foreground transition-colors duration-150 hover:text-foreground"
           aria-expanded={moreOpen}
         >
-          <ChevronDown
+          <ChevronDownIcon
             className={cn('h-3.5 w-3.5 transition-transform duration-150', moreOpen && 'rotate-180')}
             aria-hidden="true"
           />
@@ -581,7 +581,7 @@ export default function ArticleForm({
               t('submit_saving')
             ) : !canWrite ? (
               <>
-                <Lock className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="mr-2 h-4 w-4" />
                 {t('submit_save')}
               </>
             ) : (

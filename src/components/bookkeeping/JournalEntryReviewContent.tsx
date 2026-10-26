@@ -3,7 +3,7 @@
 import { Badge } from '@/components/ui/badge'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
-import { CheckCircle2, Paperclip } from 'lucide-react'
+import { CheckCircleIcon, PaperClipIcon } from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import { fiscalYearShortName } from '@/lib/bookkeeping/suggest-fiscal-period'
 
@@ -80,13 +80,13 @@ export function JournalEntryReviewContent({
         <div className="flex items-center gap-2">
           {showBalanceBadge && (
             <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
-              <CheckCircle2 className="h-3.5 w-3.5" />
+              <CheckCircleIcon className="h-3.5 w-3.5" />
               Debet = Kredit
             </span>
           )}
           {attachmentCount != null && attachmentCount > 0 && (
             <Badge variant="outline">
-              <Paperclip className="h-3 w-3 mr-1" />
+              <PaperClipIcon className="h-3 w-3 mr-1" />
               {attachmentCount} underlag
             </Badge>
           )}

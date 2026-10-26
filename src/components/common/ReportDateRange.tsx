@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslations } from 'next-intl'
-import { Check, ChevronDown } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon } from '@/components/icons'
 import { useCompany } from '@/contexts/CompanyContext'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -245,7 +245,7 @@ export function ReportDateRange({
         className="inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-full border border-border bg-background px-3 text-[13px] text-foreground transition-colors duration-150 hover:bg-secondary/60"
       >
         <span className="max-w-[260px] truncate tabular-nums">{summary}</span>
-        <ChevronDown className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
+        <ChevronDownIcon className="h-3.5 w-3.5 flex-shrink-0 text-muted-foreground" />
       </button>
       {open &&
         createPortal(
@@ -273,7 +273,7 @@ export function ReportDateRange({
                     )}
                   >
                     <span>{presetLabels[p]}</span>
-                    {active ? <Check className="h-3.5 w-3.5 text-muted-foreground" /> : null}
+                    {active ? <CheckIcon className="h-3.5 w-3.5 text-muted-foreground" /> : null}
                   </button>
                 )
               })}

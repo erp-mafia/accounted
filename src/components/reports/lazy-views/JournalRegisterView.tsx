@@ -2,7 +2,7 @@
 
 import React, { useState } from 'react'
 import { useTranslations } from 'next-intl'
-import { ChevronDown, ChevronRight } from 'lucide-react'
+import { ChevronDownIcon, ChevronRightIcon } from '@/components/icons'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -139,9 +139,9 @@ export default function JournalRegisterView({ periodId }: { periodId: string }) 
                     >
                       <td className="py-2">
                         {isExpanded ? (
-                          <ChevronDown className="h-4 w-4" />
+                          <ChevronDownIcon className="h-4 w-4" />
                         ) : (
-                          <ChevronRight className="h-4 w-4" />
+                          <ChevronRightIcon className="h-4 w-4" />
                         )}
                       </td>
                       <td className="py-2 font-mono text-xs">

@@ -2,7 +2,7 @@
 
 import { useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { CreditCard, Link2 } from 'lucide-react'
+import { CreditCardIcon, LinkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { failureDescription } from '@/lib/browser/action-failure'
@@ -32,7 +32,7 @@ export default function ZettleSettingsPanel() {
     <FeedConnectorPanel<ConnectionInfo, ZettleSyncPayload>
       extensionId="zettle"
       namespace="zettle"
-      icon={CreditCard}
+      icon={CreditCardIcon}
       request={zettleRequest}
       syncTimeoutMs={ZETTLE_SYNC_TIMEOUT_MS}
       maxBackfillYears={MAX_BACKFILL_YEARS}
@@ -69,7 +69,7 @@ export default function ZettleSettingsPanel() {
           <div className="space-y-4">
             <p className="text-sm text-muted-foreground">{t('connect_hint')}</p>
             <Button onClick={handleConnect} loading={connecting}>
-              {!connecting && <Link2 className="mr-2 h-4 w-4" />}
+              {!connecting && <LinkIcon className="mr-2 h-4 w-4" />}
               {connecting ? tf('connecting') : t('connect')}
             </Button>
           </div>

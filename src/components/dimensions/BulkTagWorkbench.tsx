@@ -3,14 +3,14 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { useCallback, useMemo, useRef, useState } from 'react'
 import {
-  AlertTriangle,
-  ChevronDown,
-  ChevronRight,
-  Search,
-  Tags,
-  Undo2,
-  X,
-} from 'lucide-react'
+  ArrowUturnLeftIcon,
+  ChevronDownIcon,
+  ChevronRightIcon,
+  ExclamationTriangleIcon,
+  HashtagIcon,
+  MagnifyingGlassIcon,
+  XMarkIcon,
+} from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent } from '@/components/ui/card'
@@ -518,7 +518,7 @@ export default function BulkTagWorkbench() {
           </div>
           <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
             <div className="relative flex-1">
-              <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <MagnifyingGlassIcon className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
                 placeholder="Sök i beskrivning…"
                 className="pl-10"
@@ -550,7 +550,7 @@ export default function BulkTagWorkbench() {
               </Label>
             </div>
             <Button onClick={() => void loadVouchers()} loading={isLoading}>
-              {!isLoading && <Search className="mr-2 h-4 w-4" />}
+              {!isLoading && <MagnifyingGlassIcon className="mr-2 h-4 w-4" />}
               Hämta verifikat
             </Button>
           </div>
@@ -562,7 +562,7 @@ export default function BulkTagWorkbench() {
         <Card>
           <CardContent className="p-0">
             <DataListEmpty
-              icon={<Tags className="h-6 w-6" />}
+              icon={<HashtagIcon className="h-6 w-6" />}
               title="Hämta verifikat att tagga"
               description="Välj filter ovan och klicka på Hämta verifikat för att bläddra bland bokförda verifikat."
             />
@@ -594,7 +594,7 @@ export default function BulkTagWorkbench() {
             <DataListLoading />
           ) : vouchers && vouchers.length === 0 ? (
             <DataListEmpty
-              icon={<Search className="h-6 w-6" />}
+              icon={<MagnifyingGlassIcon className="h-6 w-6" />}
               title="Inga verifikat matchade filtren"
               description="Justera datum, kontointervall eller söktext och försök igen."
             />
@@ -637,9 +637,9 @@ export default function BulkTagWorkbench() {
                           aria-expanded={isExpanded}
                         >
                           {isExpanded ? (
-                            <ChevronDown className="h-4 w-4" />
+                            <ChevronDownIcon className="h-4 w-4" />
                           ) : (
-                            <ChevronRight className="h-4 w-4" />
+                            <ChevronRightIcon className="h-4 w-4" />
                           )}
                         </Button>
                       </div>
@@ -658,7 +658,7 @@ export default function BulkTagWorkbench() {
                           title="Verifikatet ingår i ett storno-par"
                           className="inline-flex shrink-0"
                         >
-                          <Undo2
+                          <ArrowUturnLeftIcon
                             className="h-3.5 w-3.5 text-muted-foreground"
                             aria-hidden="true"
                           />
@@ -773,7 +773,7 @@ export default function BulkTagWorkbench() {
           {missingPairLineIds.length > 0 && (
             <div className="mb-4 flex flex-col gap-3 rounded-lg border border-border bg-secondary/40 p-3 sm:flex-row sm:items-center sm:justify-between">
               <div className="flex items-start gap-2">
-                <AlertTriangle
+                <ExclamationTriangleIcon
                   className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground"
                   aria-hidden="true"
                 />
@@ -800,7 +800,7 @@ export default function BulkTagWorkbench() {
                 anchorIndexRef.current = null
               }}
             >
-              <X className="mr-1 h-3 w-3" />
+              <XMarkIcon className="mr-1 h-3 w-3" />
               Avmarkera
             </Button>
             <div className="ml-auto flex items-center gap-2">
@@ -837,7 +837,7 @@ export default function BulkTagWorkbench() {
                   className="flex-1"
                 />
                 <Button onClick={() => void handleApply()} disabled={!canApply} loading={isApplying}>
-                  {!isApplying && <Tags className="mr-2 h-4 w-4" />}
+                  {!isApplying && <HashtagIcon className="mr-2 h-4 w-4" />}
                   Tagga {selectedVoucherCount} verifikat
                 </Button>
               </div>

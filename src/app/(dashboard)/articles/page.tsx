@@ -14,7 +14,7 @@ import { TD_CLASS, SHOW_MORE_STEP, ShowMoreFooter, SortableTh } from '@/componen
 import { useUrlSort } from '@/lib/hooks/use-url-sort'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { Plus, Package, Lock } from 'lucide-react'
+import { CubeIcon, LockClosedIcon, PlusIcon } from '@/components/icons'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import {
   useSubmitWithAccountActivation,
@@ -225,9 +225,9 @@ function ArticlesPageInner() {
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
                 {canWrite ? (
-                  <Plus className="mr-2 h-4 w-4" />
+                  <PlusIcon className="mr-2 h-4 w-4" />
                 ) : (
-                  <Lock className="mr-2 h-4 w-4" />
+                  <LockClosedIcon className="mr-2 h-4 w-4" />
                 )}
                 {t('new_article')}
               </Button>
@@ -287,7 +287,7 @@ function ArticlesPageInner() {
       ) : sortedArticles.length === 0 ? (
         searchTerm ? (
           <EmptyState
-            icon={Package}
+            icon={CubeIcon}
             title={t('no_search_results_title')}
             description={
               // The currency scope is part of why nothing matched, so it has to
@@ -306,7 +306,7 @@ function ArticlesPageInner() {
           />
         ) : (
           <EmptyState
-            icon={Package}
+            icon={CubeIcon}
             title={t('empty_title')}
             description={t('empty_description')}
             actionLabel={canWrite ? t('empty_action') : undefined}

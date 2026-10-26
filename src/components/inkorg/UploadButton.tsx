@@ -2,7 +2,7 @@
 
 import { useRef, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Upload } from 'lucide-react'
+import { ArrowUpTrayIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
@@ -72,7 +72,7 @@ export function UploadButton({ onUploaded }: { onUploaded: () => Promise<void> }
         }}
       />
       <Button size="sm" onClick={() => inputRef.current?.click()} loading={progress !== null}>
-        {progress === null && <Upload aria-hidden="true" className="mr-1.5 h-3.5 w-3.5" />}
+        {progress === null && <ArrowUpTrayIcon aria-hidden="true" className="mr-1.5 h-3.5 w-3.5" />}
         {progress && progress.total > 1
           ? t('upload_progress', { index: Math.min(progress.done + 1, progress.total), total: progress.total })
           : progress

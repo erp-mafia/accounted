@@ -36,13 +36,7 @@ import {
 import { AddAccountDialog } from './AddAccountDialog'
 import { EditAccountDialog } from './EditAccountDialog'
 import { PruneAccountsDialog } from './PruneAccountsDialog'
-import {
-  ChevronRight,
-  ListFilter,
-  Plus,
-  Pencil,
-  Trash2,
-} from 'lucide-react'
+import { ChevronRightIcon, FunnelIcon, PencilIcon, PlusIcon, TrashIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import type { BASAccount } from '@/types'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
@@ -573,7 +567,7 @@ export default function ChartOfAccountsManager() {
           {t('prune_button')}
         </button>
         <Button size="sm" onClick={() => setAddDialogOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
+          <PlusIcon className="mr-2 h-4 w-4" />
           {t('add_own')}
         </Button>
       </div>
@@ -606,7 +600,7 @@ export default function ChartOfAccountsManager() {
           aria-expanded={open}
           className="flex w-full items-center gap-1.5 bg-muted/40 px-3 py-[7px] text-left text-[11px] font-semibold uppercase tracking-[0.06em] text-muted-foreground transition-colors duration-150 hover:bg-secondary/35"
         >
-          <ChevronRight className={cn('h-3 w-3 shrink-0 transition-transform duration-150', open && 'rotate-90')} />
+          <ChevronRightIcon className={cn('h-3 w-3 shrink-0 transition-transform duration-150', open && 'rotate-90')} />
           {t('class_heading', { cls, label: classLabel(cls) })}
         </button>
       </td>
@@ -714,7 +708,7 @@ export default function ChartOfAccountsManager() {
                           )}
                         >
                           {usageFilter === 'all' ? t('col_usage') : t(USAGE_FILTER_KEY[usageFilter])}
-                          <ListFilter className="h-3 w-3" aria-hidden />
+                          <FunnelIcon className="h-3 w-3" aria-hidden />
                         </button>
                       </DropdownMenuTrigger>
                       <DropdownMenuContent align="end">
@@ -829,7 +823,7 @@ export default function ChartOfAccountsManager() {
                                     aria-label={tCommon('edit')}
                                     onClick={() => setEditAccount(account)}
                                   >
-                                    <Pencil className="h-3.5 w-3.5" />
+                                    <PencilIcon className="h-3.5 w-3.5" />
                                   </Button>
                                   {!account.is_system_account && (
                                     <Button
@@ -841,7 +835,7 @@ export default function ChartOfAccountsManager() {
                                       loading={deletingAccount === account.account_number}
                                     >
                                       {deletingAccount !== account.account_number && (
-                                        <Trash2 className="h-3.5 w-3.5" />
+                                        <TrashIcon className="h-3.5 w-3.5" />
                                       )}
                                     </Button>
                                   )}
@@ -933,7 +927,7 @@ export default function ChartOfAccountsManager() {
                                       loading={activatingAccounts.has(account.account_number)}
                                     >
                                       {!activatingAccounts.has(account.account_number) && (
-                                        <Plus className="mr-1 h-3 w-3" />
+                                        <PlusIcon className="mr-1 h-3 w-3" />
                                       )}
                                       {account.is_activated ? t('reactivate') : t('add')}
                                     </Button>

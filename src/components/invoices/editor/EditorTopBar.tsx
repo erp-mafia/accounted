@@ -3,7 +3,7 @@
 import { useState, type KeyboardEvent, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Check, ChevronDown, ChevronRight, Lock } from 'lucide-react'
+import { CheckIcon, ChevronDownIcon, ChevronRightIcon, LockClosedIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import {
@@ -93,7 +93,7 @@ export function EditorTopBar({
         >
           {breadcrumb.label}
         </Link>
-        <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
+        <ChevronRightIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />
         <h1 className="page-header-title min-w-0">
           {documentTypes ? (
             <DropdownMenu>
@@ -104,7 +104,7 @@ export function EditorTopBar({
                   className="inline-flex h-8 items-center gap-1 rounded-full px-2 transition-colors duration-150 hover:bg-secondary/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 >
                   {title}
-                  <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+                  <ChevronDownIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
                 </button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="start" className="min-w-[200px]">
@@ -151,7 +151,7 @@ export function EditorTopBar({
             title={primary.title}
             aria-keyshortcuts="Meta+Enter Control+Enter"
           >
-            {primary.locked && <Lock className="mr-2 h-3.5 w-3.5" aria-hidden="true" />}
+            {primary.locked && <LockClosedIcon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />}
             {primary.label}
           </Button>
           {menu && (
@@ -163,7 +163,7 @@ export function EditorTopBar({
                   aria-label={t('more_actions_aria')}
                   disabled={primary.disabled}
                 >
-                  <ChevronDown className="h-4 w-4" />
+                  <ChevronDownIcon className="h-4 w-4" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[260px]">
@@ -187,7 +187,7 @@ function MenuEntry({ entry }: { entry: TopBarMenuEntry }) {
   return (
     <DropdownMenuItem disabled={entry.disabled} onSelect={entry.onSelect} className="items-start py-2">
       <span className="flex h-5 w-4 shrink-0 items-center" aria-hidden="true">
-        {entry.selected && <Check className="h-3.5 w-3.5" strokeWidth={2.5} />}
+        {entry.selected && <CheckIcon className="h-3.5 w-3.5" strokeWidth={2} />}
       </span>
       <span className="flex min-w-0 flex-col">
         <span className="text-[13px] leading-5">{entry.label}</span>

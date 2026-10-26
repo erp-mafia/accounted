@@ -4,7 +4,7 @@ import { useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
-import { Landmark } from 'lucide-react'
+import { BuildingLibraryIcon } from '@/components/icons'
 import { AiConnectorDialog } from '@/components/onboarding/AiConnectorDialog'
 import {
   DropdownMenu,
@@ -119,7 +119,7 @@ export function KopplingarChips({
         )}
         {showBank && (
           <Chip
-            icon={<Landmark className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
+            icon={<BuildingLibraryIcon className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
             name={t('kopplingar_bank_short')}
             status={t('kopplingar_bank_off')}
             action={
@@ -135,7 +135,7 @@ export function KopplingarChips({
         )}
         {showSkvChip && (
           <Chip
-            icon={<Landmark className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
+            icon={<BuildingLibraryIcon className="h-[13px] w-[13px] text-muted-foreground" aria-hidden />}
             name={t('kopplingar_skv_short')}
             status={t('kopplingar_skv_off')}
             action={skvOmbudEnabled ? (

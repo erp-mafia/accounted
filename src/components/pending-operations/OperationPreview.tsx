@@ -10,7 +10,7 @@
 import { Fragment, createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ArrowDown } from 'lucide-react'
+import { ArrowDownIcon } from '@/components/icons'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isUuid } from '@/lib/invariants/uuid'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -1175,7 +1175,7 @@ function LinkDocumentToVoucherPreview({
         {documentCard}
       </div>
       <div className="flex items-center justify-center text-xs text-muted-foreground">
-        <ArrowDown className="mr-1 h-3.5 w-3.5" aria-hidden />
+        <ArrowDownIcon className="mr-1 h-3.5 w-3.5" aria-hidden />
         {t('preview_link_caption')}
       </div>
     </div>

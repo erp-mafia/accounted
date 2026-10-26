@@ -18,7 +18,17 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { CheckCircle, CreditCard, FileText, Trash2, Lock, Undo2, CalendarClock, MoreHorizontal, Landmark } from 'lucide-react'
+import {
+  ArrowUturnLeftIcon,
+  BuildingLibraryIcon,
+  CalendarDaysIcon,
+  CheckCircleIcon,
+  CreditCardIcon,
+  DocumentTextIcon,
+  EllipsisHorizontalIcon,
+  LockClosedIcon,
+  TrashIcon,
+} from '@/components/icons'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { isCreditableSupplierInvoiceStatus } from '@/lib/bookkeeping/creditable-statuses'
 import { formatDate, cn } from '@/lib/utils'
@@ -644,13 +654,13 @@ export default function SupplierInvoiceDetailPage() {
   const payDisabledTitle = !canWrite ? t('viewer_disabled_tooltip') : undefined
   const payOptions: SplitButtonOption[] = [
     ...(canPayViaBank
-      ? [{ key: 'bank', label: tList('bulk_pay_via_bank'), icon: canWrite ? Landmark : Lock, onSelect: () => setIsBankDialogOpen(true) }]
+      ? [{ key: 'bank', label: tList('bulk_pay_via_bank'), icon: canWrite ? BuildingLibraryIcon : LockClosedIcon, onSelect: () => setIsBankDialogOpen(true) }]
       : []),
     ...(canAddToFile
-      ? [{ key: 'file', label: t('add_to_payment_file'), icon: canWrite ? FileText : Lock, onSelect: () => setIsFileDialogOpen(true) }]
+      ? [{ key: 'file', label: t('add_to_payment_file'), icon: canWrite ? DocumentTextIcon : LockClosedIcon, onSelect: () => setIsFileDialogOpen(true) }]
       : []),
     ...(canMarkPaid
-      ? [{ key: 'mark_paid', label: t('mark_paid'), icon: canWrite ? CreditCard : Lock, onSelect: () => setIsPayDialogOpen(true) }]
+      ? [{ key: 'mark_paid', label: t('mark_paid'), icon: canWrite ? CreditCardIcon : LockClosedIcon, onSelect: () => setIsPayDialogOpen(true) }]
       : []),
   ].map((option) => ({ ...option, disabled: isProcessing || !canWrite, disabledTitle: payDisabledTitle }))
   const payVariant = canApprove || openPayment === 'bank_payment' ? 'outline' : 'default'
@@ -695,7 +705,7 @@ export default function SupplierInvoiceDetailPage() {
             )}
             {items.some(itemHasAccrual) && (
               <Badge variant="outline" className="gap-1">
-                <CalendarClock className="h-3 w-3" />
+                <CalendarDaysIcon className="h-3 w-3" />
                 {t('badge_accrued')}
               </Badge>
             )}
@@ -719,7 +729,7 @@ export default function SupplierInvoiceDetailPage() {
           {invoice.is_self_billed && (
             <Button size="sm" variant="outline" asChild>
               <a href={`/api/supplier-invoices/${invoice.id}/self-billing-pdf?disposition=inline`} target="_blank" rel="noreferrer">
-                <FileText className="mr-2 h-4 w-4" />
+                <DocumentTextIcon className="mr-2 h-4 w-4" />
                 {t('download_self_billing')}
               </a>
             </Button>
@@ -732,9 +742,9 @@ export default function SupplierInvoiceDetailPage() {
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {processingAction === 'approve' ? null : canWrite ? (
-                <CheckCircle className="mr-2 h-4 w-4" />
+                <CheckCircleIcon className="mr-2 h-4 w-4" />
               ) : (
-                <Lock className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="mr-2 h-4 w-4" />
               )}
               {t('approve')}
             </Button>
@@ -773,9 +783,9 @@ export default function SupplierInvoiceDetailPage() {
               title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
             >
               {processingAction === 'uncredit' ? null : canWrite ? (
-                <Undo2 className="mr-2 h-4 w-4" />
+                <ArrowUturnLeftIcon className="mr-2 h-4 w-4" />
               ) : (
-                <Lock className="mr-2 h-4 w-4" />
+                <LockClosedIcon className="mr-2 h-4 w-4" />
               )}
               {t('uncredit_button')}
             </Button>
@@ -791,14 +801,14 @@ export default function SupplierInvoiceDetailPage() {
                   loading={processingAction === 'credit' || processingAction === 'delete'}
                 >
                   {processingAction !== 'credit' && processingAction !== 'delete' && (
-                    <MoreHorizontal className="h-4 w-4" />
+                    <EllipsisHorizontalIcon className="h-4 w-4" />
                   )}
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">
                 {canCredit && (
                   <DropdownMenuItem onSelect={() => void handleCredit()} disabled={isProcessing || !canWrite}>
-                    <FileText className="h-4 w-4" />
+                    <DocumentTextIcon className="h-4 w-4" />
                     {t('credit_note_button')}
                   </DropdownMenuItem>
                 )}
@@ -810,7 +820,7 @@ export default function SupplierInvoiceDetailPage() {
                       disabled={isProcessing || !canWrite}
                       className="text-destructive focus:text-destructive"
                     >
-                      <Trash2 className="h-4 w-4" />
+                      <TrashIcon className="h-4 w-4" />
                       {t('delete_confirm_label')}
                     </DropdownMenuItem>
                   </>
@@ -1077,7 +1087,7 @@ export default function SupplierInvoiceDetailPage() {
                 loading={processingAction === 'book'}
                 title={!canWrite ? t('viewer_disabled_tooltip') : undefined}
               >
-                {processingAction !== 'book' && !canWrite && <Lock className="mr-2 h-4 w-4" />}
+                {processingAction !== 'book' && !canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}
                 {t('book_action')}
               </Button>
             </span>

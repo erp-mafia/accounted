@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
-import { Check, Copy, RefreshCw, Trash2 } from 'lucide-react'
+import { ArrowPathIcon, CheckIcon, Square2StackIcon, TrashIcon } from '@/components/icons'
 import {
   SettingsGroup,
   SettingsRow,
@@ -270,7 +270,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
             )}
             <div className="ml-auto flex shrink-0 items-center gap-2">
               <Button variant="outline" size="sm" onClick={() => void handleVerify()} loading={isChecking}>
-                {!isChecking && <RefreshCw className="mr-1.5 h-3.5 w-3.5" />}
+                {!isChecking && <ArrowPathIcon className="mr-1.5 h-3.5 w-3.5" />}
                 {t('check_again')}
               </Button>
               <Button
@@ -280,7 +280,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                 loading={isRemoving}
                 aria-label={t('remove_aria')}
               >
-                {!isRemoving && <Trash2 className="h-3.5 w-3.5" />}
+                {!isRemoving && <TrashIcon className="h-3.5 w-3.5" />}
               </Button>
             </div>
           </SettingsRow>
@@ -315,7 +315,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                 />
               </SettingsRow>
               <div className="flex items-start gap-3 rounded-lg border border-border p-4 text-sm">
-                <Check className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+                <CheckIcon className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
                 <div className="space-y-1">
                   <p className="font-medium">
                     {t('preview_label')}{' '}
@@ -366,7 +366,7 @@ export function InvoiceSenderDomainSettings({ companyName }: { companyName: stri
                               onClick={() => void handleCopy(r.value)}
                               aria-label={t('copy_record_aria', { type: r.type })}
                             >
-                              <Copy className="h-3.5 w-3.5" />
+                              <Square2StackIcon className="h-3.5 w-3.5" />
                             </Button>
                           </td>
                         </tr>

@@ -15,11 +15,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
-import {
-  ArrowLeft,
-  ArrowRight,
-  AlertTriangle,
-} from 'lucide-react'
+import { ArrowLeftIcon, ArrowRightIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
 import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
@@ -175,7 +171,7 @@ export default function BankFilePreviewStep({
         <Card className="border-destructive">
           <CardContent className="pt-6">
             <div className="flex gap-3">
-              <AlertTriangle className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
+              <ExclamationTriangleIcon className="h-5 w-5 text-destructive flex-shrink-0 mt-0.5" />
               <div className="min-w-0 space-y-2">
                 <p className="font-medium text-destructive">Filen innehåller fel som förhindrar import</p>
                 <div className="max-h-32 space-y-1 overflow-y-auto">
@@ -194,12 +190,12 @@ export default function BankFilePreviewStep({
       {/* Navigation */}
       <div className="flex flex-col-reverse gap-3 sm:flex-row sm:justify-between">
         <Button variant="outline" onClick={onBack}>
-          <ArrowLeft className="mr-2 h-4 w-4" />
+          <ArrowLeftIcon className="mr-2 h-4 w-4" />
           Tillbaka
         </Button>
         <Button onClick={onContinue} disabled={hasIssues || transactions.length === 0}>
           Fortsätt
-          <ArrowRight className="ml-2 h-4 w-4" />
+          <ArrowRightIcon className="ml-2 h-4 w-4" />
         </Button>
       </div>
     </div>

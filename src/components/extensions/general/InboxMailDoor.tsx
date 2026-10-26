@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { Search } from 'lucide-react'
+import { MagnifyingGlassIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { GoogleMark } from '@/components/ui/provider-marks'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
@@ -63,7 +63,7 @@ export function InboxMailDoor({
               disabled={active.length === 0 || !hasAi}
               onClick={() => void hunt.hunt()}
             >
-              {!hunt.hunting && <Search className="mr-1.5 h-3.5 w-3.5" />}
+              {!hunt.hunting && <MagnifyingGlassIcon className="mr-1.5 h-3.5 w-3.5" />}
               {hunt.hunting ? tMail('hunt_running') : t('hunt_button')}
             </Button>
           </>

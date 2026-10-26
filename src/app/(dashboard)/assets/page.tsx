@@ -14,7 +14,7 @@ import {
   useDestructiveConfirm,
 } from '@/components/ui/destructive-confirm-dialog'
 import { useToast } from '@/components/ui/use-toast'
-import { Package, Plus } from 'lucide-react'
+import { CubeIcon, PlusIcon } from '@/components/icons'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { Asset, AssetCategory } from '@/types'
@@ -119,7 +119,7 @@ export default function AssetsPage() {
       <div className="page-header flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
         <h1 className="page-header-title font-display text-2xl leading-8 tracking-tight">{t('title')}</h1>
         <Button size="sm" onClick={() => setDialogOpen(true)}>
-          <Plus className="mr-2 h-4 w-4" />
+          <PlusIcon className="mr-2 h-4 w-4" />
           {t('new_asset')}
         </Button>
       </div>
@@ -136,7 +136,7 @@ export default function AssetsPage() {
 
       {assets !== null && assets.length === 0 && (
         <EmptyState
-          icon={Package}
+          icon={CubeIcon}
           title={t('empty_title')}
           description={t('empty_description')}
           actionLabel={t('new_asset')}

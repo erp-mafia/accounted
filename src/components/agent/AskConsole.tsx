@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import dynamic from 'next/dynamic'
 import { usePathname } from 'next/navigation'
 import { useLocale } from 'next-intl'
-import { AlertTriangle, MessageSquare, Send } from 'lucide-react'
+import { ChatBubbleLeftIcon, ExclamationTriangleIcon, PaperAirplaneIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { UpgradeNote } from '@/components/billing/UpgradeNote'
 import { useCapability } from '@/contexts/CompanyContext'
@@ -286,7 +286,7 @@ export default function AskConsole({
               disabled={pending || input.trim().length === 0}
               aria-label="Skicka"
             >
-              <Send className="h-4 w-4" />
+              <PaperAirplaneIcon className="h-4 w-4" />
             </Button>
           </div>
           <p className="mt-2 text-[11px] text-muted-foreground">
@@ -345,7 +345,7 @@ function EmptyState({ onPick, canSend }: { onPick: (prompt: string) => void; can
   return (
     <div className="flex flex-1 flex-col items-center justify-center py-10 text-center">
       <div className="mb-3.5 grid h-9 w-9 place-items-center rounded-lg bg-secondary text-foreground">
-        <MessageSquare className="h-[18px] w-[18px]" />
+        <ChatBubbleLeftIcon className="h-[18px] w-[18px]" />
       </div>
       <h3 className="mb-1.5 text-[15px] font-medium text-foreground">Fråga om det du ser</h3>
       <p className="mx-auto max-w-[34ch] text-sm text-muted-foreground">
@@ -372,7 +372,7 @@ function EmptyState({ onPick, canSend }: { onPick: (prompt: string) => void; can
 function UnconfiguredNotice() {
   return (
     <div className="flex items-start gap-3 rounded-lg border border-border bg-secondary/40 px-4 py-3 text-sm">
-      <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
+      <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-warning" />
       <div>
         <strong className="font-medium">Assistenten är inte konfigurerad</strong>
         <p className="mt-1 text-muted-foreground">

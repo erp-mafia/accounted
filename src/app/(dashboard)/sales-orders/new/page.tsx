@@ -2,7 +2,7 @@
 
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
-import { ArrowLeft } from 'lucide-react'
+import { ArrowLeftIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import SalesOrderForm from '@/components/sales-orders/SalesOrderForm'
 
@@ -17,7 +17,7 @@ export default function NewSalesOrderPage() {
             href="/sales-orders"
             className="flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
           >
-            <ArrowLeft className="h-4 w-4" />
+            <ArrowLeftIcon className="h-4 w-4" />
             {t('back')}
           </Link>
         }

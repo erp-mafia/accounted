@@ -23,7 +23,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { changeCorrectionLineAccount, getSelectableCorrectionCatalog } from '@/lib/bookkeeping/correction-line-account'
 import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
-import { Loader2 } from 'lucide-react'
+import { SpinnerIcon } from '@/components/icons'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
 interface NewLine {
@@ -298,7 +298,7 @@ export default function StrikeLinesDialog({ entry, open, onOpenChange, onCorrect
           {accountsStatus !== 'ready' && (
             <div className="flex items-center justify-between gap-3 rounded-lg border bg-muted/50 p-3 text-sm text-muted-foreground">
               <span className="flex items-center gap-2">
-                {accountsStatus === 'loading' && <Loader2 className="h-4 w-4 animate-spin" />}
+                {accountsStatus === 'loading' && <SpinnerIcon className="h-4 w-4 animate-spin" />}
                 {accountsStatus === 'loading' ? t('accounts_loading') : t('accounts_load_failed')}
               </span>
               {accountsStatus === 'error' && (

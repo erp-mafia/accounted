@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { ChevronRight, Plus, X } from 'lucide-react'
+import { ChevronRightIcon, PlusIcon, XMarkIcon } from '@/components/icons'
 import { useTranslations } from 'next-intl'
 import { useToast } from '@/components/ui/use-toast'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -365,7 +365,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               aria-expanded={false}
               className="inline-flex items-center gap-2 text-[12.5px] text-muted-foreground transition-colors duration-150 hover:text-foreground"
             >
-              <ChevronRight className="h-3.5 w-3.5" aria-hidden="true" />
+              <ChevronRightIcon className="h-3.5 w-3.5" aria-hidden="true" />
               {t('opening.disclosure')}
             </button>
           ) : (
@@ -519,7 +519,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                           aria-label="Ta bort komponent"
                           disabled={componentRows.length === 1}
                         >
-                          <X className="h-4 w-4" />
+                          <XMarkIcon className="h-4 w-4" />
                         </Button>
                       </div>
                     </div>
@@ -532,7 +532,7 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
                       size="sm"
                       onClick={addComponentRow}
                     >
-                      <Plus className="mr-1 h-4 w-4" /> Lägg till komponent
+                      <PlusIcon className="mr-1 h-4 w-4" /> Lägg till komponent
                     </Button>
                     <div className="text-xs tabular-nums text-muted-foreground">
                       Summa komponenter:{' '}

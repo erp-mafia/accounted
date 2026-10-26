@@ -16,7 +16,7 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { TxColumnId } from '@/lib/transactions/columns-v2'
 import { HUE_DOT_CLASS, accountHue } from '@/lib/bookkeeping/template-group-colors'
-import { AlertCircle, Link2, MoreHorizontal } from 'lucide-react'
+import { EllipsisHorizontalIcon, ExclamationCircleIcon, LinkIcon } from '@/components/icons'
 import type {
   SkattekontoBookingSuggestion,
   SkattekontoMatchSuggestion,
@@ -138,7 +138,7 @@ export default function SkattekontoInboxCard({
           <span className="truncate">{row.transaktionstext}</span>
           {matchSuggestion && (
             <Badge variant="warning" className="h-4 shrink-0 gap-1 px-1.5 py-0 text-[11px]">
-              <AlertCircle className="h-3 w-3" />
+              <ExclamationCircleIcon className="h-3 w-3" />
               {duplicateLabel}
             </Badge>
           )}
@@ -195,7 +195,7 @@ export default function SkattekontoInboxCard({
             onClick={() => (matchSuggestion ? onMatch(row) : onBokfor(row))}
             loading={processing}
           >
-            {!processing && matchSuggestion ? <Link2 className="mr-1 h-3 w-3" /> : null}
+            {!processing && matchSuggestion ? <LinkIcon className="mr-1 h-3 w-3" /> : null}
             {matchSuggestion ? t('link_to_voucher') : t('book')}
           </Button>
           <DropdownMenu>
@@ -208,7 +208,7 @@ export default function SkattekontoInboxCard({
                 title={t('more_actions_aria')}
                 disabled={processing}
               >
-                <MoreHorizontal className="h-4 w-4" />
+                <EllipsisHorizontalIcon className="h-4 w-4" />
               </Button>
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">

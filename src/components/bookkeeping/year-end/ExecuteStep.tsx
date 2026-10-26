@@ -3,7 +3,7 @@
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
-import { Lock } from 'lucide-react'
+import { LockClosedIcon } from '@/components/icons'
 
 interface ExecuteStepProps {
   periodName: string
@@ -28,7 +28,7 @@ export function ExecuteStep({ periodName, isRunning, error, bolagsskattMissing, 
     <div className="space-y-6">
       <section>
         <div className="mb-3 flex items-center gap-2 px-1">
-          <Lock className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
+          <LockClosedIcon className="h-3.5 w-3.5 text-muted-foreground" aria-hidden="true" />
           <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
             Klar att verkställa
           </h3>

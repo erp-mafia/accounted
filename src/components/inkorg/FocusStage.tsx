@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type Dispatch, type SetStateAction } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { Check, FileQuestion, Paperclip } from 'lucide-react'
+import { CheckIcon, DocumentMagnifyingGlassIcon, PaperClipIcon } from '@/components/icons'
 import { InboxArrivalProvenance } from '@/components/extensions/general/InboxArrivalProvenance'
 import { PurchaseCategoryChip } from '@/components/inbox/PurchaseCategoryChip'
 import BookingWhy from '@/components/bookkeeping/BookingWhy'
@@ -286,7 +286,7 @@ export function FocusStage({
               <BrandMark name={headline.name} variant="mark" size={40} logoUrl={item.logo_url} />
             ) : (
               <GlyphMark size={40}>
-                <FileQuestion aria-hidden="true" className="h-5 w-5 text-muted-foreground" />
+                <DocumentMagnifyingGlassIcon aria-hidden="true" className="h-5 w-5 text-muted-foreground" />
               </GlyphMark>
             )}
             <div className="min-w-0 flex-1">
@@ -395,7 +395,7 @@ export function FocusStage({
       {finishing && (
         <div className="absolute inset-0 flex items-start justify-center bg-background/70 pt-12 animate-fade-in" aria-live="polite">
           <span className="flex items-center gap-2 rounded-full border border-border bg-background px-4 py-2 text-[13px] font-medium">
-            <Check aria-hidden="true" className="h-4 w-4" />
+            <CheckIcon aria-hidden="true" className="h-4 w-4" />
             {t('done')}
           </span>
         </div>
@@ -419,7 +419,7 @@ function CompanionReceipt({ receipt, showing, onToggle }: { receipt: InkorgItem;
     : null
   return (
     <div role="group" aria-label={t('companion_label')} className="flex items-center gap-3 rounded-lg border border-border px-4 py-3 text-[13px]">
-      <Paperclip aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <PaperClipIcon aria-hidden="true" className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="min-w-0 flex-1">
         <span className="block">{t('companion_title')}</span>
         {paid && (

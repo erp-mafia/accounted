@@ -5,7 +5,12 @@ import Image from 'next/image'
 import { useTranslations } from 'next-intl'
 import { BankIdQrCode } from './BankIdQrCode'
 import { Button } from '@/components/ui/button'
-import { Smartphone, Monitor, AlertTriangle, Loader2 } from 'lucide-react'
+import {
+  ComputerDesktopIcon,
+  DevicePhoneMobileIcon,
+  ExclamationTriangleIcon,
+  SpinnerIcon,
+} from '@/components/icons'
 
 type BankIdStatus =
   | 'idle'
@@ -566,7 +571,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   if (status === 'cancelling') {
     return (
       <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerIcon className="h-4 w-4 animate-spin" />
         {t('bankid_cancelling')}
       </div>
     )
@@ -603,7 +608,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
   if (status === 'complete') {
     return (
       <div className="flex items-center justify-center gap-2 py-6 text-sm text-muted-foreground">
-        <Loader2 className="h-4 w-4 animate-spin" />
+        <SpinnerIcon className="h-4 w-4 animate-spin" />
         {t('bankid_completing')}
       </div>
     )
@@ -635,7 +640,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
     return (
       <div className="rounded-lg border border-border bg-muted/30 p-4">
         <div className="flex items-start gap-3">
-          <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0 text-attn" />
           <div className="space-y-1.5">
             <p className="text-sm font-medium">
               BankID är inte tillgängligt just nu
@@ -700,7 +705,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
               size="sm"
               className="gap-1.5 text-muted-foreground"
             >
-              <Monitor className="h-3.5 w-3.5" />
+              <ComputerDesktopIcon className="h-3.5 w-3.5" />
               BankID på den här enheten
             </Button>
           )}
@@ -709,7 +714,7 @@ export function BankIdAuth({ mode, onComplete, hero = false }: BankIdAuthProps) 
 
       {isMobile() && (
         <div className="flex flex-col items-center gap-2">
-          <Smartphone className="h-8 w-8 text-muted-foreground" />
+          <DevicePhoneMobileIcon className="h-8 w-8 text-muted-foreground" />
           {/* A resumed tab never launched anything, so saying "opening the
               BankID app" would be a lie followed by silence. */}
           <p className="text-sm text-muted-foreground">
