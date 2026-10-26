@@ -200,6 +200,18 @@ export async function dispatchDueDeliveries(args: {
   // Dedupe webhook lookups within a single cycle.
   const webhookIds = Array.from(new Set(due.map((d) => d.webhook_id)))
   const webhookMap = await loadWebhooksByIds(args.supabase, webhookIds)
+  if (!webhookMap) {
+    // The lookup failed, not the webhooks: read as an empty map, every claimed
+    // row would die as 'webhook_deleted', a terminal state for an endpoint
+    // that still exists. Hand the claims back for the next tick instead.
+    await releaseUnattempted(
+      args.supabase,
+      due.map((d) => ({ id: d.id, attempts: d.attempts })),
+      now,
+    )
+    summary.released = due.length
+    return summary
+  }
 
   for (const [index, delivery] of due.entries()) {
     // Out of budget: hand back everything we will not reach rather than
@@ -433,10 +445,11 @@ async function claimDueDeliveries(
   return (data ?? []) as DueDelivery[]
 }
 
+/** Null when the lookup itself failed, so a read error is never mistaken for deleted webhooks. */
 async function loadWebhooksByIds(
   supabase: SupabaseClient,
   ids: string[],
-): Promise<Map<string, WebhookForDelivery>> {
+): Promise<Map<string, WebhookForDelivery> | null> {
   // Include company_id so the dispatch loop can assert that the delivery
   // row's company_id matches the webhook's: defense in depth against a
   // poisoned delivery row pointing at another tenant's webhook
@@ -450,7 +463,7 @@ async function loadWebhooksByIds(
 
   if (error || !data) {
     log.error('webhook lookup for dispatch failed', error as Error)
-    return new Map()
+    return null
   }
   return new Map((data as WebhookForDelivery[]).map((w) => [w.id, w]))
 }

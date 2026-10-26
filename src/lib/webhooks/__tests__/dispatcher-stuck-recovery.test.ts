@@ -67,6 +67,8 @@ function makeSupabase(opts: {
   lostOwnership?: Set<string>
   /** Rows the sweep RPC reports as recovered this tick. */
   recovered?: Array<{ id: string; status: string; attempts: number }>
+  /** The webhooks read fails (a timeout, a column the code expects before its migration). */
+  webhookLookupFails?: boolean
 } = {}): { client: SupabaseClient; recorded: Recorded } {
   const recorded: Recorded = { rpcCalls: [], deliveryUpdates: [] }
   const count = opts.deliveryCount ?? 1
@@ -126,6 +128,9 @@ function makeSupabase(opts: {
       }
 
       if (table === 'webhooks') {
+        if (opts.webhookLookupFails) {
+          return { select: () => ({ in: async () => ({ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014' } }) }) }
+        }
         return {
           select: () => ({
             in: async () => ({
@@ -469,5 +474,28 @@ describe('dispatcher cycle budget', () => {
       status: 'failed',
       next_attempt_at: NOW.toISOString(),
     })
+  })
+})
+
+describe('dispatcher webhook lookup failure', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('hands the claims back instead of killing them as deleted webhooks', async () => {
+    const { client, recorded } = makeSupabase({ deliveryCount: 3, webhookLookupFails: true })
+    const posted: string[] = []
+
+    const summary = await dispatchDueDeliveries({ supabase: client, now: NOW, pinnedFetchImpl: makeOkFetch(posted) as never })
+
+    expect(summary).toMatchObject({ picked: 3, released: 3, dead: 0, delivered: 0 })
+    expect(posted).toEqual([])
+    // One release of the never-attempted claims back to pending, guarded on in_flight; nothing marked dead.
+    expect(recorded.deliveryUpdates).toEqual([
+      {
+        payload: { status: 'pending', next_attempt_at: NOW.toISOString() },
+        filters: { id: DELIVERY_IDS, status: 'in_flight' },
+      },
+    ])
   })
 })
