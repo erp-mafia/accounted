@@ -3,11 +3,16 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CustomerDto, SupplierDto } from '@/lib/providers/dto'
 import { mapFortnoxToCustomer, mapFortnoxToSupplier } from '@/lib/providers/fortnox/mapper'
 import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
+
+type ChainCalls = { method: string; args: unknown[] }[]
+const eqArg = (calls: ChainCalls, column: string) =>
+  calls.find((c) => c.method === 'eq' && c.args[0] === column)?.args[1]
 import {
   applyTermsFills,
   matchTermsCandidates,
   planFortnoxTermsBackfill,
   readCandidateTerms,
+  runFortnoxTermsBackfill,
   statedTerms,
   termsSourceRecord,
   type TermsCard,
@@ -283,5 +288,129 @@ describe('applyTermsFills', () => {
     const mock = createTableMockSupabase({ customers: { error: { message: 'boom' } } })
     await expect(applyTermsFills(mock.supabase as unknown as SupabaseClient, COMPANY, fills.slice(0, 1)))
       .rejects.toThrow('customers: boom')
+  })
+})
+
+describe('runFortnoxTermsBackfill', () => {
+  const A = 'company-a'
+  const B = 'company-b'
+
+  /** Two companies with a live connection; A is already finished. */
+  function cronTables(params: {
+    progress?: Record<string, unknown>[]
+    archived?: string[]
+    reset?: string[]
+    customers?: Record<string, Record<string, unknown>[]>
+    sourceMap?: Record<string, { resource: string; source_id: string; target_id: string }[]>
+  } = {}) {
+    const byCompany = <T,>(map: Record<string, T[]> | undefined): TableMockResolver => (calls) =>
+      ({ data: map?.[String(eqArg(calls, 'company_id'))] ?? [] })
+    return createTableMockSupabase({
+      provider_consents: (calls) => ({
+        data: eqArg(calls, 'company_id') ? [{ id: `consent-${eqArg(calls, 'company_id')}` }] : [{ company_id: A }, { company_id: B }],
+      }),
+      fortnox_terms_backfill_progress: (calls) =>
+        ({ data: calls.some((c) => c.method === 'upsert') ? null : params.progress ?? [] }),
+      companies: (calls) => ({ data: { archived_at: (params.archived ?? []).includes(String(eqArg(calls, 'id'))) ? '2026-01-01' : null } }),
+      company_migration_resets: (calls) =>
+        ({ data: (params.reset ?? []).includes(String(eqArg(calls, 'source_company_id'))) ? [{ id: 'r' }] : [] }),
+      customers: (calls) => (calls.some((c) => c.method === 'update')
+        ? { data: [{ id: String(eqArg(calls, 'id')) }] }
+        : byCompany(params.customers)(calls)),
+      suppliers: { data: [] },
+      migration_source_records: byCompany(params.sourceMap),
+    })
+  }
+
+  const fortnox = (terms: Record<string, string>) => ({
+    resolveConsent: vi.fn().mockResolvedValue({ consent: {}, accessToken: 'token' }),
+    fetchMigrationPage: vi.fn(async (_p: unknown, _t: unknown, _c: unknown, resource: string) => ({
+      items: resource === 'customers' ? [listed('1')] : [], nextPage: null, total: 1,
+    })) as never,
+    ...hydrator(terms),
+  })
+
+  it('works only on companies without an outcome and records what it changed', async () => {
+    const mock = cronTables({
+      progress: [{ company_id: A, next_key: null, outcome: 'done', attempts: 0, filled_customer_ids: [], filled_supplier_ids: [] }],
+      customers: { [B]: [customerRow('c1')] },
+      sourceMap: { [B]: [{ resource: 'customers', source_id: '1', target_id: 'c1' }] },
+    })
+    const summary = await runFortnoxTermsBackfill(mock.supabase as unknown as SupabaseClient, Date.now() + 120_000,
+      fortnox({ 'customers:1': '10' }))
+    expect(summary).toEqual({ pending: 1, worked: 1, finished: 1, filled: 1 })
+    expect(mock.payloads('customers', 'update')).toEqual([{ default_payment_terms: 10 }])
+    expect(mock.payloads('fortnox_terms_backfill_progress', 'upsert')).toEqual([expect.objectContaining({
+      company_id: B, outcome: 'done', attempts: 0, filled_customer_ids: ['c1'], filled_supplier_ids: [], last_error: null,
+    })])
+  })
+
+  it('stores the cursor of a run the deadline cut short, and leaves the company pending', async () => {
+    const mock = cronTables({
+      progress: [{ company_id: A, next_key: null, outcome: 'done', attempts: 0, filled_customer_ids: [], filled_supplier_ids: [] }],
+      customers: { [B]: [customerRow('c1')] },
+      sourceMap: { [B]: [{ resource: 'customers', source_id: '1', target_id: 'c1' }] },
+    })
+    const deps = { ...fortnox({}), ...hydrator({}, { abortedBy: 'budget' }) }
+    const summary = await runFortnoxTermsBackfill(mock.supabase as unknown as SupabaseClient, Date.now() + 120_000, deps)
+    expect(summary).toMatchObject({ worked: 1, finished: 0, filled: 0 })
+    expect(mock.payloads('fortnox_terms_backfill_progress', 'upsert')).toEqual([
+      expect.objectContaining({ company_id: B, next_key: 'customers:1', outcome: null }),
+    ])
+  })
+
+  it('gives a company up after three runs that read nothing new', async () => {
+    const mock = cronTables({
+      progress: [
+        { company_id: A, next_key: null, outcome: 'done', attempts: 0, filled_customer_ids: [], filled_supplier_ids: [] },
+        { company_id: B, next_key: 'customers:1', outcome: null, attempts: 2, filled_customer_ids: [], filled_supplier_ids: [] },
+      ],
+      customers: { [B]: [customerRow('c1')] },
+      sourceMap: { [B]: [{ resource: 'customers', source_id: '1', target_id: 'c1' }] },
+    })
+    const deps = { ...fortnox({}), ...hydrator({}, { abortedBy: 'budget' }) }
+    await runFortnoxTermsBackfill(mock.supabase as unknown as SupabaseClient, Date.now() + 120_000, deps)
+    expect(mock.payloads('fortnox_terms_backfill_progress', 'upsert')).toEqual([
+      expect.objectContaining({ company_id: B, outcome: 'stuck', attempts: 3 }),
+    ])
+  })
+
+  it('finishes an archived, a migration-reset and an expired-connection company without writing a card', async () => {
+    const archived = cronTables({ archived: [A, B] })
+    await runFortnoxTermsBackfill(archived.supabase as unknown as SupabaseClient, Date.now() + 120_000, fortnox({}))
+    expect(archived.payloads('fortnox_terms_backfill_progress', 'upsert'))
+      .toEqual([expect.objectContaining({ outcome: 'archived' }), expect.objectContaining({ outcome: 'archived' })])
+
+    const reset = cronTables({ reset: [A, B] })
+    await runFortnoxTermsBackfill(reset.supabase as unknown as SupabaseClient, Date.now() + 120_000, fortnox({}))
+    expect(reset.payloads('fortnox_terms_backfill_progress', 'upsert'))
+      .toEqual([expect.objectContaining({ outcome: 'migration_reset' }), expect.objectContaining({ outcome: 'migration_reset' })])
+
+    const expired = cronTables()
+    await runFortnoxTermsBackfill(expired.supabase as unknown as SupabaseClient, Date.now() + 120_000,
+      { resolveConsent: vi.fn().mockRejectedValue({ status: 401, message: 'Token expired' }) })
+    expect(expired.payloads('fortnox_terms_backfill_progress', 'upsert')).toEqual([
+      expect.objectContaining({ outcome: 'consent_expired', last_error: 'Token expired' }),
+      expect.objectContaining({ outcome: 'consent_expired' }),
+    ])
+    for (const mock of [archived, reset, expired]) expect(mock.payloads('customers', 'update')).toEqual([])
+  })
+
+  it('counts a failure and retries the company in a later run', async () => {
+    const mock = cronTables({
+      progress: [{ company_id: A, next_key: null, outcome: 'done', attempts: 0, filled_customer_ids: [], filled_supplier_ids: [] }],
+    })
+    await runFortnoxTermsBackfill(mock.supabase as unknown as SupabaseClient, Date.now() + 120_000,
+      { resolveConsent: vi.fn().mockRejectedValue(new Error('Fortnox 503')) })
+    expect(mock.payloads('fortnox_terms_backfill_progress', 'upsert')).toEqual([
+      expect.objectContaining({ company_id: B, outcome: null, attempts: 1, last_error: 'Fortnox 503' }),
+    ])
+  })
+
+  it('starts no company with less than 30 s left', async () => {
+    const mock = cronTables()
+    const summary = await runFortnoxTermsBackfill(mock.supabase as unknown as SupabaseClient, Date.now() + 10_000, fortnox({}))
+    expect(summary).toEqual({ pending: 2, worked: 0, finished: 0, filled: 0 })
+    expect(mock.payloads('fortnox_terms_backfill_progress', 'upsert')).toEqual([])
   })
 })

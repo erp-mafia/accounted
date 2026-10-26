@@ -13,7 +13,7 @@ import {
   type CustomerCard,
   type PartyFacts,
 } from './customer-match'
-import { consentUnusable, messageOf } from './repair-fortnox-supplier-numbers'
+import { consentUnusable, isMigrationResetSource, messageOf } from './repair-fortnox-supplier-numbers'
 
 /**
  * crm#1245: gives customers and suppliers imported from Fortnox before !747
@@ -21,7 +21,7 @@ import { consentUnusable, messageOf } from './repair-fortnox-supplier-numbers'
  * Both imports read Fortnox's short list form, which has no TermsOfPayment,
  * so every card got the 30-day default: in prod 12 of 7 334 job-path
  * customers were not on 30 before the fix, 243 of 368 after it. One-off,
- * driven by fortnox-terms-backfill-routes.
+ * driven by the fortnox-terms-backfill cron (runFortnoxTermsBackfill).
  *
  * The terms come from Fortnox itself, one detail read per card: the stored
  * import payloads hold the list form too, so they cannot say. Each record
@@ -30,9 +30,10 @@ import { consentUnusable, messageOf } from './repair-fortnox-supplier-numbers'
  * (customer-match). Only a card still on 30 is a candidate, and the write
  * repeats that condition, so a term a person set since wins.
  *
- * A company with tens of thousands of cards does not fit one request, so
+ * A company with tens of thousands of cards does not fit one run, so
  * candidates are read in key order and a run that reaches its deadline
- * answers with `next`, the key to start the following run from.
+ * stores `next`, the key the following run starts from, in
+ * fortnox_terms_backfill_progress (migration 20261026230300).
  */
 
 export type TermsResource = 'customers' | 'suppliers'
@@ -428,4 +429,136 @@ export async function applyTermsFills(
   }
   await Promise.all(Array.from({ length: options.concurrency ?? 10 }, worker))
   return { filled: filledIds.length, changed, filledIds }
+}
+
+/** A company's row in fortnox_terms_backfill_progress. */
+export interface TermsBackfillProgress {
+  company_id: string
+  next_key: string | null
+  outcome: string | null
+  attempts: number
+  filled_customer_ids: string[]
+  filled_supplier_ids: string[]
+}
+
+/** Runs in a row that fail, or read nothing new, before a company is given up on. */
+const MAX_ATTEMPTS = 3
+/** Companies read side by side; Fortnox limits each connection on its own. */
+const PARALLEL_COMPANIES = 4
+/** A company is not started with less time than this left in the run. */
+const MIN_COMPANY_MS = 30_000
+
+export interface TermsBackfillRunSummary {
+  /** Companies with a live Fortnox connection and no outcome yet, before this run. */
+  pending: number
+  /** Companies this run worked on. */
+  worked: number
+  /** Of those, the ones that reached an outcome. */
+  finished: number
+  /** Cards that got their terms in this run. */
+  filled: number
+}
+
+/**
+ * One cron run: works through the companies with a live Fortnox connection
+ * that have no outcome yet, most recently used connection first, each from
+ * its stored cursor, until the deadline. Idempotent: a card is written only
+ * while it is still on 30, so a run cut short repeats nothing harmful.
+ */
+export async function runFortnoxTermsBackfill(
+  supabase: SupabaseClient,
+  deadline: number,
+  deps: TermsBackfillDeps = {},
+): Promise<TermsBackfillRunSummary> {
+  const consents = await fetchAllRows<{ company_id: string }>(({ from, to }) =>
+    supabase.from('provider_consents').select('company_id').eq('provider', 'fortnox').in('status', [0, 1])
+      .order('updated_at', { ascending: false }).order('company_id').range(from, to))
+  const progress = await fetchAllRows<TermsBackfillProgress>(({ from, to }) =>
+    supabase.from('fortnox_terms_backfill_progress')
+      .select('company_id, next_key, outcome, attempts, filled_customer_ids, filled_supplier_ids')
+      .order('company_id').range(from, to))
+  const rows = new Map(progress.map((row) => [row.company_id, row]))
+  const queue = [...new Set(consents.map((c) => c.company_id))].filter((id) => !rows.get(id)?.outcome)
+  const summary: TermsBackfillRunSummary = { pending: queue.length, worked: 0, finished: 0, filled: 0 }
+
+  let next = 0
+  const worker = async () => {
+    while (next < queue.length && deadline - Date.now() >= MIN_COMPANY_MS) {
+      const companyId = queue[next++]
+      summary.worked++
+      const row = await backfillCompany(supabase, companyId, rows.get(companyId), deadline, deps)
+      summary.filled += row.filled
+      if (row.outcome) summary.finished++
+    }
+  }
+  await Promise.all(Array.from({ length: PARALLEL_COMPANIES }, worker))
+  return summary
+}
+
+async function backfillCompany(
+  supabase: SupabaseClient,
+  companyId: string,
+  previous: TermsBackfillProgress | undefined,
+  deadline: number,
+  deps: TermsBackfillDeps,
+): Promise<{ outcome: string | null; filled: number }> {
+  const row: TermsBackfillProgress = previous ?? {
+    company_id: companyId, next_key: null, outcome: null, attempts: 0, filled_customer_ids: [], filled_supplier_ids: [],
+  }
+  let lastError: string | null = null
+  let filled = 0
+  try {
+    const { data: company, error } = await supabase.from('companies').select('archived_at')
+      .eq('id', companyId).maybeSingle()
+    if (error) throw new Error(`companies: ${error.message}`)
+    if (!company || (company as { archived_at: string | null }).archived_at !== null) {
+      row.outcome = 'archived'
+    } else if (await isMigrationResetSource(supabase, companyId)) {
+      // Its cards are immutable (block_migration_reset_source_mutation).
+      row.outcome = 'migration_reset'
+    } else {
+      const plan = await planFortnoxTermsBackfill(supabase, companyId, { from: row.next_key, deadline }, deps)
+      const written = await applyTermsFills(supabase, companyId, plan.fills)
+      const ids = new Set(written.filledIds)
+      for (const fill of plan.fills) {
+        if (!ids.has(fill.id)) continue
+        if (fill.resource === 'customers') row.filled_customer_ids = [...row.filled_customer_ids, fill.id]
+        else row.filled_supplier_ids = [...row.filled_supplier_ids, fill.id]
+      }
+      filled = written.filled
+      if (plan.fortnox === 'no_consent' || plan.fortnox === 'consent_expired') {
+        row.outcome = plan.fortnox
+      } else if (plan.fortnox === 'failed') {
+        lastError = plan.fortnoxError ?? null
+        row.attempts++
+        if (row.attempts >= MAX_ATTEMPTS) row.outcome = 'failed'
+      } else if (plan.next === null) {
+        row.outcome = 'done'
+      } else if (plan.next === row.next_key) {
+        // The run read nothing past where it started: count it as a miss.
+        row.attempts++
+        if (row.attempts >= MAX_ATTEMPTS) row.outcome = 'stuck'
+      } else {
+        row.next_key = plan.next
+        row.attempts = 0
+      }
+      lastError = lastError ?? plan.fortnoxError ?? null
+    }
+  } catch (err) {
+    lastError = messageOf(err)
+    row.attempts++
+    if (row.attempts >= MAX_ATTEMPTS) row.outcome = 'failed'
+  }
+  const { error } = await supabase.from('fortnox_terms_backfill_progress').upsert({
+    company_id: row.company_id,
+    next_key: row.next_key,
+    outcome: row.outcome,
+    attempts: row.attempts,
+    filled_customer_ids: row.filled_customer_ids,
+    filled_supplier_ids: row.filled_supplier_ids,
+    last_error: lastError,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'company_id' })
+  if (error) throw new Error(`fortnox_terms_backfill_progress: ${error.message}`)
+  return { outcome: row.outcome, filled }
 }
