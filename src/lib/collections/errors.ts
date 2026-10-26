@@ -68,6 +68,8 @@ export const COLLECTIONS_TERMS_CHANGED = 'COLLECTIONS_TERMS_CHANGED'
 export const COLLECTIONS_PAYOUT_ACCOUNT_INVALID = 'COLLECTIONS_PAYOUT_ACCOUNT_INVALID'
 /** The company has no valid organisation number to apply with. */
 export const COLLECTIONS_ORG_NUMBER_MISSING = 'COLLECTIONS_ORG_NUMBER_MISSING'
+/** An application failed on the way and the provider still holds nothing of it: the form is handed back. */
+export const COLLECTIONS_APPLICATION_NOT_RECEIVED = 'COLLECTIONS_APPLICATION_NOT_RECEIVED'
 
 /** The neutral word used when neither the catalogue nor the connection row names the provider. */
 export const PROVIDER_FALLBACK_NAME = { sv: 'inkassobolaget', en: 'the collection agency' } as const
@@ -168,6 +170,10 @@ export const COLLECTIONS_ERROR_MESSAGES: Readonly<Record<string, { sv: string; e
   COLLECTIONS_ORG_NUMBER_MISSING: {
     sv: 'Lägg till företagets organisationsnummer under Företag först.',
     en: 'Add the company\'s organisation number under Company first.',
+  },
+  COLLECTIONS_APPLICATION_NOT_RECEIVED: {
+    sv: 'Ansökan gick inte igenom hos {provider}. Skicka den igen.',
+    en: 'The application did not go through at {provider}. Send it again.',
   },
   COLLECTION_NOT_ELIGIBLE: {
     sv: 'Fakturan uppfyller inte kraven för att skickas till inkasso.',

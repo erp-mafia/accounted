@@ -1,0 +1,1 @@
+[2026-10-26] A collections application the provider still does not hold 10 minutes after a failed send is handed back as the form, not re-sent by the status poll: the know-your-customer answers are never stored, so only the admin can send them again.

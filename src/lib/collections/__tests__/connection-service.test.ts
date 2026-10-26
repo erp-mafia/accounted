@@ -8,6 +8,7 @@ import {
   FAKE_PROVIDER_PROFILE,
 } from '../adapters/fake'
 import type { CatalogueCapabilityEntry } from '../catalogue'
+import { isLostApplication, LOST_APPLICATION_AFTER_MS } from '../connection'
 import {
   acceptTerms,
   ActivationValidationError,
@@ -353,6 +354,43 @@ describe('failures at the provider', () => {
     // Corrected and sent again: a new body is a new request.
     const row = await submitOnboarding(deps(), onboardingBody({ rules: { minimumAmount: 300 } }))
     expect(row.sub_status).toBe('awaiting_signature')
+  })
+
+  it('hands a lost application back: a timed-out send the provider still does not hold ten minutes on', async () => {
+    await consent()
+    vi.spyOn(adapter, 'onboard').mockRejectedValueOnce(new CollectionsError('timeout', { code: 'CONNECTOR_UPSTREAM_ERROR', retryable: true }))
+    await expectCode(submitOnboarding(deps(), onboardingBody()), 'CONNECTOR_UPSTREAM_ERROR')
+
+    // Inside the send's deadlines the read follows it as submitted.
+    let row = await refreshConnection(deps({ now: () => new Date(NOW.getTime() + 5 * 60_000) }))
+    expect(row).toMatchObject({ submitted_at: NOW.toISOString(), sub_status: 'not_started' })
+
+    row = await refreshConnection(deps({ now: () => new Date(NOW.getTime() + LOST_APPLICATION_AFTER_MS) }))
+    expect(row).toMatchObject({
+      state: 'connecting',
+      sub_status: 'not_started',
+      submitted_at: null,
+      health: 'degraded',
+      health_cause: 'COLLECTIONS_APPLICATION_NOT_RECEIVED',
+      health_action: 'retry_later',
+      user_id: null,
+    })
+
+    // Sent again, it goes through and the reason is gone.
+    row = await submitOnboarding(deps(), onboardingBody())
+    expect(row).toMatchObject({ sub_status: 'awaiting_signature', health: 'ok', health_cause: null })
+  })
+
+  it('takes an application for lost only when nobody holds it past the deadlines', () => {
+    const sent = { submitted_at: NOW.toISOString(), connection_handle: null }
+    const nothing = { state: 'connecting', subStatus: 'not_started', connectionHandle: null } as const
+    const due = new Date(NOW.getTime() + LOST_APPLICATION_AFTER_MS)
+    expect(isLostApplication(sent, nothing, due)).toBe(true)
+    expect(isLostApplication(sent, nothing, new Date(due.getTime() - 1))).toBe(false)
+    expect(isLostApplication({ ...sent, submitted_at: null }, nothing, due)).toBe(false)
+    expect(isLostApplication({ ...sent, connection_handle: 'h' }, nothing, due)).toBe(false)
+    expect(isLostApplication(sent, { ...nothing, connectionHandle: 'h' }, due)).toBe(false)
+    expect(isLostApplication(sent, { ...nothing, subStatus: 'awaiting_terms' }, due)).toBe(false)
   })
 
   it('never lets the provider end a connection: a vanished one asks a person to look', async () => {

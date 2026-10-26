@@ -144,10 +144,12 @@ export function collectionsEntryShown(
 
 /**
  * The sentence for a health cause stored on the connection (an error code,
- * or PROVIDER_DISCONNECTED), lower-cased to sit after "har problem:".
+ * or PROVIDER_DISCONNECTED), lower-cased to sit after "har problem:". A
+ * sentence that starts with the provider's name keeps it as written.
  */
 export function collectionsErrorMessageFor(code: string | null, provider: string): string {
   if (!code) return ''
   const text = collectionsErrorMessage(code, { provider })
+  if (provider.trim() && text.startsWith(provider.trim())) return text
   return text.charAt(0).toLowerCase() + text.slice(1)
 }
