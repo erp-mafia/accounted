@@ -197,13 +197,14 @@ Example response `200`:
 **The banks a company can connect with BankID through Open Payments.**
 `scope:transactions:read · risk:low · idempotent`
 
-Lists the banks the account information provider reaches (BIC, name, logo, whether BankID can be signed in our screen). Answers OPEN_BANKING_NOT_AVAILABLE when reading through Open Payments is not switched on for the company.
+Lists the banks the account information provider reaches (BIC, name, logo, whether BankID can be signed in our screen, and `reached`: whether Open Payments reads the bank for this company yet). Answers OPEN_BANKING_NOT_AVAILABLE when reading through Open Payments is not switched on for the company.
 
 **Use when:** Before starting a bank connection with BankID.
 **Do not use for:** Enable Banking connections (the bank list of the enable-banking extension).
 
 **Pitfalls:**
 - A sparbank is reached through SWEDSESS with its affiliate id; ask bank for the list.
+- reached false: the bank is listed but not read through Open Payments for this company yet (Svea); keep its earlier connection or import statements as a file.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -213,7 +214,7 @@ Response `200`:
 ```ts
 {
   data: {
-    banks: { bic: string, name: string, logo_url: string | null, decoupled: boolean | null, redirect: boolean | null }[]
+    banks: { bic: string, name: string, logo_url: string | null, decoupled: boolean | null, redirect: boolean | null, reached: boolean }[]
   },
   meta: {
     request_id: string,
@@ -237,7 +238,8 @@ Example response `200`:
         "name": "Swedbank",
         "logo_url": null,
         "decoupled": true,
-        "redirect": false
+        "redirect": false,
+        "reached": true
       }
     ]
   }

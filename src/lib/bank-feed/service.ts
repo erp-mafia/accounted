@@ -65,8 +65,9 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { SigningChallenge } from '@/lib/payments/initiation/provider'
 import { createServiceClient } from '@/lib/supabase/server'
 import type { TriggerSyncResult } from '@/lib/bank-sync/trigger-sync-contract'
+import { bankCoveredByOpenPayments } from './bank-coverage'
 import { BANK_FEED_NOT_FOUND, BankFeedError, BankFeedRefusedError, ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
-import { openBankFeedDoor } from './door'
+import { openBankFeedDoor, reachesUncoveredBanks } from './door'
 import { consentFailureText, OPEN_BANKING_FAILURE_TEXTS } from './failure-text'
 import { runOpenPaymentsSync } from './feed'
 import { enableBankingRowsTakenOver, type HandoverCandidate } from './handover'
@@ -449,6 +450,8 @@ export interface BankView {
   logo_url: string | null
   decoupled: boolean | null
   redirect: boolean | null
+  /** Open Payments reaches the bank for this company: not on the coverage list (./bank-coverage.ts), or the company is in the pilot for those (reachesUncoveredBanks). */
+  reached: boolean
 }
 
 export async function listBankFeedBanks(ctx: OperationContext): Promise<OperationOutcome<{ banks: BankView[] }>> {
@@ -456,7 +459,15 @@ export async function listBankFeedBanks(ctx: OperationContext): Promise<Operatio
   if (!door.ok) return { ok: false, code: 'OPEN_BANKING_NOT_AVAILABLE', details: { reason: door.reason } }
   try {
     const banks = await door.connect.banks(ctx.companyId)
-    return { ok: true, data: { banks: banks.map((b) => ({ bic: b.bic, name: b.name, logo_url: b.logoUrl, decoupled: b.decoupled, redirect: b.redirect })) } }
+    const pilot = reachesUncoveredBanks(ctx.companyId)
+    return {
+      ok: true,
+      data: {
+        banks: banks.map((b) => ({
+          bic: b.bic, name: b.name, logo_url: b.logoUrl, decoupled: b.decoupled, redirect: b.redirect, reached: pilot || bankCoveredByOpenPayments(b.name),
+        })),
+      },
+    }
   } catch (error) {
     return providerFailure(error, ctx.log)
   }

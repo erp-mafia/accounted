@@ -20,7 +20,10 @@
  * every read answers 401 "Account(s) need to be defined in the consent
  * request to access details". Not one Svea connection through Open Payments
  * has synced. Until a Svea consent reads transactions, its rows keep Enable
- * Banking and the new flow points there.
+ * Banking and the new flow points there. Connect now names the accounts for
+ * balances and transactions too (Connect !26, 2026-10-26); Svea comes off
+ * the list once a pilot company (door.ts reachesUncoveredBanks) has read
+ * transactions through a consent signed after that.
  */
 export const UNCOVERED_BANK_NEEDLES: readonly string[] = ['wise', 'paypal', 'norwegian', 'first card', 'juni', 'svea']
 
@@ -29,6 +32,15 @@ export function bankCoveredByOpenPayments(bankName: string | null | undefined): 
   const name = (bankName ?? '').trim().toLowerCase()
   if (!name) return true
   return !UNCOVERED_BANK_NEEDLES.some((needle) => name.includes(needle))
+}
+
+/**
+ * Whether the Koppla banken flow may go on with a bank: the server's answer
+ * for this company when the bank list carried one (BankView.reached, which
+ * lets a pilot company through to a bank on the list above), else the list.
+ */
+export function bankReached(bankName: string | null | undefined, reached?: boolean | null): boolean {
+  return typeof reached === 'boolean' ? reached : bankCoveredByOpenPayments(bankName)
 }
 
 /**
