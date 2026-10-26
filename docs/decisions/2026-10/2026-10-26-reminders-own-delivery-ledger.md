@@ -1,0 +1,1 @@
+[2026-10-26] The reminder engine records delivery on invoice_reminders (own provider columns, apply_invoice_reminder_provider_status) instead of reusing invoice_deliveries: its reserve and capture RPCs lock one invoice send, and bending them would touch the core invoice send path.

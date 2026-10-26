@@ -12,6 +12,7 @@
 import { getResendClient } from '@/lib/email/resend-client'
 import type { WebhookEventPayload } from 'resend'
 import type { InvoiceDeliveryProviderStatus } from '@/types'
+import type { ProviderDeliveryReport } from '@/lib/email/delivery-reports'
 
 export class ResendDeliverySignatureError extends Error {
   constructor(message: string) {
@@ -20,13 +21,8 @@ export class ResendDeliverySignatureError extends Error {
   }
 }
 
-export interface ProviderDeliveryReport {
-  providerMessageId: string
-  status: InvoiceDeliveryProviderStatus
-  occurredAt: string
-  detail: string | null
-  recipients: string[]
-}
+// The provider-neutral report shape lives in core (lib/email/delivery-reports.ts).
+export type { ProviderDeliveryReport }
 
 /**
  * Events that say something about whether the message arrived. `email.sent`

@@ -172,6 +172,55 @@ export function deliveryEvidence(input: {
   return input.emailDeliveries.length + input.peppolDeliveries.length > 0 ? 'not_delivered' : 'no_history'
 }
 
+/** The credit notes against an invoice, what reached the customer, and whether it came from another system. */
+export interface InvoiceDeliveryFacts {
+  /** Credit notes against the invoice that are not cancelled. */
+  creditNotes: { status: string }[]
+  delivery: DeliveryEvidence
+  /** The invoice came from another system (a provider migration). */
+  imported: boolean
+}
+
+/**
+ * Read once for the collections handover and for the reminder sender
+ * (lib/reminders/facts.ts), so both judge "credited", "delivered" and
+ * "imported" by the same rows.
+ */
+export async function loadInvoiceDeliveryFacts(
+  db: Pick<SupabaseClient, 'from'>,
+  companyId: string,
+  invoiceId: string,
+): Promise<InvoiceDeliveryFacts> {
+  const [creditNotes, emailDeliveries, peppolDeliveries, imported] = await Promise.all([
+    db.from('invoices').select('status').eq('company_id', companyId).eq('credited_invoice_id', invoiceId).neq('status', 'cancelled'),
+    db.from('invoice_deliveries').select('status, provider_status').eq('company_id', companyId).eq('invoice_id', invoiceId),
+    db.from('peppol_deliveries').select('status').eq('company_id', companyId).eq('invoice_id', invoiceId),
+    db
+      .from('migration_source_records')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('resource', 'salesInvoices')
+      .eq('target_id', invoiceId)
+      .limit(1),
+  ])
+  for (const [label, result] of [
+    ['credit notes', creditNotes],
+    ['invoice_deliveries', emailDeliveries],
+    ['peppol_deliveries', peppolDeliveries],
+    ['migration_source_records', imported],
+  ] as const) {
+    if (result.error) throw new Error(`${label} lookup failed: ${result.error.message}`)
+  }
+  return {
+    creditNotes: (creditNotes.data ?? []) as { status: string }[],
+    delivery: deliveryEvidence({
+      emailDeliveries: (emailDeliveries.data ?? []) as { status: string; provider_status: string | null }[],
+      peppolDeliveries: (peppolDeliveries.data ?? []) as { status: string }[],
+    }),
+    imported: ((imported.data ?? []) as unknown[]).length > 0,
+  }
+}
+
 export interface LoadHandoverContextInput {
   companyId: string
   invoiceId: string
@@ -193,7 +242,7 @@ export async function loadHandoverContext(
   const { companyId, invoiceId } = input
   const { invoice, customerRow } = await loadHandoverInvoice(db, companyId, invoiceId)
 
-  const [settings, openCase, latestCase, creditNotes, emailDeliveries, peppolDeliveries, imported, reminders, payments] = await Promise.all([
+  const [settings, openCase, latestCase, invoiceFacts, reminders, payments] = await Promise.all([
     db.from('company_settings').select('ore_rounding').eq('company_id', companyId).maybeSingle(),
     loadOpenCaseForInvoice(db, companyId, invoiceId),
     db
@@ -204,26 +253,13 @@ export async function loadHandoverContext(
       .eq('submission_status', 'registered')
       .order('created_at', { ascending: false })
       .limit(1),
-    db.from('invoices').select('status').eq('company_id', companyId).eq('credited_invoice_id', invoiceId).neq('status', 'cancelled'),
-    db.from('invoice_deliveries').select('status, provider_status').eq('company_id', companyId).eq('invoice_id', invoiceId),
-    db.from('peppol_deliveries').select('status').eq('company_id', companyId).eq('invoice_id', invoiceId),
-    db
-      .from('migration_source_records')
-      .select('id')
-      .eq('company_id', companyId)
-      .eq('resource', 'salesInvoices')
-      .eq('target_id', invoiceId)
-      .limit(1),
+    loadInvoiceDeliveryFacts(db, companyId, invoiceId),
     db.from('invoice_reminders').select('response_type, created_at').eq('invoice_id', invoiceId).not('response_type', 'is', null),
     db.from('invoice_payments').select('id, payment_date, amount').eq('company_id', companyId).eq('invoice_id', invoiceId),
   ])
   for (const [label, result] of [
     ['company_settings', settings],
     ['collection_cases', latestCase],
-    ['credit notes', creditNotes],
-    ['invoice_deliveries', emailDeliveries],
-    ['peppol_deliveries', peppolDeliveries],
-    ['migration_source_records', imported],
     ['invoice_reminders', reminders],
     ['invoice_payments', payments],
   ] as const) {
@@ -255,12 +291,9 @@ export async function loadHandoverContext(
     features: input.features,
     openCase: openCase ? { id: openCase.id, stage: openCase.stage } : null,
     latestCaseClosedPaid: isClosedPaid(((latestCase.data ?? []) as { stage: string; is_open: boolean }[])[0]),
-    creditNotes: (creditNotes.data ?? []) as { status: string }[],
-    delivery: deliveryEvidence({
-      emailDeliveries: (emailDeliveries.data ?? []) as { status: string; provider_status: string | null }[],
-      peppolDeliveries: (peppolDeliveries.data ?? []) as { status: string }[],
-    }),
-    imported: ((imported.data ?? []) as unknown[]).length > 0,
+    creditNotes: invoiceFacts.creditNotes,
+    delivery: invoiceFacts.delivery,
+    imported: invoiceFacts.imported,
     reminderResponse,
   })
 

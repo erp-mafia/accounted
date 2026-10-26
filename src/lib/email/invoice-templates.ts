@@ -11,7 +11,7 @@ import {
 } from '@/lib/invoices/payment-rows'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from './user-text'
 
-type EmailLang = 'sv' | 'en'
+export type EmailLang = 'sv' | 'en'
 
 // Customer-facing labels. Statutory chapter references stay intact in both
 // locales. lib/utils.ts formatCurrency() keeps the Swedish "kr" symbol for
@@ -172,7 +172,7 @@ function quoteValidUntil(invoice: Invoice): string {
 // recipient reads "1 234,56 SEK" instead of the Swedish symbol "kr". Use the
 // English locale for digit grouping when the email is in English so the comma
 // thousands separator matches reader expectation.
-function formatCurrencyForCustomer(amount: number, currency: string, lang: EmailLang): string {
+export function formatCurrencyForCustomer(amount: number, currency: string, lang: EmailLang): string {
   const formatted = new Intl.NumberFormat(lang === 'en' ? 'en-US' : 'sv-SE', {
     style: 'decimal',
     minimumFractionDigits: 2,

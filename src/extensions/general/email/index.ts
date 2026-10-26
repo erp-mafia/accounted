@@ -14,8 +14,12 @@ import {
   isDeliveryWebhookConfigured,
   toDeliveryReport,
   verifyDeliveryWebhook,
-  type ProviderDeliveryReport,
 } from './lib/delivery-webhook'
+import {
+  applyDeliveryReport,
+  type AppliedDeliveryReport,
+  type ProviderDeliveryReport,
+} from '@/lib/email/delivery-reports'
 import {
   annotateUnmatchedReportDetail,
   isDestructiveDeliveryStatus,
@@ -320,31 +324,24 @@ export const emailExtension: Extension = {
         const service = createServiceClientNoCookies()
         const detail = await detailWithUnmatchedRecipients(service, report)
 
-        const { data, error } = await service.rpc(
-          'apply_invoice_delivery_provider_event',
-          {
-            p_provider: 'resend',
-            p_provider_message_id: report.providerMessageId,
-            p_status: report.status,
-            p_occurred_at: report.occurredAt,
-            p_detail: detail,
-            p_recipient_addresses: report.recipients,
-          },
-        )
-
-        // A failed apply must not be acknowledged: Svix retries non-2xx with
-        // backoff, which is exactly the recovery wanted for a transient
-        // database error.
-        if (error) {
+        // The invoice delivery or the reminder that carries the message id
+        // (lib/email/delivery-reports.ts, provider-neutral).
+        let applied: AppliedDeliveryReport
+        try {
+          applied = await applyDeliveryReport(service, 'resend', report, detail)
+        } catch (error) {
+          // A failed apply must not be acknowledged: Svix retries non-2xx
+          // with backoff, which is exactly the recovery wanted for a
+          // transient database error.
           log.error('failed to apply delivery status', error, { status: report.status })
           return NextResponse.json({ error: 'Failed to record delivery status' }, { status: 500 })
         }
 
-        if (!data) {
+        if (applied.applied === null) {
           return NextResponse.json({ data: { applied: false, reason: 'no_matching_delivery' } })
         }
 
-        log.info('delivery status applied', { deliveryId: data, status: report.status })
+        log.info('delivery status applied', { target: applied.applied, id: applied.id, status: report.status })
         return NextResponse.json({ data: { applied: true } })
       },
     },
