@@ -174,9 +174,9 @@ export default function BulkOrderBookingDialog({
       .map(([rate, count]) => ({ rate, count }))
   }, [bookableOrders, settingsFor])
 
-  // Orders shipped abroad, per destination with the accounts the store's
-  // country rules book them on, so the user sees where each slice lands
-  // before confirming (convention 10).
+  // Orders the store's country rules book (shipped abroad, or to Sweden on a
+  // Sverige row), per destination with the accounts the rules book them on,
+  // so the user sees where each slice lands before confirming (convention 10).
   const countryGroups = useMemo(() => {
     const groups = new Map<string, { country: string; accounts: Set<string>; count: number }>()
     for (const order of bookableOrders) {

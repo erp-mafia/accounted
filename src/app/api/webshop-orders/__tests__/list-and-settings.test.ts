@@ -565,6 +565,51 @@ describe('GET|PUT /api/webshop-orders/settings', () => {
       expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
     })
 
+    describe('a Sverige row (crm#1449)', () => {
+      const SALES_3011 = chartRow('3011', 'Försäljning varor till privatpersoner i Sverige, 25 % moms', {
+        default_vat_rate: 0.25,
+        default_vat_treatment: 'standard_25',
+      })
+
+      it("stores Sweden on the store's own sales account next to its other rules", async () => {
+        // The reporting store's rules plus the Sverige row it asked for.
+        const rules = [
+          { country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+          { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+          { country: 'SE', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+        ]
+        enqueue({
+          data: [
+            SALES_3011,
+            chartRow('3105', 'Försäljning varor till land utanför EU', {
+              default_vat_rate: 0,
+              default_vat_treatment: 'export_goods',
+            }),
+          ],
+        })
+        enqueue({ data: { platform: 'shopify', store_scope: SHOP, country_account_rules: rules } })
+        const { status } = await parseJsonResponse(
+          await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }),
+        )
+        expect(status).toBe(200)
+        expect(mockEnsurePresetAccounts.mock.calls[0][3]).toEqual([])
+        expect(findCall('chart_of_accounts', 'update')).toBeUndefined()
+        const upsert = findCall('webshop_store_settings', 'upsert')![0] as Record<string, unknown>
+        expect(upsert.country_account_rules).toEqual(rules)
+      })
+
+      it('refuses Sweden on own accounts and stores nothing', async () => {
+        const rules = [{ country: 'SE', vat_rate: null, mode: 'accounts', revenue_account: '3011', vat_account: '2611' }]
+        enqueue({ data: [SALES_3011, chartRow('2611', 'Utgående moms på försäljning inom Sverige, 25 %')] })
+        const { status, body } = await parseJsonResponse<{
+          error: { details: { problems: Array<{ code: string }> } }
+        }>(await put({ platform: 'shopify', store_scope: SHOP, country_account_rules: rules }))
+        expect(status).toBe(400)
+        expect(body.error.details.problems).toEqual([{ index: 0, field: 'country', code: 'country_sweden' }])
+        expect(findCall('webshop_store_settings', 'upsert')).toBeUndefined()
+      })
+    })
+
     it('names an account that is not in the chart', async () => {
       const rules = [
         { country: 'NO', vat_rate: 25, mode: 'accounts', revenue_account: '3105', vat_account: '2899' },

@@ -1389,6 +1389,45 @@ describe('POST /api/webshop-orders/bulk-book', () => {
       ])
     })
 
+    describe('a Sverige row (crm#1449)', () => {
+      const SE_ROW = { country: 'SE', vat_rate: null, mode: 'swedish', revenue_account: '3011' }
+
+      it("books an order to Sweden on the store's own sales account without a template", async () => {
+        // The reporting store's rules plus the Sverige row it asked for, and
+        // its order of 94.50 kr incl. 25 %.
+        const rules = [
+          { country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+          { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+          SE_ROW,
+        ]
+        const order = shopifyOrder({
+          customer_country: 'SE',
+          total: 94.5,
+          total_sek: 94.5,
+          total_tax: 18.9,
+          vat_breakdown: [{ rate: 25, net: 75.6, tax: 18.9 }],
+        })
+        const { body } = await runRouted(order, rules, true)
+        expect(body.data.booked_count).toBe(1)
+        expect(bookedLines()).toEqual([
+          ['1686', 94.5, 0],
+          ['3011', 0, 75.6],
+          ['2611', 0, 18.9],
+        ])
+      })
+
+      it('books an order without a country on the row when the store has no rules for abroad', async () => {
+        // A Sverige row says nothing about sales abroad: the order is Swedish, not unknown.
+        const { body } = await runRouted(shopifyOrder({ customer_country: null }), [SE_ROW], true)
+        expect(body.data.booked_count).toBe(1)
+        expect(bookedLines()).toEqual([
+          ['1686', 500, 0],
+          ['3011', 0, 400],
+          ['2611', 0, 100],
+        ])
+      })
+    })
+
     it('refuses a Shopify order without a destination country when the store has country rules', async () => {
       // The store sells abroad, so a missing country (withheld addresses, a
       // local pickup, an old row) is unknown, not Sweden: never 3001/2611

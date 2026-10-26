@@ -4865,7 +4865,7 @@ Everything GET /webshop-orders returns for the row plus its line items and sugge
 
 **Pitfalls:**
 - customer_country is ISO 3166-1 alpha-2. Shopify stores the shipping (destination) country, or the billing country when nothing on the order ships (digital products, services); WooCommerce the billing country. It is null for a Shopify local pickup or when the store withholds addresses.
-- For a Shopify order shipped outside Sweden the suggested lines use the store's accounts for that country and VAT rate when the store has set them (Settings > Connections > Shopify), e.g. 3106/2670 for OSS. Otherwise they use Swedish accounts (3001-3004, 2611-2631): for an OSS, export or VOEC sale choose the accounts yourself. The account choice is the caller's.
+- For a Shopify order shipped outside Sweden the suggested lines use the store's accounts for that country and VAT rate when the store has set them (Settings > Connections > Shopify), e.g. 3106/2670 for OSS; an order shipped to Sweden uses the store's own sales account for Sweden when it has set one. Otherwise they use Swedish accounts (3001-3004, 2611-2631): for an OSS, export or VOEC sale choose the accounts yourself. The account choice is the caller's.
 - suggestion.lines is null while a non-SEK order has no exchange rate; booking resolves the rate once more and refuses with WEBSHOP_ORDER_FX_UNRESOLVED if it still cannot.
 
 | Parameter | In | Type | Required | Notes |

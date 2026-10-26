@@ -7,6 +7,7 @@ import type { WebshopCountryAccountRule } from '@/types'
 import {
   COUNTRY_SCOPE_EU,
   COUNTRY_SCOPE_NON_EU,
+  COUNTRY_SWEDEN,
   SWEDISH_RULE_RATES,
   isEuRuleCountry,
   isOssRule,
@@ -119,7 +120,7 @@ function swedishRevenueProblem(
  * momsdeklaration expects: a sale taxed abroad never feeds a Swedish sales
  * box, OSS sales stay out of the declaration entirely, VAT owed abroad never
  * sits on an account the declaration reads, and a sale with Swedish VAT
- * (a 'swedish' rule) lands in ruta 05.
+ * (a 'swedish' rule, the only kind Sweden takes) lands in ruta 05.
  */
 export function countryRuleProblems(
   rules: readonly WebshopCountryAccountRule[],
@@ -136,7 +137,9 @@ export function countryRuleProblems(
       problems.push({ index, field: 'country', code: 'country_invalid' })
       return
     }
-    if (country === 'SE') {
+    // A sale in Sweden carries Swedish VAT: a Sverige row may only choose
+    // its sales account (crm#1449).
+    if (country === COUNTRY_SWEDEN && rule.mode !== 'swedish') {
       problems.push({ index, field: 'country', code: 'country_sweden' })
       return
     }
@@ -149,7 +152,7 @@ export function countryRuleProblems(
 
     const eu = isEuRuleCountry(country)
     if (rule.mode === 'swedish') {
-      if (!eu) problems.push({ index, field: 'country', code: 'swedish_outside_eu' })
+      if (!eu && country !== COUNTRY_SWEDEN) problems.push({ index, field: 'country', code: 'swedish_outside_eu' })
       if (rule.vat_rate !== null && !SWEDISH_RULE_RATES.some((r) => sameVatRate(r, rule.vat_rate as number))) {
         problems.push({ index, field: 'vat_rate', code: 'swedish_rate' })
       }
