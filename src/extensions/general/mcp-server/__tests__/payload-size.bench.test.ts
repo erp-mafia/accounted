@@ -753,6 +753,13 @@ describe('tools/list payload size guard', () => {
     //     outputSchema (the answer's instructions say what it holds), about +175.
     //     Measured 66 062. Ceiling unchanged. With the rest of run t1022
     //     (landing branch): measured 66 055.
+    //   * Märkning on the customer card (crm#1477, 2026-10-26):
+    //     gnubok_create_customer and gnubok_update_customer gain
+    //     invoice_marking as a bare type, as invoice_reference before it. Paid
+    //     for on the same two tools: country loses "a name is normalised"
+    //     (both) and update's personal_number its "encrypted at staging,
+    //     masked on read". Measured 66 084 (single-company 61 594). Ceiling
+    //     unchanged.
     expect(approxTokens).toBeLessThan(66_100)
   })
 
@@ -871,6 +878,9 @@ describe('tools/list payload size guard', () => {
     // The kreditfaktura refund through gnubok_mark_invoice_as_paid is told by
     // the kreditfaktura-process skill, not the description, to stay under
     // the ceiling. Ceiling unchanged.
+    // 2026-10-26 (crm#1477): invoice_marking on the two customer tools, paid
+    // for on the same tools (see the case above). Measured 61 594. Ceiling
+    // unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

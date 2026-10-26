@@ -386,6 +386,25 @@ describe('POST /api/invoices/[id]/convert', () => {
       expect(inserted.your_reference).toBe('Anna Andersson')
     })
 
+    it("takes the customer card's Märkning when the quote has none (crm#1477)", async () => {
+      const inserted = await convertQuote({
+        ...baseQuote,
+        invoice_marking: null,
+        customer: { default_payment_terms: 20, invoice_marking: '4500012345' },
+      })
+      expect(inserted.invoice_marking).toBe('4500012345')
+      expect(findCall('invoices', 'select')?.[0]).toContain('invoice_marking')
+    })
+
+    it("keeps the quote's own Märkning over the customer card", async () => {
+      const inserted = await convertQuote({
+        ...baseQuote,
+        invoice_marking: 'Projekt Norr',
+        customer: { default_payment_terms: 20, invoice_marking: '4500012345' },
+      })
+      expect(inserted.invoice_marking).toBe('Projekt Norr')
+    })
+
     // accounted#18: 23:30 UTC is already the next day in Stockholm, in summer
     // (UTC+2) and in winter (UTC+1). The invoice is dated that day and the
     // terms count from it.

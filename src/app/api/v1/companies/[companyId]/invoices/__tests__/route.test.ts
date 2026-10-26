@@ -1831,13 +1831,14 @@ describe('PATCH /api/v1/companies/:companyId/invoices/:id', () => {
 // Er referens from the customer card's Fakturareferens (crm#1200)
 // ──────────────────────────────────────────────────────────────────
 
-describe('POST /api/v1/companies/:companyId/invoices: Er referens from the customer card', () => {
-  // The customers mock honours select(), so the card value only reaches the
-  // route when it actually selects invoice_reference.
+describe('POST /api/v1/companies/:companyId/invoices: Er referens and Märkning from the customer card', () => {
+  // The customers mock honours select(), so a card value only reaches the
+  // route when it actually selects invoice_reference and invoice_marking.
   const CUSTOMER_WITH_REFERENCE = {
     ...SWEDISH_BUSINESS_CUSTOMER,
     contact_person: 'Karin Ek',
     invoice_reference: 'KST 4410',
+    invoice_marking: '4500012345',
   }
 
   async function create(body: Record<string, unknown>) {
@@ -1879,5 +1880,17 @@ describe('POST /api/v1/companies/:companyId/invoices: Er referens from the custo
 
   it('keeps the your_reference the request states', async () => {
     expect((await create({ your_reference: 'Inköp 77' })).your_reference).toBe('Inköp 77')
+  })
+
+  it('writes the card\'s Märkning when the request states none (crm#1477)', async () => {
+    expect((await create({})).invoice_marking).toBe('4500012345')
+  })
+
+  it('reads an empty invoice_marking as none', async () => {
+    expect((await create({ invoice_marking: '  ' })).invoice_marking).toBe('4500012345')
+  })
+
+  it('keeps the invoice_marking the request states', async () => {
+    expect((await create({ invoice_marking: 'Projekt Norr' })).invoice_marking).toBe('Projekt Norr')
   })
 })

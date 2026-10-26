@@ -302,3 +302,29 @@ describe('bulk-create takes Er referens from the customer card as POST /invoices
     expect(bulk.header).toEqual(single.header)
   })
 })
+
+describe('bulk-create takes Märkning from the customer card as POST /invoices does (crm#1477)', () => {
+  const withMarking = {
+    ...TABLES,
+    customers: { ...(TABLES.customers as Record<string, unknown>), invoice_marking: '4500012345' },
+  }
+  const body = {
+    customer_id: CUSTOMER_ID,
+    invoice_date: '2026-05-12',
+    due_date: '2026-06-11',
+    currency: 'SEK',
+    items: [{ description: 'Konsultation', quantity: 1, unit: 'tim', unit_price: 1000, vat_rate: 25 }],
+  }
+
+  it('writes the card\'s Märkning when the request states none', async () => {
+    const { single, bulk } = await writesOf(body, withMarking)
+    expect((single.header[0] as Record<string, unknown>).invoice_marking).toBe('4500012345')
+    expect(bulk.header).toEqual(single.header)
+  })
+
+  it('keeps the invoice_marking the request states', async () => {
+    const { single, bulk } = await writesOf({ ...body, invoice_marking: 'Projekt Norr' }, withMarking)
+    expect((single.header[0] as Record<string, unknown>).invoice_marking).toBe('Projekt Norr')
+    expect(bulk.header).toEqual(single.header)
+  })
+})

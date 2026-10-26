@@ -1133,6 +1133,13 @@ export interface Customer {
    */
   invoice_reference: string | null
 
+  /**
+   * Märkning (crm#1477): copied into invoices.invoice_marking (Peppol BT-13
+   * OrderReference) on a new invoice to this customer when the caller states
+   * none (lib/customers/invoice-marking.ts).
+   */
+  invoice_marking: string | null
+
   // Notes
   notes: string | null
 
@@ -2067,6 +2074,7 @@ export interface CreateCustomerInput {
   language?: 'sv' | 'en'
   default_payment_terms?: number
   invoice_reference?: string | null
+  invoice_marking?: string | null
   notes?: string
 }
 

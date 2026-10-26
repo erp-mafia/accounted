@@ -215,6 +215,20 @@ describe('POST /api/webshop-orders/[id]/create-invoice', () => {
     expect(input.your_reference).toBe('KST 4410')
   })
 
+  it("puts the matched customer's Märkning on the invoice (crm#1477)", async () => {
+    enqueue({ data: makeOrderRow() }) // order fetch
+    enqueue({
+      data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', invoice_marking: '4500012345' },
+    }) // email match
+    enqueue({ data: { id: 'inv-1', status: 'draft', invoice_number: null } }) // invoices insert
+    enqueue({ data: null }) // invoice_items insert
+    enqueue({ data: [{ id: 'order-1' }] }) // order link-back matched
+
+    expect((await postCreate()).status).toBe(200)
+    const input = (mockBuildInvoiceWriteData.mock.calls[0][0] as { input: { invoice_marking?: string } }).input
+    expect(input.invoice_marking).toBe('4500012345')
+  })
+
   it("keeps the buyer's name in Er referens for a customer without a Fakturareferens", async () => {
     enqueue({ data: makeOrderRow() })
     enqueue({ data: { id: 'cust-1', name: 'Testbolaget AB', email: 'kund@example.se', customer_type: 'swedish_business', invoice_reference: null } })

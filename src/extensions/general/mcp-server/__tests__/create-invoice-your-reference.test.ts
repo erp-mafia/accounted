@@ -1,7 +1,8 @@
 /**
  * gnubok_create_invoice: Er referens the agent leaves out comes from the
- * customer card's Fakturareferens (crm#1200), staged resolved so the approval
- * card shows what the invoice gets. What the agent states wins.
+ * customer card's Fakturareferens (crm#1200), and Märkning from the card's
+ * Märkning (crm#1477), staged resolved so the approval card shows what the
+ * invoice gets. What the agent states wins.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
@@ -15,7 +16,11 @@ beforeEach(() => {
   vi.clearAllMocks()
 })
 
-async function stage(invoiceReference: string | null, args: Record<string, unknown> = {}) {
+async function stage(
+  invoiceReference: string | null,
+  args: Record<string, unknown> = {},
+  invoiceMarking: string | null = null,
+) {
   const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
   enqueue({
     data: {
@@ -26,6 +31,7 @@ async function stage(invoiceReference: string | null, args: Record<string, unkno
       default_payment_terms: 30,
       contact_person: 'Karin Ek',
       invoice_reference: invoiceReference,
+      invoice_marking: invoiceMarking,
     },
     error: null,
   }) // customers fetch
@@ -58,5 +64,19 @@ describe('gnubok_create_invoice: Er referens from the customer card', () => {
 
   it('stages none for a customer without one, and never the contact person', async () => {
     expect((await stage(null)).your_reference).toBeNull()
+  })
+})
+
+describe('gnubok_create_invoice: Märkning from the customer card (crm#1477)', () => {
+  it('stages the card\'s Märkning when the agent states none', async () => {
+    expect((await stage(null, {}, '4500012345')).invoice_marking).toBe('4500012345')
+  })
+
+  it('keeps the Märkning the agent states', async () => {
+    expect((await stage(null, { invoice_marking: 'Projekt Norr' }, '4500012345')).invoice_marking).toBe('Projekt Norr')
+  })
+
+  it('stages none for a customer without one', async () => {
+    expect((await stage(null)).invoice_marking).toBeNull()
   })
 })

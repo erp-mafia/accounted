@@ -456,6 +456,9 @@ export default function CustomerDetailPage({
         {customer.invoice_reference && (
           <DefRow label={t('def_invoice_reference')}>{customer.invoice_reference}</DefRow>
         )}
+        {customer.invoice_marking && (
+          <DefRow label={t('def_invoice_marking')}>{customer.invoice_marking}</DefRow>
+        )}
       </DetailSection>
 
       <CustomerCollectionsExclusion
@@ -580,6 +583,7 @@ export default function CustomerDetailPage({
               language: customer.language,
               default_payment_terms: customer.default_payment_terms ?? undefined,
               invoice_reference: customer.invoice_reference,
+              invoice_marking: customer.invoice_marking,
               notes: customer.notes || undefined,
             }}
           />
