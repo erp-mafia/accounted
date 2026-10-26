@@ -1441,6 +1441,7 @@ export const ARCHIVE_EXCLUDED_TABLES: Record<string, string> = {
   invoice_completion_work: 'provider scan cursors and scheduling leases; no accounting content',
   invoice_completion_entries: 're-fetchable matching evidence and retry receipts; completed invoices and processing history are exported separately',
   sie_period_read_leases: 'short-lived coordination leases; no accounting content',
+  fortnox_terms_backfill_progress: 'one-off backfill cursor and the ids of customer and supplier cards it changed; the cards themselves are exported',
   // Operator-side Peppol access grant and sending cap: platform configuration, not the company's räkenskapsinformation.
   peppol_access: 'platform access grant (status, sending cap); no bookkeeping content',
   peppol_alerts: 'which Peppol problems the health check already mailed about (dedupe claims); the deliveries and inbound documents themselves are exported',

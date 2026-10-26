@@ -1,0 +1,1 @@
+[2026-10-26] The crm#1245 terms backfill runs as a 5-minute cron with a per-company progress table instead of the operator route from !878: the run needs no person signed in with MFA, and the invoice-completion cron already fills Fortnox data across companies the same way.
