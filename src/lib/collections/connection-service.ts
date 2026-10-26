@@ -37,8 +37,10 @@ import { COLLECTIONS_BATCH_TYPE } from './batch'
 import { getCollectionsProvider, type CatalogueCapabilityEntry } from './catalogue'
 import {
   failurePatch,
+  isLostApplication,
   loadCollectionObligations,
   loadLiveConnection,
+  lostApplicationPatch,
   normalizeConnectionRow,
   snapshotPatch,
   type CollectionConnectionRow,
@@ -470,8 +472,10 @@ export function buildOnboardingRequest(input: {
  * Send the application. The rules are stored on the row first (they are the
  * company's whatever the provider answers), then the provider is called.
  * A failure the provider may still finish (timeout, in flight) leaves the
- * row submitted and the status poll picks the result up; any other failure
- * clears submitted_at so the admin can correct and send again.
+ * row submitted and the status poll picks the result up, or hands the form
+ * back when the provider still holds nothing ten minutes on
+ * (isLostApplication); any other failure clears submitted_at so the admin
+ * can correct and send again.
  */
 export async function submitOnboarding(deps: ConnectionServiceDeps, body: OnboardingBody): Promise<CollectionConnectionRow> {
   if (!deps.actor) throw new Error('submitOnboarding needs a person')
@@ -649,7 +653,11 @@ export async function refreshRow(deps: ConnectionServiceDeps, row: CollectionCon
   const system: ConnectionServiceDeps = { ...deps, actor: null }
   const adapter = requireAdapter(system, row)
   const snapshot = await withProvider(system, row, () => adapter.connection(callContext(row)))
-  const refreshed = await applySnapshot(system, row, snapshot)
+  // A sent application the provider still does not hold after the send's
+  // deadlines is lost: hand the form back instead of showing "submitted".
+  const lost = isLostApplication(row, snapshot, nowOf(system))
+  if (lost) log.warn('collections application never reached the provider, form handed back', { connectionId: row.id, submittedAt: row.submitted_at })
+  const refreshed = await applySnapshot(system, row, snapshot, lost ? lostApplicationPatch() : {})
   // A status read that finds the consented terms waiting finishes that step
   // too (the acceptance was interrupted, or onboarding timed out before it).
   return acceptConsentedTerms(system, refreshed)

@@ -4,6 +4,7 @@ import type {
   CollectionsConnectionState,
   CollectionsConnectionSubStatus,
 } from '@accounted/connect-contract'
+import { COLLECTIONS_APPLICATION_NOT_RECEIVED } from './errors'
 import {
   NO_COLLECTION_OBLIGATIONS,
   type CollectionObligations,
@@ -271,5 +272,41 @@ export function failurePatch(
     failures_in_row: row.failures_in_row + 1,
     last_error_code: error.code,
     last_error_at: now.toISOString(),
+  }
+}
+
+/**
+ * How long a sent application may go without the provider holding it before
+ * the status read hands the form back. Well past every deadline on the way
+ * (the onboarding route's 150 seconds, the service's 150-second request
+ * lease), so a send still under way is never taken for a lost one.
+ */
+export const LOST_APPLICATION_AFTER_MS = 10 * 60 * 1000
+
+/**
+ * Whether a sent application never reached the provider: sent long enough
+ * ago, no handle on either side, and the provider reports nothing started.
+ * A timed-out send stays submitted for the status read to follow, but that
+ * read can only follow an application the provider holds; without this the
+ * page would say "submitted" forever and offer no way to send again.
+ */
+export function isLostApplication(
+  row: Pick<CollectionConnectionRow, 'submitted_at' | 'connection_handle'>,
+  snapshot: Pick<CollectionsConnection, 'state' | 'subStatus' | 'connectionHandle'>,
+  now: Date,
+): boolean {
+  if (!row.submitted_at || row.connection_handle || snapshot.connectionHandle) return false
+  if (snapshot.state !== 'connecting' || snapshot.subStatus !== 'not_started') return false
+  return now.getTime() - Date.parse(row.submitted_at) >= LOST_APPLICATION_AFTER_MS
+}
+
+/** The row for a lost application: the form comes back, with the reason shown above it. */
+export function lostApplicationPatch(): Pick<CollectionConnectionRow, 'submitted_at'> &
+  Pick<SnapshotPatch, 'health' | 'health_cause' | 'health_action'> {
+  return {
+    submitted_at: null,
+    health: 'degraded',
+    health_cause: COLLECTIONS_APPLICATION_NOT_RECEIVED,
+    health_action: 'retry_later',
   }
 }

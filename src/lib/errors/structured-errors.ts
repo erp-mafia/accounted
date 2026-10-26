@@ -9633,6 +9633,12 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Lägg till företagets organisationsnummer under Företag först.',
     message_en: 'Add the company\'s organisation number under Company first.',
   },
+  COLLECTIONS_APPLICATION_NOT_RECEIVED: {
+    httpStatus: 409,
+    message_sv: 'Ansökan gick inte igenom hos inkassobolaget. Skicka den igen.',
+    message_en: 'The application did not go through at the collection agency. Send it again.',
+    thrown_message_sv: true,
+  },
   COLLECTION_NOT_ELIGIBLE: {
     httpStatus: 409,
     message_sv: 'Fakturan uppfyller inte kraven för att skickas till inkasso.',
