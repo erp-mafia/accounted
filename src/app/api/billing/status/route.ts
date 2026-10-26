@@ -18,24 +18,27 @@ const log = createLogger('api/billing/status')
  * What Stripe says about a paying company's subscription, asked live once per
  * read.
  *
- * firstChargeDue: whether a trialing subscription will still be charged when
- * its trial ends. company_subscriptions does not record a pending
- * cancellation, and a portal cancellation takes effect at period end by
- * default, so a trial cancelled in the portal stays 'trialing' in the row
- * until it lapses without a charge.
+ * chargeDue: whether the subscription will still be charged at its period
+ * end, and as what: 'trialing' (the deferred first charge when the trial
+ * ends) or 'active' (the renewal). company_subscriptions does not record a
+ * pending cancellation, and a portal cancellation takes effect at period end
+ * by default, so a cancelled subscription keeps its status in the row until
+ * it lapses without a charge. The caller claims a date only when this matches
+ * the row's status.
  *
  * amountExVat: what the subscription itself costs per interval, in SEK exkl.
  * moms. The list price went up on 2026-10-22 while every earlier
  * subscription kept its Stripe price, so the plan row shows this amount and
  * never the list price.
  *
- * Any doubt (a Stripe error, a pending cancellation, a price in another
- * currency) counts as no / unknown: the card then makes no claim.
+ * Any doubt (a Stripe error, a pending cancellation, a live status other than
+ * trialing or active, a price in another currency) counts as no / unknown:
+ * the card then makes no claim.
  */
 async function readSubscription(
   subscriptionId: string,
   companyId: string,
-): Promise<{ firstChargeDue: boolean; amountExVat: number | null }> {
+): Promise<{ chargeDue: 'trialing' | 'active' | null; amountExVat: number | null }> {
   try {
     const sub = await getStripe().subscriptions.retrieve(subscriptionId)
     const price = sub.items?.data?.[0]?.price
@@ -43,13 +46,12 @@ async function readSubscription(
       price && price.currency === 'sek' && typeof price.unit_amount === 'number'
         ? price.unit_amount / 100
         : null
-    return {
-      firstChargeDue: sub.status === 'trialing' && !sub.cancel_at_period_end && !sub.cancel_at,
-      amountExVat,
-    }
+    const cancelling = Boolean(sub.cancel_at_period_end || sub.cancel_at)
+    const chargeDue = !cancelling && (sub.status === 'trialing' || sub.status === 'active') ? sub.status : null
+    return { chargeDue, amountExVat }
   } catch (err) {
     log.warn('subscription read failed', err as Error, { companyId })
-    return { firstChargeDue: false, amountExVat: null }
+    return { chargeDue: null, amountExVat: null }
   }
 }
 
@@ -104,6 +106,9 @@ export async function GET() {
   // Stripe dashboard to a subscription that was already charged would also
   // read as a first charge here; the date is still the next charge.
   let firstChargeAt: string | null = null
+  // An active subscription's next renewal: its current_period_end, under the
+  // same live no-cancellation check. Additive field: absent for everyone else.
+  let renewsAt: string | null = null
   // What the paying company's own subscription costs per interval (SEK exkl.
   // moms), read from Stripe. Absent when unknown: the card then shows no
   // amount rather than a list price the company does not pay.
@@ -138,16 +143,18 @@ export async function GET() {
       subscriptionPlan = plan === 'monthly' || plan === 'yearly' ? plan : null
       const periodEnd = subscription?.current_period_end
       const subscriptionId = subscription?.stripe_subscription_id
+      const status = subscription?.status
       if (!isDemo && typeof subscriptionId === 'string') {
         const live = await readSubscription(subscriptionId, companyId)
         subscriptionAmountExVat = live.amountExVat
         if (
-          subscription?.status === 'trialing' &&
+          (status === 'trialing' || status === 'active') &&
+          live.chargeDue === status &&
           typeof periodEnd === 'string' &&
-          new Date(periodEnd).getTime() > Date.now() &&
-          live.firstChargeDue
+          new Date(periodEnd).getTime() > Date.now()
         ) {
-          firstChargeAt = periodEnd
+          if (status === 'trialing') firstChargeAt = periodEnd
+          else renewsAt = periodEnd
         }
       }
     }
@@ -163,6 +170,7 @@ export async function GET() {
     ...(teamAgreement ? { teamAgreement } : {}),
     ...(subscriptionPlan ? { subscriptionPlan } : {}),
     ...(firstChargeAt ? { firstChargeAt } : {}),
+    ...(renewsAt ? { renewsAt } : {}),
     ...(subscriptionAmountExVat !== null ? { subscriptionAmountExVat } : {}),
   })
 }

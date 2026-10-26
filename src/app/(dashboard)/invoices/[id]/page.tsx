@@ -99,7 +99,7 @@ import {
   InvoiceDeliveryHistory,
   type InvoiceDeliveryView,
 } from '@/components/invoices/InvoiceDeliveryHistory'
-import CorrectionAffordance from '@/components/bookkeeping/CorrectionAffordance'
+import { WithCorrection } from '@/components/bookkeeping/WithCorrection'
 import { DocumentViewButton } from '@/components/bookkeeping/DocumentViewButton'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
@@ -213,32 +213,6 @@ const accrualMonth = (date: string): string => date.slice(0, 7)
 // actions next to plain values, the hairline underline darkening on hover.
 const ROW_ACTION_CLASS =
   'underline decoration-border underline-offset-4 transition-colors duration-150 hover:decoration-foreground disabled:opacity-50'
-
-type CorrectionHandle = { open: () => void; isLoading: boolean }
-
-/**
- * The header menu's "Skapa ändringsverifikation" item needs the opener of
- * CorrectionAffordance, and the affordance (it owns the correction dialog)
- * must outlive the menu content, which unmounts on select. So it wraps the
- * whole menu when there is a voucher to correct, and is a pass-through
- * otherwise.
- */
-function WithCorrection({
-  journalEntryId,
-  onCorrected,
-  children,
-}: {
-  journalEntryId: string | null
-  onCorrected: () => void
-  children: (correction: CorrectionHandle | null) => React.ReactNode
-}) {
-  if (!journalEntryId) return <>{children(null)}</>
-  return (
-    <CorrectionAffordance journalEntryId={journalEntryId} onCorrected={onCorrected}>
-      {(correction) => children(correction)}
-    </CorrectionAffordance>
-  )
-}
 
 export default function InvoiceDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { canWrite } = useCanWrite()

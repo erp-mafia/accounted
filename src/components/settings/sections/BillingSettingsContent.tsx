@@ -63,6 +63,9 @@ interface BillingView {
    * null once the first charge is behind.
    */
   firstChargeAt: string | null
+  /** Paying card: the next renewal of an active subscription; null when a
+   *  cancellation is pending or Stripe could not confirm it. */
+  renewsAt: string | null
   paidJustNow: boolean
   isDemo: boolean
   /**
@@ -250,6 +253,7 @@ function BillingCoreContent() {
           configured?: unknown
           trialEndsAt?: unknown
           firstChargeAt?: unknown
+          renewsAt?: unknown
           isDemo?: unknown
           teamAgreement?: unknown
           coverage?: unknown
@@ -268,6 +272,7 @@ function BillingCoreContent() {
         const daysLeft = msLeft !== null ? Math.max(0, Math.ceil(msLeft / 86_400_000)) : null
         const chargeDeferred = msLeft !== null && msLeft > DEFER_THRESHOLD_MS
         const firstChargeAt = typeof d.firstChargeAt === 'string' ? d.firstChargeAt : null
+        const renewsAt = typeof d.renewsAt === 'string' ? d.renewsAt : null
         // Set by the checkout success redirect. Provisioning happens via the
         // Stripe webhook, so isPaying can lag the redirect by a few seconds.
         const paidJustNow = new URLSearchParams(window.location.search).get('success') === '1'
@@ -294,6 +299,7 @@ function BillingCoreContent() {
           daysLeft,
           chargeDeferred,
           firstChargeAt,
+          renewsAt,
           paidJustNow,
           isDemo: d.isDemo === true,
           teamAgreement,
@@ -519,6 +525,11 @@ function BillingCoreContent() {
         {view.firstChargeAt && (
           <SettingsRowNote className="basis-full">
             {t('first_charge_on', { date: formatDateLong(view.firstChargeAt) })}
+          </SettingsRowNote>
+        )}
+        {view.renewsAt && (
+          <SettingsRowNote className="basis-full">
+            {t('next_charge_on', { date: formatDateLong(view.renewsAt) })}
           </SettingsRowNote>
         )}
       </SettingsRow>

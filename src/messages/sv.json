@@ -2863,6 +2863,7 @@
     "unlock_collections": "Påminnelser och inkasso",
     "unlock_collections_gloss": "påminnelser och inkassokrav via inkassobolaget",
     "first_charge_on": "Första dragningen sker {date}. Ingen bindningstid.",
+    "next_charge_on": "Nästa dragning sker {date}.",
     "manage_line": "Byt kort, byt plan eller säg upp.",
     "team_managed_by": "Hanteras av {teamName}.",
     "receipts_col_date": "Datum",

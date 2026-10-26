@@ -252,6 +252,81 @@ describe('GET /api/billing/status first charge date', () => {
   })
 })
 
+// An active subscription renews at current_period_end unless a cancellation
+// is pending, which only Stripe knows: the row keeps 'active' until it lapses.
+describe('GET /api/billing/status renewal date', () => {
+  type RenewalBody = StatusBody & { firstChargeAt?: string; renewsAt?: string }
+  const STRIPE_LIVE = [{ capability_key: 'ai', expires_at: '2099-01-04T00:00:00Z', source: 'stripe', team_id: null }]
+  const ACTIVE_ROW = {
+    status: 'active',
+    plan: 'yearly',
+    current_period_end: '2099-03-01T09:00:00+00:00',
+    stripe_subscription_id: 'sub_test_2',
+  }
+
+  beforeEach(() => {
+    subscriptionsRetrieve.mockResolvedValue({ status: 'active', cancel_at_period_end: false, cancel_at: null })
+  })
+
+  it('returns the renewal date for an active subscription', async () => {
+    authAs({
+      company_subscriptions: { data: ACTIVE_ROW },
+      capability_grants: { data: STRIPE_LIVE },
+    })
+
+    const { status, body } = await parseJsonResponse<RenewalBody>(await GET())
+
+    expect(status).toBe(200)
+    expect(body.isPaying).toBe(true)
+    expect(body.renewsAt).toBe('2099-03-01T09:00:00+00:00')
+    expect('firstChargeAt' in (body as object)).toBe(false)
+    expect(subscriptionsRetrieve).toHaveBeenCalledWith('sub_test_2')
+  })
+
+  it.each([
+    ['cancel_at_period_end', { status: 'active', cancel_at_period_end: true, cancel_at: 4076211600 }],
+    ['cancel_at', { status: 'active', cancel_at_period_end: false, cancel_at: 4076211600 }],
+    ['a live status other than active', { status: 'past_due', cancel_at_period_end: false, cancel_at: null }],
+  ])('omits it when Stripe reports %s', async (_case, live) => {
+    subscriptionsRetrieve.mockResolvedValue(live)
+    authAs({
+      company_subscriptions: { data: ACTIVE_ROW },
+      capability_grants: { data: STRIPE_LIVE },
+    })
+
+    const { body } = await parseJsonResponse<RenewalBody>(await GET())
+
+    expect(body.isPaying).toBe(true)
+    expect('renewsAt' in (body as object)).toBe(false)
+  })
+
+  it('omits it when Stripe cannot be asked (fails closed)', async () => {
+    subscriptionsRetrieve.mockRejectedValue(new Error('stripe unavailable'))
+    authAs({
+      company_subscriptions: { data: ACTIVE_ROW },
+      capability_grants: { data: STRIPE_LIVE },
+    })
+
+    const { status, body } = await parseJsonResponse<RenewalBody>(await GET())
+
+    expect(status).toBe(200)
+    expect('renewsAt' in (body as object)).toBe(false)
+  })
+
+  it('never returns it for a trialing subscription (that date is the first charge)', async () => {
+    subscriptionsRetrieve.mockResolvedValue({ status: 'trialing', cancel_at_period_end: false, cancel_at: null })
+    authAs({
+      company_subscriptions: { data: { ...ACTIVE_ROW, status: 'trialing' } },
+      capability_grants: { data: STRIPE_LIVE },
+    })
+
+    const { body } = await parseJsonResponse<RenewalBody>(await GET())
+
+    expect(body.firstChargeAt).toBe('2099-03-01T09:00:00+00:00')
+    expect('renewsAt' in (body as object)).toBe(false)
+  })
+})
+
 // WL-10 billing honesty: a non-paying company under a byrå team with an
 // active team-scoped manual grant gets the additive teamAgreement field.
 describe('GET /api/billing/status team agreement', () => {
