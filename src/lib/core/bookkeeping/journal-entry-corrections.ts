@@ -37,6 +37,7 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { resolveUserLabelsFromProfiles } from '@/lib/reports/behandlingshistorik'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { refuseCorrectedImportVatWithoutBase, type ImportVatShapeLine } from '@/lib/bookkeeping/import-vat-base'
+import { isBankLedgerAccount } from '@/lib/core/bookkeeping/correction-bank-leg'
 import {
   AccountsNotInChartError,
   CannotCorrectNonPostedError,
@@ -560,7 +561,7 @@ async function previewLineRattelse(
     }
   }
   const bankAccountsChanged = anchors.bank
-    ? changedAccounts.filter((acc) => acc.startsWith('19') || anchors.cashLedgerAccounts.includes(acc))
+    ? changedAccounts.filter((acc) => isBankLedgerAccount(acc, anchors.cashLedgerAccounts))
     : []
 
   const struckDebit = sumSide(struck, 'debit_amount')

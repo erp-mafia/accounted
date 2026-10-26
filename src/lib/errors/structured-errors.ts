@@ -936,6 +936,21 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
         'Import of goods: add the beskattningsunderlag on 4545/4546/4547 in the same voucher. Reverse charge (EU goods, services from abroad): book the self-assessed output VAT on 2614/2624/2634, not 2615/2625/2635.',
     },
   },
+  // A storno + rättelse that moves a bank row's leg to another bank account
+  // (lib/core/bookkeeping/correction-bank-leg.ts). The door names both
+  // accounts; this is the fallback for an envelope without them.
+  CORRECTION_BANK_ACCOUNT_CHANGED: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen är kopplad till en banktransaktion, och rättelsen flyttar beloppet till ett annat bankkonto än det banken visar. Behåll beloppet på bankkontot. Hör banktransaktionen inte till verifikationen, makulera verifikationen i stället, så kommer transaktionen tillbaka till Att bokföra.',
+    message_en:
+      'The voucher is linked to a bank transaction, and the correction moves the amount to another bank account than the one the bank shows. Keep the amount on the bank account. If the bank transaction does not belong to the voucher, reverse the voucher instead: the transaction returns to Att bokföra.',
+    thrown_message_sv: true,
+    remediation: {
+      description:
+        'Keep the line on details.bank_account in the corrected lines. If the bank transaction is wrong for this voucher (a duplicate, another account), reverse the voucher instead: the bank row is released and can be booked or ignored.',
+    },
+  },
   TRANSACTION_BOOK_POSSIBLE_DUPLICATE: {
     httpStatus: 409,
     message_sv:
