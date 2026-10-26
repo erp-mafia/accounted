@@ -86,13 +86,16 @@ describe('Fortnox customers carry the terms only their detail form names', () =>
     expect(customer?.defaultPaymentTermsDays).toBe(0);
   });
 
-  it('does not spend a request on a customer whose payload already names its terms', async () => {
-    stubFetch(() => json(listResponse([{ ...LISTED, TermsOfPayment: '15' }])));
+  it('reads the customer from its own record even when the list names its terms (crm#1436)', async () => {
+    stubFetch((url) => url.includes('/customers/1001')
+      ? json(detailFor('1001', '10'))
+      : json(listResponse([{ ...LISTED, TermsOfPayment: '15' }])));
 
     const [customer] = await fetchCustomersDirect('fortnox', 'token');
 
-    expect(customer?.defaultPaymentTermsDays).toBe(15);
-    expect(requested.some((url) => url.includes('/customers/1001'))).toBe(false);
+    expect(customer?.defaultPaymentTermsDays).toBe(10);
+    expect(customer?.vatNumber).toBe('SE556677889901');
+    expect(requested.filter((url) => url.includes('/customers/1001'))).toHaveLength(1);
   });
 
   it('keeps the listed customer when its detail form cannot be read', async () => {

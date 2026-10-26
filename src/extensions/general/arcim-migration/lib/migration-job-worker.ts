@@ -6,7 +6,7 @@ import { ExecutionBudgetExceeded, withExecutionDeadline } from '@/lib/http/execu
 import { resolveConsent, type ResolvedConsent } from '@/lib/providers/resolve-consent'
 import { classifyProviderError, providerRefusalReason, ProviderCallError } from '@/lib/providers/with-provider-call'
 import { fortnoxApiErrorCode } from '@/lib/providers/fortnox/client'
-import { fetchCompanyInfoDirect, fetchMigrationPage, hydrateCustomers, hydrateSalesInvoices, hydrateSupplierInvoices, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
+import { fetchCompanyInfoDirect, fetchMigrationPage, hydrateCustomers, hydrateSalesInvoices, hydrateSupplierInvoices, hydrateSuppliers, type HydrationReport, type MigrationDto } from '@/lib/providers/provider-data-fetcher'
 import { migrationRetrySeconds, type ProviderMigrationJob, type MigrationResource } from '@/lib/providers/migration-contract'
 import { sealMigrationPayload, openMigrationPayload } from '@/lib/providers/migration-payload'
 import type { ProviderName } from '@/lib/providers/types'
@@ -103,7 +103,7 @@ function mappedParty(job: ProviderMigrationJob, resource: MigrationResource, dto
 }
 
 /**
- * The listed customer with its detail form where the list left the terms out
+ * The listed customer in its detail form where the provider lists a short one
  * (Fortnox, see hydrateCustomers; crm#1245). A customer whose detail cannot
  * be read still imports from its list form, with the default terms as before:
  * its card is worth more than its absence, and the invoices that name it
@@ -115,6 +115,29 @@ async function customerWithDetail(job: ProviderMigrationJob, listed: CustomerDto
   const hydrated = await hydrateCustomers(job.provider as ProviderName, connection.accessToken,
     connection.providerCompanyId, [listed], budget)
   if (!hydrated.unhydratedIds.has(listed.id)) return hydrated.customers[0]
+  return partyWithoutDetail(listed, hydrated, budget, job, connection, deadline)
+}
+
+/**
+ * The supplier twin of customerWithDetail: Fortnox's supplier list leaves out
+ * the country and the VAT number (hydrateSuppliers; crm#1436).
+ */
+async function supplierWithDetail(job: ProviderMigrationJob, listed: SupplierDto,
+  connection: ResolvedConsent, deadline: number): Promise<SupplierDto> {
+  const budget = Math.min(MAX_DETAIL_BUDGET_MS, Math.max(0, deadline - Date.now() - 5000))
+  const hydrated = await hydrateSuppliers(job.provider as ProviderName, connection.accessToken,
+    connection.providerCompanyId, [listed], budget)
+  if (!hydrated.unhydratedIds.has(listed.id)) return hydrated.suppliers[0]
+  return partyWithoutDetail(listed, hydrated, budget, job, connection, deadline)
+}
+
+/**
+ * A party the detail pass did not reach: pending when only this invocation
+ * ran out of time, the provider's refusal when it refused the token, and
+ * otherwise its list form.
+ */
+async function partyWithoutDetail<T>(listed: T, hydrated: { hydration: HydrationReport; authError?: unknown },
+  budget: number, job: ProviderMigrationJob, connection: ResolvedConsent, deadline: number): Promise<T> {
   if (hydrated.hydration.abortedBy === 'budget' && budget < MAX_DETAIL_BUDGET_MS) throw new Error('MIGRATION_DEADLINE')
   if (hydrated.hydration.abortedBy === 'auth') {
     throw await readProviderRefusal(hydrated.authError ?? new Error('PROVIDER_AUTH_EXPIRED'), job, connection, deadline)
@@ -139,7 +162,8 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   }
   if (c.resource === 'suppliers') {
     if (!(dto as SupplierDto).active) return { id: c.id, skip: 'inactive' }
-    return { id: c.id, row: mapSupplier(dto as SupplierDto, job.user_id, job.company_id) }
+    const supplier = await supplierWithDetail(job, dto as SupplierDto, connection, deadline)
+    return { id: c.id, row: mapSupplier(supplier, job.user_id, job.company_id) }
   }
   const listed = dto as InvoiceDto
   // A supplier invoice cancelled (makulerad) in Fortnox was never a payable,

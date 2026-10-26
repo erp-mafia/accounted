@@ -274,6 +274,22 @@ describe('executeMigration: hydration budget and scope', () => {
     expect(mListCustomers.mock.calls[0][3]).toEqual({ detailBudgetMs: undefined })
   })
 
+  it('gives the supplier detail pass (Fortnox country and VAT number, crm#1436) its share of the deadline', async () => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-09-08T12:00:00Z'))
+    const mListSuppliers = fetchSuppliersDirect as Mock
+    mListSuppliers.mockResolvedValue([])
+
+    // 100 s left, the fixed insert reserve held back: 100 000 - 30 000.
+    await executeMigration(baseOptions({ importSuppliers: true, deadlineMs: Date.now() + 100_000 }))
+    expect(mListSuppliers.mock.calls[0][3]).toEqual({ detailBudgetMs: 70_000 })
+
+    // No deadline: the provider default applies.
+    mListSuppliers.mockClear()
+    await executeMigration(baseOptions({ importSuppliers: true }))
+    expect(mListSuppliers.mock.calls[0][3]).toEqual({ detailBudgetMs: undefined })
+  })
+
   it('skips the detail request for a supplier invoice whose (supplier, number) pair is already in the database', async () => {
     ;(fetchSuppliersDirect as Mock).mockResolvedValue([SUPPLIER])
     mListSupplier.mockResolvedValue([supplierDto('L-77'), supplierDto('L-78')])
