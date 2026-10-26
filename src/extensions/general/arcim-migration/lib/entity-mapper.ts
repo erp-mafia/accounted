@@ -11,6 +11,8 @@ import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-
 import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
 import { normalizeVatRateToFraction } from '@/lib/vat/vat-rate-unit'
 import { normalizeCountryCode } from '@/lib/vat/country-codes'
+import { cleanSupplierPaymentDetails } from '@/lib/payments/payment-details'
+import { FREE_TEXT_BANK_ACCOUNT } from '@/lib/payments/supplier-payee'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import { isAccountNumber } from '@/lib/invariants/account-number'
 import { sumLineVat, lineVatFromPercent } from '@/lib/providers/amounts'
@@ -767,8 +769,40 @@ export function fitsPersonalNumberColumn(value: string): boolean {
   return length >= 10 && length <= 99
 }
 
+/**
+ * A supplier's bank account as the clearing and account fields the supplier
+ * form shows and payments read (lib/payments/supplier-payee.ts). The import
+ * wrote the provider's account number alone into the free-text bank_account,
+ * which the form does not show, without the clearing number Fortnox and Visma
+ * keep in a field of its own, so such a supplier could not be paid. An
+ * account typed with its clearing number in front ("8327-9 123 456 789") is
+ * split the way the payee resolver splits a free-text account.
+ */
+export function supplierBankAccount(dto: Pick<SupplierDto, 'bankAccount' | 'clearingNumber'>): {
+  clearing_number: string | null
+  account_number: string | null
+} {
+  const account = dto.bankAccount?.trim()
+  if (!account) return { clearing_number: null, account_number: null }
+  const clearing = dto.clearingNumber?.trim()
+  if (clearing) return { clearing_number: clearing, account_number: account }
+  const typed = FREE_TEXT_BANK_ACCOUNT.exec(account)
+  return typed
+    ? { clearing_number: typed[1], account_number: typed[2].trim() }
+    : { clearing_number: null, account_number: account }
+}
+
+/** The currency the supplier bills in, when Accounted books that currency; SEK otherwise. */
+function supplierCurrency(code: string | undefined): Currency {
+  const stated = code?.trim().toUpperCase()
+  return CURRENCIES.find((currency) => currency === stated) ?? 'SEK'
+}
+
 export function mapSupplier(dto: SupplierDto, userId: string, companyId: string): Record<string, unknown> {
   const addr = formatAddress(dto.party.postalAddress)
+  // Each one validated on its own, as an invoice's stated payee is: a
+  // malformed IBAN is left out rather than stored or failing the row.
+  const foreign = cleanSupplierPaymentDetails({ iban: dto.iban, bic: dto.bic })
   return {
     user_id: userId,
     company_id: companyId,
@@ -783,15 +817,13 @@ export function mapSupplier(dto: SupplierDto, userId: string, companyId: string)
     vat_number: dto.vatNumber || null,
     bankgiro: dto.bankGiro || null,
     plusgiro: dto.plusGiro || null,
-    bank_account: dto.bankAccount || null,
-    // SupplierDto carries bankAccount/bankGiro/plusGiro only: it has no IBAN,
-    // BIC or default expense account, so these are honest nulls, not dropped
-    // data. The user fills them in when a foreign payment first needs them.
-    iban: null,
-    bic: null,
+    ...supplierBankAccount(dto),
+    iban: foreign.iban ?? null,
+    bic: foreign.bic ?? null,
+    // No provider names a default expense account the chart here can trust.
     default_expense_account: null,
     default_payment_terms: paymentTermsDays(dto.defaultPaymentTermsDays),
-    default_currency: 'SEK',
+    default_currency: supplierCurrency(dto.currencyCode),
     notes: dto.note || null,
   }
 }

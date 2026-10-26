@@ -497,13 +497,13 @@ export function mapBokioToAccountingAccount(raw: Record<string, unknown>): Accou
  *
  * A Bokio supplier has no contacts and no payment terms. The giro and
  * account numbers were read from the top level, where Bokio has none, so no
- * Bokio supplier arrived with them (crm#1436). IBAN and BIC have no field on
- * SupplierDto yet.
+ * Bokio supplier arrived with them (crm#1436).
  */
 export function mapBokioToSupplier(raw: Record<string, unknown>): SupplierDto {
   const name = (raw['name'] as string) ?? '';
   const orgNumber = raw['orgNumber'] as string | undefined;
   const address = raw['address'] as Record<string, unknown> | undefined;
+  const currency = raw['currency'];
 
   return {
     id: String(raw['id'] ?? ''),
@@ -512,12 +512,13 @@ export function mapBokioToSupplier(raw: Record<string, unknown>): SupplierDto {
     active: true,
     vatNumber: raw['vatNumber'] as string | undefined,
     ...supplierPaymentDetails(raw['paymentDetails']),
+    currencyCode: typeof currency === 'string' && currency.trim() ? currency.trim() : undefined,
     _raw: raw,
   };
 }
 
 /** The one way a Bokio supplier is paid, as the giro or account it names. */
-function supplierPaymentDetails(value: unknown): Pick<SupplierDto, 'bankGiro' | 'plusGiro' | 'bankAccount'> {
+function supplierPaymentDetails(value: unknown): Pick<SupplierDto, 'bankGiro' | 'plusGiro' | 'bankAccount' | 'clearingNumber' | 'iban' | 'bic'> {
   if (!value || typeof value !== 'object') return {};
   const details = value as Record<string, unknown>;
   const text = (key: string) => {
@@ -527,11 +528,8 @@ function supplierPaymentDetails(value: unknown): Pick<SupplierDto, 'bankGiro' | 
   switch (details['type']) {
     case 'bankgiro': return { bankGiro: text('bankgiroNumber') };
     case 'plusgiro': return { plusGiro: text('plusgiroNumber') };
-    case 'transfer': {
-      const clearing = text('clearingNumber');
-      const account = text('accountNumber');
-      return { bankAccount: clearing && account ? `${clearing}-${account}` : account };
-    }
+    case 'transfer': return { clearingNumber: text('clearingNumber'), bankAccount: text('accountNumber') };
+    case 'internationalPayment': return { iban: text('iban'), bic: text('bic') };
     default: return {};
   }
 }

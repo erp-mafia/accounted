@@ -752,7 +752,7 @@ export async function executeMigration(options: MigrationOptions): Promise<Migra
           ({ from, to }) =>
             supabase
               .from('suppliers')
-              .select('id, org_number, name, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, notes')
+              .select('id, org_number, name, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, notes')
               .eq('company_id', companyId)
               .order('id', { ascending: true })
               .range(from, to)

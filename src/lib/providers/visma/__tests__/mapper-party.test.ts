@@ -101,4 +101,12 @@ describe('Visma supplier', () => {
     expect(dto.party.contact).toMatchObject({ email: 'info@example.test', telephone: '08-123 45 67' })
     expect(dto.note).toBe('Ramavtal 2026')
   })
+
+  it('reads the clearing number, the IBAN, the BIC and the currency', () => {
+    const dto = mapVismaToSupplier({
+      ...SUPPLIER, Clearing: '8327-9', BankIban: 'DE89 3704 0044 0532 0130 00', BankBic: 'COBADEFFXXX', CurrencyCode: 'EUR',
+    })
+    expect(dto).toMatchObject({ clearingNumber: '8327-9', iban: 'DE89 3704 0044 0532 0130 00', bic: 'COBADEFFXXX', currencyCode: 'EUR' })
+    expect(mapVismaToSupplier({ ...SUPPLIER, Clearing: ' ', BankIban: '' })).toMatchObject({ clearingNumber: undefined, iban: undefined })
+  })
 })

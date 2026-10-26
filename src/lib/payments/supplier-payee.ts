@@ -39,7 +39,7 @@ export interface SupplierPayeeSource {
  * blob cannot be split safely (is 83279123456789 clearing 8327 or 8327-9?),
  * so it resolves to payee_invalid.
  */
-const FREE_TEXT_BANK_ACCOUNT = /^(\d{4}|8\d{4})[-\s]+([\d\s-]{5,15})$/
+export const FREE_TEXT_BANK_ACCOUNT = /^(\d{4}|8\d{4})[-\s]+([\d\s-]{5,15})$/
 
 function digits(value: string | null | undefined): string {
   return (value ?? '').replace(/\D/g, '')

@@ -476,7 +476,7 @@ export async function enrichCommittedParties(supabase: SupabaseClient, job: Prov
     }
     if (supplierIds.length > 0) {
       const read = await withinMigrationDeadline(supabase.from('suppliers')
-        .select('id, org_number, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, notes')
+        .select('id, org_number, email, phone, address_line1, address_line2, postal_code, city, country, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, notes')
         .eq('company_id', job.company_id).in('id', supplierIds), deadline)
       if (read.error) throw dbError(read.error)
       for (const card of (read.data ?? []) as SupplierCardDetails[]) suppliers.set(card.id, card)

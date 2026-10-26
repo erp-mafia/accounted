@@ -463,9 +463,16 @@ export interface SupplierDto {
   financialDimensions?: FinancialDimensionRef[];
   active: boolean;
   vatNumber?: string;
+  /** The account number; with the clearing number in front when the provider keeps them together. */
   bankAccount?: string;
+  /** The clearing number, where the provider names it apart from the account. */
+  clearingNumber?: string;
   bankGiro?: string;
   plusGiro?: string;
+  iban?: string;
+  bic?: string;
+  /** The currency the supplier bills in (ISO 4217). */
+  currencyCode?: string;
   defaultPaymentTermsDays?: number;
   note?: string;
   createdAt?: string;
