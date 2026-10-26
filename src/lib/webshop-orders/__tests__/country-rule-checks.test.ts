@@ -233,6 +233,45 @@ describe('countryRuleProblems', () => {
       expect(ossRevenueAccounts([swedish(null, '3012')])).toEqual([])
     })
   })
+
+  describe('a Sverige row (crm#1449)', () => {
+    const chart = chartOf(
+      ...BAS_CHART.values(),
+      row('3011', 'Försäljning varor till privatpersoner i Sverige, 25 % moms', {
+        default_vat_rate: 0.25,
+        default_vat_treatment: 'standard_25',
+      }),
+    )
+    const sweden = (vat_rate: number | null, revenue_account?: string): WebshopCountryAccountRule => ({
+      country: 'SE',
+      vat_rate,
+      mode: 'swedish',
+      ...(revenue_account ? { revenue_account } : {}),
+    })
+
+    it('accepts Swedish VAT on a ruta 05 account of its own, or the default', () => {
+      expect(countryRuleProblems([sweden(null, '3011')], chart)).toEqual([])
+      expect(countryRuleProblems([sweden(25, '3011'), sweden(12)], chart)).toEqual([])
+      expect(countryRuleProblems([...NO_OSS_PRESET_RULES, sweden(null, '3011')], chart)).toEqual([])
+    })
+
+    it('refuses own accounts, a foreign rate and an account outside ruta 05 or the rate', () => {
+      expect(countryRuleProblems([accounts('SE', null, '3011', '2611')], chart)).toEqual([
+        { index: 0, field: 'country', code: 'country_sweden' },
+      ])
+      expect(countryRuleProblems([sweden(19)], chart)).toEqual([{ index: 0, field: 'vat_rate', code: 'swedish_rate' }])
+      expect(countryRuleProblems([sweden(12, '3011')], chart)).toEqual([
+        { index: 0, field: 'revenue_account', code: 'swedish_revenue_vat_code', account: '3011', box: '05' },
+      ])
+      expect(countryRuleProblems([sweden(null, '3106')], chart)).toEqual([
+        { index: 0, field: 'revenue_account', code: 'swedish_revenue_vat_code', account: '3106' },
+      ])
+    })
+
+    it('stays out of the OSS accounts', () => {
+      expect(ossRevenueAccounts([sweden(null, '3011')])).toEqual([])
+    })
+  })
 })
 
 describe('vatAccountInSwedishDeclaration', () => {

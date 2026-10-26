@@ -20,6 +20,7 @@ import { getCountryName, getCountryOptions } from '@/lib/vat/country-codes'
 import {
   COUNTRY_SCOPE_EU,
   COUNTRY_SCOPE_NON_EU,
+  COUNTRY_SWEDEN,
   NO_OSS_PRESET_RULES,
   OSS_PRESET_RULES,
   SWEDISH_RULE_RATES,
@@ -83,9 +84,11 @@ type RateChoice = 'any' | 'zero' | 'other'
  * Swedish rate or every rate. Such a row offers the choice between its own
  * accounts (OSS and the like) and Swedish VAT, so a seller below the
  * distance-selling threshold reaches Svensk moms on a row that exists
- * (crm#1449), not only through the preset on an empty form.
+ * (crm#1449), not only through the preset on an empty form. A Sverige row
+ * has no choice: it is always Svensk moms.
  */
 function offersSwedishMode(rule: DraftRule): boolean {
+  if (rule.country === COUNTRY_SWEDEN) return false
   if (rule.mode === 'swedish') return true
   if (!isEuRuleCountry(rule.country) || !ruleCoversVat(rule)) return false
   return rule.vat_rate === null || SWEDISH_RULE_RATES.some((rate) => sameVatRate(rate, rule.vat_rate as number))
@@ -100,9 +103,10 @@ type LoadState = 'loading' | 'failed' | 'ready'
 
 /**
  * Accounts per destination country for a Shopify store (country_account_rules).
- * An order shipped outside Sweden books each VAT bucket on these accounts, in
- * the single dialog's prefill, in bulk booking and in the MCP suggestion; an
- * order to a country without a row is skipped by bulk booking. Fönster
+ * An order books each VAT bucket on these accounts, in the single dialog's
+ * prefill, in bulk booking and in the MCP suggestion; an order to a country
+ * outside Sweden without a row is skipped by bulk booking, and one to Sweden
+ * without a row books on the default Swedish accounts. Fönster
  * language: flat hairline rows, save appears only when dirty, every
  * explanation behind the group's "?".
  */
@@ -163,7 +167,7 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
       : t('country_rules_rate_value', { rate: rate.toLocaleString(locale === 'en' ? 'en-GB' : 'sv-SE') })
 
   const countryOptions = useMemo(
-    () => getCountryOptions(locale).filter((option) => option.code !== 'SE'),
+    () => getCountryOptions(locale).filter((option) => option.code !== COUNTRY_SWEDEN),
     [locale],
   )
 
@@ -185,6 +189,9 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
           ? rule.vat_rate === newRate
           : sameVatRate(rule.vat_rate, newRate)),
     )
+  // Sverige at 0 %: Svensk moms with no sales account to choose, a row that
+  // changes nothing.
+  const newIsEmptySweden = newCountry === COUNTRY_SWEDEN && newRate === 0
 
   const editDraft = (next: DraftRule[]) => {
     setDraft(next)
@@ -192,7 +199,11 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
   }
 
   const addRule = () => {
-    if (newRate === undefined || newIsDuplicate) return
+    if (newRate === undefined || newIsDuplicate || newIsEmptySweden) return
+    if (newCountry === COUNTRY_SWEDEN) {
+      editDraft([...draft, { country: newCountry, vat_rate: newRate, mode: 'swedish', revenue: '' }])
+      return
+    }
     const preset = presetAccountsFor(newCountry, newRate)
     editDraft([
       ...draft,
@@ -430,6 +441,8 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
         >
           <option value={COUNTRY_SCOPE_EU}>{t('country_rules_scope_eu')}</option>
           <option value={COUNTRY_SCOPE_NON_EU}>{t('country_rules_scope_non_eu')}</option>
+          {/* Up top, not in its alphabetical place: the most common row. */}
+          <option value={COUNTRY_SWEDEN}>{countryLabel(COUNTRY_SWEDEN)}</option>
           {countryOptions.map((option) => (
             <option key={option.code} value={option.code}>
               {locale === 'en' ? option.nameEn : option.name}
@@ -462,7 +475,7 @@ export function CountryAccountRulesForm({ platform, storeScope }: CountryAccount
             size="sm"
             variant="outline"
             onClick={addRule}
-            disabled={newRate === undefined || newIsDuplicate}
+            disabled={newRate === undefined || newIsDuplicate || newIsEmptySweden}
           >
             {t('country_rules_add')}
           </Button>

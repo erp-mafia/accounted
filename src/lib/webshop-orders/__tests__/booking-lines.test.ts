@@ -508,6 +508,69 @@ describe('buildOrderBookingLines with country rules (crm#1032)', () => {
     })
   })
 
+  describe("a Sverige row, the store's own sales account for Sweden (crm#1449)", () => {
+    // The reporting store's saved rules (Swedish VAT on EU sales, export
+    // outside the EU) plus the Sverige row it asked for.
+    const storeSettings: WebshopStoreSettings = {
+      ...shopifySettings,
+      payment_method_account_map: { shopify_payments: { mode: 'book', account: '1686' } },
+      country_account_rules: [
+        { country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+        { country: 'NON_EU', vat_rate: 0, mode: 'accounts', revenue_account: '3105', vat_account: null },
+        { country: 'SE', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+      ],
+    }
+
+    it("books an order to Sweden on the row's account and the VAT on the account for the rate", () => {
+      // The store's order of 94.50 kr incl. 25 % to Sweden, which booked on 3001 by default.
+      const order = toCountry('SE', {
+        total: 94.5,
+        total_sek: 94.5,
+        total_tax: 18.9,
+        vat_breakdown: [{ rate: 25, net: 75.6, tax: 18.9 }],
+      })
+      const lines = buildOrderBookingLines({ order, settings: storeSettings })
+      expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['1686', 94.5, 0],
+        ['3011', 0, 75.6],
+        ['2611', 0, 18.9],
+      ])
+      expect(resolveBookingWarnings(order, storeSettings)).toEqual([])
+    })
+
+    it('outranks the bulk revenue template, which keeps a rate the row does not cover', () => {
+      const se25: WebshopStoreSettings = {
+        ...shopifySettings,
+        country_account_rules: [{ country: 'SE', vat_rate: 25, mode: 'swedish', revenue_account: '3011' }],
+      }
+      const order = toCountry('SE', {
+        total: 556,
+        total_sek: 556,
+        total_tax: 106,
+        vat_breakdown: [
+          { rate: 25, net: 400, tax: 100 },
+          { rate: 12, net: 50, tax: 6 },
+        ],
+      })
+      const lines = buildOrderBookingLines({ order, settings: se25, revenueAccounts: { 25: '3010', 12: '3022' } })
+      expect(lines.map((l) => [l.account_number, l.debit_amount, l.credit_amount])).toEqual([
+        ['1686', 556, 0],
+        ['3011', 0, 400],
+        ['2611', 0, 100],
+        ['3022', 0, 50],
+        ['2621', 0, 6],
+      ])
+    })
+
+    it('leaves an order to Sweden on the default accounts in a store without the row', () => {
+      // The OSS preset's EU catch-all is the other EU countries, never Sweden.
+      const lines = buildOrderBookingLines({ order: toCountry('SE'), settings: shopifySettings })
+      expect(lineFor(lines, '3001')?.credit_amount).toBe(400)
+      expect(lineFor(lines, '2611')?.credit_amount).toBe(100)
+      expect(lineFor(lines, '3106')).toBeUndefined()
+    })
+  })
+
   describe('order without a destination country', () => {
     const noCountry = (overrides: Record<string, unknown> = {}) => ({
       ...makeOrder({ payment_method: 'shopify_payments', ...overrides }),

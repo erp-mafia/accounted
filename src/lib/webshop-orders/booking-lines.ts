@@ -29,7 +29,9 @@ import {
  * country rules (country-routing.ts) instead, e.g. 3106/2670 for an OSS sale;
  * a bucket no rule covers, or an order without a destination country in a
  * store with rules, keeps the Swedish accounts here, which only the single
- * dialog may show (as an editable prefill).
+ * dialog may show (as an editable prefill). An order shipped to Sweden, or
+ * without a country, books on the store's Sverige row when it has one: its
+ * own sales account, the output VAT account for the rate.
  *
  * Non-SEK orders book in SEK via the row's stored exchange_rate (rate date =
  * paid date, captured at sync); every line carries the currency metadata trio

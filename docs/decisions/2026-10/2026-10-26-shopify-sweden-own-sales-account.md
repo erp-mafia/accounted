@@ -1,0 +1,1 @@
+[2026-10-26] A Shopify store's own sales account for Sweden is a 'swedish' rule for SE (never own accounts, no catch-all) that books every order not routed abroad, those without a country too; chosen over a separate saved revenue template: no migration, one resolver for every door (crm#1449).

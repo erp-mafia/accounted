@@ -4,6 +4,7 @@ import {
   OSS_PRESET_RULES,
   alternativeAccountFor,
   isDestinationUnknown,
+  isEuRuleCountry,
   isOssRule,
   presetAccountsFor,
   resolveCountryRule,
@@ -174,6 +175,89 @@ describe('routeOrderBuckets', () => {
     expect(usesSwedishAccounts(routing.buckets[0])).toBe(true)
     expect(usesRevenueTemplate(routing.buckets[0])).toBe(false)
     expect(usesRevenueTemplate({ bucket: routing.buckets[0].bucket, rule: null })).toBe(true)
+  })
+})
+
+describe('a Sverige row (crm#1449)', () => {
+  const SE_OWN: WebshopCountryAccountRule = { country: 'SE', vat_rate: null, mode: 'swedish', revenue_account: '3011' }
+  // The rules the reporting store saved (Swedish VAT on EU sales, export
+  // outside the EU) plus the Sverige row it asked for.
+  const STORE_RULES: WebshopCountryAccountRule[] = [
+    { country: 'EU', vat_rate: null, mode: 'swedish', revenue_account: '3011' },
+    OSS_PRESET_RULES[1],
+    SE_OWN,
+  ]
+  const order25 = [{ rate: 25, net: 75.6, tax: 18.9 }]
+
+  it("books an order to Sweden on the store's own sales account", () => {
+    const routing = routeOrderBuckets(shopify('SE'), order25, STORE_RULES)
+    expect(routing.country).toBe('SE')
+    expect(routing.unroutedRates).toEqual([])
+    expect(routing.destinationUnknown).toBe(false)
+    expect(routing.buckets[0].rule).toBe(SE_OWN)
+    expect(usesSwedishAccounts(routing.buckets[0])).toBe(true)
+    expect(usesRevenueTemplate(routing.buckets[0])).toBe(false)
+  })
+
+  it('never lets the EU catch-all book an order to Sweden', () => {
+    // isEuMemberCountry counts Sweden as a member; the OSS preset must not take it.
+    expect(resolveCountryRule(OSS_PRESET_RULES, 'SE', 25)).toBeNull()
+    expect(resolveCountryRule(NO_OSS_PRESET_RULES, 'SE', 25)).toBeNull()
+    const routing = routeOrderBuckets(shopify('SE'), order25, NO_OSS_PRESET_RULES)
+    expect(routing.country).toBeNull()
+    expect(routing.buckets[0].rule).toBeNull()
+  })
+
+  it('keeps a rate the row does not cover on the default Swedish accounts, never unrouted', () => {
+    const se25: WebshopCountryAccountRule = { country: 'SE', vat_rate: 25, mode: 'swedish', revenue_account: '3011' }
+    const routing = routeOrderBuckets(
+      shopify('se'),
+      [
+        { rate: 25, net: 100, tax: 25 },
+        { rate: 12, net: 50, tax: 6 },
+        { rate: 0, net: 20, tax: 0 },
+      ],
+      [se25],
+    )
+    expect(routing.country).toBe('SE')
+    expect(routing.unroutedRates).toEqual([])
+    expect(routing.buckets.map((route) => route.rule)).toEqual([se25, null, null])
+  })
+
+  it('books an order without a country on the row: it books as Swedish', () => {
+    // Only the row: the store has said nothing about abroad, so the order is Swedish.
+    const domestic = routeOrderBuckets(shopify(null), order25, [SE_OWN])
+    expect(domestic.destinationUnknown).toBe(false)
+    expect(domestic.buckets[0].rule).toBe(SE_OWN)
+    // With rules for abroad it stays unknown (the sweep refuses it); the
+    // dialog's editable guess is still the store's Swedish booking.
+    const sellsAbroad = routeOrderBuckets(shopify(null), order25, STORE_RULES)
+    expect(sellsAbroad.destinationUnknown).toBe(true)
+    expect(sellsAbroad.buckets[0].rule).toBe(SE_OWN)
+  })
+
+  it('ignores a Sverige row that is not Swedish VAT, and another platform', () => {
+    // The settings route refuses such a row: a sale in Sweden never books on own accounts.
+    const seAccounts: WebshopCountryAccountRule = {
+      country: 'SE',
+      vat_rate: null,
+      mode: 'accounts',
+      revenue_account: '3106',
+      vat_account: '2670',
+    }
+    const routing = routeOrderBuckets(shopify('SE'), order25, [seAccounts])
+    expect(routing.country).toBeNull()
+    expect(routing.buckets[0].rule).toBeNull()
+    expect(routeOrderBuckets({ platform: 'woocommerce', customer_country: 'SE' }, order25, [SE_OWN]).buckets[0].rule).toBeNull()
+  })
+
+  it('is not a rule for abroad: neither EU, OSS nor a preset', () => {
+    expect(isDestinationUnknown(shopify(null), [SE_OWN])).toBe(false)
+    expect(isEuRuleCountry('SE')).toBe(false)
+    expect(isEuRuleCountry('DK')).toBe(true)
+    expect(isOssRule(SE_OWN)).toBe(false)
+    expect(presetAccountsFor('SE', null)).toEqual({ revenue: null, vat: null })
+    expect(presetAccountsFor('SE', 25)).toEqual({ revenue: null, vat: null })
   })
 })
 
