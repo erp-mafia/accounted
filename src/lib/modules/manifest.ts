@@ -463,7 +463,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     dependsOn: ['invoicing', 'transactions'],
     layer: 'process',
     uses: ['vat'],
-    libFolders: ['collections'],
+    // reminders: our own email reminders for companies without a provider
+    // (accounted#104), on the same owed and bank guards as the handover.
+    libFolders: ['collections', 'reminders'],
     operationPrefixes: ['collections'],
     // An invoice's case lives under the invoice; the longer claim wins over invoicing's 'invoices'.
     v1Segments: ['collections', 'invoices/:id/collection'],

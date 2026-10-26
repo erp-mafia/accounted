@@ -184,10 +184,12 @@ const MAILBOX_BLOCK_KEYS: Record<MailboxSendBlock, string> = {
 // customer's bearer link, withheld from end-user roles by a column grant, so
 // a '*' select from the browser is refused outright.
 const REMINDER_HISTORY_COLUMNS = 'id, reminder_level, sent_at, email_to, response_type'
+// Sent reminders only (the query filters on sent_at): a reserved or failed
+// row of the sender never reached the customer.
 type ReminderHistoryRow = Pick<
   InvoiceReminder,
-  'id' | 'reminder_level' | 'sent_at' | 'email_to' | 'response_type'
->
+  'id' | 'reminder_level' | 'email_to' | 'response_type'
+> & { sent_at: string }
 
 // How long the preview waits for the PDF route to say whether it will render
 // before giving up and closing the placeholder tab. Generous: a cold
@@ -627,6 +629,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           .from('invoice_reminders')
           .select(REMINDER_HISTORY_COLUMNS)
           .eq('invoice_id', id)
+          .not('sent_at', 'is', null)
           .order('sent_at', { ascending: false }),
         // Payment history for the Betalningsstatus card. Joins the
         // journal_entries row to get voucher_series + voucher_number so each

@@ -694,6 +694,8 @@ export interface CompanySettings {
 
   // Automation
   send_invoice_reminders: boolean
+  /** When send_invoice_reminders last went on (trigger-maintained); null while off. */
+  reminders_enabled_at?: string | null
   reminder_days_level_1: number
   reminder_days_level_2: number
   reminder_days_level_3: number
@@ -1140,6 +1142,8 @@ export interface Customer {
    * /api/customers/[id]/collections-exclusion while collections is offered.
    */
   collections_excluded?: boolean
+  /** "Skicka aldrig påminnelser": the reminder sender skips this customer's invoices. */
+  reminders_excluded?: boolean
 
   created_at: string
   updated_at: string
@@ -4178,7 +4182,8 @@ export interface InvoiceReminder {
   user_id: string
   company_id: string
   reminder_level: 1 | 2 | 3
-  sent_at: string
+  /** Null until the provider accepted the reminder. */
+  sent_at: string | null
   email_to: string
   response_type: ReminderResponseType | null
   response_at: string | null
@@ -4192,6 +4197,20 @@ export interface InvoiceReminder {
   interest_days: number | null
   reminder_fee: number
   fee_journal_entry_id: string | null
+  // The sender's ledger (migration 20261026233000): reserved before the send,
+  // then sent or failed; the provider's id finds it again on a bounce.
+  status: 'reserved' | 'sent' | 'failed'
+  channel: 'email'
+  /** approved, automatic or manual; null on the old sender's rows. */
+  mode: 'approved' | 'automatic' | 'manual' | null
+  subject: string | null
+  provider: string | null
+  provider_message_id: string | null
+  provider_status: InvoiceDeliveryProviderStatus | null
+  provider_status_at: string | null
+  provider_status_detail: string | null
+  error_code: string | null
+  failed_at: string | null
 }
 
 // ============================================================

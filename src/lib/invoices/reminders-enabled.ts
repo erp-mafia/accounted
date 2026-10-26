@@ -20,6 +20,9 @@
  * accounted#104: remind only invoices issued from Accounted, pass the
  * collections bank check (lib/collections/bank-check.ts) before every
  * reminder, approval per batch by default with automatic sending opt-in.
+ * The new sender's engine is lib/reminders (policy, facts, channel, and
+ * dispatch.ts, the one send path); flipping this switch is the last step,
+ * after the daily batch and the turn-on flow exist.
  *
  * Kept dependency-free on purpose: it is imported from both server code and
  * client components (the settings form).
