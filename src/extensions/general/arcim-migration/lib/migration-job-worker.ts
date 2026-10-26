@@ -154,15 +154,20 @@ async function prepareRecord(supabase: SupabaseClient, job: ProviderMigrationJob
   const dto = openMigrationPayload<MigrationDto & { migrationError?: string }>(c.payload)
   if (dto.migrationError) return { id: c.id, error: dto.migrationError }
   if (!dto.id) return { id: c.id, error: 'MIGRATION_SOURCE_ID_MISSING' }
+  // Asked twice: on the list form, to spare an inactive record its detail
+  // request, and on the detail form, because Fortnox's customer list carries
+  // no Active at all and every listed customer read as active (crm#1436).
   if (c.resource === 'customers') {
     if (!(dto as CustomerDto).active) return { id: c.id, skip: 'inactive' }
     const customer = await customerWithDetail(job, dto as CustomerDto, connection, deadline)
+    if (!customer.active) return { id: c.id, skip: 'inactive' }
     parties.set(c.id, { sourceId: c.source_id, facts: customerRegisterFacts(job.provider, customer) })
     return { id: c.id, row: mapCustomer(customer, job.user_id, job.company_id) }
   }
   if (c.resource === 'suppliers') {
     if (!(dto as SupplierDto).active) return { id: c.id, skip: 'inactive' }
     const supplier = await supplierWithDetail(job, dto as SupplierDto, connection, deadline)
+    if (!supplier.active) return { id: c.id, skip: 'inactive' }
     return { id: c.id, row: mapSupplier(supplier, job.user_id, job.company_id) }
   }
   const listed = dto as InvoiceDto

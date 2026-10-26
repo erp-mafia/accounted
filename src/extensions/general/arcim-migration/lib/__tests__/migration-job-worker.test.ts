@@ -475,6 +475,14 @@ describe('Fortnox customers take their terms from the detail form (crm#1245)', (
     expect(db.rows.map(row => row.state)).toEqual(['done'])
   })
 
+
+  it('skips a customer its detail form names inactive, which Fortnox\'s list cannot say', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
+    db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
+    mocks.hydrateCustomers.mockResolvedValueOnce({ customers: [{ ...detailed('1001'), active: false }], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: 'c1', skip: 'inactive' }])
+  })
   it('still imports the customer from its list form when the detail cannot be read', async () => {
     const db = database({ provider: 'fortnox', phase: 'import', resources: ['customers'] })
     db.rows.push({ id: 'c1', source_id: '1001', resource: 'customers', state: 'pending', ...sealMigrationPayload(listed('1001')) })
@@ -542,6 +550,14 @@ describe('Fortnox suppliers take their country and VAT number from the detail fo
     expect(committed(db)).toEqual([])
     expect(db.rows.map(row => row.state)).toEqual(['pending'])
     expect(db.job.state).toBe('queued')
+  })
+
+  it('skips a supplier its detail form names inactive', async () => {
+    const db = database({ provider: 'fortnox', phase: 'import', resources: ['suppliers'] })
+    db.rows.push({ id: 's1', source_id: '7', resource: 'suppliers', state: 'pending', ...sealMigrationPayload(listed('7')) })
+    mocks.hydrateSuppliers.mockResolvedValueOnce({ suppliers: [{ ...detailed('7'), active: false }], unhydratedIds: new Set(), hydration: {} })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(committed(db)).toEqual([{ id: 's1', skip: 'inactive' }])
   })
 
   it('skips an inactive supplier without asking for its detail', async () => {
