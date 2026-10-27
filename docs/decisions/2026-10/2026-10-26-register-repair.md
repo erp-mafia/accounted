@@ -1,0 +1,1 @@
+[2026-10-26] Import: one cron repairs the customer and supplier cards older imports wrote, from each provider's record, only where a card is empty or still on the old import's value; the provider's own type, never the number, decides private vs sole trader (crm#1436).

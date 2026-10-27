@@ -143,6 +143,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/extensions/arcim-migration/register-repair/cron",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
     },
