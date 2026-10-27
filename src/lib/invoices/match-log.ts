@@ -1,10 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('invoices/match-log')
 
 /**
  * Every value must also be in the payment_match_log.action CHECK (latest:
  * migration 20261013160000) and in tests/pg/payment-match-log-actions.pg.test.ts:
- * the insert below is fire-and-forget, so a value the CHECK lacks is dropped
- * silently.
+ * a value the CHECK lacks is refused, and the refusal is only logged (the
+ * insert never fails the match it records).
  */
 export type MatchAction =
   | 'matched'
@@ -37,7 +40,7 @@ export async function logMatchEvent(
   }
 ): Promise<void> {
   try {
-    await supabase.from('payment_match_log').insert({
+    const { error } = await supabase.from('payment_match_log').insert({
       user_id: userId,
       transaction_id: transactionId,
       invoice_id: opts?.invoiceId ?? null,
@@ -48,7 +51,10 @@ export async function logMatchEvent(
       previous_state: opts?.previousState ?? null,
       new_state: opts?.newState ?? null,
     })
-  } catch {
-    // Non-critical: audit log insert must never break the main flow
+    // supabase-js answers a refused insert (the action CHECK, RLS, a foreign key) with an error, never a throw.
+    if (error) log.error('payment match audit row not written', { transactionId, action, code: error.code, message: error.message })
+  } catch (err) {
+    // The audit row must never break the match it records, but a lost row is a gap in the trail.
+    log.error('payment match audit row not written', err as Error, { transactionId, action })
   }
 }

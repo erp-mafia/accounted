@@ -16,6 +16,8 @@ vi.mock('@/lib/reconciliation/unattended-sweep', () => ({
   toSweepSummary: vi.fn(() => ({ summary: true })),
 }))
 vi.mock('@/lib/events/bus', () => ({ eventBus: { emit: vi.fn() } }))
+const errorLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => errorLog }))
 
 import { syncAccountTransactions } from '../sync'
 import { persistBankSyncResult } from '@/lib/bank-sync/persist-sync-result'
@@ -96,6 +98,18 @@ describe('runConnectionSync', () => {
       accounts: ACCOUNTS,
     }))
     expect(mockPersist.mock.calls[0][1]).not.toHaveProperty('initialSync')
+  })
+
+  it('treats an unanswered SIE overlap check as an overlap: no auto-categorization, the sweep runs, and it is an error', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }, bank_connections: { data: null } })
+    mockSync.mockResolvedValue(result() as never)
+
+    const outcome = await runConnectionSync(input(supabase, { lookbackDays: 7 }))
+
+    expect(outcome.sieOverlap).toBe(true)
+    expect(mockSync.mock.calls[0][8]).toEqual({ skipAutoCategorization: true })
+    expect(mockSweep).toHaveBeenCalled()
+    expect(errorLog.error).toHaveBeenCalledWith('SIE overlap check failed: treating the window as covered by an import', expect.objectContaining({ connectionId: 'conn-1', companyId: 'company-1', code: '57014' }))
   })
 
   it('keeps the default strategy for a short incremental window', async () => {

@@ -38,6 +38,9 @@ import { OPEN_PAYMENTS_AGGREGATOR } from '@/lib/bank-sync/aggregator'
 import type { BankIngestRoute, IngestOptions, IngestResult, RawTransaction } from '@/types'
 import { ConsentOverError, getBankFeedConnect, type BankFeedConnect } from './connect'
 import { recordBankFeedPageArrival } from './page-arrival'
+import { createLogger } from '@/lib/logger'
+
+const archiveLog = createLogger('bank-feed/sync')
 
 /** Two balance reads a day at most: the consent's unattended budget is small. */
 export const BALANCE_MAX_AGE_MS = 12 * 60 * 60 * 1000
@@ -234,7 +237,9 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
         { upload_source: 'api' })
       archivedPageIds[i] = archived.id
     } catch (archiveError) {
-      console.error(`[bank-feed] Failed to archive raw response page ${i + 1}:`, archiveError)
+      // The page's rows land without their BFL 7 kap evidence for good (a re-sync
+      // deduplicates them): an error, though it never fails the sync.
+      archiveLog.error('raw bank response page not archived', archiveError as Error, { connectionId, companyId, accountUid: account.uid, page: i + 1 })
     }
     // How the page came in (best effort, never fails the sync).
     const pageId = archivedPageIds[i]

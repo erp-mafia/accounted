@@ -43,13 +43,14 @@ export async function handleSupplierInvoiceRetroMatch(
 
     // Re-fetch with the supplier relation (the scorer reads bankgiro/plusgiro/
     // name): the emitted payload can be stale or lack the join.
-    const { data: invoice } = await supabase
+    const { data: invoice, error: invoiceError } = await supabase
       .from('supplier_invoices')
       .select('*, supplier:suppliers(*)')
       .eq('id', supplierInvoice.id)
       .eq('company_id', companyId)
-      .single()
+      .maybeSingle()
 
+    if (invoiceError) throw new Error(`supplier invoice read failed: ${invoiceError.message}`)
     if (!invoice) return
     if (!['registered', 'approved'].includes(invoice.status)) return
     if ((invoice.remaining_amount ?? invoice.total) <= 0) return
@@ -57,11 +58,12 @@ export async function handleSupplierInvoiceRetroMatch(
 
     // Idempotency: if a tx already points at this invoice (a prior retro run, or
     // ingest's forward match), don't add a competing suggestion.
-    const { count: linkedCount } = await supabase
+    const { count: linkedCount, error: linkedError } = await supabase
       .from('transactions')
       .select('id', { count: 'exact', head: true })
       .eq('company_id', companyId)
       .eq('supplier_invoice_id', invoice.id)
+    if (linkedError) throw new Error(`linked transaction count failed: ${linkedError.message}`)
     if (linkedCount && linkedCount > 0) return
 
     // Bound the scan: ~90 days before the invoice/due date covers normal terms
@@ -71,7 +73,7 @@ export async function handleSupplierInvoiceRetroMatch(
     const anchorMs = new Date(anchor).getTime()
     const lowDate = new Date(anchorMs - 90 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10)
 
-    const { data: candidates } = await supabase
+    const { data: candidates, error: candidatesError } = await supabase
       .from('transactions')
       .select('*')
       .eq('company_id', companyId)
@@ -83,6 +85,7 @@ export async function handleSupplierInvoiceRetroMatch(
       .order('date', { ascending: false })
       .limit(200)
 
+    if (candidatesError) throw new Error(`candidate transactions read failed: ${candidatesError.message}`)
     if (!candidates || candidates.length === 0) return
 
     // Pick the best candidate: highest confidence, tie-break on the payment
@@ -105,12 +108,16 @@ export async function handleSupplierInvoiceRetroMatch(
 
     // Suggestion only. The `.is('supplier_invoice_id', null)` guard avoids a
     // race where the tx was linked between the scan and this write.
-    await supabase
+    const { data: suggested, error: suggestError } = await supabase
       .from('transactions')
       .update({ potential_supplier_invoice_id: invoice.id })
       .eq('id', best.tx.id)
       .eq('company_id', companyId)
       .is('supplier_invoice_id', null)
+      .select('id')
+    if (suggestError) throw new Error(`suggestion write failed: ${suggestError.message}`)
+    // Linked between the scan and the write: nothing was suggested, so nothing is logged as suggested.
+    if (!suggested || suggested.length === 0) return
 
     await logMatchEvent(supabase, userId, best.tx.id, 'auto_suggested', {
       supplierInvoiceId: invoice.id,

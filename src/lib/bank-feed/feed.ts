@@ -371,7 +371,7 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     window = incrementalWindow(connection, now, limits.maxDays)
   }
   const lookbackDays = Math.max(1, Math.round((new Date(`${window.toDate}T00:00:00Z`).getTime() - new Date(`${window.fromDate}T00:00:00Z`).getTime()) / DAY_MS))
-  const { data: sieOverlap } = await supabase
+  const { data: sieImport, error: sieOverlapError } = await supabase
     .from('sie_imports')
     .select('id')
     .eq('company_id', companyId)
@@ -379,6 +379,18 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
     .gte('fiscal_year_end', window.fromDate)
     .limit(1)
     .maybeSingle()
+  // An unanswered check counts as an overlap: auto-categorizing rows an
+  // import already booked, or skipping the sweep that links them, is what
+  // books them twice (crm#1282); suppressing and sweeping costs nothing.
+  if (sieOverlapError) {
+    log.error('SIE overlap check failed: treating the window as covered by an import', {
+      connectionId,
+      companyId,
+      code: sieOverlapError.code,
+      message: sieOverlapError.message,
+    })
+  }
+  const sieOverlap = Boolean(sieImport) || Boolean(sieOverlapError)
 
   const startedAt = new Date(now).toISOString()
   try {

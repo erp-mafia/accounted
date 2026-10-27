@@ -30,10 +30,13 @@ import { INITIAL_SYNC_TIMEOUT } from '@/lib/bank-sync/initial-sync-error'
 import { persistBankSyncResult } from '@/lib/bank-sync/persist-sync-result'
 import { sweepAfterOverlappingSync } from '@/lib/bank-sync/post-sync-sweep'
 import { eventBus } from '@/lib/events/bus'
+import { createLogger } from '@/lib/logger'
 import { chunk } from '@/lib/utils'
 import type { Transaction } from '@/types'
 import { syncAccountTransactions, type IngestFn, type SyncOptions, type SyncResult } from './sync'
 import type { StoredAccount } from '../types'
+
+const errorLog = createLogger('enable-banking/run-connection-sync')
 
 /** Ids per read of the inserted rows: keeps the PostgREST URL short on a 90-day first import. */
 const SYNCED_ROWS_READ_CHUNK = 200
@@ -108,7 +111,7 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
   const { supabase, companyId, userId, connection, accounts, fromDate, toDate, log } = input
   const rawInsertOnly = input.rawInsertOnly === true
 
-  const { data: sieOverlap } = await supabase
+  const { data: sieImport, error: sieOverlapError } = await supabase
     .from('sie_imports')
     .select('id')
     .eq('company_id', companyId)
@@ -116,10 +119,22 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     .gte('fiscal_year_end', fromDate)
     .limit(1)
     .maybeSingle()
-  if (sieOverlap) {
+  // An unanswered check counts as an overlap: auto-categorizing rows an
+  // import already booked, or skipping the sweep that links them, is what
+  // books them twice (crm#1282); suppressing and sweeping costs nothing.
+  if (sieOverlapError) {
+    errorLog.error('SIE overlap check failed: treating the window as covered by an import', {
+      connectionId: connection.id,
+      companyId,
+      code: sieOverlapError.code,
+      message: sieOverlapError.message,
+    })
+  }
+  const sieOverlap = Boolean(sieImport) || Boolean(sieOverlapError)
+  if (sieImport) {
     log.info('SIE import overlap detected: suppressing auto-categorization', {
       connectionId: connection.id,
-      sieImportId: sieOverlap.id,
+      sieImportId: sieImport.id,
       fromDate,
       toDate,
     })
@@ -220,7 +235,7 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     returnedMin,
     returnedMax,
     historyFrom,
-    sieOverlap: Boolean(sieOverlap),
+    sieOverlap,
     autoMatched,
     truncated,
     completedAt,

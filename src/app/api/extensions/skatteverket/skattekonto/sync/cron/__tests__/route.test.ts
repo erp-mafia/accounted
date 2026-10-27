@@ -9,6 +9,9 @@ const mocks = vi.hoisted(() => ({
   syncSkattekonto: vi.fn(),
 }))
 
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => log }))
+
 vi.mock('@supabase/supabase-js', () => ({
   createClient: (...args: unknown[]) => mocks.createClient(...args),
 }))
@@ -80,6 +83,9 @@ vi.mock('@/lib/errors/get-error-message', () => ({
 }))
 
 import { GET } from '../route'
+import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
+import { listVerifiedCompanies } from '@/extensions/general/skatteverket/lib/connection-store'
+import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 
 function makeRequest(): Request {
   return new Request('http://localhost/api/extensions/skatteverket/skattekonto/sync/cron')
@@ -222,6 +228,29 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
 
     expect(body).toMatchObject({ processed: 1, unavailable: 0, errors: 1 })
     expect(errorSpy).toHaveBeenCalledWith('[skattekonto-sync-cron] Sync failed', expect.anything())
+  })
+
+  it('a system credential that cannot be minted is an error once per run: every company on the grant stops syncing', async () => {
+    const first = '11111111-1111-4111-8111-111111111111'
+    const second = '22222222-2222-4222-8222-222222222222'
+    vi.mocked(getSystemAuthMode).mockReturnValue('on')
+    vi.mocked(isSystemAuthConfigured).mockReturnValue(true)
+    vi.mocked(listVerifiedCompanies).mockResolvedValue([{ company_id: first, created_by: 'u1' }, { company_id: second, created_by: 'u2' }] as never)
+    mocks.createClient.mockReturnValue(makeSupabaseStub([]))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([first, second]))
+    mocks.syncSkattekonto.mockRejectedValue(new (SkatteverketAuthError as any)('certificate rejected', 'SYSTEM_AUTH_FAILED'))
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(body.results.map((r: { status: string }) => r.status)).toEqual(['system_auth_failed', 'system_auth_failed'])
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith(
+      'system token minting/authentication failed; skipping remaining system-mode entries this run',
+      expect.objectContaining({ message: 'certificate rejected' }),
+    )
+    vi.mocked(getSystemAuthMode).mockReturnValue('off')
+    vi.mocked(isSystemAuthConfigured).mockReturnValue(false)
+    vi.mocked(listVerifiedCompanies).mockResolvedValue([])
   })
 
   it('an unavailable company is asked again after three hours, not every hour', async () => {

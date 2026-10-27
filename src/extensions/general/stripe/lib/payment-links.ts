@@ -139,7 +139,8 @@ export async function deactivatePaymentLink(
  * invoice.paid handler: once an invoice is settled (through Stripe or any
  * other channel), its payment link must stop accepting money. Belt to the
  * single-use restriction's suspenders. Best-effort: a failure is logged,
- * never surfaced to the flow that emitted the event.
+ * never surfaced to the flow that emitted the event, and it is an error:
+ * nothing retries it, and the link keeps taking money for a settled claim.
  */
 export async function handleInvoicePaid(
   payload: { invoice: Invoice; companyId: string },
@@ -149,13 +150,14 @@ export async function handleInvoicePaid(
   if (!linkId) return
   const supabase = ctx?.supabase ?? createServiceClientNoCookies()
   try {
-    await deactivatePaymentLink(supabase, payload.companyId, linkId)
-    log.info('deactivated payment link after invoice paid', {
+    const deactivated = await deactivatePaymentLink(supabase, payload.companyId, linkId)
+    log.info(deactivated ? 'deactivated payment link after invoice paid' : 'payment link left as it is: no active Stripe connection', {
       invoiceId: payload.invoice.id,
       paymentLinkId: linkId,
     })
   } catch (err) {
-    log.warn('failed to deactivate payment link after invoice paid', {
+    log.error('failed to deactivate payment link after invoice paid', {
+      companyId: payload.companyId,
       invoiceId: payload.invoice?.id,
       paymentLinkId: linkId,
       reason: err instanceof Error ? err.message : String(err),
@@ -176,21 +178,24 @@ export async function handleCreditNoteCreated(
   if (!originalId) return
   const supabase = ctx?.supabase ?? createServiceClientNoCookies()
   try {
-    const { data: original } = await supabase
+    const { data: original, error } = await supabase
       .from('invoices')
       .select('id, stripe_payment_link_id')
       .eq('id', originalId)
       .eq('company_id', payload.companyId)
       .maybeSingle()
+    // A failed read must not read as "no link": the credited claim's link would keep taking money.
+    if (error) throw new Error(`credited invoice read failed: ${error.message}`)
     const linkId = original?.stripe_payment_link_id
     if (!linkId) return
-    await deactivatePaymentLink(supabase, payload.companyId, linkId)
-    log.info('deactivated payment link after credit note', {
+    const deactivated = await deactivatePaymentLink(supabase, payload.companyId, linkId)
+    log.info(deactivated ? 'deactivated payment link after credit note' : 'payment link left as it is: no active Stripe connection', {
       invoiceId: originalId,
       paymentLinkId: linkId,
     })
   } catch (err) {
-    log.warn('failed to deactivate payment link after credit note', {
+    log.error('failed to deactivate payment link after credit note', {
+      companyId: payload.companyId,
       invoiceId: originalId,
       reason: err instanceof Error ? err.message : String(err),
     })

@@ -21,6 +21,9 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { currentSkvEnvironment, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('cron/skattekonto-sync')
 
 // Head room past the 50 s work budget: syncs already in flight when the
 // budget closes finish instead of being killed mid-write at the platform
@@ -322,10 +325,12 @@ export async function GET(request: Request) {
         if (err.code === 'SYSTEM_AUTH_FAILED') {
           if (!systemAuthFailed) {
             systemAuthFailed = true
-            console.warn(
-              '[skattekonto-sync-cron] system token minting/authentication failed; skipping remaining system-mode entries this run',
-              { companyId, message },
-            )
+            // Every company on the system grant stops syncing until the
+            // certificate, secret or scope is fixed: an error, not a warning.
+            log.error('system token minting/authentication failed; skipping remaining system-mode entries this run', {
+              companyId,
+              message,
+            })
           }
           return { userId, companyId, source, status: 'system_auth_failed', error: err.code }
         }
