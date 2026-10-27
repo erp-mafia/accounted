@@ -98,7 +98,7 @@ export async function ensureTicSnapshot(opts: {
   }
 
   // Org number drifts: some onboarding flows persist it on company_settings
-  // only (TicWorkspace reads from there). Prefer companies.org_number but
+  // only. Prefer companies.org_number but
   // fall back to company_settings.org_number so existing companies aren't
   // permanently blocked from TIC enrichment.
   let orgNumber = (companyRow.org_number as string | null) ?? null

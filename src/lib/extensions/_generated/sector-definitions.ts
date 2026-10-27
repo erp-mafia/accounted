@@ -10,8 +10,8 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "category": "operations",
           "icon": "Calendar",
           "dataPattern": "core",
-          "description": "Fullständig kalendervy med månads-, vecko- och dagsvisning",
-          "longDescription": "Se alla fakturadatum och deadlines i en interaktiv kalender med månads-, vecko- och dagsvy.",
+          "description": "Synka deadlines och fakturornas förfallodagar med Apple Calendar, Google Calendar eller Outlook",
+          "longDescription": "Prenumerera på deadlines och fakturornas förfallodagar i Apple Calendar, Google Calendar eller Outlook. Länken skapar du under Inställningar, Profil.",
           "readsCoreTables": [
                 "invoices",
                 "deadlines",
@@ -64,14 +64,7 @@ export const EXTENSION_DEFINITIONS: Record<string, ExtensionDefinition[]> = {
           "dataPattern": "manual",
           "description": "Hämta företagsinformation automatiskt vid registrering",
           "longDescription": "Fyll i företagsuppgifter automatiskt genom att ange organisationsnummer. Hämtar adress, momsregistrering, F-skattestatus och bankuppgifter från offentliga register via TIC.",
-          "hasOwnData": true,
-          "quickAction": {
-                "label": "Företagsprofil",
-                "description": "Visa offentliga uppgifter",
-                "icon": "Briefcase",
-                "href": "/e/general/tic",
-                "order": 10
-          }
+          "hasOwnData": true
     },
     {
           "slug": "mcp-server",

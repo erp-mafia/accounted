@@ -89,7 +89,7 @@ Abridged from `src/extensions/general/enable-banking/manifest.json`:
   "sector": "general",
   "exportName": "enableBankingExtension",
   "entryPoint": "@/extensions/general/enable-banking",
-  "workspace": "@/components/extensions/general/EnableBankingWorkspace",
+  "workspace": null,
   "requiredEnvVars": ["ENABLE_BANKING_APP_ID", "ENABLE_BANKING_PRIVATE_KEY"],
   "optionalEnvVars": ["ENABLE_BANKING_API_URL", "ENABLE_BANKING_PSU_TYPE"],
   "npmDependencies": [],

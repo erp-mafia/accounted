@@ -21520,6 +21520,9 @@ export const tools: McpTool[] = [
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_STAGED_WRITE,
+    // Search-only: no call in the 90 days to 2026-10-26 (the bank-match route
+    // runs the same executor); gnubok_stage_tool reaches it.
+    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const transactionId = args.transaction_id as string
       const rawIds = Array.isArray(args.request_ids) ? (args.request_ids as unknown[]) : []
@@ -22657,6 +22660,9 @@ export const tools: McpTool[] = [
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_STAGED_WRITE,
+    // Search-only: a year-end write with no call in the 90 days to 2026-10-26;
+    // gnubok_stage_tool reaches it and the year-end skill names it.
+    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       const closingDate = args.closing_date as string
@@ -25377,6 +25383,9 @@ export const tools: McpTool[] = [
     },
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_STAGED_WRITE,
+    // Search-only: a year-end write with no call in the 90 days to 2026-10-26;
+    // gnubok_stage_tool reaches it and the year-end skill names it.
+    catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
       const fiscalPeriodId = args.fiscal_period_id as string
       if (!fiscalPeriodId) throw badArgument('fiscal_period_id', 'fiscal_period_id is required')

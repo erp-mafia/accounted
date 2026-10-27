@@ -3,7 +3,7 @@
   "sector": "general",
   "exportName": "cloudBackupExtension",
   "entryPoint": "@/extensions/general/cloud-backup",
-  "workspace": "@/components/extensions/general/CloudBackupWorkspace",
+  "workspace": null,
   "requiredEnvVars": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET"],
   "optionalEnvVars": [
     "DROPBOX_APP_KEY",

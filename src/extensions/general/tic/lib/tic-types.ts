@@ -133,7 +133,7 @@ export type TICBeneficialOwnerResponse = TICBeneficialOwnerNotificationRaw[]
  * Document type enum from v2 `/companies/{id}/documents`. The endpoint
  * returns every document the company has filed (annual reports, audit
  * reports, articles of association, minutes, etc.); we filter on this
- * field to extract the financial-report subset that TicWorkspace shows.
+ * field to extract the financial-report subset the profile carries.
  */
 export type TICDocumentType =
   | 'annualReport'
@@ -171,10 +171,9 @@ export interface TICDocument {
 }
 
 /**
- * Normalized financial-report row consumed by TicWorkspace. v1's TIC
+ * Normalized financial-report row in the company profile. v1's TIC
  * endpoint returned this shape directly; in v2 we derive it from
- * `TICDocument` (filtered to `type === 'annualReport'`). Keeping the
- * shape stable means TicWorkspace doesn't need to change.
+ * `TICDocument` (filtered to `type === 'annualReport'`).
  */
 export interface TICFinancialReportSummary {
   financialReportSummaryId?: number
