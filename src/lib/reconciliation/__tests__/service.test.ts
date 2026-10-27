@@ -16,6 +16,10 @@ vi.mock('../manual-reconciliation', () => ({
   listManualAccounts: (...args: unknown[]) => listManualMock(...args),
   getManualReconciliationStatus: (...args: unknown[]) => manualStatusMock(...args),
 }))
+const balanceCheckMock = vi.fn()
+vi.mock('../bank-balance-check', () => ({
+  checkBankBalance: (...args: unknown[]) => balanceCheckMock(...args),
+}))
 
 import { bankAccountKey, parseAccountKey } from '../schemas'
 import { getAccountStatus, listReconciliationAccounts } from '../service'
@@ -339,6 +343,8 @@ describe('getAccountStatus', () => {
     skattekontoStatusMock.mockReset()
     bankStatusMock.mockReset()
     manualStatusMock.mockReset()
+    balanceCheckMock.mockReset()
+    balanceCheckMock.mockResolvedValue({ check: null, refusal: 'NO_BANK_BALANCE' })
   })
 
   function manualStatus(overrides: Record<string, unknown> = {}) {
@@ -483,6 +489,59 @@ describe('getAccountStatus', () => {
       bank_reported_available_balance: 123930.5,
       bank_balance_updated_at: '2026-08-20T05:12:00Z',
     })
+  })
+
+  it('adds the balance check for the account, beside the movement bridge', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    const row = cashAccount(ID_A, { is_primary: true, balance: 1000, balance_updated_at: '2026-08-20T05:12:00Z' })
+    enqueue({ data: row })
+    bankStatusMock.mockResolvedValue(bankStatus())
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+    const check = {
+      as_of: '2026-08-20',
+      fetched_at: '2026-08-20T05:12:00Z',
+      bank_balance: 1000,
+      booked_balance: 700,
+      difference: 300,
+      unbooked: { count: 2, total: 150 },
+      before_history: { history_start: '2026-06-01', bank_balance: 400, booked_balance: 300, difference: 100 },
+      ignored: { count: 0, total: 0 },
+      rest: 50,
+    }
+    balanceCheckMock.mockResolvedValue({ check, refusal: null })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    if (!s) throw new Error('expected status')
+    expect(balanceCheckMock).toHaveBeenCalledWith(supabase, COMPANY, expect.objectContaining({ id: ID_A, ledger_account: '1930' }))
+    expect(s.bank).toMatchObject({ balance_check: check, balance_check_refusal: null })
+    // The movement verdict and everything sign-off reads stay as they were.
+    expect(s.is_reconciled).toBe(true)
+    expect(s.difference).toBe(0)
+    expect(s.external_balance).toBeNull()
+  })
+
+  it('says why there is no balance check', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { currency: 'EUR' }) })
+    bankStatusMock.mockResolvedValue(bankStatus({ currency: 'EUR' }))
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+    balanceCheckMock.mockResolvedValue({ check: null, refusal: 'FOREIGN_CURRENCY_ACCOUNT' })
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    expect(s?.bank).toMatchObject({ balance_check: null, balance_check_refusal: 'FOREIGN_CURRENCY_ACCOUNT' })
+  })
+
+  it('a failed balance check costs only that block', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: cashAccount(ID_A, { balance: 1000, balance_updated_at: '2026-08-20T05:12:00Z' }) })
+    bankStatusMock.mockResolvedValue(bankStatus({ difference: -46 }))
+    enqueue({ data: { created_at: '2026-08-20T06:00:00Z' } })
+    balanceCheckMock.mockRejectedValue(new Error('Kunde inte läsa räkenskapsår: timeout'))
+
+    const s = await getAccountStatus(supabase as never, COMPANY, bankAccountKey(ID_A), { today: '2026-08-20' })
+    if (!s) throw new Error('expected status')
+    expect(s.difference).toBe(-46)
+    expect(s.bank).toMatchObject({ balance_check: null, balance_check_refusal: null, bank_reported_balance: 1000 })
   })
 
   // PH 195: a connected account the bank had delivered nothing for compared

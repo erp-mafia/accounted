@@ -20,6 +20,7 @@ import type {
   ReconciliationItemBucket,
   ReconciliationStatus,
 } from '@/lib/reconciliation/schemas'
+import type { BankBalanceCheck } from '@/lib/reconciliation/bank-balance-check'
 import { dropProposedLedgerDuplicates } from '@/lib/reconciliation/overview-rows'
 import { accountTransactionsHref } from '@/lib/reconciliation/account-links'
 import type { SkattekontoBatchRowResult, SkattekontoTransactionWithSuggestion } from '@/types/skatteverket'
@@ -663,6 +664,35 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
           })
       : null
 
+  // The bank's balance against the books on the bank's own day
+  // (lib/reconciliation/bank-balance-check.ts). The tiles compare movements
+  // in the period and cannot see an opening balance that never reached the
+  // books, so this stands under the verdict instead of behind the bridge. Its
+  // parts sum to the difference.
+  const balanceCheck =
+    !isSkv && !isManual ? ((status.bank as { balance_check?: BankBalanceCheck | null } | null)?.balance_check ?? null) : null
+  const balanceDiffers = balanceCheck !== null && Math.abs(balanceCheck.difference) >= 0.005
+  const balanceParts =
+    balanceCheck && balanceDiffers
+      ? [
+          balanceCheck.unbooked.count > 0
+            ? t('balance_check_part_unbooked', {
+                count: balanceCheck.unbooked.count,
+                amount: formatCurrency(balanceCheck.unbooked.total, currency),
+              })
+            : null,
+          balanceCheck.before_history && Math.abs(balanceCheck.before_history.difference) >= 0.005
+            ? t('balance_check_part_before', {
+                date: formatDate(balanceCheck.before_history.history_start),
+                amount: formatCurrency(balanceCheck.before_history.difference, currency),
+              })
+            : null,
+          Math.abs(balanceCheck.rest) >= 0.005
+            ? t('balance_check_part_rest', { amount: formatCurrency(balanceCheck.rest, currency) })
+            : null,
+        ].filter((part): part is string => part !== null)
+      : []
+
   const bucketLabel = (bucket: ReconciliationItemBucket): string => {
     switch (bucket) {
       case 'proposed':
@@ -712,7 +742,9 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
         ? t('v2_verdict_ok_skv')
         : isManual
           ? t('v2_verdict_ok_manual')
-          : t('v2_verdict_ok_bank')
+          : balanceDiffers
+            ? t('v2_verdict_ok_bank_balance_differs')
+            : t('v2_verdict_ok_bank')
       : explained.length > 0
         ? t('v2_verdict_diff', { explanations: explained.join(', ') })
         : null
@@ -754,12 +786,36 @@ export function AccountOverview({ account, otherBankAccounts = [], window, onCha
             </div>
           ))}
         </div>
-        <p className={cn('text-[13px]', status.is_reconciled ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
+        <p className={cn('text-[13px]', status.is_reconciled && !balanceDiffers ? 'text-success' : 'text-muted-foreground')} data-ph-mask>
           {verdict}
           <button type="button" onClick={() => setBridgeOpen((v) => !v)} className={cn(QUIET_LINK_CLASS, verdict && 'ml-3', 'text-[12.5px]')}>
             {bridgeOpen ? t('v2_hide_bridge') : t('v2_show_bridge')}
           </button>
         </p>
+        {balanceCheck && (
+          <div className="space-y-1 text-[12.5px] text-muted-foreground" data-ph-mask>
+            <p>
+              {balanceDiffers
+                ? t('balance_check_diff', {
+                    bank: formatCurrency(balanceCheck.bank_balance, currency),
+                    date: formatDate(balanceCheck.as_of),
+                    account: status.account_number,
+                    booked: formatCurrency(balanceCheck.booked_balance, currency),
+                    difference: formatCurrency(balanceCheck.difference, currency),
+                  })
+                : t('balance_check_ok', {
+                    date: formatDate(balanceCheck.as_of),
+                    amount: formatCurrency(balanceCheck.bank_balance, currency),
+                  })}
+            </p>
+            {balanceParts.length > 0 && (
+              <div className="flex items-center gap-1">
+                <span>{t('balance_check_parts', { parts: balanceParts.join(' · ') })}</span>
+                <InfoTooltip content={t('balance_check_help', { account: status.account_number })} iconClassName="h-3 w-3" />
+              </div>
+            )}
+          </div>
+        )}
         {bridgeOpen && (
           <div className="space-y-2">
             <ReconciliationSummary status={status} kind={account.kind} specificationLabel={specificationLabel} />

@@ -24,7 +24,7 @@ import { toHandle } from '@/lib/handles'
 import { tiesOut } from '@/lib/measures/explain'
 import { fiscalPeriodContaining } from '@/lib/measures/params'
 import { roundOre } from '@/lib/money'
-import { generateTrialBalance } from '@/lib/reports/trial-balance'
+import { bookedBalancesAt } from '@/lib/reconciliation/bank-balance-check'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { applyUnbookedFilter } from '@/lib/transactions/unbooked'
 import { cannotCheck, companyFacts, kronor, noFiscalPeriod, sourceFailed, statusFor, sumOre } from '../shared'
@@ -144,9 +144,7 @@ async function run(ctx: CheckContext): Promise<CheckRun<BankSource>[]> {
     const key = `${fiscalPeriodId}|${date}`
     let pending = balances.get(key)
     if (!pending) {
-      pending = generateTrialBalance(ctx.supabase, ctx.companyId, fiscalPeriodId, { closingEntry: 'include', toDate: date }).then(
-        (tb) => new Map(tb.rows.map((r) => [r.account_number, roundOre(r.closing_debit - r.closing_credit)])),
-      )
+      pending = bookedBalancesAt(ctx.supabase, ctx.companyId, fiscalPeriodId, date)
       balances.set(key, pending)
     }
     return pending
