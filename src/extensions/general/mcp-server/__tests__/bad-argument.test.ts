@@ -79,8 +79,8 @@ describe('hand-checked tool arguments answer VALIDATION_ERROR with the field', (
     const error = await refusal('gnubok_approve_pending_operation', {})
     expect(error).toMatchObject({
       code: 'VALIDATION_ERROR',
-      message_en: 'operation_id or batch_id is required',
-      message_sv: 'operation_id: Ange operation_id eller batch_id.',
+      message_en: 'operation_id, operation_ids or batch_id is required',
+      message_sv: 'operation_id: Ange operation_id, operation_ids eller batch_id.',
     })
   })
 })

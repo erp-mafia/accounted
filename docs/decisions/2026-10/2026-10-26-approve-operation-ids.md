@@ -1,0 +1,1 @@
+[2026-10-26] gnubok_approve_pending_operation takes operation_ids (up to 50, one company): low and medium risk commit, high-risk and web-only ones are only listed, as with batch_id; acknowledgment is per operation. 266 proposals sat pending in 30 days while the rest of their session was approved.

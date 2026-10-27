@@ -448,6 +448,7 @@ import {
   supersedeTransactionClaims,
   transactionAlreadyStagedRefusal,
 } from '@/lib/pending-operations/transaction-claims'
+import { supersedeIdenticalProposals } from '@/lib/pending-operations/identical-proposal'
 import { generateBalanceSheet } from '@/lib/reports/balance-sheet'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 import type { UnexplainedBriefing } from '@/lib/unexplained'
@@ -964,6 +965,14 @@ export interface ActorContext {
    * 'service_account' with the account's name as the label.
    */
   serviceAccountId?: string | null
+  /**
+   * Whether the key holds pending_operations:approve, read at auth time with
+   * the other key facts. A staging answer uses it to say for certain whether
+   * the agent approves here or the person approves in the app; undefined (an
+   * in-app actor, a test double) keeps the conditional wording.
+   * Only meaningful for `type: 'api_key'`.
+   */
+  canApprove?: boolean
 }
 
 // ── JSON-RPC types ───────────────────────────────────────────
@@ -2020,11 +2029,43 @@ function vatWarningsStageOptions(warnings: InvoiceVatWarning[]): Pick<StageOptio
 const APPROVE_SCOPE_FALLBACK =
   'If that tool is missing from your catalog, this API key lacks the pending_operations:approve scope: the user approves at /pending instead.'
 
-function buildApprovalGuidance(operationId: string, riskLevel: 'low' | 'medium' | 'high'): string {
-  if (riskLevel === 'high') {
-    return `This is an irreversible posting under BFL 5 kap 5§: surface the irreversibility implications, and any compliance_warning in the preview, to the user and obtain an explicit acknowledgment before committing. Once the user has acknowledged, call gnubok_approve_pending_operation with operation_id="${operationId}" and confirmed=true. ${APPROVE_SCOPE_FALLBACK}`
+/**
+ * Where a person reviews staged operations: absolute on a deployment that
+ * knows its origin, so the agent can hand the user a link, else the path.
+ */
+function pendingReviewLink(): string {
+  return process.env.NEXT_PUBLIC_APP_URL ? `${getCanonicalBaseUrl()}/pending` : '/pending'
+}
+
+/**
+ * What the agent does with a staged operation next. A key without
+ * pending_operations:approve (the default one-click connection since issue
+ * #3408) cannot approve here at all, so it is told that outright, with the
+ * link to give the user: the conditional fallback left agents calling a tool
+ * they did not have or saying nothing, and their operations waited unseen
+ * (239 still pending after two hours in 30 days). The fallback stays only
+ * where the scopes are unknown.
+ */
+function buildApprovalGuidance(
+  operationId: string,
+  riskLevel: 'low' | 'medium' | 'high',
+  canApprove?: boolean,
+): string {
+  if (canApprove === false) {
+    return `This connection cannot approve: its key lacks the pending_operations:approve scope, so gnubok_approve_pending_operation is refused here and no bridge carries it. Tell the user the proposal is waiting for them at ${pendingReviewLink()} and that nothing is booked until they approve it there.`
   }
-  return `When the user authorises, call gnubok_approve_pending_operation with operation_id="${operationId}". ${APPROVE_SCOPE_FALLBACK}`
+  const fallback = canApprove === undefined ? ` ${APPROVE_SCOPE_FALLBACK}` : ''
+  if (riskLevel === 'high') {
+    return `This is an irreversible posting under BFL 5 kap 5§: surface the irreversibility implications, and any compliance_warning in the preview, to the user and obtain an explicit acknowledgment before committing. Once the user has acknowledged, call gnubok_approve_pending_operation with operation_id="${operationId}" and confirmed=true.${fallback}`
+  }
+  return `When the user authorises, call gnubok_approve_pending_operation with operation_id="${operationId}".${fallback}`
+}
+
+/** The approve hint of a staged answer: none for a key that cannot approve here. */
+function approveHint(operationId: string, companyId: string, actor: ActorContext) {
+  return actor.canApprove === false
+    ? {}
+    : { approve: { tool: 'gnubok_approve_pending_operation', args: { operation_id: operationId, company_id: companyId } as Record<string, unknown> } }
 }
 
 /**
@@ -2090,7 +2131,7 @@ async function stagePendingOperation(
   dry_run?: boolean
   idempotency_replay?: boolean
   operation_id?: string
-  /** Older proposals of this stager for the same bank rows, rejected as superseded (crm#1264). */
+  /** Older proposals of this stager for the same bank rows (crm#1264), or identical ones, rejected as superseded. */
   superseded_operation_ids?: string[]
   /** A dry run's: the proposals staging would supersede. */
   would_supersede_operation_ids?: string[]
@@ -2200,16 +2241,9 @@ async function stagePendingOperation(
         risk_level: riskLevel,
         actor,
         message: cachedOpId
-          ? `Replayed cached response for idempotency_key "${options.idempotencyKey}": already staged as pending_operation ${cachedOpId}. No new side-effects. ${buildApprovalGuidance(cachedOpId, riskLevel)}`
+          ? `Replayed cached response for idempotency_key "${options.idempotencyKey}": already staged as pending_operation ${cachedOpId}. No new side-effects. ${buildApprovalGuidance(cachedOpId, riskLevel, actor.canApprove)}`
           : `Replayed cached response for idempotency_key "${options.idempotencyKey}". No new side-effects.`,
-        ...(cachedOpId
-          ? {
-              approve: {
-                tool: 'gnubok_approve_pending_operation',
-                args: { operation_id: cachedOpId, company_id: companyId },
-              },
-            }
-          : {}),
+        ...(cachedOpId ? approveHint(cachedOpId, companyId, actor) : {}),
         preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
         ...(periodStatus ? { period_status: periodStatus } : {}),
       } as Awaited<ReturnType<typeof stagePendingOperation>>
@@ -2229,11 +2263,8 @@ async function stagePendingOperation(
       operation_id: existing.id,
       risk_level: existingRisk,
       actor,
-      message: `Already staged: pending_operation ${existing.id} (staged ${existing.created_at}) holds exactly this proposal for these bank rows, so nothing new was staged. ${buildApprovalGuidance(existing.id, existingRisk)}`,
-      approve: {
-        tool: 'gnubok_approve_pending_operation',
-        args: { operation_id: existing.id, company_id: companyId },
-      },
+      message: `Already staged: pending_operation ${existing.id} (staged ${existing.created_at}) holds exactly this proposal for these bank rows, so nothing new was staged. ${buildApprovalGuidance(existing.id, existingRisk, actor.canApprove)}`,
+      ...approveHint(existing.id, companyId, actor),
       preview: periodStatus ? { ...existingPreview, period_status: periodStatus } : existingPreview,
       ...(periodStatus ? { period_status: periodStatus } : {}),
       ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
@@ -2275,6 +2306,16 @@ async function stagePendingOperation(
           channel: 'mcp',
         })
       : []
+  // The same reversal, rättelse or SIE import, staged again by this stager
+  // while the first was open (identical-proposal.ts): the older card leaves
+  // the queue the same way, instead of waiting out the expiry after its twin
+  // was approved.
+  const supersededTwins = await supersedeIdenticalProposals(
+    supabase,
+    companyId,
+    { id: data.id, operationType, params, batchId: currentStagingBatchId() },
+    { stager, actorLabel: actor.label, channel: 'mcp' },
+  )
 
   // approve.args carries only the operation_id. For high-risk operations the
   // LLM must supply confirmed=true itself after surfacing the BFL 5 kap 5§
@@ -2287,12 +2328,9 @@ async function stagePendingOperation(
     operation_id: data.id,
     risk_level: riskLevel,
     actor,
-    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}).${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel)} The user can also approve at /pending in the ${branding} web app.${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
-    ...(superseded.length > 0 ? { superseded_operation_ids: superseded } : {}),
-    approve: {
-      tool: 'gnubok_approve_pending_operation',
-      args: { operation_id: data.id, company_id: companyId } as Record<string, unknown>,
-    },
+    message: `Staged as pending_operation ${data.id} (risk: ${riskLevel}).${superseded.length > 0 ? ` It replaces your earlier proposal(s) ${superseded.join(', ')} for the same bank rows, now rejected as superseded.` : ''}${supersededTwins.length > 0 ? ` It replaces your identical earlier proposal(s) ${supersededTwins.join(', ')}, now rejected as superseded.` : ''} ${buildApprovalGuidance(data.id, riskLevel, actor.canApprove)}${actor.canApprove === false ? '' : ` The user can also approve at /pending in the ${branding} web app.`}${options.complianceNote ? ` WARNING: ${options.complianceNote}` : ''}`,
+    ...(superseded.length + supersededTwins.length > 0 ? { superseded_operation_ids: [...superseded, ...supersededTwins] } : {}),
+    ...approveHint(data.id, companyId, actor),
     preview: periodStatus ? { ...previewData, period_status: periodStatus } : previewData,
     ...(periodStatus ? { period_status: periodStatus } : {}),
     ...(next ? { next: addCompanyToNextHint(next, companyId) as NextActionHint } : {}),
@@ -2842,6 +2880,28 @@ function pendingOperationNotFound(operationId: string): Error {
   )
 }
 
+/** How many operations one gnubok_approve_pending_operation call settles by id. */
+const MAX_APPROVE_OPERATION_IDS = 50
+
+/** operation_ids as the approve tool reads it: 1 to 50 UUIDs, repeats dropped. */
+function parseApproveOperationIds(value: unknown): string[] {
+  if (!Array.isArray(value) || value.length === 0) {
+    throw badArgument('operation_ids', 'operation_ids must be a non-empty array of operation ids', 'Ange minst ett operation_id.')
+  }
+  if (value.length > MAX_APPROVE_OPERATION_IDS) {
+    throw badArgument(
+      'operation_ids',
+      `operation_ids takes at most ${MAX_APPROVE_OPERATION_IDS} ids; approve the rest in another call`,
+      `Högst ${MAX_APPROVE_OPERATION_IDS} åt gången.`,
+    )
+  }
+  const invalid = value.find((id) => typeof id !== 'string' || !UUID_RE.test(id))
+  if (invalid !== undefined) {
+    throw badArgument('operation_ids', `operation_ids must hold operation UUIDs; got ${JSON.stringify(invalid)}`, 'Ogiltigt operation_id.')
+  }
+  return [...new Set(value as string[])]
+}
+
 /**
  * A voucher-link validator's refusal: its registry code on `.code` (it used
  * to ride in the message text only), the registry's English and the details
@@ -3253,6 +3313,21 @@ const BRIDGE_TOOLS: ReadonlyMap<string, BridgeKind> = new Map([
 ])
 
 /**
+ * The tool a bridge call names. `tool` is the declared parameter; an agent
+ * that copies the tools/call shape sends `name`, some `tool_name`, and each
+ * was refused "requires a tool argument" (39 sessions in 30 days, none got
+ * through). Read in that order, so a call that sends `tool` behaves exactly
+ * as before.
+ */
+function bridgeTargetName(args: Record<string, unknown>): string {
+  for (const key of ['tool', 'name', 'tool_name']) {
+    const value = args[key]
+    if (typeof value === 'string' && value.trim() !== '') return value.trim()
+  }
+  return ''
+}
+
+/**
  * Why a bridge will not carry this target, or null when it will.
  *
  * This decides only WHICH tools a bridge may name. It grants nothing: after it
@@ -3286,9 +3361,14 @@ function bridgeRefusalReason(
   requestedToolName: string,
   target: McpTool | undefined,
   keyScopes: ApiKeyScope[],
+  receivedKeys: string[] = [],
 ): string | null {
   const bridgeName = bridge === 'call_tool' ? 'gnubok_call_tool' : 'gnubok_stage_tool'
-  if (!requestedToolName) return `${bridgeName} requires a "tool" argument naming the tool to invoke.`
+  if (!requestedToolName) {
+    // Say what came instead: the bare sentence gave nothing to correct.
+    const got = receivedKeys.length > 0 ? `got ${receivedKeys.map((key) => `"${key}"`).join(', ')}` : 'got no arguments'
+    return `${bridgeName} requires a "tool" argument naming the tool to invoke (${got}). A working call looks like: {"tool": "<tool name>", "arguments": {...}}.`
+  }
   if (!target) return null
   const isRead = target.annotations.readOnlyHint === true
   const directCall = (lead: string): string =>
@@ -25896,11 +25976,16 @@ export const tools: McpTool[] = [
       type: 'object',
       additionalProperties: false,
       properties: {
-        operation_id: { type: 'string', description: 'UUID of the pending_operations row to approve. Either this or batch_id.' },
-        batch_id: { type: 'string', format: 'uuid', description: 'Approve a whole gnubok_stage_across_companies batch (low/medium risk; high-risk members are only listed).' },
+        operation_id: { type: 'string', description: 'The pending_operations row to approve.' },
+        operation_ids: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Several of one company at once (low/medium risk).',
+        },
+        batch_id: { type: 'string', format: 'uuid', description: 'Approve a whole gnubok_stage_across_companies batch (high-risk members are only listed).' },
         confirmed: {
           type: 'boolean',
-          description: 'Required when the operation has risk_level=high (create_voucher, correct_entry, reverse_entry, year-end, period lock/close). Acknowledges the BFL/BFNAR irreversibility implications. The web UI surfaces the same gate via an explicit warning dialog.',
+          description: 'Required when the operation has risk_level=high (create_voucher, correct_entry, reverse_entry, year-end, period lock/close). Acknowledges the BFL/BFNAR irreversibility implications.',
         },
       },
       required: [],
@@ -25930,8 +26015,13 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const operationId = typeof args.operation_id === 'string' ? args.operation_id : ''
       const batchId = typeof args.batch_id === 'string' ? args.batch_id : ''
-      if (!operationId && !batchId) throw badArgument('operation_id', 'operation_id or batch_id is required', 'Ange operation_id eller batch_id.')
-      if (operationId && batchId) throw badArgument('batch_id', 'Pass either operation_id or batch_id, not both', 'Ange operation_id eller batch_id, inte båda.')
+      const operationIds = args.operation_ids === undefined ? null : parseApproveOperationIds(args.operation_ids)
+      if (!operationId && !batchId && !operationIds) {
+        throw badArgument('operation_id', 'operation_id, operation_ids or batch_id is required', 'Ange operation_id, operation_ids eller batch_id.')
+      }
+      if ([operationId, batchId, operationIds].filter(Boolean).length > 1) {
+        throw badArgument('operation_ids', 'Pass only one of operation_id, operation_ids and batch_id', 'Ange bara en av operation_id, operation_ids och batch_id.')
+      }
 
       // Resolve the user's email so commitPendingOperation can attribute the
       // journal_entries.committed_by_email and any user-facing email side
@@ -26015,6 +26105,75 @@ export const tools: McpTool[] = [
           }
         }
         return { status: 'batch', batch_id: batchId, results, committed, skipped, failed }
+      }
+
+      // Several named operations of this company (the call routed here by the
+      // first id). An agent approving its proposals one call each stopped
+      // part way: 266 operations in 30 days stayed pending while others from
+      // the same session were approved. Each is still settled on its own,
+      // with every gate the single path applies; high-risk and web-only ones
+      // are only listed, because their acknowledgment is per operation.
+      if (operationIds) {
+        const { data: rows, error: rowsError } = await supabase
+          .from('pending_operations')
+          .select('*')
+          .eq('company_id', companyId)
+          .in('id', operationIds)
+        if (rowsError) throw dbError(rowsError)
+        const byId = new Map(((rows ?? []) as PendingOperation[]).map((row) => [row.id, row]))
+
+        const results: Array<Record<string, unknown>> = []
+        let committed = 0
+        let skipped = 0
+        let failed = 0
+        for (const id of operationIds) {
+          const operation = byId.get(id)
+          if (!operation) {
+            failed += 1
+            results.push({ operation_id: id, status: 'failed', error_code: 'NOT_FOUND', error: `No operation with id ${id} in this company.` })
+            continue
+          }
+          const row = { operation_id: id, operation_type: operation.operation_type, risk_level: operation.risk_level }
+          if (operation.status !== 'pending') {
+            skipped += 1
+            results.push({ ...row, status: 'skipped', reason: 'not_pending', operation_status: operation.status })
+            continue
+          }
+          if (requiresWebApproval(operation.operation_type, operation.params)) {
+            skipped += 1
+            results.push({ ...row, status: 'skipped', reason: 'person_approves_in_app' })
+            continue
+          }
+          if (operation.risk_level === 'high') {
+            skipped += 1
+            results.push({ ...row, status: 'skipped', reason: 'high_risk_requires_individual_approval' })
+            continue
+          }
+          try {
+            const outcome = await commitStagedOperation({
+              supabase,
+              userId,
+              companyId,
+              operation,
+              actor,
+              userEmail,
+              confirmed: false,
+            })
+            if (outcome.status === 'committed') committed += 1
+            else failed += 1
+            results.push({
+              ...row,
+              status: outcome.status,
+              ...(outcome.error ? { error: outcome.error } : {}),
+              ...(outcome.code ? { error_code: outcome.code } : {}),
+              ...(outcome.operation_status ? { operation_status: outcome.operation_status } : {}),
+            })
+          } catch (err) {
+            failed += 1
+            results.push({ ...row, status: 'failed', error: err instanceof Error ? err.message : String(err) })
+          }
+        }
+        return { status: 'batch', results, committed, skipped, failed }
       }
 
       const { data: op, error: fetchError } = await supabase
@@ -27871,6 +28030,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         pinnedCompanyId,
         oauthKey,
         serviceAccountId,
+        canApprove: hasScope(keyScopes, 'pending_operations:approve'),
       }
 
   // ── Simple company mode ──
@@ -28210,11 +28370,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const outerCanonicalName = toCanonicalToolName(outerToolName)
       const bridge: BridgeKind | null = BRIDGE_TOOLS.get(outerCanonicalName) ?? null
       const viaBridge = bridge !== null
-      const requestedToolName = viaBridge
-        ? typeof outerToolArgs.tool === 'string'
-          ? outerToolArgs.tool
-          : ''
-        : outerToolName
+      const requestedToolName = viaBridge ? bridgeTargetName(outerToolArgs) : outerToolName
       const toolName = toCanonicalToolName(requestedToolName)
       const innerToolArgs = viaBridge
         ? ((outerToolArgs.arguments ?? {}) as Record<string, unknown>)
@@ -28260,7 +28416,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       const refusal = bridgeCompanyConflict
         ? `company_id is given twice with different values (${String(outerToolArgs.company_id)} next to "tool", ${String(innerToolArgs.company_id)} inside "arguments"). Send it once.`
         : bridge
-          ? bridgeRefusalReason(bridge, requestedToolName, tool, keyScopes)
+          ? bridgeRefusalReason(bridge, requestedToolName, tool, keyScopes, Object.keys(outerToolArgs))
           : null
       if (refusal) {
         const bridgeError = toToolError(codedError('VALIDATION_ERROR', refusal), {
@@ -28486,7 +28642,10 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           // is simply not found there.
           let requestedCompanyId = extracted.requestedCompanyId
           if (requestedCompanyId === undefined && !pinnedCompanyId && isOperationScopedTool(toolName)) {
-            const fromRow = await resolveOperationCompanyId(supabase, toolArgs.operation_id)
+            // operation_ids approves several of one company: the first names it.
+            const namedOperation =
+              toolArgs.operation_id ?? (Array.isArray(toolArgs.operation_ids) ? toolArgs.operation_ids[0] : undefined)
+            const fromRow = await resolveOperationCompanyId(supabase, namedOperation)
             if (fromRow) {
               requestedCompanyId = fromRow
               companySelection = 'operation'

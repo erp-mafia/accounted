@@ -96,7 +96,13 @@ export const STALE_TOOLS_LIST_NOTE =
 export const STALE_BRIDGE_NOTE =
   'A bridge named in callable_via or a note that your client does not show means it kept an older copy of tools/list. Without gnubok_stage_tool, stage the same tool through gnubok_call_tool({tool, arguments}): it carries every stage_tool target and only stages, whatever its older description says. For anything else, ask the user to refresh or reconnect the Accounted connector. The tool exists, so do not report it as unavailable.'
 
-/** The same advice for one named tool, appended to a refusal that says "call it directly". */
+/**
+ * The same advice for one named tool, appended to a refusal that says "call it
+ * directly". A client that defers tool loading (a large connector, Claude
+ * Code's tool search) has the tool but has not loaded it, and loading it is
+ * the fix there: the advice used to go straight to reconnecting, and about a
+ * third of the sessions refused this way in 30 days never reached the tool.
+ */
 export function staleToolsListAdvice(toolName: string): string {
-  return `If your client does not show ${toolName}, it kept an older copy of tools/list: ask the user to refresh or reconnect the Accounted connector.`
+  return `If your client does not show ${toolName}, load it through your client's tool search first when it defers tools; if it is not there either, the client kept an older copy of tools/list: ask the user to refresh or reconnect the Accounted connector.`
 }
