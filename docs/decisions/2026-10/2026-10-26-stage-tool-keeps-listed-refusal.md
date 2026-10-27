@@ -1,0 +1,1 @@
+[2026-10-26] gnubok_stage_tool keeps refusing tools that are in tools/list, against the session-autopsy proposal to carry them: carrying them would route around a user who blocked that tool in their client. The refusal now tells clients that defer tool loading to load it first.

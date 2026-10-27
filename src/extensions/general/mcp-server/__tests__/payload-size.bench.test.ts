@@ -881,6 +881,11 @@ describe('tools/list payload size guard', () => {
     // 2026-10-26 (crm#1477): invoice_marking on the two customer tools, paid
     // for on the same tools (see the case above). Measured 61 594. Ceiling
     // unchanged.
+    // 2026-10-26 (MCP session autopsy): gnubok_approve_pending_operation gains
+    // operation_ids (several of one company in one call), paid for on the
+    // same tool: the web-UI sentence in confirmed's description and the risk
+    // note batch_id repeated from the tool description went. Measured 61 597
+    // (full catalog 66 087). Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

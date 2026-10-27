@@ -270,6 +270,27 @@ describe('gnubok_call_tool bridge', () => {
     expect(event.errorKind).toBe('bridge_refused')
   })
 
+  // Agents that copy the tools/call shape send `name`, some `tool_name`; each
+  // was refused "requires a tool argument" and none got through (prod, 30 days).
+  it('reads the tool from `name` when an agent copies the tools/call shape', async () => {
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(mcpToolCall('gnubok_call_tool', { name: 'gnubok_list_skills', arguments: {} }))
+
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_list_skills')
+    expect(event.errorKind).not.toBe('bridge_refused')
+  })
+
+  it('names what it got when no tool is named at all', async () => {
+    const response = await handleMcpRequest(mcpToolCall('gnubok_call_tool', { arguments: { query: 'moms' } }))
+    const { isError, payload } = await parsedToolResult(response)
+
+    expect(isError).toBe(true)
+    expect(JSON.stringify(payload)).toContain('got \\"arguments\\"')
+    expect(JSON.stringify(payload)).toContain('A working call looks like')
+  })
+
   it('enforces the INNER tool scope, not the wrapper (which has none)', async () => {
     vi.mocked(validateApiKey).mockResolvedValueOnce({
       userId: 'user-1',
@@ -488,7 +509,22 @@ describe('gnubok_stage_tool bridge', () => {
 
     expect(isError).toBe(true)
     expect(JSON.stringify(payload)).toMatch(/call it directly/)
+    // A client that defers tool loading has the tool: loading it comes first.
+    expect(JSON.stringify(payload)).toMatch(/tool search/)
     expect((await eventPromise).errorKind).toBe('bridge_refused')
+  })
+
+  it('reads the tool from `tool_name` too', async () => {
+    keyWithScopes(['payroll:write'])
+    const eventPromise = captureNextToolCalled()
+
+    await handleMcpRequest(
+      mcpToolCall('gnubok_stage_tool', { tool_name: 'gnubok_log_mileage_trip', arguments: MILEAGE_TRIP_ARGS }),
+    )
+
+    const event = await eventPromise
+    expect(event.tool).toBe('gnubok_log_mileage_trip')
+    expect(event.errorKind).not.toBe('bridge_refused')
   })
 
   it('refuses a read and points at gnubok_call_tool', async () => {

@@ -1,0 +1,1 @@
+[2026-10-26] A reversal, rättelse or SIE import staged again by the same stager with identical params rejects the older open copy as superseded, as bank-row claims do: 31 such copies sat pending in 30 days after the twin was approved. Creation types stay out: identical can mean two events.

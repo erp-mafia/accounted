@@ -1,0 +1,1 @@
+[2026-10-26] No re-check of pending proposals when another booking commits, against the session-autopsy proposal: none of the 120 duplicate refusals at commit in 30 days shared a bank row with the booking before it; the guard caught a same-day same-amount event, a person's call either way.

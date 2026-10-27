@@ -526,12 +526,12 @@ describe('gnubok_approve_pending_operation with batch_id', () => {
     })
   })
 
-  it('requires exactly one of operation_id and batch_id', async () => {
+  it('requires exactly one of operation_id, operation_ids and batch_id', async () => {
     const { supabase } = supabaseDouble()
-    await expect(approveTool.execute({}, DEFAULT_COMPANY_ID, 'user-1', supabase as never)).rejects.toThrow(/operation_id or batch_id/)
+    await expect(approveTool.execute({}, DEFAULT_COMPANY_ID, 'user-1', supabase as never)).rejects.toThrow(/operation_id, operation_ids or batch_id/)
     await expect(
       approveTool.execute({ operation_id: 'x', batch_id: BATCH_ID }, DEFAULT_COMPANY_ID, 'user-1', supabase as never)
-    ).rejects.toThrow(/not both/)
+    ).rejects.toThrow(/only one of/)
   })
 })
 
