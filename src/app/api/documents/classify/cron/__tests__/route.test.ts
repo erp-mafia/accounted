@@ -46,6 +46,8 @@ describe('GET /api/documents/classify/cron', () => {
 
 
   it('finds the companies from the newest untyped rows: the shelf is on for everyone', async () => {
+    // The budget is exactly ten documents: one millisecond on a slow runner made the second batch nine.
+    vi.spyOn(Date, 'now').mockReturnValue(1_000_000)
     scanReturning(['co-9', 'co-9', null, 'co-3'])
     await GET(request())
     expect(asMock(classifyUnclassifiedDocuments).mock.calls.map((c) => c[1])).toEqual(['co-9', 'co-3'])

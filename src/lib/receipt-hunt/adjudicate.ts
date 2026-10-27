@@ -24,15 +24,17 @@
  * rather than trusting a verdict.
  */
 import { z } from 'zod'
+import { resolveTierModel } from '@/lib/ai/config'
 import { createAiClient, toProviderModelId, type AiClient } from '@/lib/ai/provider'
 import { createLogger } from '@/lib/logger'
 
 const log = createLogger('receipt-hunt-adjudicate')
 
+// The reading tier, like mail-intelligence; RECEIPT_HUNT_MODEL_ID still pins it.
 const MODEL = toProviderModelId(
   process.env.RECEIPT_HUNT_MODEL_ID ||
-    process.env.BEDROCK_MODEL_ID ||
-    'claude-sonnet-5'
+    resolveTierModel('extraction') ||
+    'claude-haiku-5-5'
 )
 
 export interface UncertainPair {

@@ -12,6 +12,7 @@ const mockCreate = vi.fn()
 vi.mock('@/lib/ai/provider', () => ({
   createAiClient: () => ({ messages: { create: (...args: unknown[]) => mockCreate(...args) } }),
   toProviderModelId: (id: string) => id,
+  resolveAiProvider: () => 'bedrock',
 }))
 
 import { adjudicate } from '../adjudicate'

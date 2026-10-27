@@ -53,7 +53,7 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
     expect(result.ok).toBe(true)
     expect(mockCreate).toHaveBeenCalledTimes(1)
     expect(mockCreate.mock.calls[0][0]).toEqual({
-      model: 'eu.anthropic.claude-sonnet-5',
+      model: 'eu.anthropic.claude-haiku-5-5',
       max_tokens: 8192,
       system: [{ type: 'text', text: SYSTEM, cache_control: { type: 'ephemeral' } }],
       messages: [
@@ -122,7 +122,7 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
     expect(result).toEqual({
       ok: true,
       text: '{"ok":true}',
-      model: 'eu.anthropic.claude-sonnet-5',
+      model: 'eu.anthropic.claude-haiku-5-5',
       usage: { inputTokens: 10, outputTokens: 5, cacheCreationInputTokens: 0, cacheReadInputTokens: 7 },
     })
     expect(result.ok && result.truncated).toBeFalsy()
@@ -155,7 +155,7 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
   it('reads with the cheap tier when the caller asks for it', async () => {
     const svc = createAnthropicFamilyService(readAiConfig())
     await svc.extractFromDocument({ document: { kind: 'text', text: 'x' }, system: SYSTEM, instruction: INSTRUCTION, maxTokens: 1, tier: 'cheap' })
-    expect(mockCreate.mock.calls[0][0].model).toBe('eu.anthropic.claude-haiku-4-5-20251001-v1:0')
+    expect(mockCreate.mock.calls[0][0].model).toBe('eu.anthropic.claude-haiku-5-5')
   })
 
   it('skips without a call when the deployment has no credentials', async () => {
@@ -240,6 +240,14 @@ describe('generateText / generateStructured', () => {
     await expect(
       svc.generateStructured({ tier: 'assistant', prompt: 'x', maxTokens: 10, schema: { name: 'v', jsonSchema: {} } })
     ).rejects.toThrow(/forced tool/)
+  })
+
+  it('generateStructured names a refusal in its error, so a declined request is not read as a cut-off one', async () => {
+    mockCreate.mockResolvedValueOnce({ content: [], stop_reason: 'refusal', usage: {} })
+    const svc = createAnthropicFamilyService(readAiConfig())
+    await expect(
+      svc.generateStructured({ tier: 'cheap', prompt: 'x', maxTokens: 10, schema: { name: 'v', jsonSchema: {} } })
+    ).rejects.toThrow(/stop_reason: refusal/)
   })
 })
 

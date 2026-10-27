@@ -316,7 +316,9 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         (b): b is Anthropic.Messages.ToolUseBlock => b.type === 'tool_use' && b.name === req.schema.name
       )
       if (!toolUse) {
-        throw new Error(`Model answered without the forced tool "${req.schema.name}"`)
+        // The stop reason tells a safety refusal (Haiku 5.5 declines some
+        // requests and has no server-side fallback) from a cut-off answer.
+        throw new Error(`Model answered without the forced tool "${req.schema.name}" (stop_reason: ${resp.stop_reason ?? 'unknown'})`)
       }
       return { value: toolUse.input, model, usage: usageOf(resp) }
     },
