@@ -109,8 +109,9 @@ describe('POST /api/agent/categorize/outcome', () => {
       const base = makeSupabase()
       return {
         from(table: string) {
-          if (table !== 'company_capability_config') return base.from(table)
-          const result = { data: optedOut ? [{ company_id: companyId }] : [], error: null }
+          if (table !== 'company_capability_config' && table !== 'company_settings') return base.from(table)
+          // company_settings answers which of them are sandboxes: none here.
+          const result = { data: optedOut && table === 'company_capability_config' ? [{ company_id: companyId }] : [], error: null }
           const chain = {
             select: () => chain,
             eq: () => chain,

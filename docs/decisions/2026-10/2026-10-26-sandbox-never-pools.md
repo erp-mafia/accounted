@@ -1,0 +1,1 @@
+[2026-10-26] Sandbox companies never count toward what is shared across companies (counterparty directory promotion, calibration corpus): their books are seeded demo data, and a reading two sandboxes share would outlive both in the shared directory.

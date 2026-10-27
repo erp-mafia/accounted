@@ -50,6 +50,16 @@ describe('pooling', () => {
     expect(findCall('company_capability_config', 'in')).toEqual(['company_id', [COMPANY, OTHER]])
   })
 
+  it('counts a sandbox company as never pooling: its books are seeded demo data', async () => {
+    enqueue({ data: [] }) // no opt-outs
+    enqueue({ data: [{ company_id: COMPANY }] }) // company_settings.is_sandbox
+    expect(await companiesWithPoolingOff(supabase as never, [COMPANY, OTHER])).toEqual(new Set([COMPANY]))
+    expect(findCall('company_settings', 'eq')).toEqual(['is_sandbox', true])
+    enqueue({ data: [] })
+    enqueue({ error: { message: 'down' } })
+    await expect(companiesWithPoolingOff(supabase as never, [COMPANY])).rejects.toThrow(/sandbox/)
+  })
+
   it('isPoolingOn is false for an opted-out company and false when the read fails', async () => {
     enqueue({ data: [{ company_id: COMPANY }] })
     expect(await isPoolingOn(supabase as never, COMPANY)).toBe(false)

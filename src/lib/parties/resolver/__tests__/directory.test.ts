@@ -76,17 +76,20 @@ describe('promoteIfShared', () => {
   describe('counts only companies that pool (Datadelning och AI)', () => {
     const A = '11111111-1111-4111-8111-111111111111'
     const B = '22222222-2222-4222-8222-222222222222'
-    function serviceWith(optOuts: { data: unknown; error: unknown }) {
+    function serviceWith(optOuts: { data: unknown; error: unknown }, sandboxes: unknown[] = []) {
       const upsert = vi.fn(async () => ({ error: null }))
       const limit = vi.fn(async () => ({ data: [{ company_id: A }, { company_id: B }], error: null }))
       const optOutQuery = { select: () => ({ eq: () => ({ eq: () => ({ in: async () => optOuts }) }) }) }
+      const sandboxQuery = { select: () => ({ eq: () => ({ in: async () => ({ data: sandboxes, error: null }) }) }) }
       const service = {
         from: (table: string) =>
           table === 'counterparty_directory'
             ? { upsert }
             : table === 'company_capability_config'
               ? optOutQuery
-              : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ is: () => ({ limit }) }) }) }) }) },
+              : table === 'company_settings'
+                ? sandboxQuery
+                : { select: () => ({ eq: () => ({ eq: () => ({ eq: () => ({ is: () => ({ limit }) }) }) }) }) },
       } as unknown as SupabaseClient
       return { service, upsert }
     }
@@ -100,6 +103,12 @@ describe('promoteIfShared', () => {
 
     it('promotes nothing when the opt-outs cannot be read', async () => {
       const { service, upsert } = serviceWith({ data: null, error: { message: 'down' } })
+      expect(await promoteIfShared(service, candidate)).toBe(false)
+      expect(upsert).not.toHaveBeenCalled()
+    })
+
+    it('does not count a sandbox company: its seeded demo texts must not make a reading shared', async () => {
+      const { service, upsert } = serviceWith({ data: [], error: null }, [{ company_id: B }])
       expect(await promoteIfShared(service, candidate)).toBe(false)
       expect(upsert).not.toHaveBeenCalled()
     })
