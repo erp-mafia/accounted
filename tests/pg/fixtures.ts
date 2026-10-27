@@ -43,7 +43,7 @@ export async function insertCompany(params: {
 export async function insertCompanyMember(params: {
   companyId: string
   userId: string
-  role?: 'owner' | 'admin' | 'member' | 'viewer'
+  role?: 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
 }): Promise<void> {
   await getPool().query(
     `INSERT INTO public.company_members (company_id, user_id, role)

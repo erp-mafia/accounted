@@ -2304,6 +2304,8 @@
     "members_role_admin": "Admin",
     "members_role_member": "Medlem",
     "members_role_viewer": "Läsbehörighet",
+    "members_role_invoicer": "Fakturering",
+    "members_role_invoicer_note": "Fakturering ser bara kunder, fakturor, offerter, order och artiklar och kan skapa och skicka fakturor. Lön, bokföring, bank och dokument syns inte.",
     "members_title": "Medlemmar",
     "members_count": "{count, plural, =1 {# medlem} other {# medlemmar}} i {companyName}",
     "members_load_failed": "Medlemslistan kunde inte läsas in, så medlemmar och inbjudningar kan inte visas just nu.",

@@ -70,6 +70,7 @@ export function CompanyMembersSection() {
     admin: t('members_role_admin'),
     member: t('members_role_member'),
     viewer: t('members_role_viewer'),
+    invoicer: t('members_role_invoicer'),
   }
   const profileName = (id: ProfileId) => {
     const profile = latestProfile(id)
@@ -533,6 +534,7 @@ export function CompanyMembersSection() {
               aria-label={t('members_role_label')}
             >
               <option value="viewer">{t('members_role_viewer')}</option>
+              <option value="invoicer">{t('members_role_invoicer')}</option>
               <option value="member">{t('members_role_member')}</option>
               <option value="admin">{t('members_role_admin')}</option>
             </SettingsSelect>
@@ -541,6 +543,11 @@ export function CompanyMembersSection() {
               {t('members_invite_button')}
             </Button>
           </div>
+          {inviteRole === 'invoicer' && (
+            <p className="px-1 pt-2">
+              <SettingsRowNote>{t('members_role_invoicer_note')}</SettingsRowNote>
+            </p>
+          )}
         </form>
       )}
 

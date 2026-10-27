@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -105,6 +106,11 @@ export async function POST(request: Request) {
   }
   // The pipeline upserts agent_profiles — a mutation, so viewers are refused
   // (same rule as /api/agent/profile and /verify).
+  // The invoicing-only role (lib/auth/invoicer-role.ts) never reaches the
+  // assistant: it runs as the service role and reads the whole company.
+  if (isInvoicerRole(membership.role)) {
+    return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  }
   if (membership.role === 'viewer') {
     return NextResponse.json(
       { error: 'Du har endast läsbehörighet i detta företag.' },

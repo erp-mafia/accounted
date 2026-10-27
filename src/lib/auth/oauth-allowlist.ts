@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { createServiceClientNoCookies } from './api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { scopeKind, type ApiKeyScope } from './scope-catalog'
+import { INVOICER_API_SCOPES, isInvoicerRole } from '@/lib/auth/invoicer-role'
 
 /**
  * What an OAuth consent may grant: which redirect URIs a code may be sent
@@ -245,6 +246,9 @@ export function capScopesForRole(
   role: string | null,
 ): ApiKeyScope[] {
   if (role !== null && WRITER_ROLES.has(role)) return [...scopes]
+  // The invoicing-only role (lib/auth/invoicer-role.ts): its own scopes,
+  // read and write, and nothing else.
+  if (isInvoicerRole(role)) return scopes.filter((s) => INVOICER_API_SCOPES.includes(s))
   return scopes.filter((s) => scopeKind(s) === 'read')
 }
 

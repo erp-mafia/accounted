@@ -255,6 +255,19 @@ describe('GET /api/events', () => {
     expect(keyClient.findCalls('event_log', 'select')).toEqual([])
   })
 
+  it('returns 403 for a key whose membership has the invoicing-only role, before reading events', async () => {
+    mockExtractBearerToken.mockReturnValue('gnubok_sk_invoicer')
+    mockValidateApiKey.mockResolvedValue(apiKeyAuth())
+    const keyClient = withKeyClient([{ data: { company_id: 'company-1', role: 'invoicer' } }, { data: sampleEvents }])
+
+    const response = await GET(createMockRequest('/api/events'))
+    const { status, body } = await parseJsonResponse<ErrorEnvelope>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(keyClient.findCalls('event_log', 'select')).toEqual([])
+  })
+
   it('serves an owner key through the seat gate check', async () => {
     mockExtractBearerToken.mockReturnValue('gnubok_sk_owner')
     mockValidateApiKey.mockResolvedValue(apiKeyAuth())

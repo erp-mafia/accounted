@@ -44,6 +44,8 @@ import { withSIEPeriodRead } from '@/lib/import/sie-period-read'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { startPackageForSessionRequest } from '@/lib/modules/package-doors'
 import { packageStartRefusal } from '@/lib/modules/package-gate'
+import { invoicerRouteAccess, isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { createCompanyScopedClient } from '@/lib/auth/company-scoped-client'
 
 export interface RouteContext {
   /** Stable id for this HTTP request: appears in logs, error envelope, X-Request-Id header. */
@@ -52,7 +54,12 @@ export interface RouteContext {
   log: Logger
   /** Authenticated user. Always present: wrapper short-circuits with 401 otherwise. */
   user: User
-  /** Authenticated Supabase client (request-scoped, RLS active). */
+  /**
+   * Authenticated Supabase client (request-scoped, RLS active). For the
+   * invoicer role on a `scoped` route (lib/auth/invoicer-role.ts) it is a
+   * service-role client that can only reach `companyId`
+   * (lib/auth/company-scoped-client.ts).
+   */
   supabase: SupabaseClient
   /**
    * Resolved active company id. The wrapper short-circuits with
@@ -172,6 +179,30 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         return errorResponseFromCode('COMPANY_CONTEXT_MISSING', userLog, { requestId })
       }
 
+      // The invoicing-only role reaches the routes on its allowlist and
+      // nothing else (lib/auth/invoicer-role.ts). A scoped route runs its
+      // handler with a client that can only reach this company: the role
+      // writes nothing through its own session. A role the resolution did
+      // not report is never the invoicer: the resolver RPC has reported the
+      // role since before the role existed, and only service-role clients
+      // fall back to the query path.
+      let handlerSupabase: SupabaseClient = supabase
+      if (isInvoicerRole(resolved.role)) {
+        const access = invoicerRouteAccess(request.method, new URL(request.url).pathname)
+        if (!access) {
+          userLog.warn('invoicer role refused outside its routes')
+          return errorResponseFromCode('FORBIDDEN', userLog.child({ companyId }), {
+            requestId,
+            messageSv: 'Rollen Fakturering når bara kunder, fakturor, offerter, order och artiklar.',
+            messageEn: 'The Invoicing role reaches only customers, invoices, quotes, orders and articles.',
+            details: { code: 'INVOICER_ROUTE_NOT_ALLOWED' },
+          })
+        }
+        if (access === 'scoped') {
+          handlerSupabase = createCompanyScopedClient({ companyId, userId: user.id }, userLog.child({ companyId }))
+        }
+      }
+
       if (requireAdmin) {
         if (!(await isCompanyAdmin(supabase, companyId))) {
           return companyAdminRequiredResponse(userLog.child({ companyId }), requestId)
@@ -202,7 +233,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       // down. Every other route skips this: the match is in memory.
       const startPackage = startPackageForSessionRequest(request.method, new URL(request.url).pathname)
       if (startPackage) {
-        const refusal = await packageStartRefusal(supabase, companyId, startPackage)
+        const refusal = await packageStartRefusal(handlerSupabase, companyId, startPackage)
         if (refusal) {
           return errorResponseFromCode(refusal.code, userLog.child({ companyId }), {
             requestId,
@@ -217,7 +248,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
         requestId,
         log: userLog.child({ companyId }),
         user,
-        supabase,
+        supabase: handlerSupabase,
         companyId,
         role: resolved.role,
       }
@@ -232,7 +263,7 @@ export function withRouteContext<P extends DynamicParams = { params: Promise<Rec
       // as an approval, opens its own runWithActor scope inside this one.
       const response = await runWithActor({ type: 'user' }, () =>
         requireCompleteLedger
-          ? withSIEPeriodRead(supabase, companyId, 'report_export', () => handler(request, ctx, params))
+          ? withSIEPeriodRead(handlerSupabase, companyId, 'report_export', () => handler(request, ctx, params))
           : handler(request, ctx, params))
       const handlerMs = Date.now() - handlerStart
 

@@ -5056,7 +5056,7 @@ export const tools: McpTool[] = [
               name: { type: 'string' },
               org_number: { type: ['string', 'null'] },
               entity_type: { type: ['string', 'null'] },
-              role: { type: 'string', enum: ['owner', 'admin', 'member', 'viewer'] },
+              role: { type: 'string', enum: ['owner', 'admin', 'member', 'viewer', 'invoicer'] },
               // read: this connection may only read here (read-only access
               // chosen at consent, or a viewer role); write tools are refused.
               access: { type: 'string', enum: ['read', 'write'] },
@@ -5088,7 +5088,7 @@ export const tools: McpTool[] = [
       }
       type MembershipRow = {
         company_id: string
-        role: 'owner' | 'admin' | 'member' | 'viewer'
+        role: 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
         companies: CompanyRow | CompanyRow[] | null
       }
 

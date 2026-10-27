@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { guardSandbox } from '@/lib/sandbox/guard'
 import { requireCapability } from '@/lib/entitlements/has-capability'
@@ -125,11 +126,14 @@ export async function POST(request: Request): Promise<Response> {
 
   const { data: membership } = await supabase
     .from('company_members')
-    .select('user_id')
+    .select('user_id, role')
     .eq('company_id', companyId)
     .eq('user_id', user.id)
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  // The invoicing-only role (lib/auth/invoicer-role.ts) never reaches the
+  // assistant: it runs as the service role and reads the whole company.
+  if (isInvoicerRole(membership.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   const blocked = await guardSandbox(supabase, companyId)
   if (blocked) return blocked

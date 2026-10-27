@@ -84,6 +84,7 @@ import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import { withSIEExternalReport } from '@/lib/import/sie-period-read'
 import type { V1RequiredScope } from '@/lib/auth/scopes'
+import { INVOICER_API_SCOPES, INVOICER_ROLE, roleAllowsScope } from '@/lib/auth/invoicer-role'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getEndpointByConcretePath, getEndpointForOperation } from './registry'
 import {
@@ -629,6 +630,36 @@ async function checkCompanyAccessGate(
   }
 
   const membershipRole = (membership as { role?: string }).role
+
+  // The invoicing-only role (lib/auth/invoicer-role.ts) reaches customers,
+  // invoices and articles, whatever scopes the key holds: this surface runs
+  // as the service role, so this is the only gate between an invoicer's key
+  // and the rest of the books. Read or write, a door outside those scopes is
+  // refused. After the membership and allowlist answers, so a non-member
+  // sees exactly what it saw before.
+  if (!roleAllowsScope(membershipRole, requiredScope)) {
+    log.warn('invoicer membership refused outside its scopes', {
+      companyId,
+      method,
+      requiredScope,
+      ...forensic,
+    })
+    return refuse(await v1ErrorResponseFromCode('FORBIDDEN', log, {
+      requestId,
+      status: 403,
+      reason: 'role_scope_limited',
+      details: {
+        code: 'ROLE_SCOPE_LIMITED',
+        companyId,
+        role: INVOICER_ROLE,
+        required_scope: requiredScope,
+        allowed_scopes: INVOICER_API_SCOPES,
+        message:
+          'This company membership has the Invoicing role: only customers, invoices (quotes and orders included) and articles are reachable. Ask a company owner or admin to change the role.',
+      },
+    }))
+  }
+
   const isWrite =
     !SAFE_METHODS.has(method) ||
     (requiredScope !== 'authenticated' && scopeKind(requiredScope) === 'write')

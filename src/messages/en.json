@@ -2304,6 +2304,8 @@
     "members_role_admin": "Admin",
     "members_role_member": "Member",
     "members_role_viewer": "Read-only",
+    "members_role_invoicer": "Invoicing",
+    "members_role_invoicer_note": "Invoicing sees only customers, invoices, quotes, orders and articles, and can create and send invoices. Payroll, the books, the bank and documents stay hidden.",
     "members_title": "Members",
     "members_count": "{count, plural, =1 {# member} other {# members}} in {companyName}",
     "members_load_failed": "The member list could not be loaded, so members and invitations cannot be shown right now.",

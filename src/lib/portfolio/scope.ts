@@ -33,6 +33,7 @@ import { getByraMembership } from '@/lib/clients/fetch-client-overview'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { chunk } from '@/lib/utils'
 import { createLogger } from '@/lib/logger'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import {
   capCompanies,
   excludeCompanies,
@@ -167,6 +168,9 @@ export async function resolveCompanyScope(
     const company = pickEmbedded(membership.companies)
     if (!company || company.archived_at !== null) continue
     if (restrictTo && !restrictTo.has(company.id.toLowerCase())) continue
+    // A portfolio read spans the books (bank, deadlines, the ledger): an
+    // invoicing-only membership (lib/auth/invoicer-role.ts) never enters it.
+    if (isInvoicerRole(membership.role)) continue
     accessible.set(company.id.toLowerCase(), {
       companyId: company.id,
       name: company.name,

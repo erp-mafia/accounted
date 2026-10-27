@@ -3,6 +3,7 @@ import type { ApiKeyScope } from '@/lib/auth/api-keys'
 // Pure data module (no server imports): the same classifier the settings UI
 // and the v1 REST wrapper use, so "what counts as a write" has one owner.
 import { scopeKind } from '@/lib/auth/scope-catalog'
+import { roleAllowsScope } from '@/lib/auth/invoicer-role'
 import { getMultiUserState, isMembershipDormant } from '@/lib/entitlements/multi-user'
 import { getUserCompanies } from '@/lib/company/context'
 import { resolveDormantCompanyIds } from '@/lib/company/active-company'
@@ -385,7 +386,7 @@ export function noCompanyYetError(): Error {
 }
 
 function isCompanyRole(value: unknown): value is CompanyRole {
-  return value === 'owner' || value === 'admin' || value === 'member' || value === 'viewer'
+  return value === 'owner' || value === 'admin' || value === 'member' || value === 'viewer' || value === 'invoicer'
 }
 
 export function isCompanyDependentTool(toolName: string): boolean {
@@ -652,11 +653,21 @@ function assertIdList(values: unknown[], field: string): string[] {
  * permission is the intersection of the key's scopes, the company's access
  * level and the user's role. The role is checked first so a viewer keeps
  * the message that names the actual fix (the role, not the connection).
+ *
+ * The invoicing-only role (lib/auth/invoicer-role.ts) is refused every tool,
+ * read or write, outside the customer, invoice and article scopes, and every
+ * company-scoped tool without a scope.
  */
 export function assertMcpCompanyWriteAccess(
   context: McpCompanyContext,
   scope: ApiKeyScope | undefined
 ): void {
+  if (!roleAllowsScope(context.role, scope)) {
+    throw codedError(
+      'FORBIDDEN',
+      `This company membership has the Invoicing role: only tools for customers, invoices (quotes and orders included) and articles are allowed${scope ? `, and this one requires the "${scope}" scope` : ''}. Ask a company owner or admin to change the role.`
+    )
+  }
   if (!isTenantWriteScope(scope)) return
   if (context.role === 'viewer') {
     throw codedError(

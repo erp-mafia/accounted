@@ -14,7 +14,7 @@ import { PROFILE_IDS } from '@/lib/modules/profiles'
 
 const InviteSchema = z.object({
   email: z.string().trim().toLowerCase().pipe(z.string().email('Ogiltig e-postadress.')),
-  role: z.enum(['admin', 'member', 'viewer']).default('viewer'),
+  role: z.enum(['admin', 'member', 'viewer', 'invoicer']).default('viewer'),
   /**
    * The client's profile (lib/modules/profiles.ts): required when the caller
    * is the byrå of this client company, refused from anyone else.

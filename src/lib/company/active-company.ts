@@ -135,7 +135,7 @@ export interface ActiveCompanyFacts {
   role?: CompanyRole
 }
 
-const COMPANY_ROLES: readonly CompanyRole[] = ['owner', 'admin', 'member', 'viewer']
+const COMPANY_ROLES: readonly CompanyRole[] = ['owner', 'admin', 'member', 'viewer', 'invoicer']
 
 function isCompanyRole(value: unknown): value is CompanyRole {
   return typeof value === 'string' && (COMPANY_ROLES as readonly string[]).includes(value)

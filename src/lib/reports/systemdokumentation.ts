@@ -372,7 +372,7 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
     }))
     .sort((a, b) => a.created_at.localeCompare(b.created_at))
 
-  const roleOrder: Record<CompanyRole, number> = { owner: 0, admin: 1, member: 2, viewer: 3 }
+  const roleOrder: Record<CompanyRole, number> = { owner: 0, admin: 1, member: 2, viewer: 3, invoicer: 4 }
   const members = [...facts.members]
     .sort((a, b) => roleOrder[a.role] - roleOrder[b.role] || a.joined_at.localeCompare(b.joined_at))
     .map((m) => ({ role: m.role, label: label(m.user_id), joined_at: m.joined_at }))

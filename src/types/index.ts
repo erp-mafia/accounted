@@ -22,8 +22,10 @@ export type AccountingFramework = 'k2' | 'k3'
 export type CompanyJurisdiction = 'SE'
 export type LedgerCurrency = 'SEK'
 
-// Company role for multi-tenant access
-export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer'
+// Company role for multi-tenant access. 'invoicer' (shown as Fakturering)
+// reaches only customers, invoices, quotes, orders and articles
+// (lib/auth/invoicer).
+export type CompanyRole = 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
 
 // Team (consulting firm grouping). 'personal' teams are the implicit
 // one-per-user grouping; 'byra' teams are ops-created accounting-firm
