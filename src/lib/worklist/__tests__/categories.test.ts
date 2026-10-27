@@ -19,6 +19,7 @@ import {
   summarizeOverdueInvoices,
   countPendingOperations,
   countCollectionDecisionsAndBatch,
+  countReminderBatchReady,
   countReconciliationDue,
   countSuggestedMatches,
   countUnclassifiedDocuments,
@@ -421,10 +422,11 @@ describe('summarizeOverdueInvoices', () => {
 })
 
 describe('countPendingOperations and the collections batch', () => {
-  it('leaves the daily collections batch to its own row', async () => {
+  it('leaves the daily batches (collections, reminders) to their own rows', async () => {
     enqueue({ count: 2 })
     await expect(countPendingOperations(supabase, COMPANY)).resolves.toBe(2)
-    expect(findCall('pending_operations', 'neq')).toEqual(['operation_type', 'collections_daily_batch'])
+    expect(findCall('pending_operations', 'not')).toEqual(['operation_type', 'in', '(collections_daily_batch,reminder_daily_batch)'])
+    expect(findCall('pending_operations', 'neq')).toEqual(['actor_type', 'system'])
   })
 
   it('counts the items of the pending batch less the removed ones', async () => {
@@ -458,6 +460,29 @@ describe('countPendingOperations and the collections batch', () => {
     enqueue({ data: null, error: { message: 'boom' } })
     enqueue({ data: null, error: { message: 'boom' } })
     await expect(countCollectionDecisionsAndBatch(supabase, COMPANY)).resolves.toEqual({ decision: 0, batchReady: 0 })
+  })
+})
+
+describe('countReminderBatchReady', () => {
+  const reminder = (invoiceId: string) => ({ kind: 'reminder', invoice_id: invoiceId, level: 1, bank: 'fresh' })
+
+  it('counts the reminders of the pending batch less the ones taken out', async () => {
+    enqueue({ data: [{ id: 'op-1', params: { items: [reminder('i1'), reminder('i2'), reminder('i3')] } }], error: null })
+    enqueue({ data: [{ invoice_id: 'i3' }], error: null })
+    await expect(countReminderBatchReady(supabase, COMPANY)).resolves.toBe(2)
+    expect(findCalls('pending_operations', 'eq')).toContainEqual(['operation_type', 'reminder_daily_batch'])
+    expect(findCalls('collection_batch_removals', 'eq')).toContainEqual(['kind', 'reminder'])
+    expect(mockSupabase.from).not.toHaveBeenCalledWith('event_log')
+  })
+
+  it('counts nothing without a pending batch, and soft-fails to 0', async () => {
+    enqueue({ data: [], error: null })
+    await expect(countReminderBatchReady(supabase, COMPANY)).resolves.toBe(0)
+    enqueue({ data: null, error: { message: 'boom' } })
+    await expect(countReminderBatchReady(supabase, COMPANY)).resolves.toBe(0)
+    enqueue({ data: [{ id: 'op-1', params: { items: [reminder('i1')] } }], error: null })
+    enqueue({ data: null, error: { message: 'denied' } })
+    await expect(countReminderBatchReady(supabase, COMPANY)).resolves.toBe(0)
   })
 })
 

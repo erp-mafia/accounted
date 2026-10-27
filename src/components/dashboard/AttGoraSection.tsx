@@ -31,9 +31,13 @@ import { BATCH_REVIEW_HREF, batchRowKey } from '@/lib/collections/batch-dialog'
 import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
 import { usePendingCollectionsRun } from '@/components/collections/collections-run-client'
 import { capitalizeFirst } from '@/components/collections/collections-client'
+import { REMINDER_BATCH_REVIEW_HREF } from '@/lib/reminders/batch-dialog'
+import { ReminderBatchDialog } from '@/components/reminders/ReminderBatchDialog'
+import { usePendingReminderBatch } from '@/components/reminders/reminder-batch-client'
 import {
   ArrowsRightLeftIcon,
   BanknotesIcon,
+  BellAlertIcon,
   BookOpenIcon,
   BuildingLibraryIcon,
   CalendarDaysIcon,
@@ -288,6 +292,7 @@ export default function AttGoraSection({
 }: AttGoraSectionProps) {
   const t = useTranslations('dashboard')
   const tCollections = useTranslations('collections')
+  const tReminders = useTranslations('reminders')
   const tAttest = useTranslations('att_gora_attest')
   const router = useRouter()
   const { formatDateLong } = useFormat()
@@ -302,6 +307,12 @@ export default function AttGoraSection({
   const { company } = useCompany()
   const collectionsRun = usePendingCollectionsRun(company?.id, counts.collection_batch_ready > 0)
   const [collectionsRunOpen, setCollectionsRunOpen] = useState(false)
+  // The day's reminders: the same, a row that opens their review dialog in
+  // place. The open dialog holds its operation id, so it stays on its result
+  // after the approval while the row and the batch go away behind it.
+  const reminderBatch = usePendingReminderBatch(company?.id, counts.reminder_batch_ready > 0)
+  const reminderBatchId = reminderBatch.batch?.id ?? null
+  const [reviewingReminderBatchId, setReviewingReminderBatchId] = useState<string | null>(null)
   const [total, setTotal] = useState(worklist.total)
   // The grouped overdue row's facts, refreshed with the counts so its
   // count, amount and date never disagree.
@@ -386,7 +397,8 @@ export default function AttGoraSection({
     counts.collection_attention > 0 ||
     counts.collection_settlements_to_book > 0 ||
     counts.collected_payments_to_book > 0 ||
-    counts.collection_batch_ready > 0
+    counts.collection_batch_ready > 0 ||
+    counts.reminder_batch_ready > 0
   // The switch rows: urgent ones (inside 14 days, or past the deadline) lead
   // the list under their own band; the rest wait in Bevaka with the other
   // time-driven items.
@@ -841,6 +853,15 @@ export default function AttGoraSection({
                         hint={t('row_collection_batch_cta')}
                       />
                     )}
+                    {counts.reminder_batch_ready > 0 && (
+                      <WorklistRow
+                        href={REMINDER_BATCH_REVIEW_HREF}
+                        onSelect={reminderBatchId ? () => setReviewingReminderBatchId(reminderBatchId) : undefined}
+                        icon={BellAlertIcon}
+                        label={tReminders('batch_row', { count: counts.reminder_batch_ready })}
+                        hint={t('row_reminder_batch_cta')}
+                      />
+                    )}
                   </div>
                 </div>
               )}
@@ -971,6 +992,20 @@ export default function AttGoraSection({
           onOpenChange={setCollectionsRunOpen}
           onCommitted={() => {
             void collectionsRun.reload()
+            void refetchCounts()
+          }}
+        />
+      )}
+      {reviewingReminderBatchId && (
+        <ReminderBatchDialog
+          key={reviewingReminderBatchId}
+          operationId={reviewingReminderBatchId}
+          open
+          onOpenChange={(open) => {
+            if (!open) setReviewingReminderBatchId(null)
+          }}
+          onCommitted={() => {
+            void reminderBatch.reload()
             void refetchCounts()
           }}
         />

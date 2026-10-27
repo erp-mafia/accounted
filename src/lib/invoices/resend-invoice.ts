@@ -7,7 +7,6 @@ import {
   generateInvoiceEmailSubject,
   generateInvoiceEmailText,
 } from '@/lib/email/invoice-templates'
-import { computeSHA256, downloadDocumentObject } from '@/lib/core/documents/document-service'
 import {
   EMAIL_PATTERN,
   exceedsInvoiceEmailRecipientLimit,
@@ -15,6 +14,7 @@ import {
   resolveInvoiceEmailRecipients,
   resolveInvoiceReplyTo,
 } from '@/lib/invoices/email-recipients'
+import { loadArchivedInvoicePdf } from '@/lib/invoices/archived-invoice-pdf'
 import { loadInvoiceEmailAttachments } from '@/lib/invoices/invoice-attachments'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import {
@@ -22,7 +22,6 @@ import {
   reserveInvoiceDelivery,
   sendTrackedInvoiceEmail,
 } from '@/lib/invoices/invoice-deliveries'
-import { findArchivedInvoiceDelivery, type InvoicePdfDelivery } from '@/lib/invoices/invoice-pdf-source'
 import { isInvoiceResendEligible } from '@/lib/invoices/resend-eligibility'
 import type { CompanySettings, Customer, Invoice } from '@/types'
 
@@ -87,47 +86,9 @@ export async function resendInvoiceEmail(args: {
     return fail('INVOICE_SEND_NO_CUSTOMER_EMAIL', { customerId: customer.id })
   }
 
-  // The same history the detail page reads, newest first.
-  const { data: deliveries, error: deliveriesError } = await supabase.rpc(
-    'list_invoice_delivery_summaries',
-    { p_company_id: companyId, p_invoice_id: invoiceId },
-  )
-  if (deliveriesError) {
-    log.error('resend: failed to read the delivery history', deliveriesError)
-    return fail('INVOICE_RESEND_ARCHIVE_UNAVAILABLE')
-  }
-  const archived = findArchivedInvoiceDelivery(
-    (deliveries ?? []) as Array<InvoicePdfDelivery & { attachment_filename: string | null }>,
-  )
-  if (!archived) return fail('INVOICE_RESEND_NO_ARCHIVED_COPY')
-
-  const { data: document, error: documentError } = await supabase
-    .from('document_attachments')
-    .select('id, file_name, storage_path, sha256_hash')
-    .eq('id', archived.document_attachment_id)
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (documentError || !document) {
-    log.error('resend: archived invoice PDF row not readable', {
-      documentId: archived.document_attachment_id,
-      reason: documentError?.message,
-    })
-    return fail('INVOICE_RESEND_ARCHIVE_UNAVAILABLE')
-  }
-
-  const { blob } = await downloadDocumentObject(supabase, document.storage_path, companyId)
-  if (!blob) {
-    log.error('resend: archived invoice PDF could not be downloaded', { documentId: document.id })
-    return fail('INVOICE_RESEND_ARCHIVE_UNAVAILABLE')
-  }
-  const bytes = await blob.arrayBuffer()
-  // What leaves must be byte for byte what the archive recorded as sent.
-  if ((await computeSHA256(bytes)) !== document.sha256_hash) {
-    log.error('resend: archived invoice PDF does not match its stored checksum', {
-      documentId: document.id,
-    })
-    return fail('INVOICE_RESEND_ARCHIVE_UNAVAILABLE')
-  }
+  const archive = await loadArchivedInvoicePdf(supabase, companyId, invoiceId, log)
+  if (!archive.ok) return fail(archive.code)
+  const archived = archive.value
 
   const { data: company, error: companyError } = await supabase
     .from('company_settings')
@@ -172,7 +133,7 @@ export async function resendInvoiceEmail(args: {
     customer,
     company: company as CompanySettings,
     replyTo,
-    copyOf: { sentAt: archived.sent_at },
+    copyOf: { sentAt: archived.delivery.sent_at },
   }
 
   let result
@@ -193,10 +154,10 @@ export async function resendInvoiceEmail(args: {
       replyTo,
       fromName: company.company_name,
       from: await resolveInvoiceSender(supabase, companyId, company.company_name),
-      filename: archived.attachment_filename || document.file_name,
-      pdfBuffer: Buffer.from(bytes),
+      filename: archived.filename,
+      pdfBuffer: Buffer.from(archived.bytes),
       extraAttachments: extraAttachments.value,
-      archivedDocument: { id: document.id, sha256Hash: document.sha256_hash },
+      archivedDocument: archived.document,
     })
   } catch (err) {
     log.error('resend: failed to persist the delivery snapshot', err as Error)
@@ -223,7 +184,7 @@ export async function resendInvoiceEmail(args: {
   log.info('invoice resent', {
     deliveryId: result.deliveryId,
     messageId: result.messageId,
-    originalDeliveryId: archived.id,
+    originalDeliveryId: archived.delivery.id,
     recipientCounts: { to: recipients.to.length, cc: recipients.cc.length },
   })
 

@@ -696,6 +696,10 @@ export interface CompanySettings {
   send_invoice_reminders: boolean
   /** When send_invoice_reminders last went on (trigger-maintained); null while off. */
   reminders_enabled_at?: string | null
+  /** When automatic reminder sending went on (set by Accounted only); null: each batch waits for approval. */
+  reminders_automatic_at?: string | null
+  /** Who turned automatic reminder sending on. */
+  reminders_automatic_by?: string | null
   reminder_days_level_1: number
   reminder_days_level_2: number
   reminder_days_level_3: number
@@ -4195,6 +4199,8 @@ export interface InvoiceReminder {
   email_to: string
   response_type: ReminderResponseType | null
   response_at: string | null
+  /** The customer's note with the answer (answer page), at most 1000 characters. */
+  response_note: string | null
   action_token: string
   action_token_used: boolean
   created_at: string

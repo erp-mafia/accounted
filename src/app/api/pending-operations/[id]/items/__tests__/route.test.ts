@@ -149,3 +149,60 @@ describe('PATCH /api/pending-operations/[id]/items', () => {
     expect(body.data.items.map((i) => i.invoice_id)).toEqual([A])
   })
 })
+
+describe('a daily reminder batch', () => {
+  function reminderItem(invoiceId: string) {
+    return {
+      kind: 'reminder',
+      invoice_id: invoiceId,
+      invoice_number: 'F-1',
+      customer_name: 'Kund AB',
+      recipient: 'kund@example.se',
+      due_date: '2026-12-02',
+      level: 1,
+      remaining_amount: 1250,
+      currency: 'SEK',
+      bank: 'fresh',
+    }
+  }
+  const REMINDER_BATCH = {
+    id: OP_ID,
+    operation_type: 'reminder_daily_batch',
+    status: 'pending',
+    created_at: '2026-12-17T06:45:00Z',
+    params: {
+      batch_date: '2026-12-17',
+      items: [reminderItem(A), reminderItem(B)],
+      excluded: [{ invoice_id: '11111111-1111-4111-8111-1111111111ff', invoice_number: 'F-9', customer_name: 'Annan AB', due_date: '2026-12-01', reason: 'response' }],
+    },
+  }
+
+  it('shows its items less the ones taken out, the excluded, and which were taken out', async () => {
+    enqueue({ data: REMINDER_BATCH, error: null })
+    enqueue({ data: [{ invoice_id: B, kind: 'reminder', removed_by: 'user-1', removed_at: '2026-12-17T07:00:00Z' }], error: null })
+    const res = await get()
+    expect(res.status).toBe(200)
+    const { body } = await parseJsonResponse<{ data: { items: Array<{ invoice_id: string }>; excluded: unknown[]; removed_invoice_ids: string[] } }>(res)
+    expect(body.data.items.map((i) => i.invoice_id)).toEqual([A])
+    expect(body.data.excluded).toHaveLength(1)
+    expect(body.data.removed_invoice_ids).toEqual([B])
+  })
+
+  it('takes items out through the same database function', async () => {
+    enqueue({ data: { id: OP_ID, operation_type: 'reminder_daily_batch' }, error: null })
+    enqueue({ data: { removed: 1, remaining: 1 }, error: null })
+    enqueue({ data: REMINDER_BATCH, error: null })
+    enqueue({ data: [{ invoice_id: B, kind: 'reminder', removed_by: 'user-1', removed_at: '2026-12-17T07:00:00Z' }], error: null })
+    const res = await patch({ remove_invoice_ids: [B] })
+    expect(res.status).toBe(200)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith('remove_collection_batch_items', { p_operation_id: OP_ID, p_invoice_ids: [B] })
+  })
+
+  it('answers a reminder batch the database cannot find with its own code', async () => {
+    enqueue({ data: { id: OP_ID, operation_type: 'reminder_daily_batch' }, error: null })
+    enqueue({ data: null, error: { message: 'COLLECTION_BATCH_NOT_FOUND: no such daily batch' } })
+    const res = await patch({ remove_invoice_ids: [A] })
+    expect(res.status).toBe(404)
+    expect(JSON.stringify((await parseJsonResponse(res)).body)).toContain('REMINDER_BATCH_NOT_FOUND')
+  })
+})

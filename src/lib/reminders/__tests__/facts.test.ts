@@ -116,6 +116,7 @@ describe('loadReminderContext', () => {
   it('owes what is left after a part payment, and nothing when the books say nothing remains', async () => {
     expect((await load({ invoice: invoiceRow({ status: 'partially_paid', paid_amount: 1000, remaining_amount: 250 }) })).facts.remaining).toBe(250)
     expect((await load({ invoice: invoiceRow({ remaining_amount: 0 }) })).facts.remaining).toBe(0)
+    expect((await load({ invoice: invoiceRow({ status: 'partially_paid', paid_amount: 1000, remaining_amount: 250 }) })).amount).toBe(1250)
   })
 
   it('tells a credit note, a quote and a credited invoice apart from an owed one', async () => {

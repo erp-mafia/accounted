@@ -55,6 +55,7 @@ describe('PAID_OPERATION_CAPABILITY_MAP', () => {
     expect(PAID_OPERATION_CAPABILITY_MAP).toEqual({
       send_invoice: CAPABILITY.email_send,
       send_payslips: CAPABILITY.email_send,
+      reminder_daily_batch: CAPABILITY.email_send,
       submit_vat_declaration: CAPABILITY.skatteverket,
       submit_agi: CAPABILITY.skatteverket,
     })

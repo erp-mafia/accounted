@@ -31,6 +31,7 @@ import {
   countCollectionSettlementsToBook,
   countCollectedPaymentsToBook,
   countCollectionDecisionsAndBatch,
+  countReminderBatchReady,
   getOverdueInvoicesDue,
   countPaymentsVerificationDue,
   countPendingOperations,
@@ -153,6 +154,7 @@ export async function getWorklistCounts(
     collectionSettlementsToBook,
     collectedPaymentsToBook,
     collectionBatchReady,
+    reminderBatchReady,
     bankSwitch,
     paymentsVerificationRenewal,
     supplierPayeeChange,
@@ -193,6 +195,7 @@ export async function getWorklistCounts(
     countCollectionSettlementsToBook(supabase, companyId),
     countCollectedPaymentsToBook(supabase, companyId),
     collectionWork.then((work) => work.batchReady),
+    countReminderBatchReady(supabase, companyId),
     options.bankSwitchDue
       ? Promise.resolve(options.bankSwitchDue).then((b) => b.length)
       : countBankSwitchDue(supabase, companyId),
@@ -240,6 +243,7 @@ export async function getWorklistCounts(
       collection_settlements_to_book: collectionSettlementsToBook,
       collected_payments_to_book: collectedPaymentsToBook,
       collection_batch_ready: collectionBatchReady,
+      reminder_batch_ready: reminderBatchReady,
       bank_switch: bankSwitch,
       payments_verification_renewal: paymentsVerificationRenewal,
       supplier_payee_change: supplierPayeeChange,
@@ -269,6 +273,7 @@ export async function getWorklistCounts(
       collectionSettlementsToBook +
       collectedPaymentsToBook +
       collectionBatchReady +
+      reminderBatchReady +
       bankSwitch +
       paymentsVerificationRenewal +
       supplierPayeeChange +

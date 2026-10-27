@@ -8,7 +8,9 @@ function data(overrides: Partial<ReminderEmailData> = {}): ReminderEmailData {
     invoice: makeInvoice({ invoice_number: 'F-1042', invoice_date: '2026-11-02', due_date: '2026-12-02', status: 'sent', total: 12500 }),
     customer: makeCustomer({ name: 'Kund AB', contact_person: null }),
     company: makeCompanySettings({ company_name: 'Säljaren AB', bankgiro: '123-4567', org_number: '5566778899' }),
+    amount: 2500,
     remaining: 2500,
+    payBy: '2027-01-24',
     overdueDays: 15,
     actionUrl: 'https://app.accounted.se/invoice-action/tok123',
     replyTo: 'faktura@saljaren.se',
@@ -22,6 +24,19 @@ describe('renderReminderEmail', () => {
     expect(mail.subject).toBe('Vänlig påminnelse: Faktura F-1042 - 2 500,00 SEK')
     expect(mail.text).toContain('Att betala: 2 500,00 SEK')
     expect(mail.text).not.toContain('12 500,00')
+  })
+
+  it('shows what the invoice asked for and what came in after a part payment', () => {
+    const mail = renderReminderEmail(data({ amount: 12500, remaining: 2500 }))
+    // Currency formatting puts a no-break space in the amounts.
+    expect(mail.subject).toMatch(/- 2\s500,00\sSEK$/)
+    expect(mail.text).toMatch(/Fakturabelopp: 12\s500,00\sSEK\nBetalt: 10\s000,00\sSEK\nAtt betala: 2\s500,00\sSEK/)
+    expect(renderReminderEmail(data()).text).not.toContain('Betalt:')
+  })
+
+  it('asks for payment by a date in the final reminder', () => {
+    expect(renderReminderEmail(data({ level: 3 })).text).toContain('ber dig betala senast den 2027-01-24.')
+    expect(renderReminderEmail(data({ level: 3, customer: makeCustomer({ language: 'en' }) })).text).toContain('ask you to pay by 2027-01-24.')
   })
 
   it('words each level, and level 3 is a final reminder with no inkasso threat', () => {

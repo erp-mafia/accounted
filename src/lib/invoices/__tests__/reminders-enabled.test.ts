@@ -11,6 +11,7 @@ import { REMINDERS_SENDING_ENABLED, remindersActiveFor } from '@/lib/invoices/re
 
 describe('remindersActiveFor', () => {
   it('is false for every company while the product-wide switch is off', () => {
+    // NEXT_PUBLIC_REMINDERS_SENDING_ENABLED is unset in tests.
     expect(REMINDERS_SENDING_ENABLED).toBe(false)
     expect(remindersActiveFor(true)).toBe(false)
     expect(remindersActiveFor(false)).toBe(false)

@@ -25,6 +25,8 @@ export interface ReminderMessage {
   subject: string
   html: string
   text: string
+  /** The invoice PDF as the customer was first emailed it, when there is one. */
+  attachments?: Array<{ filename: string; content: Buffer; contentType: string }>
 }
 
 export interface ReminderReceipt {

@@ -32,6 +32,8 @@ export interface ReminderContext {
    * 20261025084600, which may not write to them).
    */
   companyInactive: boolean
+  /** What the invoice asked for (collectionClaim().amount); facts.remaining is what is left of it. */
+  amount: number
   facts: ReminderInvoiceFacts
   history: ReminderHistoryEntry[]
 }
@@ -145,5 +147,5 @@ export async function loadReminderContext(
     legacy: r.mode === null,
   }))
 
-  return { invoice, customer, company: companySettings, companyInactive, facts, history }
+  return { invoice, customer, company: companySettings, companyInactive, amount: claim.amount, facts, history }
 }

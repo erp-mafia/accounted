@@ -3,11 +3,11 @@ import type { CollectionsFeatures } from '@accounted/connect-contract'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { createLogger, type Logger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
+import { expireStaleDailyBatches, resolveDailyBatchOwner } from '@/lib/pending-operations/daily-batch-staging'
 import { getRiskLevel } from '@/lib/pending-operations/risk-tiers'
 import { loadCollectionsGateFacts } from './availability'
 import { runBankCheck, type BankCheckResult } from './bank-check'
 import {
-  BATCH_EXPIRY_HOURS,
   COLLECTIONS_BATCH_TYPE,
   type BatchExcluded,
   type BatchExcludedReason,
@@ -317,48 +317,18 @@ export async function gatherDailyBatch(db: Pick<SupabaseClient, 'from'>, input: 
  * the person who turned the ladder on while they are still a member, else
  * the company's owner. Approval is a separate question (an administrator).
  */
-export async function resolveBatchOwner(
-  db: Pick<SupabaseClient, 'from'>,
-  companyId: string,
-  ladderEnabledBy: string | null,
-): Promise<string | null> {
-  const { data, error } = await db.from('company_members').select('user_id, role').eq('company_id', companyId)
-  if (error) throw new Error(`company_members lookup failed: ${error.message}`)
-  const members = (data ?? []) as Array<{ user_id: string; role: string }>
-  if (ladderEnabledBy && members.some((m) => m.user_id === ladderEnabledBy)) return ladderEnabledBy
-  return members.find((m) => m.role === 'owner')?.user_id ?? null
+export function resolveBatchOwner(db: Pick<SupabaseClient, 'from'>, companyId: string, ladderEnabledBy: string | null): Promise<string | null> {
+  return resolveDailyBatchOwner(db, companyId, ladderEnabledBy)
 }
 
 /**
- * How much earlier than BATCH_EXPIRY_HOURS after its staging a daily run
- * may reject a batch. The ladder cron fires once a day and stages the batch
- * during its run, so the third run after it can start seconds short of 72
- * hours; without this slack the batch would wait for the fourth (96 hours).
- */
-export const BATCH_EXPIRY_RUN_SLACK_MS = 60 * 60_000
-
-/**
- * Reject a pending batch once it has waited BATCH_EXPIRY_HOURS (less the
- * run slack): the company's own (companyId), or every company's (null, the
+ * Reject a pending batch once it has waited DAILY_BATCH_EXPIRY_HOURS (less
+ * the run slack): the company's own (companyId), or every company's (null, the
  * cron's sweep, which also reaches a company whose gates or connection no
  * longer let the batch be approved). Returns how many were rejected.
  */
-export async function expireStaleBatches(db: Pick<SupabaseClient, 'from'>, companyId: string | null, now: Date): Promise<number> {
-  const cutoff = new Date(now.getTime() - BATCH_EXPIRY_HOURS * 3_600_000 + BATCH_EXPIRY_RUN_SLACK_MS).toISOString()
-  let query = db
-    .from('pending_operations')
-    .update({
-      status: 'rejected',
-      resolved_at: now.toISOString(),
-      result_data: { auto_rejected: true, reason: 'expired' },
-    })
-    .eq('operation_type', COLLECTIONS_BATCH_TYPE)
-    .eq('status', 'pending')
-    .lt('created_at', cutoff)
-  if (companyId !== null) query = query.eq('company_id', companyId)
-  const { data, error } = await query.select('id')
-  if (error) throw new Error(`collections batch expiry failed: ${error.message}`)
-  return (data ?? []).length
+export function expireStaleBatches(db: Pick<SupabaseClient, 'from'>, companyId: string | null, now: Date): Promise<number> {
+  return expireStaleDailyBatches(db, COLLECTIONS_BATCH_TYPE, companyId, now)
 }
 
 export type StageBatchOutcome =

@@ -6,6 +6,8 @@ import { validateBody } from '@/lib/api/validate'
 import { batchParamsSchema, COLLECTIONS_BATCH_TYPE, remainingBatchItems } from '@/lib/collections/batch'
 import { loadBatchRemovals } from '@/lib/collections/batch-removals'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { dailyBatchTypeOf, type DailyBatchType } from '@/lib/pending-operations/daily-batches'
+import { REMINDER_BATCH_ITEM_KIND, REMINDER_BATCH_TYPE, reminderBatchParamsSchema, remainingReminderItems } from '@/lib/reminders/batch'
 
 const ParamsSchema = z.object({ id: z.uuid() })
 
@@ -13,6 +15,16 @@ const NarrowBodySchema = z.object({
   /** The invoices to take out of the batch. Removal only: nothing can be added here. */
   remove_invoice_ids: z.array(z.uuid()).min(1).max(500),
 })
+
+/** The daily batch types this route reviews, and the not-found code each answers. */
+const NOT_FOUND_CODE: Record<DailyBatchType, string> = {
+  [COLLECTIONS_BATCH_TYPE]: 'COLLECTION_BATCH_NOT_FOUND',
+  [REMINDER_BATCH_TYPE]: 'REMINDER_BATCH_NOT_FOUND',
+}
+
+function isDailyBatchType(type: unknown): type is DailyBatchType {
+  return typeof type === 'string' && dailyBatchTypeOf(type) !== null
+}
 
 /** The batch as the review dialog shows it: the staged items less the removed ones, the excluded, the removals. */
 async function batchView(ctx: RouteContext, operationId: string): Promise<NextResponse> {
@@ -23,9 +35,10 @@ async function batchView(ctx: RouteContext, operationId: string): Promise<NextRe
     .eq('company_id', ctx.companyId)
     .maybeSingle()
   if (error) throw error
-  if (!op || op.operation_type !== COLLECTIONS_BATCH_TYPE) {
+  if (!op || !isDailyBatchType(op.operation_type)) {
     return errorResponseFromCode('COLLECTION_BATCH_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
   }
+  if (op.operation_type === REMINDER_BATCH_TYPE) return reminderBatchView(ctx, op)
   const params = batchParamsSchema.safeParse(op.params)
   if (!params.success) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId })
   const removals = await loadBatchRemovals(ctx.supabase, ctx.companyId, operationId)
@@ -42,9 +55,32 @@ async function batchView(ctx: RouteContext, operationId: string): Promise<NextRe
   })
 }
 
+/** A daily reminder batch: its items less the ones taken out, the excluded, and which were taken out. */
+async function reminderBatchView(
+  ctx: RouteContext,
+  op: { id: string; status: string; params: unknown; created_at: string },
+): Promise<NextResponse> {
+  const params = reminderBatchParamsSchema.safeParse(op.params)
+  if (!params.success) return errorResponseFromCode('VALIDATION_ERROR', ctx.log, { requestId: ctx.requestId })
+  const removed = (await loadBatchRemovals(ctx.supabase, ctx.companyId, op.id))
+    .filter((r) => (r.kind as string) === REMINDER_BATCH_ITEM_KIND)
+    .map((r) => r.invoice_id)
+  return NextResponse.json({
+    data: {
+      id: op.id,
+      status: op.status,
+      created_at: op.created_at,
+      batch_date: params.data.batch_date,
+      items: remainingReminderItems(params.data, removed),
+      excluded: params.data.excluded,
+      removed_invoice_ids: removed,
+    },
+  })
+}
+
 /**
- * GET /api/pending-operations/[id]/items: a daily collections batch as the
- * review dialog shows it.
+ * GET /api/pending-operations/[id]/items: a daily batch (collections or
+ * reminders) as its review dialog shows it.
  */
 export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
   'pending_operation.batch_items',
@@ -59,7 +95,7 @@ const RPC_ERRORS = ['COLLECTION_BATCH_NOT_FOUND', 'COLLECTION_BATCH_ADMIN_ONLY',
 
 /**
  * PATCH /api/pending-operations/[id]/items: take invoices out of a pending
- * daily collections batch before approving it ("Bocka ur dem du inte vill
+ * daily batch (collections or reminders) before approving it ("Bocka ur dem du inte vill
  * skicka"). Removal only, owner or administrator only (the people who may
  * approve the batch). The commit route takes no body, so this is how the
  * review dialog narrows the batch. The staged params stay frozen: the
@@ -83,7 +119,7 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       .eq('company_id', ctx.companyId)
       .maybeSingle()
     if (error) throw error
-    if (!op || op.operation_type !== COLLECTIONS_BATCH_TYPE) {
+    if (!op || !isDailyBatchType(op.operation_type)) {
       return errorResponseFromCode('COLLECTION_BATCH_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
 
@@ -92,7 +128,8 @@ export const PATCH = withRouteContext<{ params: Promise<{ id: string }> }>(
       p_invoice_ids: body.data.remove_invoice_ids,
     })
     if (rpcError) {
-      const code = RPC_ERRORS.find((c) => rpcError.message?.includes(c))
+      const found = RPC_ERRORS.find((c) => rpcError.message?.includes(c))
+      const code = found === 'COLLECTION_BATCH_NOT_FOUND' ? NOT_FOUND_CODE[op.operation_type] : found
       if (code) return errorResponseFromCode(code, ctx.log, { requestId: ctx.requestId })
       throw rpcError
     }

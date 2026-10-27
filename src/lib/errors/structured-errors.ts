@@ -9866,6 +9866,31 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bara företagets ägare eller en administratör kan godkänna omgången.',
     message_en: 'Only the company owner or an administrator can approve the batch.',
   },
+  REMINDER_BATCH_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Påminnelseomgången hittades inte.',
+    message_en: 'The reminder batch was not found.',
+  },
+  REMINDERS_AUTOMATIC_NOT_YET: {
+    httpStatus: 409,
+    message_sv: 'Automatiska påminnelser kan slås på när de tre senaste omgångarna godkänts utan ändringar.',
+    message_en: 'Automatic reminders can be turned on once the last three batches were approved without changes.',
+  },
+  REMINDERS_UNAVAILABLE: {
+    httpStatus: 409,
+    message_sv: 'Påminnelser kan inte skickas från Accounted ännu.',
+    message_en: 'Reminders cannot be sent from Accounted yet.',
+  },
+  REMINDER_NO_INVOICE_TO_PREVIEW: {
+    httpStatus: 404,
+    message_sv: 'Det finns ingen faktura att visa påminnelsen med ännu.',
+    message_en: 'There is no invoice to show the reminder with yet.',
+  },
+  REMINDERS_OFF: {
+    httpStatus: 409,
+    message_sv: 'Påminnelser är avstängda, så omgången kan inte skickas. Slå på dem igen för att skicka nästa omgång.',
+    message_en: 'Reminders are turned off, so the batch cannot be sent. Turn them on again to send the next batch.',
+  },
   COLLECTION_POSSIBLE_PAYMENT_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Den möjliga betalningen hittades inte för den här fakturan.',

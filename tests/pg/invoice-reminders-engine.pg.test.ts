@@ -9,6 +9,8 @@ import { seedCompany, setActiveCompany } from './fixtures'
  * the send; a provider message id belongs to one reminder; a provider report
  * never downgrades a worse one (apply_invoice_reminder_provider_status); and
  * company_settings.reminders_enabled_at moves with the toggle and nothing else.
+ * The customer's note with an answer (20261027120000) is bounded and readable
+ * by the company's members.
  */
 
 async function seedInvoice(): Promise<{ companyId: string; userId: string; invoiceId: string }> {
@@ -211,5 +213,30 @@ describe('customers.reminders_excluded (pg)', () => {
       [userId, companyId],
     )
     expect(rows[0]!.reminders_excluded).toBe(false)
+  })
+})
+
+describe('invoice_reminders.response_note (pg, migration 20261027120000)', () => {
+  it("keeps the customer's note of up to 1000 characters, and refuses an empty or longer one", async () => {
+    const seeded = await seedInvoice()
+    const { rows } = await reserve({ ...seeded, level: 1 })
+    const id = rows[0]!.id
+    const setNote = (note: string) => getPool().query(`UPDATE public.invoice_reminders SET response_note = $1 WHERE id = $2`, [note, id])
+
+    await setNote('x'.repeat(1000))
+    await expect(setNote('')).rejects.toMatchObject({ code: '23514' })
+    await expect(setNote('x'.repeat(1001))).rejects.toMatchObject({ code: '23514' })
+  })
+
+  it('is readable by a member of the company', async () => {
+    const seeded = await seedInvoice()
+    const { rows } = await reserve({ ...seeded, level: 1 })
+    await getPool().query(`UPDATE public.invoice_reminders SET response_note = 'Betalt den 3 december' WHERE id = $1`, [rows[0]!.id])
+    await setActiveCompany(seeded.userId, seeded.companyId)
+
+    const read = await withUserContext(seeded.userId, (client) =>
+      client.query<{ response_note: string }>(`SELECT response_note FROM public.invoice_reminders WHERE id = $1`, [rows[0]!.id]),
+    )
+    expect(read.rows[0]!.response_note).toBe('Betalt den 3 december')
   })
 })
