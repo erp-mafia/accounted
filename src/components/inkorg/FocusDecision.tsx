@@ -538,8 +538,13 @@ export function FocusDecision({
       : null
 
   const evidence = decision.evidence
+  // A reading the AI provider could not take is said as such, not as "not read".
   const question =
-    evidence?.kind === 'bank_match' ? t('q_already_paid_on', { date: shortDate(evidence.date, locale) }) : t(`q_${decision.question}`)
+    evidence?.kind === 'bank_match'
+      ? t('q_already_paid_on', { date: shortDate(evidence.date, locale) })
+      : evidence?.kind === 'not_read' && evidence.retry
+        ? t('q_not_read_provider')
+        : t(`q_${decision.question}`)
   const rendered = buttons.map(renderAction).filter(Boolean)
 
   return (
@@ -761,7 +766,7 @@ function Evidence({ evidence, suggestion }: { evidence: DecisionEvidence | null;
       case 'unreadable':
         return t('ev_unreadable')
       case 'not_read':
-        return t('ev_not_read')
+        return evidence.retry ? t(`ev_not_read_${evidence.retry}`) : t('ev_not_read')
       case 'booked':
         return t('ev_booked')
       case 'booked_with': {

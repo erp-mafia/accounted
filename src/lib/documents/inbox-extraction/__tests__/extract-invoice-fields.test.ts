@@ -7,6 +7,7 @@ import {
   dropMalformedVatNumber,
   emptyResult,
 } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
+import { APIError } from '@anthropic-ai/sdk'
 
 // Mock the Bedrock SDK so tests drive the JSON parser without
 // network/credential needs.
@@ -486,11 +487,13 @@ describe('extractInvoiceFields', () => {
     const pending = extractInvoiceFields({ buffer: Buffer.from('%PDF'), mimeType: 'application/pdf', fileName: 'f.pdf' })
     await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
     deadline.abort()
-    const { data, rawText } = await pending
+    const { data, rawText, failure } = await pending
 
     expect(rawText).toBeNull()
     expect(data.totals.total).toBeNull()
     expect(data.confidence).toBe(0)
+    // A provider that stopped answering, not an unreadable document.
+    expect(failure).toBe('provider_unavailable')
     timeout.mockRestore()
   })
 
@@ -590,6 +593,43 @@ describe('extractInvoiceFields', () => {
     })
     expect(rawText).toBeNull()
     expect(data.totals.total).toBeNull()
+  })
+
+  // ── failure classification (2026-10-26 Bedrock 503 outage) ──
+
+  it('marks a Bedrock 503 as the provider being unavailable, not an unreadable document', async () => {
+    mockCreate.mockRejectedValueOnce(
+      APIError.generate(503, { message: 'Bedrock is unable to process your request.' }, undefined, new Headers()),
+    )
+    const result = await extractInvoiceFields({ buffer: Buffer.from('%PDF'), mimeType: 'application/pdf', fileName: 'f.pdf' })
+    expect(result.failure).toBe('provider_unavailable')
+    expect(result.rawText).toBeNull()
+    expect(result.data.totals.total).toBeNull()
+    expect(result.skipped).toBeUndefined()
+  })
+
+  it('marks a refused document (400) as an error', async () => {
+    mockCreate.mockRejectedValueOnce(
+      APIError.generate(400, { type: 'error', error: { type: 'invalid_request_error', message: 'The PDF specified was not valid.' } }, undefined, new Headers()),
+    )
+    const { failure } = await extractInvoiceFields({ buffer: Buffer.from('%PDF'), mimeType: 'application/pdf', fileName: 'f.pdf' })
+    expect(failure).toBe('error')
+  })
+
+  it('marks an answer that does not parse as an error, whatever it says', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse('Bedrock is unable to process your request.'))
+    const { failure, rawText } = await extractInvoiceFields({ buffer: Buffer.from('%PDF'), mimeType: 'application/pdf', fileName: 'f.pdf' })
+    expect(rawText).toBe('Bedrock is unable to process your request.')
+    expect(failure).toBe('error')
+  })
+
+  it('sets no failure on a reading or a skip', async () => {
+    mockCreate.mockReturnValueOnce(aiResponse(VALID_RESULT))
+    const read = await extractInvoiceFields({ buffer: Buffer.from('%PDF'), mimeType: 'application/pdf', fileName: 'f.pdf' })
+    expect(read.failure).toBeUndefined()
+    const skipped = await extractInvoiceFields({ buffer: Buffer.from(''), mimeType: 'application/zip', fileName: 'f.zip' })
+    expect(skipped.skipped).toBe('unsupported_media')
+    expect(skipped.failure).toBeUndefined()
   })
 
   it('forces accountSuggestion to null even if the model returns a value', async () => {

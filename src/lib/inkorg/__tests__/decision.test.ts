@@ -469,6 +469,30 @@ describe('focusDecision: a document nobody read', () => {
   })
 })
 
+// 2026-10-26: a Bedrock outage left readings empty, and the Inkorg said "Dokumentet är inte läst" with no hint
+// that the AI service was down or that the sweep reads it again.
+describe('focusDecision: a reading the AI provider could not take', () => {
+  it.each(['scheduled', 'scheduled_later', 'exhausted'] as const)('carries the retry (%s) on the not-read evidence, reading first', (retry) => {
+    const d = focusDecision(makeItem({ extracted_data: reading(), reading_retry: retry }), { canRead: true })
+    expect(d.question).toBe('not_read')
+    expect(d.evidence).toEqual({ kind: 'not_read', retry })
+    expect(d.actions[0]).toBe('retry_reading')
+    expect(d.actions).toEqual(['retry_reading', 'match_purchase', 'expense'])
+    expect(d.quietActions).toEqual(['not_underlag'])
+  })
+
+  it('keeps the plain not-read evidence when the reading did not fail at the provider', () => {
+    expect(focusDecision(makeItem({ reading_retry: null }), { canRead: true }).evidence).toEqual({ kind: 'not_read' })
+  })
+
+  it('never says so once something was read, or where the company cannot read documents', () => {
+    const read = focusDecision(makeItem({ extracted_data: reading({ totals: { total: 99 } }), reading_retry: 'scheduled' }), { canRead: true })
+    expect(read.question).toBe('who_paid')
+    const noAi = focusDecision(makeItem({ reading_retry: 'scheduled' }), { canRead: false })
+    expect(noAi.evidence).not.toEqual(expect.objectContaining({ retry: 'scheduled' }))
+  })
+})
+
 describe('nothingRead', () => {
   it('is true for no reading and for the empty skeleton, false once one value was read', () => {
     expect(nothingRead(null)).toBe(true)

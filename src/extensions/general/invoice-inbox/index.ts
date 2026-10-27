@@ -23,6 +23,9 @@ import { loadDocumentReading } from '@/lib/documents/reading/load'
 import { peppolReader } from '@/lib/invoices/peppol-reading'
 import { checkNeverCheckedInboxItems, neverChecked, neverCheckedToCheck, proposeBankMatchForInboxItem } from '@/lib/operations/inbox-bank-match'
 import type { InboxPairing } from '@/lib/inkorg/pairs'
+import { nothingRead } from '@/lib/inkorg/decision'
+import type { InkorgItem, ReadingRetry } from '@/lib/inkorg/items'
+import { readingRetryOf } from './lib/provider-retry'
 import { readInboxPairings, type ListedItem } from '@/lib/operations/inbox-pairings'
 import { readInboxBankMatch, readInboxBankMatches, type BankMatch, type BankMatchItemRow } from '@/lib/documents/inbox-bank-match'
 import type { ReadingItemRow } from '@/lib/documents/reading/resolve'
@@ -593,6 +596,7 @@ export const invoiceInboxExtension: Extension = {
           created_supplier_invoice_id: string | null
           extracted_data: Record<string, unknown> | null
           extraction_skipped: boolean | null
+          created_at: string
         }
         const rows = (data ?? []) as ItemRow[]
         const bookedState = await resolveInboxBookedState(ctx.supabase, ctx.companyId, rows)
@@ -628,6 +632,7 @@ export const invoiceInboxExtension: Extension = {
           matched_transaction_journal_entry_id: bookedState.get(r.id)?.journalEntryId ?? null,
           underlag_status: bookedState.get(r.id)?.underlag ?? null,
           bank_match: bankMatches.get(r.id) ?? null,
+          reading_retry: null as ReadingRetry | null,
         }))
 
         // A receipt dropped into Dokument is routed here the moment the
@@ -635,23 +640,43 @@ export const invoiceInboxExtension: Extension = {
         // created with none and stayed "Inte AI-tolkad" although the document
         // row got the reading seconds later (prod 2026-09-24). The document's
         // own reading stands in for the item's.
-        const unread = items.filter((i) => i.extracted_data == null && i.document_id).map((i) => i.document_id as string)
+        //
+        // The same read gives an open item whose reading came back empty its
+        // document's stamp: when the AI provider could not take the call
+        // (failed:provider_unavailable), reading_retry says whether the sweep
+        // reads it again, so the Inkorg shows an outage as one instead of as
+        // a document nobody read (2026-10-26).
+        const unread = items
+          .filter(
+            (i) =>
+              i.document_id &&
+              (i.extracted_data == null ||
+                (i.extraction_skipped !== true &&
+                  !i.created_supplier_invoice_id &&
+                  !i.created_journal_entry_id &&
+                  nothingRead(i.extracted_data as unknown as InkorgItem['extracted_data']))),
+          )
+          .map((i) => i.document_id as string)
         if (unread.length > 0) {
           // In slices: the list is no longer capped, so the id list is not either.
-          const docs: Array<{ id: string; extracted_data: Record<string, unknown> | null }> = []
+          const docs: Array<{ id: string; extracted_data: Record<string, unknown> | null; extraction_model: string | null }> = []
           for (const ids of chunk(unread, 200)) {
-            const { data: part, error: docsError } = await ctx.supabase.from('document_attachments').select('id, extracted_data').in('id', ids)
+            const { data: part, error: docsError } = await ctx.supabase.from('document_attachments').select('id, extracted_data, extraction_model').in('id', ids)
             if (docsError) return NextResponse.json({ error: docsError.message }, { status: 500 })
             docs.push(...((part ?? []) as typeof docs))
           }
           const readingOf = new Map(
             docs.filter((d) => d.extracted_data).map((d) => [d.id, d.extracted_data]),
           )
+          const stampOf = new Map(docs.map((d) => [d.id, d.extraction_model]))
+          const now = Date.now()
           for (const item of items) {
-            if (item.extracted_data == null && item.document_id && readingOf.has(item.document_id)) {
+            if (!item.document_id) continue
+            if (item.extracted_data == null && readingOf.has(item.document_id)) {
               item.extracted_data = readingOf.get(item.document_id) ?? null
               item.extraction_skipped = false
             }
+            item.reading_retry = readingRetryOf(stampOf.get(item.document_id), item.created_at, now)
           }
         }
 

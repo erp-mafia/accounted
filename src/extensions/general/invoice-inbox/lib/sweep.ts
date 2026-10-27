@@ -1,21 +1,35 @@
 /**
- * Crash recovery for the staged upload.
+ * Crash recovery for the staged upload, and the one automatic re-read.
  *
  * The web upload route inserts the inbox row as 'processing' and defers
  * Bedrock extraction to an after() worker that can die with the serverless
  * instance. A row stuck in 'processing' is durable state with no live owner:
  * this sweep flips it to 'received' with the empty extraction skeleton so it
- * becomes a normal manually-editable item. Deliberately NO re-extraction
- * here: the UI retry button covers that, and a cron that silently re-spends
- * Bedrock tokens on every crash would hide the crashes.
+ * becomes a normal manually-editable item. A crashed worker is never read
+ * again here: the UI retry button covers that, and a cron that silently
+ * re-spends Bedrock tokens on every crash would hide the crashes.
+ *
+ * The one exception is narrower than a crash: a reading the AI provider
+ * itself could not take (stamped failed:provider_unavailable on the document:
+ * a 5xx, a throttle, a dropped connection, the reading's deadline). Those say
+ * nothing about our code or the document, and on 2026-10-26 a three-hour
+ * Bedrock outage left dozens of items looking unreadable. They are read again
+ * by retryProviderUnavailableReadings (./provider-retry.ts): at most three
+ * readings in all, 15 minutes then two hours apart, three documents per pass,
+ * behind the same entitlement and sandbox gates as the upload, and with a
+ * compare-and-set on the item so a person's edit is never overwritten. Every
+ * other failure, crashes included, is still never retried here and keeps its
+ * own stamp; every retry leaves a history line and a log line.
  *
  * Overlap with a slow live worker is safe: every mutation is a guarded claim
  * on status='processing' (and extracted_data still NULL), so the sweep and
- * the worker never both win one row.
+ * the worker never both win one row. Overlapping sweep runs are safe for the
+ * re-read too: it claims the document's stamp before reading.
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { requeueHiddenRoutedItems, routeStaleQueueItems } from './route-from-arkiv'
+import { retryProviderUnavailableReadings, type ProviderRetrySummary } from './provider-retry'
 import { createLogger } from '@/lib/logger'
 import { emptyResult } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 
@@ -41,6 +55,8 @@ export interface InboxSweepSummary {
   routed?: number
   /** Routed rows of companies that do not see the Dokument section, brought back to Underlag. */
   requeued?: number
+  /** Readings the AI provider could not take, read again (./provider-retry.ts). */
+  reread?: ProviderRetrySummary
 }
 
 /** Run one sweep pass. Never throws. */
@@ -53,14 +69,16 @@ export async function runInboxSweep(supabase: SupabaseClient): Promise<InboxSwee
   } catch (err) {
     log.error('routed row requeue failed', { error: err instanceof Error ? err.message : String(err) })
   }
+  let routed = 0
   try {
-    const routed = await routeStaleQueueItems(supabase)
+    routed = await routeStaleQueueItems(supabase)
     if (routed > 0) log.info('routed stale queue rows to arkiv', { routed })
-    return { ...summary, routed, requeued }
   } catch (err) {
     log.error('stale queue routing failed', { error: err instanceof Error ? err.message : String(err) })
-    return { ...summary, routed: 0, requeued }
   }
+  // Last: its readings can take minutes, the steps above take milliseconds.
+  const reread = await retryProviderUnavailableReadings(supabase)
+  return { ...summary, routed, requeued, reread }
 }
 
 async function flipStaleProcessing(supabase: SupabaseClient): Promise<InboxSweepSummary> {

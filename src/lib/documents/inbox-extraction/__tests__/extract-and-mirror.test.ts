@@ -31,6 +31,7 @@ describe('extractAndMirror', () => {
       rawText: '{}',
       model: 'm',
       skipped: null,
+      failure: null,
     })
   })
 
@@ -42,7 +43,14 @@ describe('extractAndMirror', () => {
       rawText: null,
       model: null,
       skipped: 'unsupported_media',
+      failure: null,
     })
+  })
+
+  it('passes a provider failure through so the stamp can say the provider was down', async () => {
+    extractMock.mockResolvedValue({ data: {}, rawText: null, model: null, failure: 'provider_unavailable' })
+    await extractAndMirror('doc-1', input)
+    expect(mirrorMock).toHaveBeenCalledWith('doc-1', expect.objectContaining({ failure: 'provider_unavailable' }))
   })
 
   it('stamps nothing when the extraction throws, so the row keeps its reading', async () => {
