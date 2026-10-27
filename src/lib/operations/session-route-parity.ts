@@ -653,6 +653,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     [`POST ${V}/salary-runs/:id/payment-file`],
     'new version with new_version + confirm_previous_not_approved; no MCP door builds payment files',
   ),
+  'POST /api/salary/runs/:id/payment/pay-via-bank': gap(
+    'P2',
+    'prepare a salary run as bank payments, one per employee (lib/salary/payment/pay-via-bank.ts): the dashboard only in v1, no v1 endpoint or MCP tool yet; approving and signing them are the supplier payments\' doors',
+  ),
   'POST /api/salary/runs/:id/payslips/send': covered([`POST ${V}/salary-runs/:id/send-payslips`, 'gnubok_send_payslips']),
   'POST /api/salary/runs/:id/employees': covered([`POST ${V}/salary-runs/:id/employees`, 'gnubok_add_salary_run_employee']),
   'PATCH /api/salary/runs/:id/employees/:employeeId': covered([`PATCH ${V}/salary-runs/:id/employees/:employeeId`, 'gnubok_set_run_salary']),
@@ -924,4 +928,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 156 -> 155 (2026-10-26, PH 175 / issue #50): the skattekonto account is
  * covered by PATCH /settings/skattekonto-account.
  */
-export const GAP_CEILING = 155
+export const GAP_CEILING = 156

@@ -34,6 +34,7 @@ import { BANK_ACCOUNTS_INCLUDED_PER_MONTH, BANK_PAYMENTS_INCLUDED_PER_MONTH, get
 import { PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import type { PaymentOrderRow } from '@/lib/payments/orders/types'
 import { formatPayeeLabel } from '@/lib/payments/supplier-payee'
+import { maskPayeeAccount } from '@/lib/payments/bank-account'
 import { maskIban } from './supplier-payment-batches'
 import { defineOperation, type OperationContext } from './types'
 
@@ -61,13 +62,18 @@ const STATUS = z
 
 const Payee = z.object({
   type: z.enum(['bankgiro', 'plusgiro', 'bank_account', 'iban']),
-  label: z.string().describe('Display form, e.g. "BG 5050-1055", "3300 1234567" or the IBAN.'),
-  name: z.string().describe('The payee name as the order carries it (the supplier name, or Skatteverket for a skattekonto payment).'),
+  label: z
+    .string()
+    .describe('Display form, e.g. "BG 5050-1055", "3300 1234567" or the IBAN; an employee\'s account shows its last four digits ("8327-****7890").'),
+  name: z
+    .string()
+    .describe('The payee name as the order carries it (the supplier name, Skatteverket for a skattekonto payment, or the employee for a salary payment).'),
   source: z
-    .enum(['invoice', 'supplier', 'skatteverket'])
+    .enum(['invoice', 'supplier', 'skatteverket', 'employee'])
     .describe(
-      'Where the account came from: the invoice (as the document states it), the supplier card, or skatteverket ' +
-        '(a payment in to the skattekonto: bankgiro 5050-1055 with the company\'s OCR number, no supplier invoice).',
+      'Where the account came from: the invoice (as the document states it), the supplier card, skatteverket ' +
+        '(a payment in to the skattekonto: bankgiro 5050-1055 with the company\'s OCR number, no supplier invoice), or employee ' +
+        '(one employee\'s net pay on a salary run, to the account on the employee card, no supplier invoice).',
     ),
   check: z
     .enum(['unchecked', 'known', 'new', 'changed'])
@@ -179,6 +185,8 @@ function payeeLabel(row: OrderSelectRow): string {
     case 'plusgiro':
       return row.payee_plusgiro ? formatPayeeLabel({ type: 'plusgiro', plusgiro: row.payee_plusgiro }) : ''
     case 'bank_account':
+      // An employee's account shows its last four digits only: a Nordea personkonto is the personnummer.
+      if (row.payee_source === 'employee') return maskPayeeAccount(row.payee_clearing, row.payee_account)
       return formatPayeeLabel({ type: 'bank_account', clearing: row.payee_clearing ?? '', account: row.payee_account ?? '' })
     case 'iban':
       return row.payee_iban ?? ''

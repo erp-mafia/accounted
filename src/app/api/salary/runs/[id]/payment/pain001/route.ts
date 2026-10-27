@@ -5,6 +5,7 @@ import {
   type SalaryPaymentFileError,
 } from '@/lib/salary/payment/build-payment-file'
 import { fileResponse } from '@/lib/api/file-response'
+import { SALARY_IN_BANK_PAYMENT_FILE_SV } from '@/lib/salary/payment/in-bank-payment'
 import { validateBody } from '@/lib/api/validate'
 import { NewSalaryPaymentFileVersionSchema } from '@/lib/api/schemas'
 
@@ -44,6 +45,8 @@ function legacyError(result: SalaryPaymentFileError): NextResponse {
       )
     case 'SWEDBANK_IDS_MISSING':
       return NextResponse.json({ error: result.details.message as string }, { status: 400 })
+    case 'IN_BANK_PAYMENT':
+      return NextResponse.json({ error: SALARY_IN_BANK_PAYMENT_FILE_SV }, { status: 409 })
     case 'NO_EMPLOYEES':
       return NextResponse.json({ error: 'Inga anställda i lönekörningen' }, { status: 400 })
     case 'EMPLOYEE_BANK_MISSING':

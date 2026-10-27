@@ -65,6 +65,9 @@ export type PayeeCheck = 'unchecked' | 'known' | 'new' | 'changed'
 export interface PaymentOrder {
   id: string
   supplier_invoice_id: string | null
+  /** The salary run and employee a salary payment pays; null for every other payment. */
+  salary_run_id: string | null
+  employee_id: string | null
   batch_id: string | null
   status: PaymentOrderStatus
   amount: number
@@ -78,8 +81,8 @@ export interface PaymentOrder {
   payee_account: string | null
   payee_iban: string | null
   payee_name: string
-  /** skatteverket: a payment in to the skattekonto (no supplier invoice). */
-  payee_source: 'invoice' | 'supplier' | 'skatteverket'
+  /** skatteverket: a payment in to the skattekonto; employee: one employee's net pay on a salary run (neither has a supplier invoice). */
+  payee_source: 'invoice' | 'supplier' | 'skatteverket' | 'employee'
   payee_check: PayeeCheck
   reference_type: 'ocr' | 'message'
   reference: string
@@ -342,10 +345,13 @@ export function startCompanyVerification(options: { handoff?: boolean } = {}): P
   return send<StartedVerification>('/api/payments/verification', { method: 'POST', body: JSON.stringify({ handoff: options.handoff === true }) })
 }
 
-export function listPaymentOrders(params: { status?: PaymentOrderStatus[]; supplierInvoiceId?: string } = {}): Promise<PaymentOrder[]> {
+export function listPaymentOrders(
+  params: { status?: PaymentOrderStatus[]; supplierInvoiceId?: string; salaryRunId?: string } = {},
+): Promise<PaymentOrder[]> {
   const search = new URLSearchParams()
   if (params.status?.length) search.set('status', params.status.join(','))
   if (params.supplierInvoiceId) search.set('supplier_invoice_id', params.supplierInvoiceId)
+  if (params.salaryRunId) search.set('salary_run_id', params.salaryRunId)
   const query = search.toString()
   return send<PaymentOrder[]>(`/api/payments/orders${query ? `?${query}` : ''}`)
 }
@@ -500,6 +506,78 @@ export function prepareSkattekontoPayment(input: SkattekontoPaymentInput): Promi
   return send<PreparedSkattekontoPayment>('/api/payments/orders/skattekonto', { method: 'POST', body: skattekontoPaymentBody(input, false) })
 }
 
+/** A warning on a salary run paid through the bank (lib/salary/payment/pay-via-bank). */
+export interface SalaryBankPaymentWarning {
+  code: 'after_payday' | 'date_moved'
+  payday?: string
+  from?: string
+  to?: string
+}
+
+/** The dry run of a salary run paid through the bank: who is paid what, from where and when. */
+export interface SalaryBankPaymentPreview {
+  salary_run_id: string
+  period: string
+  payment_date: string | null
+  cash_account_id: string
+  debtor: { bank_name: string | null; bic: string | null }
+  currency: string
+  requested_execution_date: string
+  /** The day asked for when it was no banking day the bank takes. */
+  date_moved_from: string | null
+  /** The message each employee sees on the payment. */
+  reference: string
+  payees: Array<{ employee_id: string; name: string; masked_account: string; amount: number; known_account: boolean }>
+  total: number
+  zero_payouts: number
+  /** Employees whose payment is already approved, at the bank or executed: left out. */
+  in_payment: number
+  /** Drafts of the run nobody approved, replaced by this preparation. */
+  replaces_drafts: number
+  /** Set when the person must confirm the salaries were not paid another way (a paid or booked run, or a payment file). */
+  confirmation_required: { status: string; payment_file_generated_at: string | null } | null
+  warnings: SalaryBankPaymentWarning[]
+}
+
+export interface PreparedSalaryBankPayment {
+  orders: PaymentOrder[]
+  replaced_draft_ids: string[]
+  warnings: SalaryBankPaymentWarning[]
+  total: number
+}
+
+export interface SalaryBankPaymentInput {
+  salaryRunId: string
+  cashAccountId: string
+  executionDate: string | null
+  confirmedUnpaid: boolean
+}
+
+function salaryBankPaymentBody(input: SalaryBankPaymentInput, dryRun: boolean) {
+  return JSON.stringify({
+    cash_account_id: input.cashAccountId,
+    execution_date: input.executionDate,
+    confirmed_unpaid: input.confirmedUnpaid,
+    ...(dryRun ? { dry_run: true } : {}),
+  })
+}
+
+/** The dry run of paying a salary run through the bank: every rule, nothing written. The dialog's preview. */
+export function previewSalaryBankPayment(input: SalaryBankPaymentInput): Promise<SalaryBankPaymentPreview> {
+  return send<SalaryBankPaymentPreview>(`/api/salary/runs/${input.salaryRunId}/payment/pay-via-bank`, {
+    method: 'POST',
+    body: salaryBankPaymentBody(input, true),
+  })
+}
+
+/** One draft payment per employee with a payout, to be approved and signed like supplier payments. */
+export function prepareSalaryBankPayment(input: SalaryBankPaymentInput): Promise<PreparedSalaryBankPayment> {
+  return send<PreparedSalaryBankPayment>(`/api/salary/runs/${input.salaryRunId}/payment/pay-via-bank`, {
+    method: 'POST',
+    body: salaryBankPaymentBody(input, false),
+  })
+}
+
 export function approvePaymentOrders(input: { orderIds: string[]; confirmedPayeeInvoiceIds: string[] }): Promise<{ approved: string[] }> {
   return send<{ approved: string[] }>('/api/payments/orders/approve', {
     method: 'POST',
@@ -615,8 +693,15 @@ export function orderGiroForLookup(order: Pick<PaymentOrder, 'payee_type' | 'pay
   return null
 }
 
-/** "BG 5050-1055", "PG 123456-7", "1234 567890" or an IBAN: the account a payment goes to. */
-export function payeeLabel(order: Pick<PaymentOrder, 'payee_type' | 'payee_bankgiro' | 'payee_plusgiro' | 'payee_clearing' | 'payee_account' | 'payee_iban'>): string {
+/**
+ * "BG 5050-1055", "PG 123456-7", "1234 567890" or an IBAN: the account a payment goes to. An employee's
+ * account shows its last four digits only (8327-****7890): a Nordea personkonto is the personnummer.
+ */
+export function payeeLabel(
+  order: Pick<PaymentOrder, 'payee_type' | 'payee_bankgiro' | 'payee_plusgiro' | 'payee_clearing' | 'payee_account' | 'payee_iban'> & {
+    payee_source?: PaymentOrder['payee_source']
+  },
+): string {
   switch (order.payee_type) {
     case 'bankgiro': {
       const bg = order.payee_bankgiro ?? ''
@@ -627,6 +712,7 @@ export function payeeLabel(order: Pick<PaymentOrder, 'payee_type' | 'payee_bankg
       return pg.length > 1 ? `PG ${pg.slice(0, -1)}-${pg.slice(-1)}` : `PG ${pg}`
     }
     case 'bank_account':
+      if (order.payee_source === 'employee') return `${order.payee_clearing ?? ''}-****${(order.payee_account ?? '').slice(-4)}`
       return `${order.payee_clearing ?? ''} ${order.payee_account ?? ''}`.trim()
     case 'iban':
       return order.payee_iban ?? ''

@@ -35,6 +35,7 @@ import { downloadFile, saveBlobToDisk } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { AGIPanel } from '@/components/salary/AGIPanel'
 import { PaymentFilePanel } from '@/components/salary/PaymentFilePanel'
+import { SalaryBankPaymentSection } from '@/components/salary/SalaryBankPaymentSection'
 import { TaxPaymentPanel } from '@/components/salary/TaxPaymentPanel'
 import { RunHeader } from '@/components/salary/run/RunHeader'
 import { RunProgressBar } from '@/components/salary/run/RunProgressBar'
@@ -115,6 +116,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     payment_due_date?: string | null
   } | null>(null)
   const [taxPaymentLoading, setTaxPaymentLoading] = useState(false)
+  // A bank payment of the run is live: the payment file is left out, it would pay the month twice.
+  const [inBankPayment, setInBankPayment] = useState(false)
   // How the payslips can go out: the email link, plus each digital mailbox
   // (Billo, Kivra) the company sends through, read once. A failed read
   // leaves the email link alone, as before the mailboxes.
@@ -1113,9 +1116,20 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
         )}
       </div>
 
-      {/* Payment file: available once the run is approved, but only when there
-          is something to pay out. A zero-payout run generates no file rows. */}
+      {/* Paying through the bank (one payment per employee, one BankID), and
+          the payment file: available once the run is approved, but only when
+          there is something to pay out. A zero-payout run generates no file
+          rows. While a bank payment is live the file is left out. */}
       {['approved', 'paid', 'booked'].includes(run.status) && !noPayout && (
+        <SalaryBankPaymentSection
+          salaryRunId={id}
+          runStatus={run.status}
+          readOnly={!canWrite}
+          onChange={loadRun}
+          onInBankPayment={setInBankPayment}
+        />
+      )}
+      {['approved', 'paid', 'booked'].includes(run.status) && !noPayout && !inBankPayment && (
         <PaymentFilePanel
           salaryRunId={id}
           periodLabel={periodLabel}

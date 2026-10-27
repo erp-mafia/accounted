@@ -9,9 +9,16 @@ export interface PaymentOrderRow {
   id: string
   company_id: string
   user_id: string
-  /** skattekonto: a payment in to Skatteverket's bankgiro with the company's OCR number (migration 20261016180000); it has no supplier invoice. */
-  purpose: 'supplier_invoice' | 'skattekonto'
+  /**
+   * skattekonto: a payment in to Skatteverket's bankgiro with the company's OCR number (migration 20261016180000).
+   * salary: one employee's net pay on a salary run, to the account on the employee card (migration 20261027100000).
+   * Neither has a supplier invoice.
+   */
+  purpose: 'supplier_invoice' | 'skattekonto' | 'salary'
   supplier_invoice_id: string | null
+  /** The salary run and employee a salary payment pays; null for every other purpose. */
+  salary_run_id: string | null
+  employee_id: string | null
   batch_id: string | null
   status: PaymentOrderStatus
   amount: number
@@ -27,7 +34,7 @@ export interface PaymentOrderRow {
   payee_iban: string | null
   payee_bic: string | null
   payee_name: string
-  payee_source: 'invoice' | 'supplier' | 'skatteverket'
+  payee_source: 'invoice' | 'supplier' | 'skatteverket' | 'employee'
   payee_check: 'unchecked' | 'known' | 'new' | 'changed'
   reference_type: 'ocr' | 'message'
   reference: string

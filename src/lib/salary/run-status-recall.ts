@@ -15,7 +15,9 @@
  * (submitted/accepted, or the run stamped agi_submitted_at): the period must
  * then be redone via a correction AGI with the same specifikationsnummer.
  * A paid or booked run is never unapproved: it is corrected through the
- * correction flow. On success it clears the approver, the AGI generation
+ * correction flow. Nor is one with a bank payment approved, at the bank or
+ * executed (SALARY_RUN_IN_BANK_PAYMENT, refused by the database,
+ * 20261027100000); the run's bank payment drafts are cancelled with it. On success it clears the approver, the AGI generation
  * stamp and the payment-file tracking, and deletes a generated but unfiled
  * (generated/exported) AGI declaration, which now carries stale amounts
  * (a correction run's is kept: it is the period's row).
@@ -25,6 +27,7 @@
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { eventBus } from '@/lib/events'
+import { isSalaryInBankPaymentError } from '@/lib/salary/payment/in-bank-payment'
 
 /** AGI declaration states that mean Skatteverket has (or is about to have) it. */
 const AGI_FILED_STATUSES = ['pending_signature', 'submitted', 'accepted']
@@ -220,6 +223,12 @@ export async function unapproveSalaryRun(
     // server fault; the caller should reload and retry.
     if (isNoRowsError(error)) {
       return { ok: false, code: 'SALARY_RUN_STATUS_CHANGED', details: { expected_status: 'approved' } }
+    }
+    // A bank payment of the run is approved, at the bank or executed
+    // (salary_run_recall_guard_bank_payments, 20261027100000): it was made
+    // from the amounts the recall would recompute.
+    if (isSalaryInBankPaymentError(error)) {
+      return { ok: false, code: 'SALARY_RUN_IN_BANK_PAYMENT' }
     }
     log.error('salary run unapprove update failed', error as Error)
     return { ok: false, code: 'SALARY_RUN_UNAPPROVE_FAILED' }

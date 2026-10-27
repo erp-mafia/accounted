@@ -19,7 +19,8 @@ const PrepareSchema = z.object({
 
 /**
  * GET /api/payments/orders: the company's bank payment orders, newest first.
- * ?status=draft,approved narrows; ?supplier_invoice_id=... finds one invoice's orders.
+ * ?status=draft,approved narrows; ?supplier_invoice_id=... finds one invoice's orders,
+ * ?salary_run_id=... one salary run's payments.
  * bank_confirming: signed, and the bank has not confirmed the payment yet.
  * sign_again: unsigned at the bank in a signing nobody is in (isSignableAgain).
  */
@@ -30,6 +31,7 @@ export const GET = withRouteContext('payment_orders.list', async (request, { sup
     .map((s) => s.trim())
     .filter((s): s is (typeof PAYMENT_ORDER_STATUSES)[number] => (PAYMENT_ORDER_STATUSES as readonly string[]).includes(s))
   const invoiceId = url.searchParams.get('supplier_invoice_id')
+  const salaryRunId = url.searchParams.get('salary_run_id')
 
   // Named columns: what a person needs to follow a payment, never internals
   // such as the idempotency key. provider_error_message is a sanitised text.
@@ -39,13 +41,14 @@ export const GET = withRouteContext('payment_orders.list', async (request, { sup
   let query = supabase
     .from('payment_orders')
     .select(
-      `id, supplier_invoice_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider, provider_payment_id, provider_status, provider_status_at, provider_error_code, provider_error_message, create_started_at, outcome_unknown_at, approved_by, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, supplier:suppliers(name), ${INVOICE_DOCUMENT_COLUMNS})`,
+      `id, supplier_invoice_id, salary_run_id, employee_id, batch_id, status, amount, currency, requested_execution_date, cash_account_id, payee_type, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, payee_name, payee_source, payee_check, reference_type, reference, end_to_end_id, provider, provider_payment_id, provider_status, provider_status_at, provider_error_code, provider_error_message, create_started_at, outcome_unknown_at, approved_by, approved_at, submitted_at, signed_at, executed_at, cancelled_at, matched_at, created_at, updated_at, supplier_invoice:supplier_invoices(supplier_invoice_number, supplier:suppliers(name), ${INVOICE_DOCUMENT_COLUMNS})`,
     )
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
     .limit(200)
   if (statuses.length) query = query.in('status', statuses)
   if (invoiceId && z.uuid().safeParse(invoiceId).success) query = query.eq('supplier_invoice_id', invoiceId)
+  if (salaryRunId && z.uuid().safeParse(salaryRunId).success) query = query.eq('salary_run_id', salaryRunId)
   const { data, error } = await query
   if (error) throw error
   const rows = data ?? []

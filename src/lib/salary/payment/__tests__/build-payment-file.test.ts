@@ -435,6 +435,22 @@ describe('buildSalaryPaymentFile', () => {
     expect(calls.filter((c) => c.method === 'update')).toHaveLength(0)
   })
 
+  it('refuses the file while a bank payment of the run is live: the archive says so by its hint', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([
+      { data: run },
+      { data: company },
+      { data: settings },
+      { data: [anna] },
+      { data: null, error: { code: '23514', message: 'salary run is paid through the bank', hint: 'salary_run_in_bank_payment' } },
+    ])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+    expect(result).toMatchObject({ ok: false, code: 'IN_BANK_PAYMENT', format: 'pain001' })
+    expect(calls.filter((c) => c.method === 'update')).toHaveLength(0)
+    if (result.ok) return
+    expect(salaryPaymentFileRefusal(result)).toEqual({ code: 'SALARY_RUN_IN_BANK_PAYMENT', details: { format: 'pain001' } })
+  })
+
   it('returns DB_ERROR with the stage when a read fails', async () => {
     const { supabase, enqueueMany } = client()
     enqueueMany([{ data: null, error: { code: 'XX000', message: 'boom' } }])

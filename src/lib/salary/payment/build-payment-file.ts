@@ -25,6 +25,9 @@
  *   8. every one of those accounts names a payable account
  *      (payeeAccountProblem, the same verdict the generators apply): all
  *      affected employees are named at once, never the account number
+ *   9. on a live call, no bank payment of the run is live: the archive
+ *      refuses the file (IN_BANK_PAYMENT), since the file and the bank
+ *      payments would each pay the month (lib/salary/payment/pay-via-bank.ts)
  *
  * Employees whose effective net payout is 0 (nollkörning, net fully consumed
  * by a nettolöneavdrag) are left out of the file, so their bank details are
@@ -57,6 +60,7 @@ import type { Pain001CompanyData, Pain001Employee } from './pain001-generator'
 import { generateBgLb, utbetalningsnummer } from './bg-lb-generator'
 import type { BgLbCompanyData, BgLbEmployee } from './bg-lb-generator'
 import { effectiveNetPayout } from './effective-net'
+import { isSalaryInBankPaymentError } from './in-bank-payment'
 import { resolveSwedbankFileIds } from '@/lib/payments/swedbank'
 import {
   checkEmployeeAccountChecksum,
@@ -120,6 +124,7 @@ export type SalaryPaymentFileErrorCode =
   | 'DB_ERROR'
   | 'NEW_VERSION_UNCONFIRMED'
   | 'NEW_VERSION_UNSUPPORTED'
+  | 'IN_BANK_PAYMENT'
 
 export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'employees'
 
@@ -316,6 +321,8 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
       return { code: 'SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED' }
     case 'NEW_VERSION_UNSUPPORTED':
       return { code: 'SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED', details: { format: result.format } }
+    case 'IN_BANK_PAYMENT':
+      return { code: 'SALARY_RUN_IN_BANK_PAYMENT', details: { format: result.format } }
     case 'ARCHIVE_FAILED':
     case 'DB_ERROR':
       return null
@@ -678,7 +685,15 @@ export async function buildSalaryPaymentFile(
     version,
     previous_not_approved_confirmed: input.newVersion === true,
   })
-  if (archiveErr) return fail('ARCHIVE_FAILED', format, {}, { cause: archiveErr })
+  if (archiveErr) {
+    // The archive refuses a file while a bank payment of the run is live
+    // (refuse_salary_payment_file_in_bank_payment, 20261027100000): the file
+    // and the bank payments would each pay the month.
+    if (isSalaryInBankPaymentError(archiveErr)) {
+      return fail('IN_BANK_PAYMENT', format)
+    }
+    return fail('ARCHIVE_FAILED', format, {}, { cause: archiveErr })
+  }
 
   // Stamp the run. The archive row above is the record; the stamp is
   // bookkeeping about the run, so a failed UPDATE never withholds the file;

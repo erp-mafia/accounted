@@ -15,6 +15,8 @@ export function order(id: string, overrides: Partial<PaymentOrderRow> = {}): Pay
     user_id: USER,
     purpose: 'supplier_invoice',
     supplier_invoice_id: `inv-${id}`,
+    salary_run_id: null,
+    employee_id: null,
     batch_id: null,
     status: 'approved',
     amount: 737.5,
