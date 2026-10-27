@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
@@ -24,31 +24,45 @@ const LIVE_STATUSES: ReadonlySet<string> = new Set([
   'executed',
 ])
 
-interface SalaryBankPaymentSectionProps {
-  salaryRunId: string
-  runStatus: string
-  readOnly?: boolean
-  /** Called after the dialog changed something, so the page reloads the run (it may have moved to paid). */
-  onChange?: () => void
-  /** Whether a bank payment of the run is live: the page then leaves the payment file out (the file would pay the month twice). */
-  onInBankPayment?: (live: boolean) => void
+export interface SalaryBankPayments {
+  /** Bank payments are switched on for the company (GET /api/payments/availability); null until the first answer. */
+  available: boolean | null
+  /** The run's bank payments; null until the first answer. */
+  orders: PaymentOrder[] | null
+  /** The payments that still pay or paid the run. While any is live the payment file is left out: it would pay the month twice. */
+  live: PaymentOrder[]
+  reload: () => void
 }
 
 /**
- * Betala via banken on the salary run page. Rendered only where bank payments
- * are switched on for the company (GET /api/payments/availability), or where
- * the run already has bank payments. Before any: the button that opens
- * PaySalaryViaBankDialog, for an approved run. After: one line per employee
- * with the payment's status, and Betala igen when the bank refused one.
+ * The run's bank payments and whether the company can make them: read once
+ * by the run page, which picks the header's button from them (Betala via
+ * banken before any payment) and hands them to the section below. Nothing is
+ * read until the run can have payments (enabled: approved, paid or booked).
  */
-export function SalaryBankPaymentSection({ salaryRunId, runStatus, readOnly, onChange, onInBankPayment }: SalaryBankPaymentSectionProps) {
-  const t = useTranslations('salary_bank_payment')
-  const tb = useTranslations('bank_payments')
-  const [available, setAvailable] = useState(false)
+export function useSalaryBankPayments(salaryRunId: string, enabled: boolean): SalaryBankPayments {
+  const [available, setAvailable] = useState<boolean | null>(null)
   const [orders, setOrders] = useState<PaymentOrder[] | null>(null)
-  const [open, setOpen] = useState(false)
+  const [generation, setGeneration] = useState(0)
 
-  const load = useCallback(() => {
+  useEffect(() => {
+    if (!enabled) return
+    let cancelled = false
+    fetchPaymentsAvailability()
+      .then((data) => {
+        if (!cancelled) setAvailable(data.available)
+      })
+      .catch(() => {
+        // Without an answer Betala via banken stays away; the payment file still stands.
+        if (!cancelled) setAvailable(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [enabled])
+
+  useEffect(() => {
+    if (!enabled) return
     let cancelled = false
     listPaymentOrders({ salaryRunId })
       .then((rows) => {
@@ -61,55 +75,69 @@ export function SalaryBankPaymentSection({ salaryRunId, runStatus, readOnly, onC
     return () => {
       cancelled = true
     }
-  }, [salaryRunId])
+  }, [salaryRunId, enabled, generation])
 
-  useEffect(() => {
-    let cancelled = false
-    fetchPaymentsAvailability()
-      .then((data) => {
-        if (!cancelled) setAvailable(data.available)
-      })
-      .catch(() => {
-        // Without an answer the button stays away; the payment file still stands.
-      })
-    const stopLoad = load()
-    return () => {
-      cancelled = true
-      stopLoad()
-    }
-  }, [load])
+  const reload = useCallback(() => setGeneration((g) => g + 1), [])
+  const live = useMemo(() => (orders ?? []).filter((o) => LIVE_STATUSES.has(o.status)), [orders])
+  return { available, orders, live, reload }
+}
 
-  const live = (orders ?? []).filter((o) => LIVE_STATUSES.has(o.status))
-  useEffect(() => {
-    onInBankPayment?.(live.length > 0)
-  }, [live.length, onInBankPayment])
-
-  if (orders === null) return null
-  const canPay = !readOnly && available && runStatus === 'approved'
-  if (live.length === 0 && !canPay) return null
-
-  const dialog = open && (
+/** PaySalaryViaBankDialog, loaded when opened: from the header's Betala via banken or the section's Betala igen. */
+export function SalaryBankPaymentDialog({
+  salaryRunId,
+  open,
+  onClose,
+  onDone,
+}: {
+  salaryRunId: string
+  open: boolean
+  onClose: () => void
+  /** Called when the dialog closes after anything changed: the run may have moved to paid. */
+  onDone: () => void
+}) {
+  if (!open) return null
+  return (
     <PaySalaryViaBankDialog
       open
       salaryRunId={salaryRunId}
       onOpenChange={(next) => {
-        if (!next) setOpen(false)
+        if (!next) onClose()
       }}
-      onDone={() => {
-        load()
-        onChange?.()
-      }}
+      onDone={onDone}
     />
   )
+}
+
+interface SalaryBankPaymentSectionProps {
+  payments: SalaryBankPayments
+  /** The run can be paid through the bank now: approved, bank payments on, and the person may write. */
+  canPay: boolean
+  /** Opens the dialog for Betala igen. */
+  onPay: () => void
+  /** The other way to pay, under the prompt before any payment: the payment file, folded. */
+  children?: ReactNode
+}
+
+/**
+ * Betala via banken on the salary run page, where bank payments are switched
+ * on for the company or the run already has bank payments. Before any: what
+ * the header's Betala via banken does, with the payment file folded under it.
+ * After: one line per employee with the payment's status, and Betala igen
+ * when the bank refused one.
+ */
+export function SalaryBankPaymentSection({ payments, canPay, onPay, children }: SalaryBankPaymentSectionProps) {
+  const t = useTranslations('salary_bank_payment')
+  const tb = useTranslations('bank_payments')
+  const { orders, live } = payments
+
+  if (orders === null) return null
+  if (live.length === 0 && !canPay) return null
 
   if (live.length === 0) {
     return (
       <DetailSection kicker={t('section_title')}>
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <p className="text-[13px] leading-6 text-muted-foreground">{t('section_prompt')}</p>
-          <Button onClick={() => setOpen(true)}>{t('pay_button')}</Button>
-        </div>
-        {dialog}
+        <p className="text-[13px] leading-6 text-muted-foreground">{t('section_prompt')}</p>
+        {children && <div className="mt-3">{children}</div>}
       </DetailSection>
     )
   }
@@ -143,12 +171,11 @@ export function SalaryBankPaymentSection({ salaryRunId, runStatus, readOnly, onC
       {payAgain && (
         <div className="mt-3 flex flex-wrap items-center justify-between gap-3">
           <p className="text-[13px] leading-6 text-muted-foreground">{t('section_prompt_again')}</p>
-          <Button variant="outline" onClick={() => setOpen(true)}>
+          <Button variant="outline" onClick={onPay}>
             {t('pay_again_button')}
           </Button>
         </div>
       )}
-      {dialog}
     </DetailSection>
   )
 }

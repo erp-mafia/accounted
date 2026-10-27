@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -58,6 +58,11 @@ interface PaymentFilePanelProps {
    * behind it.
    */
   settled?: boolean
+  /**
+   * Betala via banken is the run's way to pay (the header's action): the
+   * file is the other way, one line that folds the panel out.
+   */
+  folded?: boolean
   onDownloaded?: () => void
 }
 
@@ -89,6 +94,7 @@ export function PaymentFilePanel({
   senderIban,
   readOnly,
   settled,
+  folded,
   onDownloaded,
 }: PaymentFilePanelProps) {
   const t = useTranslations('salary_payments')
@@ -112,8 +118,11 @@ export function PaymentFilePanel({
     ? [matchedBank, ...banks.filter((b) => b !== matchedBank)]
     : banks
   const [showInstructions, setShowInstructions] = useState(Boolean(matchedBank))
-  // The settled one-liner's fold: closed until asked for.
-  const [settledOpen, setSettledOpen] = useState(false)
+  // The company's own bank alone, until the person asks for the others.
+  const [otherBanks, setOtherBanks] = useState(false)
+  const shownBanks = matchedBank && !otherBanks ? [matchedBank] : sortedBanks
+  // The one-liner's fold (settled, or folded under Betala via banken): closed until asked for.
+  const [foldOpen, setFoldOpen] = useState(false)
   const generatedFormat = paymentFileFormat ? parseSalaryPaymentFormat(paymentFileFormat) : null
 
   const FORMAT_LABEL: Record<PaymentFormat, string> = {
@@ -243,7 +252,7 @@ export function PaymentFilePanel({
                 const next = parseSalaryPaymentFormat(e.target.value)
                 if (next) setFormat(next)
               }}
-              wrapperClassName="-my-1"
+              wrapperClassName="-my-1 max-w-xs"
             >
               <option value="pain001">{FORMAT_LABEL.pain001}</option>
               <option value="bg_lb">{FORMAT_LABEL.bg_lb}</option>
@@ -325,7 +334,7 @@ export function PaymentFilePanel({
           {showInstructions && (
             <div className="text-xs">
               <div className="divide-y divide-border">
-                {sortedBanks.map((bank) => (
+                {shownBanks.map((bank) => (
                   <p key={bank} className="py-2">
                     <span className="text-foreground">
                       {BANK_NAME[bank]}
@@ -335,6 +344,15 @@ export function PaymentFilePanel({
                   </p>
                 ))}
               </div>
+              {shownBanks.length < sortedBanks.length && (
+                <button
+                  type="button"
+                  onClick={() => setOtherBanks(true)}
+                  className="pt-2 text-muted-foreground underline-offset-4 transition-colors duration-150 hover:text-foreground hover:underline"
+                >
+                  {t('instructions_other_banks')}
+                </button>
+              )}
               <p className="pt-2 text-muted-foreground">{t('instructions_footer')}</p>
             </div>
           )}
@@ -376,51 +394,67 @@ export function PaymentFilePanel({
     </Dialog>
   )
 
+  // One line that folds the panel out: the label, anything after it on the
+  // line, and the section help once open.
+  const foldLine = (label: string, after?: ReactNode) => (
+    <section>
+      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+        <button
+          type="button"
+          onClick={() => setFoldOpen((open) => !open)}
+          aria-expanded={foldOpen}
+          className="inline-flex items-center gap-2 transition-colors duration-150 hover:text-foreground"
+        >
+          <ChevronRightIcon
+            className={cn(
+              'h-3.5 w-3.5 text-muted-foreground transition-transform duration-150',
+              foldOpen && 'rotate-90',
+            )}
+          />
+          {label}
+        </button>
+        {after}
+        {foldOpen && sectionHelp}
+      </div>
+      {foldOpen && <div className="mt-3">{body}</div>}
+      {newVersionDialog}
+    </section>
+  )
+
   // Paid or booked with a file made: one line, the date and a download of the
   // same file again (the same version, so the bank's duplicate check holds).
   // The format, banklista, instructions and new-version action fold out
   // behind it.
   if (settled && generatedFormat && paymentFileGeneratedAt) {
-    return (
-      <section>
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
-          <button
-            type="button"
-            onClick={() => setSettledOpen((open) => !open)}
-            aria-expanded={settledOpen}
-            className="inline-flex items-center gap-2 transition-colors duration-150 hover:text-foreground"
-          >
-            <ChevronRightIcon
-              className={cn(
-                'h-3.5 w-3.5 text-muted-foreground transition-transform duration-150',
-                settledOpen && 'rotate-90',
-              )}
-            />
-            {t('settled_label')}
-          </button>
-          <span className="text-muted-foreground" aria-hidden>·</span>
-          <span className="tabular-nums text-muted-foreground">{formatDate(paymentFileGeneratedAt)}</span>
-          {!readOnly && (
-            <>
-              <span className="text-muted-foreground" aria-hidden>·</span>
-              <Button
-                type="button"
-                variant="link"
-                className="h-auto p-0 text-sm"
-                onClick={() => void handleDownload(generatedFormat)}
-                loading={downloading}
-              >
-                {t('download_again')}
-              </Button>
-            </>
-          )}
-          {settledOpen && sectionHelp}
-        </div>
-        {settledOpen && <div className="mt-3">{body}</div>}
-        {newVersionDialog}
-      </section>
+    return foldLine(
+      t('settled_label'),
+      <>
+        <span className="text-muted-foreground" aria-hidden>·</span>
+        <span className="tabular-nums text-muted-foreground">{formatDate(paymentFileGeneratedAt)}</span>
+        {!readOnly && (
+          <>
+            <span className="text-muted-foreground" aria-hidden>·</span>
+            <Button
+              type="button"
+              variant="link"
+              className="h-auto p-0 text-sm"
+              onClick={() => void handleDownload(generatedFormat)}
+              loading={downloading}
+            >
+              {t('download_again')}
+            </Button>
+          </>
+        )}
+      </>,
     )
   }
+
+  // Paid or booked without a file: paid some other way, so the panel folds
+  // away behind its name.
+  if (settled) return foldLine(t('settled_label'))
+
+  // Betala via banken is the way to pay: the file is the alternative, folded.
+  if (folded) return foldLine(t('folded_label'))
 
   return (
     <DetailSection kicker={t('title')} help={sectionHelp}>

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { Fragment, useState } from 'react'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import {
@@ -30,6 +30,7 @@ import {
   ArrowDownTrayIcon,
   ArrowLeftCircleIcon,
   ArrowUturnLeftIcon,
+  CheckCircleIcon,
   DocumentArrowDownIcon,
   EllipsisHorizontalIcon,
   ExclamationTriangleIcon,
@@ -63,10 +64,14 @@ interface RunHeaderProps {
   // one has nothing worth previewing.
   isCalculated: boolean
   // The single "forward" step for the current status (Beräkna, Till
-  // granskning, Godkänn, Markera utbetald, Bokför, Lämna in AGI): the one
+  // granskning, Godkänn, Betala via banken or Markera som betald, Bokför,
+  // Lämna in AGI): the one
   // default button in the header. Everything else lives behind the ⋯ menu,
   // the payslip send included.
   primaryAction?: { key: string; label: string; onClick: () => void } | null
+  // Markera som betald in the ⋯ menu, when the header's button pays another
+  // way (Betala via banken): the money may still leave by file or by hand.
+  onMarkPaid?: (() => void) | null
   onPreview: () => void
   onRevert: () => void
   onUnapprove: () => void
@@ -95,6 +100,7 @@ export function RunHeader({
   employeeCount,
   isCalculated,
   primaryAction,
+  onMarkPaid,
   onPreview,
   onRevert,
   onUnapprove,
@@ -130,6 +136,7 @@ export function RunHeader({
   const payslipsAvailable = rank >= 2
   const showPayslipSend = payslipsAvailable && canWrite
 
+  const showMarkPaid = canWrite && run.status === 'approved' && !!onMarkPaid
   const showPreview = canWrite && (run.status === 'draft' || run.status === 'review')
   const showRevert = canWrite && run.status === 'review'
   const showUnapprove = canWrite && run.status === 'approved'
@@ -140,6 +147,7 @@ export function RunHeader({
   const showDelete = canWrite && run.status === 'draft'
   const showCorrect = canWrite && run.status === 'booked'
   const hasMenu =
+    showMarkPaid ||
     showPayslipSend ||
     showPreview ||
     showRevert ||
@@ -155,7 +163,8 @@ export function RunHeader({
     actionLoading === 'correct' ||
     actionLoading === 'preview' ||
     actionLoading === 'bulk_payslip' ||
-    actionLoading === 'agi-download'
+    actionLoading === 'agi-download' ||
+    (showMarkPaid && actionLoading === 'paid')
 
   // Editable while draft: prefilled with the effective value, committed on
   // blur/Enter so half-typed dates never fire a PATCH. The draft state resyncs
@@ -190,21 +199,24 @@ export function RunHeader({
   const deviationWindow = hasCustomDeviationWindow(run) ? runDeviationWindow(run) : null
 
   const metaParts: React.ReactNode[] = [
-    <span key="payment" className="inline-flex items-center gap-2">
+    <span key="payment">
       {t('payment_date_label')}{' '}
       {paymentDateEditable ? (
-        <Input
-          type="date"
-          value={paymentDateDraft}
-          onChange={(e) => setPaymentDateDraft(e.target.value)}
-          onBlur={commitPaymentDate}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') e.currentTarget.blur()
-          }}
-          disabled={busy}
-          aria-label={t('payment_date_edit_aria')}
-          className="h-8 w-fit px-2 py-0 text-sm tabular-nums"
-        />
+        // inline-flex keeps the field on the meta line, whose parts the top bar sets inline.
+        <span className="inline-flex align-middle">
+          <Input
+            type="date"
+            value={paymentDateDraft}
+            onChange={(e) => setPaymentDateDraft(e.target.value)}
+            onBlur={commitPaymentDate}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') e.currentTarget.blur()
+            }}
+            disabled={busy}
+            aria-label={t('payment_date_edit_aria')}
+            className="h-8 w-fit px-2 py-0 text-sm tabular-nums"
+          />
+        </span>
       ) : (
         <span className="tabular-nums">{formatDate(run.payment_date)}</span>
       )}
@@ -272,12 +284,14 @@ export function RunHeader({
               <Badge variant="outline">{t('correction_badge')}</Badge>
             )}
           </div>
-          <p className="page-header-meta mt-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-sm text-muted-foreground">
+          {/* Separated in the text, as the other detail pages do: the top bar
+              sets the parts inline, where a flex gap does not apply. */}
+          <p className="page-header-meta mt-1 text-sm text-muted-foreground">
             {metaParts.map((part, i) => (
-              <span key={i} className="inline-flex items-center gap-x-2">
-                {i > 0 && <span aria-hidden>·</span>}
+              <Fragment key={i}>
+                {i > 0 && ' · '}
                 {part}
-              </span>
+              </Fragment>
             ))}
           </p>
         </div>
@@ -297,6 +311,12 @@ export function RunHeader({
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="min-w-[240px]">
+                {showMarkPaid && (
+                  <DropdownMenuItem onSelect={() => onMarkPaid?.()} disabled={busy}>
+                    <CheckCircleIcon className="h-4 w-4" />
+                    {t('action_mark_paid')}
+                  </DropdownMenuItem>
+                )}
                 {showPreview && (
                   <DropdownMenuItem
                     onSelect={onPreview}

@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { DetailSection } from '@/components/ui/detail-section'
+import { HelpPopover } from '@/components/ui/help-popover'
 import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineViews } from '@/lib/bookkeeping/voucher-line-view'
 import { CalculatorIcon, DocumentTextIcon } from '@/components/icons'
@@ -119,8 +120,9 @@ export function RunJournalPreview({ preview, onRecalculate, recalculating, under
             </div>
           ))}
           {benefitValues !== undefined && benefitValues > 0 && (
-            <p className="text-sm text-muted-foreground">
+            <p className="flex items-center gap-2 text-sm text-muted-foreground">
               {t('journal_preview_benefits_note', { amount: formatRunAmount(benefitValues) })}
+              <HelpPopover>{t('journal_preview_benefits_help')}</HelpPopover>
             </p>
           )}
         </div>
