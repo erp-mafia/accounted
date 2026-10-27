@@ -3,7 +3,8 @@ import type { NormalizedBankTransaction } from '@accounted/connect-contract'
 import { buildStableExternalIds } from '@/lib/transactions/external-id'
 import type { BankIngestRoute } from '@/types'
 
-const mocks = vi.hoisted(() => ({ upload: vi.fn(), ingest: vi.fn(), arrival: vi.fn() }))
+const mocks = vi.hoisted(() => ({ upload: vi.fn(), ingest: vi.fn(), arrival: vi.fn(), log: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => mocks.log }))
 vi.mock('@/lib/core/documents/document-service', () => ({ uploadDocument: (...a: unknown[]) => mocks.upload(...a) }))
 vi.mock('../page-arrival', () => ({ recordBankFeedPageArrival: (...a: unknown[]) => mocks.arrival(...a) }))
 vi.mock('@/lib/transactions/ingest', () => ({ ingestTransactions: (...a: unknown[]) => mocks.ingest(...a) }))
@@ -152,6 +153,8 @@ describe('syncOpenPaymentsAccount', () => {
     await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect })
     const rows = (mocks.ingest.mock.calls[0] as unknown[])[3] as Array<{ raw_document_id: string | null }>
     expect(rows[0].raw_document_id).toBeNull()
+    // Those rows keep no BFL 7 kap evidence, for good: an error that reaches error tracking.
+    expect(mocks.log.error).toHaveBeenCalledWith('raw bank response page not archived', expect.any(Error), expect.objectContaining({ connectionId: 'conn-1', companyId: 'co-1', page: 1 }))
   })
 
   it('keeps a fresh balance, forwards the ingest options, and reports a truncated or narrowed window', async () => {

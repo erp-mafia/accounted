@@ -480,8 +480,9 @@ export const GET = withCronContext('cron.bank_sync', async (_request, ctx) => {
   }
   if (providerUnavailable) {
     // The one line for the whole run: the per-connection failures above are
-    // the two that tripped it (and whatever was already in flight).
-    ctx.log.warn('enable banking refused the application credentials on the first connections tried; run stopped', {
+    // the two that tripped it (and whatever was already in flight). Every
+    // connection stays 'active' and stops syncing, so this is an error.
+    ctx.log.error('enable banking refused the application credentials on the first connections tried; run stopped', {
       credentialFailures: circuit.credentialFailures,
       skippedByCircuit,
     })

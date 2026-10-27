@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+const errorLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => errorLog }))
+
 vi.mock('@/lib/reconciliation/unattended-sweep', () => ({
   runUnattendedReconciliationSweep: vi.fn(),
   toSweepSummary: vi.fn(() => ({ summary: true })),
@@ -50,6 +53,14 @@ describe('sweepAfterOverlappingSync', () => {
     mockSweep.mockRejectedValue(new Error('boom'))
     const applied = await sweepAfterOverlappingSync(supabase as never, input())
     expect(applied).toBe(0)
-    expect(log.warn).toHaveBeenCalledWith('Post-sync reconciliation sweep failed', expect.objectContaining({ connectionId: 'conn-1', message: 'boom' }))
+    // Never swept again, and the rows sit unhandled next to their verifikat: an error, not a warning.
+    expect(errorLog.error).toHaveBeenCalledWith('Post-sync reconciliation sweep failed', expect.objectContaining({ connectionId: 'conn-1', companyId: 'co-1', message: 'boom' }))
+  })
+
+  it('reports a summary that could not be stamped on the connection', async () => {
+    const { supabase } = createTableMockSupabase({ bank_connections: [{ data: null, error: { code: '42501', message: 'denied' } }] })
+    mockSweep.mockResolvedValue(sweepResult(3))
+    expect(await sweepAfterOverlappingSync(supabase as never, input())).toBe(3)
+    expect(errorLog.error).toHaveBeenCalledWith('Post-sync reconciliation summary not stamped', expect.objectContaining({ connectionId: 'conn-1', code: '42501' }))
   })
 })

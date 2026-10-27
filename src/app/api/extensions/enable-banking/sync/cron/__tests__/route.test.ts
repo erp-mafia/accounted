@@ -799,8 +799,10 @@ describe('GET /api/extensions/enable-banking/sync/cron: circuit breaker for an e
     expect(state.updates).toEqual([])
     expect(state.leaseWrites).toHaveLength(2)
     expect(state.active.every(row => row.status === 'active' && row.error_message === null)).toBe(true)
-    // One warn line for the run, none at error level.
-    const tripLines = consoleWarn.mock.calls.filter(call => String(call[0]).includes('run stopped'))
+    // One error line for the run (every connection silently stops syncing,
+    // so it must reach error tracking), and no per-connection error lines.
+    expect(consoleWarn.mock.calls.some(call => String(call[0]).includes('run stopped'))).toBe(false)
+    const tripLines = consoleError.mock.calls.filter(call => String(call[0]).includes('run stopped'))
     expect(tripLines).toHaveLength(1)
     expect(String(tripLines[0][0])).toContain('skippedByCircuit=10')
     expect(String(tripLines[0][0])).toContain('credentialFailures=2')

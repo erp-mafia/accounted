@@ -26,6 +26,9 @@ import { syncOpenPaymentsAccount } from '@/lib/bank-feed/sync'
 import { recordBankFeedPageArrival } from '@/lib/bank-feed/page-arrival'
 import type { RawTransaction, IngestResult, IngestOptions } from '@/types'
 import type { StoredAccount, TransactionsFetchStrategy } from '../types'
+import { createLogger } from '@/lib/logger'
+
+const archiveLog = createLogger('enable-banking/sync')
 
 /** Ingest function signature: matches lib/transactions/ingest */
 export type IngestFn = (
@@ -514,8 +517,9 @@ export async function syncAccountTransactions(
       )
       archivedPageIds[i] = archived.id
     } catch (archiveError) {
-      console.error(`[enable-banking] Failed to archive raw response page ${i + 1}:`, archiveError)
-      // Archival failure must not fail the sync
+      // Archival failure must not fail the sync, but the page's rows land without
+      // their BFL 7 kap evidence for good (a re-sync deduplicates them): an error.
+      archiveLog.error('raw bank response page not archived', archiveError as Error, { connectionId, companyId, accountUid: account.uid, page: i + 1 })
     }
     // How the page came in (best effort, never fails the sync).
     const pageId = archivedPageIds[i]

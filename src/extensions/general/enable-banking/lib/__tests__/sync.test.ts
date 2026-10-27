@@ -4,6 +4,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const mockGetAllTransactionsWithRaw = vi.fn()
 const mockConvertTransaction = vi.fn()
 const mockGetAccountBalance = vi.fn()
+const archiveLog = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => archiveLog }))
+
 vi.mock('../api-client', () => ({
   getAllTransactionsWithRaw: (...args: unknown[]) => mockGetAllTransactionsWithRaw(...args),
   convertTransaction: (...args: unknown[]) => mockConvertTransaction(...args),
@@ -194,8 +197,6 @@ describe('syncAccountTransactions', () => {
 
     mockUploadDocument.mockRejectedValue(new Error('Storage error'))
 
-    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
-
     const account = makeAccount()
     const result = await syncAccountTransactions(
       {} as never,
@@ -210,12 +211,12 @@ describe('syncAccountTransactions', () => {
 
     expect(result.imported).toBe(1)
     expect(result.errors).toBe(0)
-    expect(errorSpy).toHaveBeenCalledWith(
-      expect.stringContaining('Failed to archive raw response'),
-      expect.any(Error)
+    // The rows landed without their BFL 7 kap evidence, for good: an error that reaches error tracking.
+    expect(archiveLog.error).toHaveBeenCalledWith(
+      'raw bank response page not archived',
+      expect.any(Error),
+      expect.objectContaining({ connectionId: CONNECTION_ID, companyId: COMPANY_ID, page: 1 }),
     )
-
-    errorSpy.mockRestore()
   })
 
   it('forwards strategy from sync options to getAllTransactionsWithRaw', async () => {

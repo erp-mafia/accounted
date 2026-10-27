@@ -39,6 +39,8 @@ function makeRetroMock(opts: {
   invoice: unknown
   linkedCount: number
   candidates: unknown[]
+  /** What the guarded suggestion write answers; one updated row by default. */
+  update?: { data: unknown; error: unknown }
 }) {
   const updates: Record<string, unknown>[] = []
   const chain = (result: unknown): unknown =>
@@ -62,7 +64,7 @@ function makeRetroMock(opts: {
               : chain({ data: opts.candidates, error: null }),
           update: (payload: Record<string, unknown>) => {
             updates.push(payload)
-            return chain({ data: null, error: null })
+            return chain(opts.update ?? { data: [{ id: 'tx-retro' }], error: null })
           },
         }
       }
@@ -222,6 +224,31 @@ describe('Supplier Invoice Core Handler', () => {
       mockServiceClient.mockReturnValue(supabase as never)
       await emitRegistered('si-retro')
       expect(updates).toHaveLength(0)
+      expect(mockLogMatch).not.toHaveBeenCalled()
+    })
+
+    it('logs no suggestion when the transaction was linked between the scan and the write', async () => {
+      const { supabase, updates } = makeRetroMock({
+        invoice: baseInvoice(),
+        linkedCount: 0,
+        candidates: [matchingTx()],
+        update: { data: [], error: null },
+      })
+      mockServiceClient.mockReturnValue(supabase as never)
+      await emitRegistered('si-retro')
+      expect(updates).toHaveLength(1)
+      expect(mockLogMatch).not.toHaveBeenCalled()
+    })
+
+    it('logs no suggestion when the suggestion write was refused', async () => {
+      const { supabase } = makeRetroMock({
+        invoice: baseInvoice(),
+        linkedCount: 0,
+        candidates: [matchingTx()],
+        update: { data: null, error: { message: 'permission denied' } },
+      })
+      mockServiceClient.mockReturnValue(supabase as never)
+      await emitRegistered('si-retro')
       expect(mockLogMatch).not.toHaveBeenCalled()
     })
 

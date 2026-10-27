@@ -12,13 +12,19 @@
  *   - The summary is stamped on the connection (last_sie_sweep) so the UI can
  *     say "Vi matchade X av Y" and the review surface knows what to granska.
  *
- * Non-critical: a failure leaves the rows for manual review and counts 0.
+ * Non-critical for the sync: a failure leaves the rows for manual review and
+ * counts 0. It is never swept again (the sweep runs only when a sync imports
+ * rows), so the failure is an error: those rows sit unhandled next to the
+ * verifikat that already book them, which invites booking them twice.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { createLogger } from '@/lib/logger'
 import {
   runUnattendedReconciliationSweep,
   toSweepSummary,
 } from '@/lib/reconciliation/unattended-sweep'
+
+const errorLog = createLogger('bank-sync/post-sync-sweep')
 
 export interface PostSyncSweepLog {
   info: (message: string, meta?: Record<string, unknown>) => void
@@ -53,10 +59,11 @@ export async function sweepAfterOverlappingSync(
       dateTo: toDate,
       ledgerAccounts,
     })
-    await supabase
+    const { error: stampError } = await supabase
       .from('bank_connections')
       .update({ last_sie_sweep: toSweepSummary(sweep, { dateFrom: sweepFrom, dateTo: toDate }) })
       .eq('id', connectionId)
+    if (stampError) errorLog.error('Post-sync reconciliation summary not stamped', { connectionId, companyId, code: stampError.code, message: stampError.message })
     if (sweep.applied > 0 || sweep.skippedBelowThreshold > 0) {
       log.info('Post-sync reconciliation linked imported rows to existing verifikat', {
         connectionId,
@@ -71,8 +78,9 @@ export async function sweepAfterOverlappingSync(
     }
     return sweep.applied
   } catch (sweepError) {
-    log.warn('Post-sync reconciliation sweep failed', {
+    errorLog.error('Post-sync reconciliation sweep failed', {
       connectionId,
+      companyId,
       message: sweepError instanceof Error ? sweepError.message : String(sweepError),
     })
     return 0

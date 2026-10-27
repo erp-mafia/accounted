@@ -288,6 +288,20 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ connectionId: 'conn-1', initialSync: undefined }))
   })
 
+  it('treats an unanswered SIE overlap check as an overlap: no auto-categorization, the sweep runs, and it is an error', async () => {
+    const { supabase } = stub({
+      bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      transactions: [{ data: null, error: null }],
+      sie_imports: [{ data: null, error: { code: '57014', message: 'canceling statement due to statement timeout' } }],
+    })
+    mocks.syncAccount.mockResolvedValue({ imported: 12, duplicates: 0, errors: 0, transactionIds: ['t1'], returnedMinBookingDate: '2026-08-01', returnedMaxBookingDate: '2026-10-01', requestedFromDate: '2026-07-01', historyNarrowed: false, truncated: false })
+    const result = await run(supabase, { trigger: 'cron', unattended: true })
+    expect(result).toMatchObject({ ok: true })
+    expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ options: expect.objectContaining({ skipAutoCategorization: true }) }))
+    expect(mocks.sweep).toHaveBeenCalled()
+    expect(log.error).toHaveBeenCalledWith('SIE overlap check failed: treating the window as covered by an import', expect.objectContaining({ connectionId: 'conn-1', code: '57014' }))
+  })
+
   it('links a first import over SIE-imported books to the existing verifikat (crm#1282)', async () => {
     const { supabase } = stub({
       bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],

@@ -6,6 +6,9 @@ const pricesCreate = vi.fn()
 const paymentLinksCreate = vi.fn()
 const paymentLinksUpdate = vi.fn()
 
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => log }))
+
 vi.mock('@/lib/stripe/client', () => ({
   getStripe: () => ({
     prices: { create: pricesCreate },
@@ -237,6 +240,19 @@ describe('stripe payment links', () => {
         ),
       ).resolves.toBeUndefined()
       expect(paymentLinksUpdate).toHaveBeenCalled()
+      // Nothing retries it and the link keeps taking money: an error, not a warning.
+      expect(log.error).toHaveBeenCalledWith('failed to deactivate payment link after invoice paid', expect.objectContaining({ companyId: 'company-1', paymentLinkId: 'plink_1', reason: 'gone' }))
+    })
+
+    it('credit_note.created handler reports a failed read of the credited invoice instead of reading it as no link', async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: null, error: { message: 'canceling statement due to statement timeout' } })
+      await handleCreditNoteCreated(
+        { creditNote: { credited_invoice_id: 'inv-orig' } as never, companyId: 'company-1' },
+        { supabase } as never,
+      )
+      expect(paymentLinksUpdate).not.toHaveBeenCalled()
+      expect(log.error).toHaveBeenCalledWith('failed to deactivate payment link after credit note', expect.objectContaining({ invoiceId: 'inv-orig', reason: expect.stringContaining('credited invoice read failed') }))
     })
 
     it('credit_note.created handler deactivates the ORIGINAL invoice link', async () => {
