@@ -3708,6 +3708,7 @@ describe('salary calculation policy and engångsskatt shapes', () => {
         leave_context: 'all_registered',
         net_rounding: 'up',
         one_off_tax_rounding: 'truncate',
+        vacation_day_value: 'daily_divisor',
       })
     }
     expect(Schema.safeParse({ salary_calculation_policy: { sick_rate: 'hourly' } }).success).toBe(false)

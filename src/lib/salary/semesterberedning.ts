@@ -18,21 +18,31 @@
  *
  * Day valuation (BFNAR 2016:10 per-employee, simplified and shown in the
  * review report before anything commits):
- *   sammalöneregeln (monthly): monthly/dailyDivisor + monthly x tillägg
- *   procentregeln (monthly)  : monthly x 12 x rate / entitled days
- *   procentregeln (hourly)   : hourly x hours_per_week x 52 x rate / entitled
+ *   sammalöneregeln (monthly): monthly/dailyDivisor + monthly x tillägg, or
+ *                              monthly x 4,6 % + monthly x tillägg under the
+ *                              vacation_day_value policy percent_4_6
+ *   procentregeln            : the earning year's day value (rate x the
+ *                              intjänandeår's semesterlönegrundande lön /
+ *                              earned days, 16 b §, procentregeln-liability.ts),
+ *                              and only where Accounted lacks that year the
+ *                              estimate below
+ *   procentregeln estimate   : monthly x 12 x rate / entitled days, or
+ *                              hourly x hours_per_week x 52 x rate / entitled
+ * The days valued are vacationLiabilityDays' (vacation-liability-days.ts):
+ * the year's untaken paid days, the sparade dagar and, on the statutory
+ * basis, the next semesterår's days earned in the closing intjänandeår. The
+ * Semesterskuld report and the remeasurement value the same days, so a
+ * company that books the liability at every run finds next to no drift here.
  * Under sammalöneregeln the liability also carries the semesterlön of the
  * rörliga lönedelar still unpaid at the year end (Semesterlagen 16 a §
  * tredje stycket, lib/salary/variable-vacation-pay.ts): it is paid after the
  * semesterår, not per day, so it is a sum per employee, not a day value.
  * Avgifter on the liability use per-employee age tiers at the settlement
- * year (born <= 1937 exempt, fyllt 67 vid årets ingång 10.21%, otherwise
- * 31.42%), matching the rates the per-run accruals booked on 2940; a flat
- * 31.42% target would "correct" a correct booked balance to a wrong one
- * for companies with 67+ staff. The temporary youth discount is
- * deliberately NOT provisioned: it is payment-month- and cap-dependent and
- * expires Sep 2027, so the full rate is the prudent target (ÅRL
- * försiktighetsprincipen); youth accruals therefore show a top-up drift.
+ * year (liabilityAvgifterRate: born <= 1937 exempt, fyllt 67 vid årets
+ * ingång 10.21%, otherwise 31.42%), matching the rates the per-run accruals
+ * booked on 2940. The temporary youth discount is deliberately NOT
+ * provisioned (see liabilityAvgifterRate); youth accruals therefore show a
+ * top-up drift.
  *
  * The frozen report is stored on vacation_year_closures (BFL 7 kap: it is
  * the underlag for the adjustment entry). The UNIQUE
@@ -48,8 +58,15 @@ import { loadVariablePayRuns, previousVacationYearStart, unpaidVariableVacationP
 import { getVacationYearBounds, type VacationYearBasis } from './vacation-year'
 import { getVacationYearBasis, syncVacationLedgerForEmployees, type VacationBalanceRow } from './vacation-ledger'
 import { remainingSavedDays } from './vacation-category'
-import { decryptPersonnummer } from './personnummer'
-import { avgiftAgeTier } from './avgift-tier'
+import {
+  liabilityAvgifterRate,
+  liabilitySettlementYear,
+  vacationLiabilityDays,
+  type VacationLiabilityDays,
+} from './vacation-liability-days'
+import { loadProcentregelnLiabilityValues, procentregelnLiabilitySek } from './procentregeln-liability'
+import { DRIFT_TOLERANCE_SEK } from './vacation-liability-plan'
+import { vacationDayValuePolicyFrom, type VacationDayValuePolicy } from './calculation-policy'
 import {
   splitVacationLiabilityChange,
   vacationLiabilityChangeAccount,
@@ -62,14 +79,8 @@ import { categoryForTemplateGroup } from '@/lib/posting/categories'
 import { mappingVersion } from '@/lib/posting/mapping-version'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 
-const STANDARD_AVGIFTER_RATE = 0.3142
-/** Ålderspensionsavgift only, for fyllt 67 vid årets ingång (SAL 2 kap). */
-const REDUCED_AVGIFTER_RATE = 0.1021
-/** Threshold applies to payment years >= 2026; every close this module can
- * run settles 2026 or later, so the pre-2026 66-year threshold never applies. */
-const REDUCED_AVGIFT_AGE = 67
-/** Book an adjustment only beyond this drift (öre noise is not a bokslut post). */
-const DRIFT_TOLERANCE_SEK = 1
+/** Sammalöneregeln day value under vacation_day_value percent_4_6 (K2 exempel 17 b). */
+const PERCENT_4_6_DAY_SHARE = 0.046
 
 export type VacationCloseResult<T> =
   | { ok: true; data: T }
@@ -88,6 +99,10 @@ export interface VacationCloseEmployeeRow {
   untaken_below_floor_days: number
   /** Saved days whose origin year fell out of the 5-year window: forced payout. */
   expiring_days: number
+  /** Statutory basis: the next semesterår's paid days earned in the closing
+   *  intjänandeår, owed at the year end and part of the liability. 0 under
+   *  the calendar basis, where they are earned in the year they are taken. */
+  earning_days?: number
   /** Obetalda days still unused at close: they lapse (Semesterlagen 8 §), never carry. */
   unpaid_days_lapsed: number
   /** Förskott days taken during the closing year: they reduce next year's
@@ -175,12 +190,18 @@ export type DayValueEmployee = Pick<
 
 /**
  * Simplified BFNAR 2016:10 value of one paid vacation day in SEK (the unit
- * the ledger counts, vacation-net-days.ts). Shared by the year-close, the MCP
- * vacation-balance tool and the v1 vacation-balance route, so all three agree
- * on the semesterlöneskuld estimate and a kollektivavtal semesterlön rate
- * (employees.vacation_pay_rate) reaches every one of them.
+ * the ledger counts, vacation-net-days.ts), from the employee's pay today.
+ * Under procentregeln this is only the estimate: the valuations price a day
+ * from the earning year's pay (procentregeln-liability.ts, Semesterlagen
+ * 16 b §) and fall back here where Accounted lacks that year. Shared by the year-close, the
+ * Semesterskuld report, the remeasurement, the MCP vacation-balance tool and
+ * the v1 vacation-balance route, so all of them agree on the
+ * semesterlöneskuld estimate and a kollektivavtal semesterlön rate
+ * (employees.vacation_pay_rate) reaches every one of them. `dayValuePolicy`
+ * is the company's vacation_day_value convention (calculation-policy.ts); it
+ * only changes the sammalöneregeln dagslön.
  */
-export function dayValueSek(emp: DayValueEmployee): number {
+export function dayValueSek(emp: DayValueEmployee, dayValuePolicy: VacationDayValuePolicy = 'daily_divisor'): number {
   const rate = resolveVacationPayRate(emp.vacation_days_per_year, emp.vacation_pay_rate)
   if (emp.salary_type === 'hourly') {
     const annualBasis = (emp.hourly_rate || 0) * (emp.hours_per_week ?? 40) * 52
@@ -197,36 +218,13 @@ export function dayValueSek(emp: DayValueEmployee): number {
     // week), so the dagslön is spread over the paid days it covers. The
     // tillägg is per paid day as it stands (Semesterlagen 16 a §).
     const tillagg = emp.semestertillagg_rate ?? 0.0043
+    // percent_4_6: 4,6 % of the månadslön per paid day, schedule-independent
+    // (25 paid days are 115 % of a month whatever the week looks like).
+    if (dayValuePolicy === 'percent_4_6') return roundOre(monthly * PERCENT_4_6_DAY_SHARE + monthly * tillagg)
     const perDayOff = paidDaysPerDayOff(emp.vacation_days_per_year, emp.workdays_per_week)
     return roundOre(monthly / dailyDivisor(emp.workdays_per_week) / perDayOff + monthly * tillagg)
   }
   return roundOre((monthly * 12 * rate) / Math.max(emp.vacation_days_per_year, 1))
-}
-
-/**
- * Age-tier avgifter rate for the semesterlöneskuld provision.
- *
- * The liability settles when vacation is taken during the NEXT vacation
- * year, so the tier is evaluated against that settlement year. This matches
- * the per-run accruals, which credit 2940 at each employee's actual rate
- * (calculation-engine.ts step 10). The temporary youth discount is not
- * applied here (see the module header). An absent or undecryptable
- * personnummer falls back to the standard rate, mirroring the run engine.
- */
-function avgifterRateFor(emp: EmployeeRosterRow, settlementYear: number): number {
-  if (!emp.personnummer) return STANDARD_AVGIFTER_RATE
-  let pnr: string
-  try {
-    pnr = decryptPersonnummer(emp.personnummer)
-  } catch {
-    return STANDARD_AVGIFTER_RATE
-  }
-  // The engine's own tier (avgift-tier.ts), so the 2940 target uses the
-  // rates the per-run accruals booked.
-  const tier = avgiftAgeTier(pnr, settlementYear, REDUCED_AVGIFT_AGE)
-  if (tier === 'exempt') return 0
-  if (tier === 'reduced') return REDUCED_AVGIFTER_RATE
-  return STANDARD_AVGIFTER_RATE
 }
 
 /** Prorated entitlement for the new year (Semesterlagen 3a §: round UP). */
@@ -395,9 +393,15 @@ export async function previewVacationYearClose(
 
   const closingYear = Number(closingYearStart.slice(0, 4))
   // The rolled liability is paid out during the new vacation year: that is
-  // the year the avgifter age tier is evaluated against.
-  const settlementYear = Number(newYearStart.slice(0, 4))
-  const rows: VacationCloseEmployeeRow[] = []
+  // the year the avgifter age tier is evaluated against (the day after the
+  // year end, liabilitySettlementYear).
+  const settlementYear = liabilitySettlementYear(yearEnd)
+  // Everything but the SEK value, which waits for the day-value policy.
+  const pending: Array<{
+    emp: EmployeeRosterRow
+    days: VacationLiabilityDays
+    row: Omit<VacationCloseEmployeeRow, 'day_value_sek' | 'computed_liability_sek' | 'avgifter_rate'>
+  }> = []
 
   for (const emp of roster.data) {
     const ledger = ledgerByEmployee.get(emp.id)
@@ -441,13 +445,22 @@ export async function previewVacationYearClose(
       savedAfter[String(closingYear)] = roundOre((savedAfter[String(closingYear)] ?? 0) + saveable)
     }
 
-    const dayValue = dayValueSek(emp)
     // The liability covers everything still owed: this year's untaken days
     // (incl. the below-floor flag) + all saved days + expiring days awaiting
-    // payout.
-    const liabilityDays = roundOre(
-      remaining + Object.values(savedBefore).reduce((s, d) => s + (Number(d) || 0), 0),
-    )
+    // payout, and on the statutory basis the next year's days earned in the
+    // closing intjänandeår (vacationLiabilityDays, shared with the report and
+    // the remeasurement).
+    const days = vacationLiabilityDays({
+      basis,
+      yearStart: closingYearStart,
+      asOfDate: yearEnd,
+      entitledDays: entitled,
+      takenDays: taken,
+      savedDays: Object.values(savedBefore).reduce((s, d) => s + (Number(d) || 0), 0),
+      vacationDaysPerYear: emp.vacation_days_per_year,
+      employmentStart: emp.employment_start,
+      employmentEnd: emp.employment_end,
+    })
     const variableVacationPay =
       emp.vacation_rule === 'sammaloneregeln'
         ? unpaidVariableVacationPayAtYearEnd({
@@ -456,9 +469,8 @@ export async function previewVacationYearClose(
             runs: variablePayRuns.get(emp.id) ?? [],
           }).unpaid
         : 0
-    const liability = roundOre(liabilityDays * dayValue + variableVacationPay)
 
-    rows.push({
+    pending.push({ emp, days, row: {
       employee_id: emp.id,
       employee_name: `${emp.first_name} ${emp.last_name}`,
       vacation_rule: emp.vacation_rule,
@@ -478,24 +490,62 @@ export async function previewVacationYearClose(
         0,
         roundOre(nextYearEntitled(emp, newYearStart, newYearBounds.end) - advanceTaken),
       ),
-      day_value_sek: dayValue,
       variable_vacation_pay_sek: variableVacationPay,
-      computed_liability_sek: liability,
-      avgifter_rate: avgifterRateFor(emp, settlementYear),
+      ...(days.earning_days > 0 ? { earning_days: days.earning_days } : {}),
       liability_change_account: vacationLiabilityChangeAccount({
         employmentType: emp.employment_type,
         personnelCategory: emp.personnel_category,
       }),
-    })
+    } })
   }
+
+  const booked = await bookedVacationBalances(supabase, companyId, yearEnd)
+  if (!booked.ok) return booked
+
+  // The company's day-value convention (calculation-policy.ts), read last:
+  // it only prices the days counted above.
+  const { data: policyRow } = await supabase
+    .from('company_settings')
+    .select('salary_calculation_policy')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  const dayValuePolicy = vacationDayValuePolicyFrom(
+    (policyRow as { salary_calculation_policy?: unknown } | null)?.salary_calculation_policy,
+  )
+
+  // Procentregeln days are valued on the pay they were earned on (16 b §,
+  // procentregeln-liability.ts), not today's salary; the estimate stands in
+  // only where Accounted lacks the earning year.
+  let procentValues: Awaited<ReturnType<typeof loadProcentregelnLiabilityValues>>
+  try {
+    procentValues = await loadProcentregelnLiabilityValues(supabase, {
+      companyId,
+      basis,
+      asOfDate: yearEnd,
+      employees: roster.data.filter((e) => e.vacation_rule === 'procentregeln'),
+    })
+  } catch (err) {
+    return { ok: false, code: 'INTERNAL_ERROR', details: { message: err instanceof Error ? err.message : 'unknown' } }
+  }
+
+  const rows: VacationCloseEmployeeRow[] = pending.map(({ emp, days, row }) => {
+    const estimate = dayValueSek(emp, dayValuePolicy)
+    const procent =
+      emp.vacation_rule === 'procentregeln' ? procentregelnLiabilitySek(days, procentValues.get(emp.id), estimate) : null
+    return {
+      ...row,
+      day_value_sek: procent ? procent.dayValue : estimate,
+      computed_liability_sek: procent
+        ? procent.liability
+        : roundOre(days.total_days * estimate + row.variable_vacation_pay_sek),
+      avgifter_rate: liabilityAvgifterRate(emp.personnummer, settlementYear),
+    }
+  })
 
   const computedLiability = sumOre(rows.map((r) => r.computed_liability_sek))
   const computedAvgifter = sumOre(
     rows.map((r) => roundOre(r.computed_liability_sek * r.avgifter_rate)),
   )
-
-  const booked = await bookedVacationBalances(supabase, companyId, yearEnd)
-  if (!booked.ok) return booked
 
   const drift2920 = roundOre(computedLiability - booked.data.booked2920)
   const drift2940 = roundOre(computedAvgifter - booked.data.booked2940)

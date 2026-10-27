@@ -15,14 +15,19 @@ import {
   xlsxFilename,
 } from '@/lib/reports/xlsx-export'
 import { fileResponse } from '@/lib/api/file-response'
+import { roundOre } from '@/lib/money'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 
 /**
  * GET /api/reports/vacation-liability
  *
  * Semesterlöneskuld per employee (BFNAR 2016:10 kap 16), accounts 2920 +
- * 2940, as of a fiscal period's end (`period_id`) or December 31 of `year`
- * (default: the current year). JSON carries `check`: the booked 2920/2940
- * balances and the difference against the report, null when no fiscal
+ * 2940, as of `as_of`, a fiscal period's end (`period_id`, today while the
+ * period runs) or December 31 of
+ * `year` (default: the current year). Each row carries the booked
+ * specification and the computed (day-valued) liability. JSON carries
+ * `check`: the booked 2920/2940 balances, their difference against the
+ * specification and against the computed liability, null when no fiscal
  * period covers the date. format=pdf|xlsx downloads the same report.
  */
 export const GET = withRouteContext('report.vacation_liability', async (request, ctx) => {
@@ -33,10 +38,10 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
     operation: 'report.vacation_liability',
   })
   if (!query.success) return query.response
-  const { period_id: periodId, year, format } = query.data
+  const { period_id: periodId, year, as_of: asOf, format } = query.data
 
-  let asOfDate = `${year ?? new Date().getFullYear()}-12-31`
-  if (periodId) {
+  let asOfDate = asOf ?? `${year ?? new Date().getFullYear()}-12-31`
+  if (periodId && !asOf) {
     const { data: period } = await supabase
       .from('fiscal_periods')
       .select('period_end')
@@ -46,7 +51,12 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
     if (!period) {
       return errorResponseFromCode('FISCAL_PERIOD_NOT_FOUND', log, { requestId })
     }
-    asOfDate = (period as { period_end: string }).period_end
+    // A year still running is valued as of today: the liability on a
+    // future date would count days not yet earned against runs not yet
+    // booked, and stäm av books only dates that have passed.
+    const periodEnd = (period as { period_end: string }).period_end
+    const today = todayIsoStockholm()
+    asOfDate = periodEnd > today ? today : periodEnd
   }
 
   try {
@@ -104,6 +114,11 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
           currencyColumn('Sociala avgifter (2940)'),
           currencyColumn('Summa skuld'),
           currencyColumn('Förskottsskuld'),
+          decimalColumn('Skuldens dagar'),
+          currencyColumn('Dagvärde'),
+          currencyColumn('Beräknad semesterlön'),
+          currencyColumn('Beräknade sociala avgifter'),
+          currencyColumn('Beräknad skuld'),
         ],
         rows: report.rows,
         mapRow: (r) => [
@@ -118,6 +133,11 @@ export const GET = withRouteContext('report.vacation_liability', async (request,
           r.accruedAvgifter,
           r.totalLiability,
           r.advanceVacationDebt,
+          r.liabilityDays,
+          r.dayValue,
+          r.computedLiability,
+          r.computedAvgifter,
+          roundOre(r.computedLiability + r.computedAvgifter),
         ],
       },
     ])

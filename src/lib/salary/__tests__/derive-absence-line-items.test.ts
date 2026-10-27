@@ -1,7 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import {
   deriveAbsenceLineItems,
+  backAtWorkBetween,
   buildSjukloneperioder,
+  sjukloneperiodDayIndex,
   sjukloneperiodGapTolerance,
   calculateVabDeduction,
   calculateParentalLeaveDeduction,
@@ -10,6 +12,7 @@ import {
   type DeriveInput,
 } from '../derive-absence-line-items'
 import type { PayrollConfig } from '../payroll-config'
+import { roundOre } from '@/lib/money'
 
 const config: PayrollConfig = {
   configYear: 2026,
@@ -1245,5 +1248,190 @@ describe('deriveAbsenceLineItems: semesterlönegrundande frånvaro (#60 C)', () 
     expect(
       deriveAbsenceLineItems(baseInput({ monthlySalary: 0, salaryType: 'hourly', hourlyRate: 200 })).qualifyingAbsenceHours,
     ).toBe(0)
+  })
+})
+
+/** Every Monday-to-Friday date from `from` to `to`, inclusive: the days a sick row exists on. */
+function weekdays(from: string, to: string): string[] {
+  const out: string[] = []
+  for (let t = Date.parse(`${from}T00:00:00Z`); t <= Date.parse(`${to}T00:00:00Z`); t += 86_400_000) {
+    const d = new Date(t)
+    if (d.getUTCDay() % 6 !== 0) out.push(d.toISOString().slice(0, 10))
+  }
+  return out
+}
+
+const sickRows = (dates: string[], hours = 8): AbsenceDay[] =>
+  dates.map(absence_date => ({ absence_date, absence_type: 'sick' as const, hours }))
+
+const rowOf = (result: ReturnType<typeof deriveAbsenceLineItems>, type: string) =>
+  result.lineItems.filter(li => li.item_type === type)
+
+describe('återinsjuknande: only sick days count toward the fourteen (SjLL 7 §)', () => {
+  // LB-11: månadslön 36 000, sick 5-14 October 2026 (Monday to Wednesday the
+  // week after), back at work 15-16 October, sick again 19-23 October.
+  const firstSpell = weekdays('2026-10-05', '2026-10-14')
+  const secondSpell = weekdays('2026-10-19', '2026-10-23')
+
+  it('backAtWorkBetween: a weekend is no working day, a weekday without a sick row is', () => {
+    // Friday to Monday: only the weekend in between.
+    expect(backAtWorkBetween('2026-10-09', '2026-10-12')).toBe(false)
+    // Wednesday to Monday: Thursday and Friday were working days.
+    expect(backAtWorkBetween('2026-10-14', '2026-10-19')).toBe(true)
+    // Consecutive days never hold a day in between.
+    expect(backAtWorkBetween('2026-10-05', '2026-10-06')).toBe(false)
+    // Easter 2026: Thursday 2 April to Tuesday 7 April holds only Långfredag,
+    // the weekend and Annandag påsk, so the illness never stopped.
+    expect(backAtWorkBetween('2026-04-02', '2026-04-07')).toBe(false)
+    // A one-day-a-week schedule has no weekdays on record: 7 days apart can
+    // be two consecutive working days, 8 cannot.
+    expect(backAtWorkBetween('2026-09-02', '2026-09-09', 1)).toBe(false)
+    expect(backAtWorkBetween('2026-09-02', '2026-09-10', 1)).toBe(true)
+    // Four days a week: consecutive working days are at most 4 apart.
+    expect(backAtWorkBetween('2026-10-15', '2026-10-19', 4)).toBe(false)
+    expect(backAtWorkBetween('2026-10-15', '2026-10-20', 4)).toBe(true)
+  })
+
+  it('splits one sjuklöneperiod into two spells and numbers the second from where the first left off', () => {
+    const [seg, ...rest] = buildSjukloneperioder([...firstSpell, ...secondSpell])
+    expect(rest).toEqual([])
+    expect(seg.spells).toEqual([
+      { startDate: '2026-10-05', endDate: '2026-10-14' },
+      { startDate: '2026-10-19', endDate: '2026-10-23' },
+    ])
+    // The weekend inside the first spell counts: 12 October is day 8.
+    expect(sjukloneperiodDayIndex(seg, '2026-10-12')).toBe(8)
+    expect(sjukloneperiodDayIndex(seg, '2026-10-14')).toBe(10)
+    // The healthy 15-18 October do not: 19 October is day 11, 23 October day 15.
+    expect(sjukloneperiodDayIndex(seg, '2026-10-19')).toBe(11)
+    expect(sjukloneperiodDayIndex(seg, '2026-10-22')).toBe(14)
+    expect(sjukloneperiodDayIndex(seg, '2026-10-23')).toBe(15)
+  })
+
+  it('LB-11: pays 80 % sjuklön on 19-22 October and leaves only 23 October to Försäkringskassan, with one karensavdrag', () => {
+    const result = deriveAbsenceLineItems(
+      baseInput({ monthlySalary: 36000, periodDays: sickRows([...firstSpell, ...secondSpell]) }),
+    )
+    const karens = rowOf(result, 'sick_karens')
+    expect(karens).toHaveLength(1)
+    expect(karens[0].description).toBe('Karensavdrag (2026-10-05)')
+    expect(karens[0].amount).toBe(-1329.23)
+    // 8 + 4 sick weekdays in days 1-14: 12 × (1 714,29 − 80 %).
+    const sjuklon = rowOf(result, 'sick_day2_14')[0]
+    expect(sjuklon.quantity).toBe(12)
+    expect(sjuklon.amount).toBe(-4114.3)
+    const fk = rowOf(result, 'sick_day15_plus')[0]
+    expect(fk.quantity).toBe(1)
+    expect(fk.amount).toBe(-1714.29)
+    expect(result.flagFkReporting).toBe(true)
+    // Gross on the payslip: 36 000 less the three rows.
+    const gross = 36000 + result.lineItems.reduce((sum, li) => sum + li.amount, 0)
+    expect(roundOre(gross)).toBe(28842.18)
+  })
+
+  it('a weekend between two sick weekdays of one illness still counts, as before', () => {
+    // Sick every weekday 5-19 October: the weekends are sick days 6-7 and
+    // 13-14, so 19 October is day 15.
+    const dates = weekdays('2026-10-05', '2026-10-19')
+    const [seg] = buildSjukloneperioder(dates)
+    expect(seg.spells).toEqual([{ startDate: '2026-10-05', endDate: '2026-10-19' }])
+    const result = deriveAbsenceLineItems(baseInput({ monthlySalary: 36000, periodDays: sickRows(dates) }))
+    expect(rowOf(result, 'sick_day2_14')[0].quantity).toBe(10)
+    expect(rowOf(result, 'sick_day15_plus')[0].quantity).toBe(1)
+    expect(rowOf(result, 'sick_karens')).toHaveLength(1)
+  })
+
+  it('a public holiday without a sick row inside one illness is no return to work', () => {
+    // Thursday 2 April, then Tuesday 7 April after Easter: one spell, 7 April is day 6.
+    const [seg] = buildSjukloneperioder(['2026-04-02', '2026-04-07'])
+    expect(seg.spells).toEqual([{ startDate: '2026-04-02', endDate: '2026-04-07' }])
+    expect(sjukloneperiodDayIndex(seg, '2026-04-07')).toBe(6)
+  })
+
+  it('a gap longer than five days is a new sjuklöneperiod with a new karensavdrag, as before', () => {
+    // Sick Monday to Wednesday 5-7 October, back, sick again Wednesday 14 October (7 days later).
+    const result = deriveAbsenceLineItems(
+      baseInput({ monthlySalary: 36000, periodDays: sickRows(['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-14']) }),
+    )
+    expect(rowOf(result, 'sick_karens').map(k => k.description)).toEqual([
+      'Karensavdrag (2026-10-05)',
+      'Karensavdrag (2026-10-14)',
+    ])
+    expect(rowOf(result, 'sick_day2_14')[0].quantity).toBe(4)
+    expect(rowOf(result, 'sick_day15_plus')).toHaveLength(0)
+  })
+
+  it('continues a spell of the previous month with only the days it left, and no new karensavdrag', () => {
+    // Lookback: sick Monday 21 to Wednesday 30 September (10 calendar days,
+    // karensavdrag taken then). Back 1-2 October. Sick again 5-9 October.
+    const lookback = weekdays('2026-09-21', '2026-09-30')
+    const result = deriveAbsenceLineItems(
+      baseInput({
+        monthlySalary: 36000,
+        lookbackSickDates: lookback,
+        lookbackSickDays: sickRows(lookback),
+        periodDays: sickRows(weekdays('2026-10-05', '2026-10-09')),
+      }),
+    )
+    expect(rowOf(result, 'sick_karens')).toHaveLength(0)
+    // 5-8 October are days 11-14; 9 October is day 15.
+    expect(rowOf(result, 'sick_day2_14')[0].quantity).toBe(4)
+    expect(rowOf(result, 'sick_day15_plus')[0].quantity).toBe(1)
+  })
+
+  it('a two-spell sjuklöneperiod is one period for allmänt högriskskydd, as before', () => {
+    // Nine single-day sjuklöneperioder earlier in the twelve months: LB-11 is
+    // the tenth (karensavdrag) and a new illness on 30 October the eleventh (none).
+    const lookback = ['2026-01-13', '2026-02-10', '2026-03-10', '2026-04-14', '2026-05-12', '2026-06-09', '2026-07-14', '2026-08-11', '2026-09-08']
+    const result = deriveAbsenceLineItems(
+      baseInput({
+        monthlySalary: 36000,
+        lookbackSickDates: lookback,
+        periodDays: sickRows([...firstSpell, ...secondSpell, '2026-10-30']),
+      }),
+    )
+    expect(rowOf(result, 'sick_karens').map(k => k.description)).toEqual(['Karensavdrag (2026-10-05)'])
+  })
+
+  it('on a four-day week, a gap wider than two consecutive working days ends the spell', () => {
+    // Monday to Thursday. Sick 5-15 October (11 calendar days), back
+    // Monday 19 October, sick again Tuesday 20 to Thursday 22 and Monday 26.
+    const dates = ['2026-10-05', '2026-10-06', '2026-10-07', '2026-10-08', '2026-10-12', '2026-10-13', '2026-10-14', '2026-10-15', '2026-10-20', '2026-10-21', '2026-10-22', '2026-10-26']
+    const result = deriveAbsenceLineItems(
+      baseInput({
+        monthlySalary: 36000,
+        periodDays: sickRows(dates, 8),
+        hoursPerDay: 8,
+        hoursPerWeek: 32,
+        workdaysPerWeek: 4,
+        dailyDivisor: 17.33,
+      }),
+    )
+    // 20-22 October are days 12-14; Monday 26 October (same spell: Thursday
+    // to Monday is the schedule's own gap) is day 18.
+    expect(rowOf(result, 'sick_day2_14')[0].quantity).toBe(11)
+    expect(rowOf(result, 'sick_day15_plus')[0].quantity).toBe(1)
+    expect(rowOf(result, 'sick_karens')).toHaveLength(1)
+  })
+
+  it('on a two-day week, where no gap inside a sjuklöneperiod can prove a working day, counts calendar days as before', () => {
+    // Tuesday 6 and Monday 12 October, 6 days apart: one spell, 12 October is day 7.
+    const [seg] = buildSjukloneperioder(['2026-10-06', '2026-10-12'], 2)
+    expect(seg.spells).toHaveLength(1)
+    expect(sjukloneperiodDayIndex(seg, '2026-10-12')).toBe(7)
+  })
+
+  it('a part-time employee on a five-day week is numbered the same way, by date', () => {
+    const result = deriveAbsenceLineItems(
+      baseInput({
+        monthlySalary: 18000,
+        periodDays: sickRows([...firstSpell, ...secondSpell], 4),
+        hoursPerDay: 4,
+        hoursPerWeek: 20,
+        workdaysPerWeek: 5,
+      }),
+    )
+    expect(rowOf(result, 'sick_day2_14')[0].quantity).toBe(12)
+    expect(rowOf(result, 'sick_day15_plus')[0].quantity).toBe(1)
   })
 })

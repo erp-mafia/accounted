@@ -4,11 +4,13 @@ import { useState } from 'react'
 import useSWR from 'swr'
 import { useLocale, useTranslations } from 'next-intl'
 import { ChevronDownIcon } from '@/components/icons'
+import { AttnLine } from '@/components/ui/attn-line'
 import { DefRow } from '@/components/ui/detail-section'
 import { Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, VTD_CLASS, VTH_CLASS } from '@/components/ui/dry-table'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { SalaryBankList } from '@/lib/salary/payment/bank-list'
+import type { OverpaidEmployee } from '@/lib/salary/payment/payable'
 import { salaryBankListUrl, type SalaryPaymentFileFormat } from '@/lib/salary/payment/payment-format'
 import { cn, formatCurrency } from '@/lib/utils'
 
@@ -17,13 +19,33 @@ interface PaymentBankListProps {
   format: SalaryPaymentFileFormat
 }
 
+/** A refused bank list, with whom a correction overpaid when it has nothing to pay. */
+class BankListError extends Error {
+  constructor(
+    message: string,
+    readonly code: string | null,
+    readonly overpaid: OverpaidEmployee[],
+  ) {
+    super(message)
+  }
+}
+
+/** "Anna Andersson (1 290,75 kr), Bertil Berg (300,00 kr)": who a correction overpaid, and by how much. */
+function overpaidList(overpaid: OverpaidEmployee[]): string {
+  return overpaid.map((employee) => `${employee.name} (${formatCurrency(employee.amount)})`).join(', ')
+}
+
 /**
  * Banklista beside the payment-file download: the payments the file carries
  * for the chosen format, from the payment file builder itself (a dry run of
- * the same computation), with a PDF of the same list.
+ * the same computation), with a PDF of the same list. For a correction run
+ * (rättelsekörning) the file pays only the difference against the run it
+ * corrects: one muted line says so, and an employee it overpaid is named in
+ * one attention sentence.
  */
 export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
   const t = useTranslations('salary_payments')
+  const tc = useTranslations('salary_correction_payment')
   const locale = useLocale() as ErrorLocale
   const [open, setOpen] = useState(false)
 
@@ -31,10 +53,18 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
   // DOM text reaches the fetch or the link attribute as is.
   const listUrl = salaryBankListUrl(salaryRunId, format)
   const pdfUrl = salaryBankListUrl(salaryRunId, format, 'pdf')
-  const { data, error, isLoading } = useSWR<SalaryBankList, Error>(listUrl, async (url: string) => {
+  const { data, error, isLoading } = useSWR<SalaryBankList, BankListError>(listUrl, async (url: string) => {
     const res = await fetch(url)
     const json = await res.json().catch(() => null)
-    if (!res.ok) throw new Error(getErrorMessage(json, { context: 'salary', statusCode: res.status, locale }))
+    if (!res.ok) {
+      const envelope = json as { error?: { code?: unknown; details?: { correction?: { overpaid?: OverpaidEmployee[] } } } } | null
+      const overpaid = envelope?.error?.details?.correction?.overpaid
+      throw new BankListError(
+        getErrorMessage(json, { context: 'salary', statusCode: res.status, locale }),
+        typeof envelope?.error?.code === 'string' ? envelope.error.code : null,
+        Array.isArray(overpaid) ? overpaid : [],
+      )
+    }
     return (json as { data: SalaryBankList }).data
   })
 
@@ -43,6 +73,21 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
       <DefRow label={t('bank_list_label')}>
         <Skeleton className="h-4 w-48" />
       </DefRow>
+    )
+  }
+
+  // A correction with no positive difference has no file to make: say that,
+  // and name whom it overpaid, instead of "the list appears once the file can be made".
+  if (error?.code === 'SALARY_RUN_PAYMENT_FILE_NOTHING_TO_PAY') {
+    return (
+      <>
+        <DefRow label={t('bank_list_label')}>
+          <span className="text-[12.5px] text-muted-foreground">{tc('nothing_to_pay')}</span>
+        </DefRow>
+        {error.overpaid.length > 0 && (
+          <AttnLine>{tc('overpaid', { list: overpaidList(error.overpaid), count: error.overpaid.length })}</AttnLine>
+        )}
+      </>
     )
   }
 
@@ -55,6 +100,8 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
       </DefRow>
     )
   }
+
+  const overpaid = data.correction?.overpaid ?? []
 
   return (
     <>
@@ -81,7 +128,10 @@ export function PaymentBankList({ salaryRunId, format }: PaymentBankListProps) {
             {t('bank_list_pdf')}
           </a>
         </div>
+        {data.correction && <div className="mt-1 text-[12.5px] text-muted-foreground">{tc('difference_only')}</div>}
       </DefRow>
+      {/* Never paid, never deducted: the person handles it (one sentence, every name and amount). */}
+      {overpaid.length > 0 && <AttnLine>{tc('overpaid', { list: overpaidList(overpaid), count: overpaid.length })}</AttnLine>}
 
       {open && (
         <div className="overflow-x-auto pb-2">

@@ -1302,6 +1302,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   // report is the underlag for the drift-adjustment verifikation (BFL 7 kap).
   { name: 'employee_vacation_balances', file: 'employee_vacation_balances.json' },
   { name: 'vacation_year_closures', file: 'vacation_year_closures.json' },
+  // The frozen calculation behind each semesterlöneskuld remeasurement
+  // verifikat (salary_vacation_liability_method 'remeasure'): its underlag.
+  { name: 'vacation_liability_remeasurements', file: 'vacation_liability_remeasurements.json' },
   { name: 'salary_worked_days', file: 'salary_worked_days.json' },
   { name: 'salary_payslip_links', file: 'salary_payslip_links.json' },
   // Archived bank payment files (pain.001 / Bankgirot LB) exactly as handed

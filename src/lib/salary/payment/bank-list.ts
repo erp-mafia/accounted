@@ -29,7 +29,16 @@ export const SalaryBankListQuery = z.object({ format: z.enum(SALARY_PAYMENT_FILE
 
 export type SalaryBankList = Pick<
   SalaryPaymentFileOk,
-  'format' | 'filename' | 'paymentDate' | 'periodLabel' | 'employeeCount' | 'totalAmount' | 'payees' | 'payer' | 'warnings'
+  | 'format'
+  | 'filename'
+  | 'paymentDate'
+  | 'periodLabel'
+  | 'employeeCount'
+  | 'totalAmount'
+  | 'payees'
+  | 'payer'
+  | 'warnings'
+  | 'correction'
 >
 
 export type SalaryBankListResult = { ok: true; list: SalaryBankList } | SalaryPaymentFileError
@@ -40,10 +49,10 @@ export async function buildSalaryBankList(
 ): Promise<SalaryBankListResult> {
   const result = await buildSalaryPaymentFile(supabase, { ...input, dryRun: true })
   if (!result.ok) return result
-  const { format, filename, paymentDate, periodLabel, employeeCount, totalAmount, payees, payer, warnings } = result
+  const { format, filename, paymentDate, periodLabel, employeeCount, totalAmount, payees, payer, warnings, correction } = result
   return {
     ok: true,
-    list: { format, filename, paymentDate, periodLabel, employeeCount, totalAmount, payees, payer, warnings },
+    list: { format, filename, paymentDate, periodLabel, employeeCount, totalAmount, payees, payer, warnings, correction },
   }
 }
 

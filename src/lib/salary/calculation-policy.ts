@@ -92,6 +92,19 @@ import { z } from 'zod'
  *   - nearest: compatibility with systems that round the one-off tax to the
  *     nearest krona; off by at most one krona per rate group. Kept so a
  *     migrated customer's historical payslips can be reproduced.
+ *
+ * vacation_day_value: what one paid semesterdag is worth under
+ *   sammalöneregeln when the semesterlöneskuld is valued (dayValueSek in
+ *   semesterberedning.ts: the Semesterskuld report, the semesterårsavslut,
+ *   the remeasurement and the vacation balance). Not a pay rule: the salary
+ *   keeps running through the vacation either way, and the semestertillägg
+ *   on top is the employee's rate under both.
+ *   - daily_divisor: the dagslön, månadslön / dagdivisor (21 at a five-day
+ *     week, the schedule formula otherwise), spread over the paid days a day
+ *     off uses. About 4,76 % of the månadslön per paid day.
+ *   - percent_4_6: 4,6 % of the månadslön per paid day, the value the market
+ *     (Fortnox, Spiris, K2 exempel 17 b) uses. Semesterlagen does not say
+ *     how the liability is valued; K2 punkt 17.10 asks for it per employee.
  */
 export const SALARY_CALCULATION_POLICY_OPTIONS = {
   partial_month: ['workdays', 'annual_calendar_days'],
@@ -100,6 +113,7 @@ export const SALARY_CALCULATION_POLICY_OPTIONS = {
   leave_context: ['all_registered', 'through_deviation_end'],
   net_rounding: ['up', 'nearest'],
   one_off_tax_rounding: ['truncate', 'nearest'],
+  vacation_day_value: ['daily_divisor', 'percent_4_6'],
 } as const
 
 export type SalaryCalculationPolicyKey = keyof typeof SALARY_CALCULATION_POLICY_OPTIONS
@@ -116,6 +130,7 @@ const conventions = {
   leave_context: z.enum(SALARY_CALCULATION_POLICY_OPTIONS.leave_context),
   net_rounding: z.enum(SALARY_CALCULATION_POLICY_OPTIONS.net_rounding),
   one_off_tax_rounding: z.enum(SALARY_CALCULATION_POLICY_OPTIONS.one_off_tax_rounding),
+  vacation_day_value: z.enum(SALARY_CALCULATION_POLICY_OPTIONS.vacation_day_value),
 }
 
 /** Full policy: every key present; the defaults reproduce the historical engine. */
@@ -129,6 +144,7 @@ export const SalaryCalculationPolicySchema = z
     one_off_tax_rounding: conventions.one_off_tax_rounding.default(
       SALARY_CALCULATION_POLICY_OPTIONS.one_off_tax_rounding[0],
     ),
+    vacation_day_value: conventions.vacation_day_value.default(SALARY_CALCULATION_POLICY_OPTIONS.vacation_day_value[0]),
   })
   .strict()
 
@@ -144,3 +160,16 @@ export type SalaryCalculationPolicyPatch = z.infer<typeof SalaryCalculationPolic
 
 /** The historical engine behaviour, spelled out. */
 export const DEFAULT_SALARY_CALCULATION_POLICY: SalaryCalculationPolicy = SalaryCalculationPolicySchema.parse({})
+
+export type VacationDayValuePolicy = SalaryCalculationPolicy['vacation_day_value']
+
+/**
+ * The company's vacation_day_value from a stored policy object
+ * (company_settings.salary_calculation_policy or a run snapshot). Anything
+ * missing or unknown reads the default, so a valuation never fails on a
+ * policy the strict parser would refuse.
+ */
+export function vacationDayValuePolicyFrom(stored: unknown): VacationDayValuePolicy {
+  const raw = (stored as { vacation_day_value?: unknown } | null | undefined)?.vacation_day_value
+  return raw === 'percent_4_6' ? 'percent_4_6' : 'daily_divisor'
+}

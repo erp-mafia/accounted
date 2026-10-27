@@ -1,0 +1,1 @@
+[2026-10-27] The year-end wizard's semesterlöneskuld proposal targets the computed (day-valued) liability, not the report's booked specification: that restates 2920 itself, so the proposal was about 0 whenever runs under- or over-accrued.

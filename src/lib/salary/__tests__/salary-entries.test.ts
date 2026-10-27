@@ -51,6 +51,20 @@ vi.mock('@/lib/bookkeeping/dimension-rules', async (importOriginal) => ({
   fetchActiveDimensionRules: vi.fn(async () => fake.rules),
 }))
 
+// The semesterlöneskuld remeasurement reads the ledger and the payroll; its
+// plan is pinned here, so a test asserts what the booking does with it.
+const remeasure = vi.hoisted(() => ({
+  plan: vi.fn(),
+  upsert: vi.fn(async () => undefined),
+  link: vi.fn(async () => null),
+}))
+vi.mock('../vacation-liability-remeasure', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../vacation-liability-remeasure')>()),
+  planVacationLiabilityRemeasure: remeasure.plan,
+  upsertRunRemeasurement: remeasure.upsert,
+  linkRunRemeasurement: remeasure.link,
+}))
+
 import { cancelDraftEntry, commitEntry, createDraftEntry } from '@/lib/bookkeeping/engine'
 import { MandatoryDimensionMissingError } from '@/lib/bookkeeping/dimension-errors'
 import {
@@ -1860,3 +1874,111 @@ describe('salary entries: regionalt stöd avdrag (PH 208)', () => {
     expect(linesOn(avgifter, '2731')).toEqual([expect.objectContaining({ credit_amount: 3063 })])
   })
 })
+
+describe('salary entries under the remeasure method (semesterlöneskuld at its computed value)', () => {
+  const REMEASURE_LINES = [
+    { account_number: '7290', debit_amount: 2500, credit_amount: 0, line_description: 'Semesterlöneskuld, förändring' },
+    { account_number: '2920', debit_amount: 0, credit_amount: 2500, line_description: 'Semesterlöneskuld, förändring' },
+    { account_number: '7519', debit_amount: 785.5, credit_amount: 0, line_description: 'Sociala avgifter på semesterlöneskuld, förändring' },
+    { account_number: '2940', debit_amount: 0, credit_amount: 785.5, line_description: 'Sociala avgifter på semesterlöneskuld, förändring' },
+  ]
+  const plan = (lines = REMEASURE_LINES) => ({
+    ok: true,
+    data: {
+      as_of_date: '2026-06-25',
+      basis: 'calendar',
+      day_value_policy: 'daily_divisor',
+      settlement_year: 2026,
+      booked_2920: 10000,
+      booked_2940: 3142,
+      computed_liability: 12500,
+      computed_avgifter: 3927.5,
+      difference_2920: 2500,
+      difference_2940: 785.5,
+      rows: [],
+      lines,
+    },
+  })
+  const remeasureRun = () => ({
+    ...makeRun([makeEmployee({ vacation_accrual: 1200, vacation_accrual_avgifter: 377.04 })]),
+    calculation_params: { slpRate: 0.2426, salary_vacation_liability_method: 'remeasure' },
+  })
+
+  beforeEach(() => {
+    remeasure.plan.mockReset()
+    remeasure.upsert.mockClear()
+    remeasure.link.mockClear()
+    remeasure.plan.mockResolvedValue(plan())
+  })
+
+  it('an accrual run books exactly the accrual and never reads the remeasurement', async () => {
+    const accrualRun = makeRun([makeEmployee({ vacation_accrual: 1200, vacation_accrual_avgifter: 377.04 })])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', accrualRun)
+
+    expect(remeasure.plan).not.toHaveBeenCalled()
+    expect(remeasure.upsert).not.toHaveBeenCalled()
+    const vacation = entryByDescription('Semesteravsättning')
+    expect(vacation.lines).toEqual(buildSalaryRunEntryLines(accrualRun, 'Lön 2026-06', '1930').vacationLines)
+    expect(linesOn(vacation, '2920')[0]).toMatchObject({ credit_amount: 1200 })
+  })
+
+  it('a remeasure run posts the difference to the computed liability as of its payment date, counting itself', async () => {
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())
+
+    expect(remeasure.plan).toHaveBeenCalledWith(expect.anything(), 'company-1', '2026-06-25', { inFlightRunId: 'run-1' })
+    const vacation = entryByDescription('Lön 2026-06: Semesterlöneskuld')
+    expect(vacation.lines).toEqual(REMEASURE_LINES)
+    expect(vacation.entry_date).toBe('2026-06-25')
+    assertBalanced(vacation)
+    // The run's own accrual (1 200) is not booked: the remeasurement replaces it.
+    expect(fake.ledger.some((row) => row.description === 'Lön 2026-06: Semesteravsättning')).toBe(false)
+    // The underlag is stored before anything posts, then linked to the verifikat.
+    expect(Math.max(...remeasure.upsert.mock.invocationCallOrder)).toBeLessThan(Math.min(...mockedCommit.mock.invocationCallOrder))
+    expect(remeasure.link).toHaveBeenCalledWith(expect.anything(), {
+      companyId: 'company-1',
+      salaryRunId: 'run-1',
+      journalEntryId: result.vacationEntry?.id,
+    })
+  })
+
+  it('nothing beyond a krona to move: no vacation verifikat, the calculation is still stored', async () => {
+    remeasure.plan.mockResolvedValue(plan([]))
+    const result = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())
+    expect(result.vacationEntry).toBeNull()
+    expect(remeasure.upsert).toHaveBeenCalledTimes(1)
+    expect(remeasure.link).not.toHaveBeenCalled()
+  })
+
+  it('a retry after an interruption adopts the posted remeasurement instead of posting it again', async () => {
+    // First attempt: salary and avgifter post, then the vacation commit fails.
+    fake.failCommit = (input) => input.description.endsWith('Semesterlöneskuld')
+    await expect(createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())).rejects.toThrow('commit failed')
+    expect(fake.ledger.map((row) => row.description)).toEqual(['Lön 2026-06', 'Lön 2026-06: Arbetsgivaravgifter'])
+
+    // Second attempt posts the vacation verifikat; a third (the run flip
+    // failed) adopts all three. The plan is computed without the run's own
+    // vouchers, so it is the same each time (planVacationLiabilityRemeasure).
+    fake.failCommit = null
+    const second = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())
+    mockedCreateEntry.mockClear()
+    const third = await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())
+
+    expect(mockedCreateEntry).not.toHaveBeenCalled()
+    expect(fake.ledger.filter((row) => row.description === 'Lön 2026-06: Semesterlöneskuld')).toHaveLength(1)
+    expect(third.vacationEntry?.id).toBe(second.vacationEntry?.id)
+    expect(remeasure.link).toHaveBeenLastCalledWith(expect.anything(), {
+      companyId: 'company-1',
+      salaryRunId: 'run-1',
+      journalEntryId: second.vacationEntry?.id,
+    })
+  })
+
+  it('a remeasurement that cannot be computed refuses the booking before anything posts', async () => {
+    remeasure.plan.mockResolvedValue({ ok: false, code: 'VALIDATION_ERROR' })
+    await expect(createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', remeasureRun())).rejects.toThrow(
+      'Ingen räkenskapsperiod täcker 2026-06-25',
+    )
+    expect(fake.ledger).toHaveLength(0)
+  })
+})
+

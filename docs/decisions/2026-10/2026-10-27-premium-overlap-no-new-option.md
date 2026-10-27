@@ -1,0 +1,1 @@
+[2026-10-27] No new overlap option on premium rules: one winner per minute by priority, ties by rate per hour, gives Bygg (övertid above OB) and Handels only-the-highest between premiums; övertid paid as timlön plus premium needs overtime detection, a follow-up like stacking.

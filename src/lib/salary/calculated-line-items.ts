@@ -63,7 +63,10 @@ export const DERIVED_ABSENCE_TYPES: SalaryLineItemType[] = [
 /**
  * Item types the calculator derives from shift_premium_rules + worked days.
  * These are wiped at the start of each per-employee pass and regenerated so
- * the displayed line items always match the latest rules.
+ * the displayed line items always match the latest rules. Each derived row
+ * names the rule that won its minutes (source_premium_rule_id) and freezes
+ * the rule as used (premium_basis, migration 20261027213119); the type, not
+ * that provenance, is what marks the row as calculated.
  */
 export const DERIVED_PREMIUM_TYPES: ShiftPremiumItemType[] = [
   'overtime_50',

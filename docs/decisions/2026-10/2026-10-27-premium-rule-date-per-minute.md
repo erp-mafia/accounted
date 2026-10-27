@@ -1,0 +1,1 @@
+[2026-10-27] Premium rule validity and the ob_holiday gate are judged on the calendar date each worked minute falls on, not the shift's work_date: the after-midnight part of a night shift is paid at the rate valid that day (Handels/Gröna steps "från och med 1 april").

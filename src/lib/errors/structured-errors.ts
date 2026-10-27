@@ -6757,6 +6757,25 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Ingående saldon är låsta: den anställda har en bokförd lönekörning.',
     message_en: 'Opening balances are locked: the employee has a booked salary run.',
   },
+  // Semesterlöneskuld remeasurement (lib/salary/vacation-liability-reconcile.ts).
+  VACATION_LIABILITY_DATE_AHEAD: {
+    httpStatus: 400,
+    message_sv: 'Semesterlöneskulden kan bara stämmas av per ett datum som har passerat.',
+    message_en: 'The vacation liability can only be reconciled as of a date that has passed.',
+    retryable: false,
+  },
+  VACATION_LIABILITY_NO_FISCAL_PERIOD: {
+    httpStatus: 400,
+    message_sv: 'Inget räkenskapsår täcker datumet. Lägg upp räkenskapsåret först.',
+    message_en: 'No fiscal year covers the date. Create the fiscal year first.',
+    retryable: false,
+  },
+  VACATION_LIABILITY_RECONCILE_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Semesterlöneskulden kunde inte stämmas av. Försök igen.',
+    message_en: 'The vacation liability could not be reconciled. Try again.',
+    retryable: true,
+  },
   VACATION_YEAR_NOT_ENDED: {
     httpStatus: 400,
     message_sv: 'Semesteråret kan inte stängas innan det har tagit slut.',
@@ -6855,6 +6874,45 @@ const SALARY: Record<string, StructuredErrorEntry> = {
       description:
         'Resend the same update with vacation_rule: "procentregeln", or with sammaloneregeln_kollektivavtal_confirmed: true when a central kollektivavtal applies. The confirmation is recorded in the audit log with who gave it.',
     },
+  },
+  // OB / overtime premium rules (shift_premium_rules, lib/salary/shift-premium-rules.ts).
+  SHIFT_PREMIUM_RULE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Regeln för OB eller övertid kunde inte hittas.',
+    message_en: 'Premium rule not found.',
+  },
+  SHIFT_PREMIUM_RULE_EMPLOYEE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'En eller flera valda anställda finns inte i företaget.',
+    message_en: 'One or more selected employees do not belong to the company.',
+  },
+  SHIFT_PREMIUM_RULE_SCOPE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Välj antingen alla anställda eller minst en namngiven anställd.',
+    message_en: 'Choose either all employees or at least one named employee.',
+  },
+  // The merged row after a PATCH would carry the fields of two amount forms,
+  // or none: the DB CHECK refuses it too, this names it first.
+  SHIFT_PREMIUM_RULE_FORM_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'Ange exakt ett belopp som passar beräkningssättet: procent för procent av timlön, delare för månadslön delat med, kronor för kronor per timme.',
+    message_en:
+      'Send exactly the amount field of the chosen form: premium_percent for percent_of_hourly, monthly_divisor for monthly_divisor, sek_per_hour for sek_per_hour.',
+  },
+  // A monthly_divisor rule prices an hour from the månadslön; an hourly-paid
+  // employee has none, so naming one is refused instead of paying 0 kr.
+  SHIFT_PREMIUM_RULE_HOURLY_EMPLOYEE: {
+    httpStatus: 400,
+    message_sv:
+      'Månadslön delat med gäller bara månadsavlönade. Välj procent av timlön eller kronor per timme för timavlönade.',
+    message_en:
+      'The monthly_divisor form applies to monthly-paid employees only. Use percent_of_hourly or sek_per_hour for hourly-paid employees.',
+  },
+  SHIFT_PREMIUM_RULE_VALIDITY_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Slutdatumet kan inte ligga före startdatumet.',
+    message_en: 'valid_to cannot be before valid_from.',
   },
   // A production deployment without PERSONNUMMER_ENCRYPTION_KEY: every
   // employee create (and every decrypt-on-read) throws before touching the
@@ -7290,6 +7348,15 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     httpStatus: 422,
     message_sv: 'Bara en ISO 20022-fil (pain.001) kan få en ny version. Bankgirot LB-filen har inga meddelande-id.',
     message_en: 'Only an ISO 20022 file (pain.001) can get a new version. The Bankgirot LB file has no message ids.',
+  },
+  // A correction run pays only the difference against the run it corrects
+  // (lib/salary/payment/payable.ts); with no positive difference there is no file.
+  SALARY_RUN_PAYMENT_FILE_NOTHING_TO_PAY: {
+    httpStatus: 422,
+    message_sv:
+      'Rättelsen ger ingen skillnad att betala ut jämfört med den tidigare körningen, så ingen betalfil behövs. details.correction.overpaid anger anställda som har fått för mycket.',
+    message_en:
+      'The correction leaves no difference to pay out compared with the earlier run, so no payment file is needed. details.correction.overpaid names employees who were paid too much.',
   },
   // Paying a salary run through the bank (lib/salary/payment/pay-via-bank.ts,
   // migration 20261027100000): one payment per employee, signed with BankID.

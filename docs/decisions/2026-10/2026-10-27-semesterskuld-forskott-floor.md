@@ -1,0 +1,1 @@
+[2026-10-27] Semesterlöneskuld under sammanfallande semesterår values the earned share of the year's days minus days taken, floored at 0 per employee: a förskott is reclaimable only in the SemL 29 a § cases, so it is not netted against other employees' liability (conservative reading).

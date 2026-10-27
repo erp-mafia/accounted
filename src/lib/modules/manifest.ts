@@ -355,7 +355,7 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'process',
     uses: ['deadlines', 'payments'],
     libFolders: ['salary'],
-    operationPrefixes: ['salary-runs', 'employees', 'agi-filings'],
+    operationPrefixes: ['salary-runs', 'employees', 'agi-filings', 'salary'],
     v1Segments: ['employees', 'salary-runs', 'salary'],
     jurisdictions: SE,
   },

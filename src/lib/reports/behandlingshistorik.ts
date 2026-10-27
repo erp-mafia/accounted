@@ -395,6 +395,7 @@ const SETTINGS_FIELDS: Record<string, string> = {
   salary_default_bank: 'Standardbank för lön',
   salary_deviation_period: 'Avvikelseperiod för lön',
   salary_calculation_policy: 'Beräkningsprinciper för lön',
+  salary_vacation_liability_method: 'Bokföring av semesterlöneskuld',
   kontrolluppgifter_enabled: 'Kontrolluppgifter',
   fyllnadsinbetalning_enabled: 'Fyllnadsinbetalning',
   preliminary_tax_monthly: 'Preliminärskatt per månad',

@@ -1,0 +1,1 @@
+[2026-10-27] Premium rules priced as månadslön / divisor divide the actual (degree-adjusted) salary for OB but the full-time salary for övertid types: Almega Tjänsteföretag 5.3.2 and Teknikavtalet § 8 mom 3:2 raise a part-timer's salary to full time for the övertid divisors.

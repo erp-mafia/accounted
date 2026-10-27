@@ -83,6 +83,7 @@ import {
 } from './salary-employee-setup'
 import { salaryRunsPaymentFilesList } from './salary-payment-files'
 import { salaryForaReportGet } from './salary-fora-report'
+import { salaryVacationLiabilityReconcile } from './salary-vacation-liability'
 import {
   invoicesBook,
   invoicesBulkBook,
@@ -315,6 +316,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   salaryRunsPaymentFilesList,
   // salary-fora-report (v1 + MCP, summary only: the file is the salary run page's download)
   salaryForaReportGet,
+  // salary-vacation-liability (v1; the dashboard route calls the same service)
+  salaryVacationLiabilityReconcile,
   // salary-employee-setup (MCP only: the v1 doors are the hand-written employee routes)
   employeesWorkedDaysList,
   employeesWorkedDaysUpsert,

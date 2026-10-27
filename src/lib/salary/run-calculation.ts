@@ -34,6 +34,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { calculateSalary, monthlyBaseSalary, type CalculationStep } from './calculation-engine'
 import { SalaryCalculationPolicySchema } from './calculation-policy'
+import { VACATION_LIABILITY_METHOD_PARAM, vacationLiabilityMethodFrom } from './vacation-liability-method'
 import {
   DERIVED_ABSENCE_TYPES,
   DERIVED_PREMIUM_TYPES,
@@ -62,14 +63,14 @@ import { monthWindow, runDeviationWindow } from './deviation-period'
 import type { MoneyLineItemType } from './account-mapping'
 import { recurringLineFlags, type RecurringLineItemType } from './recurring-lines'
 import { RECURRING_TEXT_SORT_ORDER, isTextRow } from './text-rows'
-import { computePremiumLines } from './shift-premium-engine'
+import { computePremiumLines, premiumPayBasis } from './shift-premium-engine'
 import { roundOre } from '@/lib/money'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { effectiveRow } from './effective-figures'
 import { refreshRunEmployeeSalaryType, runMonthlySalaryFor } from './base-salary-line'
 import { isBaseSalaryDisplayLine } from './line-item-roles'
 import { computePriorYtd, loadOpeningBalances } from './ytd'
-import { dailyDivisor, degreeAdjustedMonthlySalary, hourlyDivisor, scheduledHoursPerDay } from './work-schedule'
+import { dailyDivisor, degreeAdjustedMonthlySalary, scheduledHoursPerDay } from './work-schedule'
 import { paidDaysPerDayOff } from './vacation-net-days'
 import { resolveVacationPayRate } from './vacation-pay-rate'
 import { getVacationYearBounds, getVacationYearStart, type VacationYearBasis } from './vacation-year'
@@ -93,29 +94,6 @@ import {
 import type { WorkedDayShift } from './shift-premium-engine'
 import type { Logger } from '@/lib/logger'
 import type { SalaryLineItemType, ShiftPremiumRule, ShiftPremiumItemType } from '@/types'
-
-/**
- * Effective hourly rate used as the base for shift-premium computation.
- *   - Hourly employees: their stored hourly_rate.
- *   - Monthly employees: degree-adjusted monthly salary /
- *     hourlyDivisor(hours_per_week): 173 at the 40h default (common Swedish
- *     derivation for full-time monthly → hourly, matches the timlön
- *     conventions used in CBAs), the exact 52w formula for other schedules
- *     (arbetsschema-lite). monthly_salary is the full-time salary and
- *     hours_per_week the part-time schedule, so the raw column over the
- *     part-time divisor would price a 10 % employee's hour ten times too high.
- */
-function effectiveHourlyRate(emp: {
-  salary_type: 'monthly' | 'hourly'
-  hourly_rate: number | null
-  monthly_salary: number | null
-  employment_degree: number | null
-  hours_per_week?: number | null
-}): number {
-  if (emp.salary_type === 'hourly') return emp.hourly_rate || 0
-  const monthly = degreeAdjustedMonthlySalary(emp.monthly_salary, emp.employment_degree)
-  return monthly > 0 ? Math.round((monthly / hourlyDivisor(emp.hours_per_week)) * 100) / 100 : 0
-}
 
 /** Benefit-type → line-item-type mapping for the derived benefit rows. */
 const BENEFIT_TYPE_TO_LINE_ITEM: Record<string, MoneyLineItemType> = {
@@ -263,7 +241,7 @@ export async function runSalaryCalculation(
   //     refuses the run rather than silently calculating on defaults.
   const { data: companySettings, error: settingsError } = await supabase
     .from('company_settings')
-    .select('salary_net_rounding, salary_calculation_policy, salary_vacation_year_basis, salary_regional_support')
+    .select('salary_net_rounding, salary_calculation_policy, salary_vacation_year_basis, salary_regional_support, salary_vacation_liability_method')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsError) {
@@ -290,6 +268,12 @@ export async function runSalaryCalculation(
   // at a fast driftställe in a stödområde. Frozen into the snapshot below so
   // the run's booking and AGI read the answer it was calculated with.
   const regionalSupport = companySettings?.salary_regional_support === true
+  // How the run's vacation verifikat books the semesterlöneskuld
+  // (vacation-liability-remeasure.ts): frozen like the conventions, so the
+  // journal preview the run is approved on and the booking agree.
+  const remeasureVacationLiability =
+    vacationLiabilityMethodFrom((companySettings as { salary_vacation_liability_method?: unknown } | null)?.salary_vacation_liability_method) ===
+    'remeasure'
 
   // 3. Load roster: `salary_run_employees` joined with employees + line items.
   // Defense-in-depth: filter by company_id too even though salary_run_id is a
@@ -474,7 +458,9 @@ export async function runSalaryCalculation(
 
   // 7b. Load active shift_premium_rules once per run. Filtered by company.
   // Inactive rules excluded: the engine also re-checks, but this saves
-  // network bytes for companies with many archived rules.
+  // network bytes for companies with many archived rules. Validity is judged
+  // by the engine per worked minute (a rule that ended mid-period still pays
+  // the days before its valid_to), so it is not filtered here.
   const { data: premiumRulesRaw, error: rulesError } = await supabase
     .from('shift_premium_rules')
     .select('*')
@@ -871,10 +857,13 @@ export async function runSalaryCalculation(
     // 8d2. Derive shift-premium rows (OB-tillägg, övertid 50/100). The engine
     //      consumes start_time/end_time when present; rows without explicit
     //      times fall back to a default 08:00-17:00 shift (no pure-night/
-    //      pure-weekend rules trigger for those days). The premium rate is
-    //      applied to the employee's effectiveHourlyRate so monthly
-    //      employees still get OB by deriving an hourly rate as
-    //      monthly_salary / 173.
+    //      pure-weekend rules trigger for those days). Each rule is priced
+    //      in its own form from the employee's pay basis (premiumPayBasis:
+    //      the hourly wage, and for monthly-paid staff the full-time and the
+    //      actual månadslön of this run). Every row carries the rule that won
+    //      its minutes and the rule as used (source_premium_rule_id,
+    //      premium_basis), so the line can be explained after the rule
+    //      changes and a correction run recomputes from the dated rules.
     let derivedPremiumRows: Array<{
       salary_run_employee_id: string
       company_id: string
@@ -889,10 +878,12 @@ export async function runSalaryCalculation(
       is_net_deduction: boolean
       account_number: string | null
       sort_order: number
+      source_premium_rule_id: string
+      premium_basis: Record<string, unknown>
     }> = []
 
     if (premiumRules.length > 0 && workedDayRows.length > 0) {
-      const baseHourlyRate = effectiveHourlyRate({
+      const pay = premiumPayBasis({
         salary_type: emp.salary_type,
         hourly_rate: emp.hourly_rate,
         monthly_salary: runMonthlySalary,
@@ -907,7 +898,8 @@ export async function runSalaryCalculation(
       }))
       const premiumLines = computePremiumLines({
         employeeId: emp.id,
-        baseHourlyRate,
+        baseHourlyRate: pay.hourlyRate,
+        monthlySalary: pay.monthlySalary,
         workedDays: shifts,
         rules: premiumRules,
       })
@@ -925,6 +917,8 @@ export async function runSalaryCalculation(
         is_net_deduction: false,
         account_number: null,
         sort_order: 300 + idx,
+        source_premium_rule_id: line.sourceRuleId,
+        premium_basis: line.basis as unknown as Record<string, unknown>,
       }))
     }
 
@@ -1522,6 +1516,8 @@ export async function runSalaryCalculation(
         salary_calculation_policy: calculationPolicy,
         // Only when on, so a run calculated without it keeps its snapshot shape.
         ...(regionalSupport ? { [REGIONAL_SUPPORT_PARAM]: true } : {}),
+        // Likewise only under 'remeasure': an accrual run's snapshot is unchanged.
+        ...(remeasureVacationLiability ? { [VACATION_LIABILITY_METHOD_PARAM]: 'remeasure' } : {}),
       },
     })
     .eq('id', id)

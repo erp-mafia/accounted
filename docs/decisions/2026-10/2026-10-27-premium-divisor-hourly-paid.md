@@ -1,0 +1,1 @@
+[2026-10-27] A monthly_divisor premium rule never applies to an hourly-paid employee (no månadslön to divide): the engine passes it over so a lower rule may win those minutes, and the rules service refuses to name an hourly-paid employee on one rather than let it pay 0 kr.
