@@ -1,6 +1,6 @@
 import { randomUUID } from 'crypto'
 import { beforeAll, describe, expect, it } from 'vitest'
-import { getPool, withUserContext } from './setup'
+import { getClient, getPool, withUserContext } from './setup'
 import { insertAuthUser, insertFiscalPeriod, insertPostedJournalEntry, seedCompany } from './fixtures'
 
 /**
@@ -11,15 +11,16 @@ import { insertAuthUser, insertFiscalPeriod, insertPostedJournalEntry, seedCompa
  * no type is a verifikat's underlag, apart from a loose one that awaits its
  * type, and a type set on a document in a closed period counts under that type
  * although the period lock keeps it off the row. A booked document is dated
- * by its verifikat, not by the upload day. A member sees their own
- * company only.
+ * by its verifikat, not by the upload day, and that verifikat is found by key:
+ * a join over journal_entries scanned every company's entries on prod and
+ * ran past the statement timeout. A member sees their own company only.
  */
-async function insertDocument(p: { userId: string; companyId: string; docType: string | null; mime?: string; createdAt: string; invoiceDate?: string; admission?: string; journalEntryId?: string }): Promise<string> {
+async function insertDocument(p: { userId: string; companyId: string; docType: string | null; mime?: string; createdAt: string; invoiceDate?: string; admission?: string; journalEntryId?: string; journalEntryLineId?: string }): Promise<string> {
   const id = randomUUID()
   await getPool().query(
     `INSERT INTO public.document_attachments
-       (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, doc_type, admission_state, extracted_data, created_at, journal_entry_id)
-     VALUES ($1, $2, $3, 'f.pdf', $4, 1024, $5, $6, 'file_upload', $7, $8, $9, $10, $11)`,
+       (id, user_id, company_id, file_name, mime_type, file_size_bytes, storage_path, sha256_hash, upload_source, doc_type, admission_state, extracted_data, created_at, journal_entry_id, journal_entry_line_id)
+     VALUES ($1, $2, $3, 'f.pdf', $4, 1024, $5, $6, 'file_upload', $7, $8, $9, $10, $11, $12)`,
     [
       id,
       p.userId,
@@ -32,9 +33,58 @@ async function insertDocument(p: { userId: string; companyId: string; docType: s
       p.invoiceDate ? JSON.stringify({ invoice: { invoiceDate: p.invoiceDate } }) : null,
       p.createdAt,
       p.journalEntryId ?? null,
+      p.journalEntryLineId ?? null,
     ],
   )
   return id
+}
+
+interface PlanNode {
+  'Node Type': string
+  'Relation Name'?: string
+  'Parent Relationship'?: string
+  Plans?: PlanNode[]
+}
+
+/**
+ * The plans of the statements a call runs, the SQL function's own query
+ * included: auto_explain, preloaded in the supabase/postgres image, reports
+ * nested statements to the client as NOTICEs.
+ */
+async function nestedPlans(userId: string, sql: string, params: unknown[]): Promise<Array<{ query: string; plan: PlanNode }>> {
+  const client = await getClient()
+  const notices: string[] = []
+  const onNotice = (notice: { message?: string }) => {
+    if (notice.message) notices.push(notice.message)
+  }
+  client.on('notice', onNotice)
+  try {
+    await client.query('BEGIN')
+    for (const setting of ['log_min_duration = 0', 'log_nested_statements = on', 'log_format = json', 'log_level = notice']) {
+      await client.query(`SET LOCAL auto_explain.${setting}`)
+    }
+    await client.query(`SELECT set_config('request.jwt.claims', $1, true)`, [JSON.stringify({ sub: userId, role: 'authenticated' })])
+    await client.query(`SELECT set_config('request.jwt.claim.sub', $1, true)`, [userId])
+    await client.query('SET LOCAL ROLE authenticated')
+    await client.query(sql, params)
+  } finally {
+    await client.query('ROLLBACK')
+    client.off('notice', onNotice)
+    client.release()
+  }
+  return notices
+    .filter((message) => message.includes('{'))
+    .map((message) => {
+      const explained = JSON.parse(message.slice(message.indexOf('{'))) as { 'Query Text': string; Plan: PlanNode }
+      return { query: explained['Query Text'], plan: explained.Plan }
+    })
+}
+
+/** Scans of journal_entries outside a SubPlan: the table joined whole rather than looked up by key. */
+function journalEntryScansOutsideSubPlans(node: PlanNode, inSubPlan = false): string[] {
+  const lookup = inSubPlan || node['Parent Relationship'] === 'SubPlan'
+  const own = node['Relation Name'] === 'journal_entries' && !lookup ? [`${node['Node Type']} on journal_entries`] : []
+  return [...own, ...(node.Plans ?? []).flatMap((child) => journalEntryScansOutsideSubPlans(child, lookup))]
 }
 
 describe('arkiv_document_type_counts and arkiv_document_page', () => {
@@ -132,5 +182,30 @@ describe('arkiv_document_type_counts and arkiv_document_page', () => {
       return [...a.rows, ...b.rows]
     })
     expect(rows).toEqual([])
+  })
+
+  it('dates a document that names a verifikat line by that verifikat', async () => {
+    const period2023 = await insertFiscalPeriod({ userId, companyId, name: '2023', periodStart: '2023-01-01', periodEnd: '2023-12-31' })
+    const entry2023 = await insertPostedJournalEntry({ userId, companyId, fiscalPeriodId: period2023, entryDate: '2023-09-14' })
+    const { rows } = await getPool().query<{ id: string }>(`SELECT id FROM public.journal_entry_lines WHERE journal_entry_id = $1 LIMIT 1`, [entry2023])
+    ids.lineLinked = await insertDocument({ userId, companyId, docType: null, createdAt: '2026-08-01T10:00:00Z', journalEntryLineId: rows[0].id })
+
+    expect(await counts(2023)).toEqual({ booked: 1 })
+    expect(await page('booked', null, 2023)).toEqual([{ id: ids.lineLinked, doc_day: '2023-09-14' }])
+  })
+
+  it("finds the verifikat by key, never by a join over every company's journal entries", async () => {
+    // The functions run on a generic plan; a join there hash-joined a sequential
+    // scan of the whole journal_entries table (prod 2026-10-26: 2.27 million
+    // rows, 13 s). A lookup by key is a SubPlan per document.
+    const calls: Array<[string, unknown[]]> = [
+      ['SELECT * FROM public.arkiv_document_type_counts($1, $2)', [companyId, 2024]],
+      [`SELECT * FROM public.arkiv_document_page($1, 'booked', NULL, NULL, 0, 25)`, [companyId]],
+    ]
+    for (const [sql, params] of calls) {
+      const own = (await nestedPlans(userId, sql, params)).filter((p) => p.query.includes('public.document_attachments'))
+      expect(own).toHaveLength(1)
+      expect(journalEntryScansOutsideSubPlans(own[0].plan)).toEqual([])
+    }
   })
 })
