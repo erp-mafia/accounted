@@ -3,6 +3,7 @@ import { createLogger } from '@/lib/logger'
 import { roundOre } from '@/lib/money'
 import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getReconciliationStatus as getBankReconciliationStatus } from './bank-reconciliation'
+import { checkBankBalance } from './bank-balance-check'
 import { getSkattekontoReconciliationStatus } from './skattekonto-reconciliation'
 import {
   bankAccountKey,
@@ -501,7 +502,28 @@ export async function getAccountStatus(
       from: options.windowFrom ?? defaultWindow(today).from,
       to: options.windowTo ?? defaultWindow(today).to,
     }
-    status = await bankStatus(supabase, companyId, data as CashAccountRow, window, today)
+    const account = data as CashAccountRow
+    // The bank's balance against the books on the bank's own day, beside the
+    // movement bridge (lib/reconciliation/bank-balance-check.ts). Read for one
+    // account only: the rail stays one status read per account. A failed read
+    // costs this block, never the status.
+    const [bank, balanceCheck] = await Promise.all([
+      bankStatus(supabase, companyId, account, window, today),
+      checkBankBalance(supabase, companyId, account).catch((err) => {
+        log.warn('bank balance check failed', {
+          companyId,
+          cashAccountId: account.id,
+          error: err instanceof Error ? err.message : String(err),
+        })
+        return null
+      }),
+    ])
+    status = bank
+    status.bank = {
+      ...status.bank,
+      balance_check: balanceCheck?.check ?? null,
+      balance_check_refusal: balanceCheck?.refusal ?? null,
+    }
   }
   if (parsed.kind === 'manual') {
     status = await getManualReconciliationStatus(supabase, companyId, parsed.accountNumber, {
