@@ -3,7 +3,7 @@
 import useSWR from 'swr'
 import { REFERENCE_SWR_OPTIONS } from '@/lib/reference-data/hooks'
 import { createClient } from '@/lib/supabase/client'
-import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
+import { DAILY_BATCH_TYPES_FILTER } from '@/lib/pending-operations/daily-batches'
 
 export interface WorklistBadges {
   /**
@@ -15,8 +15,9 @@ export interface WorklistBadges {
   uncategorized: number
   /**
    * Agent-staged operations awaiting review: same predicate as
-   * countPendingOperations, so the daily collections batch (a collections
-   * row in Att göra, not an agent proposal) is left out.
+   * countPendingOperations, so the daily batches (the collections run and
+   * the reminders, rows of their own in Att göra, not agent proposals) are
+   * left out.
    */
   pendingOperations: number
 }
@@ -56,7 +57,7 @@ export function useWorklistBadges(companyId: string | null | undefined) {
           .select('id', { count: 'exact', head: true })
           .eq('company_id', id)
           .eq('status', 'pending')
-          .neq('operation_type', COLLECTIONS_BATCH_TYPE),
+          .not('operation_type', 'in', DAILY_BATCH_TYPES_FILTER),
       ])
       return {
         uncategorized: (tx.error ? 0 : (tx.count ?? 0)) + (skv.error ? 0 : (skv.count ?? 0)),

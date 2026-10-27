@@ -78,6 +78,8 @@ const RISK_TIERS = {
   // approves next steps against customers; an administrator approves it in
   // the web UI only.
   collections_daily_batch: 'high',
+  // The daily reminder batch emails the company's customers (lib/reminders).
+  reminder_daily_batch: 'high',
   record_customer_loss: 'high',
   // Kvittning books a verifikat and lowers a customer and a supplier invoice;
   // undone only by a storno of that verifikat.
@@ -547,6 +549,8 @@ function paramEscalatedRisk(
 export const WEB_ONLY_APPROVAL_TYPES: ReadonlySet<string> = new Set([
   'open_collection_case',
   'collections_daily_batch',
+  // A person approves the day's reminder emails (lib/reminders/batch-commit.ts).
+  'reminder_daily_batch',
   // A person vouches that the supplier's new bank details are real.
   'confirm_supplier_payee',
   // Accepting a rule for automatic booking (lib/grants) hands posting

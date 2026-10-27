@@ -1,15 +1,16 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { runBankCheck } from '@/lib/collections/bank-check'
-import { daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getBaseUrlForCompany, getSenderForCompany } from '@/lib/email/brand-sender'
 import { resolveInvoiceSender } from '@/lib/email/invoice-sender'
+import { loadArchivedInvoicePdf } from '@/lib/invoices/archived-invoice-pdf'
 import { remindersActiveFor, REMINDERS_SENDING_ENABLED } from '@/lib/invoices/reminders-enabled'
 import { resolveInvoiceEmailRecipients, resolveInvoiceReplyTo } from '@/lib/invoices/email-recipients'
 import { createLogger, type Logger } from '@/lib/logger'
+import { checkReminderBank } from './bank'
 import { ReminderChannelError, type ReminderChannel, type ReminderMessage } from './channel'
 import { loadReminderContext } from './facts'
 import { decideReminder, reminderSchedule, type ReminderLevel, type ReminderSkipReason } from './policy'
-import { renderReminderEmail } from './templates'
+import { FINAL_REMINDER_PAY_WITHIN_DAYS, renderReminderEmail } from './templates'
 
 /**
  * Send one reminder, the only path that does (accounted#104). Every caller,
@@ -37,8 +38,12 @@ export type ReminderMode = 'approved' | 'automatic' | 'manual'
 export interface DispatchReminderInput {
   companyId: string
   invoiceId: string
-  /** The level the batch or the person approved; a different decision today skips as changed. */
-  level: ReminderLevel
+  /**
+   * The level the batch or the person approved; a different decision today
+   * skips as changed. A person's pick from the invoice may leave it out: the
+   * level the policy decides is sent.
+   */
+  level?: ReminderLevel
   /** Recorded on the row: who approved, picked, or turned automatic sending on. */
   actorUserId: string
   mode: ReminderMode
@@ -57,6 +62,8 @@ export interface DispatchReminderDeps {
   baseUrl?: (companyId: string) => Promise<string>
   /** From identity; defaults to the company's own verified sender and the brand's address. */
   sender?: (companyId: string, companyName: string | null) => Promise<Pick<ReminderMessage, 'from' | 'fromAddress'>>
+  /** The invoice PDF to attach; defaults to the archived copy the customer was first emailed (none: no attachment). */
+  invoicePdf?: (companyId: string, invoiceId: string) => Promise<{ filename: string; content: Buffer } | null>
   log?: Logger
 }
 
@@ -75,6 +82,7 @@ export type DispatchReminderOutcome =
   | {
       status: 'sent'
       reminderId: string
+      level: ReminderLevel
       providerMessageId: string | null
       /** The send went out but the row could not be marked sent: it stays reserved, which stops the ladder. */
       recorded: boolean
@@ -114,28 +122,15 @@ export async function dispatchReminder(deps: DispatchReminderDeps, input: Dispat
     picked: input.mode === 'manual',
   })
   if (decision.kind === 'skip') return skipped(decision.reason)
-  if (decision.level !== input.level) return skipped('changed')
+  if (input.level !== undefined && decision.level !== input.level) return skipped('changed')
+  const level = decision.level
   const { customer } = ctx
   const recipient = ctx.facts.recipient
   // The policy has refused a missing address already; this narrows the types.
   if (!customer || !recipient) return skipped('no_email')
 
   // 3. The bank.
-  const bank = await runBankCheck(db, {
-    companyId: input.companyId,
-    invoice: {
-      id: ctx.invoice.id,
-      invoice_number: ctx.invoice.invoice_number,
-      invoice_date: ctx.invoice.invoice_date,
-      currency: ctx.invoice.currency,
-      payment_cash_account_id: ctx.invoice.payment_cash_account_id ?? null,
-    },
-    customerName: customer.name ?? null,
-    remaining: ctx.facts.remaining,
-    dismissedTransactionIds: [],
-    today,
-    now,
-  })
+  const bank = await checkReminderBank(db, ctx, { companyId: input.companyId, today, now })
   if (bank.outcome === 'candidates') return skipped('possible_payment')
   if (bank.outcome !== 'pass' && !(input.mode !== 'automatic' && input.bankAttested === true)) return skipped('bank_not_fresh')
 
@@ -153,7 +148,7 @@ export async function dispatchReminder(deps: DispatchReminderDeps, input: Dispat
       invoice_id: input.invoiceId,
       company_id: input.companyId,
       user_id: input.actorUserId,
-      reminder_level: input.level,
+      reminder_level: level,
       email_to: recipients.to.join(', '),
       mode: input.mode,
       status: 'reserved',
@@ -170,16 +165,26 @@ export async function dispatchReminder(deps: DispatchReminderDeps, input: Dispat
   const baseUrl = await (deps.baseUrl ?? getBaseUrlForCompany)(input.companyId)
   const replyTo = resolveInvoiceReplyTo(ctx.company)
   const mail = renderReminderEmail({
-    level: input.level,
+    level,
     invoice: ctx.invoice,
     customer,
     company: ctx.company,
+    amount: ctx.amount,
     remaining: ctx.facts.remaining,
+    payBy: addDaysIso(today, FINAL_REMINDER_PAY_WITHIN_DAYS),
     overdueDays: daysBetweenIso(ctx.invoice.due_date, today),
     actionUrl: `${baseUrl}/invoice-action/${reminder.action_token}`,
     replyTo,
   })
   const sender = await (deps.sender ?? ((companyId, name) => defaultSender(db, companyId, name)))(input.companyId, ctx.company.company_name ?? null)
+  // The invoice itself rides along when the archive has it. Without it the
+  // reminder still carries the amount and the payment rows, so it goes anyway.
+  let pdf: { filename: string; content: Buffer } | null = null
+  try {
+    pdf = await (deps.invoicePdf ?? ((companyId, invoiceId) => archivedPdf(db, companyId, invoiceId, log)))(input.companyId, input.invoiceId)
+  } catch (error) {
+    log.warn('reminder goes without the invoice PDF', { reminderId: reminder.id, reason: error instanceof Error ? error.message : String(error) })
+  }
 
   let receipt
   try {
@@ -194,6 +199,7 @@ export async function dispatchReminder(deps: DispatchReminderDeps, input: Dispat
       subject: mail.subject,
       html: mail.html,
       text: mail.text,
+      ...(pdf ? { attachments: [{ filename: pdf.filename, content: pdf.content, contentType: 'application/pdf' }] } : {}),
     })
   } catch (error) {
     const failure =
@@ -221,7 +227,17 @@ export async function dispatchReminder(deps: DispatchReminderDeps, input: Dispat
     .eq('id', reminder.id)
     .eq('company_id', input.companyId)
   if (sentError) log.error('reminder sent but not recorded as sent', sentError, { reminderId: reminder.id })
-  return { status: 'sent', reminderId: reminder.id, providerMessageId: receipt.providerMessageId, recorded: !sentError }
+  return { status: 'sent', reminderId: reminder.id, level, providerMessageId: receipt.providerMessageId, recorded: !sentError }
+}
+
+async function archivedPdf(
+  db: SupabaseClient,
+  companyId: string,
+  invoiceId: string,
+  log: Logger,
+): Promise<{ filename: string; content: Buffer } | null> {
+  const archive = await loadArchivedInvoicePdf(db, companyId, invoiceId, log)
+  return archive.ok ? { filename: archive.value.filename, content: Buffer.from(archive.value.bytes) } : null
 }
 
 async function defaultSender(

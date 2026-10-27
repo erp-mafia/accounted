@@ -378,6 +378,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     'P3',
     '"Skicka aldrig till inkasso" on a customer; served only while collections is offered, joins PATCH /api/v1/customers/:id when collections leaves the dark launch',
   ),
+  'PATCH /api/customers/:id/reminders-exclusion': gap(
+    'P3',
+    '"Skicka aldrig påminnelser" on a customer; joins PATCH /api/v1/customers/:id when reminders leave the dark launch (accounted#104)',
+  ),
   'POST /api/articles': covered(['gnubok_create_article']),
   'PATCH /api/articles/:id': covered(['gnubok_update_article']),
   'DELETE /api/articles/:id': gap('P3'),
@@ -481,6 +485,12 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/invoices/autogiro/reports': gap('P2', 'read a Bankgirot Autogiro report (payments, mandates)'),
   'POST /api/invoices/autogiro/settle': gap('P2', 'settle Autogiro debits from the bank deposit without a report'),
   'POST /api/invoices/reminders/action': machine('machine endpoint: public token link for the invoice recipient'),
+  'POST /api/reminders/automatic': uiOnly(
+    'a person lets the daily reminder batch send itself after three clean batches; no machine door changes who approves reminders (accounted#104)',
+  ),
+  'POST /api/reminders/send': uiOnly(
+    'a person picks which customers get a reminder email now, with the bank check shown; no machine door sends reminders (accounted#104)',
+  ),
 
   // ── Suppliers and supplier invoices ────────────────────────────────
   'POST /api/suppliers': covered([`POST ${V}/suppliers`, 'gnubok_create_supplier']),
@@ -927,5 +937,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * ledger account on any connection, dashboard first like the pickers.
  * 156 -> 155 (2026-10-26, PH 175 / issue #50): the skattekonto account is
  * covered by PATCH /settings/skattekonto-account.
+ * 155 -> 156 (2026-10-26): paying a salary run through the bank, dashboard
+ * only in v1.
+ * 156 -> 157 (2026-10-27, accounted#104): excluding a customer from
+ * reminders, a P3 gap like the collections exclusion.
  */
-export const GAP_CEILING = 156
+export const GAP_CEILING = 157

@@ -272,6 +272,20 @@ export const WORKLIST_CATEGORIES = [
    */
   'collection_batch_ready',
   /**
+   * The day's reminders waiting for an owner or administrator ("N
+   * påminnelser väntar på godkännande"): the items of the one pending
+   * reminder_daily_batch operation the reminders cron staged
+   * (lib/reminders/batch.ts). Counted here, not under pending_operations.
+   * Pending:  a reminder_daily_batch operation with status 'pending': its
+   *           items less those a person took out (collection_batch_removals
+   *           rows of kind 'reminder'), read by lib/reminders/pending-batch.ts.
+   * Done:     an owner or administrator approved or rejected it, or it
+   *           left 'pending' any other way (withdrawn, expired). The
+   *           invoices it leaves out today get no row here: the review
+   *           lists each with its reason.
+   */
+  'reminder_batch_ready',
+  /**
    * Bank connections to switch from Enable Banking to Open Payments before
    * the campaign deadline ("Byt bankkopplingen för {bank} senast {date}"),
    * one item per connection.

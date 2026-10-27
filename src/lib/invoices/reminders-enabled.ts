@@ -1,3 +1,5 @@
+import { flagEnabled } from '@/lib/env/public-flags'
+
 /**
  * Master switch for automatic invoice reminder sending.
  *
@@ -21,13 +23,23 @@
  * collections bank check (lib/collections/bank-check.ts) before every
  * reminder, approval per batch by default with automatic sending opt-in.
  * The new sender's engine is lib/reminders (policy, facts, channel, and
- * dispatch.ts, the one send path); flipping this switch is the last step,
- * after the daily batch and the turn-on flow exist.
+ * dispatch.ts, the one send path), with the daily batch, the turn-on flow
+ * and automatic sending built (phases 1 to 4).
  *
- * Kept dependency-free on purpose: it is imported from both server code and
- * client components (the settings form).
+ * Switched on by NEXT_PUBLIC_REMINDERS_SENDING_ENABLED=true, a founder's
+ * decision: set it in the deployment's environment and redeploy (it is read
+ * at build time, as client components import it). Unset, everything stays
+ * dark: no batch is gathered, nothing sends, and no turn-on offer shows.
+ * Each company still turns reminders on itself, and its batches wait for
+ * approval.
+ *
+ * Self-hosted Docker images carry no sentinel for it yet, so there it stays
+ * off.
+ *
+ * Kept free of server dependencies on purpose: it is imported from both
+ * server code and client components (the settings form).
  */
-export const REMINDERS_SENDING_ENABLED = false as boolean
+export const REMINDERS_SENDING_ENABLED: boolean = flagEnabled(process.env.NEXT_PUBLIC_REMINDERS_SENDING_ENABLED)
 
 /**
  * Whether automatic reminders actually go out for a company: the product-wide

@@ -27,6 +27,7 @@ vi.mock('../categories', () => ({
   countSkattekontoPaymentDue: vi.fn().mockResolvedValue(1),
   countFailedPeppolDeliveries: vi.fn().mockResolvedValue(2),
   countCollectionDecisionsAndBatch: vi.fn().mockResolvedValue({ decision: 0, batchReady: 0 }),
+  countReminderBatchReady: vi.fn().mockResolvedValue(0),
   countCollectionAttention: vi.fn().mockResolvedValue(0),
   countCollectionSettlementsToBook: vi.fn().mockResolvedValue(0),
   countCollectedPaymentsToBook: vi.fn().mockResolvedValue(0),
@@ -87,6 +88,7 @@ describe('getWorklistCounts', () => {
       collection_settlements_to_book: 0,
       collected_payments_to_book: 0,
       collection_batch_ready: 0,
+      reminder_batch_ready: 0,
       bank_switch: 0,
       payments_verification_renewal: 0,
       supplier_payee_change: 0,
@@ -166,6 +168,15 @@ describe('getWorklistCounts', () => {
     expect(total).toBe(36)
     expect(countCollectionDecisionsAndBatch).toHaveBeenCalledTimes(1)
     expect(countCollectionDecisionsAndBatch).toHaveBeenCalledWith(supabase, 'company-1')
+  })
+
+  it('counts the pending reminder batch items into the total, on the session client', async () => {
+    const { countReminderBatchReady } = await import('../categories')
+    vi.mocked(countReminderBatchReady).mockResolvedValueOnce(3)
+    const { counts, total } = await getWorklistCounts(supabase, 'company-1')
+    expect(counts.reminder_batch_ready).toBe(3)
+    expect(total).toBe(34)
+    expect(countReminderBatchReady).toHaveBeenCalledWith(supabase, 'company-1')
   })
 
   it('counts failed Peppol deliveries on the caller session client, like every other category', async () => {

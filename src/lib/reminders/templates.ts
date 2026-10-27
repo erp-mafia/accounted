@@ -2,6 +2,7 @@ import type { CompanySettings, Customer, Invoice, ReminderTextOverride } from '@
 import { companyWithInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { formatCurrencyForCustomer, invoiceEmailPaymentRows, type EmailLang } from '@/lib/email/invoice-templates'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from '@/lib/email/user-text'
+import { roundOre } from '@/lib/money'
 import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
 import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import type { ReminderLevel } from './policy'
@@ -33,7 +34,11 @@ export const REMINDER_EMAIL_PLACEHOLDER_KEYS = [
   'förfallodatum',
   'belopp',
   'dagar',
+  'betala_senast',
 ] as const
+
+/** The final reminder asks for payment within this many days of its send date, shown as a date. */
+export const FINAL_REMINDER_PAY_WITHIN_DAYS = 8
 
 export const REMINDER_EMAIL_DEFAULT_TEXTS: Record<EmailLang, Record<ReminderLevel, { subject: string; body: string }>> = {
   sv: {
@@ -53,7 +58,7 @@ export const REMINDER_EMAIL_DEFAULT_TEXTS: Record<EmailLang, Record<ReminderLeve
       subject: 'Slutlig påminnelse: Faktura {fakturanummer} - {belopp}',
       body:
         'Det här är en slutlig påminnelse om faktura {fakturanummer}, som förföll den {förfallodatum}. '
-        + 'Vi har trots tidigare påminnelser inte fått din betalning och ber dig betala inom 8 dagar.',
+        + 'Vi har trots tidigare påminnelser inte fått din betalning och ber dig betala senast den {betala_senast}.',
     },
   },
   en: {
@@ -73,7 +78,7 @@ export const REMINDER_EMAIL_DEFAULT_TEXTS: Record<EmailLang, Record<ReminderLeve
       subject: 'Final reminder: Invoice {fakturanummer} - {belopp}',
       body:
         'This is a final reminder about invoice {fakturanummer}, which was due on {förfallodatum}. '
-        + 'Despite earlier reminders we have not received your payment, and we ask you to pay within 8 days.',
+        + 'Despite earlier reminders we have not received your payment, and we ask you to pay by {betala_senast}.',
     },
   },
 }
@@ -86,6 +91,8 @@ const WORDS = {
     invoiceNumber: 'Fakturanummer:',
     invoiceDate: 'Fakturadatum:',
     dueDate: 'Förfallodatum:',
+    invoiceAmount: 'Fakturabelopp:',
+    paid: 'Betalt:',
     remaining: 'Att betala:',
     paymentHeading: 'Betalningsinformation',
     actionLead: 'Har du redan betalat, eller stämmer något inte med fakturan?',
@@ -102,6 +109,8 @@ const WORDS = {
     invoiceNumber: 'Invoice number:',
     invoiceDate: 'Invoice date:',
     dueDate: 'Due date:',
+    invoiceAmount: 'Invoice amount:',
+    paid: 'Paid:',
     remaining: 'Amount due:',
     paymentHeading: 'Payment information',
     actionLead: 'Already paid, or is something wrong with the invoice?',
@@ -121,8 +130,12 @@ export interface ReminderEmailData {
   invoice: Invoice
   customer: Customer
   company: CompanySettings
+  /** What the invoice asked for (collectionClaim().amount), in the invoice currency. */
+  amount: number
   /** What is left to pay (collectionClaim().remaining), in the invoice currency. */
   remaining: number
+  /** The date the final reminder asks payment by (ISO): its send date plus FINAL_REMINDER_PAY_WITHIN_DAYS. */
+  payBy: string
   /** Whole days past the due date today. */
   overdueDays: number
   /** The customer's page to answer "already paid" or "disputed"; null leaves the line out. */
@@ -172,6 +185,7 @@ export function renderReminderEmail(data: ReminderEmailData): RenderedReminderEm
     förfallodatum: formatDate(invoice.due_date),
     belopp: amount,
     dagar: String(data.overdueDays),
+    betala_senast: formatDate(data.payBy),
   }
   const subject = sanitizeSubjectLine(applyPlaceholders(companyText(data.company, level, 'subject', lang) ?? stock.subject, values))
   const body = applyPlaceholders(companyText(data.company, level, 'body', lang) ?? stock.body, values)
@@ -181,6 +195,15 @@ export function renderReminderEmail(data: ReminderEmailData): RenderedReminderEm
     [W.invoiceDate, formatDate(invoice.invoice_date)],
     [W.dueDate, formatDate(invoice.due_date)],
   ]
+  // A part payment shows what the invoice asked for and what came in, so the
+  // smaller amount asked for is not a surprise.
+  const paid = roundOre(data.amount - data.remaining)
+  if (paid > 0) {
+    summary.push(
+      [W.invoiceAmount, formatCurrencyForCustomer(data.amount, invoice.currency, lang)],
+      [W.paid, formatCurrencyForCustomer(paid, invoice.currency, lang)],
+    )
+  }
   const payment = invoiceEmailPaymentRows(company, invoice, lang)
   const footer = company.org_number
     ? [`${W.orgNo} ${company.org_number}`, company.vat_number ? `${W.vat} ${company.vat_number}` : null, company.f_skatt ? F_SKATT : null]

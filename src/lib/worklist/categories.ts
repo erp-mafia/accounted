@@ -34,6 +34,8 @@ import { filterOverdueInvoices } from '@/lib/invoices/overdue'
 import { summarizeOverdueInvoices } from './overdue-summary'
 import { PAYMENT_STATUSES_TO_BOOK, SETTLEMENT_STATUSES_TO_BOOK } from '@/lib/collections/settlements-ui'
 import { COLLECTIONS_BATCH_TYPE, collectionWorkCounts, type BatchItem, type BatchRemoval } from '@/lib/collections/batch'
+import { DAILY_BATCH_TYPES_FILTER } from '@/lib/pending-operations/daily-batches'
+import { readPendingReminderBatch } from '@/lib/reminders/pending-batch'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { listPeppolFailedInvoiceIds } from '@/lib/invoices/peppol-failed-invoices'
 import { switchStateFor } from '@/lib/bank-feed/switch-campaign'
@@ -662,8 +664,8 @@ export async function countPendingOperations(
     .select('id', { count: 'exact', head: true })
     .eq('company_id', companyId)
     .eq('status', 'pending')
-    // The daily collections batch has its own row (collection_batch_ready).
-    .neq('operation_type', COLLECTIONS_BATCH_TYPE)
+    // The daily batches have their own rows (collection_batch_ready, reminder_batch_ready).
+    .not('operation_type', 'in', DAILY_BATCH_TYPES_FILTER)
     // A suggestion (staged by the system, lib/suggestions) has its own row too.
     .neq('actor_type', 'system')
   if (error) return logAndZero('pending_operations', companyId, error)
@@ -714,6 +716,21 @@ export async function countCollectionDecisionsAndBatch(
     return { decision: decisionCaseIds.length, batchReady: 0 }
   }
   return collectionWorkCounts(decisionCaseIds, items, (removed ?? []) as BatchRemoval[])
+}
+
+/**
+ * The reminders of the pending daily reminder batch (at most one is
+ * pending) less those a person took out ("reminder_batch_ready"). Read with
+ * the row that opens the batch's dialog (lib/reminders/pending-batch.ts),
+ * so the number and the dialog agree.
+ */
+export async function countReminderBatchReady(
+  supabase: SupabaseClient,
+  companyId: string,
+): Promise<number> {
+  const read = await readPendingReminderBatch(supabase, companyId)
+  if (!read.ok) return logAndZero('reminder_batch_ready', companyId, read.error)
+  return read.batch?.items.length ?? 0
 }
 
 interface SuggestedMatchTxRow {

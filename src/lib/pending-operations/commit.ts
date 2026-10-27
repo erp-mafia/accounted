@@ -297,6 +297,8 @@ import { backfillSupplierPaymentDetails, inboxStatedPaymentDetails } from '@/lib
 import { assessRegisteredPayee, payeeAlertWarning } from '@/lib/payments/payee-registration'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
 import { batchApprovalRefusal, commitCollectionsDailyBatch } from '@/lib/collections/batch-commit'
+import { REMINDER_BATCH_TYPE } from '@/lib/reminders/batch'
+import { commitReminderDailyBatch, reminderBatchApprovalRefusal } from '@/lib/reminders/batch-commit'
 import type { AnyOperation, OperationOutcome } from '@/lib/operations/types'
 import type {
   Transaction,
@@ -7354,8 +7356,12 @@ async function commitPendingOperationInner(
   // ── The daily collections batch: an administrator approves it, and the
   //    batch's start gates must still say yes. Refused before the claim, so
   //    the batch stays 'pending' (the ladder cron rejects it after 72 hours).
-  if (pendingOp.operation_type === COLLECTIONS_BATCH_TYPE) {
-    const refused = await batchApprovalRefusal(supabase, companyId)
+  if (pendingOp.operation_type === COLLECTIONS_BATCH_TYPE || pendingOp.operation_type === REMINDER_BATCH_TYPE) {
+    // The reminder batch: an owner or administrator, while reminders are on.
+    const refused =
+      pendingOp.operation_type === COLLECTIONS_BATCH_TYPE
+        ? await batchApprovalRefusal(supabase, companyId)
+        : await reminderBatchApprovalRefusal(supabase, companyId)
     if (refused) {
       return {
         status: 'failed',
@@ -7749,6 +7755,13 @@ async function commitPendingOperationInner(
           companyId,
           operation: { id: pendingOp.id, params: pendingOp.params },
         })
+        result = batch.ok
+          ? { data: batch.data as unknown as Record<string, unknown> }
+          : { error: batch.message, errorCode: batch.code, status: batch.status }
+        break
+      }
+      case 'reminder_daily_batch': {
+        const batch = await commitReminderDailyBatch({ userId, companyId, operation: { id: pendingOp.id, params: pendingOp.params } })
         result = batch.ok
           ? { data: batch.data as unknown as Record<string, unknown> }
           : { error: batch.message, errorCode: batch.code, status: batch.status }

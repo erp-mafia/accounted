@@ -27,6 +27,7 @@ export function createEmailReminderChannel(service: EmailService): ReminderChann
           ...(message.fromAddress ? { fromAddress: message.fromAddress } : {}),
           // The company's own verified sender wins over the brand address.
           from: message.from,
+          ...(message.attachments && message.attachments.length > 0 ? { attachments: message.attachments } : {}),
         })
       } catch (error) {
         throw new ReminderChannelError('EMAIL_SEND_THREW', { outcomeUnknown: true, cause: error })

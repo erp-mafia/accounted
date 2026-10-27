@@ -76,6 +76,7 @@
 23 * * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/community/sync/cron
 */10 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/collections/sync/cron
 15 6 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/collections/ladder/cron
+45 6 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/reminders/batch/cron
 */10 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/reports/ledger-account-days/build/cron
 
 # self-hosted-only jobs, not in vercel.json: see EXTRA_JOBS in scripts/generate-crontabs.ts

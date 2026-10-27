@@ -31,6 +31,7 @@ import type { Customer, CustomerType, CreateCustomerInput, InvoiceStatus } from 
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { PartyFactsSection } from '@/components/parties/PartyFactsSection'
 import { CustomerCollectionsExclusion } from '@/components/collections/CustomerCollectionsExclusion'
+import { CustomerRemindersExclusion } from '@/components/reminders/CustomerRemindersExclusion'
 import { CustomerAutogiroSection } from '@/components/invoices/autogiro/CustomerAutogiroSection'
 import { usePartyDossier } from '@/components/parties/use-party-dossier'
 import { CounterpartyRoleLink } from '@/components/parties/CounterpartyRoleLink'
@@ -466,6 +467,13 @@ export default function CustomerDetailPage({
         excluded={customer.collections_excluded === true}
         canWrite={canWrite}
         onSaved={(excluded) => setCustomer((current) => (current ? { ...current, collections_excluded: excluded } : current))}
+      />
+
+      <CustomerRemindersExclusion
+        customerId={customer.id}
+        excluded={customer.reminders_excluded === true}
+        canWrite={canWrite}
+        onSaved={(excluded) => setCustomer((current) => (current ? { ...current, reminders_excluded: excluded } : current))}
       />
 
       <CustomerAutogiroSection customerId={customer.id} canWrite={canWrite} />

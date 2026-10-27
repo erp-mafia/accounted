@@ -70,6 +70,7 @@ import {
   ArrowDownTrayIcon,
   ArrowTopRightOnSquareIcon,
   BanknotesIcon,
+  BellAlertIcon,
   CalendarDaysIcon,
   CheckCircleIcon,
   ClipboardDocumentListIcon,
@@ -122,7 +123,8 @@ import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
-import { remindersActiveFor } from '@/lib/invoices/reminders-enabled'
+import { REMINDERS_SENDING_ENABLED, remindersActiveFor } from '@/lib/invoices/reminders-enabled'
+import { SendReminderDialog } from '@/components/reminders/SendReminderDialog'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { CollectionCaseCard } from '@/components/collections/CollectionCaseCard'
 import { SendToCollectionDialog } from '@/components/collections/SendToCollectionDialog'
@@ -183,12 +185,12 @@ const MAILBOX_BLOCK_KEYS: Record<MailboxSendBlock, string> = {
 // The reminder history card's columns. Never '*': action_token is the
 // customer's bearer link, withheld from end-user roles by a column grant, so
 // a '*' select from the browser is refused outright.
-const REMINDER_HISTORY_COLUMNS = 'id, reminder_level, sent_at, email_to, response_type'
+const REMINDER_HISTORY_COLUMNS = 'id, reminder_level, sent_at, email_to, response_type, response_note'
 // Sent reminders only (the query filters on sent_at): a reserved or failed
 // row of the sender never reached the customer.
 type ReminderHistoryRow = Pick<
   InvoiceReminder,
-  'id' | 'reminder_level' | 'email_to' | 'response_type'
+  'id' | 'reminder_level' | 'email_to' | 'response_type' | 'response_note'
 > & { sent_at: string }
 
 // How long the preview waits for the PDF route to say whether it will render
@@ -233,6 +235,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   // Begäran status labels are shared with the payout dialog on the list page.
   const tInvoices = useTranslations('invoices')
   const tCommon = useTranslations('common')
+  const tReminders = useTranslations('reminders_setup')
   const locale = useLocale()
   const downloadLocale: ErrorLocale = locale.startsWith('sv') ? 'sv' : 'en'
   const downloadFailureCopy = {
@@ -426,6 +429,8 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const collection = useInvoiceCollection(id, collectionEligible)
   const { tp: tCollections, words: collectionWords } = useCaseWords(collection.data?.availability.displayName ?? null)
   const [showCollectionDialog, setShowCollectionDialog] = useState(false)
+  // "Skicka påminnelse" (accounted#104): one reminder now, picked by a person.
+  const [showReminderDialog, setShowReminderDialog] = useState(false)
   // Bumped when the handover dialog closes: the overdue banner reads its bank check again.
   const [collectionCheckKey, setCollectionCheckKey] = useState(0)
   // Today's pending collections run, read only where the ladder proposes one:
@@ -2107,6 +2112,10 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const collectionRemindersAside: string | null = collectionAside
     ? tCollections(collectionAside.key, collectionAside.key === 'reminders_batch' ? { days: collectionAside.days } : {})
     : null
+  // "Skicka påminnelse": an owed invoice of our own past its due date, while
+  // reminders exist at all and no open collection case reminds the customer
+  // already; the send decides the rest from fresh facts.
+  const showReminderItem = REMINDERS_SENDING_ENABLED && !isSelfBilled && isInvoiceOverdue(invoice) && !collectionCaseOnTop
   const showCustomerLossItem = customerLoss.view?.menuVisible === true
   const showRecoveryItem = customerLoss.view?.recovery?.available === true
   // Correcting the invoice's voucher (storno + rättelse) is a rare repair,
@@ -2115,6 +2124,7 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
   const hasMenu =
     showCorrectionItem ||
     showCollectionItem ||
+    showReminderItem ||
     showCustomerLossItem ||
     showRecoveryItem ||
     canCreateOrder ||
@@ -2490,6 +2500,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                       <DropdownMenuItem onSelect={() => setShowCollectionDialog(true)} disabled={!canWrite}>
                         <ScaleIcon className="h-4 w-4" />
                         {tCollections('menu_send')}
+                      </DropdownMenuItem>
+                    )}
+                    {showReminderItem && (
+                      <DropdownMenuItem onSelect={() => setShowReminderDialog(true)} disabled={!canWrite}>
+                        <BellAlertIcon className="h-4 w-4" />
+                        {tReminders('invoice_action')}
                       </DropdownMenuItem>
                     )}
                     {showCustomerLossItem && (
@@ -3349,6 +3365,12 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
                   ) : reminder.response_type === 'marked_paid' ? (
                     <span className="ml-auto text-xs text-muted-foreground">{t('reminder_marked_paid')}</span>
                   ) : null}
+                  {/* The customer's own words from the answer page; data-ph-mask: user data. */}
+                  {reminder.response_note && (
+                    <p className="w-full whitespace-pre-line text-xs text-muted-foreground" data-ph-mask="">
+                      {t('reminder_customer_note', { note: reminder.response_note })}
+                    </p>
+                  )}
                 </li>
               ))}
             </ul>
@@ -3425,6 +3447,18 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           }}
           availability={collection.data.availability}
           onDone={collection.setCase}
+        />
+      )}
+
+      {/* After a send the invoice is read again: the Påminnelser card lists sent reminders. */}
+      {showReminderItem && company && (
+        <SendReminderDialog
+          invoiceId={invoice.id}
+          companyId={company.id}
+          canWrite={canWrite}
+          open={showReminderDialog}
+          onOpenChange={setShowReminderDialog}
+          onSent={() => void fetchInvoice()}
         />
       )}
 

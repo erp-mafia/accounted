@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef, type ComponentProps, type ComponentType } from 'react'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { useRouter } from 'next/navigation'
@@ -41,6 +41,7 @@ import { collectPages } from '@/lib/lists/collect-pages'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
   ArrowsUpDownIcon,
+  BellAlertIcon,
   ChatBubbleLeftIcon,
   CheckIcon,
   ChevronRightIcon,
@@ -51,6 +52,7 @@ import {
   ScaleIcon,
   SpinnerIcon,
   XMarkIcon,
+  type Icon,
 } from '@/components/icons'
 import type {
   PendingOperation,
@@ -76,8 +78,12 @@ import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
 import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
 import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
-import { BATCH_REVIEW_QUERY, batchRowKey, isCollectionsRun, runItems, wantsBatchReview } from '@/lib/collections/batch-dialog'
+import { BATCH_REVIEW_QUERY, batchRowKey, runItems, wantsBatchReview } from '@/lib/collections/batch-dialog'
 import { capitalizeFirst } from '@/components/collections/collections-client'
+import { ReminderBatchDialog } from '@/components/reminders/ReminderBatchDialog'
+import { REMINDER_BATCH_TYPE } from '@/lib/reminders/batch'
+import { reminderRunItems, wantsReminderBatchReview } from '@/lib/reminders/batch-dialog'
+import { dailyBatchTypeOf, pendingDailyBatchTypeOf, type DailyBatchType } from '@/lib/pending-operations/daily-batches'
 
 // Terse per-type labels used in the bulk confirmation dialog list. Phrased so
 // they read naturally under the heading "Genom att bekräfta utförs följande:".
@@ -126,6 +132,22 @@ function bulkActionLabel(operationType: string, count: number, t: (key: string) 
   const fn = bulkActionDescriptions[operationType]
   if (fn) return fn(count)
   return `${count} × ${operationLabel(operationType, t)}`
+}
+
+// The daily batches (lib/pending-operations/daily-batches) on a pending row:
+// the mark beside it and what its approve button says (it opens the batch's
+// review dialog, it does not approve).
+const DAILY_BATCH_ICON: Record<DailyBatchType, Icon> = {
+  collections_daily_batch: ScaleIcon,
+  reminder_daily_batch: BellAlertIcon,
+}
+const DAILY_BATCH_REVIEW_LABEL_KEY: Record<DailyBatchType, string> = {
+  collections_daily_batch: 'review_collections_batch',
+  reminder_daily_batch: 'review_reminder_batch',
+}
+const DAILY_BATCH_DIALOG: Record<DailyBatchType, ComponentType<ComponentProps<typeof ReminderBatchDialog>>> = {
+  collections_daily_batch: HandoverBatchDialog,
+  reminder_daily_batch: ReminderBatchDialog,
 }
 
 // Period status carried inside preview_data when stagePendingOperation can
@@ -286,6 +308,7 @@ type ViewTab = 'pending' | 'history'
 export default function PendingOperationsPage() {
   const t = useTranslations('pending')
   const tCollections = useTranslations('collections')
+  const tReminders = useTranslations('reminders')
   const tSkills = useTranslations('skills_registry')
   const tCommon = useTranslations('common')
   const complianceWarningText = useComplianceWarningText()
@@ -335,11 +358,12 @@ export default function PendingOperationsPage() {
   // can ask for a category + free-text reason that feeds back to the agent.
   // 'bulk' targets the current checkbox selection instead of a single op.
   const [rejectTarget, setRejectTarget] = useState<PendingOperation | 'bulk' | null>(null)
-  // The daily collections batch is reviewed in its own dialog (items to
-  // untick, the ones left out, a typed confirmation), never through the
-  // generic approval card. Att göra links here with ?review= to open it.
-  const [batchOpId, setBatchOpId] = useState<string | null>(null)
-  const batchReviewRequested = useRef(false)
+  // The daily batches (the collections run, the reminders) are reviewed in
+  // their own dialog (items to untick, the ones left out, what was sent),
+  // never through the generic approval card. Att göra links here with
+  // ?review=<type> to open one.
+  const [batchReview, setBatchReview] = useState<{ id: string; type: DailyBatchType } | null>(null)
+  const batchReviewRequested = useRef<DailyBatchType | null>(null)
   const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
@@ -362,8 +386,13 @@ export default function PendingOperationsPage() {
     const url = new URL(window.location.href)
     const conv = url.searchParams.get('conversation')
     if (conv) setConversationFilter(conv)
-    if (wantsBatchReview(url.search)) {
-      batchReviewRequested.current = true
+    const review = wantsBatchReview(url.search)
+      ? COLLECTIONS_BATCH_TYPE
+      : wantsReminderBatchReview(url.search)
+        ? REMINDER_BATCH_TYPE
+        : null
+    if (review) {
+      batchReviewRequested.current = review
       // Once: a reload or the back button should not reopen the dialog.
       url.searchParams.delete(BATCH_REVIEW_QUERY)
       window.history.replaceState(window.history.state, '', `${url.pathname}${url.search}`)
@@ -481,16 +510,34 @@ export default function PendingOperationsPage() {
   // The Att göra row's deep link: open the pending batch once the pending
   // list has loaded (or drop the request when there is none any more).
   useEffect(() => {
-    if (!batchReviewRequested.current || loadedTabRef.current !== 'pending') return
-    batchReviewRequested.current = false
-    const batch = operations.find((op) => op.operation_type === COLLECTIONS_BATCH_TYPE && op.status === 'pending')
-    if (batch) setBatchOpId(batch.id)
+    const wanted = batchReviewRequested.current
+    if (!wanted || loadedTabRef.current !== 'pending') return
+    batchReviewRequested.current = null
+    const batch = operations.find((op) => pendingDailyBatchTypeOf(op) === wanted)
+    if (batch) setBatchReview({ id: batch.id, type: wanted })
   }, [operations])
 
-  /** A row's review surface: the batch dialog for the daily collections batch, else the detail slide-over. */
+  /** A row's review surface: the batch dialog for a pending daily batch, else the detail slide-over. */
   function openReview(op: PendingOperation) {
-    if (op.operation_type === COLLECTIONS_BATCH_TYPE && op.status === 'pending') setBatchOpId(op.id)
+    const type = pendingDailyBatchTypeOf(op)
+    if (type) setBatchReview({ id: op.id, type })
     else setDetailOpId(op.id)
+  }
+
+  /**
+   * A pending daily batch's row in its own words, with what it does as the
+   * hover text; the staged title when its items cannot be read.
+   */
+  function dailyBatchRow(type: DailyBatchType, op: PendingOperation): { title: string; detail: string } {
+    if (type === REMINDER_BATCH_TYPE) {
+      const count = reminderRunItems(op.params).length
+      return { title: count > 0 ? tReminders('batch_row', { count }) : op.title, detail: tReminders('batch_run_detail') }
+    }
+    const items = runItems(op.params)
+    return {
+      title: items.length > 0 ? capitalizeFirst(tCollections(batchRowKey(items), { count: items.length })) : op.title,
+      detail: tCollections('batch_run_detail'),
+    }
   }
 
   // Realtime subscription: refetch when ANY pending_operations row changes for
@@ -826,6 +873,8 @@ export default function PendingOperationsPage() {
   const detailPeriod = detailOp ? getPeriodStatus(detailOp) : null
   const detailPeriodLocked = detailPeriod != null && detailPeriod.status !== 'open'
   const detailConversationId = detailOp?.agent_metadata?.conversation_id ?? null
+  // The open daily batch's own review dialog (the same props for each).
+  const BatchReviewDialog = batchReview ? DAILY_BATCH_DIALOG[batchReview.type] : null
 
   const SEG_TABS: Array<{ tab: ViewTab; labelKey: string }> = [
     { tab: 'pending', labelKey: 'tab_pending' },
@@ -997,12 +1046,15 @@ export default function PendingOperationsPage() {
               const canBulkSelect =
                 showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
               const isSelected = selectedIds.has(op.id)
-              const isCollectionsBatch = op.operation_type === COLLECTIONS_BATCH_TYPE
-              // The daily collections run is the company's own morning run,
-              // not an agent proposal: no agent mark, no risk chip, its own
-              // words (lib/collections/batch-dialog isCollectionsRun).
-              const isRun = isCollectionsRun(op)
-              const isAgent = op.actor_type && op.actor_type !== 'user' && !isCollectionsBatch
+              const batchType = dailyBatchTypeOf(op.operation_type)
+              // A daily batch (the collections run, the reminders) is the
+              // company's own morning run, not an agent proposal: no agent
+              // mark, no risk chip, its own words
+              // (lib/pending-operations/daily-batches).
+              const runType = pendingDailyBatchTypeOf(op)
+              const isRun = runType !== null
+              const runRow = runType ? dailyBatchRow(runType, op) : null
+              const isAgent = op.actor_type && op.actor_type !== 'user' && !batchType
               // High risk, and a registration of an already-booked invoice
               // (it cannot be undone): the consent sentence the approval
               // confirms in a dialog.
@@ -1101,7 +1153,8 @@ export default function PendingOperationsPage() {
               // two decisions as hover-revealed icon buttons. The kicker
               // (type, origin, retrieved instructions) and the consent
               // sentence live in the slide-over the row opens.
-              const approveLabel = isCollectionsBatch ? t('review_collections_batch') : t('approve')
+              const approveLabel = batchType ? t(DAILY_BATCH_REVIEW_LABEL_KEY[batchType]) : t('approve')
+              const BatchIcon = batchType ? DAILY_BATCH_ICON[batchType] : null
               return (
                 <div
                   key={op.id}
@@ -1148,8 +1201,8 @@ export default function PendingOperationsPage() {
                     className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-border text-muted-foreground"
                     aria-hidden
                   >
-                    {isCollectionsBatch ? (
-                      <ScaleIcon className="h-3.5 w-3.5" />
+                    {BatchIcon ? (
+                      <BatchIcon className="h-3.5 w-3.5" />
                     ) : isAgent ? (
                       <CpuChipIcon className="h-3.5 w-3.5" />
                     ) : (
@@ -1157,12 +1210,10 @@ export default function PendingOperationsPage() {
                     )}
                   </span>
                   <span className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
-                    {/* The daily collections run reads in its own words, with
-                        what it does as the hover text. */}
-                    <span className="min-w-0 truncate" title={isRun ? tCollections('batch_run_detail') : undefined}>
-                      {isRun && runItems(op.params).length > 0
-                        ? capitalizeFirst(tCollections(batchRowKey(runItems(op.params)), { count: runItems(op.params).length }))
-                        : op.title}
+                    {/* A daily batch reads in its own words, with what it
+                        does as the hover text. */}
+                    <span className="min-w-0 truncate" title={runRow?.detail}>
+                      {runRow?.title ?? op.title}
                     </span>
                     {/* The staged compliance warning stays on the row, as a
                         truncated suffix: approving from the row or with
@@ -1202,8 +1253,8 @@ export default function PendingOperationsPage() {
                       onClick={(e) => {
                         e.stopPropagation()
                         if (periodLocked) return
-                        if (isCollectionsBatch) {
-                          setBatchOpId(op.id)
+                        if (batchType) {
+                          setBatchReview({ id: op.id, type: batchType })
                         } else if (op.risk_level === 'high' || rowConsent) {
                           // High risk, and an approval that cannot be undone
                           // (a registration of an already-booked invoice),
@@ -1346,10 +1397,11 @@ export default function PendingOperationsPage() {
                         // Same risk gate as the review-row pill: the detail
                         // panel already shows the full preview, so low/medium
                         // commit directly; only high risk keeps the dialog.
-                        // The collections batch has its own review dialog.
-                        if (detailOp.operation_type === COLLECTIONS_BATCH_TYPE) {
+                        // A daily batch has its own review dialog.
+                        const detailBatchType = dailyBatchTypeOf(detailOp.operation_type)
+                        if (detailBatchType) {
                           setDetailOpId(null)
-                          setBatchOpId(detailOp.id)
+                          setBatchReview({ id: detailOp.id, type: detailBatchType })
                         } else if (detailOp.risk_level === 'high') {
                           setSelectedOp(detailOp)
                           setShowCommitDialog(true)
@@ -1368,13 +1420,13 @@ export default function PendingOperationsPage() {
         </SlideOverContent>
       </SlideOver>
 
-      {batchOpId && (
-        <HandoverBatchDialog
-          key={batchOpId}
-          operationId={batchOpId}
+      {BatchReviewDialog && batchReview && (
+        <BatchReviewDialog
+          key={batchReview.id}
+          operationId={batchReview.id}
           open
           onOpenChange={(open) => {
-            if (!open) setBatchOpId(null)
+            if (!open) setBatchReview(null)
           }}
           onCommitted={() => {
             void fetchOperations()

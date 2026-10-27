@@ -61,6 +61,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   merge_customers: 'warning_merge_customers',
   request_signature: 'warning_request_signature',
   request_arsredovisning_signatures: 'warning_request_arsredovisning_signatures',
+  reminder_daily_batch: 'warning_reminder_daily_batch',
 }
 
 // Full-sentence warning for the single-op confirmation dialog AND the inline

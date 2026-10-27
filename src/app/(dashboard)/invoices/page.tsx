@@ -65,6 +65,8 @@ import {
   useCollectionsAvailability,
 } from '@/components/collections/collections-client'
 import { BulkHandoverDialog } from '@/components/collections/BulkHandoverDialog'
+import { RemindersOfferRow, RemindersStatusButton, useInvoiceListReminders } from '@/components/reminders/InvoiceListReminders'
+import { TurnOnRemindersSheet } from '@/components/reminders/TurnOnRemindersSheet'
 import { bulkSendable } from '@/lib/collections/bulk-handover'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { useInvoiceListVariant } from '@/lib/invoices/list-variant'
@@ -327,6 +329,9 @@ export default function InvoicesPage() {
   const locale = useLocale()
   const tStart = useTranslations('start_cards')
   const { uiState, loaded: uiStateLoaded } = useUiState()
+  // Reminders (accounted#104): the offer or the status control, read once
+  // after the list has loaded and only while REMINDERS_SENDING_ENABLED is on.
+  const reminders = useInvoiceListReminders(!isQuotesList && !isLoading)
 
   // "Ny faktura" (and offert, proforma, självfaktura, copy) is its own page,
   // the one-screen editor at /invoices/new. Old links that opened the list's
@@ -863,6 +868,7 @@ export default function InvoicesPage() {
           {t(isQuotesList ? 'title_quotes' : 'title')}
         </h1>
         <div className="flex flex-wrap items-center gap-2">
+          {reminders.entry === 'status' && <RemindersStatusButton onOpen={reminders.openSheet} />}
           {showRotRutAction && (
             // The ROT/RUT overview (begäran, beslut, utbetalning, nekat
             // belopp) has its own page; the file dialog still opens from
@@ -1013,6 +1019,10 @@ export default function InvoicesPage() {
         <p className="attn text-[12.5px]">
           {t('coverage_notice', { date: formatDate(registerCoverage.covers_from) })}
         </p>
+      )}
+
+      {reminders.offerShown && (
+        <RemindersOfferRow count={reminders.overdueCount} onOpen={reminders.openSheet} onDismiss={reminders.dismiss} />
       )}
 
       {/* Bulkbar: appears once anything is selected (supplier-invoices shape). */}
@@ -1349,6 +1359,8 @@ export default function InvoicesPage() {
           }}
         />
       )}
+
+      <TurnOnRemindersSheet {...reminders.sheet} />
     </div>
   )
 }

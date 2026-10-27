@@ -85,7 +85,6 @@ export const LOCAL_SUPABASE_CHAIN_ALLOWED = new Set([
   'src/app/api/customers/__tests__/reveal-personal-number.test.ts',
   'src/app/api/customers/__tests__/vies-unavailable.test.ts',
   'src/app/api/invoices/[id]/refresh-exchange-rate/__tests__/route.test.ts',
-  'src/app/api/invoices/reminders/action/__tests__/route.test.ts',
   'src/app/api/salary/employees/[id]/__tests__/personnummer-write-guard.test.ts',
   'src/app/api/salary/employees/[id]/__tests__/route.test.ts',
   'src/app/api/salary/employees/[id]/worked-hours/__tests__/recording-supabase.ts',

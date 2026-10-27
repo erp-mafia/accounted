@@ -204,6 +204,8 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
 export const PAID_OPERATION_CAPABILITY_MAP: Readonly<Partial<Record<string, CapabilityKey>>> = {
   send_invoice: CAPABILITY.email_send,
   send_payslips: CAPABILITY.email_send,
+  // The approved reminder batch emails the company's customers, like an invoice send.
+  reminder_daily_batch: CAPABILITY.email_send,
   submit_vat_declaration: CAPABILITY.skatteverket,
   submit_agi: CAPABILITY.skatteverket,
 } as const
