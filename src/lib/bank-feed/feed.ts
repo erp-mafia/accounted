@@ -354,10 +354,14 @@ export async function runOpenPaymentsSync(supabase: SupabaseClient, input: RunOp
       .order('date', { ascending: false })
       .limit(1)
       .maybeSingle()
-    // The extended range only while the bank still serves it; a first import
-    // the cron retries later would otherwise ask for two years and be
-    // refused or narrowed, so it asks for the ordinary window and says so.
-    const extended = extendedHistoryWindowOpen(connection, limits.extendedWindowMinutes, now)
+    // The extended range only with the person present and while the bank
+    // still serves it. A first import the cron or an agent retries would
+    // otherwise ask for two years without anyone there: Swedbank refuses that
+    // ("Mandatory header is missing: PSU-User-Agent", 2026-10-26) and PSD2
+    // guarantees 90 days only (UNATTENDED_MAX_LOOKBACK_DAYS), so it asks for
+    // the ordinary window and says so. A period the bank refuses with the
+    // person present is stepped later by Connect (effective_date_from).
+    const extended = personPresent && extendedHistoryWindowOpen(connection, limits.extendedWindowMinutes, now)
     historyWindow = extended ? 'extended' : 'ordinary'
     const listedExtended = connection.consent_attempt?.selection?.extended_history_days ?? connection.consent_attempt?.extended_history_days ?? null
     window = initialWindow({
