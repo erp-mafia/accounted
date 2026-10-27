@@ -316,7 +316,7 @@ describe('what a skattekonto order is', () => {
     ).rejects.toThrow(/payment_orders_skattekonto_instruction/)
   })
 
-  it('still knows no purpose beyond supplier_invoice and skattekonto, and no payee source beyond the three', async () => {
+  it('knows no purpose and no payee source beyond the ones a migration added', async () => {
     const ctx = await seedTaxPayer()
     const insert = (purpose: string, source: string) =>
       getPool().query(
@@ -327,8 +327,9 @@ describe('what a skattekonto order is', () => {
                  'bankgiro', '50501055', 'Skatteverket', $6, 'ocr', $7, $8)`,
         [ctx.companyId, ctx.userId, purpose, ctx.cashAccountId, JSON.stringify(DEBTOR), source, OCR, randomUUID()],
       )
-    await expect(insert('salary', 'skatteverket')).rejects.toThrow(/payment_orders_purpose_check/)
-    await expect(insert('skattekonto', 'employee')).rejects.toThrow(/payment_orders_payee_source_check/)
+    // salary and employee arrived with 20261027100000 (tests/pg/payment-orders-salary.pg.test.ts).
+    await expect(insert('refund', 'skatteverket')).rejects.toThrow(/payment_orders_purpose_check/)
+    await expect(insert('skattekonto', 'agency')).rejects.toThrow(/payment_orders_payee_source_check/)
   })
 })
 

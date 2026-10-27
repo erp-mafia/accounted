@@ -41,6 +41,10 @@ const REFUSED_ON_PURPOSE: Record<string, string> = {
     'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
   'payment_orders.cash_account_id':
     'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.employee_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/salary/payment/pay-via-bank.ts, and create_salary_payment_orders itself); a row means a bank saw the instruction',
+  'payment_orders.salary_run_id':
+    'Bank payments are refused for sandbox companies (isSandboxCompany in lib/salary/payment/pay-via-bank.ts, and create_salary_payment_orders itself); a row means a bank saw the instruction',
   'payment_orders.supplier_invoice_id':
     'Bank payments are refused for sandbox companies (isSandboxCompany in lib/payments/orders/prepare.ts, and create_payment_orders itself); a row means a bank saw the instruction',
   'payment_orders.supplier_invoice_payment_id':

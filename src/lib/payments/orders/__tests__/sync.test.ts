@@ -34,6 +34,7 @@ function order(id: string, overrides: Partial<PaymentOrderRow> = {}): PaymentOrd
   return {
     id,
     company_id: COMPANY,
+    purpose: 'supplier_invoice',
     supplier_invoice_id: `inv-${id}`,
     amount: 737.5,
     batch_id: 'batch-1',

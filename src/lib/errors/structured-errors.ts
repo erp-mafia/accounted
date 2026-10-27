@@ -7188,6 +7188,52 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bara en ISO 20022-fil (pain.001) kan få en ny version. Bankgirot LB-filen har inga meddelande-id.',
     message_en: 'Only an ISO 20022 file (pain.001) can get a new version. The Bankgirot LB file has no message ids.',
   },
+  // Paying a salary run through the bank (lib/salary/payment/pay-via-bank.ts,
+  // migration 20261027100000): one payment per employee, signed with BankID.
+  SALARY_RUN_IN_BANK_PAYMENT: {
+    httpStatus: 409,
+    message_sv:
+      'Lönen betalas via banken. Avbryt betalningarna under Betalningar först, annars betalas lönen ut två gånger.',
+    message_en:
+      'The salaries are being paid through the bank. Cancel those payments under Payments first, or the salaries are paid twice.',
+  },
+  SALARY_RUN_BANK_PAYMENT_NOT_READY: {
+    httpStatus: 409,
+    message_sv: 'Lönekörningen måste vara godkänd innan lönen kan betalas via banken.',
+    message_en: 'The salary run must be approved before the salaries can be paid through the bank.',
+  },
+  SALARY_RUN_BANK_PAYMENT_CONFIRMATION_REQUIRED: {
+    httpStatus: 409,
+    message_sv:
+      'Bekräfta att lönen inte redan har betalats ut, med betalfil eller i internetbanken. Annars betalas den ut två gånger.',
+    message_en:
+      'Confirm that the salaries have not already been paid, by payment file or in the online bank. Otherwise they are paid twice.',
+  },
+  SALARY_RUN_BANK_PAYMENT_NOTHING_TO_PAY: {
+    httpStatus: 409,
+    message_sv: 'Alla anställda i lönekörningen har redan en betalning via banken. Se Betalningar.',
+    message_en: 'Every employee on the salary run already has a bank payment. See Payments.',
+  },
+  SALARY_RUN_BANK_PAYMENT_EMPLOYEE_BANK_MISSING: {
+    httpStatus: 422,
+    message_sv:
+      'En eller flera anställda med nettoutbetalning saknar clearingnummer eller kontonummer. Komplettera bankuppgifterna under Anställda.',
+    message_en:
+      'One or more employees with a net payout lack a clearing number or account number. Complete their bank details under Employees.',
+  },
+  SALARY_RUN_BANK_PAYMENT_EMPLOYEE_BANK_INVALID: {
+    httpStatus: 422,
+    message_sv:
+      'En eller flera anställda har bankuppgifter som banken inte kan betala till. details.employees anger vem och vad som behöver rättas.',
+    message_en:
+      'One or more employees have bank details the bank cannot pay to. details.employees names who and what to correct.',
+    thrown_message_sv: true,
+  },
+  SALARY_RUN_BANK_PAYMENT_ALREADY_IN_PAYMENT: {
+    httpStatus: 409,
+    message_sv: 'Lönen förbereddes samtidigt i en annan flik. Öppna dialogen igen.',
+    message_en: 'The salaries were prepared at the same time elsewhere. Open the dialog again.',
+  },
   BANK_IMPORT_FAILED: {
     httpStatus: 500,
     message_sv: 'Bankfilsimporten misslyckades.',

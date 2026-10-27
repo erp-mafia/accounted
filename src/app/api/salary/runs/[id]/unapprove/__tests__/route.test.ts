@@ -130,6 +130,26 @@ describe('POST /api/salary/runs/[id]/unapprove', () => {
     expect(status).toBe(409)
   })
 
+  it('returns 409 SALARY_RUN_IN_BANK_PAYMENT when a bank payment of the run is live', async () => {
+    const { supabase, enqueueMany } = createQueuedMockSupabase()
+    authed(supabase)
+
+    enqueueMany([
+      { data: approvedRun },                            // salary_runs lookup
+      { data: null, error: { message: 'No rows' } },    // agi_declarations lookup
+      // salary_run_recall_guard_bank_payments refuses the update
+      { data: null, error: { code: '23514', message: 'salary run has bank payments', hint: 'salary_run_in_bank_payment' } },
+    ])
+
+    const request = createMockRequest('/api/salary/runs/run-1/unapprove', { method: 'POST' })
+    const response = await POST(request, createMockRouteParams({ id: 'run-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('SALARY_RUN_IN_BANK_PAYMENT')
+    expect(body.error.message).toMatch(/Lönen betalas via banken/)
+  })
+
   it('returns 409 when the run transitions concurrently between read and update', async () => {
     const { supabase, enqueueMany } = createQueuedMockSupabase()
     authed(supabase)

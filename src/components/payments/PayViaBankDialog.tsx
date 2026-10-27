@@ -1,7 +1,7 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useLocale, useTranslations } from 'next-intl'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
@@ -10,33 +10,26 @@ import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Skeleton } from '@/components/ui/skeleton'
 import { AttnLine } from '@/components/ui/attn-line'
-import { useToast } from '@/components/ui/use-toast'
-import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { creditorNameMatches } from '@/lib/payments/creditor-name-match'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import { RequestSigningLinkButton, RequestSigningLinkPanel } from './RequestSigningLinkDialog'
 import { BankPaymentsAllowanceLine } from './BankPaymentsAllowance'
-import { PaymentsVerificationLine } from './PaymentsVerificationLine'
-import { defaultPaymentAccount, PaymentAccountPicker, rememberPaymentAccount } from './PaymentAccountPicker'
+import { BankPaymentAccountGate, useBankPaymentDialog } from './bank-payment-dialog'
+import { PaymentAccountPicker, rememberPaymentAccount } from './PaymentAccountPicker'
 import { DocumentCheckLine, InvoiceDocumentButton, InvoiceDocumentSheet, PaymentBesideDocument, paymentFromPreviewLine } from './InvoiceDocumentPreview'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
 import {
   approvePaymentOrders,
-  fetchBankPaymentsUsage,
-  fetchPaymentsAvailability,
   lookupCreditorName,
   orderGiroForLookup,
   payeeLabel,
-  paymentReadinessFor,
   PaymentsClientError,
   preparePaymentOrders,
   previewPaymentOrders,
   type CreditorLookupResult,
   type PaymentOrder,
-  type PaymentsAvailability,
   type PreparedPreview,
-  type BankPaymentsUsage,
   remainingBankPayments,
 } from './payments-client'
 
@@ -116,14 +109,10 @@ function skippedFromError(error: unknown): Skipped | null {
 
 export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoiceLabelById, onDone }: PayViaBankDialogProps) {
   const t = useTranslations('bank_payments')
-  const locale = useLocale() as ErrorLocale
-  const { toast } = useToast()
+  const { availability, usage, accountId, setAccountId, payableAccounts, account, unsupportedBank, verificationLine, fail } =
+    useBankPaymentDialog(open)
 
   const [phase, setPhase] = useState<Phase>('preview')
-  const [availability, setAvailability] = useState<PaymentsAvailability | null>(null)
-  /** This month's bank payments against the cap; null until read (informational, the server decides). */
-  const [usage, setUsage] = useState<BankPaymentsUsage | null>(null)
-  const [accountId, setAccountId] = useState('')
   const [executionDate, setExecutionDate] = useState('')
   const [editingDate, setEditingDate] = useState(false)
   const [preview, setPreview] = useState<PreparedPreview | null>(null)
@@ -139,42 +128,6 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
   /** The invoice whose document is open in the side sheet, when several are paid. */
   const [documentKey, setDocumentKey] = useState<string | null>(null)
   const changed = useRef(false)
-
-  const fail = useCallback(
-    (title: string, error: unknown) => {
-      const body = error instanceof PaymentsClientError ? error.body : null
-      toast({ title, description: getErrorMessage(body, { locale }), variant: 'destructive' })
-    },
-    [locale, toast],
-  )
-
-  useEffect(() => {
-    if (!open) return
-    let cancelled = false
-    fetchPaymentsAvailability()
-      .then((data) => {
-        if (cancelled) return
-        setAvailability(data)
-        const pick = defaultPaymentAccount(data.accounts.filter((a) => a.payable))
-        if (pick) setAccountId(pick.id)
-        if (data.available) {
-          fetchBankPaymentsUsage().then(
-            (u) => {
-              if (!cancelled) setUsage(u)
-            },
-            () => {
-              // Without the counter the dialog stands; a signing past the cap is refused with the numbers.
-            },
-          )
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setAvailability({ available: false, reason: null, provider: null, accounts: [], signer_known: false })
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [open])
 
   // The preview follows the account and the date: a dry run on the server,
   // every rule, nothing written.
@@ -205,18 +158,6 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, accountId, executionDate, invoiceKey, phase])
 
-  const payableAccounts = useMemo(() => availability?.accounts.filter((a) => a.payable) ?? [], [availability])
-  const account = payableAccounts.find((a) => a.id === accountId) ?? null
-  // With no payable account, a bank the provider does not pay from is named
-  // instead of the IBAN requirement it already meets (crm#1424).
-  const unsupportedBank = availability?.accounts.find((a) => a.reason === 'bank_not_supported' && a.bank_name)?.bank_name ?? null
-  // The company's verification, where a payment from this account needs it:
-  // said here, on the first screen, with the step that starts it.
-  const readiness = availability && account ? paymentReadinessFor(availability, account) : null
-  const verificationLine =
-    availability?.verification && (readiness === 'verification_needed' || readiness === 'verification_pending') ? (
-      <PaymentsVerificationLine verification={availability.verification} />
-    ) : null
   const lines = preview?.lines ?? []
   // More invoices than the month's cap still takes: nothing is prepared or
   // approved that could not go to the bank this month.
@@ -349,192 +290,181 @@ export default function PayViaBankDialog({ open, onOpenChange, invoiceIds, invoi
 
         {phase === 'preview' && (
           <div className="space-y-4">
-            {!availability ? (
-              <div className="space-y-3">
-                <Skeleton className="h-4 w-1/2" />
-                <Skeleton className="h-9 w-full" />
-              </div>
-            ) : !availability.available ? (
-              <AttnLine>{t('unavailable')}</AttnLine>
-            ) : payableAccounts.length === 0 ? (
-              <AttnLine>{unsupportedBank ? t('account_none_bank_not_supported', { bank: unsupportedBank }) : t('account_none')}</AttnLine>
-            ) : (
-              <>
-                {verificationLine}
-                <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
-                  <PaymentAccountPicker accounts={payableAccounts} accountId={accountId} onChange={setAccountId} />
-                  <div className="flex items-center gap-2">
-                    {editingDate ? (
-                      <>
-                        <Input
-                          type="date"
-                          aria-label={t('date_label')}
-                          min={earliestExecutionDateIso(new Date().toLocaleDateString('sv-SE'))}
-                          value={executionDate}
-                          onChange={(e) => setExecutionDate(e.target.value)}
-                          className="h-8 w-[160px] tabular-nums"
-                        />
-                        <button
-                          type="button"
-                          className="text-muted-foreground underline underline-offset-2"
-                          onClick={() => {
-                            setExecutionDate('')
-                            setEditingDate(false)
-                          }}
-                        >
-                          {t('reset_date')}
-                        </button>
-                      </>
-                    ) : (
-                      <>
-                        <span className="text-muted-foreground">
-                          {executionDate ? t('date_chosen', { date: formatDate(executionDate) }) : t('date_default')}
-                        </span>
-                        <button type="button" className="underline underline-offset-2" onClick={() => setEditingDate(true)}>
-                          {t('change_date')}
-                        </button>
-                      </>
-                    )}
-                  </div>
+            <BankPaymentAccountGate availability={availability} payableAccounts={payableAccounts} unsupportedBank={unsupportedBank}>
+              {verificationLine}
+              <div className="flex flex-wrap items-center gap-x-6 gap-y-2 text-[13px]">
+                <PaymentAccountPicker accounts={payableAccounts} accountId={accountId} onChange={setAccountId} />
+                <div className="flex items-center gap-2">
+                  {editingDate ? (
+                    <>
+                      <Input
+                        type="date"
+                        aria-label={t('date_label')}
+                        min={earliestExecutionDateIso(new Date().toLocaleDateString('sv-SE'))}
+                        value={executionDate}
+                        onChange={(e) => setExecutionDate(e.target.value)}
+                        className="h-8 w-[160px] tabular-nums"
+                      />
+                      <button
+                        type="button"
+                        className="text-muted-foreground underline underline-offset-2"
+                        onClick={() => {
+                          setExecutionDate('')
+                          setEditingDate(false)
+                        }}
+                      >
+                        {t('reset_date')}
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-muted-foreground">
+                        {executionDate ? t('date_chosen', { date: formatDate(executionDate) }) : t('date_default')}
+                      </span>
+                      <button type="button" className="underline underline-offset-2" onClick={() => setEditingDate(true)}>
+                        {t('change_date')}
+                      </button>
+                    </>
+                  )}
                 </div>
+              </div>
 
-                {previewing && !preview ? (
-                  <div className="space-y-3">
-                    <Skeleton className="h-4 w-2/3" />
-                    <Skeleton className="h-4 w-1/2" />
-                  </div>
-                ) : single ? (
-                  <div className={previewing ? 'opacity-60' : undefined}>
-                    <PaymentBesideDocument
-                      payment={payments[0]}
-                      payeeExtra={
-                        (lines[0].alternative_payee || lines[0].warnings.includes('unattested')) && (
-                          <span className="mt-1 flex flex-wrap justify-end gap-2">
-                            {lines[0].alternative_payee && (
-                              <Badge variant="warning" className="font-normal" title={t('payee_changed_detail', { alternative: lines[0].alternative_payee })}>
-                                {t('payee_changed')}
-                              </Badge>
-                            )}
-                            {lines[0].warnings.includes('unattested') && (
-                              <Badge variant="outline" className="font-normal">
-                                {t('unattested')}
-                              </Badge>
-                            )}
-                          </span>
-                        )
-                      }
-                      dateExtra={
-                        lines[0].date_moved_from && (
-                          <span className="block text-[11px] text-muted-foreground">{t('date_moved', { from: formatDate(lines[0].date_moved_from) })}</span>
-                        )
-                      }
-                    />
-                  </div>
-                ) : lines.length > 0 ? (
-                  <div className={previewing ? 'overflow-x-auto opacity-60' : 'overflow-x-auto'}>
-                    <table className="w-full border-collapse text-[13px]">
-                      <thead>
-                        <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
-                          <th className="py-2 pr-3 font-medium">{t('th_supplier')}</th>
-                          <th className="py-2 pr-3 font-medium">{t('th_payee')}</th>
-                          <th className="py-2 pr-3 font-medium">{t('th_date')}</th>
-                          <th className="py-2 text-right font-medium">{t('th_amount')}</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {lines.map((line) => {
-                          const label = invoiceLabelById?.get(line.supplier_invoice_id) ?? line.supplier_invoice_number
-                          const payment = paymentByKey.get(line.supplier_invoice_id)
-                          return (
-                            <tr key={line.supplier_invoice_id} className="border-b border-border align-middle">
-                              <td className="w-1/3 max-w-0 py-2 pr-3">
-                                <div className="flex items-center gap-1">
-                                  <div className="min-w-0 flex-1">
-                                    <span className="block truncate">{line.supplier_name}</span>
-                                    <span className="block truncate text-[11px] text-muted-foreground">{label}</span>
-                                  </div>
-                                  {payment && <InvoiceDocumentButton payment={payment} onOpen={setDocumentKey} />}
-                                </div>
-                              </td>
-                              <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
-                                <span>{line.payee.label}</span>
-                                {line.alternative_payee && (
-                                  <Badge
-                                    variant="warning"
-                                    className="ml-2 font-normal"
-                                    title={t('payee_changed_detail', { alternative: line.alternative_payee })}
-                                  >
-                                    {t('payee_changed')}
-                                  </Badge>
-                                )}
-                                {line.warnings.includes('unattested') && (
-                                  <Badge variant="outline" className="ml-2 font-normal">
-                                    {t('unattested')}
-                                  </Badge>
-                                )}
-                                <span className="block text-[11px] text-muted-foreground">
-                                  {line.reference.type === 'ocr' ? `OCR ${line.reference.value}` : line.reference.value}
-                                </span>
-                                {payment && <DocumentCheckLine payment={payment} className="whitespace-normal" />}
-                              </td>
-                              <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
-                                {formatDate(line.requested_execution_date)}
-                                {line.date_moved_from && (
-                                  <span className="block text-[11px] text-muted-foreground">{t('date_moved', { from: formatDate(line.date_moved_from) })}</span>
-                                )}
-                              </td>
-                              <td className="whitespace-nowrap py-2 text-right tabular-nums">{formatCurrency(Number(line.amount), line.currency)}</td>
-                            </tr>
-                          )
-                        })}
-                      </tbody>
-                      {lines.length > 1 && (
-                        <tfoot>
-                          <tr>
-                            <td colSpan={3} className="py-2 pr-3 text-muted-foreground">
-                              {t('total')}
-                            </td>
-                            <td className="py-2 text-right font-medium tabular-nums">{formatCurrency(preview?.total_amount ?? 0, preview?.currency ?? 'SEK')}</td>
-                          </tr>
-                        </tfoot>
-                      )}
-                    </table>
-                  </div>
-                ) : nothingToPay ? (
-                  <AttnLine>{t('nothing_to_pay')}</AttnLine>
-                ) : null}
-
-                {skipped.length > 0 && (
-                  <div className="space-y-1 text-[12.5px] text-muted-foreground">
-                    {lines.length > 0 && <p>{t('skipped_title', { count: skipped.length })}</p>}
-                    <ul className="space-y-1">
-                      {skipped.map((s) => (
-                        <li key={s.supplier_invoice_id}>
-                          {invoiceLabelById?.get(s.supplier_invoice_id) ?? s.supplier_invoice_id}:{' '}
-                          {t.has(`skip_${s.reason}`) ? t(`skip_${s.reason}`) : s.reason}
-                          {s.reason === 'already_in_payment' && (
-                            <>
-                              {' '}
-                              <Link href="/payments" className="underline underline-offset-2">
-                                {t('open_payments_page')}
-                              </Link>
-                            </>
+              {previewing && !preview ? (
+                <div className="space-y-3">
+                  <Skeleton className="h-4 w-2/3" />
+                  <Skeleton className="h-4 w-1/2" />
+                </div>
+              ) : single ? (
+                <div className={previewing ? 'opacity-60' : undefined}>
+                  <PaymentBesideDocument
+                    payment={payments[0]}
+                    payeeExtra={
+                      (lines[0].alternative_payee || lines[0].warnings.includes('unattested')) && (
+                        <span className="mt-1 flex flex-wrap justify-end gap-2">
+                          {lines[0].alternative_payee && (
+                            <Badge variant="warning" className="font-normal" title={t('payee_changed_detail', { alternative: lines[0].alternative_payee })}>
+                              {t('payee_changed')}
+                            </Badge>
                           )}
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
+                          {lines[0].warnings.includes('unattested') && (
+                            <Badge variant="outline" className="font-normal">
+                              {t('unattested')}
+                            </Badge>
+                          )}
+                        </span>
+                      )
+                    }
+                    dateExtra={
+                      lines[0].date_moved_from && (
+                        <span className="block text-[11px] text-muted-foreground">{t('date_moved', { from: formatDate(lines[0].date_moved_from) })}</span>
+                      )
+                    }
+                  />
+                </div>
+              ) : lines.length > 0 ? (
+                <div className={previewing ? 'overflow-x-auto opacity-60' : 'overflow-x-auto'}>
+                  <table className="w-full border-collapse text-[13px]">
+                    <thead>
+                      <tr className="border-b border-border text-left text-[11px] uppercase tracking-wider text-muted-foreground">
+                        <th className="py-2 pr-3 font-medium">{t('th_supplier')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('th_payee')}</th>
+                        <th className="py-2 pr-3 font-medium">{t('th_date')}</th>
+                        <th className="py-2 text-right font-medium">{t('th_amount')}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {lines.map((line) => {
+                        const label = invoiceLabelById?.get(line.supplier_invoice_id) ?? line.supplier_invoice_number
+                        const payment = paymentByKey.get(line.supplier_invoice_id)
+                        return (
+                          <tr key={line.supplier_invoice_id} className="border-b border-border align-middle">
+                            <td className="w-1/3 max-w-0 py-2 pr-3">
+                              <div className="flex items-center gap-1">
+                                <div className="min-w-0 flex-1">
+                                  <span className="block truncate">{line.supplier_name}</span>
+                                  <span className="block truncate text-[11px] text-muted-foreground">{label}</span>
+                                </div>
+                                {payment && <InvoiceDocumentButton payment={payment} onOpen={setDocumentKey} />}
+                              </div>
+                            </td>
+                            <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
+                              <span>{line.payee.label}</span>
+                              {line.alternative_payee && (
+                                <Badge
+                                  variant="warning"
+                                  className="ml-2 font-normal"
+                                  title={t('payee_changed_detail', { alternative: line.alternative_payee })}
+                                >
+                                  {t('payee_changed')}
+                                </Badge>
+                              )}
+                              {line.warnings.includes('unattested') && (
+                                <Badge variant="outline" className="ml-2 font-normal">
+                                  {t('unattested')}
+                                </Badge>
+                              )}
+                              <span className="block text-[11px] text-muted-foreground">
+                                {line.reference.type === 'ocr' ? `OCR ${line.reference.value}` : line.reference.value}
+                              </span>
+                              {payment && <DocumentCheckLine payment={payment} className="whitespace-normal" />}
+                            </td>
+                            <td className="whitespace-nowrap py-2 pr-3 tabular-nums">
+                              {formatDate(line.requested_execution_date)}
+                              {line.date_moved_from && (
+                                <span className="block text-[11px] text-muted-foreground">{t('date_moved', { from: formatDate(line.date_moved_from) })}</span>
+                              )}
+                            </td>
+                            <td className="whitespace-nowrap py-2 text-right tabular-nums">{formatCurrency(Number(line.amount), line.currency)}</td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                    {lines.length > 1 && (
+                      <tfoot>
+                        <tr>
+                          <td colSpan={3} className="py-2 pr-3 text-muted-foreground">
+                            {t('total')}
+                          </td>
+                          <td className="py-2 text-right font-medium tabular-nums">{formatCurrency(preview?.total_amount ?? 0, preview?.currency ?? 'SEK')}</td>
+                        </tr>
+                      </tfoot>
+                    )}
+                  </table>
+                </div>
+              ) : nothingToPay ? (
+                <AttnLine>{t('nothing_to_pay')}</AttnLine>
+              ) : null}
 
-                <InvoiceDocumentSheet payment={documentKey ? (paymentByKey.get(documentKey) ?? null) : null} onClose={() => setDocumentKey(null)} />
+              {skipped.length > 0 && (
+                <div className="space-y-1 text-[12.5px] text-muted-foreground">
+                  {lines.length > 0 && <p>{t('skipped_title', { count: skipped.length })}</p>}
+                  <ul className="space-y-1">
+                    {skipped.map((s) => (
+                      <li key={s.supplier_invoice_id}>
+                        {invoiceLabelById?.get(s.supplier_invoice_id) ?? s.supplier_invoice_id}:{' '}
+                        {t.has(`skip_${s.reason}`) ? t(`skip_${s.reason}`) : s.reason}
+                        {s.reason === 'already_in_payment' && (
+                          <>
+                            {' '}
+                            <Link href="/payments" className="underline underline-offset-2">
+                              {t('open_payments_page')}
+                            </Link>
+                          </>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
 
-                {preview && preview.replaces_drafts > 0 && (
-                  <p className="text-[12.5px] text-muted-foreground">{t('replaces_drafts', { count: preview.replaces_drafts })}</p>
-                )}
-                {lines.length > 0 && <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>}
-                {lines.length > 0 && <BankPaymentsAllowanceLine usage={usage} count={lines.length} canRequest />}
-              </>
-            )}
+              <InvoiceDocumentSheet payment={documentKey ? (paymentByKey.get(documentKey) ?? null) : null} onClose={() => setDocumentKey(null)} />
+
+              {preview && preview.replaces_drafts > 0 && (
+                <p className="text-[12.5px] text-muted-foreground">{t('replaces_drafts', { count: preview.replaces_drafts })}</p>
+              )}
+              {lines.length > 0 && <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>}
+              {lines.length > 0 && <BankPaymentsAllowanceLine usage={usage} count={lines.length} canRequest />}
+            </BankPaymentAccountGate>
             <DialogFooter>
               {closeButton}
               {lines.length > 0 && (

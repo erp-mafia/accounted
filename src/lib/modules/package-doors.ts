@@ -552,6 +552,7 @@ const PAYROLL: PackageDoors = {
     'PATCH /api/salary/runs/:id/lines/:lineId',
     'POST /api/salary/runs/:id/paid',
     'POST /api/salary/runs/:id/payment/pain001',
+    'POST /api/salary/runs/:id/payment/pay-via-bank',
     'POST /api/salary/runs/:id/payslips/send',
     'POST /api/salary/runs/:id/revert',
     'POST /api/salary/runs/:id/review',

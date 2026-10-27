@@ -89,12 +89,12 @@ export async function releasePaymentOrder(
 
 /**
  * Orders whose invoice no longer needs paying: paid, credited, reversed, gone, or reduced below the order.
- * Only an order that pays a supplier invoice can be one. A skattekonto payment has no invoice that could
- * close under it, so it stays payable here, in the signing and in the status sync alike
+ * Only an order that pays a supplier invoice can be one. A skattekonto or salary payment has no invoice
+ * that could close under it, so it stays payable here, in the signing and in the status sync alike
  * (release_payment_order sends it back to approved for the same reason).
  */
 export async function unpayableOrders(writer: SupabaseClient, orders: PaymentOrderRow[]): Promise<Set<string>> {
-  const invoiceOrders = orders.filter((o) => o.purpose !== 'skattekonto')
+  const invoiceOrders = orders.filter((o) => o.purpose === 'supplier_invoice')
   const invoiceIds = [...new Set(invoiceOrders.map((o) => o.supplier_invoice_id).filter((id): id is string => Boolean(id)))]
   if (invoiceIds.length === 0) return new Set()
   const { data, error } = await writer
