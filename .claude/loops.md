@@ -1,6 +1,6 @@
 # Loops
 
-Four skills that scan a source and then propose: they file or update GitLab issues
+Five skills that scan a source and then propose: they file or update GitLab issues
 and open merge requests, and never merge. Run one by hand (`/loop-docs-freshness`)
 or wrap it in `/loop <interval>` for a session. The weekly and monthly ones check a
 run marker in their tracking issue first, so running them early is a cheap no-op.
@@ -11,6 +11,7 @@ run marker in their tracking issue first, so running them early is a cheap no-op
 | `loop-docs-freshness` | docs.accounted.se against what the repo generates | weekly | one drift issue, website MR |
 | `loop-regeluppdat` | Swedish laws and rules that affect the product | monthly | issues only, never code |
 | `loop-skill-review` | community skill submissions | on demand | registry MR |
+| `loop-usage-audit` | page, route and MCP tool use in PostHog, prod `event_log` and Vercel | monthly | run log issue, keep-list MRs |
 
 ## Shared rules
 
