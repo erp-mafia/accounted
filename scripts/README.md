@@ -21,6 +21,7 @@ Run scripts from the repository root. Prefer the named commands in [package.json
 | `sie-import/` | Import acceptance, staging benchmarks, and reviewed repairs |
 | `provider-migration/` | Synthetic load and recovery harnesses; [measured results](provider-migration/README.md) |
 | `migration/` | Targeted migration follow-up tools |
+| `ops/` | Read-only production snapshots; `background-freshness.sql` shows when each background path last did real work per company |
 | `support/` | Account support actions |
 | `salary/` | Salary maintenance |
 | `parties/` | Party matching evaluation; [method and fixtures](parties/README.md) |
