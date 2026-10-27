@@ -27,6 +27,15 @@ import {
 // The momsdeklaration impact has its own tests
 // (src/lib/vat/__tests__/voucher-vat-impact.test.ts); here it is a fixed
 // answer so the queued reads below stay the tool's own.
+// The booking-time voucher warnings have their own tests
+// (lib/bookkeeping/__tests__/voucher-*.test.ts); here they pass, so the
+// queued mock answers stay in step.
+const mockVoucherGuard = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bookkeeping/voucher-warnings-guard', () => ({
+  runVoucherWarningsGuard: (...args: unknown[]) => mockVoucherGuard(...args),
+  recordVoucherWarningsAcknowledged: vi.fn(),
+}))
+
 vi.mock('@/lib/vat/voucher-vat-impact', () => ({
   previewVoucherVatDeclaration: vi.fn().mockResolvedValue({
     status: 'ok', vat_period: null, counted: true, excluded_as: null, rutor_change: {},
@@ -52,6 +61,8 @@ const categorizeTransaction = tools.find((t) => t.name === 'gnubok_categorize_tr
 const bulkBookTransactions = tools.find((t) => t.name === 'gnubok_bulk_book_transactions')!
 
 beforeEach(() => {
+  mockVoucherGuard.mockReset()
+  mockVoucherGuard.mockResolvedValue({ ok: true, acknowledged: [] })
   vi.clearAllMocks()
 })
 

@@ -71,6 +71,7 @@ export const PROCESSING_EVENT_TYPES = [
   'SupplierInvoiceCompleted',
   'SupplierInvoiceCounterRowsRepaired',
   'TransactionDocumentReplaced',
+  'VoucherWarningsAcknowledged',
 ] as const
 
 export type ProcessingHistoryEventType = (typeof PROCESSING_EVENT_TYPES)[number]

@@ -9,7 +9,7 @@
 
 import { Fragment, createContext, useContext, useEffect, useState, type ReactNode } from 'react'
 import Link from 'next/link'
-import { useTranslations } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import { ArrowDownIcon } from '@/components/icons'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isUuid } from '@/lib/invariants/uuid'
@@ -30,6 +30,7 @@ import { voucherLineViews, type PostingLineLike } from '@/lib/bookkeeping/vouche
 import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import { complianceWarningOf, type ComplianceWarning } from './vocabulary'
 import { formatPreviewNumber } from './preview-facts'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 
 // The subset of a PendingOperation the preview actually reads. operation_type
 // is widened to string: the chat surface derives it from an MCP tool name and
@@ -589,10 +590,14 @@ function readVatDeclarationSummary(value: unknown): string | null {
 // OperationPreview above every preview type, not here.
 function VoucherPreview({ data, showSeries = true }: { data: Record<string, unknown>; showSeries?: boolean }) {
   const t = useTranslations('pending')
+  const tWarnings = useTranslations('voucherWarnings')
+  const locale = useLocale()
   const lines = (data.lines as PostingLineLike[]) || []
   const totalDebit = data.total_debit as number | undefined
   const totalCredit = data.total_credit as number | undefined
   const vatSummary = readVatDeclarationSummary(data.vat_declaration)
+  // The booking-time warnings the person confirmed when the voucher was staged.
+  const confirmedWarnings = Array.isArray(data.voucher_warnings) ? (data.voucher_warnings as VoucherWarning[]) : []
 
   return (
     <div className="space-y-3 text-sm">
@@ -625,6 +630,16 @@ function VoucherPreview({ data, showSeries = true }: { data: Record<string, unkn
         ) : null}
       </div>
       <VoucherLinesBlock lines={lines} totalDebit={totalDebit} totalCredit={totalCredit} />
+      {confirmedWarnings.length > 0 && (
+        <div className="space-y-1">
+          <div className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{tWarnings('pending_heading')}</div>
+          <ul className="space-y-1 text-[12.5px] text-muted-foreground">
+            {confirmedWarnings.map((w) => (
+              <li key={w.code}>{locale === 'en' ? w.message_en : w.message_sv}</li>
+            ))}
+          </ul>
+        </div>
+      )}
     </div>
   )
 }

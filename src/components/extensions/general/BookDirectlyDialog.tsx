@@ -47,6 +47,8 @@ import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useAccounts, useCashAccounts, useCompanySettings, useFiscalPeriods } from '@/lib/reference-data/hooks'
 import {
@@ -190,6 +192,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
   } = useUnderlagBankCandidates({ open, extractedData: item.extracted_data, search: txSearch })
 
   const [isSubmitting, setIsSubmitting] = useState(false)
+  // Booking-time voucher warnings (VOUCHER_NEEDS_CONFIRMATION): "Bokför
+  // ändå" resends with the codes the dialog showed.
+  const [voucherWarnings, setVoucherWarnings] = useState<VoucherWarning[] | null>(null)
+  const acknowledgedWarningsRef = useRef<string[] | null>(null)
 
   // "Spara som mall" — derive amount-parameterised template lines from the
   // current konteringsrader so the user can save the pattern they just worked
@@ -532,6 +538,7 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       notes: notes.trim(),
       lines: lines.map(toBookDirectPayloadLine),
       transaction_id: selectedTransactionId ?? undefined,
+      ...(acknowledgedWarningsRef.current ? { acknowledged_warnings: acknowledgedWarningsRef.current } : {}),
     }
     const res = await fetch(
       `/api/extensions/ext/invoice-inbox/items/${item.id}/book-direct`,
@@ -567,7 +574,12 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       if (err instanceof Error && err.message === 'cancelled') {
         // User dismissed the activation dialog: no toast needed
       } else {
-        const anyErr = err as { body?: unknown; status?: number }
+        const anyErr = err as { body?: { error?: { code?: string; details?: { warnings?: VoucherWarning[] } } }; status?: number }
+        const warnings = anyErr.body?.error?.details?.warnings
+        if (anyErr.body?.error?.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(warnings)) {
+          setVoucherWarnings(warnings)
+          return
+        }
         toast({
           title: 'Kunde inte bokföra',
           description: getErrorMessage(anyErr.body ?? err, {
@@ -581,6 +593,19 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
       setIsSubmitting(false)
     }
   }, [canSubmit, runSubmit, toast, onSuccess, onOpenChange])
+
+  // Resend past the warnings the person just read; the server checks again.
+  const handleConfirmWarnings = useCallback(async () => {
+    const warnings = voucherWarnings
+    if (!warnings) return
+    acknowledgedWarningsRef.current = warnings.map((w) => w.code)
+    setVoucherWarnings(null)
+    try {
+      await handleSubmit()
+    } finally {
+      acknowledgedWarningsRef.current = null
+    }
+  }, [voucherWarnings, handleSubmit])
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -1047,6 +1072,13 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         accountNumbers={activationDialog.accountNumbers}
         onConfirm={confirmActivation}
         onCancel={cancelActivation}
+      />
+
+      <VoucherWarningsDialog
+        warnings={voucherWarnings}
+        processing={isSubmitting}
+        onCancel={() => setVoucherWarnings(null)}
+        onConfirm={handleConfirmWarnings}
       />
 
       {/* Save the current kontering as a reusable template. Amounts are stored

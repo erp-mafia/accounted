@@ -33,6 +33,7 @@ import {
 } from '@/lib/bookkeeping/bank-line-business-events'
 import { bookDirectDocumentCurrency, bookDirectFxRefusal } from '@/lib/bookkeeping/book-direct-prefill'
 import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
+import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
 import { bookkeepingErrorResponse } from '@/lib/bookkeeping/errors'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -182,6 +183,16 @@ export async function bookInboxItemDirectly(
     }))
   }
 
+  // The person's own lines: the booking-time VAT, revenue and duplicate
+  // warnings apply, confirmed through acknowledged_warnings
+  // (lib/bookkeeping/voucher-warnings-guard.ts).
+  const voucherGuard = await runVoucherWarningsGuard(ctx.supabase, ctx.companyId, body, ctx.log, {
+    acknowledged: body.acknowledged_warnings,
+  })
+  if (!voucherGuard.ok) {
+    return refused(errorResponseFromCode(voucherGuard.code, ctx.log, { requestId: ctx.requestId, details: voucherGuard.details }))
+  }
+
   // WhatsApp-sourced items: when the request carries NO notes field at
   // all, default to the rendered chat context (representation deltagare
   // + syfte, sender note) so the audit text reaches the verifikat even
@@ -257,6 +268,14 @@ export async function bookInboxItemDirectly(
       { status: 400 }
     ))
   }
+  await recordVoucherWarningsAcknowledged({
+    companyId: ctx.companyId,
+    userId: ctx.userId,
+    journalEntryId: journalEntry.id,
+    warnings: voucherGuard.acknowledged,
+    door: 'inbox_book_direct',
+    log: ctx.log,
+  })
 
   // The transaction this verifikat settles: the one the caller named, or
   // the one the item was already matched to. Preserving the match without

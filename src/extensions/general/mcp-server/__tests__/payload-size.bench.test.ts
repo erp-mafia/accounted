@@ -760,6 +760,12 @@ describe('tools/list payload size guard', () => {
     //     (both) and update's personal_number its "encrypted at staging,
     //     masked on read". Measured 66 084 (single-company 61 594). Ceiling
     //     unchanged.
+    //   * Booking-time voucher warnings (2026-10-27): gnubok_create_voucher
+    //     gains acknowledge_warnings, the codes of a VOUCHER_NEEDS_CONFIRMATION
+    //     refusal the person confirmed. Paid for inside the tool:
+    //     fiscal_period_id and notes lose their restating notes and
+    //     is_opening_balance its reconciliation aside. Measured 66 076
+    //     (single-company 61 586). Ceiling unchanged.
     expect(approxTokens).toBeLessThan(66_100)
   })
 

@@ -402,6 +402,7 @@ import { findUnknownArgKeys, listArgKeys, listRequiredArgKeys, shortestExampleFo
 import { parseVatPeriodArgs } from '@/lib/reports/vat-period-args'
 import { VAT_ROUNDING_ACCOUNT } from '@/lib/reports/vat-settlement'
 import { previewVoucherVatDeclaration } from '@/lib/vat/voucher-vat-impact'
+import { runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
   AGENT_AMOUNT_FORMAT,
@@ -24392,16 +24393,17 @@ export const tools: McpTool[] = [
       properties: {
         entry_date: { type: 'string', description: 'Voucher date (YYYY-MM-DD)' },
         description: { type: 'string', description: 'Verifikationstext (required, min 1 char)' },
-        fiscal_period_id: { type: 'string', description: 'UUID of fiscal period. If omitted, resolved from entry_date.' },
+        fiscal_period_id: { type: 'string', description: 'Resolved from entry_date when omitted.' },
         voucher_series: { type: 'string', description: 'Single letter A-Z. Defaults to A.' },
-        notes: { type: 'string', description: 'Internal notes (max 2000 chars): visible on the verifikation but not on reports.' },
+        notes: { type: 'string', description: 'Internal notes, max 2000 chars.' },
         default_dimensions: {
           type: 'object',
           additionalProperties: { type: 'string' },
           description: 'Dimension tags {sie_dim_no: kod eller namn}, e.g. {"6":"P001"}, applied to every line not setting the key itself. Unknown values are rejected: never auto-created.',
         },
-        is_opening_balance: { type: 'boolean', description: 'Set true ONLY for a migrated ingående balans (IB). Marks the entry source_type=opening_balance so bank reconciliation excludes it from period movement. Requires every line to be a balance-sheet account (class 1/2) and entry_date = fiscal period start, else rejected. Defaults false.' },
+        is_opening_balance: { type: 'boolean', description: 'Set true ONLY for a migrated ingående balans (IB). Requires every line to be a balance-sheet account (class 1/2) and entry_date = fiscal period start, else rejected. Defaults false.' },
         inbox_item_id: { type: 'string', description: 'Inbox item UUID to book directly. For a received handling this is the BFL 5 kap 6§ path: the document becomes the verifikation. On confirm the item and its document link to the new verifikat. Not in inbox? gnubok_upload_document first. Fails if already booked/converted.' },
+        acknowledge_warnings: { type: 'array', items: { type: 'string' }, description: 'VOUCHER_NEEDS_CONFIRMATION codes the person confirmed.' },
         lines: {
           type: 'array',
           description: 'At least 2 balanced lines. sum(debit_amount) === sum(credit_amount), both > 0.',
@@ -24709,6 +24711,24 @@ export const tools: McpTool[] = [
         lines: bookedLines,
         isOpeningBalance,
       })
+      // Booking-time warnings on the typed lines (VAT that does not fit its
+      // base, revenue debited in a purchase, a duplicate of a posted
+      // verifikat or of booked bank money): refused until the person has
+      // seen them, then staged with the confirmed codes, which the approver
+      // sees and the commit checks again (lib/bookkeeping/voucher-warnings-guard.ts).
+      // A migrated IB moves balances only and is never asked.
+      const voucherGuard = isOpeningBalance
+        ? null
+        : await runVoucherWarningsGuard(supabase, companyId, { entry_date: entryDate, description, lines: bookedLines }, log, {
+            acknowledged: Array.isArray(args.acknowledge_warnings) ? (args.acknowledge_warnings as string[]) : undefined,
+          })
+      if (voucherGuard && !voucherGuard.ok) {
+        throw Object.assign(
+          new Error('The voucher deviates from what such a voucher normally looks like: show the person error.details.warnings, and stage again with acknowledge_warnings only if they confirm the lines.'),
+          { code: voucherGuard.code, details: voucherGuard.details },
+        )
+      }
+      const acknowledgedWarnings = voucherGuard?.acknowledged ?? []
       return stage({
         supabase,
         companyId,
@@ -24725,11 +24745,14 @@ export const tools: McpTool[] = [
           inbox_item_id: inboxItemId,
           document_id: inboxDocumentId,
           lines: bookedLines,
+          ...(acknowledgedWarnings.length > 0 ? { acknowledged_warnings: acknowledgedWarnings.map((w) => w.code) } : {}),
         },
         preview: {
           entry_date: entryDate,
           description,
           fiscal_period_id: fiscalPeriodId,
+          // The warnings the person confirmed before this was staged, for the approver.
+          ...(acknowledgedWarnings.length > 0 ? { voucher_warnings: acknowledgedWarnings } : {}),
           voucher_series: (args.voucher_series as string) || 'A',
           total_debit: bookedTotals.totalDebit,
           total_credit: bookedTotals.totalCredit,

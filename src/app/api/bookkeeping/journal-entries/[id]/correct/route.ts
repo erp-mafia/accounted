@@ -7,13 +7,29 @@ import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { validateBody } from '@/lib/api/validate'
 import { CorrectJournalEntryAppSchema } from '@/lib/api/schemas'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'bookkeeping.journal-entry.correct',
-  async (request, { supabase, companyId, user }, { params }) => {
+  async (request, { supabase, companyId, user, log, requestId }, { params }) => {
     const { id } = await params
     const validation = await validateBody(request, CorrectJournalEntryAppSchema)
     if (!validation.success) return validation.response
+
+    // The corrected lines are typed: the booking-time VAT and revenue
+    // warnings apply. A rättelse mirrors its original on purpose, so the
+    // duplicate half stays out (lib/bookkeeping/voucher-warnings-guard.ts).
+    const voucherGuard = await runVoucherWarningsGuard(
+      supabase,
+      companyId,
+      { entry_date: validation.data.entry_date ?? '', description: validation.data.description ?? '', lines: validation.data.lines },
+      log,
+      { acknowledged: validation.data.acknowledged_warnings, checkDuplicates: false },
+    )
+    if (!voucherGuard.ok) {
+      return errorResponseFromCode(voucherGuard.code, log, { requestId, details: voucherGuard.details })
+    }
     // Posting port (step 2i): while POSTING_EVENTS is on, ledger.storno and
     // ledger.correction of the verifikat, which the person asked for
     // (user_created), each linked to its own new verifikat.
@@ -37,6 +53,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         },
       },
     })
+    const correctedId = (result as { corrected?: { id?: string } } | null)?.corrected?.id
+    if (correctedId) {
+      await recordVoucherWarningsAcknowledged({
+        companyId,
+        userId: user.id,
+        journalEntryId: correctedId,
+        warnings: voucherGuard.acknowledged,
+        door: 'dashboard_correction',
+        log,
+      })
+    }
     // The object the verifikat books, if any: the correction is a new
     // verifikat the object does not point at, so the answer names it.
     const ownedBy = await voucherOwnerOrNull(supabase, companyId, { id })

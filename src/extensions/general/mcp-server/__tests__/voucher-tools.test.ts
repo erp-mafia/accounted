@@ -10,6 +10,15 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
+// The booking-time voucher warnings have their own tests
+// (lib/bookkeeping/__tests__/voucher-*.test.ts); here they pass, so the
+// queued mock answers stay in step.
+const mockVoucherGuard = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bookkeeping/voucher-warnings-guard', () => ({
+  runVoucherWarningsGuard: (...args: unknown[]) => mockVoucherGuard(...args),
+  recordVoucherWarningsAcknowledged: vi.fn(),
+}))
+
 vi.mock('@/lib/bookkeeping/engine', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/engine')>(
     '@/lib/bookkeeping/engine'
@@ -39,6 +48,8 @@ const correctEntry = tools.find((t) => t.name === 'gnubok_correct_entry')!
 const reverseEntry = tools.find((t) => t.name === 'gnubok_reverse_journal_entry')!
 
 beforeEach(() => {
+  mockVoucherGuard.mockReset()
+  mockVoucherGuard.mockResolvedValue({ ok: true, acknowledged: [] })
   vi.clearAllMocks()
 })
 
@@ -391,6 +402,67 @@ describe('gnubok_create_voucher: staging gates', () => {
     // The executor always hardcodes 'manual'. Look at the insert call.
     const insertCalls = (supabase.from as ReturnType<typeof vi.fn>).mock.calls
     expect(insertCalls.some((args) => args[0] === 'pending_operations')).toBe(true)
+  })
+
+  it('refuses to stage until the person confirmed the booking-time warnings, handing them to the agent', async () => {
+    const warnings = [{ code: 'INPUT_VAT_ABOVE_RATE', message_sv: 'x', message_en: 'x', details: {} }]
+    mockVoucherGuard.mockResolvedValue({ ok: false, code: 'VOUCHER_NEEDS_CONFIRMATION', details: { warnings } })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'fp-1', is_closed: false, period_start: '2026-01-01', period_end: '2026-12-31', name: '2026' }, error: null })
+    enqueue({
+      data: [
+        { account_number: '1010', account_name: 'Balanserade utgifter', is_active: true },
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+      ],
+      error: null,
+    })
+
+    const staged = createVoucher.execute(
+      { entry_date: '2026-05-12', description: 'Capitalize Cursor', fiscal_period_id: 'fp-1', lines: balancedLines },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )
+
+    await expect(staged).rejects.toMatchObject({ code: 'VOUCHER_NEEDS_CONFIRMATION', details: { warnings } })
+    const { toToolError } = await import('../tool-result')
+    expect(toToolError(await staged.catch((e: unknown) => e)).error.details).toEqual({ warnings })
+  })
+
+  it('stages the confirmed codes for the approver and the commit', async () => {
+    const warnings = [{ code: 'INPUT_VAT_ABOVE_RATE', message_sv: 'x', message_en: 'x', details: {} }]
+    mockVoucherGuard.mockResolvedValue({ ok: true, acknowledged: warnings })
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'fp-1', is_closed: false, period_start: '2026-01-01', period_end: '2026-12-31', name: '2026' }, error: null })
+    enqueue({
+      data: [
+        { account_number: '1010', account_name: 'Balanserade utgifter', is_active: true },
+        { account_number: '1930', account_name: 'Företagskonto', is_active: true },
+      ],
+      error: null,
+    })
+    enqueue({ data: null, error: null })
+    enqueue({ data: null, error: null })
+    enqueue({ data: { id: 'op-staged' }, error: null })
+
+    const result = (await createVoucher.execute(
+      {
+        entry_date: '2026-05-12',
+        description: 'Capitalize Cursor',
+        fiscal_period_id: 'fp-1',
+        lines: balancedLines,
+        acknowledge_warnings: ['INPUT_VAT_ABOVE_RATE'],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+    )) as { staged: boolean; preview: Record<string, unknown> }
+
+    expect(mockVoucherGuard.mock.calls[0][4]).toEqual({ acknowledged: ['INPUT_VAT_ABOVE_RATE'] })
+    expect(result.staged).toBe(true)
+    expect(result.preview.voucher_warnings).toEqual(warnings)
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    expect(inserted.params.acknowledged_warnings).toEqual(['INPUT_VAT_ABOVE_RATE'])
   })
 
   it('exposes inbox_item_id as an optional input', () => {

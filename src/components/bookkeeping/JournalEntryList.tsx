@@ -10,6 +10,7 @@ import {
   DataListLoading,
 } from '@/components/ui/data-list'
 import { Badge } from '@/components/ui/badge'
+import { useCommitDraft } from '@/components/bookkeeping/use-commit-draft'
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { SegmentedControl } from '@/components/ui/segmented-control'
@@ -797,21 +798,24 @@ export default function JournalEntryList({
       .catch(() => {})
   }
 
+  // The commit meets the booking-time voucher warnings (useCommitDraft).
+  const { commit: commitDraft, dialog: commitWarningsDialog } = useCommitDraft<{ voucher_series?: string | null; voucher_number?: number | null } | null>({
+    onPosted: async (posted) => {
+      toast({
+        title: t('toast_posted_title'),
+        description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
+      })
+      await fetchEntries()
+    },
+    onFailed: (result) => {
+      toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+    },
+  })
+
   const handleCommit = async (entryId: string) => {
     setCommittingId(entryId)
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${entryId}/commit`, { method: 'POST' })
-      const result = await res.json()
-      if (res.ok) {
-        const posted = result.data
-        toast({
-          title: t('toast_posted_title'),
-          description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
-        })
-        await fetchEntries()
-      } else {
-        toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
-      }
+      await commitDraft(entryId)
     } catch {
       toast({ title: t('toast_post_failed_generic'), variant: 'destructive' })
     } finally {
@@ -2050,6 +2054,9 @@ export default function JournalEntryList({
           </div>
         </ConfirmationDialog>
       )}
+
+      {/* Booking-time voucher warnings on a draft's commit */}
+      {commitWarningsDialog}
 
       {/* Attachment preview sheet */}
       <AttachmentPreviewSheet

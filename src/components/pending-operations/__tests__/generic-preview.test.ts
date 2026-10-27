@@ -21,7 +21,10 @@ vi.mock('next-intl', async () => {
     const text = lookup(key)
     return typeof text === 'string' ? text.replace(/\{(\w+)\}/g, (_, name: string) => String(values?.[name])) : key
   }
-  return { useTranslations: () => Object.assign(t, { has: (key: string) => typeof lookup(key) === 'string' }) }
+  return {
+    useTranslations: () => Object.assign(t, { has: (key: string) => typeof lookup(key) === 'string' }),
+    useLocale: () => 'sv',
+  }
 })
 
 const { OperationPreview } = await import('../OperationPreview')

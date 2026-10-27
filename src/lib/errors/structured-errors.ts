@@ -973,6 +973,14 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The duplicate candidate echoed in expected_duplicate_transaction_id / expected_duplicate_journal_entry_id no longer matches the one detected at request time. Re-run the booking pre-flight to obtain the current candidate, then retry.',
   },
+  // Booking-time warnings on a typed verifikat (lib/bookkeeping/voucher-warnings-guard.ts).
+  VOUCHER_NEEDS_CONFIRMATION: {
+    httpStatus: 409,
+    message_sv:
+      'Verifikationen avviker från hur en sådan verifikation brukar se ut. Läs varningarna och bekräfta att den stämmer, eller rätta raderna.',
+    message_en:
+      'The voucher deviates from what such a voucher normally looks like (details.warnings: code, message_sv, message_en, details). Show the warnings to the person; if they confirm the lines are right, send the same request again with acknowledged_warnings listing every code. Otherwise correct the lines.',
+  },
   TX_CATEGORIZE_TX_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Transaktionen kunde inte hittas.',

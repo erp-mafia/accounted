@@ -2,6 +2,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
 const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+// The booking-time voucher warnings have their own tests
+// (lib/bookkeeping/__tests__/voucher-*.test.ts, the book-direct guard test
+// below); here they pass, so the queued mock answers stay in step.
+const mockVoucherGuard = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bookkeeping/voucher-warnings-guard', () => ({
+  runVoucherWarningsGuard: (...args: unknown[]) => mockVoucherGuard(...args),
+  recordVoucherWarningsAcknowledged: vi.fn(),
+}))
+
 vi.mock('@/lib/operations/inbox-pair-guard', () => ({
   refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
 }))
@@ -117,6 +126,8 @@ describe('POST /items/:id/book-direct', () => {
   const route = findRoute('POST', '/items/:id/book-direct')
 
   beforeEach(() => {
+    mockVoucherGuard.mockReset()
+    mockVoucherGuard.mockResolvedValue({ ok: true, acknowledged: [] })
     vi.mocked(recordInboxDecision).mockClear()
     vi.mocked(recordDecisions).mockClear()
     createJournalEntryMock.mockReset()
@@ -245,6 +256,29 @@ describe('POST /items/:id/book-direct', () => {
     expect(body.error.message).toContain('2614, 2624 eller 2634')
     expect(createJournalEntryMock).not.toHaveBeenCalled()
     expect(linkToJournalEntryMock).not.toHaveBeenCalled()
+  })
+
+  it('refuses with the voucher warnings before anything is posted, passing the confirmed codes on', async () => {
+    const warnings = [{ code: 'INPUT_VAT_ABOVE_RATE', message_sv: 'x', message_en: 'x', details: {} }]
+    mockVoucherGuard.mockResolvedValue({ ok: false, code: 'VOUCHER_NEEDS_CONFIRMATION', details: { warnings } })
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: makeInvoiceInboxItem({ document_id: 'doc-1' }) })
+
+    const res = await route.handler(
+      createMockRequest('/items/item-1/book-direct', {
+        method: 'POST',
+        body: { ...VALID_BODY, acknowledged_warnings: ['REVERSE_CHARGE_ONE_SIDED'] },
+        searchParams: { _id: 'item-1' },
+      }),
+      buildCtx(supabase),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: unknown[] } } }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
+    expect(body.error.details.warnings).toEqual(warnings)
+    expect(mockVoucherGuard.mock.calls[0][4]).toEqual({ acknowledged: ['REVERSE_CHARGE_ONE_SIDED'] })
+    expect(createJournalEntryMock).not.toHaveBeenCalled()
   })
 
   it('books a standalone entry and links the document', async () => {

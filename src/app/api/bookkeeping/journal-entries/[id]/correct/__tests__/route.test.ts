@@ -98,6 +98,33 @@ describe('POST /api/bookkeeping/journal-entries/[id]/correct', () => {
     expect(body.error).toContain('At least two lines are required for double-entry')
   })
 
+  it('asks for confirmation when the corrected lines debit a revenue account in a purchase, before any storno', async () => {
+    const lines = [
+      { account_number: '3020', debit_amount: 154.4, credit_amount: 0 },
+      { account_number: '2641', debit_amount: 9.27, credit_amount: 0 },
+      { account_number: '1930', debit_amount: 0, credit_amount: 163.67 },
+    ]
+    const request = createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', { method: 'POST', body: { lines } })
+    const response = await POST(request, createMockRouteParams({ id: 'entry-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
+    expect(body.error.details.warnings.map((w) => w.code)).toEqual(['REVENUE_DEBITED_IN_PURCHASE'])
+    expect(mockCorrectEntry).not.toHaveBeenCalled()
+
+    mockCorrectEntry.mockResolvedValue({ reversal: makeJournalEntry({ id: 'r-1' }), corrected: makeJournalEntry({ id: 'c-1' }) })
+    const confirmed = await POST(
+      createMockRequest('/api/bookkeeping/journal-entries/entry-1/correct', {
+        method: 'POST',
+        body: { lines, acknowledged_warnings: ['REVENUE_DEBITED_IN_PURCHASE'] },
+      }),
+      createMockRouteParams({ id: 'entry-1' }),
+    )
+    expect((await parseJsonResponse(confirmed)).status).toBe(200)
+    expect(mockCorrectEntry).toHaveBeenCalledTimes(1)
+  })
+
   it('returns reversal and corrected entries on success', async () => {
     const reversal = makeJournalEntry({
       id: 'reversal-1',

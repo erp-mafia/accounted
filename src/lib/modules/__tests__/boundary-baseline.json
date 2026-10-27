@@ -11,7 +11,7 @@
     "ledger -> payroll": 6,
     "ledger -> skatteverket": 5,
     "ledger -> transactions": 11,
-    "ledger -> vat": 19,
+    "ledger -> vat": 20,
     "ledger -> year-end": 10,
     "platform -> payroll": 1
   },
