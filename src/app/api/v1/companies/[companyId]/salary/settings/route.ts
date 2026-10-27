@@ -282,15 +282,17 @@ const EXAMPLE_RESOURCE = {
     leave_context: 'all_registered',
     net_rounding: 'nearest',
     one_off_tax_rounding: 'truncate',
+    vacation_day_value: 'percent_4_6',
   },
   salary_voucher_series: 'K',
 }
 
 const POLICY_PITFALLS = [
   'salary_calculation_policy holds the company\'s calculation conventions (beräkningsprinciper). Every key defaults to the historical Accounted behaviour; a customer migrated from Fortnox usually wants partial_month=annual_calendar_days (månadslön × 12 / 365 per calendar day employed), sick_rate=annual_hourly (timlön = månadslön × 12 / (52 × veckoarbetstid) for sjuklön), long_leave=calendar_after_five_workdays (leave longer than five working days deducted per calendar day at månadslön × 12 / 365, a whole month = the monthly salary) and, with salary_net_rounding, net_rounding=nearest. Compare one historical payslip before switching.',
-  'A PATCH of salary_calculation_policy is merged key by key into the stored policy (omitted keys keep their value); the response and the stored value always carry all six keys. It is not snapshotted onto existing runs at creation: the conventions are read at :calculate and frozen into the run\'s calculation_params, so a draft recalculated after a change follows the new conventions and a calculated run does not.',
+  'A PATCH of salary_calculation_policy is merged key by key into the stored policy (omitted keys keep their value); the response and the stored value always carry all seven keys. It is not snapshotted onto existing runs at creation: the conventions are read at :calculate and frozen into the run\'s calculation_params, so a draft recalculated after a change follows the new conventions and a calculated run does not.',
   'long_leave=calendar_after_five_workdays is a five-day-week rule: :calculate refuses (400 VALIDATION_ERROR) a monthly employee whose workdays_per_week is not 5 while it is on. leave_context only matters under that convention.',
   'one_off_tax_rounding governs engångsskatt on payslip lines that carry one_off_tax_percent (POST /salary-runs/{id}/employees/{employeeId}/lines); truncate (öretal bortfaller) is the statutory rule, nearest exists to reproduce another system\'s history.',
+  'vacation_day_value is how one paid semesterdag is valued under sammalöneregeln when the semesterlöneskuld is computed (the vacation-liability report, the vacation-year close, the vacation-balance estimate and the remeasurement): daily_divisor = månadslön / 21 at a five-day week (the historical value), percent_4_6 = 4,6 % of the månadslön, as Fortnox and Spiris value it. It never changes what a payslip pays. Valuations read the company\'s current value, not a run snapshot.',
 ]
 
 const SHARED_PITFALLS = [

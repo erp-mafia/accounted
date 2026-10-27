@@ -115,6 +115,41 @@ export const KONTANTMETOD_EU_GOODS_RULE =
 export const EU_GOODS_REGISTRATION_DATE_RULE =
   'En leverantörsfaktura för varor från ett annat EU-land (unionsinternt förvärv, omvänd skattskyldighet) registreras daterad fakturadatum, men senast den 15:e i månaden efter den månad då varorna levererades när fakturan har ett leveransdatum, eftersom den beräknade utgående och ingående momsen ska redovisas senast för den period som omfattar den dagen (ML 7 kap. 12, 26 och 40 §§). Utan leveransdatum dateras registreringen fakturadatum. Regeln gäller enligt både faktureringsmetoden och kontantmetoden och infördes med ärende #93; programversion och driftsättning framgår av behandlingshistoriken. Redan bokförda verifikationer ändras inte.'
 
+/**
+ * Semesterlöneskuld (2920/2940): the automatkontering of the salary run's
+ * vacation verifikat under the company's booking method
+ * (company_settings.salary_vacation_liability_method), BFN vägledning
+ * Bokföring punkt 9.9 c. Text per method and day-value convention.
+ */
+export function vacationLiabilityRuleText(
+  method: 'accrual' | 'remeasure',
+  dayValue: 'daily_divisor' | 'percent_4_6',
+): string {
+  const dagvarde =
+    dayValue === 'percent_4_6'
+      ? 'Dagvärdet är vid sammalöneregeln 4,6 procent av månadslönen plus semestertillägget, och vid procentregeln semesterlöneprocenten av årslönen delad med antalet semesterdagar.'
+      : 'Dagvärdet är vid sammalöneregeln månadslönen delad med 21 vid femdagarsvecka (dagdivisorn för annat schema) plus semestertillägget, och vid procentregeln semesterlöneprocenten av årslönen delad med antalet semesterdagar.'
+  const berakning =
+    'Skulden beräknas per anställd som obetald semesterlön för intjänade dagar som inte är uttagna: återstående betalda dagar för semesteråret (vid sammanfallande semesterår den del av årets dagar som är intjänad), sparade dagar och, vid semesterår 1 april till 31 mars, dagar som tjänas in under pågående intjänandeår, gånger dagvärdet, plus obetald semesterlön på rörliga lönedelar enligt sammalöneregeln. Sociala avgifter beräknas med varje anställds avgiftssats för året efter värderingsdagen. ' +
+    dagvarde
+  const andring =
+    'Regeln infördes med migration 20261027213121; programversion och driftsättning framgår av behandlingshistoriken, och byte av metod sparas i ändringsloggen. Redan bokförda verifikationer ändras inte.'
+  if (method === 'remeasure') {
+    return (
+      'Vid varje bokförd lönekörning bokförs semesterlöneskulden till sitt beräknade värde: verifikatet för semesterlöneskuld är skillnaden mellan den beräknade skulden per lönekörningens utbetalningsdag, med lönekörningen inräknad, och det som är bokfört på 2920 och 2940. ' +
+      berakning +
+      ' Kostnadssidan bokförs per anställd på 7090 (kollektivanställda) eller 7290 (övriga) mot 2920 och på 7519 mot 2940, debet när skulden ökar och kredit när den minskar. Belopp inom 1 krona bokförs inte. Samma beräkning kan bokföras per ett passerat datum utan lönekörning (Stäm av i rapporten Semesterskuld), och vid byte till metoden bokförs en första justering per bytesdagen. Varje beräkning sparas som underlag för sitt verifikat. Vid semesterårsavslutet bokförs bara en kvarvarande skillnad. ' +
+      andring
+    )
+  }
+  return (
+    'Vid varje bokförd lönekörning bokförs en semesteravsättning: debet 7090 (kollektivanställda) eller 7290 (övriga) mot kredit 2920, och debet 7519 mot kredit 2940 med den anställdes avgiftssats. Enligt procentregeln är avsättningen semesterlöneprocenten av den semesterlönegrundande lönen, enligt sammalöneregeln semestertillägget för årets dagar och semesterlön på rörliga lönedelar. Uttagen semester bokförs som lönekostnad och minskar inte 2920 löpande. Vid semesterårsavslutet bokförs skillnaden mot den beräknade skulden som ett justeringsverifikat daterat semesterårets sista dag, och beräkningen sparas som underlag. ' +
+    berakning +
+    ' Rapporten Semesterskuld visar den beräknade skulden och det bokförda beloppet per datum, och skillnaden kan bokföras per ett passerat datum (Stäm av). ' +
+    andring
+  )
+}
+
 /** Retention and integrity of the stored räkenskapsinformation. */
 export const ARCHIVE_RULES = {
   lagringsregel: 'Till och med utgången av det sjunde kalenderåret efter det kalenderår då räkenskapsåret avslutades',

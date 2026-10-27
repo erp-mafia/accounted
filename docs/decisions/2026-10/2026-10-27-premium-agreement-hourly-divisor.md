@@ -1,0 +1,1 @@
+[2026-10-27] percent_of_hourly premium rules take an optional hourly_divisor (full-time månadslön / divisor as timlön) beyond the three forms specified: Handels prices OB on 1/166 and Bygg on 52 x veckoarbetstid / 12, while the schedule divisor gives 173 at 40 h.

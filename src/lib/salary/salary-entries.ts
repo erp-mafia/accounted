@@ -42,6 +42,13 @@ import {
 } from './declared-avgifter'
 import { calculateLoneVaxlingPensionProvision } from './lonevaxling'
 import { computeRegionalSupport, regionalSupportEnabled } from './regional-support'
+import {
+  linkRunRemeasurement,
+  planVacationLiabilityRemeasure,
+  upsertRunRemeasurement,
+} from './vacation-liability-remeasure'
+import type { RemeasurePlan } from './vacation-liability-plan'
+import { runRemeasuresVacationLiability } from './vacation-liability-method'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type {
   CreateJournalEntryInput,
@@ -353,7 +360,12 @@ export function salaryRunBusinessEvent(run: SalaryRunData, linkBasis: LinkBasisC
  * Create all journal entries for a salary run: 1-4 vouchers
  *   1. Salary: gross salary expenses, tax withholding, net payment
  *   2. Avgifter (if the run has any): employer contributions expense + liability
- *   3. Vacation (if anything accrues): accrual expense + liability, with avgifter
+ *   3. Vacation (if anything accrues): accrual expense + liability, with avgifter.
+ *      A run calculated under salary_vacation_liability_method 'remeasure'
+ *      books the semesterlöneskuld remeasurement instead: computed liability
+ *      as of the payment date, after this run, minus what 2920/2940 hold
+ *      (lib/salary/vacation-liability-remeasure.ts), and stores the frozen
+ *      calculation behind it before anything posts.
  *   4. Pension (if löneväxling): pension provision + SLP
  *
  * All entries use source_type 'salary_payment' and source_id = the run id.
@@ -398,9 +410,16 @@ export async function createSalaryRunEntries(
   // account, the same resolver the preview route calls (issue #3097).
   const bankAccount = await resolvePrimaryBankAccount(supabase, companyId, log)
 
+  // Under the 'remeasure' method the vacation verifikat is the
+  // remeasurement as of the payment date (the run's own posted vouchers left
+  // out of the starting balance, so a resumed booking computes the same).
+  const remeasure = runRemeasuresVacationLiability(run.calculation_params)
+    ? await planRunVacationRemeasure(supabase, companyId, run)
+    : null
+
   // The four line sets come from the same builder the preview route renders,
   // so what the user approved on screen is what posts.
-  const built = buildSalaryRunEntryLines(postingRun, desc, bankAccount)
+  const built = buildSalaryRunEntryLines(postingRun, desc, bankAccount, remeasure?.lines)
 
   await activateSalaryAccounts(supabase, companyId, userId, built)
 
@@ -414,7 +433,7 @@ export async function createSalaryRunEntries(
     vouchers.push({ slot: 'avgifter', description: `${desc}: Arbetsgivaravgifter`, lines: built.avgifterLines })
   }
   if (built.vacationLines.length > 0) {
-    vouchers.push({ slot: 'vacation', description: `${desc}: Semesteravsättning`, lines: built.vacationLines })
+    vouchers.push({ slot: 'vacation', description: vacationVoucherDescription(desc, remeasure !== null), lines: built.vacationLines })
   }
   if (built.pensionLines.length > 0) {
     vouchers.push({ slot: 'pension', description: `${desc}: Pensionsavsättning`, lines: built.pensionLines })
@@ -424,6 +443,9 @@ export async function createSalaryRunEntries(
   // adopted, never posted again.
   const adopted = await adoptPostedRunVouchers(supabase, companyId, run.id, entryDate, vouchers)
   const pending = vouchers.filter((voucher) => !adopted.has(voucher.slot))
+
+  // The remeasurement's underlag exists before its verifikat does.
+  if (remeasure) await upsertRunRemeasurement(supabase, { companyId, salaryRunId: run.id, plan: remeasure })
 
   const inputs = pending.map((voucher): CreateJournalEntryInput => {
     log.info(`Creating salary run entry "${voucher.description}": ${voucher.lines.length} lines`)
@@ -448,6 +470,17 @@ export async function createSalaryRunEntries(
 
   const bySlot = new Map<SalaryVoucherSlot, JournalEntry>(adopted)
   pending.forEach((voucher, index) => bySlot.set(voucher.slot, created[index]))
+  const vacationEntry = bySlot.get('vacation')
+  if (remeasure && vacationEntry) {
+    const linkError = await linkRunRemeasurement(supabase, { companyId, salaryRunId: run.id, journalEntryId: vacationEntry.id })
+    if (linkError) {
+      log.warn('semesterlöneskuld remeasurement stored but not linked to its verifikat', {
+        salaryRunId: run.id,
+        journalEntryId: vacationEntry.id,
+        message: linkError,
+      })
+    }
+  }
   const salaryEntry = bySlot.get('salary')
   if (!salaryEntry) {
     // Unreachable: the salary slot is always in the set and is either
@@ -461,6 +494,33 @@ export async function createSalaryRunEntries(
     vacationEntry: bySlot.get('vacation') ?? null,
     pensionEntry: bySlot.get('pension') ?? null,
   }
+}
+
+/** The vacation verifikat's text: the accrual, or the remeasurement under 'remeasure'. */
+export function vacationVoucherDescription(desc: string, remeasure: boolean): string {
+  return remeasure ? `${desc}: Semesterlöneskuld` : `${desc}: Semesteravsättning`
+}
+
+/**
+ * The remeasurement a run calculated under 'remeasure' books: as of its
+ * payment date, counting the run itself as booked. Shared by the booking and
+ * the journal preview route, so the previewed vacation verifikat is the one
+ * that posts on unchanged books.
+ */
+export async function planRunVacationRemeasure(
+  supabase: SupabaseClient,
+  companyId: string,
+  run: Pick<SalaryRunData, 'id' | 'payment_date'>,
+): Promise<RemeasurePlan> {
+  const planned = await planVacationLiabilityRemeasure(supabase, companyId, run.payment_date, { inFlightRunId: run.id })
+  if (!planned.ok) {
+    throw new Error(
+      planned.code === 'VALIDATION_ERROR'
+        ? `Ingen räkenskapsperiod täcker ${run.payment_date}, så semesterlöneskulden kan inte räknas om.`
+        : 'Semesterlöneskulden kunde inte räknas om. Försök igen.',
+    )
+  }
+  return planned.data
 }
 
 /**
@@ -602,6 +662,8 @@ export function buildSalaryRunEntryLines(
   run: SalaryRunData,
   desc: string,
   bankAccount: string,
+  /** The remeasurement's lines under 'remeasure' (planRunVacationRemeasure); absent books the accrual. */
+  vacationRemeasureLines?: CreateJournalEntryLineInput[],
 ): SalaryRunEntryLines {
   const postingRun = resolveLoneVaxlingPension(run)
   const totalVacation = postingRun.employees.reduce((sum, e) => sum + e.vacation_accrual, 0)
@@ -614,8 +676,9 @@ export function buildSalaryRunEntryLines(
   return {
     salaryLines: buildSalaryLines(postingRun, desc, bankAccount),
     avgifterLines: buildAvgifterLines(postingRun, desc),
-    vacationLines:
-      totalVacation > 0 || totalVacationAvgifter > 0
+    vacationLines: vacationRemeasureLines
+      ? vacationRemeasureLines
+      : totalVacation > 0 || totalVacationAvgifter > 0
         ? buildVacationLines(postingRun, desc, totalVacation, totalVacationAvgifter)
         : [],
     pensionLines: totalPension > 0 ? buildPensionLines(postingRun, desc, totalSlp) : [],

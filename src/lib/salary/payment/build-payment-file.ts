@@ -33,6 +33,15 @@
  * by a nettolöneavdrag) are left out of the file, so their bank details are
  * not required (see lib/salary/payment/effective-net.ts).
  *
+ * Every amount is the run's payable amount (lib/salary/payment/payable.ts),
+ * the same rule the bank payments follow: the effective net for an ordinary
+ * run, and for a correction run (rättelsekörning) only the difference
+ * against what the corrected run already paid. The chain a correction
+ * replaces is read after the run's employees, so an ordinary run makes
+ * exactly the queries it made before. An employee a correction overpaid is
+ * left out of the file and named (`correction.overpaid` and a warning); a
+ * correction with no positive difference has no file (NOTHING_TO_PAY).
+ *
  * Versions (crm#1219). A pain.001 carries the run's payment file version in
  * its ids (salaryPaymentMessageId). Every download returns the run's current
  * version, so a re-download is the same message to the bank and its duplicate
@@ -54,12 +63,20 @@ import { createHash, randomUUID } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { getBranding } from '@/lib/branding/service'
+import { formatCurrency } from '@/lib/utils'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { generatePain001, pain001TransactionId } from './pain001-generator'
 import type { Pain001CompanyData, Pain001Employee } from './pain001-generator'
 import { generateBgLb, utbetalningsnummer } from './bg-lb-generator'
 import type { BgLbCompanyData, BgLbEmployee } from './bg-lb-generator'
-import { effectiveNetPayout } from './effective-net'
+import {
+  CORRECTION_DIFFERENCE_ONLY_SV,
+  loadCorrectionPaidBefore,
+  overpaidEmployees,
+  overpaidSentenceSv,
+  payableAmount,
+  type OverpaidEmployee,
+} from './payable'
 import { isSalaryInBankPaymentError } from './in-bank-payment'
 import { resolveSwedbankFileIds } from '@/lib/payments/swedbank'
 import {
@@ -125,8 +142,9 @@ export type SalaryPaymentFileErrorCode =
   | 'NEW_VERSION_UNCONFIRMED'
   | 'NEW_VERSION_UNSUPPORTED'
   | 'IN_BANK_PAYMENT'
+  | 'NOTHING_TO_PAY'
 
-export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'employees'
+export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'employees' | 'correction'
 
 /**
  * One payment the file carries, in file order: the banklista line. Built from
@@ -202,6 +220,18 @@ export interface SalaryPaymentFileOk {
   paymentFileId: string | null
   /** The payment file version the file carries (1 for Bankgirot LB). */
   version: number
+  /**
+   * Set for a correction run (rättelsekörning): every amount is the
+   * difference against what the corrected run already paid, and an employee
+   * it overpaid is left out and named with the amount. Null for an ordinary run.
+   */
+  correction: SalaryPaymentFileCorrection | null
+}
+
+/** A correction run's file: what it corrects and whom it overpaid. */
+export interface SalaryPaymentFileCorrection {
+  correctsRunId: string
+  overpaid: OverpaidEmployee[]
 }
 
 export type SalaryPaymentFileResult = SalaryPaymentFileOk | SalaryPaymentFileError
@@ -214,6 +244,8 @@ interface RunRow {
   payment_date: string
   /** The run's pain.001 version (20261015230000); absent before the column existed. */
   payment_file_version?: number | null
+  /** The run a correction run corrects (salary_runs.corrects_run_id); null for an ordinary run. */
+  corrects_run_id?: string | null
 }
 
 interface SettingsRow {
@@ -323,6 +355,8 @@ export function salaryPaymentFileRefusal(result: SalaryPaymentFileError): Salary
       return { code: 'SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED', details: { format: result.format } }
     case 'IN_BANK_PAYMENT':
       return { code: 'SALARY_RUN_IN_BANK_PAYMENT', details: { format: result.format } }
+    case 'NOTHING_TO_PAY':
+      return { code: 'SALARY_RUN_PAYMENT_FILE_NOTHING_TO_PAY', details: { format: result.format, ...result.details } }
     case 'ARCHIVE_FAILED':
     case 'DB_ERROR':
       return null
@@ -498,6 +532,12 @@ export async function buildSalaryPaymentFile(
   const runEmployees = (runEmployeesData as RunEmployeeRow[] | null) ?? []
   if (runEmployees.length === 0) return fail('NO_EMPLOYEES', format)
 
+  // A correction pays only the difference against what the run it corrects
+  // already paid (payable.ts). An ordinary run reads nothing more.
+  const chain = await loadCorrectionPaidBefore(supabase, companyId, { id: runRow.id, corrects_run_id: runRow.corrects_run_id })
+  if (!chain.ok) return fail('DB_ERROR', format, {}, { stage: 'correction', cause: chain.error })
+  const paidBefore = chain.paidBefore
+
   // 7. Bank details, but only for employees who actually appear in the file
   // (positive payout). A zero-net employee is filtered out below, so missing
   // bank details for them must not block the file.
@@ -506,10 +546,29 @@ export async function buildSalaryPaymentFile(
   // computed from the same numbers.
   const withNet = runEmployees.map((sre) => ({
     sre,
-    effectiveNet: Math.round(effectiveNetPayout(sre) * 100) / 100,
+    effectiveNet: payableAmount(sre, sre.employee_id, paidBefore),
   }))
   const paid = withNet.filter(({ effectiveNet }) => effectiveNet > 0)
-  const skipped = withNet.length - paid.length
+  // A correction's overpaid employee is named below, not counted as a zero payout.
+  const skipped = withNet.filter(({ effectiveNet }) => (paidBefore ? effectiveNet === 0 : effectiveNet <= 0)).length
+  const correction: SalaryPaymentFileCorrection | null = paidBefore
+    ? {
+        correctsRunId: paidBefore.correctsRunId,
+        overpaid: overpaidEmployees(
+          runEmployees.map((sre) => ({
+            ...sre,
+            name: sre.employee ? `${sre.employee.first_name} ${sre.employee.last_name}`.trim() : '',
+          })),
+          paidBefore,
+        ),
+      }
+    : null
+  // A correction that raises nobody's net has nothing for a file to pay.
+  if (correction && paid.length === 0) {
+    return fail('NOTHING_TO_PAY', format, {
+      correction: { corrects_run_id: correction.correctsRunId, overpaid: correction.overpaid },
+    })
+  }
 
   const missingBank = paid.filter(({ sre }) => !sre.employee?.clearing_number || !sre.employee?.bank_account_number)
   if (missingBank.length > 0) {
@@ -541,7 +600,14 @@ export async function buildSalaryPaymentFile(
     })
   }
 
-  if (skipped > 0) {
+  if (correction) {
+    warnings.push(CORRECTION_DIFFERENCE_ONLY_SV)
+    if (skipped > 0) {
+      warnings.push(`${skipped} anställd(a) utan skillnad mot den tidigare körningen ingår inte i filen.`)
+    }
+    const overpaidSentence = overpaidSentenceSv(correction.overpaid, (amount) => formatCurrency(amount))
+    if (overpaidSentence) warnings.push(overpaidSentence)
+  } else if (skipped > 0) {
     warnings.push(
       `${skipped} anställd(a) med 0 kr i nettoutbetalning ingår inte i filen.`,
     )
@@ -644,6 +710,7 @@ export async function buildSalaryPaymentFile(
     employeeCount: employees.length,
     totalAmount,
     payees,
+    correction,
     payer: pain001Company
       ? { name: pain001Company.name, orgNumber: companyRow.org_number, account: pain001Company.iban }
       : {

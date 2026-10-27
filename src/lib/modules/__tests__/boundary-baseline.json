@@ -8,7 +8,7 @@
     "ledger -> import": 7,
     "ledger -> inbox": 2,
     "ledger -> parties": 5,
-    "ledger -> payroll": 6,
+    "ledger -> payroll": 7,
     "ledger -> skatteverket": 5,
     "ledger -> transactions": 11,
     "ledger -> vat": 20,

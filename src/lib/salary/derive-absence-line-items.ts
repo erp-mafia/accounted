@@ -4,6 +4,7 @@ import { daysBetweenIso } from '@/lib/dates/iso'
 import type { SalaryCalculationPolicy } from './calculation-policy'
 import { calendarLeaveDeduction } from './calendar-leave'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { isSwedishHolidayISO } from '@/lib/tax/swedish-holidays'
 
 /**
  * Derive payroll line items from per-day absence records.
@@ -13,7 +14,8 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  * per-day records and emits correctly-classified line items.
  *
  * Swedish payroll rules implemented:
- *   - **Sjuklöneperiod** (Sjuklönelagen) = first sick day → calendar-day 14.
+ *   - **Sjuklöneperiod** (Sjuklönelagen) = first sick day → calendar-day 14
+ *     (counted over the sick spells only, see "Which days count" below).
  *     Days 1-14 are sjuklön at 80 % of the lost pay (SjLL 6 §), less ONE
  *     karensavdrag per period of 20 % of an average week's sjuklön (SjLL
  *     6 § since 2019, replacing the old karensdag). The karensavdrag can
@@ -29,6 +31,26 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
  *     a sparse schedule the window grows to the widest gap between two
  *     scheduled days (sjukloneperiodGapTolerance), since sick rows exist
  *     only on scheduled days.
+ *   - **Which days count toward the 14** (SjLL 7 §): the new sick period
+ *     after an återinsjuknande covers only as many calendar days as, with
+ *     the earlier sjuklöneperiod, make fourteen. The days the employee was
+ *     back at work in between do not count. A sjuklöneperiod is therefore
+ *     numbered per sick spell (sjukperiod): within a spell every calendar
+ *     day counts (a weekend between two sick weekdays of one illness is
+ *     sick days 6 and 7, as before), and a later spell starts where the
+ *     earlier ones left off (sjukloneperiodDayIndex). Sick rows exist only
+ *     on scheduled days, so a gap between two sick rows ends a spell when
+ *     it holds at least one scheduled working day without a sick row: the
+ *     employee was back (backAtWorkBetween). Limits: the five-day week is
+ *     read as Monday to Friday less Swedish public holidays, the schedule
+ *     the rest of the salary module assumes; any other schedule has no
+ *     weekdays on record, so a gap ends a spell only when it is wider than
+ *     two consecutive scheduled days can be apart (8 - workdays per week),
+ *     which below four days a week never happens inside one sjuklöneperiod
+ *     (those keep counting calendar days, as before). And a spell ends on
+ *     its last sick row: non-scheduled days after it (the weekend before
+ *     the employee came back) have no row saying they were sick and do
+ *     not count.
  *   - **Allmänt högriskskydd**: max 10 karensavdrag per rolling 12-month
  *     window (inclusive of the new one). The 11th is suppressed.
  *
@@ -126,11 +148,23 @@ export interface DeriveResult {
   qualifyingAbsenceHours: number
 }
 
+/** One sick spell (sjukperiod) inside a sjuklöneperiod: first to last sick row, no working day in between. */
+export interface SickSpell {
+  startDate: string
+  endDate: string
+}
+
 interface SjukloneperiodSegment {
   startDate: string
   endDate: string
   /** Number of *sick days* in this merged segment (not calendar days). */
   sickDayCount: number
+  /**
+   * The sick spells the sjuklöneperiod is made of, in date order: one, or
+   * more when an återinsjuknande continued it after the employee was back
+   * at work. Their calendar days are what counts toward the fourteen.
+   */
+  spells: SickSpell[]
   /** True if this segment is the continuation of a prior segment via
    *  återinsjuknande (gap within sjukloneperiodGapTolerance). No new
    *  karensavdrag. */
@@ -197,12 +231,59 @@ export function sjukloneperiodGapTolerance(workdaysPerWeek: number | null | unde
   return Math.max(5, 8 - w)
 }
 
+/** Whole days per week of a schedule, 1 to 7; a missing or nonsense value is the five-day week. */
+function workdaysOf(workdaysPerWeek: number | null | undefined): number {
+  return Number(workdaysPerWeek) > 0 ? Math.min(7, Math.floor(Number(workdaysPerWeek))) : 5
+}
+
+/**
+ * Whether the employee was back at work between two sick rows of one
+ * sjuklöneperiod: the gap holds at least one scheduled working day without a
+ * sick row (sick rows exist only on scheduled days). A five-day week is
+ * Monday to Friday less Swedish public holidays, the schedule the rest of
+ * the salary module assumes (absence.ts, calendar-leave.ts). Any other
+ * schedule has no weekdays on record, so the gap proves a working day only
+ * when it is wider than two consecutive scheduled days can be apart (8 - w
+ * calendar days, as in sjukloneperiodGapTolerance).
+ */
+export function backAtWorkBetween(previousSickDate: string, nextSickDate: string, workdaysPerWeek?: number | null): boolean {
+  const gap = daysBetweenIso(previousSickDate, nextSickDate)
+  if (gap <= 1) return false
+  const w = workdaysOf(workdaysPerWeek)
+  if (w !== 5) return gap > 8 - w
+  for (let i = 1; i < gap; i++) {
+    const date = addDays(previousSickDate, i)
+    const weekday = dateOnly(date).getUTCDay()
+    if (weekday !== 0 && weekday !== 6 && !isSwedishHolidayISO(date)) return true
+  }
+  return false
+}
+
+/**
+ * The day of its sjuklöneperiod a sick date is (1-based): the calendar days
+ * of the earlier spells, then the calendar days of its own spell up to the
+ * date (SjLL 7 §: the continued period covers only what is left of the
+ * fourteen). Days 1-14 are sjuklön, 15 and later Försäkringskassan. A date
+ * between two spells (no sick row there) counts as the first day after the
+ * earlier spells.
+ */
+export function sjukloneperiodDayIndex(seg: Pick<SjukloneperiodSegment, 'spells'>, date: string): number {
+  let used = 0
+  for (const spell of seg.spells) {
+    if (date < spell.startDate) break
+    if (date <= spell.endDate) return used + daysBetweenIso(spell.startDate, date) + 1
+    used += daysBetweenIso(spell.startDate, spell.endDate) + 1
+  }
+  return used + 1
+}
+
 /**
  * Walk the (sorted ascending) sick dates and merge them into sjuklöneperioder
  * using the SjLL återinsjuknande rule: a gap of 1 to `tolerance` calendar
  * days = same period continues; a wider gap = new period. The tolerance is
  * 5 at a five-day week and grows for sparser schedules, see
- * sjukloneperiodGapTolerance.
+ * sjukloneperiodGapTolerance. Inside a period, a gap the employee spent back
+ * at work (backAtWorkBetween) starts a new sick spell of the same period.
  */
 export function buildSjukloneperioder(
   sickDates: string[],
@@ -216,17 +297,20 @@ export function buildSjukloneperioder(
   let startDate = sorted[0]
   let endDate = sorted[0]
   let count = 1
+  let spellStart = sorted[0]
+  let spells: SickSpell[] = []
 
-  const flush = (gapToNext: number | null) => {
+  const flush = () => {
+    spells.push({ startDate: spellStart, endDate })
     segments.push({
       startDate,
       endDate,
       sickDayCount: count,
+      spells,
       // The *first* segment is never återinsjuknande (no prior period).
       // For subsequent segments, this flag is set below when starting a new one.
       isAterinsjuknande: false,
     })
-    void gapToNext
   }
 
   for (let i = 1; i < sorted.length; i++) {
@@ -234,18 +318,25 @@ export function buildSjukloneperioder(
     const gap = daysBetweenIso(endDate, date)
     if (gap === 0) continue
     if (gap >= 1 && gap <= tolerance) {
-      // Within the tolerance: same period (contiguous OR återinsjuknande)
+      // Within the tolerance: same period (contiguous OR återinsjuknande).
+      // Back at work in between: the earlier spell ended, a new one begins.
+      if (backAtWorkBetween(endDate, date, workdaysPerWeek)) {
+        spells.push({ startDate: spellStart, endDate })
+        spellStart = date
+      }
       endDate = date
       count += 1
       continue
     }
     // gap > tolerance: close current segment, start new one
-    flush(gap)
+    flush()
     startDate = date
     endDate = date
     count = 1
+    spellStart = date
+    spells = []
   }
-  flush(null)
+  flush()
 
   // Annotate isAterinsjuknande based on inter-segment gap (only meaningful if
   // the gap from prior segment's end to this segment's start is 1-5 days,
@@ -595,13 +686,13 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       const periodDaysInSjuklon = sumSickUnits(
         periodSickRows.filter(
           d => d.absence_date >= seg.startDate && d.absence_date <= seg.endDate &&
-            daysBetweenIso(seg.startDate, d.absence_date) < 14,
+            sjukloneperiodDayIndex(seg, d.absence_date) <= 14,
         ),
       )
       const priorDaysInSjuklon = sumSickUnits(
         lookbackSickRows.filter(
           d => d.absence_date >= seg.startDate && d.absence_date < periodMin &&
-            daysBetweenIso(seg.startDate, d.absence_date) < 14,
+            sjukloneperiodDayIndex(seg, d.absence_date) <= 14,
         ),
       )
       const karensEligible = segmentStartsInPeriod
@@ -633,12 +724,13 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
       // the window, the employee just keeps the full sjuklön.
       if (segmentStartsInPeriod) karensInWindow += 1
 
-      // Classify each *period* sick row in this segment by its segment day
-      // index (calendar days from segment start, 1-based), weighted by hours.
+      // Classify each *period* sick row in this segment by its day of the
+      // sjuklöneperiod (calendar days of its sick spells, 1-based; healthy
+      // days between spells do not count), weighted by hours.
       for (const row of periodSickRows) {
         const d = row.absence_date
         if (d < seg.startDate || d > seg.endDate) continue
-        const segDayIndex = daysBetweenIso(seg.startDate, d) + 1
+        const segDayIndex = sjukloneperiodDayIndex(seg, d)
         if (segDayIndex <= 14) {
           day2_14CountTotal += sickUnits(row)
           day2_14Dates += 1
@@ -705,7 +797,7 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
             days: [...lookbackSickRows, ...periodSickRows].filter(d =>
               segments.some(
                 seg => d.absence_date >= seg.startDate && d.absence_date <= seg.endDate &&
-                  daysBetweenIso(seg.startDate, d.absence_date) >= 14,
+                  sjukloneperiodDayIndex(seg, d.absence_date) > 14,
               ),
             ),
             calendarFromStart: true,

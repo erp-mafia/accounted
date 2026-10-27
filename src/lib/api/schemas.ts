@@ -4323,8 +4323,30 @@ export const EfDeclarationPreviewQuerySchema = z.object({
 export const VacationLiabilityQuerySchema = z.object({
   period_id: uuid.optional(),
   year: z.coerce.number().int().min(2000).max(2100).optional(),
+  // A date of its own (a month end) instead of the period's end or Dec 31.
+  as_of: isoDate.optional(),
   format: z.enum(['json', 'xlsx', 'pdf']).default('json'),
 })
+
+const previewTokenField = z.string().regex(/^pv1\.[A-Za-z0-9_-]{43}$/, 'Ogiltig förhandsgranskning').optional()
+
+/** POST /api/salary/vacation-liability/reconcile: stäm av semesterlöneskuld per datum. */
+export const VacationLiabilityReconcileSchema = z
+  .object({
+    as_of: saneIsoDateSchema,
+    dry_run: z.boolean().optional(),
+    preview_token: previewTokenField,
+  })
+  .strict()
+
+/** POST /api/salary/vacation-liability/method: how the semesterlöneskuld is booked. */
+export const VacationLiabilityMethodSchema = z
+  .object({
+    method: z.enum(['accrual', 'remeasure']),
+    dry_run: z.boolean().optional(),
+    preview_token: previewTokenField,
+  })
+  .strict()
 
 // ============================================================
 // Voucher gap schemas
@@ -4985,6 +5007,219 @@ export const UpdateEmployeeBenefitSchema = z.object({
     })
   }
 })
+
+// ============================================================
+// Shift premium rules (OB-tillägg / övertid): shift_premium_rules
+// ============================================================
+
+/** The six premium families the engine derives (migration 20260526120900). */
+export const ShiftPremiumItemTypeSchema = z.enum([
+  'overtime_50',
+  'overtime_100',
+  'ob_weekday_evening',
+  'ob_weekend',
+  'ob_night',
+  'ob_holiday',
+])
+
+/** How a premium hour is priced (migration 20261027213119, lib/salary/shift-premium-engine.ts). */
+export const ShiftPremiumAmountFormSchema = z.enum(['percent_of_hourly', 'monthly_divisor', 'sek_per_hour'])
+
+/** 'HH:MM' wall-clock time, 00:00 to 23:59. Seconds are dropped on input so
+ * the stored TIME and the UI agree on one shape. */
+const clockTime = z
+  .string()
+  .regex(/^\d{2}:\d{2}$/, 'Ange klockslag som HH:MM')
+  .refine((v) => {
+    const [h, m] = v.split(':').map(Number)
+    return h >= 0 && h <= 23 && m >= 0 && m <= 59
+  }, 'Ange klockslag mellan 00:00 och 23:59')
+
+const isoWeekdayArray = z
+  .array(z.number().int().min(1).max(7))
+  .min(1, 'Välj minst en veckodag')
+  .max(7)
+  .refine((days) => new Set(days).size === days.length, 'Samma veckodag angiven flera gånger')
+
+const twoDecimals = (v: number) => Math.round(v * 100) === v * 100
+
+const premiumPercent = z.number().min(0).max(500).refine(twoDecimals, 'Max två decimaler')
+const premiumMonthlyDivisor = z
+  .number()
+  .min(1, 'Delaren måste vara minst 1')
+  .max(10000)
+  .refine(twoDecimals, 'Max två decimaler')
+const premiumSekPerHour = z.number().min(0).max(10000).refine(twoDecimals, 'Max två decimaler')
+const premiumHourlyDivisor = z
+  .number()
+  .min(1, 'Delaren måste vara minst 1')
+  .max(1000)
+  .refine(twoDecimals, 'Max två decimaler')
+
+const SHIFT_PREMIUM_SCOPE_MESSAGE = 'Välj antingen alla anställda eller minst en namngiven anställd'
+
+export const SHIFT_PREMIUM_VALIDITY_MESSAGE = '"Gäller till" måste vara samma dag som eller efter "Gäller från".'
+
+/** Both scope fields together: all=true means no named employees, all=false
+ * means at least one. Shared by create (always both present) and the merged
+ * state on update (the service merges with the stored row before checking). */
+export function shiftPremiumScopeIsConsistent(appliesToAll: boolean, employeeIds: string[]): boolean {
+  return appliesToAll ? employeeIds.length === 0 : employeeIds.length > 0
+}
+
+export interface ShiftPremiumAmountFields {
+  premium_percent: number | null
+  monthly_divisor: number | null
+  sek_per_hour: number | null
+  hourly_divisor: number | null
+}
+
+/**
+ * The amount field of each form, mirroring the DB CHECK
+ * shift_premium_rules_amount_fields_check: exactly the form's own field is
+ * set, and hourly_divisor only ever accompanies percent_of_hourly. Returns
+ * the offending field, or null when the combination is valid.
+ */
+export function shiftPremiumAmountFieldError(
+  form: z.infer<typeof ShiftPremiumAmountFormSchema>,
+  fields: ShiftPremiumAmountFields,
+): keyof ShiftPremiumAmountFields | null {
+  const own: Record<typeof form, keyof ShiftPremiumAmountFields> = {
+    percent_of_hourly: 'premium_percent',
+    monthly_divisor: 'monthly_divisor',
+    sek_per_hour: 'sek_per_hour',
+  }
+  if (fields[own[form]] == null) return own[form]
+  for (const key of ['premium_percent', 'monthly_divisor', 'sek_per_hour'] as const) {
+    if (key !== own[form] && fields[key] != null) return key
+  }
+  if (form !== 'percent_of_hourly' && fields.hourly_divisor != null) return 'hourly_divisor'
+  return null
+}
+
+const SHIFT_PREMIUM_AMOUNT_MESSAGES: Record<keyof ShiftPremiumAmountFields, string> = {
+  premium_percent: 'Ange procent för procent av timlön, och bara då',
+  monthly_divisor: 'Ange delare för månadslön delat med, och bara då',
+  sek_per_hour: 'Ange kronor för kronor per timme, och bara då',
+  hourly_divisor: 'Timlönedelaren hör bara till procent av timlön',
+}
+
+export function shiftPremiumAmountMessage(field: keyof ShiftPremiumAmountFields): string {
+  return SHIFT_PREMIUM_AMOUNT_MESSAGES[field]
+}
+
+export const CreateShiftPremiumRuleSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Ange ett namn').max(100),
+    day_of_week: isoWeekdayArray,
+    start_time: clockTime,
+    /** end <= start means the window wraps past midnight (22:00-06:00). */
+    end_time: clockTime,
+    /** Defaults to percent_of_hourly, the only form before 2026-10. */
+    amount_form: ShiftPremiumAmountFormSchema.default('percent_of_hourly'),
+    premium_percent: premiumPercent.nullable().optional(),
+    monthly_divisor: premiumMonthlyDivisor.nullable().optional(),
+    sek_per_hour: premiumSekPerHour.nullable().optional(),
+    hourly_divisor: premiumHourlyDivisor.nullable().optional(),
+    valid_from: isoDate,
+    valid_to: isoDate.nullable().optional(),
+    item_type: ShiftPremiumItemTypeSchema,
+    priority: z.number().int().min(-1000).max(1000).default(0),
+    applies_to_all_employees: z.boolean().default(true),
+    applies_to_employee_ids: z.array(uuid).max(500).default([]),
+    is_active: z.boolean().default(true),
+  })
+  .superRefine((data, ctx) => {
+    const amountError = shiftPremiumAmountFieldError(data.amount_form, {
+      premium_percent: data.premium_percent ?? null,
+      monthly_divisor: data.monthly_divisor ?? null,
+      sek_per_hour: data.sek_per_hour ?? null,
+      hourly_divisor: data.hourly_divisor ?? null,
+    })
+    if (amountError) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: shiftPremiumAmountMessage(amountError),
+        path: [amountError],
+      })
+    }
+    if (data.valid_to && data.valid_to < data.valid_from) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: SHIFT_PREMIUM_VALIDITY_MESSAGE, path: ['valid_to'] })
+    }
+    if (!shiftPremiumScopeIsConsistent(data.applies_to_all_employees, data.applies_to_employee_ids)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: SHIFT_PREMIUM_SCOPE_MESSAGE,
+        path: ['applies_to_employee_ids'],
+      })
+    }
+    if (new Set(data.applies_to_employee_ids).size !== data.applies_to_employee_ids.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Samma anställd angiven flera gånger',
+        path: ['applies_to_employee_ids'],
+      })
+    }
+  })
+
+/**
+ * Partial update. The amount fields and the scope pair are checked on the
+ * merged state by lib/salary/shift-premium-rules.ts; here only what the body
+ * alone can show. Sending amount_form switches the form: the service clears
+ * the fields of the other forms, so the body names the new form's field only.
+ */
+export const UpdateShiftPremiumRuleSchema = z
+  .object({
+    name: z.string().trim().min(1, 'Ange ett namn').max(100).optional(),
+    day_of_week: isoWeekdayArray.optional(),
+    start_time: clockTime.optional(),
+    end_time: clockTime.optional(),
+    amount_form: ShiftPremiumAmountFormSchema.optional(),
+    premium_percent: premiumPercent.optional(),
+    monthly_divisor: premiumMonthlyDivisor.optional(),
+    sek_per_hour: premiumSekPerHour.optional(),
+    /** null clears it (back to the employee's schedule divisor). */
+    hourly_divisor: premiumHourlyDivisor.nullable().optional(),
+    valid_from: isoDate.optional(),
+    /** null clears it (open-ended). */
+    valid_to: isoDate.nullable().optional(),
+    item_type: ShiftPremiumItemTypeSchema.optional(),
+    priority: z.number().int().min(-1000).max(1000).optional(),
+    applies_to_all_employees: z.boolean().optional(),
+    applies_to_employee_ids: z.array(uuid).max(500).optional(),
+    is_active: z.boolean().optional(),
+  })
+  .superRefine((data, ctx) => {
+    if (Object.keys(data).length === 0) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: 'Inga fält att uppdatera' })
+    }
+    if (data.valid_from && data.valid_to && data.valid_to < data.valid_from) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, message: SHIFT_PREMIUM_VALIDITY_MESSAGE, path: ['valid_to'] })
+    }
+    // Scope is only checkable here when both halves travel together; a
+    // single-field patch is checked against the stored row by the service.
+    if (
+      data.applies_to_all_employees !== undefined &&
+      data.applies_to_employee_ids !== undefined &&
+      !shiftPremiumScopeIsConsistent(data.applies_to_all_employees, data.applies_to_employee_ids)
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: SHIFT_PREMIUM_SCOPE_MESSAGE,
+        path: ['applies_to_employee_ids'],
+      })
+    }
+    if (data.applies_to_employee_ids && new Set(data.applies_to_employee_ids).size !== data.applies_to_employee_ids.length) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: 'Samma anställd angiven flera gånger',
+        path: ['applies_to_employee_ids'],
+      })
+    }
+  })
+
+export type CreateShiftPremiumRuleInput = z.infer<typeof CreateShiftPremiumRuleSchema>
+export type UpdateShiftPremiumRuleInput = z.infer<typeof UpdateShiftPremiumRuleSchema>
 
 export const RecurringLineItemTypeSchema = z.enum(RECURRING_LINE_ITEM_TYPES)
 

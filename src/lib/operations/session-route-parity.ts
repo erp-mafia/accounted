@@ -658,6 +658,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/salary/employees/:id/worked-hours/batch': covered([`PUT ${V}/employees/:id/worked-days`, 'gnubok_set_worked_days']),
   'DELETE /api/salary/employees/:id/worked-hours': covered([`DELETE ${V}/employees/:id/worked-days`, 'gnubok_delete_worked_days']),
   'PUT /api/salary/employees/:id/opening-balances': covered([`PUT ${V}/employees/:id/opening-balances`, 'gnubok_set_employee_opening_balances']),
+  // OB and overtime premium rules: v1 only for now; an MCP tool is a follow-up.
+  'POST /api/salary/premium-rules': covered([`POST ${V}/salary/premium-rules`]),
+  'PATCH /api/salary/premium-rules/:id': covered([`PATCH ${V}/salary/premium-rules/:id`]),
+  'DELETE /api/salary/premium-rules/:id': covered([`DELETE ${V}/salary/premium-rules/:id`]),
   'POST /api/salary/runs': covered([`POST ${V}/salary-runs`, 'gnubok_create_salary_run']),
   'PATCH /api/salary/runs/:id': covered([`PATCH ${V}/salary-runs/:id`, 'gnubok_update_salary_run']),
   'DELETE /api/salary/runs/:id': covered([`DELETE ${V}/salary-runs/:id`]),
@@ -685,6 +689,14 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/salary/runs/:id/lines': covered([`POST ${V}/salary-runs/:id/employees/:employeeId/lines`, 'gnubok_add_payslip_line']),
   'PATCH /api/salary/runs/:id/lines/:lineId': covered([`PATCH ${V}/salary-runs/:id/lines/:lineId`, 'gnubok_update_payslip_line']),
   'DELETE /api/salary/runs/:id/lines/:lineId': covered([`DELETE ${V}/salary-runs/:id/lines/:lineId`, 'gnubok_delete_payslip_line']),
+  'POST /api/salary/vacation-liability/reconcile': covered(
+    [`POST ${V}/salary/vacation-liability/reconcile`],
+    'stäm av semesterlöneskuld per datum; MCP tool not yet (needs a staged pending type)',
+  ),
+  'POST /api/salary/vacation-liability/method': gap(
+    'P3',
+    'switch how the semesterlöneskuld is booked, with the catch-up verifikat: dashboard only; v1 GET /salary/settings does not show it yet',
+  ),
 
   // ── Staged operations (Granskning) ─────────────────────────────────
   // The Anpassa page's package switch: stages enable_package or disable_package; approval is the commit door below.
@@ -961,5 +973,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * revaluation, dashboard first behind NEXT_PUBLIC_FX_MONTHLY_REVALUATION_ENABLED.
  * 167 -> 166 (2026-10-27): PATCH /api/pending-operations/:id is removed; no
  * page called it, and reject and restage covers the edit.
+ * 166 -> 167 (2026-10-27): switching how the semesterlöneskuld is booked,
+ * dashboard only: the switch posts a catch-up verifikat behind a previewed
+ * confirm; stäm av per datum has its v1 door.
  */
-export const GAP_CEILING = 166
+export const GAP_CEILING = 167

@@ -39,6 +39,7 @@ import {
   INVOICE_NUMBER_RULES,
   KONTANTMETOD_CUTOFF_RULES,
   KONTANTMETOD_EU_GOODS_RULE,
+  vacationLiabilityRuleText,
   SIE_IMPORT_RULES,
   SUPPLIER_INVOICE_ROUNDING_RULES,
   SUPPLIER_PAYMENT_RULES,
@@ -71,6 +72,8 @@ export interface SystemdokumentationSettingsRow {
   dimensions_enabled: boolean | null
   recurring_invoices_enabled: boolean | null
   invoice_payment_links_enabled: boolean | null
+  salary_vacation_liability_method?: string | null
+  salary_calculation_policy?: unknown
 }
 
 export interface SystemdokumentationPeriodRow {
@@ -331,6 +334,19 @@ export function buildSystemdokumentation(facts: SystemdokumentationFacts): Syste
   if (switched.switches.counterpartySetoff || switched.vouchers.counterpartySetoff) {
     behandlingsregler.push({ rubrik: 'Kvittning', text: COUNTERPARTY_SETOFF_RULE })
   }
+  if (paysSalaries) {
+    behandlingsregler.push({
+      rubrik: 'Semesterlöneskuld',
+      // Read in place: the ledger kernel does not import payroll (lib/modules
+      // boundary); anything but the non-default value is the default.
+      text: vacationLiabilityRuleText(
+        s?.salary_vacation_liability_method === 'remeasure' ? 'remeasure' : 'accrual',
+        (s?.salary_calculation_policy as { vacation_day_value?: unknown } | null | undefined)?.vacation_day_value === 'percent_4_6'
+          ? 'percent_4_6'
+          : 'daily_divisor',
+      ),
+    })
+  }
   if (s?.auto_lock_period_days != null) {
     behandlingsregler.push({ rubrik: 'Automatisk låsning', text: `Låsdatumet flyttas fram automatiskt ${s.auto_lock_period_days} dagar efter varje momsperiods slut.` })
   }
@@ -500,7 +516,7 @@ export async function loadSystemdokumentationFacts(
     supabase
       .from('company_settings')
       .select(
-        'entity_type, accounting_method, moms_period, vat_registered, pays_salaries, fiscal_year_start_month, bookkeeping_locked_through, auto_lock_period_days, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, ore_rounding, dimensions_enabled, recurring_invoices_enabled, invoice_payment_links_enabled',
+        'entity_type, accounting_method, moms_period, vat_registered, pays_salaries, fiscal_year_start_month, bookkeeping_locked_through, auto_lock_period_days, default_voucher_series, default_voucher_series_per_source_type, voucher_series_labels, ore_rounding, dimensions_enabled, recurring_invoices_enabled, invoice_payment_links_enabled, salary_vacation_liability_method, salary_calculation_policy',
       )
       .eq('company_id', companyId)
       .maybeSingle(),

@@ -205,6 +205,10 @@ describe('vacationLiabilityCheck', () => {
       booked2940: 1319.64,
       difference2920: 0,
       difference2940: 0,
+      // No roster reaches the valuation in this fixture: computed 0.
+      computedDifference2920: -4200,
+      computedDifference2940: -1319.64,
+      computedDifferenceTotal: -5519.64,
     })
     expect(vacationLiabilityCheck(report, { booked2920: 5000.1, booked2940: 1000 })).toMatchObject({
       difference2920: 800.1,

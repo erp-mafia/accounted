@@ -8,6 +8,8 @@ import {
   vacationLiabilityChangeAccount,
   type VacationLiabilityChangeAccount,
 } from '@/lib/salary/account-mapping'
+import { computeVacationLiability, type VacationLiabilityValuation } from '@/lib/salary/vacation-liability-valuation'
+import { roundOre } from '@/lib/money'
 
 /**
  * Semesterlöneskuld: Vacation liability report per BFNAR 2016:10.
@@ -27,7 +29,18 @@ import {
  * every accrual booked after that year end, or, before any close, the
  * cutover opening liability plus every accrual booked so far. A calendar-year
  * window instead dropped earlier years still on 2920 and re-added a cutover
- * liability a close had already replaced.
+ * liability a close had already replaced. A company that books the
+ * liability at its day value (salary_vacation_liability_method 'remeasure')
+ * has a later anchor: each remeasurement (vacation_liability_remeasurements)
+ * set 2920/2940 to the computed liability per employee on its date, so the
+ * specification starts there, and a remeasured run adds no accrual (its
+ * vacation verifikat was the remeasurement).
+ *
+ * Beside the booked specification the report carries the computed liability
+ * per employee (computeVacationLiability: unpaid vacation pay for days
+ * earned and not taken, valued per day, with age-tier avgifter): what
+ * 2920/2940 should hold on the date. The difference between the two is what
+ * a remeasurement would book.
  */
 
 export interface VacationLiabilityRow {
@@ -44,8 +57,20 @@ export interface VacationLiabilityRow {
    *  null at five days a week or more, where the two are the same. */
   vacationDaysOffRemaining: number | null
   vacationDaysSaved: number
-  accruedAmount: number       // Account 2920
-  accruedAvgifter: number     // Account 2940
+  accruedAmount: number       // Account 2920 (booked specification)
+  accruedAvgifter: number     // Account 2940 (booked specification)
+  /** The day-valued liability on the date (computeVacationLiability). */
+  computedLiability: number
+  computedAvgifter: number
+  /** Days the computed liability prices per day, and what one is worth. */
+  liabilityDays: number
+  dayValue: number
+  /** Sammalöneregeln: unpaid semesterlön on rörliga lönedelar. */
+  variablePay: number
+  /** Procentregeln, statutory basis: semesterlön earned so far this intjänandeår. */
+  earningPay: number
+  /** Procentregeln without the earning year's payslips in Accounted: the day value is estimated from today's pay. */
+  dayValueEstimated: boolean
   avgifterRate: number
   /** Förskottsskuld SEK from the cutover opening row (Semesterlagen 29 a §):
    *  a receivable on the employee, shown as its own figure and never netted
@@ -66,18 +91,53 @@ export interface VacationLiabilityReport {
     advanceVacationDebt: number
     totalLiability: number
     netLiability: number
+    computedLiability: number
+    computedAvgifter: number
+    /** computedLiability + computedAvgifter */
+    computedTotal: number
   }
   asOfDate: string
   /** The vacation year the day columns describe (contains asOfDate). */
   vacationYearStart: string
   /** The closed vacation year the SEK starts from, or null before any close. */
   closedYear: { start: string; end: string } | null
+  /** The latest remeasurement the SEK starts from, when it is later than the close. */
+  remeasuredAt: string | null
 }
 
 interface ClosureReportRow {
   employee_id: string
   computed_liability_sek: number
   avgifter_rate: number
+}
+
+/** A remeasurement's frozen row, as far as the specification reads it. */
+interface RemeasurementReportRow {
+  employee_id: string
+  computed_liability_sek: number
+  computed_avgifter_sek: number
+}
+
+interface RemeasurementAnchorRow {
+  as_of_date: string
+  created_at: string
+  kind: string
+  salary_run_id: string | null
+  journal_entry_id: string | null
+  report: { rows?: RemeasurementReportRow[] } | null
+  salary_run: { status: string } | null
+  journal_entry: { status: string } | null
+}
+
+/**
+ * A remeasurement still stands when its run is booked (a corrected run's
+ * vouchers were reversed) and its verifikat, if it had one, is posted. A
+ * standalone one without a verifikat never moved the books.
+ */
+function remeasurementStands(row: RemeasurementAnchorRow): boolean {
+  if (row.salary_run_id && row.salary_run?.status !== 'booked') return false
+  if (row.journal_entry_id) return row.journal_entry?.status === 'posted'
+  return row.kind === 'salary_run'
 }
 
 /** Last day of the vacation year starting at `startIso` (the close's adjustment date). */
@@ -90,10 +150,59 @@ function vacationYearEnd(startIso: string): string {
 /**
  * Generate the vacation liability report as of a date (YYYY-MM-DD).
  *
- * SEK: specification of booked 2920/2940 (see the header). Days: the
- * vacation year containing the date, under the company's vacation-year basis.
+ * SEK: specification of booked 2920/2940 (see the header) and the computed
+ * liability beside it. Days: the vacation year containing the date, under
+ * the company's vacation-year basis.
  */
 export async function generateVacationLiability(
+  supabase: SupabaseClient,
+  companyId: string,
+  asOfDate: string
+): Promise<VacationLiabilityReport> {
+  const spec = await generateBookedVacationSpec(supabase, companyId, asOfDate)
+  const valuation = await computeVacationLiability(supabase, companyId, asOfDate)
+  return mergeComputedLiability(spec, valuation)
+}
+
+/** The booked specification with the computed liability merged in, per employee and in totals. Pure. */
+export function mergeComputedLiability(
+  spec: VacationLiabilityReport,
+  valuation: VacationLiabilityValuation,
+): VacationLiabilityReport {
+  const byEmployee = new Map(valuation.rows.map((row) => [row.employee_id, row]))
+  const rows = spec.rows.map((row) => {
+    const value = byEmployee.get(row.employeeId)
+    return {
+      ...row,
+      computedLiability: value?.computed_liability_sek ?? 0,
+      computedAvgifter: value?.computed_avgifter_sek ?? 0,
+      liabilityDays: value?.valued_days ?? 0,
+      dayValue: value?.day_value_sek ?? 0,
+      variablePay: value?.variable_vacation_pay_sek ?? 0,
+      earningPay: value?.earning_sek ?? 0,
+      dayValueEstimated: value?.vacation_rule === 'procentregeln' && value.day_value_basis === 'current_pay',
+    }
+  })
+  const computedLiability = roundOre(rows.reduce((s, row) => s + row.computedLiability, 0))
+  const computedAvgifter = roundOre(rows.reduce((s, row) => s + row.computedAvgifter, 0))
+  return {
+    ...spec,
+    rows,
+    totals: {
+      ...spec.totals,
+      computedLiability,
+      computedAvgifter,
+      computedTotal: roundOre(computedLiability + computedAvgifter),
+    },
+  }
+}
+
+/**
+ * The booked specification alone (the header's anchors and accruals), with
+ * the computed columns at zero. The remeasurement reads it as each
+ * employee's share of what 2920/2940 hold.
+ */
+export async function generateBookedVacationSpec(
   supabase: SupabaseClient,
   companyId: string,
   asOfDate: string
@@ -113,13 +222,14 @@ export async function generateVacationLiability(
   // per-employee liability is what 2920/2940 were trued up to at its year end.
   const { data: closureRows, error: closureError } = await supabase
     .from('vacation_year_closures')
-    .select('vacation_year_start, report')
+    .select('vacation_year_start, report, closed_at')
     .eq('company_id', companyId)
     .order('vacation_year_start', { ascending: false })
   if (closureError) throw closureError
   const anchor = ((closureRows ?? []) as Array<{
     vacation_year_start: string
     report: { rows?: ClosureReportRow[] } | null
+    closed_at?: string | null
   }>)
     .map((c) => ({ ...c, end: vacationYearEnd(c.vacation_year_start) }))
     .find((c) => c.end <= asOfDate) ?? null
@@ -158,7 +268,7 @@ export async function generateVacationLiability(
         avgifter_rate,
         vacation_days_taken,
         vacation_paid_days_per_day_off,
-        salary_run:salary_runs!inner(payment_date, status)
+        salary_run:salary_runs!inner(id, payment_date, status)
       `)
       .eq('company_id', companyId)
       .eq('salary_runs.status', 'booked')
@@ -251,6 +361,42 @@ export async function generateVacationLiability(
     })
   }
 
+  // Remeasurements on or before the date (salary_vacation_liability_method
+  // 'remeasure'). A remeasured run's vacation verifikat was the
+  // remeasurement, not an accrual, so its vacation_accrual never reached
+  // 2920; the latest standing remeasurement later than the close is the
+  // anchor instead of the close.
+  const { data: remeasureData } = await supabase
+    .from('vacation_liability_remeasurements')
+    .select(
+      'as_of_date, created_at, kind, salary_run_id, journal_entry_id, report, salary_run:salary_runs(status), journal_entry:journal_entries(status)',
+    )
+    .eq('company_id', companyId)
+    .lte('as_of_date', asOfDate)
+    .order('as_of_date', { ascending: false })
+    .order('created_at', { ascending: false })
+  const remeasurements = (remeasureData ?? []) as unknown as RemeasurementAnchorRow[]
+  const remeasuredRunIds = new Set(
+    remeasurements.flatMap((row) => (row.salary_run_id ? [row.salary_run_id] : [])),
+  )
+  const latestRemeasurement = remeasurements.find(remeasurementStands) ?? null
+  const remeasureAnchor =
+    latestRemeasurement &&
+    (!anchor ||
+      latestRemeasurement.as_of_date > anchor.end ||
+      (latestRemeasurement.as_of_date === anchor.end &&
+        (latestRemeasurement.created_at ?? '') > (anchor.closed_at ?? '')))
+      ? latestRemeasurement
+      : null
+  const remeasuredByEmployee = new Map(
+    (remeasureAnchor?.report?.rows ?? []).map((row) => [row.employee_id, row]),
+  )
+  const accrualRows = verifiedBooked.filter((sre) => {
+    const run = sre.salary_run as { id?: string; payment_date: string }
+    if (run.id && remeasuredRunIds.has(run.id)) return false
+    return !remeasureAnchor || run.payment_date > remeasureAnchor.as_of_date
+  })
+
   // Aggregate per employee
   const accrualsByEmployee = new Map<string, {
     totalAccrual: number
@@ -260,11 +406,14 @@ export async function generateVacationLiability(
   }>()
 
   for (const sre of verifiedBooked) {
+    const counted = accrualRows.includes(sre)
     const current = accrualsByEmployee.get(sre.employee_id) || {
       totalAccrual: 0, totalAvgifter: 0, totalDaysTaken: 0, lastRate: 0.3142,
     }
-    current.totalAccrual += sre.vacation_accrual
-    current.totalAvgifter += sre.vacation_accrual_avgifter
+    if (counted) {
+      current.totalAccrual += sre.vacation_accrual
+      current.totalAvgifter += sre.vacation_accrual_avgifter
+    }
     // Days fallback (no ledger row) counts the current vacation year only,
     // in paid days like the ledger (the payslip's own factor, 12 a §).
     if ((sre.salary_run as { payment_date: string }).payment_date >= vacationYearStart) {
@@ -283,12 +432,17 @@ export async function generateVacationLiability(
     // age-tier rate the close used, rounded per employee as the close sums
     // it), else the cutover opening liability. A close replaces the opening.
     const closed = closedByEmployee.get(emp.id)
-    const baseAmount = anchor
-      ? closed?.computed_liability_sek || 0
-      : opening?.liability || 0
-    const baseAvgifter = anchor
-      ? r((closed?.computed_liability_sek || 0) * (closed?.avgifter_rate || 0))
-      : opening?.liabilityAvgifter || 0
+    const remeasured = remeasuredByEmployee.get(emp.id)
+    const baseAmount = remeasureAnchor
+      ? remeasured?.computed_liability_sek || 0
+      : anchor
+        ? closed?.computed_liability_sek || 0
+        : opening?.liability || 0
+    const baseAvgifter = remeasureAnchor
+      ? remeasured?.computed_avgifter_sek || 0
+      : anchor
+        ? r((closed?.computed_liability_sek || 0) * (closed?.avgifter_rate || 0))
+        : opening?.liabilityAvgifter || 0
     const accruedAmount = r((accruals?.totalAccrual || 0) + baseAmount)
     const accruedAvgifter = r((accruals?.totalAvgifter || 0) + baseAvgifter)
 
@@ -334,6 +488,13 @@ export async function generateVacationLiability(
       vacationDaysSaved: daysSaved,
       accruedAmount,
       accruedAvgifter,
+      computedLiability: 0,
+      computedAvgifter: 0,
+      liabilityDays: 0,
+      dayValue: 0,
+      variablePay: 0,
+      earningPay: 0,
+      dayValueEstimated: false,
       avgifterRate: accruals?.lastRate || 0.3142,
       advanceVacationDebt,
       // The booked liability (2920 + 2940) stays gross: a receivable is never
@@ -354,6 +515,9 @@ export async function generateVacationLiability(
     advanceVacationDebt: r(rows.reduce((s, row) => s + row.advanceVacationDebt, 0)),
     totalLiability: r(rows.reduce((s, row) => s + row.totalLiability, 0)),
     netLiability: r(rows.reduce((s, row) => s + row.netLiability, 0)),
+    computedLiability: 0,
+    computedAvgifter: 0,
+    computedTotal: 0,
   }
 
   return {
@@ -362,6 +526,7 @@ export async function generateVacationLiability(
     asOfDate,
     vacationYearStart,
     closedYear: anchor ? { start: anchor.vacation_year_start, end: anchor.end } : null,
+    remeasuredAt: remeasureAnchor?.as_of_date ?? null,
   }
 }
 
@@ -373,6 +538,11 @@ export interface VacationLiabilityCheck {
    * runs and vacation-year closes moved the account. */
   difference2920: number
   difference2940: number
+  /** Computed liability minus booked: positive when the books hold too
+   * little. What a remeasurement on the date would book. */
+  computedDifference2920: number
+  computedDifference2940: number
+  computedDifferenceTotal: number
 }
 
 export function vacationLiabilityCheck(
@@ -385,5 +555,10 @@ export function vacationLiabilityCheck(
     booked2940: booked.booked2940,
     difference2920: r(booked.booked2920 - report.totals.accruedAmount),
     difference2940: r(booked.booked2940 - report.totals.accruedAvgifter),
+    computedDifference2920: r(report.totals.computedLiability - booked.booked2920),
+    computedDifference2940: r(report.totals.computedAvgifter - booked.booked2940),
+    computedDifferenceTotal: r(
+      report.totals.computedLiability + report.totals.computedAvgifter - booked.booked2920 - booked.booked2940,
+    ),
   }
 }

@@ -56,6 +56,7 @@ import {
   type SalaryRunRow,
 } from '@/lib/salary/salary-entries'
 import { syncVacationLedgerForEmployees } from '@/lib/salary/vacation-ledger'
+import { runRemeasuresVacationLiability } from '@/lib/salary/vacation-liability-method'
 import { refreshRunYtd } from '@/lib/salary/ytd'
 import { validateRunForApproval, type ApprovalRosterRow } from '@/lib/salary/approve-run'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
@@ -621,7 +622,11 @@ export async function previewPaidSalaryRunBooking(
         ...(engineInput.employees.some((employee) => Math.round(employee.avgifter_amount * 100) !== 0)
           ? ['arbetsgivaravgifter']
           : []),
-        ...(totalVacation > 0 || totalVacationAvgifter > 0 ? ['vacation accrual'] : []),
+        ...(runRemeasuresVacationLiability(run.calculation_params as Record<string, unknown> | null)
+          ? ['vacation liability remeasurement (semesterlöneskuld: computed at booking, as of the payment date)']
+          : totalVacation > 0 || totalVacationAvgifter > 0
+            ? ['vacation accrual']
+            : []),
         ...(roster.some((employee) =>
           (employee.line_items || []).some(
             (line) =>

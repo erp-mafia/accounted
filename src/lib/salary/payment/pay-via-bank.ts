@@ -8,11 +8,14 @@
  * 20261027100000).
  *
  * What is paid is never the caller's choice. The amounts are the run's
- * effective net payouts (effectiveNetPayout, the figure the payment file
- * writes) and the accounts are the employee cards; the database function
- * create_salary_payment_orders reads both itself, and this service reads the
- * same rows first to name every problem by employee before anything is
- * written. An employee whose payment is approved, at the bank or executed is
+ * payable amounts (payable.ts: the effective net, or for a correction run
+ * only the difference against what the corrected run already paid, the
+ * figure the payment file writes) and the accounts are the employee cards;
+ * the database function create_salary_payment_orders reads both itself
+ * (salary_run_payable_amounts), and this service reads the same rows first
+ * to name every problem by employee before anything is written. An employee
+ * a correction overpaid is never paid or deducted: the preview names the
+ * amount so the person handles it. An employee whose payment is approved, at the bank or executed is
  * left out, so a payment the bank rejected is paid again by preparing the run
  * again; drafts nobody approved are replaced.
  *
@@ -44,7 +47,13 @@ import { openPaymentsDoor } from '@/lib/payments/orders/switched-on'
 import type { PaymentOrderRow } from '@/lib/payments/orders/types'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { createServiceClient } from '@/lib/supabase/server'
-import { effectiveNetPayout } from './effective-net'
+import {
+  CORRECTION_NOTHING_TO_PAY_SV,
+  loadCorrectionPaidBefore,
+  overpaidEmployees,
+  payableAmount,
+  type OverpaidEmployee,
+} from './payable'
 
 /** Run statuses whose net pay may be paid through the bank. */
 export const SALARY_BANK_PAYMENT_STATUSES = ['approved', 'paid', 'booked'] as const
@@ -104,7 +113,7 @@ export type SalaryBankPaymentPreview = {
   reference: string
   payees: SalaryBankPayee[]
   total: number
-  /** Employees with a payout of 0 kr: nothing to pay. */
+  /** Employees with a payout of 0 kr (for a correction: no difference to pay): nothing to pay. */
   zero_payouts: number
   /** Employees whose payment is approved, at the bank or executed: left out. */
   in_payment: number
@@ -112,6 +121,12 @@ export type SalaryBankPaymentPreview = {
   replaces_drafts: number
   /** Set when the person must confirm the net pay has not left another way. */
   confirmation_required: { status: string; payment_file_generated_at: string | null } | null
+  /**
+   * Set for a correction run (rättelsekörning): every amount is the
+   * difference against what the corrected run already paid, and an employee
+   * it overpaid is left out and named here with the amount.
+   */
+  correction: { corrects_run_id: string; overpaid: OverpaidEmployee[] } | null
   warnings: SalaryBankPaymentWarning[]
 }
 
@@ -129,6 +144,7 @@ interface RunRow {
   period_month: number
   payment_date: string | null
   payment_file_generated_at: string | null
+  corrects_run_id: string | null
 }
 
 interface RunEmployeeRow {
@@ -177,7 +193,7 @@ export async function prepareSalaryBankPayment(
 
   const { data: runData, error: runError } = await supabase
     .from('salary_runs')
-    .select('id, status, period_year, period_month, payment_date, payment_file_generated_at')
+    .select('id, status, period_year, period_month, payment_date, payment_file_generated_at, corrects_run_id')
     .eq('id', input.salaryRunId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -215,22 +231,37 @@ export async function prepareSalaryBankPayment(
   const inPayment = new Set(runOrders.filter((o) => o.status !== 'draft').map((o) => o.employee_id))
   const drafts = runOrders.filter((o) => o.status === 'draft')
 
+  // A correction pays only the difference against what the run it corrects
+  // already paid (payable.ts); an ordinary run reads nothing more.
+  const chain = await loadCorrectionPaidBefore(supabase, companyId, run)
+  if (!chain.ok) throw chain.error
+  const paidBefore = chain.paidBefore
+
   // Rounded to öre once, the figure the payment file writes and the
   // database function computes.
-  const withPayout = runEmployees.map((row) => ({
+  const figures = runEmployees.map((row) => ({
     row,
-    amount: Math.round(
-      effectiveNetPayout({
-        net_salary: Number(row.net_salary),
-        tax_withheld: Number(row.tax_withheld),
-        tax_withheld_override: row.tax_withheld_override === null ? null : Number(row.tax_withheld_override),
-      }) * 100,
-    ) / 100,
+    input: {
+      employee_id: row.employee_id,
+      name: employeeName(row),
+      net_salary: Number(row.net_salary),
+      tax_withheld: Number(row.tax_withheld),
+      tax_withheld_override: row.tax_withheld_override === null ? null : Number(row.tax_withheld_override),
+    },
   }))
+  const withPayout = figures.map(({ row, input }) => ({ row, amount: payableAmount(input, row.employee_id, paidBefore) }))
+  const overpaid = overpaidEmployees(figures.map((f) => f.input), paidBefore)
+  const correction = paidBefore ? { corrects_run_id: paidBefore.correctsRunId, overpaid } : null
   const positive = withPayout.filter((p) => p.amount > 0)
   const toPay = positive.filter((p) => !inPayment.has(p.row.employee_id))
   if (toPay.length === 0) {
-    return { ok: false, code: 'SALARY_RUN_BANK_PAYMENT_NOTHING_TO_PAY', details: { in_payment: inPayment.size } }
+    return {
+      ok: false,
+      code: 'SALARY_RUN_BANK_PAYMENT_NOTHING_TO_PAY',
+      details: { in_payment: inPayment.size, ...(correction ? { correction } : {}) },
+      // A correction with nothing left to pay says so, not that everyone is in payment.
+      ...(correction && inPayment.size === 0 ? { messageSv: CORRECTION_NOTHING_TO_PAY_SV } : {}),
+    }
   }
 
   // Every employee paid needs an account, named all at once by name, never
@@ -318,10 +349,12 @@ export async function prepareSalaryBankPayment(
         })
         .sort((a, b) => a.name.localeCompare(b.name, 'sv')),
       total,
-      zero_payouts: withPayout.length - positive.length,
+      // A correction's overpaid employee is named in correction.overpaid, not counted here.
+      zero_payouts: withPayout.filter((p) => (paidBefore ? p.amount === 0 : p.amount <= 0)).length,
       in_payment: inPayment.size,
       replaces_drafts: drafts.length,
       confirmation_required: confirmationRequired,
+      correction,
       warnings,
     }
     return { ok: true, dryRun: true, preview }

@@ -88,6 +88,10 @@ export const MAPPING_SOURCES = {
   assetDisposal: 'se.asset-disposal',
   salaryRun: 'se.salary-run',
   vacationYearClose: 'se.vacation-year-close',
+  // The semesterlöneskuld remeasurement on a date without a salary run
+  // (lib/salary/vacation-liability-remeasure.ts): computed minus booked
+  // 2920/2940, per employee category and dimensions bag.
+  vacationLiabilityRemeasure: 'se.vacation-liability-remeasure',
   supplierInvoice: 'se.supplier-invoice-lines',
   customerInvoice: 'se.customer-invoice-lines',
   supplierPayment: 'se.supplier-payment-lines',

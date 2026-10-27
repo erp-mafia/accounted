@@ -111,6 +111,7 @@ const DEFAULT_POLICY = {
   leave_context: 'all_registered',
   net_rounding: 'up',
   one_off_tax_rounding: 'truncate',
+  vacation_day_value: 'daily_divisor',
 }
 
 beforeEach(() => {
@@ -827,6 +828,7 @@ describe('PATCH salary_calculation_policy', () => {
       leave_context: 'all_registered',
       net_rounding: 'up',
       one_off_tax_rounding: 'truncate',
+      vacation_day_value: 'daily_divisor',
     }
     const supabaseMock = createTableMockSupabase({
       company_members: MEMBER,

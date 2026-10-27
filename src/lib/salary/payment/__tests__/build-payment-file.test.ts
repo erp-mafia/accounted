@@ -726,3 +726,120 @@ describe('payment file versions', () => {
     expect(salaryPaymentMessageId('ACCOUNTED', '5590000000', '2026-10', 1)).toBe('ACCOUNTED-5590000000-2026-10')
   })
 })
+
+describe('payment file of a correction run', () => {
+  const correctionRun = { ...run, corrects_run_id: 'run-0' }
+  const bertil = {
+    ...anna,
+    employee_id: 'emp-2',
+    net_salary: 18000,
+    tax_withheld: 5000,
+    employee: { first_name: 'Bertil', last_name: 'B', clearing_number: '6000', bank_account_number: '7654321', specification_number: 2 },
+  }
+  const cecilia = {
+    ...anna,
+    employee_id: 'emp-3',
+    net_salary: 12000,
+    tax_withheld: 3000,
+    employee: { first_name: 'Cecilia', last_name: 'C', clearing_number: '6000', bank_account_number: '1112223', specification_number: 3 },
+  }
+  /** The chain's roster as the chain query reads it (one row id each). */
+  const chainRows = (...rows: Array<typeof anna>) => rows.map((r, i) => ({ id: `sre-${i}`, ...r }))
+
+  it('reads the corrected run after the employees and writes only the difference, naming the overpaid', async () => {
+    const { supabase, enqueueMany, calls, findCall } = client()
+    enqueueMany([
+      { data: correctionRun },
+      { data: company },
+      { data: settings },
+      // Anna up 1 500, Bertil down 250, Cecilia unchanged, Dora new.
+      {
+        data: [
+          { ...anna, net_salary: 21500 },
+          { ...bertil, net_salary: 17750 },
+          cecilia,
+          { ...anna, employee_id: 'emp-4', net_salary: 9000, employee: { ...anna.employee, first_name: 'Dora', last_name: 'D', specification_number: 4 } },
+        ],
+      },
+      { data: { id: 'run-0', corrects_run_id: null } },
+      { data: chainRows(anna, bertil, cecilia) },
+      { data: null }, // salary_payment_files insert
+      { data: null }, // salary_runs update
+    ])
+
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.payees.map((p) => [p.name, p.amount])).toEqual([
+      ['Anna A', 1500],
+      ['Dora D', 9000],
+    ])
+    expect(result.totalAmount).toBe(10500)
+    expect(result.employeeCount).toBe(2)
+    expect(result.content).toContain('<InstdAmt Ccy="SEK">1500.00</InstdAmt>')
+    expect(result.content).not.toContain('<InstdAmt Ccy="SEK">21500.00</InstdAmt>')
+    expect(result.correction).toEqual({
+      correctsRunId: 'run-0',
+      overpaid: [{ employee_id: 'emp-2', name: 'Bertil B', amount: 250 }],
+    })
+    expect(result.warnings).toContain('Rättelse: endast skillnaden mot den tidigare körningen betalas ut.')
+    expect(result.warnings).toContain('1 anställd(a) utan skillnad mot den tidigare körningen ingår inte i filen.')
+    expect(result.warnings.some((w) => w.startsWith('Enligt rättelsen har Bertil B (') && w.includes('för mycket'))).toBe(true)
+    // The archived row carries the file's own figures: the difference.
+    expect(findCall('salary_payment_files', 'insert')?.[0]).toMatchObject({ employee_count: 2, total_amount: 10500 })
+
+    const reads = calls.filter((c) => c.method === 'select').map((c) => c.table)
+    expect(reads).toEqual(['salary_runs', 'companies', 'company_settings', 'salary_run_employees', 'salary_runs', 'salary_run_employees'])
+    expect(findCall('salary_run_employees', 'in')).toEqual(['salary_run_id', ['run-0']])
+  })
+
+  it('makes no file when the correction raises nobody, and names the overpaid', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([
+      { data: correctionRun },
+      { data: company },
+      { data: settings },
+      { data: [{ ...anna, net_salary: 19000 }] },
+      { data: { id: 'run-0', corrects_run_id: null } },
+      { data: chainRows(anna, bertil) },
+    ])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'bg_lb' })
+    expect(result).toEqual({
+      ok: false,
+      code: 'NOTHING_TO_PAY',
+      format: 'bg_lb',
+      details: {
+        correction: {
+          corrects_run_id: 'run-0',
+          overpaid: [
+            { employee_id: 'emp-1', name: 'Anna A', amount: 1000 },
+            // Removed from the correction: everything paid before.
+            { employee_id: 'emp-2', name: 'Bertil B', amount: 18000 },
+          ],
+        },
+      },
+    })
+    expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toHaveLength(0)
+    if (result.ok) return
+    expect(salaryPaymentFileRefusal(result)).toEqual({
+      code: 'SALARY_RUN_PAYMENT_FILE_NOTHING_TO_PAY',
+      details: { format: 'bg_lb', ...result.details },
+    })
+  })
+
+  it('refuses with DB_ERROR (stage correction) when the corrected run cannot be read, never paying the full net', async () => {
+    const { supabase, enqueueMany, calls } = client()
+    enqueueMany([{ data: correctionRun }, { data: company }, { data: settings }, { data: [anna] }, { data: null }])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+    expect(result).toMatchObject({ ok: false, code: 'DB_ERROR', stage: 'correction' })
+    expect(calls.filter((c) => c.method === 'insert')).toHaveLength(0)
+  })
+
+  it('leaves an ordinary run without a correction', async () => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna] }, { data: null }, { data: null }])
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+    expect(result).toMatchObject({ ok: true, correction: null, totalAmount: 20000 })
+  })
+})

@@ -9,8 +9,10 @@
  * the row is seeded by the first booked run (or the vacation year close), and
  * zeros would claim no entitlement.
  *
- * The SEK estimate is the simplified BFNAR 2016:10 day valuation the year
- * close also uses (dayValueSek), on remaining paid days plus sparade dagar
+ * The SEK estimate is the BFNAR 2016:10 day valuation the year close also
+ * uses (dayValueSek at the company's vacation_day_value convention; under
+ * procentregeln the earning year's day value where Accounted holds that
+ * year), on remaining paid days plus sparade dagar
  * still held, floored at zero: an overdrawn balance is a receivable, not a
  * negative skuld.
  */
@@ -18,6 +20,9 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { roundOre } from '@/lib/money'
 import { dayValueSek, type DayValueEmployee } from '@/lib/salary/semesterberedning'
+import { vacationDayValuePolicyFrom } from '@/lib/salary/calculation-policy'
+import { loadProcentregelnLiabilityValues } from '@/lib/salary/procentregeln-liability'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { remainingSavedDays, sumDays } from '@/lib/salary/vacation-category'
 import { paidDaysAsDaysOff, paidDaysPerDayOff } from '@/lib/salary/vacation-net-days'
 
@@ -57,7 +62,7 @@ export async function readVacationBalance(
 ): Promise<VacationBalanceResult> {
   const { data: employee, error: empErr } = await supabase
     .from('employees')
-    .select('id, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, employment_degree, hourly_rate, hours_per_week, workdays_per_week')
+    .select('id, vacation_rule, vacation_days_per_year, vacation_pay_rate, semestertillagg_rate, salary_type, monthly_salary, employment_degree, hourly_rate, hours_per_week, workdays_per_week, employment_start, employment_end')
     .eq('id', args.employeeId)
     .eq('company_id', args.companyId)
     .maybeSingle()
@@ -99,7 +104,40 @@ export async function readVacationBalance(
   const taken = row.taken_days ?? 0
   const remaining = roundOre(entitled - taken)
   const schedule = employee as unknown as DayValueEmployee
-  const dayValue = dayValueSek(schedule)
+  // The company's day-value convention (calculation-policy.ts
+  // vacation_day_value), the one the report and the year close price with.
+  const { data: policyRow } = await supabase
+    .from('company_settings')
+    .select('salary_calculation_policy, salary_vacation_year_basis')
+    .eq('company_id', args.companyId)
+    .maybeSingle()
+  const settings = policyRow as { salary_calculation_policy?: unknown; salary_vacation_year_basis?: string } | null
+  let dayValue = dayValueSek(schedule, vacationDayValuePolicyFrom(settings?.salary_calculation_policy))
+  // Procentregeln: a day is worth what the payout pays for it, the earning
+  // year's semesterlön per day (16 b §), not today's salary; the estimate
+  // stands in where Accounted lacks that year.
+  const emp = employee as { vacation_rule?: string; employment_start?: string | null; employment_end?: string | null }
+  if (emp.vacation_rule === 'procentregeln' && emp.employment_start) {
+    try {
+      const values = await loadProcentregelnLiabilityValues(supabase, {
+        companyId: args.companyId,
+        basis: settings?.salary_vacation_year_basis === 'statutory_apr_mar' ? 'statutory_apr_mar' : 'calendar',
+        asOfDate: todayIsoStockholm(),
+        employees: [
+          {
+            id: args.employeeId,
+            vacation_days_per_year: schedule.vacation_days_per_year,
+            vacation_pay_rate: schedule.vacation_pay_rate,
+            employment_start: emp.employment_start,
+            employment_end: emp.employment_end ?? null,
+          },
+        ],
+      })
+      dayValue = values.get(args.employeeId)?.perDay ?? dayValue
+    } catch (err) {
+      return { ok: false, code: 'INTERNAL_ERROR', cause: err }
+    }
+  }
 
   return {
     ok: true,

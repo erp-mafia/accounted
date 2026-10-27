@@ -157,6 +157,9 @@ import '@/app/api/v1/companies/[companyId]/employees/[id]/absence/route'
 // Payroll gap-closure 2.3: cutover opening balances (single + atomic bulk).
 import '@/app/api/v1/companies/[companyId]/employees/[id]/opening-balances/route'
 import '@/app/api/v1/companies/[companyId]/employees/opening-balances/route'
+// OB / overtime premium rules (shift_premium_rules): list/create + update/delete.
+import '@/app/api/v1/companies/[companyId]/salary/premium-rules/route'
+import '@/app/api/v1/companies/[companyId]/salary/premium-rules/[id]/route'
 
 // Payroll gap-closure 3.4: vacation ledger + year close.
 import '@/app/api/v1/companies/[companyId]/employees/[id]/vacation-balance/route'
@@ -167,6 +170,7 @@ import '@/app/api/v1/companies/[companyId]/salary/vacation-year-close/route'
 // salary payment file (pain.001 / Bankgirot LB) for a run.
 import '@/app/api/v1/companies/[companyId]/salary/settings/route'
 import '@/app/api/v1/companies/[companyId]/salary/fora-report/route'
+import '@/app/api/v1/companies/[companyId]/salary/vacation-liability/reconcile/route'
 import '@/app/api/v1/companies/[companyId]/employees/[id]/worked-days/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/payment-file/route'
 import '@/app/api/v1/companies/[companyId]/salary-runs/[id]/payment-files/route'

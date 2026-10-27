@@ -1,0 +1,1 @@
+[2026-10-27] A run's semesterlöneskuld remeasurement is valued as of its payment date with the run counted as booked; another booked run counts when paid by then or when its leave ended by then, so same_month runs relieve their own leave and a past date never subtracts later leave.

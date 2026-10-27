@@ -47,7 +47,7 @@ Read it back with \`GET /salary/settings\`. There is no separate "avtal" to conf
 
 ### Calculation policies
 
-The law fixes what is paid (sjuklön at 80 %, one karensavdrag per sjuklöneperiod, semesterlön); how a monthly salary is turned into a day, an hour or a partial month follows the employment contract and the kollektivavtal, and every payroll system has its conventions. \`salary_calculation_policy\` on the same endpoint makes them explicit per company. Every key defaults to the calculation Accounted has always done; the other value of each is what Fortnox does, so a customer you take over from Fortnox keeps the öre on their payslips. Send only the keys you change; they are merged into the stored policy and the response always shows all six.
+The law fixes what is paid (sjuklön at 80 %, one karensavdrag per sjuklöneperiod, semesterlön); how a monthly salary is turned into a day, an hour or a partial month follows the employment contract and the kollektivavtal, and every payroll system has its conventions. \`salary_calculation_policy\` on the same endpoint makes them explicit per company. Every key defaults to the calculation Accounted has always done; the other value of each is what Fortnox does, so a customer you take over from Fortnox keeps the öre on their payslips. Send only the keys you change; they are merged into the stored policy and the response always shows all seven.
 
 \`\`\`bash
 curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/settings" \\
@@ -65,6 +65,7 @@ curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/setting
 | \`leave_context\` | \`all_registered\`: days registered after the deviation period's end count toward the five-day threshold | \`through_deviation_end\`: only days up to the period's end count, so a later registration never reprices a settled month | Only under \`calendar_after_five_workdays\`. Choose \`through_deviation_end\` when the customer registers leave month by month. |
 | \`net_rounding\` | \`up\`: whole-krona öresavrundning always rounds up | \`nearest\`: to the nearest krona; a negative difference books as a 3740 credit | Only when \`salary_net_rounding\` is on. |
 | \`one_off_tax_rounding\` | \`truncate\`: engångsskatt = belopp × procent, öretal bortfaller (SFL 22 kap. 1 §) | \`nearest\`: round to the nearest krona | Engångsskatt on lines with \`one_off_tax_percent\` (step 5). Keep the statutory default unless you are reproducing another system's history. |
+| \`vacation_day_value\` | \`daily_divisor\`: a paid semesterdag under sammalöneregeln is worth månadslön / 21 (schedule divisor for part-time weeks) | \`percent_4_6\`: 4,6 % of the månadslön per paid day | Only the valuation of the semesterlöneskuld (report, vacation-year close, remeasurement); never what a payslip pays. |
 
 The conventions are read at \`:calculate\` and frozen into the run's \`calculation_params.salary_calculation_policy\`, so a change never moves a run that is already calculated; recalculate a draft to apply it, \`:correct\` a booked run. Set them in step 2, and compare one historical payslip from the old system against a dry run before the first live month.
 

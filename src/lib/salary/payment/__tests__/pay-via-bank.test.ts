@@ -315,3 +315,165 @@ describe('prepareSalaryBankPayment', () => {
     })
   })
 })
+
+describe('prepareSalaryBankPayment on a correction run', () => {
+  const ORIGINAL = 'run-0'
+  const FIRST_CORRECTION = 'run-c1'
+
+  /** Rosters per run: the correction's own (eq salary_run_id) and the chain's (in salary_run_id). */
+  function rosters(byRun: Record<string, Array<Record<string, unknown>>>) {
+    return (calls: Chain) => {
+      const own = calls.find((c) => c.method === 'eq' && c.args[0] === 'salary_run_id')?.args[1] as string | undefined
+      if (own) return { data: byRun[own] ?? [] }
+      const chain = (calls.find((c) => c.method === 'in' && c.args[0] === 'salary_run_id')?.args[1] ?? []) as string[]
+      return { data: chain.flatMap((id) => (byRun[id] ?? []).map((row, i) => ({ id: `${id}-${i}`, ...row }))) }
+    }
+  }
+
+  /** salary_runs answers by id: the correction itself and every run of its chain. */
+  function runs(byId: Record<string, Record<string, unknown>>) {
+    return (calls: Chain) => {
+      const id = calls.find((c) => c.method === 'eq' && c.args[0] === 'id')?.args[1] as string
+      return { data: byId[id] ?? null }
+    }
+  }
+
+  beforeEach(() => {
+    db.setTable(
+      'salary_runs',
+      runs({
+        [RUN]: { ...RUN_ROW, corrects_run_id: ORIGINAL },
+        [ORIGINAL]: { id: ORIGINAL, corrects_run_id: null },
+      }),
+    )
+  })
+
+  it('pays each employee only the difference against the corrected run, a new employee in full, and names no one when nobody was overpaid', async () => {
+    const DAVID = {
+      employee_id: 'emp-david',
+      net_salary: 15000,
+      tax_withheld: 3000,
+      tax_withheld_override: null,
+      employee: { first_name: 'David', last_name: 'Dahl', clearing_number: '6000', bank_account_number: '987654321' },
+    }
+    db.setTable(
+      'salary_run_employees',
+      rosters({
+        // The original paid Anna 28 291 and Bertil 28 000 (his override).
+        [ORIGINAL]: [ANNA, BERTIL, CECILIA],
+        // The correction raises Anna by 1 200, leaves Bertil as he was and adds David.
+        [RUN]: [{ ...ANNA, net_salary: 29491 }, BERTIL, CECILIA, DAVID],
+      }),
+    )
+
+    const preview = await prepareSalaryBankPayment(ctx, { salaryRunId: RUN, cashAccountId: 'acct-1', today: TODAY, dryRun: true })
+    expect(preview).toMatchObject({
+      ok: true,
+      preview: {
+        payees: [
+          { employee_id: 'emp-anna', amount: 1200 },
+          { employee_id: 'emp-david', amount: 15000 },
+        ],
+        total: 16200,
+        // Bertil (no difference) and Cecilia (0 kr).
+        zero_payouts: 2,
+        // A fresh correction is approved and has no file: nothing to confirm.
+        confirmation_required: null,
+        correction: { corrects_run_id: ORIGINAL, overpaid: [] },
+      },
+    })
+
+    // The live call leaves the amounts to the database function, which reads the same rule.
+    const live = await prepareSalaryBankPayment(ctx, { salaryRunId: RUN, cashAccountId: 'acct-1', today: TODAY })
+    expect(live.ok).toBe(true)
+    expect(rpcArgs()).not.toHaveProperty('p_amount')
+  })
+
+  it('leaves out an overpaid employee and one removed from the correction, and names both with the amount', async () => {
+    db.setTable(
+      'salary_run_employees',
+      rosters({
+        [ORIGINAL]: [ANNA, BERTIL, CECILIA],
+        // Anna's net drops by 500,25; Bertil is no longer on the run; Cecilia now gets 1 000.
+        [RUN]: [{ ...ANNA, net_salary: 27790.75 }, { ...CECILIA, net_salary: 1000, employee: { ...CECILIA.employee, clearing_number: '6000', bank_account_number: '111222333' } }],
+      }),
+    )
+    const preview = await prepareSalaryBankPayment(ctx, { salaryRunId: RUN, cashAccountId: 'acct-1', today: TODAY, dryRun: true })
+    expect(preview).toMatchObject({
+      ok: true,
+      preview: {
+        payees: [{ employee_id: 'emp-cecilia', amount: 1000 }],
+        total: 1000,
+        zero_payouts: 0,
+        correction: {
+          corrects_run_id: ORIGINAL,
+          overpaid: [
+            { employee_id: 'emp-anna', name: 'Anna Andersson', amount: 500.25 },
+            { employee_id: 'emp-bertil', name: 'Bertil Berg', amount: 28000 },
+          ],
+        },
+      },
+    })
+  })
+
+  it('over a chain of two corrections pays only what neither earlier run paid', async () => {
+    db.setTable(
+      'salary_runs',
+      runs({
+        [RUN]: { ...RUN_ROW, corrects_run_id: FIRST_CORRECTION },
+        [FIRST_CORRECTION]: { id: FIRST_CORRECTION, corrects_run_id: ORIGINAL },
+        [ORIGINAL]: { id: ORIGINAL, corrects_run_id: null },
+      }),
+    )
+    db.setTable(
+      'salary_run_employees',
+      rosters({
+        [ORIGINAL]: [ANNA, BERTIL],
+        // The first correction raised Anna to 29 000 (paid 709) and lowered Bertil to 27 000 (nothing paid back).
+        [FIRST_CORRECTION]: [{ ...ANNA, net_salary: 29000 }, { ...BERTIL, net_salary: 26866 }],
+        // The second raises Anna to 29 500 and Bertil back to 28 100.
+        [RUN]: [{ ...ANNA, net_salary: 29500 }, { ...BERTIL, net_salary: 27966 }],
+      }),
+    )
+    const preview = await prepareSalaryBankPayment(ctx, { salaryRunId: RUN, cashAccountId: 'acct-1', today: TODAY, dryRun: true })
+    expect(preview).toMatchObject({
+      ok: true,
+      preview: {
+        payees: [
+          { employee_id: 'emp-anna', amount: 500 },
+          // Bertil still holds the original 28 000: only 100 is new.
+          { employee_id: 'emp-bertil', amount: 100 },
+        ],
+        total: 600,
+        correction: { corrects_run_id: FIRST_CORRECTION, overpaid: [] },
+      },
+    })
+    expect(db.findCall('salary_run_employees', 'in')).toEqual(['salary_run_id', [FIRST_CORRECTION, ORIGINAL]])
+  })
+
+  it('says there is nothing to pay when the correction raises nobody, naming the overpaid', async () => {
+    db.setTable(
+      'salary_run_employees',
+      rosters({ [ORIGINAL]: [ANNA, BERTIL], [RUN]: [{ ...ANNA, net_salary: 28000 }, BERTIL] }),
+    )
+    const result = await prepareSalaryBankPayment(ctx, { salaryRunId: RUN, cashAccountId: 'acct-1', today: TODAY })
+    expect(result).toEqual({
+      ok: false,
+      code: 'SALARY_RUN_BANK_PAYMENT_NOTHING_TO_PAY',
+      details: {
+        in_payment: 0,
+        correction: { corrects_run_id: ORIGINAL, overpaid: [{ employee_id: 'emp-anna', name: 'Anna Andersson', amount: 291 }] },
+      },
+      messageSv: 'Rättelsen ger ingen skillnad att betala ut jämfört med den tidigare körningen.',
+    })
+    expect(db.findCall('rpc:create_salary_payment_orders', 'rpc')).toBeUndefined()
+  })
+
+  it('refuses rather than pays the full net when the corrected run cannot be read', async () => {
+    db.setTable('salary_runs', runs({ [RUN]: { ...RUN_ROW, corrects_run_id: ORIGINAL } }))
+    await expect(
+      prepareSalaryBankPayment(ctx, { salaryRunId: RUN, cashAccountId: 'acct-1', today: TODAY, dryRun: true }),
+    ).rejects.toThrow(/corrected run run-0 not found/)
+    expect(db.findCall('rpc:create_salary_payment_orders', 'rpc')).toBeUndefined()
+  })
+})

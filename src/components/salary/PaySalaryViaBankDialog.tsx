@@ -20,6 +20,7 @@ import {
   type PaymentOrder,
   type SalaryBankPaymentPreview,
 } from '@/components/payments/payments-client'
+import type { OverpaidEmployee } from '@/lib/salary/payment/payable'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { type ErrorLocale } from '@/lib/errors/get-error-message'
 import { earliestExecutionDateIso } from '@/lib/payments/bank-days'
@@ -33,7 +34,10 @@ import { formatCurrency, formatDate } from '@/lib/utils'
  *            account masked. Nothing is written: it is the server's dry run
  *            (lib/salary/payment/pay-via-bank.ts). A run with a payment file,
  *            or one already marked paid, asks the person to confirm the
- *            salaries have not left another way.
+ *            salaries have not left another way. A correction run
+ *            (rättelsekörning) pays only the difference against the run it
+ *            corrects: one muted line says so, and an employee it overpaid
+ *            is left out and named in one attention sentence.
  *   sign:    one button creates the drafts, approves them and starts one
  *            BankID signing for them all (a basket where the bank takes
  *            one). Unsigned, the payments stay under Betalningar for another
@@ -57,16 +61,39 @@ interface Refusal {
   names: string[]
   /** The server's own Swedish sentence, when it composed one. */
   message: string | null
+  /** Nothing to pay on a correction run: whom it overpaid, and how many are already in payment. */
+  correction: { overpaid: OverpaidEmployee[]; inPayment: number } | null
 }
 
 function inlineRefusalOf(error: unknown): Refusal | null {
   if (!(error instanceof PaymentsClientError) || !error.code || !INLINE_REFUSALS.has(error.code)) return null
-  const body = error.body as { error?: { message?: unknown; details?: { employees?: Array<{ name?: unknown }> } } } | null
-  const names = (body?.error?.details?.employees ?? [])
+  const body = error.body as {
+    error?: {
+      message?: unknown
+      details?: {
+        employees?: Array<{ name?: unknown }>
+        in_payment?: unknown
+        correction?: { overpaid?: OverpaidEmployee[] }
+      }
+    }
+  } | null
+  const details = body?.error?.details
+  const names = (details?.employees ?? [])
     .map((e) => (typeof e.name === 'string' ? e.name : ''))
     .filter(Boolean)
   const message = typeof body?.error?.message === 'string' ? body.error.message : null
-  return { code: error.code, names, message }
+  const correction = details?.correction
+    ? {
+        overpaid: Array.isArray(details.correction.overpaid) ? details.correction.overpaid : [],
+        inPayment: typeof details.in_payment === 'number' ? details.in_payment : 0,
+      }
+    : null
+  return { code: error.code, names, message, correction }
+}
+
+/** "Anna Andersson (1 290,75 kr), Bertil Berg (300,00 kr)": who a correction overpaid, and by how much. */
+function overpaidList(overpaid: OverpaidEmployee[]): string {
+  return overpaid.map((employee) => `${employee.name} (${formatCurrency(employee.amount)})`).join(', ')
 }
 
 interface PaySalaryViaBankDialogProps {
@@ -80,6 +107,7 @@ interface PaySalaryViaBankDialogProps {
 export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId, onDone }: PaySalaryViaBankDialogProps) {
   const t = useTranslations('salary_bank_payment')
   const tb = useTranslations('bank_payments')
+  const tc = useTranslations('salary_correction_payment')
   const locale = useLocale() as ErrorLocale
   const bank = useBankPaymentDialog(open)
   const { availability, usage, accountId, account, fail } = bank
@@ -129,6 +157,8 @@ export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId
   const confirmation = preview?.confirmation_required ?? null
   const unconfirmed = confirmation !== null && !confirmedUnpaid
   const names = refusal?.names.join(', ') ?? ''
+  // Whom a correction overpaid: from the preview, or from its refusal when nothing is left to pay.
+  const overpaid = preview?.correction?.overpaid ?? refusal?.correction?.overpaid ?? []
 
   async function signNow() {
     if (!preview) return
@@ -249,17 +279,27 @@ export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId
         <p className="text-[12.5px] text-muted-foreground">{t('date_moved', { from: formatDate(preview.date_moved_from) })}</p>
       )}
       {afterPayday?.payday && <AttnLine>{t('after_payday', { date: formatDate(afterPayday.payday) })}</AttnLine>}
+      {preview?.correction && <p className="text-[12.5px] text-muted-foreground">{tc('difference_only')}</p>}
       {preview && preview.zero_payouts > 0 && (
-        <p className="text-[12.5px] text-muted-foreground">{t('zero_payouts', { count: preview.zero_payouts })}</p>
+        <p className="text-[12.5px] text-muted-foreground">
+          {preview.correction
+            ? tc('zero_payouts', { count: preview.zero_payouts })
+            : t('zero_payouts', { count: preview.zero_payouts })}
+        </p>
       )}
       {preview && preview.in_payment > 0 && (
         <p className="text-[12.5px] text-muted-foreground">{t('in_payment', { count: preview.in_payment })}</p>
       )}
       {preview && preview.replaces_drafts > 0 && <p className="text-[12.5px] text-muted-foreground">{t('replaces_draft')}</p>}
 
-      {refusal?.code === 'SALARY_RUN_BANK_PAYMENT_NOTHING_TO_PAY' && (
-        <AttnLine action={{ label: tb('open_payments_page'), href: '/payments' }}>{t('nothing_to_pay')}</AttnLine>
-      )}
+      {refusal?.code === 'SALARY_RUN_BANK_PAYMENT_NOTHING_TO_PAY' &&
+        (refusal.correction && refusal.correction.inPayment === 0 ? (
+          <p className="text-[12.5px] text-muted-foreground">{tc('nothing_to_pay')}</p>
+        ) : (
+          <AttnLine action={{ label: tb('open_payments_page'), href: '/payments' }}>{t('nothing_to_pay')}</AttnLine>
+        ))}
+      {/* Never paid, never deducted: the person handles it (one sentence, every name and amount). */}
+      {overpaid.length > 0 && <AttnLine>{tc('overpaid', { list: overpaidList(overpaid), count: overpaid.length })}</AttnLine>}
       {refusal?.code === 'SALARY_RUN_BANK_PAYMENT_EMPLOYEE_BANK_MISSING' && (
         <AttnLine action={{ label: t('open_employees'), href: '/salary/employees' }}>{t('bank_missing', { names })}</AttnLine>
       )}

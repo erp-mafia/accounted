@@ -170,6 +170,7 @@ describe('path parameter typing', () => {
       'payments/:paymentId': null,
       'payslips/:employeeId': 'employee',
       'pending-operations/:id': 'pending_operation',
+      'premium-rules/:id': null,
       'recurring-lines/:lineId': null,
       'rules/:id': null,
       'salary-runs/:id': 'salary_run',

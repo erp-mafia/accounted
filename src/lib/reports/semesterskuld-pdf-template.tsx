@@ -1,12 +1,15 @@
 import { formatOrgNumber } from '@/lib/utils'
+import { roundOre } from '@/lib/money'
 import { Document, Page, StyleSheet, Text, View } from '@react-pdf/renderer'
 import type { VacationLiabilityCheck, VacationLiabilityReport } from '@/lib/reports/vacation-liability'
 
 /**
- * Semesterskuld per employee (BFNAR 2016:10) as of a date, with the booked
- * 2920/2940 balances beside the totals. Same layout rules as the other
- * report PDFs: bundled Helvetica/Courier, header and footer `fixed`, every
- * row `wrap={false}`, no `break` props.
+ * Semesterskuld per employee (BFNAR 2016:10) as of a date: the computed
+ * liability per employee (days owed x day value, avgifter at the employee's
+ * rate) and, beside the totals, what 2920/2940 hold and the difference to
+ * book. Same layout rules as the other report PDFs: bundled
+ * Helvetica/Courier, header and footer `fixed`, every row `wrap={false}`, no
+ * `break` props.
  */
 
 const INK = '#1a1a1a'
@@ -88,6 +91,8 @@ export function SemesterskuldPDF({ report, check, company }: SemesterskuldPDFPro
           <Text style={[styles.th, styles.num]}>Uttagna</Text>
           <Text style={[styles.th, styles.num]}>Kvar</Text>
           <Text style={[styles.th, styles.num]}>Sparade</Text>
+          <Text style={[styles.th, styles.num]}>Skuld, dagar</Text>
+          <Text style={[styles.th, styles.amount]}>Dagvärde</Text>
           <Text style={[styles.th, styles.amount]}>Semesterlön 2920</Text>
           <Text style={[styles.th, styles.amount]}>Avgifter 2940</Text>
           <Text style={[styles.th, styles.amount]}>Summa</Text>
@@ -102,19 +107,21 @@ export function SemesterskuldPDF({ report, check, company }: SemesterskuldPDFPro
               <Text style={styles.num}>{days(row.vacationDaysTaken)}</Text>
               <Text style={styles.num}>{days(row.vacationDaysRemaining)}</Text>
               <Text style={styles.num}>{days(row.vacationDaysSaved)}</Text>
-              <Text style={styles.amount}>{amount(row.accruedAmount)}</Text>
-              <Text style={styles.amount}>{amount(row.accruedAvgifter)}</Text>
-              <Text style={styles.amount}>{amount(row.totalLiability)}</Text>
+              <Text style={styles.num}>{days(row.liabilityDays)}</Text>
+              <Text style={styles.amount}>{amount(row.dayValue)}</Text>
+              <Text style={styles.amount}>{amount(row.computedLiability)}</Text>
+              <Text style={styles.amount}>{amount(row.computedAvgifter)}</Text>
+              <Text style={styles.amount}>{amount(roundOre(row.computedLiability + row.computedAvgifter))}</Text>
             </View>
           ))
         )}
         <View style={styles.totalRow} wrap={false}>
           <Text style={[styles.name, styles.bold]}>Summa</Text>
-          {/* Under the four day columns. */}
-          <View style={{ width: 208 }} />
-          <Text style={[styles.amount, styles.bold]}>{amount(totals.accruedAmount)}</Text>
-          <Text style={[styles.amount, styles.bold]}>{amount(totals.accruedAvgifter)}</Text>
-          <Text style={[styles.amount, styles.bold]}>{amount(totals.totalLiability)}</Text>
+          {/* Under the five day columns and the day value. */}
+          <View style={{ width: 340 }} />
+          <Text style={[styles.amount, styles.bold]}>{amount(totals.computedLiability)}</Text>
+          <Text style={[styles.amount, styles.bold]}>{amount(totals.computedAvgifter)}</Text>
+          <Text style={[styles.amount, styles.bold]}>{amount(totals.computedTotal)}</Text>
         </View>
 
         {check && (
@@ -126,9 +133,9 @@ export function SemesterskuldPDF({ report, check, company }: SemesterskuldPDFPro
               <Text style={[styles.th, styles.amount]}>2940</Text>
             </View>
             <View style={styles.row}>
-              <Text style={styles.name}>Enligt rapporten</Text>
-              <Text style={styles.amount}>{amount(totals.accruedAmount)}</Text>
-              <Text style={styles.amount}>{amount(totals.accruedAvgifter)}</Text>
+              <Text style={styles.name}>Beräknad skuld</Text>
+              <Text style={styles.amount}>{amount(totals.computedLiability)}</Text>
+              <Text style={styles.amount}>{amount(totals.computedAvgifter)}</Text>
             </View>
             <View style={styles.row}>
               <Text style={styles.name}>Bokfört per {report.asOfDate}</Text>
@@ -136,9 +143,9 @@ export function SemesterskuldPDF({ report, check, company }: SemesterskuldPDFPro
               <Text style={styles.amount}>{amount(check.booked2940)}</Text>
             </View>
             <View style={styles.row}>
-              <Text style={[styles.name, styles.bold]}>Differens</Text>
-              <Text style={[styles.amount, styles.bold]}>{amount(check.difference2920)}</Text>
-              <Text style={[styles.amount, styles.bold]}>{amount(check.difference2940)}</Text>
+              <Text style={[styles.name, styles.bold]}>Skillnad att bokföra</Text>
+              <Text style={[styles.amount, styles.bold]}>{amount(check.computedDifference2920)}</Text>
+              <Text style={[styles.amount, styles.bold]}>{amount(check.computedDifference2940)}</Text>
             </View>
           </View>
         )}
@@ -149,9 +156,8 @@ export function SemesterskuldPDF({ report, check, company }: SemesterskuldPDFPro
           </Text>
         )}
         <Text style={styles.note}>
-          {report.closedYear
-            ? `Beloppen utgår från semesterårsavslutet per ${report.closedYear.end} och lägger till semesteravsättningar bokförda efter det.`
-            : 'Beloppen är alla bokförda semesteravsättningar, plus ingående semesterskuld vid byte av system.'}
+          Beräknad skuld: obetald semesterlön för intjänade dagar som inte är uttagna, per anställd, dagarna gånger dagvärdet,
+          plus obetald semesterlön på rörliga lönedelar enligt sammalöneregeln. Avgifterna följer varje anställds åldersgrupp.
         </Text>
 
         <View style={styles.footer} fixed>

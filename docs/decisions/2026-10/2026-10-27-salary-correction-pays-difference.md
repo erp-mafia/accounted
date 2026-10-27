@@ -1,0 +1,1 @@
+[2026-10-27] A correction run pays each employee its effective net minus the most any run of its corrected chain paid them, in TS and in create_salary_payment_orders; an overpayment is never paid or deducted, only named: the original's net pay has left, and settling it is the person's call.

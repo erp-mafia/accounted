@@ -1,0 +1,1 @@
+[2026-10-27] Switching to booking the semesterlöneskuld at every run posts the catch-up remeasurement as of today first, as its own previewed verifikat, then flips the setting, instead of folding the catch-up into the next run's vacation verifikat where it would read as that month's cost.

@@ -1,0 +1,1 @@
+[2026-10-27] Liability valuations (report, remeasurement, year close, vacation balance) read the company's current vacation_day_value, not a run's snapshot: the value is a convention for valuing the whole company's liability on a date, not part of one run's pay.

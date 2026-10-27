@@ -168,6 +168,28 @@ describe('buildSalaryBankList', () => {
     expect(salaryBankListFileName(result.list)).toBe('banklista_lon_2026-04_bg_lb.pdf')
   })
 
+  it('lists a correction run\'s differences and carries what it corrects and whom it overpaid', async () => {
+    const { supabase, enqueueMany } = client()
+    enqueueMany([
+      { data: { ...run, corrects_run_id: 'run-0' } },
+      { data: company },
+      { data: settings },
+      // Anna up 1 000; Bo's override is gone, so his payout drops by 500.
+      { data: [{ ...rows[0], net_salary: 21000.5 }, { ...rows[1], tax_withheld_override: null }, rows[2]] },
+      { data: { id: 'run-0', corrects_run_id: null } },
+      { data: rows.map((r, i) => ({ id: `sre-${i}`, ...r })) },
+    ])
+    const result = await buildSalaryBankList(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(result.list.payees.map((p) => [p.name, p.amount])).toEqual([['Anna Test', 1000]])
+    expect(result.list.totalAmount).toBe(1000)
+    expect(result.list.correction).toEqual({
+      correctsRunId: 'run-0',
+      overpaid: [{ employee_id: 'emp-2', name: 'Bo Test', amount: 500 }],
+    })
+  })
+
   it('passes a builder refusal through unchanged', async () => {
     const { supabase, enqueueMany } = client()
     enqueueMany([{ data: { ...run, status: 'draft' } }])

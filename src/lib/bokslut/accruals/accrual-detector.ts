@@ -63,8 +63,10 @@ export async function assessVacationLiability(
     generateTrialBalance(supabase, companyId, fiscalPeriodId, { closingEntry: 'include' }),
   ])
 
-  // Current closing balance (what 2920 should be at year-end)
-  const targetLiability = Math.round(report.totals.accruedAmount)
+  // What 2920 should hold at year-end: the day-valued liability per
+  // employee (BFNAR 2016:10), not the report's booked specification, which
+  // only restates what the runs and closes put on 2920 and so proposed ~0.
+  const targetLiability = Math.round(report.totals.computedLiability)
   // Anchor on the CURRENT closing balance, not opening: captures any
   // mid-year accruals / reversals that have already touched 2920.
   const row2920 = tb.rows.find((r) => r.account_number === '2920')
@@ -101,7 +103,7 @@ export async function assessVacationLiability(
   // one line.
   const isIncrease = deltaInt > 0
   const changeParts = splitVacationLiabilityChange(
-    report.rows.map((row) => ({ account: row.liabilityChangeAccount, liability: row.accruedAmount })),
+    report.rows.map((row) => ({ account: row.liabilityChangeAccount, liability: row.computedLiability })),
     Math.abs(deltaInt),
   )
   const lines = [

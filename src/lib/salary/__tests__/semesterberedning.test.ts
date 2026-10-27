@@ -95,13 +95,14 @@ beforeEach(() => {
 /** Queue the preview's supabase calls: closure check, roster, ledger rows,
  * cutover opening rows (förskott pool), the sammalöneregeln payslips of the
  * closing year and the year before (rörliga lönedelar), fiscal period (for
- * the booked-balance read). */
+ * the booked-balance read), the day-value policy. */
 function queuePreview(over: {
   ledger?: Array<Record<string, unknown>>
   opening?: Array<Record<string, unknown>>
   closure?: { id: string } | null
   roster?: Array<Record<string, unknown>>
   payslips?: Array<Record<string, unknown>>
+  policy?: { salary_calculation_policy: Record<string, unknown> } | null
 } = {}) {
   mock.enqueue({ data: over.closure ?? null }) // vacation_year_closures check
   mock.enqueue({ data: over.roster ?? [ROSTER_ROW] }) // roster
@@ -109,6 +110,7 @@ function queuePreview(over: {
   mock.enqueue({ data: over.opening ?? [] }) // employee_opening_balances (advance pool)
   mock.enqueue({ data: over.payslips ?? [] }) // salary_run_employees (rörliga lönedelar)
   mock.enqueue({ data: { id: 'fp-2025', period_start: '2025-01-01', period_end: '2025-12-31' } }) // fiscal period
+  mock.enqueue({ data: over.policy ?? null }) // company_settings.salary_calculation_policy (day value)
 }
 
 describe('previewVacationYearClose: beredning math', () => {
@@ -573,5 +575,38 @@ describe('previewVacationYearClose: rörliga lönedelar under sammalöneregeln (
   it('carries a previous-year variable part nobody paid', async () => {
     const row = await liabilityWith([payslip('run-2024-11', '2024-11-25', [obLine(3000)])])
     expect(row.variable_vacation_pay_sek).toBe(360)
+  })
+})
+
+describe('previewVacationYearClose: the statutory basis owes next year\'s days too (Semesterlagen 7 §)', () => {
+  it('values the closing year\'s untaken days plus the days earned in the closing intjänandeår', async () => {
+    const { getVacationYearBasis } = await import('@/lib/salary/vacation-ledger')
+    vi.mocked(getVacationYearBasis).mockResolvedValueOnce('statutory_apr_mar')
+    queuePreview({
+      ledger: [
+        {
+          id: 'vb-1',
+          employee_id: EMPLOYEE_ID,
+          vacation_year_start: '2025-04-01',
+          entitled_days: 25,
+          accrued_days: 25,
+          taken_days: 20,
+          saved_days: {},
+          forced_payout_days: 0,
+          status: 'open',
+        },
+      ],
+    })
+
+    const result = await previewVacationYearClose(supabase, COMPANY_ID, '2025-04-01')
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const row = result.data.rows[0]
+    expect(row.remaining_days).toBe(5)
+    // April 2025 to March 2026, employed throughout: the next semesterår's 25 days.
+    expect(row.earning_days).toBe(25)
+    const dayValue = roundOre(30000 / 21 + 30000 * 0.0043)
+    expect(row.day_value_sek).toBe(dayValue)
+    expect(row.computed_liability_sek).toBe(roundOre(30 * dayValue))
   })
 })

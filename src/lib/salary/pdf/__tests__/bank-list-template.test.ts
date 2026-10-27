@@ -21,6 +21,7 @@ const list: SalaryBankList = {
     { employeeId: 'emp-2', name: 'Bo Test', maskedAccount: '83279-****7890', amount: 18750.25, reference: '000026' },
   ],
   warnings: ['BIC härleddes. Spara BIC under Inställningar → Fakturering.'],
+  correction: null,
 }
 
 describe('SalaryBankListPDF', () => {

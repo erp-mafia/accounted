@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 381 endpoints.
+  pagination, scopes), and all 386 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -218,7 +218,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 381 operations. Paths are shown without
+API version `2026-05-12`, 386 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -541,7 +541,7 @@ POST /companies/{companyId}/webshop-orders/{orderId}/book : Book one webshop ord
 GET /companies/{companyId}/webshop-orders/oss-underlag : Underlag for the OSS declaration (unionsordningen): a quarter's webshop sales to consumers in other EU countries, per country and VAT rate, in euro [scope:reports:read risk:low idempotent]
 ```
 
-### Employees (27)
+### Employees (32)
 
 Full detail: [references/employees.md](references/employees.md)
 
@@ -570,8 +570,13 @@ PUT /companies/{companyId}/employees/{id}/worked-days : Register worked hours pe
 DELETE /companies/{companyId}/employees/{id}/worked-days : Delete worked days for an employee in a date range [scope:payroll:write risk:low idempotent dry-run]
 PUT /companies/{companyId}/employees/opening-balances : Bulk-set payroll cutover opening balances (atomic) [scope:payroll:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/salary/fora-report : The Fora monthly report for a payment month: each coded worker, their FOK code and the pay Fora is told about [scope:payroll:read risk:low idempotent]
+GET /companies/{companyId}/salary/premium-rules : List OB and overtime premium rules [scope:payroll:read risk:low idempotent]
+POST /companies/{companyId}/salary/premium-rules : Create an OB or overtime premium rule [scope:payroll:write risk:low idempotent dry-run reversible]
+PATCH /companies/{companyId}/salary/premium-rules/{id} : Update an OB or overtime premium rule [scope:payroll:write risk:low idempotent dry-run reversible]
+DELETE /companies/{companyId}/salary/premium-rules/{id} : Delete an OB or overtime premium rule [scope:payroll:write risk:low idempotent dry-run]
 GET /companies/{companyId}/salary/settings : Get the company payroll settings [scope:payroll:read risk:low idempotent]
 PATCH /companies/{companyId}/salary/settings : Partially update the company payroll settings [scope:payroll:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/salary/vacation-liability/reconcile : Book the semesterlöneskuld at its computed value on a date: the difference to 2920/2940 as one verifikat [scope:payroll:write risk:medium idempotent dry-run]
 POST /companies/{companyId}/salary/vacation-year-close : Close a vacation year (semesterberedning + arsavslut) [scope:payroll:write risk:high idempotent dry-run]
 ```
 

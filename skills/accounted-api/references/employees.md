@@ -2033,6 +2033,403 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/salary/premium-rules`
+
+**List OB and overtime premium rules.**
+`scope:payroll:read · risk:low · idempotent`
+
+Returns the shift premium rules the salary engine applies to worked days (OB-tillägg for evenings, nights, weekends and public holidays; tiered overtime), each with its amount form and validity. Active rules only unless ?include_inactive=true. No pagination: a company has a handful of rules.
+
+**Use when:** You want to verify how OB or overtime will be derived before calculating a run, or to mirror a kollektivavtal into the company configuration.
+**Do not use for:** The derived premium amounts on a payslip (GET /salary-runs/{id}/employees/{employeeId} after :calculate; each derived line names its rule). Worked hours themselves (the worked-days register).
+
+**Pitfalls:**
+- Rules only fire for worked days that carry start_time and end_time; hours-only rows are treated as 08:00-17:00 and never match night or weekend windows.
+- Overlapping rules never double-pay: each minute goes to the highest priority, then to the rule paying the most per hour for that employee.
+- ob_holiday rules fire only on actual Swedish public holidays, not on ordinary Sundays.
+- A rule pays only on dates between valid_from and valid_to; a rate step is two rules, the old one ending the day before the new one starts.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `include_inactive` | query | `"true" \| "false"` | no | true also returns switched-off rules. Default: active only. |
+
+Response `200`:
+```ts
+{
+  data: { premium_rule_id: string, name: string, applies_to_all_employees: boolean, applies_to_employee_ids: string[], day_of_week: number[], start_time: string, end_time: string, amount_form: "percent_of_hourly" | "monthly_divisor" | "sek_per_hour", premium_percent: number | null, monthly_divisor: number | null, sek_per_hour: number | null, hourly_divisor: number | null, valid_from: string | null, valid_to: string | null, item_type: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday", priority: number, is_active: boolean, created_at: string, updated_at: string }[],
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": [
+    {
+      "premium_rule_id": "c3f2…",
+      "name": "OB kväll",
+      "applies_to_all_employees": true,
+      "applies_to_employee_ids": [],
+      "day_of_week": [
+        1,
+        2,
+        3,
+        4,
+        5
+      ],
+      "start_time": "18:00",
+      "end_time": "06:00",
+      "amount_form": "monthly_divisor",
+      "premium_percent": null,
+      "monthly_divisor": 480,
+      "sek_per_hour": null,
+      "hourly_divisor": null,
+      "valid_from": "2025-04-01",
+      "valid_to": null,
+      "item_type": "ob_weekday_evening",
+      "priority": 0,
+      "is_active": true,
+      "created_at": "2026-10-27T08:00:00Z",
+      "updated_at": "2026-10-27T08:00:00Z"
+    }
+  ],
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/salary/premium-rules`
+
+**Create an OB or overtime premium rule.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Adds a rule: weekdays (ISO 1-7), a wall-clock window (end <= start wraps midnight), an amount form with exactly its own field (percent_of_hourly: premium_percent of the hourly wage, optionally with the agreement hourly_divisor for monthly-paid staff, e.g. Handels 166; monthly_divisor: månadslön / monthly_divisor per hour, e.g. Almega 480/300/150 or övertid 94/72; sek_per_hour: fixed kronor per hour, e.g. Gröna riksavtalet 27.59), a validity (valid_from required, valid_to optional), one of six item types, a priority for overlaps, and a scope (all employees or a named list). Supports ?dry_run=true.
+
+**Use when:** Configuring OB and overtime from a kollektivavtal, or entering a new rate from a date (create the new rule with valid_from and set valid_to on the old one).
+**Do not use for:** One-off manual premium lines on a single payslip (put the amount on item_type overtime or other on the run instead). Mertid or kompensationsledighet (not modelled).
+
+**Pitfalls:**
+- Send only the field of the chosen form: a percent on a monthly_divisor rule returns 400 VALIDATION_ERROR naming premium_percent.
+- monthly_divisor prices from the månadslön: OB types use the actual (degree-adjusted) salary, övertid types the full-time salary. It does not apply to hourly-paid employees, and naming one returns 400 SHIFT_PREMIUM_RULE_HOURLY_EMPLOYEE.
+- applies_to_all_employees=true requires an empty applies_to_employee_ids; false requires at least one id.
+- An employee id from another company returns 404 SHIFT_PREMIUM_RULE_EMPLOYEE_NOT_FOUND with the offending ids in details.
+- For "no OB on overtime hours" give the övertid rules a higher priority than the OB rules on the same window; at equal priority the rule paying the most per hour wins.
+- New rules apply to the next calculation of any open run; booked runs are never recomputed.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  name: string,
+  day_of_week: number[],
+  start_time: string,
+  end_time: string,
+  amount_form?: "percent_of_hourly" | "monthly_divisor" | "sek_per_hour",
+  premium_percent?: number | null,
+  monthly_divisor?: number | null,
+  sek_per_hour?: number | null,
+  hourly_divisor?: number | null,
+  valid_from: string,
+  valid_to?: string | null,
+  item_type: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday",
+  priority?: number,
+  applies_to_all_employees?: boolean,
+  applies_to_employee_ids?: string[],
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "name": "OB kväll",
+  "day_of_week": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "start_time": "18:00",
+  "end_time": "06:00",
+  "amount_form": "monthly_divisor",
+  "monthly_divisor": 480,
+  "valid_from": "2025-04-01",
+  "item_type": "ob_weekday_evening"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    premium_rule_id: string,
+    name: string,
+    applies_to_all_employees: boolean,
+    applies_to_employee_ids: string[],
+    day_of_week: number[],
+    start_time: string,
+    end_time: string,
+    amount_form: "percent_of_hourly" | "monthly_divisor" | "sek_per_hour",
+    premium_percent: number | null,
+    monthly_divisor: number | null,
+    sek_per_hour: number | null,
+    hourly_divisor: number | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    item_type: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday",
+    priority: number,
+    is_active: boolean,
+    created_at: string,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "premium_rule_id": "c3f2…",
+    "name": "OB kväll",
+    "applies_to_all_employees": true,
+    "applies_to_employee_ids": [],
+    "day_of_week": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "start_time": "18:00",
+    "end_time": "06:00",
+    "amount_form": "monthly_divisor",
+    "premium_percent": null,
+    "monthly_divisor": 480,
+    "sek_per_hour": null,
+    "hourly_divisor": null,
+    "valid_from": "2025-04-01",
+    "valid_to": null,
+    "item_type": "ob_weekday_evening",
+    "priority": 0,
+    "is_active": true,
+    "created_at": "2026-10-27T08:00:00Z",
+    "updated_at": "2026-10-27T08:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/salary/premium-rules/{id}`
+
+**Update an OB or overtime premium rule.**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Patches any subset of the rule fields. The scope pair, the amount field of the form and the validity order are validated on the merged state. Sending amount_form switches the form and clears the fields of the other forms, so send the new form's field with it. Set valid_to to end a rule on a date, or is_active=false to switch it off.
+
+**Use when:** A kollektivavtal changed a window, or a rule should end on a date (valid_to). For a new rate from a date, end this rule and create a new one, so runs before the date keep the old rate.
+**Do not use for:** Retroactive corrections of booked runs (use the salary run correction flow, which recomputes from the dated rules).
+
+**Pitfalls:**
+- Changing the rate in place changes it for every date the rule covers, including open runs of earlier periods; a dated step is a new rule.
+- A field of another form without amount_form returns 400 SHIFT_PREMIUM_RULE_FORM_INVALID.
+- Flipping applies_to_all_employees to false without applies_to_employee_ids returns 400 SHIFT_PREMIUM_RULE_SCOPE_INVALID.
+- Named employee ids are re-verified whenever the list or the form changes.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  name?: string,
+  day_of_week?: number[],
+  start_time?: string,
+  end_time?: string,
+  amount_form?: "percent_of_hourly" | "monthly_divisor" | "sek_per_hour",
+  premium_percent?: number,
+  monthly_divisor?: number,
+  sek_per_hour?: number,
+  hourly_divisor?: number | null,
+  valid_from?: string,
+  valid_to?: string | null,
+  item_type?: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday",
+  priority?: number,
+  applies_to_all_employees?: boolean,
+  applies_to_employee_ids?: string[],
+  is_active?: boolean
+}
+```
+
+Example request:
+```json
+{
+  "valid_to": "2026-03-31"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    premium_rule_id: string,
+    name: string,
+    applies_to_all_employees: boolean,
+    applies_to_employee_ids: string[],
+    day_of_week: number[],
+    start_time: string,
+    end_time: string,
+    amount_form: "percent_of_hourly" | "monthly_divisor" | "sek_per_hour",
+    premium_percent: number | null,
+    monthly_divisor: number | null,
+    sek_per_hour: number | null,
+    hourly_divisor: number | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    item_type: "overtime_50" | "overtime_100" | "ob_weekday_evening" | "ob_weekend" | "ob_night" | "ob_holiday",
+    priority: number,
+    is_active: boolean,
+    created_at: string,
+    updated_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "premium_rule_id": "c3f2…",
+    "name": "OB kväll",
+    "applies_to_all_employees": true,
+    "applies_to_employee_ids": [],
+    "day_of_week": [
+      1,
+      2,
+      3,
+      4,
+      5
+    ],
+    "start_time": "18:00",
+    "end_time": "06:00",
+    "amount_form": "monthly_divisor",
+    "premium_percent": null,
+    "monthly_divisor": 480,
+    "sek_per_hour": null,
+    "hourly_divisor": null,
+    "valid_from": "2025-04-01",
+    "valid_to": "2026-03-31",
+    "item_type": "ob_weekday_evening",
+    "priority": 0,
+    "is_active": true,
+    "created_at": "2026-10-27T08:00:00Z",
+    "updated_at": "2026-10-27T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `DELETE /api/v1/companies/{companyId}/salary/premium-rules/{id}`
+
+**Delete an OB or overtime premium rule.**
+`scope:payroll:write · risk:low · idempotent · dry-run`
+
+Deletes a rule no payslip line derives from. A rule a calculated run already derived a line from is kept and switched off (is_active=false) instead, so the line keeps the rule it was paid under; it derives nothing on the next calculation. Answers deleted and deactivated.
+
+**Use when:** A rule was created by mistake, or it should no longer apply at all.
+**Do not use for:** Ending a rule on a date while it still pays before it (PATCH valid_to).
+
+**Pitfalls:**
+- deleted=false with deactivated=true is a success: a payslip line already derives from the rule.
+- Returns 404 SHIFT_PREMIUM_RULE_NOT_FOUND when the id is unknown to this company.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Response `200`:
+```ts
+{
+  data: { premium_rule_id: string, deleted: boolean, deactivated: boolean },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "premium_rule_id": "c3f2…",
+    "deleted": true,
+    "deactivated": false
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/salary/settings`
 
 **Get the company payroll settings.**
@@ -2050,9 +2447,10 @@ Returns the payroll settings that drive new salary runs: pay day (salary_pay_day
 - salary_voucher_series is an alias for company_settings.default_voucher_series_per_source_type.salary_payment. Writes MERGE that one key into the per-source-type map; the other source types keep their letters. The default company layout books salaries on K.
 - preferred_payment_format: pain001 (ISO 20022) is the default; bg_lb (Bankgirot Leverantörsbetalningar / Lön) is being retired by the banks during 2026, so only pick it for a customer whose bank still accepts LB files.
 - salary_calculation_policy holds the company's calculation conventions (beräkningsprinciper). Every key defaults to the historical Accounted behaviour; a customer migrated from Fortnox usually wants partial_month=annual_calendar_days (månadslön × 12 / 365 per calendar day employed), sick_rate=annual_hourly (timlön = månadslön × 12 / (52 × veckoarbetstid) for sjuklön), long_leave=calendar_after_five_workdays (leave longer than five working days deducted per calendar day at månadslön × 12 / 365, a whole month = the monthly salary) and, with salary_net_rounding, net_rounding=nearest. Compare one historical payslip before switching.
-- A PATCH of salary_calculation_policy is merged key by key into the stored policy (omitted keys keep their value); the response and the stored value always carry all six keys. It is not snapshotted onto existing runs at creation: the conventions are read at :calculate and frozen into the run's calculation_params, so a draft recalculated after a change follows the new conventions and a calculated run does not.
+- A PATCH of salary_calculation_policy is merged key by key into the stored policy (omitted keys keep their value); the response and the stored value always carry all seven keys. It is not snapshotted onto existing runs at creation: the conventions are read at :calculate and frozen into the run's calculation_params, so a draft recalculated after a change follows the new conventions and a calculated run does not.
 - long_leave=calendar_after_five_workdays is a five-day-week rule: :calculate refuses (400 VALIDATION_ERROR) a monthly employee whose workdays_per_week is not 5 while it is on. leave_context only matters under that convention.
 - one_off_tax_rounding governs engångsskatt on payslip lines that carry one_off_tax_percent (POST /salary-runs/{id}/employees/{employeeId}/lines); truncate (öretal bortfaller) is the statutory rule, nearest exists to reproduce another system's history.
+- vacation_day_value is how one paid semesterdag is valued under sammalöneregeln when the semesterlöneskuld is computed (the vacation-liability report, the vacation-year close, the vacation-balance estimate and the remeasurement): daily_divisor = månadslön / 21 at a five-day week (the historical value), percent_4_6 = 4,6 % of the månadslön, as Fortnox and Spiris value it. It never changes what a payslip pays. Valuations read the company's current value, not a run snapshot.
 - A company without a settings row reports series A (the engine fallback). The first PATCH creates the row with the standard series set, where salary_payment is K, unless salary_voucher_series is supplied in that same call: send it explicitly when provisioning so the letter never changes under you.
 
 | Parameter | In | Type | Required | Notes |
@@ -2071,7 +2469,7 @@ Response `200`:
     salary_net_rounding: boolean,
     salary_payslip_show_employer_cost: boolean,
     salary_payslip_show_breakdown: boolean,
-    salary_calculation_policy: { partial_month?: "workdays" | "annual_calendar_days", sick_rate?: "daily_divisor" | "annual_hourly", long_leave?: "workdays" | "calendar_after_five_workdays", leave_context?: "all_registered" | "through_deviation_end", net_rounding?: "up" | "nearest", one_off_tax_rounding?: "truncate" | "nearest" },
+    salary_calculation_policy: { partial_month?: "workdays" | "annual_calendar_days", sick_rate?: "daily_divisor" | "annual_hourly", long_leave?: "workdays" | "calendar_after_five_workdays", leave_context?: "all_registered" | "through_deviation_end", net_rounding?: "up" | "nearest", one_off_tax_rounding?: "truncate" | "nearest", vacation_day_value?: "daily_divisor" | "percent_4_6" },
     salary_voucher_series: string
   },
   meta: {
@@ -2104,7 +2502,8 @@ Example response `200`:
       "long_leave": "calendar_after_five_workdays",
       "leave_context": "all_registered",
       "net_rounding": "nearest",
-      "one_off_tax_rounding": "truncate"
+      "one_off_tax_rounding": "truncate",
+      "vacation_day_value": "percent_4_6"
     },
     "salary_voucher_series": "K"
   },
@@ -2136,9 +2535,10 @@ Patches the payroll settings: salary_pay_day (1-28), salary_deviation_period (sa
 - salary_voucher_series is an alias for company_settings.default_voucher_series_per_source_type.salary_payment. Writes MERGE that one key into the per-source-type map; the other source types keep their letters. The default company layout books salaries on K.
 - preferred_payment_format: pain001 (ISO 20022) is the default; bg_lb (Bankgirot Leverantörsbetalningar / Lön) is being retired by the banks during 2026, so only pick it for a customer whose bank still accepts LB files.
 - salary_calculation_policy holds the company's calculation conventions (beräkningsprinciper). Every key defaults to the historical Accounted behaviour; a customer migrated from Fortnox usually wants partial_month=annual_calendar_days (månadslön × 12 / 365 per calendar day employed), sick_rate=annual_hourly (timlön = månadslön × 12 / (52 × veckoarbetstid) for sjuklön), long_leave=calendar_after_five_workdays (leave longer than five working days deducted per calendar day at månadslön × 12 / 365, a whole month = the monthly salary) and, with salary_net_rounding, net_rounding=nearest. Compare one historical payslip before switching.
-- A PATCH of salary_calculation_policy is merged key by key into the stored policy (omitted keys keep their value); the response and the stored value always carry all six keys. It is not snapshotted onto existing runs at creation: the conventions are read at :calculate and frozen into the run's calculation_params, so a draft recalculated after a change follows the new conventions and a calculated run does not.
+- A PATCH of salary_calculation_policy is merged key by key into the stored policy (omitted keys keep their value); the response and the stored value always carry all seven keys. It is not snapshotted onto existing runs at creation: the conventions are read at :calculate and frozen into the run's calculation_params, so a draft recalculated after a change follows the new conventions and a calculated run does not.
 - long_leave=calendar_after_five_workdays is a five-day-week rule: :calculate refuses (400 VALIDATION_ERROR) a monthly employee whose workdays_per_week is not 5 while it is on. leave_context only matters under that convention.
 - one_off_tax_rounding governs engångsskatt on payslip lines that carry one_off_tax_percent (POST /salary-runs/{id}/employees/{employeeId}/lines); truncate (öretal bortfaller) is the statutory rule, nearest exists to reproduce another system's history.
+- vacation_day_value is how one paid semesterdag is valued under sammalöneregeln when the semesterlöneskuld is computed (the vacation-liability report, the vacation-year close, the vacation-balance estimate and the remeasurement): daily_divisor = månadslön / 21 at a five-day week (the historical value), percent_4_6 = 4,6 % of the månadslön, as Fortnox and Spiris value it. It never changes what a payslip pays. Valuations read the company's current value, not a run snapshot.
 - salary_default_bank: null clears the bank; omitting the field leaves it unchanged. The bank only pre-selects upload instructions, it does not change the payment file format.
 
 | Parameter | In | Type | Required | Notes |
@@ -2162,7 +2562,8 @@ Request body:
     long_leave?: "workdays" | "calendar_after_five_workdays",
     leave_context?: "all_registered" | "through_deviation_end",
     net_rounding?: "up" | "nearest",
-    one_off_tax_rounding?: "truncate" | "nearest"
+    one_off_tax_rounding?: "truncate" | "nearest",
+    vacation_day_value?: "daily_divisor" | "percent_4_6"
   },
   salary_voucher_series?: string
 }
@@ -2197,7 +2598,7 @@ Response `200`:
     salary_net_rounding: boolean,
     salary_payslip_show_employer_cost: boolean,
     salary_payslip_show_breakdown: boolean,
-    salary_calculation_policy: { partial_month?: "workdays" | "annual_calendar_days", sick_rate?: "daily_divisor" | "annual_hourly", long_leave?: "workdays" | "calendar_after_five_workdays", leave_context?: "all_registered" | "through_deviation_end", net_rounding?: "up" | "nearest", one_off_tax_rounding?: "truncate" | "nearest" },
+    salary_calculation_policy: { partial_month?: "workdays" | "annual_calendar_days", sick_rate?: "daily_divisor" | "annual_hourly", long_leave?: "workdays" | "calendar_after_five_workdays", leave_context?: "all_registered" | "through_deviation_end", net_rounding?: "up" | "nearest", one_off_tax_rounding?: "truncate" | "nearest", vacation_day_value?: "daily_divisor" | "percent_4_6" },
     salary_voucher_series: string
   },
   meta: {
@@ -2230,12 +2631,99 @@ Example response `200`:
       "long_leave": "calendar_after_five_workdays",
       "leave_context": "all_registered",
       "net_rounding": "nearest",
-      "one_off_tax_rounding": "truncate"
+      "one_off_tax_rounding": "truncate",
+      "vacation_day_value": "percent_4_6"
     },
     "salary_voucher_series": "K"
   },
   "meta": {
     "request_id": "req_...",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/salary/vacation-liability/reconcile`
+
+**Book the semesterlöneskuld at its computed value on a date: the difference to 2920/2940 as one verifikat.**
+`scope:payroll:write · risk:medium · idempotent · dry-run`
+
+Computes the vacation liability as of `as_of` per employee (unpaid vacation pay for days earned and not taken: the remaining paid days of the vacation year, sparade dagar, on the statutory April to March basis the days earned so far toward the next semesterår, and under sammalöneregeln the unpaid semesterlön of rörliga lönedelar; each day valued at the company's vacation_day_value convention, avgifter at each employee's age-tier rate) and books the difference to what 2920 and 2940 hold: 7090 (arbetare) or 7290 per employee against 2920, and 7519 against 2940, debit when the liability grows and credit when it shrinks, dated `as_of` (source_type salary_payment). The calculation behind it is stored as the verifikat's underlag and is what the Semesterskuld report starts from afterwards. A side whose every amount stays within 1 krona is not booked; when nothing moves, `adjusted` is false and no verifikat is created, so a repeat is harmless. Dry-runnable: the dry run answers the lines and the per-employee figures and writes nothing.
+
+**Use when:** A month or quarter end without a salary run, when the balance sheet should carry the vacation liability as it stands (for example before a bokslut or a report to the bank).
+**Do not use for:** The yearly semesterårsavslut that rolls days into the next vacation year (POST /salary/vacation-year-close), or reading the liability without booking (GET /reports/vacation-liability).
+
+**Pitfalls:**
+- `as_of` must not be in the future: 400 VACATION_LIABILITY_DATE_AHEAD.
+- A closed or locked period, or a date on or before the company lock date, answers 400 PERIOD_LOCKED; no voucher number is spent.
+- Salary runs count when they are booked and were paid on or before `as_of`, or deduct leave that ended by then. Book the month's run first, or reconcile as of a date before it.
+- A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing. After a storno the report starts from the previous remeasurement or close again.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{ as_of: string }
+```
+
+Example request:
+```json
+{
+  "as_of": "2026-10-31"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    as_of: string,
+    adjusted: boolean,
+    journal_entry_id: string | null,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    booked_2920: number,
+    booked_2940: number,
+    computed_liability: number,
+    computed_avgifter: number,
+    difference_2920: number,
+    difference_2940: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "as_of": "2026-10-31",
+    "adjusted": true,
+    "journal_entry_id": "9a0b…",
+    "voucher_series": "K",
+    "voucher_number": 41,
+    "booked_2920": 48210,
+    "booked_2940": 15147.58,
+    "computed_liability": 60550,
+    "computed_avgifter": 19024.81,
+    "difference_2920": 12340,
+    "difference_2940": 3877.23
+  },
+  "meta": {
+    "request_id": "req_…",
     "api_version": "2026-05-12"
   }
 }

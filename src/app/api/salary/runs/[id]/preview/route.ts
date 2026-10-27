@@ -3,11 +3,14 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import {
   buildSalaryRunEntryLines,
+  planRunVacationRemeasure,
   salaryRunDataFromRows,
   salaryRunDescription,
+  vacationVoucherDescription,
   type SalaryRosterRow,
   type SalaryRunRow,
 } from '@/lib/salary/salary-entries'
+import { runRemeasuresVacationLiability } from '@/lib/salary/vacation-liability-method'
 import { roundOre } from '@/lib/money'
 import { loadPostedSalaryRunEntries, PostedSalaryEntriesReadError } from '@/lib/salary/posted-run-entries'
 import type { CreateJournalEntryLineInput } from '@/types'
@@ -80,10 +83,18 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
     // (createSalaryRunEntries), so the previewed bank leg is the posted one.
     const runRow = run as SalaryRunRow
     const desc = salaryRunDescription(runRow)
+    // A run calculated under the 'remeasure' method previews the
+    // semesterlöneskuld remeasurement the booking computes the same way, as
+    // of its payment date with this run counted as booked.
+    const remeasure = runRemeasuresVacationLiability(runRow.calculation_params)
+    const remeasureLines = remeasure
+      ? (await planRunVacationRemeasure(supabase, companyId, runRow)).lines
+      : undefined
     const built = buildSalaryRunEntryLines(
       salaryRunDataFromRows(runRow, employees as SalaryRosterRow[]),
       desc,
       await resolvePrimaryBankAccount(supabase, companyId, log),
+      remeasureLines,
     )
 
     // Each entry is null when it has nothing to post: a nollkörning posts
@@ -105,7 +116,7 @@ export const GET = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const salaryEntry = toEntry(desc, built.salaryLines)
     const avgifterEntry = toEntry(`${desc}: Arbetsgivaravgifter`, built.avgifterLines)
-    const vacationEntry = toEntry(`${desc}: Semesteravsättning`, built.vacationLines)
+    const vacationEntry = built.vacationLines.length > 0 ? toEntry(vacationVoucherDescription(desc, remeasure), built.vacationLines) : null
     const pensionEntry = toEntry(`${desc}: Pensionsavsättning`, built.pensionLines)
 
     return NextResponse.json({

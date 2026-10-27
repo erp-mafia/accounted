@@ -15,6 +15,8 @@ import {
 } from '@/components/settings/SettingsRows'
 import { TaxTableStatus } from '@/components/salary/TaxTableStatus'
 import { VacationYearSettings } from '@/components/settings/sections/VacationYearSettings'
+import { ShiftPremiumRulesPanel } from '@/components/salary/premium-rules/ShiftPremiumRulesPanel'
+import { VacationLiabilitySettings } from '@/components/settings/sections/VacationLiabilitySettings'
 import { Switch } from '@/components/ui/switch'
 import { useSettings } from '@/components/settings/useSettings'
 import { resolveDefaultSeriesForSource } from '@/lib/bookkeeping/voucher-series-resolver'
@@ -381,6 +383,13 @@ export function SalarySettingsContent() {
           exist. Vacation itself is configured per employee; the rule row
           only points there. */}
       <VacationYearSettings settings={settings} onSaved={updateSettings} />
+      {/* Semesterlöneskuld: how 2920/2940 are booked. Its own confirm, not
+          the save bar: switching can post the catch-up verifikat. */}
+      <VacationLiabilitySettings settings={settings} onSaved={updateSettings} />
+
+      {/* OB and overtime rules: their own list and editor dialog, outside
+          the form so the dirty-form save bar never reacts to them. */}
+      <ShiftPremiumRulesPanel />
       </>
       ) : null}
     </div>

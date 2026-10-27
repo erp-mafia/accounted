@@ -538,6 +538,14 @@ export interface SalaryBankPaymentPreview {
   replaces_drafts: number
   /** Set when the person must confirm the salaries were not paid another way (a paid or booked run, or a payment file). */
   confirmation_required: { status: string; payment_file_generated_at: string | null } | null
+  /**
+   * A correction run (rättelsekörning): every amount is the difference against
+   * the run it corrects, and an employee it overpaid is left out and named here.
+   */
+  correction: {
+    corrects_run_id: string
+    overpaid: Array<{ employee_id: string; name: string; amount: number }>
+  } | null
   warnings: SalaryBankPaymentWarning[]
 }
 

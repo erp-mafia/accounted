@@ -793,6 +793,12 @@ export interface CompanySettings {
   // column default is {} = every convention at its default = the historical
   // engine; the API stores the full object.
   salary_calculation_policy?: Partial<import('@/lib/salary/calculation-policy').SalaryCalculationPolicy>
+  // How the semesterlöneskuld is booked (migration 20261027213121): 'accrual'
+  // (the default, trued up at the semesterårsavslut) or 'remeasure' (every
+  // run books the difference to the computed liability). Changed only
+  // through POST /api/salary/vacation-liability/method, which books the
+  // catch-up first.
+  salary_vacation_liability_method?: import('@/lib/salary/vacation-liability-method').VacationLiabilityMethod
 
   // Sandbox
   is_sandbox: boolean
@@ -4768,6 +4774,16 @@ export type ShiftPremiumItemType =
   | 'overtime_50' | 'overtime_100'
   | 'ob_weekday_evening' | 'ob_weekend' | 'ob_night' | 'ob_holiday'
 
+/**
+ * How a premium hour is priced (migration 20261027213119):
+ *   percent_of_hourly  premium_percent of the hourly wage (hourly_divisor,
+ *                      when set, derives a monthly-paid employee's timlön
+ *                      as full-time månadslön / hourly_divisor);
+ *   monthly_divisor    månadslön / monthly_divisor, monthly-paid only;
+ *   sek_per_hour       fixed kronor per hour.
+ */
+export type ShiftPremiumAmountForm = 'percent_of_hourly' | 'monthly_divisor' | 'sek_per_hour'
+
 export interface ShiftPremiumRule {
   id: string
   company_id: string
@@ -4780,7 +4796,19 @@ export interface ShiftPremiumRule {
   start_time: string
   /** 'HH:MM' or 'HH:MM:SS'. End values <= start mean the window wraps midnight. */
   end_time: string
-  premium_percent: number
+  amount_form: ShiftPremiumAmountForm
+  /** percent_of_hourly only (else null). */
+  premium_percent: number | null
+  /** monthly_divisor only (else null). */
+  monthly_divisor: number | null
+  /** sek_per_hour only (else null). */
+  sek_per_hour: number | null
+  /** percent_of_hourly only, optional. */
+  hourly_divisor: number | null
+  /** First date (inclusive). Null only on rules from before validity existed. */
+  valid_from: string | null
+  /** Last date (inclusive). Null = open-ended. */
+  valid_to: string | null
   item_type: ShiftPremiumItemType
   priority: number
   is_active: boolean
