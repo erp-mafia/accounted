@@ -35,6 +35,7 @@ import {
 } from '@/components/settings/SettingsRows'
 import { BankSelector, type Bank } from './BankSelector'
 import { BankConnectionStatus } from './BankConnectionStatus'
+import { describeEmptySync } from '../lib/empty-sync-text'
 import { AccountPickerDialog } from './AccountPickerDialog'
 import {
   buildPageAttentionSentence,
@@ -616,16 +617,22 @@ export default function BankingSettingsPanel() {
       // say from which date the sync is complete instead of presenting a
       // truncated history as a full one (#2202). A bank that had not handed
       // out every page is no finished sync either (PH 195).
+      // A sync that brought in nothing says why: the bank's entries are not
+      // booked yet, or the bank sent none at all (PH 221). "0 nya" next to a
+      // fresh balance read as a connection that only reads the balance.
+      const emptyText = data.incomplete
+        ? null
+        : describeEmptySync({ imported: data.imported, duplicates: data.duplicates, notBooked: data.not_booked })
       toast({
         title: data.incomplete ? 'Synkroniseringen blev inte klar' : 'Synkronisering klar',
         description: data.incomplete
           ? `${data.imported} nya transaktioner importerade, men banken lämnade inte ut alla sidor. Försök igen senare, eller importera kontoutdraget som bankfil.`
           : data.history_narrowed && data.history_from
             ? `${data.imported} nya transaktioner importerade. Banken lämnade bara ut historik från ${data.history_from}.`
-            : `${data.imported} nya transaktioner importerade`,
+            : emptyText ?? `${data.imported} nya transaktioner importerade`,
       })
 
-      setShowCsvFallback(data.incomplete === true)
+      setShowCsvFallback(data.incomplete === true || emptyText !== null)
       notifyBankSyncUpdated()
       fetchConnections()
     } catch (error) {

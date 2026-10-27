@@ -435,7 +435,7 @@ export const reportsPeriodiskSammanstallning = defineOperation({
   docs: {
     summary: 'Periodisk sammanställning (EU sales list): per-customer EU sales of goods, services and triangulation.',
     description:
-      'Builds the periodisk sammanställning for a month or quarter: one row per EU customer VAT number with varor, tjänster and trepartshandel amounts, plus warnings (missing or invalid VAT numbers, Swedish customers, credit notes), reconciled against the momsdeklaration (rutor 35, 38, 39) when the periods coincide. The SKV 574008 CSV for upload is served by GET /reports/periodisk-sammanstallning/csv. Read-only.',
+      'Builds the periodisk sammanställning for a month or quarter: one row per EU customer VAT number with varor, tjänster and trepartshandel amounts, plus warnings (missing or invalid VAT numbers, Swedish customers, credit notes), reconciled against the momsdeklaration (rutor 35, 38, 39) for the same dates. The SKV 574008 CSV for upload is served by GET /reports/periodisk-sammanstallning/csv. Read-only.',
     useWhen: 'Before filing the periodisk sammanställning, or checking EU sales per customer against the momsdeklaration.',
     doNotUseFor: 'The momsdeklaration itself (GET /reports/vat-declaration) or domestic sales.',
     pitfalls: [

@@ -49,8 +49,13 @@ const PENDING_WINDOW_MS = 24 * 60 * 60 * 1000
 
 export type SIEBankSweepJob = Pick<
   SIEJob,
-  'id' | 'company_id' | 'user_id' | 'execution_actor_id' | 'job_state' | 'job_kind' | 'manifest'
-> & { fiscal_year_start?: string | Date | null; fiscal_year_end?: string | Date | null }
+  'id' | 'company_id' | 'user_id' | 'execution_actor_id' | 'job_state' | 'job_kind'
+> & {
+  /** Read only for its sealed fiscal year, when the columns below are empty. */
+  manifest?: SIEJob['manifest'] | null
+  fiscal_year_start?: string | Date | null
+  fiscal_year_end?: string | Date | null
+}
 
 export interface SIEBankSweepReceipt extends SieSweepSummary {
   /** Why no matcher run was needed; absent when the sweep ran. */
@@ -176,6 +181,34 @@ export async function sweepBankRowsAfterSIEImport(
 }
 
 /**
+ * The sealed manifest is the fallback source of the fiscal year (fiscalYearOf):
+ * read it for one pending row whose year columns are empty. Null when that
+ * read fails: the row keeps no receipt and the next cron run nominates it
+ * again.
+ */
+async function withFiscalYearSource(
+  supabase: SupabaseClient,
+  row: SIEBankSweepJob,
+): Promise<SIEBankSweepJob | null> {
+  if (isoDay(row.fiscal_year_start) && isoDay(row.fiscal_year_end)) return row
+  const { data, error } = await supabase
+    .from('sie_imports')
+    .select('manifest')
+    .eq('id', row.id)
+    .eq('company_id', row.company_id)
+    .maybeSingle()
+  if (error) {
+    log.warn('pending post-import bank sweep could not read its manifest', {
+      companyId: row.company_id,
+      importId: row.id,
+      message: error.message,
+    })
+    return null
+  }
+  return { ...row, manifest: (data as { manifest?: SIEJob['manifest'] | null } | null)?.manifest ?? null }
+}
+
+/**
  * Cron recovery: finish the sweep for recently completed imports that have no
  * finished receipt (the function died after completion, or the claim went
  * stale mid-sweep). The claim RPC decides who runs; this only nominates.
@@ -192,10 +225,15 @@ export async function runPendingSIEBankSweeps(
     const since = new Date(Date.now() - PENDING_WINDOW_MS).toISOString()
     // The receipt filter runs here, not in the query: a day of completed
     // imports is a handful of rows, and a JSON path inside a PostgREST or()
-    // is one more thing that can only fail in production.
+    // is one more thing that can only fail in production. The listing runs
+    // every minute and nearly every row it finds already holds a finished
+    // receipt, so it leaves the manifest out: about 15 KB a row, detoasted
+    // and serialised on each call, it made this the slowest SIE query in
+    // production (122 ms mean, 6.3 s max). A pending row reads it below, and
+    // only when its fiscal-year columns are empty.
     const { data, error } = await supabase
       .from('sie_imports')
-      .select('id, company_id, user_id, execution_actor_id, job_state, job_kind, manifest, fiscal_year_start, fiscal_year_end, bank_sweep')
+      .select('id, company_id, user_id, execution_actor_id, job_state, job_kind, fiscal_year_start, fiscal_year_end, bank_sweep')
       .eq('job_state', 'completed')
       .eq('job_kind', 'import')
       .gte('imported_at', since)
@@ -205,10 +243,11 @@ export async function runPendingSIEBankSweeps(
     const pending = ((data ?? []) as Array<SIEBankSweepJob & { bank_sweep: { state?: string } | null }>)
       .filter((row) => !row.bank_sweep || row.bank_sweep.state === 'running')
       .slice(0, options.limit ?? 10)
-    for (const job of pending) {
+    for (const row of pending) {
       if (Date.now() > deadline || !runsSIEJobs()) break
       considered++
-      if (await sweepBankRowsAfterSIEImport(supabase, job)) swept++
+      const job = await withFiscalYearSource(supabase, row)
+      if (job && await sweepBankRowsAfterSIEImport(supabase, job)) swept++
     }
   } catch (err) {
     log.warn('pending post-import bank sweeps could not be listed', {

@@ -949,6 +949,34 @@ describe('salary entries: kostnadsersättning (#2331)', () => {
     assertBalanced(salary)
   })
 
+  it('books utlandstraktamente on 7323 on top of gross and its taxable excess on 7324 inside gross (crm#1468)', async () => {
+    // The dialog writes the foreign rows as traktamente rows with their own
+    // account (manual-payslip-lines.ts): 3 days at a 600 kr normalbelopp
+    // tax-free, 200 kr above it taxable.
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 30200,
+        net_salary: 30200 - 7000 + 1800,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 30000, account_number: '7210', is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'traktamente_taxfree', amount: 1800, account_number: '7323', is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'traktamente_taxable', amount: 200, account_number: '7324', is_net_deduction: false, is_gross_deduction: false },
+        ],
+      }),
+    ])
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+    expect(linesOn(salary, '7210')[0].debit_amount).toBe(30000)
+    expect(linesOn(salary, '7323')).toEqual([
+      expect.objectContaining({ debit_amount: 1800, line_description: 'Lön 2026-06: Traktamenten skattefria, utlandet' }),
+    ])
+    expect(linesOn(salary, '7324')).toEqual([
+      expect.objectContaining({ debit_amount: 200, line_description: 'Lön 2026-06: Traktamenten skattepliktiga, utlandet' }),
+    ])
+    expect(linesOn(salary, '1930')[0].credit_amount).toBe(25000)
+    assertBalanced(salary)
+  })
+
   it('books a run that only repays utlägg as 2820 D / 1930 K', async () => {
     const run = makeRun([
       makeEmployee({

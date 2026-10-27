@@ -167,6 +167,20 @@ describe('runConnectionSync', () => {
     const outcome = await runConnectionSync(input(supabase, { lookbackDays: 7 }))
 
     expect(outcome.truncated).toBe(false)
+    expect(outcome.notBooked).toBe(0)
+  })
+
+  // PH 221: a bank that sent only unbooked entries imported nothing; the
+  // count of what it sent is what lets the sync say why.
+  it('sums the entries the banks sent but have not booked', async () => {
+    const { supabase } = createTableMockSupabase({ sie_imports: { data: null } })
+    mockSync
+      .mockResolvedValueOnce(result({ imported: 0, duplicates: 0, notBooked: 2 }) as never)
+      .mockResolvedValueOnce(result({ notBooked: 1 }) as never)
+
+    const outcome = await runConnectionSync(input(supabase, { lookbackDays: 7 }))
+
+    expect(outcome.notBooked).toBe(3)
   })
 
   it('links instead of booking over a completed SIE import, sweeping from the oldest returned date', async () => {

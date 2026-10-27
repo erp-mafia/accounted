@@ -109,7 +109,7 @@ registerEndpoint({
     'Updating an existing document (no v1 update endpoint; new versions go through the dashboard). Bulk uploads: call once per file.',
   pitfalls: [
     'Idempotency-Key is mandatory; multipart retries with the same key replay the cached response.',
-    `Max size ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB enforced server-side: DOC_UPLOAD_TOO_LARGE on overrun.`,
+    `Max size ${MAX_DOCUMENT_SIZE / 1024 / 1024} MB enforced server-side: DOC_UPLOAD_TOO_LARGE on overrun. On the hosted service the platform refuses a request body over 4.5 MB before it reaches Accounted (a plain-text 413, no error envelope), so keep files there under 4 MB.`,
     `Only ${ALLOWED_DOCUMENT_TYPES.join(' / ')} accepted: DOC_UPLOAD_UNSUPPORTED_TYPE otherwise.`,
     'WORM: once linked to a posted journal entry, the document row cannot be modified or deleted (DB trigger). Upload-then-link is reversible (the document exists with journal_entry_id=null until linked); once linked, treat as immutable.',
     'Every upload stores its own row unless dedupe_by_content=true: then, without journal_entry_id, bytes already in the archive answer that document (deduplicated: true, duplicate_of = id, still 201), whose journal_entry_id may already be set. To put it on another verifikat too, POST /documents/{id}/link with copy: true.',

@@ -36,7 +36,7 @@ import { postingPort } from '@/lib/posting/port'
 import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
 import { DIM_COST_CENTER, DIM_PROJECT, normalizeLineDimensions } from '@/lib/bookkeeping/dimension-resolver'
-import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import { chartAccountNamesLoader, chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { expandVoucherLineVatCodes } from '@/lib/bookkeeping/voucher-line-vat-code'
 
 // `dimensions` is the line's whole SIE tag bag; cost_center/project only
@@ -266,7 +266,7 @@ registerEndpoint({
     'Every account_number must resolve in the company\'s chart of accounts: a standard BAS 2026 account that is not in the chart yet is added automatically, but a deactivated account, or a non-BAS number the chart does not contain, fails with ACCOUNTS_NOT_IN_CHART.',
     'voucher_series defaults to "A" if omitted. Must be a single uppercase letter.',
     'This creates a DRAFT only: call POST /{id}/commit to assign the voucher_number and post atomically, or DELETE /{id} to discard it. A draft left uncommitted blocks the year-end close (DRAFT_ENTRIES).',
-    'source_type defaults to "manual". A business source type may label your own vouchers (e.g. "webshop_order", "bank_transaction", "invoice_created"), and "import" marks history replayed from another system. Engine-owned types exempt from the dimension rules (opening_balance, year_end, result_appropriation, currency_revaluation, storno, correction, credit_note, supplier_credit_note, system, accrual, vat_settlement, rot_rut_payout, rot_rut_reclaim, rot_rut_reclassification, expense_payout, stripe_payout, collection_settlement) are refused with 400 VALIDATION_ERROR: they belong to their own endpoints.',
+    'source_type defaults to "manual". A business source type may label your own vouchers (e.g. "webshop_order", "bank_transaction", "invoice_created"). "import" is refused with 400 VALIDATION_ERROR: an imported voucher needs the batch identity only the SIE import writes, so replay history from another system as a SIE4 file with POST /imports/sie, or book it as "manual". Engine-owned types exempt from the dimension rules (opening_balance, year_end, result_appropriation, currency_revaluation, storno, correction, credit_note, supplier_credit_note, system, accrual, vat_settlement, rot_rut_payout, rot_rut_reclaim, rot_rut_reclassification, expense_payout, stripe_payout, collection_settlement) are refused with 400 VALIDATION_ERROR: they belong to their own endpoints.',
     'lines[].vat_code books a reverse-charge purchase (omvänd betalningsskyldighet) on a BAS class 4-6 cost line: {"kind": "eu_goods" (ruta 20) | "eu_services" (21) | "non_eu_services" (22) | "domestic_services" (24), "rate": 0.25 | 0.12 | 0.06}, the rate a fraction, not percent. The server adds the fiktiv moms pair (2645, or 2647 for domestic_services, debit; 2614/2624/2634 credit) and the basis pair (44xx/45xx debit, 4598 credit) directly under the line, on its SEK amount: the lines the manual verifikat form books. They net to zero, so balance your own lines as usual; the dry run and the created draft show every line. A credit line with a vat_code reverses them (a credit note). Explicit only: a line without vat_code gets nothing, even on 4531.',
     'On an account that reports ruta 20-24 itself (4531, 4535, 4415, or one whose kontoplan momskod is reverse charge) vat_code must be the account\'s own kind and rate, and only the fiktiv moms is added. 400 VALIDATION_ERROR, details.issues[].field lines.N.vat_code, for a code on an account that takes none (balance sheet, revenue, class 7-8, 4598, 4512, 4545-4547), another code on an account with its own ruta, a code on a line without an amount, a code whose basis account (44xx/45xx) your kontoplan sets to another ruta or momssats than the code asks for (correct that account\'s momskod), and a code beside a line on an account it creates (e.g. 2645, 2614, 4598, or its 44xx/45xx basis account, also when that line carries a vat_code of its own): book a purchase\'s reverse charge with vat_code or by hand, never both, and put a second purchase booked directly on that basis account in a voucher of its own.',
   ],
@@ -334,6 +334,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     const expanded = await expandVoucherLineVatCodes(
       input.lines,
       chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!),
+      chartAccountNamesLoader(ctx.supabase, ctx.companyId!),
     )
     if (!expanded.ok) {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {

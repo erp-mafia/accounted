@@ -4,6 +4,7 @@ import { validateBody } from '@/lib/api/validate'
 import { PendingOperationsBulkSchema } from '@/lib/api/schemas'
 import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { recordAppApproval } from '@/lib/pending-operations/record-app-approval'
+import { sharedAcknowledgmentGroup } from '@/lib/pending-operations/shared-acknowledgment'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import type { PendingOperation } from '@/types'
 
@@ -33,6 +34,10 @@ export const POST = withRouteContext(
     const validated = await validateBody(request, PendingOperationsBulkSchema)
     if (!validated.success) return validated.response
     const { ids } = validated.data
+    // Groups of routine high-risk operations the person approved under one
+    // acknowledgment (crm#1489). The group is re-derived from each stored
+    // operation below, so naming a group never reaches beyond it.
+    const acknowledged = new Set(validated.data.acknowledged_groups ?? [])
 
     const { data: ops, error: fetchError } = await supabase
       .from('pending_operations')
@@ -65,7 +70,8 @@ export const POST = withRouteContext(
         })
         continue
       }
-      if (op.risk_level === 'high') {
+      const sharedGroup = sharedAcknowledgmentGroup(op)
+      if (op.risk_level === 'high' && !(sharedGroup && acknowledged.has(sharedGroup))) {
         results.push({
           id,
           status: 'skipped',
@@ -79,7 +85,14 @@ export const POST = withRouteContext(
         commitMethod: 'bulk_accept',
         actor: { type: 'user', ...(user.email ? { label: user.email } : {}) },
       })
-      await recordAppApproval({ companyId, userId: user.id, operation: op, commitMethod: 'bulk_accept', outcome: result.status })
+      await recordAppApproval({
+        companyId,
+        userId: user.id,
+        operation: op,
+        commitMethod: 'bulk_accept',
+        outcome: result.status,
+        ...(sharedGroup ? { sharedAcknowledgment: sharedGroup } : {}),
+      })
       if (result.status === 'committed') {
         results.push({ id, status: 'committed' })
       } else {

@@ -11,6 +11,7 @@ import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 import { SupportLink } from '@/components/ui/support-link'
 import NewClientCompanyDialog from '@/components/dashboard/NewClientCompanyDialog'
+import { ADD_COMPANY_HREF } from '@/components/settings/company-deletion'
 import {
   ArrowRightStartOnRectangleIcon,
   CheckIcon,
@@ -362,28 +363,32 @@ export default function UserMenu({
                       ))}
                     </div>
                   )}
-                  {!sandbox && (
+                  {!sandbox && canCreateClient && (
                     <div className="border-t border-border px-1 pt-1">
-                      {canCreateClient && (
-                        <button
-                          type="button"
-                          onClick={() => {
-                            close()
-                            setClientDialogOpen(true)
-                          }}
-                          className={menuRow}
-                        >
-                          <PlusIcon className="h-4 w-4 flex-shrink-0" />
-                          {tClients('new_client_company')}
-                        </button>
-                      )}
-                      <Link href="/select-company?choose=1" onClick={close} className={menuRow}>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          close()
+                          setClientDialogOpen(true)
+                        }}
+                        className={menuRow}
+                      >
                         <PlusIcon className="h-4 w-4 flex-shrink-0" />
-                        {tSwitcher('add_company')}
-                      </Link>
+                        {tClients('new_client_company')}
+                      </button>
                     </div>
                   )}
                 </div>
+              )}
+
+              {/* Adding a company sits in the menu itself, right under the
+                  company row: behind the flyout, new users never found it
+                  (PH 216, PH 202). */}
+              {!sandbox && (
+                <Link href={ADD_COMPANY_HREF} onClick={close} className={menuRow}>
+                  <PlusIcon className="h-4 w-4 flex-shrink-0" />
+                  {tSwitcher('add_company')}
+                </Link>
               )}
             </div>
 

@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { createSIEHistoryPollGate, startSIEHistoryPolling, type SIEHistoryPollGate } from '@/lib/import/sie-history-poll'
 import { ArrowUturnLeftIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -13,6 +14,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import Link from 'next/link'
 import SIELegacyRecoveryPanel from './SIELegacyRecoveryPanel'
+import { announceSIEHoldsChanged } from '@/lib/import/sie-holds-client'
 
 const PAGE_SIZE = 20
 
@@ -31,7 +33,8 @@ interface SIEImportListRow {
   status: string
   job_state?: string | null
   job_kind?: string | null
-  job_result?: {repairOutcome?:string} | null
+  /** job_result->>repairOutcome: the route leaves the rest of job_result out. */
+  repair_outcome?: string | null
   imported_at: string | null
   created_at: string
 }
@@ -70,6 +73,7 @@ export default function SIEImportHistory() {
   const [total, setTotal] = useState(0)
   const requestVersion = useRef(0)
   const reviewTrigger = useRef<HTMLButtonElement | null>(null)
+  const pollGate = useRef<SIEHistoryPollGate | null>(null)
 
   const fetchImports = useCallback(async (signal?: AbortSignal) => {
     const version = ++requestVersion.current
@@ -82,7 +86,9 @@ export default function SIEImportHistory() {
       }
       const data = await res.json()
       if (signal?.aborted || version !== requestVersion.current) return
-      setRows(Array.isArray(data.data) ? data.data : [])
+      const list: SIEImportListRow[] = Array.isArray(data.data) ? data.data : []
+      setRows(list)
+      pollGate.current?.record(list, Date.now())
       setTotal(data.count ?? 0)
       setLoadFailed(false)
     } catch {
@@ -91,18 +97,18 @@ export default function SIEImportHistory() {
     }
   }, [offset])
 
+  // Every 5 s while a job moves, slower while nothing changes, never while
+  // the tab is hidden (lib/import/sie-history-poll.ts). A new page starts over.
   useEffect(() => {
     const controller = new AbortController()
-    let timer: ReturnType<typeof setTimeout>
-    const poll = async () => {
-      await fetchImports(controller.signal)
-      if (!controller.signal.aborted) timer = setTimeout(() => void poll(), 5000)
-    }
-    timer = setTimeout(() => void poll(), 0)
-    return () => {
-      controller.abort()
-      clearTimeout(timer)
-    }
+    pollGate.current = createSIEHistoryPollGate()
+    startSIEHistoryPolling({
+      gate: pollGate.current,
+      fetchPage: () => fetchImports(controller.signal),
+      isVisible: () => document.visibilityState !== 'hidden',
+      signal: controller.signal,
+    })
+    return () => controller.abort()
   }, [fetchImports])
 
   // The route acknowledges the durable undo job; history polls its progress.
@@ -120,6 +126,7 @@ export default function SIEImportHistory() {
         })
         return
       }
+      announceSIEHoldsChanged()
 
       toast({
         title: t('sie_history_undo_success_title'),
@@ -209,7 +216,7 @@ export default function SIEImportHistory() {
                   {fiscalYearLabel(row)}
                 </td>
                 <td className={cn(TD_CLASS, 'text-right tabular-nums')}>{row.transactions_count}</td>
-                <td className={TD_CLASS}>{row.job_result?.repairOutcome === 'stopped' ? t('sie_job.repairStopped') : row.job_state ? t(`sie_job.states.${row.job_state}`) : statusCell(row.status)}</td>
+                <td className={TD_CLASS}>{row.repair_outcome === 'stopped' ? t('sie_job.repairStopped') : row.job_state ? t(`sie_job.states.${row.job_state}`) : statusCell(row.status)}</td>
                 <td className={cn(TD_CLASS, 'text-right')}>
                   {row.job_state && !['completed','undone','failed'].includes(row.job_state) && (
                     <Link className="text-primary underline underline-offset-4" href={`/import?mode=sie&job=${row.id}`}>{t('sie_job.open')}</Link>

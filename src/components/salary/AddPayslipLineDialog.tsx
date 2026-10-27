@@ -26,6 +26,8 @@ import {
   MEAL_BENEFIT_KINDS,
   buildManualPayslipLine,
   mealBenefitUnit,
+  storedLineItemType,
+  taxableCounterpart,
   type ManualLineCaps,
   type ManualPayslipLineType,
   type MealBenefitKind,
@@ -54,7 +56,9 @@ const parseNumber = (s: string): number | undefined => parseDecimalInput(s) ?? u
  * they are; its amount is optional (crm#1331). Kostförmån takes the meal and
  * the count, priced at Skatteverket's schablon for the run's year
  * (mealSchablon); the à-pris stays editable for a value Skatteverket has
- * adjusted (crm#1349).
+ * adjusted (crm#1349). Utlandstraktamente takes the country and, on the
+ * tax-free row, the country's normalbelopp per day, which caps the à-pris
+ * (crm#1468); the row books on 7323 / 7324 unless an account is picked.
  */
 export function AddPayslipLineDialog({
   open,
@@ -93,8 +97,15 @@ export function AddPayslipLineDialog({
   const [accountInvalid, setAccountInvalid] = useState(false)
   const [vacationCategory, setVacationCategory] = useState<VacationCategory>('paid')
   const [mealKind, setMealKind] = useState<MealBenefitKind>(DEFAULT_MEAL)
+  const [country, setCountry] = useState('')
+  const [normalbelopp, setNormalbelopp] = useState('')
 
   const spec = MANUAL_PAYSLIP_LINE_SPECS[type]
+  // The item type the row is stored as: an utlandstraktamente or a
+  // nattraktamente is a traktamente row (manual-payslip-lines.ts).
+  const storedType = storedLineItemType(type)
+  const isForeign = spec.foreign === true
+  const isForeignTaxFree = isForeign && !spec.flags.is_taxable
   // A Textrad is words only: no quantity, no à-pris, no amount.
   const isText = isTextRow({ item_type: type })
   // Semester needs its days; the amount is optional.
@@ -118,6 +129,8 @@ export function AddPayslipLineDialog({
       amount: parseNumber(amount),
       vacation_category: isVacation ? vacationCategory : undefined,
       meal_kind: isMeal ? mealKind : undefined,
+      country: isForeign ? country : undefined,
+      normalbelopp: isForeignTaxFree ? parseNumber(normalbelopp) : undefined,
     },
     taxFreeCaps,
   )
@@ -125,6 +138,8 @@ export function AddPayslipLineDialog({
   const aboveCap = !built.ok && built.reason === 'above_tax_free_cap' ? built : null
   const noText = !built.ok && built.reason === 'no_text'
   const noDays = !built.ok && built.reason === 'no_days'
+  const noCountry = !built.ok && built.reason === 'no_country'
+  const noNormalbelopp = !built.ok && built.reason === 'no_normalbelopp'
 
   function reset() {
     setType(DEFAULT_TYPE)
@@ -137,6 +152,8 @@ export function AddPayslipLineDialog({
     setAccountInvalid(false)
     setVacationCategory('paid')
     setMealKind(DEFAULT_MEAL)
+    setCountry('')
+    setNormalbelopp('')
     onOpenChange(false)
   }
 
@@ -153,8 +170,8 @@ export function AddPayslipLineDialog({
       return
     }
     // An override only: empty sends no account_number.
-    const accountNumber = lineAccountOverride(type) === 'none' ? '' : account.trim()
-    if (accountNumber && !isAllowedOverrideAccount(type, accountNumber)) {
+    const accountNumber = lineAccountOverride(storedType) === 'none' ? '' : account.trim()
+    if (accountNumber && !isAllowedOverrideAccount(storedType, accountNumber)) {
       setAccountInvalid(true)
       return
     }
@@ -302,6 +319,38 @@ export function AddPayslipLineDialog({
             </div>
           )}
 
+          {isForeign && (
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <Label htmlFor="payslip_line_country">{t('add_line_country')}</Label>
+                <Input
+                  id="payslip_line_country"
+                  value={country}
+                  onChange={(e) => { setCountry(e.target.value); setInvalid(false) }}
+                  maxLength={100}
+                  required
+                  aria-invalid={(invalid && noCountry) || undefined}
+                />
+              </div>
+              {isForeignTaxFree && (
+                <div className="space-y-2">
+                  <Label htmlFor="payslip_line_normalbelopp">{t('add_line_normalbelopp')}</Label>
+                  <Input
+                    id="payslip_line_normalbelopp"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    inputMode="decimal"
+                    value={normalbelopp}
+                    onChange={(e) => { setNormalbelopp(e.target.value); setInvalid(false) }}
+                    required
+                    aria-invalid={(invalid && noNormalbelopp) || undefined}
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
           {isText ? (
             <div className="space-y-2">
               <Label htmlFor="payslip_line_text">{t('add_line_text')}</Label>
@@ -363,28 +412,40 @@ export function AddPayslipLineDialog({
             </div>
           )}
           <p className={invalid || aboveCap ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'} aria-live="polite">
-            {aboveCap
+            {aboveCap && isForeign
+              ? t('add_line_above_normalbelopp', {
+                  cap: formatCurrency(aboveCap.cap),
+                  taxable: t(`li_${taxableCounterpart(type)}`),
+                })
+              : aboveCap
               ? t('add_line_above_cap', {
                   cap: formatCurrency(aboveCap.cap),
                   unit: t(`add_line_unit_${aboveCap.unit}`),
-                  taxable: t(`li_${type === 'mileage_taxfree' ? 'mileage_taxable' : 'traktamente_taxable'}`),
+                  taxable: t(`li_${taxableCounterpart(type)}`),
                 })
               : invalid
                 ? noText
                   ? t('add_line_invalid_text', { max: TEXT_ROW_MAX_LENGTH })
                   : noDays
                     ? t('add_line_invalid_vacation')
-                    : t('add_line_invalid')
+                    : noCountry
+                      ? t('add_line_invalid_country')
+                      : noNormalbelopp
+                        ? t('add_line_invalid_normalbelopp')
+                        : t('add_line_invalid')
                 : computed && preview && !isText
                   ? `${t('add_line_computed')} = ${formatCurrency(preview.amount)}`
                   : isMeal && mealValue !== undefined && mealSchablon?.year !== undefined
                     ? t('add_line_hint_meal', { year: mealSchablon.year, amount: formatCurrency(mealValue) })
-                    : t(isVacation ? 'add_line_hint_vacation' : hintKey)}
+                    : isForeignTaxFree
+                      ? t('add_line_hint_foreign')
+                      : t(isVacation ? 'add_line_hint_vacation' : hintKey)}
           </p>
 
           <LineAccountField
             id="payslip_line_account"
-            itemType={type}
+            itemType={storedType}
+            defaultAccount={spec.account}
             employmentType={employmentType}
             personnelCategory={personnelCategory}
             value={account}

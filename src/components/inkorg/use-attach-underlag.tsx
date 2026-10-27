@@ -8,7 +8,7 @@ import { getResponseErrorMessage } from '@/lib/errors/get-error-message'
 import { notifySessionExpired } from '@/lib/auth/session-timeout-shared'
 import { formatMegabytes, INBOX_MAX_UPLOAD_BYTES } from '@/lib/documents/upload-size'
 import { splitDroppedFiles } from '@/lib/inkorg/missing'
-import { matchToPurchase, releaseFromPurchase, uploadToInbox } from './attach-underlag'
+import { failureCode, matchToPurchase, releaseFromPurchase, uploadToInbox } from './attach-underlag'
 
 export interface AttachUnderlag {
   /** Upload the files and make the first one this purchase's underlag. */
@@ -60,6 +60,38 @@ export function useAttachUnderlag({
     [t, locale, toast, onReleased],
   )
 
+  /** The match made: read the list again and offer Ångra. */
+  const attached = useCallback(
+    async (itemId: string, purchaseId: string, extras: number) => {
+      await onAttached(purchaseId)
+      toast({
+        title: t('attached'),
+        description: extras > 0 ? t('attached_extras', { count: extras }) : undefined,
+        action: (
+          <ToastAction altText={t('undo')} onClick={() => void release(itemId, purchaseId)}>
+            {t('undo')}
+          </ToastAction>
+        ),
+      })
+    },
+    [t, toast, onAttached, release],
+  )
+
+  /** "Attach anyway" after the server said the document looks like another purchase's. */
+  const confirmMismatch = useCallback(
+    async (itemId: string, purchaseId: string, extras: number) => {
+      const res = await matchToPurchase(itemId, purchaseId, true)
+      if (!res.ok) {
+        notifySessionExpired(res)
+        toast({ title: t('attach_not_linked'), description: t('attach_not_linked_body'), variant: 'destructive' })
+        await onFiled()
+        return
+      }
+      await attached(itemId, purchaseId, extras)
+    },
+    [t, toast, onFiled, attached],
+  )
+
   const attach = useCallback(
     async (purchaseId: string, files: File[]) => {
       const { underlag, extras } = splitDroppedFiles(files)
@@ -84,7 +116,27 @@ export function useAttachUnderlag({
           return
         }
 
-        const res = await matchToPurchase(first.itemId, purchaseId)
+        const itemId = first.itemId
+        const res = await matchToPurchase(itemId, purchaseId)
+        if (!res.ok && (await failureCode(res)) === 'DOC_ROW_MISMATCH') {
+          // The document reads as another purchase (another seller, a larger
+          // amount): it is filed, not linked, until the person says it belongs.
+          toast({
+            title: t('attach_mismatch'),
+            description: await getResponseErrorMessage(res, undefined, locale),
+            variant: 'destructive',
+            action: (
+              <ToastAction
+                altText={t('attach_anyway')}
+                onClick={() => void confirmMismatch(itemId, purchaseId, extras.length)}
+              >
+                {t('attach_anyway')}
+              </ToastAction>
+            ),
+          })
+          await onFiled()
+          return
+        }
         if (!res.ok) {
           // The document is filed either way; only the link failed, and it can be made from the inbox.
           notifySessionExpired(res)
@@ -93,23 +145,13 @@ export function useAttachUnderlag({
           return
         }
 
-        await onAttached(purchaseId)
-        const itemId = first.itemId
-        toast({
-          title: t('attached'),
-          description: extras.length > 0 ? t('attached_extras', { count: extras.length }) : undefined,
-          action: (
-            <ToastAction altText={t('undo')} onClick={() => void release(itemId, purchaseId)}>
-              {t('undo')}
-            </ToastAction>
-          ),
-        })
+        await attached(itemId, purchaseId, extras.length)
       } finally {
         busy.current = false
         setBusyId(null)
       }
     },
-    [t, locale, toast, onAttached, onFiled, release],
+    [t, locale, toast, onFiled, attached, confirmMismatch],
   )
 
   return { attach, busyId }

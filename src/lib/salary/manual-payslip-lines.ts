@@ -47,17 +47,36 @@
  * semesterlön under procentregeln, a deduction for obetalda dagar, each on a
  * row of its own. Quantity x à-pris or an amount on the line replaces that:
  * the line is then paid as entered, with its sign.
+ *
+ * Utlandstraktamente and nattraktamente (crm#1468, PH 218) are variants of
+ * the traktamente rows, not item types of their own: the tax treatment, the
+ * AGI (FK051 kryss, the taxable part in the gross) and Fora are the same, so
+ * the row is stored as traktamente_taxfree / traktamente_taxable and only
+ * the cap and the account differ. A foreign row books on 7323 / 7324
+ * (Skattefria / Skattepliktiga traktamenten, utlandet; swedish-payroll
+ * references/bas-7xxx.md) through account_number, the override every pay
+ * row already carries. Skatteverket's normalbelopp per country is not in
+ * the payroll config, so the operator enters the country and its
+ * normalbelopp and the tax-free à-pris is capped at it; the excess goes on
+ * the taxable foreign row, as on the domestic one. Nattraktamente is capped
+ * at the year's traktamente_natt. Logi against a receipt is an utlägg (the
+ * receipt is the company's verifikation, its moms is deducted there), so it
+ * reaches the payslip through "Lägg till utlägg", not as a row here.
  */
 import { roundOre } from '@/lib/money'
 import type { SalaryLineItemType } from '@/types'
 import { TEXT_ROW_FLAGS, TEXT_ROW_MAX_LENGTH, VACATION_ITEM_TYPE, isTextRow, normalizeTextRow } from '@/lib/salary/text-rows'
 import type { VacationCategory } from '@/lib/salary/vacation-category'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 
 export type ManualPayslipLineType =
   | 'mileage_taxfree'
   | 'mileage_taxable'
   | 'traktamente_taxfree'
   | 'traktamente_taxable'
+  | 'traktamente_night_taxfree'
+  | 'traktamente_foreign_taxfree'
+  | 'traktamente_foreign_taxable'
   | 'bonus'
   | 'commission'
   | 'overtime'
@@ -88,7 +107,13 @@ export interface ManualLineSpec {
   flags: ManualLineFlags
   sign: ManualLineSign
   /** What "Antal" counts, when the type is naturally quantity x price. */
-  unit?: 'mil' | 'dagar' | 'timmar' | 'maltider'
+  unit?: 'mil' | 'dagar' | 'natter' | 'timmar' | 'maltider'
+  /** The item type the row is stored as, when the entry is a variant of another type (default: the key). */
+  storedAs?: SalaryLineItemType
+  /** The account written to the row's account_number (default: none, the booking resolves it). */
+  account?: string
+  /** A foreign traktamente: the operator names the country and enters its normalbelopp. */
+  foreign?: boolean
 }
 
 /** Kostnadsersättning at or under Skatteverket's schablon: net payout only. */
@@ -159,6 +184,31 @@ export const MANUAL_PAYSLIP_LINE_SPECS: Record<ManualPayslipLineType, ManualLine
   mileage_taxable: { label: 'Milersättning (skattepliktig)', flags: TAXABLE_REIMBURSEMENT, sign: 'addition', unit: 'mil' },
   traktamente_taxfree: { label: 'Traktamente (skattefritt)', flags: TAX_FREE, sign: 'addition', unit: 'dagar' },
   traktamente_taxable: { label: 'Traktamente (skattepliktigt)', flags: TAXABLE_REIMBURSEMENT, sign: 'addition', unit: 'dagar' },
+  traktamente_night_taxfree: {
+    label: 'Nattraktamente (skattefritt)',
+    flags: TAX_FREE,
+    sign: 'addition',
+    unit: 'natter',
+    storedAs: 'traktamente_taxfree',
+  },
+  traktamente_foreign_taxfree: {
+    label: 'Utlandstraktamente (skattefritt)',
+    flags: TAX_FREE,
+    sign: 'addition',
+    unit: 'dagar',
+    storedAs: 'traktamente_taxfree',
+    account: resolveAccountRole(PINNED_JURISDICTION, 'foreign_per_diem_tax_free'),
+    foreign: true,
+  },
+  traktamente_foreign_taxable: {
+    label: 'Utlandstraktamente (skattepliktigt)',
+    flags: TAXABLE_REIMBURSEMENT,
+    sign: 'addition',
+    unit: 'dagar',
+    storedAs: 'traktamente_taxable',
+    account: resolveAccountRole(PINNED_JURISDICTION, 'foreign_per_diem_taxable'),
+    foreign: true,
+  },
   bonus: { label: 'Bonus', flags: WAGE, sign: 'addition' },
   commission: { label: 'Provision', flags: WAGE, sign: 'addition' },
   overtime: { label: 'Övertid', flags: WAGE, sign: 'addition', unit: 'timmar' },
@@ -177,6 +227,18 @@ export const MANUAL_PAYSLIP_LINE_TYPES = Object.keys(MANUAL_PAYSLIP_LINE_SPECS) 
 
 export function isManualPayslipLineType(type: string): type is ManualPayslipLineType {
   return Object.prototype.hasOwnProperty.call(MANUAL_PAYSLIP_LINE_SPECS, type)
+}
+
+/** The item type a catalogue entry is stored as (a variant names its base type). */
+export function storedLineItemType(type: ManualPayslipLineType): SalaryLineItemType {
+  return MANUAL_PAYSLIP_LINE_SPECS[type].storedAs ?? (type as SalaryLineItemType)
+}
+
+/** The entry whose row takes the part above a tax-free entry's cap. */
+export function taxableCounterpart(type: ManualPayslipLineType): ManualPayslipLineType {
+  if (type === 'mileage_taxfree') return 'mileage_taxable'
+  if (type === 'traktamente_foreign_taxfree') return 'traktamente_foreign_taxable'
+  return 'traktamente_taxable'
 }
 
 /**
@@ -245,6 +307,10 @@ export interface ManualLineInput {
   vacation_category?: VacationCategory | null
   /** Kostförmån only: which meal the row prices; names the default description. */
   meal_kind?: MealBenefitKind | null
+  /** Utlandstraktamente only: the country of the trip; names the default description. */
+  country?: string | null
+  /** Utlandstraktamente only: Skatteverket's normalbelopp per day for the country, the tax-free cap. */
+  normalbelopp?: number | null
 }
 
 export interface ManualLineBody extends ManualLineFlags {
@@ -254,12 +320,14 @@ export interface ManualLineBody extends ManualLineFlags {
   unit_price?: number
   amount: number
   vacation_category?: VacationCategory
+  /** A variant's own account (utlandstraktamente 7323 / 7324); a typed override replaces it. */
+  account_number?: string
 }
 
 /**
  * Skatteverket's tax-free schablon per unit for the year of the run
  * (payroll_config: milersattning_egen_bil per mil, traktamente_heldag per
- * day). A tax-free line priced above it is simply taxable pay and is
+ * day, traktamente_natt per night). A tax-free line priced above it is simply taxable pay and is
  * refused; the excess belongs on the "skattepliktig" row. Absent = not
  * checked (the run has not been calculated yet, so its year's config is
  * not on the run).
@@ -267,6 +335,7 @@ export interface ManualLineBody extends ManualLineFlags {
 export interface ManualLineCaps {
   mileage_taxfree?: number
   traktamente_taxfree?: number
+  traktamente_night_taxfree?: number
 }
 
 export type ManualLineBuild =
@@ -274,7 +343,9 @@ export type ManualLineBuild =
   | { ok: false; reason: 'no_amount' }
   | { ok: false; reason: 'no_text' }
   | { ok: false; reason: 'no_days' }
-  | { ok: false; reason: 'above_tax_free_cap'; cap: number; unit: 'mil' | 'dagar' }
+  | { ok: false; reason: 'no_country' }
+  | { ok: false; reason: 'no_normalbelopp' }
+  | { ok: false; reason: 'above_tax_free_cap'; cap: number; unit: 'mil' | 'dagar' | 'natter' }
 
 /**
  * The request body for POST /api/salary/runs/{id}/lines (minus the
@@ -284,7 +355,9 @@ export type ManualLineBuild =
  * missing amount, and a tax-free reimbursement priced above its schablon.
  * A text row takes only its words (normalised, at most TEXT_ROW_MAX_LENGTH
  * characters); quantity, unit price and amount are ignored. A vacation line
- * needs its days; its amount is optional (buildVacationLine).
+ * needs its days; its amount is optional (buildVacationLine). A tax-free
+ * utlandstraktamente needs its country and normalbelopp (the cap), a
+ * taxable one its country.
  */
 export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineCaps = {}): ManualLineBuild {
   const spec = MANUAL_PAYSLIP_LINE_SPECS[input.item_type]
@@ -292,7 +365,7 @@ export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineC
   if (isTextRow(input)) {
     const text = normalizeTextRow(input.description ?? '')
     if (text === '' || text.length > TEXT_ROW_MAX_LENGTH) return { ok: false, reason: 'no_text' }
-    return { ok: true, body: { item_type: input.item_type, description: text, amount: 0, ...TEXT_ROW_FLAGS } }
+    return { ok: true, body: { item_type: storedLineItemType(input.item_type), description: text, amount: 0, ...TEXT_ROW_FLAGS } }
   }
   if (input.item_type === VACATION_ITEM_TYPE) return buildVacationLine(input, spec)
   const quantity = finite(input.quantity)
@@ -303,8 +376,17 @@ export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineC
   const magnitude = roundOre(Math.abs(raw))
   if (magnitude === 0) return { ok: false, reason: 'no_amount' }
 
-  const cap = capFor(input.item_type, caps)
-  if (cap !== undefined && spec.unit && (spec.unit === 'mil' || spec.unit === 'dagar')) {
+  const country = spec.foreign ? (input.country ?? '').trim() : ''
+  if (spec.foreign && country === '') return { ok: false, reason: 'no_country' }
+  const normalbelopp = finite(input.normalbelopp)
+  if (spec.foreign && !spec.flags.is_taxable && (normalbelopp === undefined || normalbelopp <= 0)) {
+    return { ok: false, reason: 'no_normalbelopp' }
+  }
+
+  // A foreign row is capped at the normalbelopp the operator entered; the
+  // taxable foreign row has no cap, like the domestic one.
+  const cap = spec.foreign ? (spec.flags.is_taxable ? undefined : normalbelopp) : capFor(input.item_type, caps)
+  if (cap !== undefined && spec.unit && (spec.unit === 'mil' || spec.unit === 'dagar' || spec.unit === 'natter')) {
     // Price per unit: the typed à-pris, or amount over quantity when only the
     // quantity is known. An amount alone cannot be judged and passes.
     const perUnit =
@@ -316,15 +398,17 @@ export function buildManualPayslipLine(input: ManualLineInput, caps: ManualLineC
 
   const amount =
     spec.sign === 'deduction' ? -magnitude : spec.sign === 'addition' ? magnitude : roundOre(raw)
-  const description = (input.description ?? '').trim() || defaultDescription(input, spec)
+  const description =
+    (input.description ?? '').trim() || (spec.foreign ? `${spec.label}, ${country}` : defaultDescription(input, spec))
   const body: ManualLineBody = {
-    item_type: input.item_type,
+    item_type: storedLineItemType(input.item_type),
     description,
     amount,
     ...spec.flags,
   }
   if (quantity !== undefined) body.quantity = quantity
   if (unitPrice !== undefined) body.unit_price = unitPrice
+  if (spec.account) body.account_number = spec.account
   return { ok: true, body }
 }
 
@@ -363,7 +447,13 @@ function defaultDescription(input: ManualLineInput, spec: ManualLineSpec): strin
 
 function capFor(type: ManualPayslipLineType, caps: ManualLineCaps): number | undefined {
   const cap =
-    type === 'mileage_taxfree' ? caps.mileage_taxfree : type === 'traktamente_taxfree' ? caps.traktamente_taxfree : undefined
+    type === 'mileage_taxfree'
+      ? caps.mileage_taxfree
+      : type === 'traktamente_taxfree'
+        ? caps.traktamente_taxfree
+        : type === 'traktamente_night_taxfree'
+          ? caps.traktamente_night_taxfree
+          : undefined
   return typeof cap === 'number' && Number.isFinite(cap) && cap > 0 ? cap : undefined
 }
 
@@ -385,8 +475,10 @@ export function manualLineCapsFromRunParams(params: Record<string, unknown> | nu
   const caps: ManualLineCaps = {}
   const mil = num('milersattning_egen_bil', 'milersattningEgenBil')
   const day = num('traktamente_heldag', 'traktamenteHeldag')
+  const night = num('traktamente_natt', 'traktamenteNatt')
   if (mil !== undefined) caps.mileage_taxfree = mil
   if (day !== undefined) caps.traktamente_taxfree = day
+  if (night !== undefined) caps.traktamente_night_taxfree = night
   return caps
 }
 

@@ -97,10 +97,11 @@ import {
   DEFAULT_REVERSE_CHARGE_KIND,
   REVERSE_CHARGE_TREATMENT_KINDS,
   isReverseChargeBasisAccount,
+  reverseChargeKindOnOwnAccount,
   reverseChargeKindRuta,
   type ReverseChargeKind,
 } from '@/lib/bookkeeping/vat-entries'
-import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import { chartAccountNamesLoader, chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import {
   expandVoucherLineVatCodes,
   VOUCHER_LINE_VAT_KINDS,
@@ -642,12 +643,14 @@ import { isOneSessionBank } from '@/extensions/general/enable-banking/lib/connec
 import {
   completePendingDocumentUpload,
   createPendingDocumentUpload,
+  findPendingDocumentUploadName,
   uploadDocument,
   MAX_DOCUMENT_SIZE,
   buildPendingDocumentStoragePath,
   DOCUMENTS_BUCKET,
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
+import { documentUploadLimits } from './document-upload-limits'
 import { apiKeyArrivalActor, readInboxItemArrivals, recordDocumentArrival, type ArrivalActor } from '@/lib/intake/arrivals'
 import { DOCUMENT_DETAIL_PARTS, parseDocumentDetailParts, readDocumentDetail } from '@/lib/documents/read/document-detail'
 import { readTransactionWithVouchers } from '@/lib/transactions/read-with-vouchers'
@@ -1516,19 +1519,33 @@ function splitCategorizeVatTreatment(value: unknown): {
 /**
  * Where a categorize preview's reverse-charge basis lands, read off the lines
  * the approval will post: the box, and whether the caller chose it, the
- * underlag's seller gave it (#94) or the EU-services default did. Undefined
- * when the lines carry no fiktiv moms.
+ * underlag's seller gave it (#94), the cost account reports it itself
+ * (crm#1454: 4531 is ruta 22 whatever the default says) or the EU-services
+ * default did. Undefined when the lines carry no fiktiv moms.
  */
 function reverseChargeBasisSummary(
   vatLines: Array<{ account_number: string; debit_amount: number }>,
   reverseChargeKind: ReverseChargeKind | undefined,
   costAccount: string,
   source: 'vat_treatment' | 'underlag' = 'vat_treatment',
+  ownAccount: { kind: ReverseChargeKind; ruta: string } | null = null,
 ): Record<string, unknown> | undefined {
   if (!vatLines.some((l) => ['2614', '2624', '2634'].includes(l.account_number))) return undefined
+  const basisLine = vatLines.find((l) => l.debit_amount > 0 && isReverseChargeBasisAccount(l.account_number))
+  if (!basisLine && ownAccount) {
+    const read = reverseChargeKind && reverseChargeKind !== ownAccount.kind
+      ? ` The ${source === 'underlag' ? 'underlag' : 'vat_treatment'} reads ${reverseChargeKindRuta(reverseChargeKind)}: book another cost account if that is right.`
+      : ''
+    return {
+      kind: ownAccount.kind,
+      kind_source: 'account',
+      basis_account: null,
+      ruta: ownAccount.ruta,
+      note: `Cost account ${costAccount} reports ${ownAccount.ruta} itself, so no 45xx/4598 basis pair (it would count the purchase twice).${read}`,
+    }
+  }
   const kind = reverseChargeKind ?? DEFAULT_REVERSE_CHARGE_KIND
   const kindSource = reverseChargeKind ? source : 'default'
-  const basisLine = vatLines.find((l) => l.debit_amount > 0 && isReverseChargeBasisAccount(l.account_number))
   if (!basisLine) {
     return {
       kind,
@@ -1561,6 +1578,19 @@ const MCP_DOCUMENT_MIME_TYPES = [
 ] as const
 
 const MCP_DOCUMENT_MIME_TYPE_SET = new Set<string>(MCP_DOCUMENT_MIME_TYPES)
+
+/**
+ * The file name an upload tool was called with. Hosts do not reliably enforce
+ * the inputSchema's required list, and the name used to reach `.split` as
+ * undefined (crm#1474): a missing name is a VALIDATION_ERROR, never a
+ * TypeError.
+ */
+function requireMcpFileName(value: unknown): string {
+  if (typeof value !== 'string' || value.trim() === '') {
+    throw codedError('VALIDATION_ERROR', 'file_name is required: the file name with its extension, for example "faktura.pdf".')
+  }
+  return value
+}
 
 function resolveMcpDocumentMimeType(fileName: string, requestedMimeType: unknown): string {
   let mimeType = typeof requestedMimeType === 'string' ? requestedMimeType : undefined
@@ -7225,7 +7255,7 @@ export const tools: McpTool[] = [
       // like the blocks above: a failed read reports no address.
       const inboxAddressRead = resolveInboxAddress(supabase, companyId)
 
-      const [profileRes, memoryRes, userRes, companyRes, settingsRes, dimensionsRes] = await Promise.all([
+      const [profileRes, memoryRes, userRes, companyRes, settingsRes, dimensionsRes, bankSyncRes] = await Promise.all([
         supabase
           .from('agent_profiles')
           .select('profile_summary, horizontal_atoms, vertical_atoms, modifier_atoms')
@@ -7264,6 +7294,17 @@ export const tools: McpTool[] = [
           .eq('company_id', companyId)
           .maybeSingle(),
         safeDimensionsRead,
+        // How fresh the bank rows are (crm#1454): an unattended run otherwise
+        // guesses from the latest transaction date. Best-effort: a failed read
+        // reports null, never a thrown briefing.
+        supabase
+          .from('bank_connections')
+          .select('last_synced_at')
+          .eq('company_id', companyId)
+          .not('last_synced_at', 'is', null)
+          .order('last_synced_at', { ascending: false })
+          .limit(1)
+          .maybeSingle(),
       ])
 
       if (profileRes.error) throw new Error(`Failed to load agent profile: ${profileRes.error.message}`)
@@ -7484,6 +7525,10 @@ export const tools: McpTool[] = [
           content: m.content,
           relevance_score: m.relevance_score,
         })),
+        // Declared in no outputSchema (catalog ceiling): the key says what it holds.
+        data_status: {
+          bank_last_synced_at: bankSyncRes?.error ? null : (bankSyncRes?.data as { last_synced_at?: string | null } | null)?.last_synced_at ?? null,
+        },
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
         ...(arkivDigest ? { arkiv: arkivDigest } : {}),
@@ -8245,6 +8290,9 @@ export const tools: McpTool[] = [
       // categorize-core.ts), with the input the approval commits: it runs every
       // check the approval runs, so a staged categorization that could never
       // commit is refused here, and the lines are the ones the approval posts.
+      // Shared with the summary below: read once, and only when the preview
+      // settles a reverse-charge set (chartVatTreatmentsLoader).
+      const loadChart = chartVatTreatmentsLoader(supabase, companyId)
       const outcome = await categorizeTransaction(
         supabase,
         userId,
@@ -8258,7 +8306,7 @@ export const tools: McpTool[] = [
           accountOverride,
           allowDuplicate: args.allow_duplicate === true,
         }),
-        { dryRun: true, onBooked: 'refuse', invoiceMatchIntercept: false, reverseChargeBoxParam: 'vat_treatment' },
+        { dryRun: true, onBooked: 'refuse', invoiceMatchIntercept: false, reverseChargeBoxParam: 'vat_treatment', loadChart },
       )
       if (!outcome.ok) throw categorizeStagingRefusal(outcome, args.transaction_id as string)
       if (!outcome.dryRun) throw new Error('categorize: unexpected booking on a dry run')
@@ -8268,8 +8316,23 @@ export const tools: McpTool[] = [
       // The box the approval books: the one sent, or the one the underlag's
       // seller gave (#94), staged so the commit books the same.
       const stagedKind = reverseChargeKind ?? preview.reverse_charge_kind
+      // A cost account that reports ruta 20-24 itself decides the box the
+      // lines book (crm#1454): 4531 is ruta 22 whatever kind was sent.
+      const selfReporting = tx.amount < 0 && vatTreatment === 'reverse_charge' &&
+        !mapping.vat_lines.some((l) => l.debit_amount > 0 && isReverseChargeBasisAccount(l.account_number))
+      const ownAccount = selfReporting
+        ? reverseChargeKindOnOwnAccount(mapping.debit_account, (await loadChart()).get(mapping.debit_account))
+        : null
+      if (ownAccount && reverseChargeKind && reverseChargeKind !== ownAccount.kind) {
+        throw badArgument(
+          'vat_treatment',
+          `vat_treatment names ${reverseChargeKindRuta(reverseChargeKind)}, but account ${mapping.debit_account} reports ${ownAccount.ruta} itself, ` +
+            'so the purchase would be declared in a box other than the one asked. Book it on a cost account without a box of its own (the basis pair then books the box asked), ' +
+            `or send the box ${mapping.debit_account} reports.`,
+        )
+      }
       const reverseCharge = tx.amount < 0
-        ? reverseChargeBasisSummary(mapping.vat_lines, stagedKind, mapping.debit_account, reverseChargeKind ? 'vat_treatment' : 'underlag')
+        ? reverseChargeBasisSummary(mapping.vat_lines, stagedKind, mapping.debit_account, reverseChargeKind ? 'vat_treatment' : 'underlag', ownAccount)
         : undefined
       const result = {
         category: preview.category,
@@ -15814,7 +15877,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_create_document_upload',
     keywords: ['ladda upp', 'underlag', 'kvitto', 'dokument'],
     title: 'Create Document Upload',
-    description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (max 10 MB) to upload_url, then call gnubok_complete_document_upload with the same upload_id and file_name.',
+    description: 'Create a short-lived URL for a model-free document upload. PUT the raw file bytes (see max_bytes) to upload_url, then call gnubok_complete_document_upload with the upload_id.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15833,7 +15896,7 @@ export const tools: McpTool[] = [
       },
       required: ['file_name'],
       // Step 1 of 2: PUT the bytes to upload_url, then complete with the SAME
-      // upload_id and file_name.
+      // upload_id (the name rides along in the reservation).
       examples: [{ file_name: 'kvitto-sl-2026-03-12.pdf' }],
     },
     outputSchema: {
@@ -15847,7 +15910,7 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_STAGED_WRITE,
     async execute(args, companyId, userId, supabase) {
-      const fileName = args.file_name as string
+      const fileName = requireMcpFileName(args.file_name)
       // Validation only: reject unsupported types before handing out a signed
       // URL. The resolved value is re-derived identically at complete time.
       resolveMcpDocumentMimeType(fileName, args.mime_type)
@@ -15861,10 +15924,14 @@ export const tools: McpTool[] = [
       )
       // Served from the app origin: agent sandboxes (Claude Desktop) only
       // reach the MCP host, not <project>.supabase.co. See storage-proxy.ts.
+      // The size fields (crm#1455) are undeclared in outputSchema: every
+      // byte there is charged to the tools/list ceiling.
+      const uploadUrl = toSameOriginStorageUrl(reservation.signedUrl)
       return {
         upload_id: reservation.uploadId,
-        upload_url: toSameOriginStorageUrl(reservation.signedUrl),
+        upload_url: uploadUrl,
         expires_at: reservation.expiresAt,
+        ...documentUploadLimits(reservation.signedUrl, uploadUrl),
       }
     },
   },
@@ -15887,7 +15954,7 @@ export const tools: McpTool[] = [
           type: 'string',
           minLength: 1,
           maxLength: 255,
-          description: 'The same file name used to create the upload URL',
+          description: 'Defaults to the name given at create',
         },
         mime_type: {
           type: 'string',
@@ -15895,9 +15962,10 @@ export const tools: McpTool[] = [
           description: 'MIME type. Optional when it can be inferred from the file extension.',
         },
       },
-      required: ['upload_id', 'file_name'],
-      // Step 2 of 2: same upload_id and file_name as gnubok_create_document_upload.
-      examples: [{ upload_id: 'f00d...', file_name: 'kvitto-sl-2026-03-12.pdf' }],
+      required: ['upload_id'],
+      // Step 2 of 2: the upload_id gnubok_create_document_upload returned;
+      // the upload already holds the file name (crm#1474).
+      examples: [{ upload_id: 'f00d...' }],
     },
     outputSchema: {
       type: 'object',
@@ -15913,9 +15981,10 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const uploadId = args.upload_id as string
-      const fileName = args.file_name as string
-      const mimeType = resolveMcpDocumentMimeType(fileName, args.mime_type)
+      const uploadId = args.upload_id
+      if (typeof uploadId !== 'string' || !isUuid(uploadId)) {
+        throw codedError('VALIDATION_ERROR', 'upload_id is required: the upload_id gnubok_create_document_upload returned.')
+      }
 
       const existingInbox = await findCompletedDocumentInboxItem(
         supabase,
@@ -15924,6 +15993,21 @@ export const tools: McpTool[] = [
         uploadId,
       )
       if (existingInbox) return existingInbox
+
+      // file_name and mime_type default to what the upload was created with
+      // (crm#1474): the reservation holds the name, so repeating it is optional.
+      const givenName = typeof args.file_name === 'string' && args.file_name.trim() !== '' ? args.file_name : null
+      const reserved = givenName ? null : await findPendingDocumentUploadName(supabase, companyId, userId, uploadId)
+      if (!givenName && !reserved) {
+        // The same coded refusal completePendingDocumentUpload gives a PUT
+        // that never landed: nothing to name, nothing to archive.
+        throw Object.assign(
+          new Error('Document upload was not found or has expired. Create a new upload URL and try again.'),
+          { code: 'DOCUMENT_UPLOAD_NOT_FOUND' },
+        )
+      }
+      const fileName = requireMcpFileName(givenName ?? reserved?.fileName)
+      const mimeType = resolveMcpDocumentMimeType(fileName, args.mime_type ?? reserved?.mimeType ?? undefined)
 
       const completed = await completePendingDocumentUpload(
         supabase,
@@ -15955,7 +16039,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_upload_document',
     keywords: ['ladda upp', 'kvitto', 'underlag', 'dokument', 'bifoga'],
     title: 'Upload Document to Inbox',
-    description: 'Legacy inline-base64 upload for small files (max 10 MB). Prefer gnubok_create_document_upload so raw bytes bypass the model. AI field extraction runs only with the AI capability.',
+    description: 'Legacy inline-base64 upload for small files (max 3 MB). Prefer gnubok_create_document_upload so raw bytes bypass the model. AI field extraction runs only with the AI capability.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -15979,8 +16063,11 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const fileName = args.file_name as string
-      const base64Content = args.file_content_base64 as string
+      const fileName = requireMcpFileName(args.file_name)
+      const base64Content = args.file_content_base64
+      if (typeof base64Content !== 'string' || base64Content.trim() === '') {
+        throw codedError('VALIDATION_ERROR', 'file_content_base64 is required: the file\'s bytes, base64-encoded.')
+      }
       const mimeType = resolveMcpDocumentMimeType(fileName, args.mime_type)
 
       const buffer = Buffer.from(base64Content, 'base64')
@@ -24411,7 +24498,7 @@ export const tools: McpTool[] = [
       // v1. They are staged and previewed as lines, so the approver sees what
       // posts and the executor needs no momskod of its own. They carry no
       // dimensions, as in the form, and net to zero.
-      const expanded = await expandVoucherLineVatCodes(lines, chartVatTreatmentsLoader(supabase, companyId))
+      const expanded = await expandVoucherLineVatCodes(lines, chartVatTreatmentsLoader(supabase, companyId), chartAccountNamesLoader(supabase, companyId))
       if (!expanded.ok) throw fieldValidationError('Invalid vat_code', expanded.refusals)
       const bookedLines = expanded.lines
       const bookedTotals = validateBalance(bookedLines)

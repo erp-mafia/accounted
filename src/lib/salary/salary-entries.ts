@@ -2,6 +2,7 @@ import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { resolvePrimaryBankAccount } from '@/lib/bookkeeping/settlement-account'
 import { activateAccounts } from '@/lib/bookkeeping/chart-of-accounts-service'
 import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
+import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import {
   coerceDimensionsBag,
   dimensionsBagKey,
@@ -1197,6 +1198,8 @@ function accountLabel(account: string): string {
     '7286': 'Semesterlöner företagsledare',
     '7321': 'Traktamenten skattefria',
     '7322': 'Traktamenten skattepliktiga',
+    [resolveAccountRole(PINNED_JURISDICTION, 'foreign_per_diem_tax_free')]: 'Traktamenten skattefria, utlandet',
+    [resolveAccountRole(PINNED_JURISDICTION, 'foreign_per_diem_taxable')]: 'Traktamenten skattepliktiga, utlandet',
     '7331': 'Bilersättningar skattefria',
     '7332': 'Bilersättningar skattepliktiga',
     '7385': 'Kostnader för fri bil',

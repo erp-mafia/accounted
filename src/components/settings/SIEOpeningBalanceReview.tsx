@@ -9,6 +9,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
 import { useToast } from '@/components/ui/use-toast'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
+import { announceSIEHoldsChanged } from '@/lib/import/sie-holds-client'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
@@ -79,6 +80,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
       const body = await response.json()
       if (!response.ok) throw new Error(getErrorMessage(body, { locale: locale, fallback: t('ib_review_failed') }))
       await invalidateReferenceData('ref:fiscal-periods')
+      announceSIEHoldsChanged()
       toast({ title: t('ib_review_saved') })
       setOpen(false)
     } catch (err) {
@@ -100,6 +102,7 @@ export function SIEOpeningBalanceReview({ period, canManage }: { period: FiscalP
         return
       }
       await invalidateReferenceData('ref:fiscal-periods')
+      announceSIEHoldsChanged()
       toast({ title: t('ib_review_booked') })
       setOpen(false)
     } catch {

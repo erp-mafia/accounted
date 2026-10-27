@@ -1,0 +1,1 @@
+[2026-10-27] The classify cron sizes each company's batch to what its 200 s budget still pays for at 20 s a document instead of only checking the budget between companies, because a full batch of ten started late in the run during a Bedrock 503 burst (about 15 s a document) would still end past the 300 s limit.

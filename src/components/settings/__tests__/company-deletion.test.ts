@@ -39,8 +39,16 @@ describe('afterCompanyDeleteHref', () => {
  */
 describe('ADD_COMPANY_HREF', () => {
   it('is the door "Lägg till företag" opens', () => {
-    for (const file of ['components/dashboard/CompanySwitcher.tsx', 'components/dashboard/UserMenu.tsx']) {
-      expect(fs.readFileSync(path.join(SRC, file), 'utf8')).toContain(`href="${ADD_COMPANY_HREF}"`)
+    expect(fs.readFileSync(path.join(SRC, 'components/dashboard/CompanySwitcher.tsx'), 'utf8')).toContain(`href="${ADD_COMPANY_HREF}"`)
+    // The user menu, the Företag settings page and ⌘K link the constant itself.
+    for (const file of [
+      'components/dashboard/UserMenu.tsx',
+      'components/settings/sections/CompanySettingsContent.tsx',
+      'components/common/CommandPalette.tsx',
+    ]) {
+      const source = fs.readFileSync(path.join(SRC, file), 'utf8')
+      expect(source, file).toMatch(/import \{[^}]*\bADD_COMPANY_HREF\b[^}]*\} from '@\/components\/settings\/company-deletion'/)
+      expect(source, file).toMatch(/href(=\{|: )ADD_COMPANY_HREF/)
     }
   })
 

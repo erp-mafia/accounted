@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { NAV_V2_COMPANY, NAV_V2_TOP, type NavV2Item } from '@/components/dashboard/nav-v2'
+import { ADD_COMPANY_HREF } from '@/components/settings/company-deletion'
 import { gateNavTree, type NavGateContext } from '@/lib/navigation/nav-gates'
 import {
   SETTINGS_GROUP_ORDER,
@@ -43,6 +44,8 @@ const log = createLogger('agent.ask.ui-map')
 export interface UiLabels {
   nav: (key: string) => string
   settings: (key: string) => string
+  /** The user menu's company rows (company_switcher), e.g. "Lägg till företag". */
+  switcher: (key: string) => string
 }
 
 interface Place {
@@ -59,7 +62,12 @@ function lookup(table: MessageTable | undefined): (key: string) => string {
   }
 }
 
-type Messages = { nav?: MessageTable; settings_nav?: MessageTable; journal_detail?: MessageTable }
+type Messages = {
+  nav?: MessageTable
+  settings_nav?: MessageTable
+  journal_detail?: MessageTable
+  company_switcher?: MessageTable
+}
 
 async function loadMessages(locale: Locale): Promise<Messages> {
   const mod = locale === 'en' ? await import('@/messages/en.json') : await import('@/messages/sv.json')
@@ -69,7 +77,11 @@ async function loadMessages(locale: Locale): Promise<Messages> {
 /** The nav and settings_nav labels in the locale the user's UI renders in. */
 export async function loadUiLabels(locale: Locale = 'sv'): Promise<UiLabels> {
   const messages = await loadMessages(locale)
-  return { nav: lookup(messages.nav), settings: lookup(messages.settings_nav) }
+  return {
+    nav: lookup(messages.nav),
+    settings: lookup(messages.settings_nav),
+    switcher: lookup(messages.company_switcher),
+  }
 }
 
 /**
@@ -307,6 +319,14 @@ export function renderUiGrounding(input: RenderUiGroundingInput): string {
     const place = places.find((p) => p.href === href)
     if (place) lines.push(`Sidan ${place.trail.join(' → ')} (${href}) innehåller: ${labels.settings(keywordsKey)}.`)
   }
+  // The user menu is not in the sidebar tree, so the assistant could not say
+  // where another company is added and told a new user it did not know
+  // (PH 216, PH 202). Same labels and door as the menu (UserMenu).
+  const companySettings = places.find((p) => p.href === '/settings/company')
+  lines.push(
+    `Företag byts och läggs till i användarmenyn längst ned i sidomenyn (klicka på ditt namn): klicka på företagsnamnet där för att byta företag; "${labels.switcher('add_company')}" (${ADD_COMPANY_HREF}) ligger direkt under företagsnamnet. På mobilen: öppna menyn och tryck på företaget överst.`
+      + (companySettings ? ` "${labels.switcher('add_company')}" finns också som knapp överst på ${companySettings.trail.join(' → ')} (${companySettings.href}).` : ''),
+  )
   lines.push(
     `${labels.nav('settings')} öppnas från användarmenyn längst ned i sidomenyn. Sektionerna (grupp → sektion) och vad de innehåller:`,
   )

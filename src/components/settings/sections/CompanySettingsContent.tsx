@@ -1,11 +1,14 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import { useCompany } from '@/contexts/CompanyContext'
+import { PlusIcon } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { CompanyDangerZone } from '@/components/settings/CompanyDangerZone'
-import type { CompanyDeleteDoor } from '@/components/settings/company-deletion'
+import { ADD_COMPANY_HREF, type CompanyDeleteDoor } from '@/components/settings/company-deletion'
 import { CompanyInfoForm } from '@/components/settings/CompanyInfoForm'
 import { CompanyProfileSection } from '@/components/settings/CompanyProfileSection'
 import { LogoUpload } from '@/components/settings/LogoUpload'
@@ -21,6 +24,7 @@ export function CompanySettingsContent() {
   const router = useRouter()
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const tSwitcher = useTranslations('company_switcher')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
   const { role, isSandbox, company } = useCompany()
   // The delete-company dialog lives in the danger zone at the foot of the
@@ -91,7 +95,20 @@ export function CompanySettingsContent() {
 
   return (
     <div>
-      <SettingsSectionHeader title={tNav('company')} intro={tIntro('company')} />
+      {/* Another company is added here too, where new users look for it
+          (PH 216, PH 202); the user menu holds the same door. */}
+      <SettingsSectionHeader
+        title={tNav('company')}
+        intro={tIntro('company')}
+        action={isSandbox ? undefined : (
+          <Button variant="outline" size="sm" asChild>
+            <Link href={ADD_COMPANY_HREF}>
+              <PlusIcon className="mr-1.5 h-3.5 w-3.5" />
+              {tSwitcher('add_company')}
+            </Link>
+          </Button>
+        )}
+      />
 
       <SettingsFormWrapper onSave={handleSave}>
         <CompanyInfoForm

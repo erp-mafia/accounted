@@ -33,9 +33,11 @@ const log = createLogger('document-service')
  * Sanitize a filename for use in Supabase Storage keys.
  * Replaces spaces and non-ASCII characters with underscores,
  * collapses consecutive underscores, and truncates to avoid
- * exceeding Supabase Storage path length limits.
+ * exceeding Supabase Storage path length limits. Storage refuses keys
+ * with non-ASCII ("Invalid key"), so every key built from a user's file
+ * name goes through this one.
  */
-function sanitizeFileName(name: string): string {
+export function sanitizeFileName(name: string): string {
   const dotIndex = name.lastIndexOf('.')
   const ext = dotIndex > 0 ? name.slice(dotIndex) : ''
   const base = dotIndex > 0 ? name.slice(0, dotIndex) : name
@@ -614,6 +616,45 @@ async function findReservedDocument(
     .maybeSingle()
   if (error) throw new Error(`Failed to check document upload: ${error.message}`)
   return data as DocumentAttachment | null
+}
+
+/**
+ * The file name (and, once completed, the stored type) a signed upload was
+ * reserved under, for a completion that does not repeat them: the reserved
+ * document row when the upload was already completed, else the name inside
+ * the object key createPendingDocumentUpload chose (`<uploadId>_<name>`,
+ * pending first, then the permanent key a concurrent completion may have
+ * written). The key holds the sanitized name, so a name with spaces or åäö
+ * comes back as stored. Null when no reservation is found: the PUT never
+ * landed, the reservation expired, or the key's name would not rebuild the
+ * same key.
+ *
+ * Agent feedback crm#1474: complete with only upload_id crashed on the
+ * missing file name although the upload already knew it.
+ */
+export async function findPendingDocumentUploadName(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  uploadId: string
+): Promise<{ fileName: string; mimeType: string | null } | null> {
+  const reserved = await findReservedDocument(supabase, companyId, userId, uploadId)
+  if (reserved) return { fileName: reserved.file_name, mimeType: reserved.mime_type ?? null }
+
+  const storage = createServiceClientNoCookies().storage.from(DOCUMENTS_BUCKET)
+  const keyPrefix = `${uploadId}_`
+  const folders = [
+    `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending`,
+    `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}`,
+  ]
+  for (const folder of folders) {
+    const { data, error } = await storage.list(folder, { search: keyPrefix, limit: 10 })
+    if (error || !data) continue
+    const object = data.find((item) => item.id && item.name.startsWith(keyPrefix))
+    const fileName = object?.name.slice(keyPrefix.length)
+    if (fileName && sanitizeFileName(fileName) === fileName) return { fileName, mimeType: null }
+  }
+  return null
 }
 
 function validateReservedDocumentMetadata(

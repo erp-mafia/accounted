@@ -1,7 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
-import { useLocale } from 'next-intl'
+import { useLocale, useTranslations } from 'next-intl'
 import Link from 'next/link'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -148,9 +148,11 @@ export function PeriodiskSammanstallningView() {
   const errors = data?.warnings.filter(w => w.level === 'error') ?? []
   const cautions = data?.warnings.filter(w => w.level === 'warning') ?? []
   const hasBlockingErrors = errors.length > 0
-  // An EU sale no buyer can be named for (crm#1336): blocking for goods, a
-  // warning for services, never "nothing to file" either way.
-  const hasUnattributedSales = data?.warnings.some(w => w.code === 'UNATTRIBUTED_EU_SALE') ?? false
+  // An EU sale no buyer can be named for, or a total off its momsdeklaration
+  // ruta (crm#1336): blocking for goods, a warning for services, never
+  // "nothing to file" either way.
+  const hasUnattributedSales =
+    data?.warnings.some(w => w.code === 'UNATTRIBUTED_EU_SALE' || w.code === 'RUTA_DIFFERENCE') ?? false
 
   return (
     <div className="space-y-8">
@@ -284,7 +286,7 @@ export function PeriodiskSammanstallningView() {
               </div>
 
               {/* Reconciliation */}
-              {data.reconciliation.matches !== null && data.totals.rowCount > 0 && (
+              {data.reconciliation.matches !== null && (data.totals.rowCount > 0 || !data.reconciliation.matches) && (
                 <div className="text-sm text-muted-foreground border-t pt-3">
                   {data.reconciliation.matches ? (
                     <span className="text-foreground inline-flex items-start gap-2">
@@ -307,11 +309,6 @@ export function PeriodiskSammanstallningView() {
                       </span>
                     </span>
                   )}
-                </div>
-              )}
-              {data.reconciliation.matches === null && data.totals.rowCount > 0 && (
-                <div className="text-xs text-muted-foreground border-t pt-3">
-                  Avstämning mot momsdeklarationen tillgänglig endast när PS-perioden sammanfaller med momsperioden.
                 </div>
               )}
 
@@ -453,12 +450,13 @@ export function PeriodiskSammanstallningView() {
 }
 
 function WarningItem({ warning }: { warning: PsWarning }) {
+  const t = useTranslations('reports')
   return (
     <div className="flex items-start gap-2">
       <span className="text-muted-foreground shrink-0">•</span>
       <div className="flex-1">
         <div>{warning.message}</div>
-        {(warning.customerId || warning.invoiceId) && (
+        {(warning.customerId || warning.invoiceId || warning.journalEntryId) && (
           <div className="text-xs text-muted-foreground mt-1 flex gap-3">
             {warning.customerId && (
               <Link href={`/customers/${warning.customerId}`} className="underline-offset-4 hover:underline">
@@ -468,6 +466,11 @@ function WarningItem({ warning }: { warning: PsWarning }) {
             {warning.invoiceId && (
               <Link href={`/invoices/${warning.invoiceId}`} className="underline-offset-4 hover:underline">
                 Öppna faktura
+              </Link>
+            )}
+            {warning.journalEntryId && (
+              <Link href={`/bookkeeping/${warning.journalEntryId}`} className="underline-offset-4 hover:underline">
+                {t('ps_open_voucher', { voucher: warning.voucher ?? '' })}
               </Link>
             )}
             {warning.amount !== undefined && (

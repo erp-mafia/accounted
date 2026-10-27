@@ -2,6 +2,7 @@
 
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import React, { useState, useEffect, useCallback } from 'react'
+import { useTranslations } from 'next-intl'
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -190,6 +191,7 @@ function SkatteverketPanelInner({
   // must target the FY-end year instead.
   const effectiveYear = periodType === 'yearly' && fiscalYearEnd ? fiscalYearEnd.year : year
   const hasSkvCapability = useCapability(CAPABILITY.skatteverket)
+  const tSigning = useTranslations('skv_signing')
   const { dialogProps, confirm } = useDestructiveConfirm()
   const [status, setStatus] = useState<SkatteverketStatus | null>(null)
   const [loading, setLoading] = useState(true)
@@ -602,6 +604,28 @@ function SkatteverketPanelInner({
     return () => document.removeEventListener('visibilitychange', onVisibilityChange)
   }, [signeringslank, submitted, actionLoading, handleCheckSubmitted])
 
+  // A declaration locked for signing elsewhere (an approved
+  // submit_vat_declaration in /pending, or before a reload) waits here with
+  // its signing link until the kvittens cron sees it filed (crm#1478). Keyed
+  // on the period string: a fresh fiscalYearEnd object must not refetch.
+  const storedStatePeriod = getRedovisningsperiod()
+  useEffect(() => {
+    if (!hasSkvCapability) return
+    let ignore = false
+    fetch(`/api/extensions/ext/skatteverket/declaration/signing?redovisningsperiod=${storedStatePeriod}`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((json: { data?: { signeringsLank?: unknown } | null } | null) => {
+        const link = json?.data?.signeringsLank
+        if (!ignore && typeof link === 'string') setSigneringslank((current) => current ?? link)
+      })
+      .catch(() => {
+        // Best effort: without the stored state the panel shows what it did before.
+      })
+    return () => {
+      ignore = true
+    }
+  }, [hasSkvCapability, storedStatePeriod])
+
   const handleDeleteDraft = async () => {
     setActionLoading('delete')
     setNotice(null)
@@ -717,6 +741,33 @@ function SkatteverketPanelInner({
     await handleDisconnect()
   }
 
+  const signingBlock = signeringslank ? (
+    <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
+      <p className="text-sm font-medium">{tSigning('awaiting_title')}</p>
+      <p className="text-xs text-muted-foreground">
+        Öppna länken nedan och signera med BankID på Skatteverkets sida. När du
+        kommer tillbaka hit kontrolleras inlämningen automatiskt.
+      </p>
+      <div className="flex flex-wrap gap-2">
+        <Button variant="outline" asChild className="gap-2">
+          <a href={signeringslank} target="_blank" rel="noopener noreferrer">
+            <ArrowTopRightOnSquareIcon className="h-4 w-4" />
+            {tSigning('sign_action')}
+          </a>
+        </Button>
+        <Button
+          variant="outline"
+          onClick={() => handleCheckSubmitted()}
+          disabled={actionLoading !== null}
+          loading={actionLoading === 'check'}
+        >
+          {actionLoading !== 'check' && <CheckCircleIcon className="mr-2 h-4 w-4" />}
+          Kontrollera inlämning
+        </Button>
+      </div>
+    </div>
+  ) : null
+
   if (loading) {
     // The primary action's silhouette in the row, so the row does not change
     // shape once the connection status lands.
@@ -769,6 +820,8 @@ function SkatteverketPanelInner({
           {actions}
           {help}
         </ActionRow>
+        {/* Signing needs no connection here: it happens at Skatteverket. */}
+        {signingBlock}
         {notice?.kind === 'error' && (
           <div
             role="alert"
@@ -1024,32 +1077,7 @@ function SkatteverketPanelInner({
         )}
 
         {/* Signing link */}
-        {signeringslank && (
-          <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2">
-            <p className="text-sm font-medium">Utkastet är låst och redo att signeras</p>
-            <p className="text-xs text-muted-foreground">
-              Öppna länken nedan och signera med BankID på Skatteverkets sida. När du
-              kommer tillbaka hit kontrolleras inlämningen automatiskt.
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" asChild className="gap-2">
-                <a href={signeringslank} target="_blank" rel="noopener noreferrer">
-                  <ArrowTopRightOnSquareIcon className="h-4 w-4" />
-                  Öppna signeringssidan
-                </a>
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => handleCheckSubmitted()}
-                disabled={actionLoading !== null}
-                loading={actionLoading === 'check'}
-              >
-                {actionLoading !== 'check' && <CheckCircleIcon className="mr-2 h-4 w-4" />}
-                Kontrollera inlämning
-              </Button>
-            </div>
-          </div>
-        )}
+        {signingBlock}
 
         {/* Visible disabled-state explanations: title attributes never show
             on disabled buttons. */}

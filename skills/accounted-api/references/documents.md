@@ -95,7 +95,7 @@ Multipart upload of a document (PDF, image or Office file) under the BFL 7 kap r
 
 **Pitfalls:**
 - Idempotency-Key is mandatory; multipart retries with the same key replay the cached response.
-- Max size 10 MB enforced server-side: DOC_UPLOAD_TOO_LARGE on overrun.
+- Max size 10 MB enforced server-side: DOC_UPLOAD_TOO_LARGE on overrun. On the hosted service the platform refuses a request body over 4.5 MB before it reaches Accounted (a plain-text 413, no error envelope), so keep files there under 4 MB.
 - Only application/pdf / image/jpeg / image/png / image/webp / image/heic / image/heif / application/vnd.openxmlformats-officedocument.wordprocessingml.document / application/vnd.openxmlformats-officedocument.spreadsheetml.sheet / application/vnd.openxmlformats-officedocument.presentationml.presentation / application/msword / application/vnd.ms-excel / application/vnd.ms-powerpoint / application/vnd.oasis.opendocument.text / application/vnd.oasis.opendocument.spreadsheet / application/vnd.oasis.opendocument.presentation / application/rtf / text/rtf / text/csv accepted: DOC_UPLOAD_UNSUPPORTED_TYPE otherwise.
 - WORM: once linked to a posted journal entry, the document row cannot be modified or deleted (DB trigger). Upload-then-link is reversible (the document exists with journal_entry_id=null until linked); once linked, treat as immutable.
 - Every upload stores its own row unless dedupe_by_content=true: then, without journal_entry_id, bytes already in the archive answer that document (deduplicated: true, duplicate_of = id, still 201), whose journal_entry_id may already be set. To put it on another verifikat too, POST /documents/{id}/link with copy: true.
@@ -564,7 +564,7 @@ Multipart delivery of one document (PDF, JPEG, PNG, HEIC or WebP, at most 10 MB)
 - The same external_ref with a different file answers 409 INBOX_DELIVERY_REF_CONFLICT: give each document its own external_ref.
 - external_ref is unique per company across every partner delivering to it: prefix it with something of your own (billo-123, not 123).
 - Do not send the same delivery twice concurrently: wait for the answer (or a timeout) before resending, or both requests may file.
-- Only PDF, JPEG, PNG, HEIC and WebP up to 10 MB: INBOX_UPLOAD_UNSUPPORTED_TYPE, INBOX_UPLOAD_TOO_LARGE, or DOC_UPLOAD_INVALID_CONTENT for bytes that do not match the declared type.
+- Only PDF, JPEG, PNG, HEIC and WebP up to 10 MB: INBOX_UPLOAD_UNSUPPORTED_TYPE, INBOX_UPLOAD_TOO_LARGE, or DOC_UPLOAD_INVALID_CONTENT for bytes that do not match the declared type. On the hosted service the platform refuses a request body over 4.5 MB before it reaches Accounted (a plain-text 413, no error envelope), so keep files there under 4 MB.
 - The Inkorg takes at most 30 deliveries a minute and 500 a day per company, a person's uploads included: 429 RATE_LIMITED with Retry-After. Resend after it with the same Idempotency-Key.
 - Extraction runs after the answer: GET /inbox-items/{id} shows status "processing" until the reading is in.
 - Not dry-runnable: test keys are refused with TEST_KEY_WRITE_BLOCKED.
@@ -1097,6 +1097,7 @@ Sets the item's matched transaction and, when the transaction has no document ye
 
 **Pitfalls:**
 - The transaction must belong to the same company: otherwise 404 TX_CATEGORIZE_TX_NOT_FOUND.
+- A document that asks for more than the transaction paid AND names another seller returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway.
 - A transaction that already carries another document keeps it (details in the dry run: transaction_has_other_document).
 - Matching a booked transaction in a locked period links the document best-effort; check the verifikat afterwards.
 
@@ -1108,7 +1109,7 @@ Sets the item's matched transaction and, when the transaction has no document ye
 
 Request body:
 ```ts
-{ transaction_id: string }
+{ transaction_id: string, mismatch_reason?: string }
 ```
 
 Example request:

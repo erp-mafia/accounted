@@ -342,22 +342,23 @@ describe('dimension rule policy per source type', () => {
   it('lets a caller claim no exemption through a generic voucher door beyond the documented label', () => {
     // The caller-authorable labels of the generic create doors (v1 POST and
     // batch-create, the dashboard route). A caller never picks a
-    // validation-exempt label, and the only rule-exempt one per door is the
-    // documented, truthful case: 'import' for replayed history over the API,
-    // 'vat_settlement' for the reviewed momsredovisning in the dashboard.
+    // validation-exempt label. The API door has no rule-exempt label at all
+    // ('import' needs the SIE import's batch identity, which the database
+    // demands); the dashboard's one is 'vat_settlement' for the reviewed
+    // momsredovisning.
     for (const doorTypes of [API_VOUCHER_SOURCE_TYPES, DASHBOARD_VOUCHER_SOURCE_TYPES]) {
       for (const sourceType of doorTypes) {
         expect(JournalEntrySourceTypeSchema.options, sourceType).toContain(sourceType)
         expect(isDimensionValidationExemptSource(sourceType), sourceType).toBe(false)
       }
     }
-    expect(API_VOUCHER_SOURCE_TYPES.filter((t) => isDimensionRuleExemptSource(t))).toEqual(['import'])
+    expect(API_VOUCHER_SOURCE_TYPES.filter((t) => isDimensionRuleExemptSource(t))).toEqual([])
     expect(DASHBOARD_VOUCHER_SOURCE_TYPES.filter((t) => isDimensionRuleExemptSource(t))).toEqual([
       'vat_settlement',
     ])
   })
 
-  it('opens the v1 voucher doors to exactly the enforced source types plus import', () => {
+  it('opens the v1 voucher doors to exactly the enforced source types', () => {
     // Classified once in DIMENSION_RULE_POLICY, followed by the API: a new
     // enforced type becomes postable, a new exempt type is refused.
     const body = (sourceType: string) => ({
@@ -373,8 +374,8 @@ describe('dimension rule policy per source type', () => {
     const accepted = JournalEntrySourceTypeSchema.options.filter(
       (sourceType) => CreateApiJournalEntrySchema.safeParse(body(sourceType)).success
     )
-    expect([...accepted].sort()).toEqual([...ENFORCED, 'import'].sort())
-    expect([...API_VOUCHER_SOURCE_TYPES].sort()).toEqual([...ENFORCED, 'import'].sort())
+    expect([...accepted].sort()).toEqual([...ENFORCED].sort())
+    expect([...API_VOUCHER_SOURCE_TYPES].sort()).toEqual([...ENFORCED].sort())
   })
 
   it('keeps the registry-validation exemption a narrow subset of the rule exemption', () => {

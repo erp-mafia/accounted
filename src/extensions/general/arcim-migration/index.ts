@@ -90,6 +90,7 @@ import { createLogger } from '@/lib/logger'
 import { requestCspNonce } from '@/lib/security/csp'
 import { resolveBrandByHost } from '@/lib/branding/resolve'
 import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
+import { providerKeyUse, readProviderKeyUseFacts } from './lib/key-use'
 
 const moduleLog = createLogger('extensions/arcim-migration')
 
@@ -381,6 +382,7 @@ export const arcimMigrationExtension: Extension = {
           // resume it (service client: provider_consent_tokens has no user
           // policy).
           const { createServiceClient } = await import('@/lib/supabase/server')
+          const service = createServiceClient()
           const [
             { count: customerCount },
             { count: supplierCount },
@@ -390,8 +392,24 @@ export const arcimMigrationExtension: Extension = {
             supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
             supabase.from('suppliers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
             supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
-            findUnfinishedConnect(createServiceClient(), companyId),
+            findUnfinishedConnect(service, companyId),
           ])
+          // Whether each stored key still has work to do, so a finished
+          // migration can say the key is no longer used and offer to remove
+          // it (crm#1476). Display only: a failed read says nothing.
+          const keyUseFacts = consents.length > 0
+            ? await readProviderKeyUseFacts(service, companyId, {
+              hasCompletedSieImport: latestCompletedSieImport != null,
+              importedRecords: (customerCount ?? 0) + (supplierCount ?? 0) + (invoiceCount ?? 0),
+              newestConsentId: consents[0]?.id ?? null,
+            }).catch((error: unknown) => {
+              moduleLog.warn('provider key use unavailable', {
+                companyId,
+                error: error instanceof Error ? error.message : String(error),
+              })
+              return null
+            })
+            : null
           // What the latest underlag run found, linked and left, so the
           // connections list can answer "did everything come in?" after a
           // reload (crm#1410). Display only: a failed read shows nothing.
@@ -407,6 +425,7 @@ export const arcimMigrationExtension: Extension = {
               status: c.status,
               companyName: c.companyName,
               createdAt: c.createdAt,
+              ...(keyUseFacts && { keyUse: providerKeyUse(c.id, keyUseFacts) }),
             })),
             sieImports: sieImports ?? [],
             hasCompletedSieImport: latestCompletedSieImport != null,

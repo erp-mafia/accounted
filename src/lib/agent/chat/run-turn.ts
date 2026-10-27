@@ -28,6 +28,9 @@ export function friendlyModelError(err: unknown): string {
   const name = (err as { name?: string } | null)?.name ?? ''
   const raw = err instanceof Error ? err.message : ''
   const text = `${name} ${raw}`.toLowerCase()
+  if (isProviderOverload(err)) {
+    return 'Assistenten är överbelastad just nu, försök igen om en minut.'
+  }
   if (
     status === 429 ||
     text.includes('throttl') ||
@@ -54,12 +57,30 @@ export function friendlyModelError(err: unknown): string {
 }
 
 /**
+ * True when the model provider is out of capacity rather than broken: an
+ * Anthropic `overloaded_error` (HTTP 529, or an `error` event inside a stream
+ * that already answered 200, which the SDK throws with no status and the
+ * event's JSON as its message) or Bedrock's 503 "Bedrock is unable to process
+ * your request". Both clear up on their own, usually within a minute.
+ */
+export function isProviderOverload(err: unknown): boolean {
+  const status = (err as { status?: number } | null)?.status
+  if (status === 529 || status === 503) return true
+  if (typeof status === 'number') return false
+  const raw = err instanceof Error ? err.message : ''
+  return raw.toLowerCase().includes('overloaded')
+}
+
+/**
  * True when a Bedrock stream failure is transient: the identical request can
  * succeed on an immediate retry without any input change. Covers throttling
- * (429), server errors (5xx), transport cuts (timeout/reset/socket), and the
- * two known SDK stream-corruption signatures observed in prod on the pinned
+ * (429), server errors (5xx), transport cuts (timeout/reset/socket), the two
+ * known SDK stream-corruption signatures observed in prod on the pinned
  * 0.29.x SDK ("Unexpected event order", "request ended without sending any
- * chunks"). Auth/validation failures (4xx other than 429) are NOT transient:
+ * chunks"), and the provider's own transient error events inside a stream
+ * (`overloaded_error`, `api_error`): those arrive after the HTTP 200, so the
+ * SDK throws them without a status and never retries them itself.
+ * Auth/validation failures (4xx other than 429) are NOT transient:
  * retrying them is wasted work and they must keep surfacing immediately.
  */
 export function isTransientStreamError(err: unknown): boolean {
@@ -82,6 +103,8 @@ export function isTransientStreamError(err: unknown): boolean {
   return (
     text.includes('unexpected event order') ||
     text.includes('request ended without sending any chunks') ||
+    text.includes('overloaded') ||
+    text.includes('api_error') ||
     text.includes('throttl') ||
     text.includes('rate limit') ||
     text.includes('rate exceeded') ||
@@ -95,9 +118,25 @@ export function isTransientStreamError(err: unknown): boolean {
   )
 }
 
-// One automatic retry per turn on a transient stream failure, after a short
-// backoff. Per-turn, not per-iteration: a turn that dies twice is not a blip.
-const STREAM_RETRY_BACKOFF_MS = 750
+// A transient stream failure is retried within the turn on two budgets:
+//
+//   - The failed attempt showed the user nothing yet (no text, reasoning or
+//     tool chip): up to PRE_OUTPUT_RETRY_DELAYS_MS.length retries per turn,
+//     each after a longer wait. Nothing from the attempt reached the screen,
+//     so the retry is invisible apart from the "Försöker igen…" line. This is
+//     what rides out a provider overload (overloaded_error, Bedrock 503),
+//     which fails before the first token.
+//   - The attempt already streamed output: one restart per turn, the client
+//     dropping the dead attempt's partial bubble on stream_restart. A turn
+//     that dies twice mid-answer is not a blip.
+//
+// No retry starts later than RETRY_WINDOW_MS after the turn's first failure:
+// the SDK already retries a 5xx response twice inside every attempt, so an
+// outage that outlasts the window is better met with an honest message than
+// with a longer spinner.
+export const PRE_OUTPUT_RETRY_DELAYS_MS: readonly number[] = [1_000, 2_000, 4_000]
+const STREAM_RESTART_BACKOFF_MS = 750
+const RETRY_WINDOW_MS = 45_000
 
 // One turn of the chat loop:
 //
@@ -146,8 +185,8 @@ export type StreamEvent =
       content?: string
     }
   | {
-      // The Bedrock stream died on a transient error and the turn is being
-      // retried once. Text and eager tool chips from the dead stream were
+      // The Bedrock stream died on a transient error and the attempt is being
+      // retried. Text and eager tool chips from the dead stream were
       // never persisted; the chat surface must reset the in-progress
       // assistant bubble to `assistant_text` (what had accumulated BEFORE the
       // failed attempt) and drop un-completed tool chips.
@@ -320,12 +359,15 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
   // stop_reason of the last completed model call: lets the post-loop check
   // tell "finished" from "ran out of output budget before any visible text".
   let lastStopReason: string | null = null
-  // One automatic retry per TURN when the Bedrock stream dies on a transient
-  // error (throttling, 5xx, transport cut, stream corruption). The failed
-  // attempt persisted nothing (persist happens after finalMessage() succeeds),
-  // so a clean retry is safe; the client is told to discard the partial
-  // bubble via stream_restart.
-  let streamRetryUsed = false
+  // Retries when the Bedrock stream dies on a transient error (overload,
+  // throttling, 5xx, transport cut, stream corruption); the budgets are
+  // described at PRE_OUTPUT_RETRY_DELAYS_MS. The failed attempt persisted
+  // nothing (persist happens after finalMessage() succeeds), so a clean retry
+  // is safe; the client is told to discard the partial bubble via
+  // stream_restart.
+  let preOutputRetries = 0
+  let streamRestartUsed = false
+  let firstFailureAt: number | null = null
 
   // Extended thinking ("tänka längre"): when the intent opts in, every model
   // call in the loop gets a reasoning channel so the agent reasons BEFORE it
@@ -364,14 +406,17 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     // for tool detection, persistence and stop-reason control flow.
     //
     // The attempt loop wraps stream creation + finalMessage() so a transient
-    // failure (throttling, 5xx, transport cut, stream corruption) gets ONE
-    // automatic retry per turn. Everything the dead stream emitted is
-    // reverted: assistantText rolls back to its pre-attempt snapshot and the
-    // client discards the partial bubble on stream_restart.
+    // failure (overload, throttling, 5xx, transport cut, stream corruption)
+    // is retried within the turn's budgets. Everything the dead stream
+    // emitted is reverted: assistantText rolls back to its pre-attempt
+    // snapshot and the client discards the partial bubble on stream_restart.
     let response
     let eagerToolIds = new Set<string>()
     for (;;) {
       const assistantTextBefore = assistantText
+      // Whether this attempt has shown the user anything: decides which
+      // retry budget a failure draws on.
+      let attemptEmitted = false
       const stream = anthropic.messages.stream({
         model,
         max_tokens: maxTokens,
@@ -384,6 +429,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
 
       stream.on('text', (delta) => {
         assistantText += delta
+        attemptEmitted = true
         emit({ kind: 'text_delta', delta })
       })
 
@@ -404,6 +450,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
           e?.delta?.type === 'thinking_delta' &&
           typeof e.delta.thinking === 'string'
         ) {
+          attemptEmitted = true
           emit({ kind: 'reasoning_delta', delta: e.delta.thinking })
           return
         }
@@ -411,6 +458,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
           const block = e.content_block
           if (typeof block.id === 'string' && typeof block.name === 'string') {
             eagerToolIds.add(block.id)
+            attemptEmitted = true
             emit({
               kind: 'tool_use',
               tool_use_id: block.id,
@@ -427,13 +475,28 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
         response = await stream.finalMessage()
         break
       } catch (err) {
-        if (!streamRetryUsed && isTransientStreamError(err)) {
-          streamRetryUsed = true
-          log.warn('Bedrock stream failed transiently, retrying once', {
+        const failedAt = Date.now()
+        firstFailureAt ??= failedAt
+        let retryDelayMs: number | null = null
+        if (isTransientStreamError(err) && failedAt - firstFailureAt < RETRY_WINDOW_MS) {
+          if (!attemptEmitted && preOutputRetries < PRE_OUTPUT_RETRY_DELAYS_MS.length) {
+            retryDelayMs = PRE_OUTPUT_RETRY_DELAYS_MS[preOutputRetries]!
+            preOutputRetries++
+          } else if (attemptEmitted && !streamRestartUsed) {
+            retryDelayMs = STREAM_RESTART_BACKOFF_MS
+            streamRestartUsed = true
+          }
+        }
+        if (retryDelayMs !== null) {
+          log.warn('Bedrock stream failed transiently, retrying', {
             conversationId,
             companyId,
             model,
             iterations,
+            retry: preOutputRetries + (streamRestartUsed ? 1 : 0),
+            afterOutput: attemptEmitted,
+            overload: isProviderOverload(err),
+            delayMs: retryDelayMs,
             errMessage: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300),
             errStatus: (err as { status?: number } | null)?.status,
           })
@@ -442,7 +505,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
           // this attempt never happened; the client resets its bubble.
           assistantText = assistantTextBefore
           emit({ kind: 'stream_restart', assistant_text: assistantText })
-          await new Promise((resolve) => setTimeout(resolve, STREAM_RETRY_BACKOFF_MS))
+          await new Promise((resolve) => setTimeout(resolve, retryDelayMs))
           continue
         }
         // Surface as a chat error so the UI clears its streaming state. Re-throw
@@ -480,7 +543,9 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
           companyId,
           model,
           iterations,
-          retried: streamRetryUsed,
+          retried: preOutputRetries > 0 || streamRestartUsed,
+          retries: preOutputRetries + (streamRestartUsed ? 1 : 0),
+          overload: isProviderOverload(err),
           errStatus: typeof bedrockErr?.status === 'number' ? bedrockErr.status : undefined,
           errCode: typeof bedrockErr?.code === 'string' ? bedrockErr.code : undefined,
           errCause,

@@ -920,6 +920,64 @@ describe('POST /bankid/complete', () => {
       expect(persistedRow).not.toHaveProperty('personalNumber')
       expect(persistedRow).not.toHaveProperty('name')
     })
+
+    it("stores a sole trader firm only when it is the BankID person's own, every company role as TIC gave it (crm#1456)", async () => {
+      vi.mocked(collectBankIdResult).mockResolvedValue(makeSession())
+      vi.mocked(requestEnrichment).mockResolvedValueOnce({
+        enrichmentId: 'enr-2',
+        sessionId: 'test-session',
+        status: 'Completed',
+        requestedTypes: ['SPAR', 'CompanyRoles'],
+        completedTypes: ['SPAR', 'CompanyRoles'],
+        secureUrl: '/api/v1/enrichment/data/def',
+        secureUrlExpiresAtUtc: '2026-05-06T12:00:00Z',
+      })
+      const role = (companyId: number, companyRegistrationNumber: string, legalEntityType: string, legalName: string) => ({
+        companyId,
+        companyRegistrationNumber,
+        legalName,
+        legalEntityType,
+        positionTypes: ['IN'],
+        positionDescriptions: ['Innehavare'],
+        positionStart: '2024-05-24',
+        positionEnd: null,
+        companyStatus: '',
+      })
+      // Three sole traders under the same owner name; the session's own
+      // personnummer (makeSession) is behind the second one only.
+      vi.mocked(fetchEnrichmentData).mockResolvedValueOnce({
+        personalNumber: '199001011234',
+        name: 'Anna Andersson',
+        enrichedAtUtc: '2026-05-06T11:30:00Z',
+        companyRoles: [
+          role(1, '1982083002390001', 'Enskild näringsidkare', 'Andersson, Anna'),
+          role(2, '1990010112340001', 'Enskild näringsidkare', 'Andersson, Anna'),
+          role(3, '2002011732750001', 'Enskild näringsidkare', 'Andersson, Anna'),
+          role(4, '5566778899', 'Aktiebolag', 'Exempel AB'),
+        ],
+      })
+      const { client } = mockServiceClient([
+        { data: null }, // pnr lookup → not linked
+        { error: null }, // bankid_identities insert OK
+      ])
+      const upsertSpy = vi.fn().mockResolvedValue({ error: null })
+      const origFrom = client.from as unknown as ReturnType<typeof vi.fn>
+      const queuedFrom = origFrom.getMockImplementation() as (table: string) => unknown
+      origFrom.mockImplementation((table: string) =>
+        table === 'bankid_enrichment' ? { upsert: upsertSpy } : queuedFrom(table),
+      )
+
+      const req = createMockRequest('/api/extensions/ext/tic/bankid/complete', {
+        method: 'POST',
+        headers: await flowCookie('signup'),
+        body: { email: 'fresh@example.com' },
+      })
+      const { status } = await parseJsonResponse(await findCompleteHandler()(req))
+
+      expect(status).toBe(200)
+      const [persistedRow] = upsertSpy.mock.calls[0] as [{ company_roles: Array<{ companyId: number }> }]
+      expect(persistedRow.company_roles.map((r) => r.companyId)).toEqual([2, 4])
+    })
   })
 
   describe('the sealed identification (#2471)', () => {
@@ -1448,6 +1506,24 @@ describe('POST /bankid/poll', () => {
       .getSetCookie()
       .some((c) => c.startsWith(`${BANKID_FLOW_COOKIE}=`) && /Max-Age=0/i.test(c))
     expect(cleared).toBe(false)
+  })
+
+  it('answers an expired order ("No such order") as no_session, but keeps a real TIC error a 502', async () => {
+    const { TICAPIError } = await import('../lib/tic-types')
+    const poll = async () => parseJsonResponse<{ error?: string }>(await findPollHandler()(
+      createMockRequest('/api/extensions/ext/tic/bankid/poll', {
+        method: 'POST',
+        headers: await flowCookie('login'),
+        body: { mode: 'login' },
+      })
+    ))
+    vi.mocked(pollBankIdSession).mockRejectedValueOnce(
+      new TICAPIError('TIC Identity API error: invalidParameters:No such order', 400)
+    )
+    expect(await poll()).toMatchObject({ status: 404, body: { error: 'no_session' } })
+
+    vi.mocked(pollBankIdSession).mockRejectedValueOnce(new TICAPIError('TIC Identity API error: bad gateway', 500))
+    expect((await poll()).status).toBe(502)
   })
 
   it('extends the window to the verified budget once identification completes', async () => {

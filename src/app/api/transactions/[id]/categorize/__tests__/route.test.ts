@@ -659,6 +659,10 @@ describe('POST /api/transactions/[id]/categorize', () => {
     enqueue({ data: [], error: null }) // ensureFiscalPeriod: no covering open period
     enqueue({ data: [{ period_start: '2026-05-12' }], error: null }) // ensureFiscalPeriod: earliest period
 
+    // A deposit books the bank in debet (the default fixture is an expense).
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult, debit_account: '1930', credit_account: '2081', vat_lines: [],
+    })
     // The clamp inside createTransactionJournalEntry (unit-tested in
     // lib/bookkeeping/__tests__/transaction-entries.test.ts) books into the
     // first open period; here it is mocked to the successful outcome.
@@ -683,6 +687,36 @@ describe('POST /api/transactions/[id]/categorize', () => {
     expect(body.journal_entry_id).toBe('je-1')
     // The pre-FY guard must not upsert a calendar-year (pre-registration) period.
     expect(findCalls('fiscal_periods', 'upsert')).toHaveLength(0)
+  })
+  it('refuses a booking that puts another account on the bank side before any draft (O17)', async () => {
+    // A mall for a payment TO the skattekonto (D 1630 / K 1930) picked for a
+    // refund FROM it: commit_journal_entry used to refuse the draft with a
+    // bare BANK_BOOKING_SETTLEMENT_CHANGED, logged as an error.
+    const tx = makeTransaction({ id: 'tx-1', amount: 900, merchant_name: null, journal_entry_id: null })
+    enqueue({ data: tx, error: null }) // fetch transaction
+    enqueue({ data: { entity_type: 'aktiebolag', fiscal_year_start_month: 1 }, error: null }) // settings
+    enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+    mockBuildMappingResultFromCategory.mockReturnValue({
+      ...defaultMappingResult, debit_account: '1630', credit_account: '1930', vat_lines: [],
+    })
+
+    const response = await POST(
+      createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_other' },
+      }),
+      createMockRouteParams({ id: 'tx-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(response)
+
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TRANSACTION_BOOK_BANK_LINE_DIRECTION')
+    expect(body.error.message).toContain('konto 1930 ska stå i debet')
+    expect(body.error.message).toContain('konto 1630')
+    expect(body.error.details).toMatchObject({ settlement_account: '1930', required_side: 'debit', booked_account: '1630' })
+    expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
   })
   it('atomically unignores an ignored transaction when categorizing it', async () => {
     const tx = makeTransaction({

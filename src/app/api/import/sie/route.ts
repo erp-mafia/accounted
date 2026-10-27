@@ -15,9 +15,14 @@ export const GET = withRouteContext(
     const offset = parseInt(searchParams.get('offset') || '0', 10)
     const status = searchParams.get('status')
 
+    // The columns the history renders. `select('*')` sent each row's manifest
+    // and job_result (about 20 KB a row) on a page the history polls.
     let query = supabase
       .from('sie_imports')
-      .select('*', { count: 'exact' })
+      .select(
+        'id, filename, fiscal_year_start, fiscal_year_end, transactions_count, status, job_state, job_kind, imported_at, created_at, repair_outcome:job_result->>repairOutcome',
+        { count: 'exact' },
+      )
       .eq('company_id', companyId)
       .order('created_at', { ascending: false })
       .order('id', { ascending: false })

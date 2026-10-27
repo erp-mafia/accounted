@@ -72,6 +72,14 @@ vi.mock('../vat-revenue-accounts', async (orig) => ({
   fetchDynamicVatAccounts: vi.fn(async () => dynamicAccounts),
 }))
 
+// The momsdeklaration rutor the reconciliation compares against.
+const declaredRutor = vi.hoisted(() => ({ ruta35: 0, ruta38: 0, ruta39: 0 }))
+const calculateVatDeclarationMock = vi.hoisted(() => vi.fn())
+vi.mock('../vat-declaration', async (orig) => ({
+  ...(await orig<typeof import('../vat-declaration')>()),
+  calculateVatDeclaration: calculateVatDeclarationMock,
+}))
+
 import {
   findUnattributedEuSales,
   generatePeriodiskSammanstallning,
@@ -633,12 +641,68 @@ describe('invoice links beyond the engine source columns (#2298)', () => {
 // ============================================================
 
 describe('reconcilePsAgainstVatDeclaration', () => {
-  it('returns null matches when periods do not coincide', async () => {
+  beforeEach(() => {
+    Object.assign(declaredRutor, { ruta35: 0, ruta38: 0, ruta39: 0 })
+    calculateVatDeclarationMock.mockImplementation(async () => ({ rutor: { ...declaredRutor } }))
+  })
+
+  it('reconciles a quarterly list against the rutor of the same dates, whatever the momsperiod (crm#1336)', async () => {
+    // A manual EU service sale no invoice names a buyer for: the list is empty, ruta 39 is not.
+    const manual = { ...entryOther('je-manual', 'manual', [lineEU('3308', 4431.88)]), voucher_series: 'A', voucher_number: 66 }
+    results = [
+      { data: [manual], error: null },
+      { data: [], error: null }, // invoices by journal_entry_id: none
+      { data: [], error: null }, // invoice_payments: none
+    ]
+    rpcResults = [{ data: [sourceLine('je-manual')], error: null }]
+    declaredRutor.ruta39 = 4432
+
     const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'quarterly', 2025, 2)
-    // No data calls expected: function bails before invoking calculateVatDeclaration.
-    results = []
-    const reconciled = await reconcilePsAgainstVatDeclaration(supabase, 'c1', report, 'monthly')
-    expect(reconciled.reconciliation.matches).toBeNull()
+    const reconciled = await reconcilePsAgainstVatDeclaration(supabase, 'c1', report)
+
+    expect(calculateVatDeclarationMock).toHaveBeenCalledWith(supabase, 'c1', 'quarterly', 2025, 2)
+    expect(reconciled.reconciliation).toMatchObject({ ruta39: 4432, matches: false })
+    expect(reconciled.warnings.find((w) => w.code === 'UNATTRIBUTED_EU_SALE')).toMatchObject({
+      voucher: 'A66',
+      ruta: '39',
+      resolveWith: 'register_booked_invoice',
+      journalEntryId: 'je-manual',
+    })
+    const difference = reconciled.warnings.find((w) => w.code === 'RUTA_DIFFERENCE')
+    expect(difference).toMatchObject({ level: 'warning', ruta: '39', amount: 4432 })
+    expect(difference?.message).toContain('ruta 39')
+    expect(difference?.message).toContain('A66')
+    // A warning, never a new refusal: no error-level finding is added.
+    expect(reconciled.warnings.filter((w) => w.level === 'error')).toEqual([])
+  })
+
+  it('matches without a difference warning when the listed buyers carry the whole ruta', async () => {
+    results = [
+      { data: [entryEU('inv-de', [lineEU('3308', 15000)])], error: null },
+      { data: [invDE()], error: null },
+    ]
+    declaredRutor.ruta39 = 15000
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+    const reconciled = await reconcilePsAgainstVatDeclaration(supabase, 'c1', report)
+
+    expect(reconciled.reconciliation).toMatchObject({ ruta39: 15000, ruta35: 0, ruta38: 0, matches: true })
+    expect(reconciled.warnings.map((w) => w.code)).not.toContain('RUTA_DIFFERENCE')
+  })
+
+  it('names no verifikat when the difference has another cause', async () => {
+    results = [
+      { data: [entryEU('inv-de', [lineEU('3108', 10000)])], error: null },
+      { data: [invDE()], error: null },
+    ]
+    declaredRutor.ruta35 = 12000
+
+    const report = await generatePeriodiskSammanstallning(supabase, 'c1', 'monthly', 2025, 5)
+    const reconciled = await reconcilePsAgainstVatDeclaration(supabase, 'c1', report)
+
+    const difference = reconciled.warnings.find((w) => w.code === 'RUTA_DIFFERENCE')
+    expect(difference).toMatchObject({ ruta: '35', amount: 2000 })
+    expect(difference?.message).toContain('Kontrollera bokföringen')
   })
 })
 

@@ -10,6 +10,15 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createTableMockSupabase } from '@/tests/helpers'
+
+// The real check by default; a case below makes it answer a mismatch.
+const fit = vi.hoisted(() => ({ gate: vi.fn() }))
+vi.mock('@/lib/documents/bank-match/fit', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/documents/bank-match/fit')>()
+  fit.gate.mockImplementation(actual.documentFitGate)
+  return { ...actual, documentFitGate: fit.gate }
+})
+
 import { tools } from '../server'
 
 const tool = tools.find((t) => t.name === 'gnubok_attach_document_to_transaction')!
@@ -66,6 +75,8 @@ describe('gnubok_attach_document_to_transaction: registration', () => {
     expect(tool.annotations).toMatchObject({ readOnlyHint: false, idempotentHint: true, destructiveHint: false })
     const schema = tool.inputSchema as { properties: Record<string, unknown>; required?: string[] }
     expect(Object.keys(schema.properties).sort()).toEqual(['document_id', 'dry_run', 'idempotency_key', 'transaction_id'])
+    // Accepted, not listed: only a DOC_ROW_MISMATCH refusal asks for it, and says how (crm#1479).
+    expect(tool.undeclaredArgs).toContain('mismatch_reason')
     expect([...(schema.required ?? [])].sort()).toEqual(['document_id', 'transaction_id'])
   })
 })
@@ -153,6 +164,45 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
       tool.execute({ transaction_id: TX, document_id: DOC }, 'company-1', 'user-1', supabase as never),
     ).rejects.toMatchObject({ code: 'DOC_ATTACH_REPLACES_POSTED' })
     expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  // crm#1479: a file of another seller, larger than the row, became underlag
+  // on the row's verifikat. The staging dry run compares both sides.
+  const MISMATCH = {
+    document_vendor: 'Synthetic AI Ltd',
+    document_amount: 90,
+    document_currency: 'EUR',
+    document_amount_sek: 1029.6,
+    transaction_text: 'KORTKÖP 0412',
+    transaction_amount: -499,
+    transaction_currency: 'SEK',
+  }
+
+  it('refuses at staging a document that plainly belongs to another purchase, naming both sides', async () => {
+    const check = vi.fn().mockResolvedValue({ code: 'DOC_ROW_MISMATCH', details: MISMATCH, messageSv: 'Underlaget verkar höra till ett annat köp' })
+    fit.gate.mockReturnValueOnce(check)
+    const { supabase } = db()
+    await expect(
+      tool.execute({ transaction_id: TX, document_id: DOC }, 'company-1', 'user-1', supabase as never),
+    ).rejects.toMatchObject({ code: 'DOC_ROW_MISMATCH', details: MISMATCH })
+    expect(fit.gate).toHaveBeenCalledWith(supabase, 'company-1', null, undefined)
+    expect(check).toHaveBeenCalledWith(DOC, expect.objectContaining({ id: TX, amount: -499 }))
+    expect(supabase.from).not.toHaveBeenCalledWith('pending_operations')
+  })
+
+  it('stages it when the agent states why it belongs, and shows the reason to the approver', async () => {
+    const { supabase, findCalls } = db()
+    const result = (await tool.execute(
+      { transaction_id: TX, document_id: DOC, mismatch_reason: 'One invoice paid in two card charges' },
+      'company-1', 'user-1', supabase as never,
+    )) as Staged
+
+    expect(result.staged).toBe(true)
+    expect(fit.gate).toHaveBeenCalledWith(supabase, 'company-1', 'One invoice paid in two card charges', undefined)
+    expect(findCalls('pending_operations', 'insert')[0]?.[0]).toMatchObject({
+      params: { transaction_id: TX, document_id: DOC, mismatch_reason: 'One invoice paid in two card charges' },
+      preview_data: expect.objectContaining({ mismatch_reason: 'One invoice paid in two card charges' }),
+    })
   })
 
   it('carries the shared-document warning when another transaction already holds the document', async () => {

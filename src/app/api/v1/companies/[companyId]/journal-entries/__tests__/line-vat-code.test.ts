@@ -398,7 +398,8 @@ describe('POST /journal-entries/batch-create: lines[].vat_code', () => {
     expect(mockCreateDraft).toHaveBeenCalledTimes(2)
     expect(draftLines(0)).toEqual(EXPANDED_PURCHASE)
     expect(draftLines(1)).toEqual([['6560', 500, 0], ['2645', 60, 0], ['2624', 0, 60], ['2440', 0, 500]])
-    expect(chartReads()).toBe(1)
+    // The momskoder once, plus the name of the basis account the first entry books (crm#1453).
+    expect(chartReads()).toBe(2)
   })
 
   it('refuses an entry that does not balance as sent with the caller\'s own totals, before its code is expanded', async () => {

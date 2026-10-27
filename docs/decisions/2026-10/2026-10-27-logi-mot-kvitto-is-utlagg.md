@@ -1,0 +1,1 @@
+[2026-10-27] Logi against a receipt stays an utlägg (Registrera utlägg, then Lägg till utlägg on the run), not a payslip row: the hotel receipt is the company's verifikation and its moms is deducted there, while a payslip row may only book class 7 and carries no moms (crm#1468, PH 218).

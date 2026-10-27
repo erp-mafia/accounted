@@ -82,9 +82,53 @@ interface AccountMappingStepProps {
   onBack: () => void
 }
 
-type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confidence' | 'manual'
+export type FilterType = 'all' | 'unmapped' | 'new_account' | 'vat_review' | 'low_confidence' | 'manual'
 
 const PAGE_SIZE = 50
+
+function matchesFilter(m: AccountMapping, filter: FilterType, knownTargets: ReadonlySet<string>): boolean {
+  switch (filter) {
+    case 'unmapped':
+      return !m.targetAccount
+    case 'new_account':
+      return !!m.targetAccount && !knownTargets.has(m.targetAccount)
+    case 'low_confidence':
+      return !!m.targetAccount && m.confidence < 0.7
+    case 'vat_review':
+      return !!m.requiresVatTreatmentReview && !m.vatTreatmentReviewed
+    case 'manual':
+      return m.isOverride
+    default:
+      return true
+  }
+}
+
+/**
+ * The rows the table shows: those matching the filter and the search, plus
+ * the rows the user answered in this view. Without the second set the review
+ * filter was a shrinking queue: a confirmed row left at once, the next row
+ * moved up under the pointer, and a quick second click confirmed a momskod
+ * nobody had read (O20). The caller empties `answered` when the filter or the
+ * search changes; that is when the answered rows leave.
+ */
+export function rowsInView(
+  mappings: AccountMapping[],
+  filter: FilterType,
+  searchTerm: string,
+  knownTargets: ReadonlySet<string>,
+  answered: ReadonlySet<string>,
+): AccountMapping[] {
+  const term = searchTerm.toLowerCase()
+  return mappings.filter((m) => {
+    if (answered.has(m.sourceAccount)) return true
+    if (!matchesFilter(m, filter, knownTargets)) return false
+    return !term ||
+      m.sourceAccount.includes(term) ||
+      m.sourceName.toLowerCase().includes(term) ||
+      !!m.targetAccount?.includes(term) ||
+      !!m.targetName?.toLowerCase().includes(term)
+  })
+}
 
 /**
  * How many account numbers the untranslated-code line names before it stops
@@ -185,43 +229,26 @@ export default function AccountMappingStep({
   // judged over all rows: a pair's legs are other rows (crm#1096).
   const rcBasisFindings = useMemo(() => rcBasisPairFindings(mappings), [mappings])
 
-  // Filter and search mappings
-  const filteredMappings = useMemo(() => {
-    let result = mappings
+  // Rows answered (target, momskod, rate or confirm) since the filter or the
+  // search last changed. They stay where they are until it changes again.
+  const [answeredInView, setAnsweredInView] = useState<ReadonlySet<string>>(() => new Set())
+  const keepInView = (sourceAccount: string) =>
+    setAnsweredInView((prev) => (prev.has(sourceAccount) ? prev : new Set(prev).add(sourceAccount)))
 
-    // Apply filter
-    switch (filter) {
-      case 'unmapped':
-        result = result.filter((m) => !m.targetAccount)
-        break
-      case 'new_account':
-        result = result.filter((m) => m.targetAccount && !knownTargets.has(m.targetAccount))
-        break
-      case 'low_confidence':
-        result = result.filter((m) => m.targetAccount && m.confidence < 0.7)
-        break
-      case 'vat_review':
-        result = result.filter((m) => m.requiresVatTreatmentReview && !m.vatTreatmentReviewed)
-        break
-      case 'manual':
-        result = result.filter((m) => m.isOverride)
-        break
-    }
+  const handleMappingChange: AccountMappingStepProps['onMappingChange'] = (sourceAccount, targetAccount, targetName) => {
+    keepInView(sourceAccount)
+    onMappingChange(sourceAccount, targetAccount, targetName)
+  }
 
-    // Apply search
-    if (searchTerm) {
-      const term = searchTerm.toLowerCase()
-      result = result.filter(
-        (m) =>
-          m.sourceAccount.includes(term) ||
-          m.sourceName.toLowerCase().includes(term) ||
-          m.targetAccount?.includes(term) ||
-          m.targetName?.toLowerCase().includes(term)
-      )
-    }
+  const handleVatTreatmentChange: AccountMappingStepProps['onVatTreatmentChange'] = (sourceAccount, treatment, rate) => {
+    keepInView(sourceAccount)
+    onVatTreatmentChange(sourceAccount, treatment, rate)
+  }
 
-    return result
-  }, [mappings, filter, searchTerm, knownTargets])
+  const filteredMappings = useMemo(
+    () => rowsInView(mappings, filter, searchTerm, knownTargets, answeredInView),
+    [mappings, filter, searchTerm, knownTargets, answeredInView],
+  )
 
   // Pagination
   const totalPages = Math.ceil(filteredMappings.length / PAGE_SIZE)
@@ -230,15 +257,17 @@ export default function AccountMappingStep({
     return filteredMappings.slice(start, start + PAGE_SIZE)
   }, [filteredMappings, currentPage])
 
-  // Reset page when filter or search changes
+  // A new filter or search is a new view: back to page 1, answered rows leave
   const handleFilterChange = (newFilter: FilterType) => {
     setFilter(newFilter)
     setCurrentPage(1)
+    setAnsweredInView(new Set())
   }
 
   const handleSearchChange = (term: string) => {
     setSearchTerm(term)
     setCurrentPage(1)
+    setAnsweredInView(new Set())
   }
 
   // Calculate stats
@@ -525,7 +554,7 @@ export default function AccountMappingStep({
                         knownTargets={knownTargets}
                         accountsByClass={accountsByClass}
                         accountByNumber={accountByNumber}
-                        onMappingChange={onMappingChange}
+                        onMappingChange={handleMappingChange}
                       />
                     </TableCell>
                     <TableCell>
@@ -545,13 +574,13 @@ export default function AccountMappingStep({
                                   ? defaultRateForVatTreatment(treatment, accountClass)
                                   : mapping.defaultVatRate
                                 : mapping.defaultVatRate ?? null
-                              onVatTreatmentChange(mapping.sourceAccount, treatment, rate)
+                              handleVatTreatmentChange(mapping.sourceAccount, treatment, rate)
                             }}
                           >
                             <SelectTrigger
                               className={cn(
                                 'min-w-0 flex-1',
-                                (mapping.requiresVatTreatmentReview ||
+                                ((mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed) ||
                                   countsRcBasisTwice(
                                     mapping.sourceAccount,
                                     mapping.defaultVatTreatment,
@@ -577,7 +606,7 @@ export default function AccountMappingStep({
                             value={mapping.defaultVatRate === null || mapping.defaultVatRate === undefined
                               ? 'none'
                               : String(mapping.defaultVatRate)}
-                            onValueChange={(value) => onVatTreatmentChange(
+                            onValueChange={(value) => handleVatTreatmentChange(
                               mapping.sourceAccount,
                               mapping.defaultVatTreatment ?? null,
                               value === 'none' ? null : Number(value),
@@ -668,6 +697,14 @@ export default function AccountMappingStep({
                         'group-hover:bg-muted/50 group-focus-within:bg-muted/50',
                       )}
                     >
+                      {/* An answered row stays in view (rowsInView), so it says
+                          it is done here instead of leaving the table. */}
+                      {mapping.requiresVatTreatmentReview && mapping.vatTreatmentReviewed && (
+                        <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
+                          <CheckIcon className="h-3.5 w-3.5" aria-hidden="true" />
+                          {t('vat_treatment_confirmed')}
+                        </span>
+                      )}
                       {mapping.requiresVatTreatmentReview && !mapping.vatTreatmentReviewed && (
                         /* Icon-only: the column header carries the label and
                            the tooltip repeats it on hover; the accessible name
@@ -679,7 +716,7 @@ export default function AccountMappingStep({
                               variant="outline"
                               size="icon-sm"
                               aria-label={`${t('vat_treatment_confirm')}: ${mapping.sourceAccount}`}
-                              onClick={() => onVatTreatmentChange(
+                              onClick={() => handleVatTreatmentChange(
                                 mapping.sourceAccount,
                                 mapping.defaultVatTreatment ?? null,
                                 mapping.defaultVatRate ?? null,

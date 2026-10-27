@@ -170,6 +170,12 @@ export interface ExtractFromDocumentRequest {
   jsonSchema?: Record<string, unknown>
   /** Which model reads the document; the extraction tier unless the caller has a cheaper job (Arkiv reads history with the cheap tier). */
   tier?: AiTier
+  /**
+   * Ends the call when it fires: the request is aborted and not retried. For a
+   * caller with a deadline of its own, e.g. work that runs after the response
+   * inside a route's 300 s.
+   */
+  signal?: AbortSignal
 }
 
 export type ExtractionSkipReason =

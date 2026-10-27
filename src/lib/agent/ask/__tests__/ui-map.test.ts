@@ -147,6 +147,24 @@ describe('renderUiGrounding: the menu', () => {
     expect(settingsNav.keywords_import).toMatch(/CSV/)
   })
 
+  // PH 216, PH 202: the assistant told a new user it did not know where to
+  // add another company: the user menu is not in the sidebar tree.
+  it('says where another company is added: the user menu, and the button on Företag', () => {
+    const out = renderUiGrounding({ ctx: gateContext(), labels: SV_LABELS })
+    const line = out.split('\n').find((l) => l.startsWith('Företag byts och läggs till'))
+    expect(line).toContain('användarmenyn längst ned i sidomenyn (klicka på ditt namn)')
+    expect(line).toContain(`"${sv.company_switcher.add_company}" (/select-company?choose=1)`)
+    expect(line).toContain(`${nav.settings} → ${settingsNav.group_company} → ${settingsNav.company} (/settings/company)`)
+    // The settings search finds the same section by the words.
+    expect(settingsNav.keywords_company).toContain(sv.company_switcher.add_company)
+  })
+
+  it('names the add-company button by the English label for an English UI', async () => {
+    const en = await loadUiLabels('en')
+    const out = renderUiGrounding({ ctx: gateContext(), labels: en })
+    expect(out).toContain('"Add company" (/select-company?choose=1)')
+  })
+
   it('uses the English labels for an English UI', async () => {
     const en = await loadUiLabels('en')
     const trail = menuTrail('/e/general/invoice-inbox', { ctx: gateContext(), labels: en })

@@ -375,6 +375,37 @@ export function reverseChargeOnAccount(
   return own === null ? { rate: purchaseRate, basisPair: true } : { rate: own, basisPair: false }
 }
 
+const KIND_BY_ACCOUNT_TREATMENT: Partial<Record<string, ReverseChargeKind>> = {
+  reverse_charge_eu_goods: 'eu_goods',
+  reverse_charge_eu_services: 'eu_services',
+  reverse_charge_non_eu_services: 'non_eu_services',
+  reverse_charge_domestic: 'domestic_services',
+}
+
+/**
+ * The kind and box of a reverse-charge purchase booked on `account` when the
+ * account reports ruta 20-24 itself (costAccountRcBasisRate), or null when it
+ * does not and the basis pair books the box (crm#1454). A configured momskod
+ * decides, otherwise the BAS basis account's number (4531 is non-EU services,
+ * ruta 22). Domestic goods (4415-4417, ruta 23) answer domestic_services, the
+ * kind whose input leg (2647) they take.
+ */
+export function reverseChargeKindOnOwnAccount(
+  account: string,
+  code: ChartVatCode | undefined,
+): { kind: ReverseChargeKind; ruta: string } | null {
+  if (costAccountRcBasisRate(account, code) === null) return null
+  const treatment = code?.default_vat_treatment ?? null
+  if (isAccountVatTreatment(treatment)) {
+    const kind = KIND_BY_ACCOUNT_TREATMENT[treatment]
+    const box = resolveVatTreatmentRuta(treatment, Number(account.charAt(0)), account)?.box
+    return kind && box ? { kind, ruta: box } : null
+  }
+  const basis = reverseChargeKindForBasisAccount(account)
+  if (basis) return { kind: basis.kind, ruta: reverseChargeKindRuta(basis.kind) }
+  return { kind: 'domestic_services', ruta: 'ruta23' }
+}
+
 /**
  * A reverse-charge purchase settled against the cost lines it is booked on
  * (crm#1096), as the purchases generateReverseChargePurchaseLines books. Each

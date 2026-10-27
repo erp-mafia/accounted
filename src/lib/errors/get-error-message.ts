@@ -1097,7 +1097,9 @@ export function classifyBankConnectionDenial(
   // Matched on the description alone: the code access_denied itself contains
   // "denied" and must not turn every denial into a cancel.
   if (description && BANK_DENIAL_CANCEL_PATTERN.test(description)) return 'cancelled'
-  if (code !== 'access_denied') return null
+  // Some banks name the cancel in the code itself (error=cancelled, no
+  // description). Only cancel/abort count there, for the reason above.
+  if (code !== 'access_denied') return /cancel|abort/i.test(code) ? 'cancelled' : null
   if (!description) return 'cancelled'
   if (BANK_DENIAL_CREDENTIALS_PATTERN.test(description)) return 'invalid_credentials'
   if (BANK_DENIAL_ACCOUNT_ACCESS_PATTERN.test(description)) return 'account_access'

@@ -1,0 +1,1 @@
+[2026-10-27] No MCP change for reading an approved filing's signing link: gnubok_list_pending_operations already returns result_data (signing_url, status awaiting_signature) when called with status 'committed', and the one-sentence description hint belongs in server.ts, which !942 rewrites, so it is left for that MR instead of a conflicting edit (crm#1478).

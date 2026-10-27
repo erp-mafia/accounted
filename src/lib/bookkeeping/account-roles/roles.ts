@@ -70,6 +70,10 @@ export const ACCOUNT_ROLES = [
   'oss_output_vat',
   /** Sales of goods shipped to a customer outside the EU: an export, no domestic VAT. */
   'export_goods_sales',
+  /** Per diem for a business trip abroad paid within the tax-free allowance: a payroll cost outside gross pay. */
+  'foreign_per_diem_tax_free',
+  /** The part of a foreign per diem above the tax-free allowance: taxed as pay. */
+  'foreign_per_diem_taxable',
 ] as const
 
 export type AccountRole = (typeof ACCOUNT_ROLES)[number]

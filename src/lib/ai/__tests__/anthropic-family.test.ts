@@ -71,6 +71,17 @@ describe('extractFromDocument request shape (hosted regression net)', () => {
     })
   })
 
+  it('hands a caller\'s signal to the SDK as the request option, and sends none without one', async () => {
+    const svc = createAnthropicFamilyService(readAiConfig())
+    const deadline = new AbortController()
+    const req = { document: { kind: 'text' as const, text: 'x' }, system: SYSTEM, instruction: INSTRUCTION, maxTokens: 1 }
+    await svc.extractFromDocument({ ...req, signal: deadline.signal })
+    await svc.extractFromDocument(req)
+    expect(mockCreate.mock.calls[0][1]).toEqual({ signal: deadline.signal })
+    expect(mockCreate.mock.calls[0][0]).not.toHaveProperty('signal')
+    expect(mockCreate.mock.calls[1][1]).toBeUndefined()
+  })
+
   it('sends an image as a base64 image block with its media type', async () => {
     const svc = createAnthropicFamilyService(readAiConfig())
     const jpeg = Buffer.from('JPEG')

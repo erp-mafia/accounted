@@ -6,6 +6,7 @@ import { Progress } from '@/components/ui/progress'
 import { Button } from '@/components/ui/button'
 import { DestructiveConfirmDialog } from '@/components/ui/destructive-confirm-dialog'
 import { fetchSIEJob } from '@/lib/import/sie-job-client'
+import { announceSIEHoldsChanged } from '@/lib/import/sie-holds-client'
 import { describeSIEJobFailure, formatImportFailureReference } from '@/lib/import/import-failure'
 import type { SIEJob } from '@/lib/import/sie-job-contract'
 import type { ImportResult } from '@/lib/import/types'
@@ -21,6 +22,9 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
   const [error,setError] = useState<string|null>(null)
   const [confirmUndo,setConfirmUndo] = useState(false)
   const [busy,setBusy] = useState(false)
+  // The job holds its year: the dashboard hold banner refetches now instead
+  // of waiting for its next nudge.
+  useEffect(() => {announceSIEHoldsChanged()},[importId])
   useEffect(() => {
     const controller = new AbortController()
     let timer:ReturnType<typeof setTimeout>
@@ -49,6 +53,7 @@ export default function SIEJobProgress({importId,onCompleted,onUndone}:{
       const body = await response.json()
       if (!response.ok) throw new Error(getErrorMessage(body))
       setJob(body.data);setError(null);setConfirmUndo(false)
+      announceSIEHoldsChanged()
     } catch (err) {setError(getErrorMessage(err))}
     finally {setBusy(false)}
   }

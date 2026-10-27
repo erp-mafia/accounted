@@ -13,6 +13,8 @@
  */
 import { z } from 'zod'
 import { matchInboxItemSupplier, matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import { documentFitGate } from '@/lib/documents/bank-match/fit'
+import { MISMATCH_REASON } from './documents'
 import { proposeBankMatchForInboxItem } from './inbox-bank-match'
 import { defineOperation } from './types'
 
@@ -78,6 +80,7 @@ export const inboxItemsMatchTransaction = defineOperation({
       'Registering a supplier invoice from the item (POST /inbox-items/{id}/convert) or attaching an arbitrary document to a transaction (POST /transactions/{id}/attach-document).',
     pitfalls: [
       'The transaction must belong to the same company: otherwise 404 TX_CATEGORIZE_TX_NOT_FOUND.',
+      'A document that asks for more than the transaction paid AND names another seller returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway.',
       'A transaction that already carries another document keeps it (details in the dry run: transaction_has_other_document).',
       'Matching a booked transaction in a locked period links the document best-effort; check the verifikat afterwards.',
     ],
@@ -89,16 +92,21 @@ export const inboxItemsMatchTransaction = defineOperation({
   input: z.object({
     inbox_item_id: INBOX_ITEM_ID,
     transaction_id: z.string().uuid().describe('The bank transaction id (from GET /transactions).'),
+    mismatch_reason: MISMATCH_REASON,
   }),
   output: z.object({ inbox_item_id: z.string().uuid(), matched_transaction_id: z.string().uuid() }),
-  errorCodes: ['INBOX_ITEM_NOT_FOUND', 'TX_CATEGORIZE_TX_NOT_FOUND'],
+  errorCodes: ['INBOX_ITEM_NOT_FOUND', 'TX_CATEGORIZE_TX_NOT_FOUND', 'DOC_ROW_MISMATCH'],
   http: {
     method: 'POST',
     path: '/api/v1/companies/:companyId/inbox-items/:id/match-transaction',
     pathParams: { id: 'inbox_item_id' },
   },
-  run: async (ctx, { inbox_item_id, transaction_id }, { dryRun }) => {
-    const outcome = await matchInboxItemTransaction(ctx, inbox_item_id, transaction_id, { dryRun })
+  run: async (ctx, { inbox_item_id, transaction_id, mismatch_reason }, { dryRun }) => {
+    // Every agent and API pairing compares the two sides (crm#1479).
+    const outcome = await matchInboxItemTransaction(ctx, inbox_item_id, transaction_id, {
+      dryRun,
+      fitCheck: documentFitGate(ctx.supabase, ctx.companyId, mismatch_reason),
+    })
     if (!outcome.ok || outcome.dryRun) return outcome
     return {
       ok: true,

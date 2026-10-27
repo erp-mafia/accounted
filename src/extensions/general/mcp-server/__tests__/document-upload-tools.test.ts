@@ -7,6 +7,7 @@ import { receiptImage } from '@/tests/fixtures/receipt-images'
 const mocks = vi.hoisted(() => ({
   createPendingDocumentUpload: vi.fn(),
   completePendingDocumentUpload: vi.fn(),
+  findPendingDocumentUploadName: vi.fn(),
   uploadDocument: vi.fn(),
   extractInvoiceFields: vi.fn(),
   hasCapability: vi.fn(),
@@ -30,6 +31,7 @@ vi.mock('@/lib/core/documents/document-service', async (importOriginal) => {
     ...actual,
     createPendingDocumentUpload: mocks.createPendingDocumentUpload,
     completePendingDocumentUpload: mocks.completePendingDocumentUpload,
+    findPendingDocumentUploadName: mocks.findPendingDocumentUploadName,
     uploadDocument: mocks.uploadDocument,
   }
 })
@@ -133,6 +135,61 @@ describe('MCP model-free document upload tools', () => {
     })
   })
 
+  // crm#1455: on hosted the proxy runs in a function, and the platform
+  // refuses a body over 4.5 MB before it starts, so a 5.2 MB photo got a bare
+  // 413 while the tool promised 10 MB. The answer now names the real limit
+  // and hands out the raw Storage URL for anything larger.
+  it('states the proxy limit on hosted and hands out the direct Storage URL for larger files', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://pwxtzglxptnnvjrpixpg.supabase.co')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const signedUrl =
+      'https://pwxtzglxptnnvjrpixpg.supabase.co/storage/v1/object/upload/sign/documents/co/user/pending/up/kvitto.png?token=signed'
+    mocks.createPendingDocumentUpload.mockResolvedValue({ uploadId, signedUrl, expiresAt: '2026-08-03T12:00:00.000Z' })
+
+    const result = (await findTool('gnubok_create_document_upload').execute(
+      { file_name: 'kvitto.png' },
+      companyId,
+      userId,
+      {} as never,
+    )) as Record<string, unknown>
+
+    expect(result).toMatchObject({
+      upload_url: 'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/kvitto.png?token=signed',
+      max_bytes: 4 * 1024 * 1024,
+      direct_upload_url: signedUrl,
+      direct_max_bytes: 10 * 1024 * 1024,
+    })
+    // The reported photo: over what upload_url carries, within the direct URL's limit.
+    const photoBytes = 5.2 * 1000 * 1000
+    expect(photoBytes).toBeGreaterThan(result.max_bytes as number)
+    expect(photoBytes).toBeLessThan(result.direct_max_bytes as number)
+    expect(result.notice).toMatch(/at most 4 MB.*up to 10 MB.*direct_upload_url/)
+  })
+
+  it('self-hosted: the proxy has no platform cap, so upload_url carries the archive limit and no second URL', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://storage.self-hosted.example')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://books.self-hosted.example')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    mocks.createPendingDocumentUpload.mockResolvedValue({
+      uploadId,
+      signedUrl: 'https://storage.self-hosted.example/storage/v1/object/upload/sign/documents/co/user/pending/up/a.pdf?token=signed',
+      expiresAt: '2026-08-03T12:00:00.000Z',
+    })
+
+    const result = (await findTool('gnubok_create_document_upload').execute(
+      { file_name: 'a.pdf' },
+      companyId,
+      userId,
+      {} as never,
+    )) as Record<string, unknown>
+
+    expect(result.upload_url).toBe('https://books.self-hosted.example/api/storage/upload/sign/documents/co/user/pending/up/a.pdf?token=signed')
+    expect(result.max_bytes).toBe(10 * 1024 * 1024)
+    expect(result).not.toHaveProperty('direct_upload_url')
+    expect(result).not.toHaveProperty('notice')
+  })
+
   it('returns an unauthenticated PUT URL without accepting file bytes', async () => {
     const tool = findTool('gnubok_create_document_upload')
     const result = await tool.execute(
@@ -153,6 +210,8 @@ describe('MCP model-free document upload tools', () => {
       upload_id: uploadId,
       upload_url: 'https://storage.example/upload?token=signed',
       expires_at: '2026-08-03T12:00:00.000Z',
+      // Not rewritten onto the proxy: nothing caps the PUT below the archive limit.
+      max_bytes: 10 * 1024 * 1024,
     })
     const schema = tool.inputSchema as { properties: Record<string, unknown> }
     expect(schema.properties).not.toHaveProperty('file_content_base64')
@@ -206,6 +265,84 @@ describe('MCP model-free document upload tools', () => {
       status: 'received',
     })
     expect(mocks.extractInvoiceFields).toHaveBeenCalledOnce()
+  })
+
+  // crm#1474: hosts do not enforce inputSchema.required, and complete with
+  // only upload_id crashed "Cannot read properties of undefined (reading
+  // 'split')" although the reservation already holds the name.
+  it('completes with only upload_id: the name and type come from the reservation', async () => {
+    mocks.findPendingDocumentUploadName.mockResolvedValue({ fileName: 'invoice.pdf', mimeType: null })
+    const invoiceLookups = [
+      makeQueryBuilder({ data: null, error: null }),
+      makeQueryBuilder({ data: null, error: null }),
+      queuedItems([]),
+      makeQueryBuilder({ data: { id: uploadId, status: 'received' }, error: null }),
+    ]
+    const from = vi.fn((table: string) => {
+      if (table === 'invoice_inbox_items') return invoiceLookups.shift()
+      if (table === 'suppliers') return makeQueryBuilder({ data: null, error: null })
+      if (table === 'document_attachments') return makeQueryBuilder({ data: { journal_entry_id: null }, error: null })
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    const result = await findTool('gnubok_complete_document_upload').execute(
+      { upload_id: uploadId },
+      companyId,
+      userId,
+      { from } as never,
+    )
+
+    expect(mocks.findPendingDocumentUploadName).toHaveBeenCalledWith(expect.anything(), companyId, userId, uploadId)
+    expect(mocks.completePendingDocumentUpload).toHaveBeenCalledWith(
+      expect.anything(),
+      companyId,
+      userId,
+      uploadId,
+      'invoice.pdf',
+      'application/pdf',
+      undefined,
+      { extractionOwner: 'invoice-inbox', dedupeByContent: true },
+    )
+    expect(result).toMatchObject({ document_id: uploadId, inbox_item_id: uploadId })
+    const schema = findTool('gnubok_complete_document_upload').inputSchema as { required: string[] }
+    expect(schema.required).toEqual(['upload_id'])
+  })
+
+  it('answers DOCUMENT_UPLOAD_NOT_FOUND, not a TypeError, when only upload_id names nothing', async () => {
+    mocks.findPendingDocumentUploadName.mockResolvedValue(null)
+    const from = vi.fn((table: string) => {
+      if (table === 'invoice_inbox_items') return makeQueryBuilder({ data: null, error: null })
+      throw new Error(`Unexpected table: ${table}`)
+    })
+
+    await expect(
+      findTool('gnubok_complete_document_upload').execute({ upload_id: uploadId }, companyId, userId, { from } as never),
+    ).rejects.toMatchObject({ code: 'DOCUMENT_UPLOAD_NOT_FOUND' })
+    expect(mocks.completePendingDocumentUpload).not.toHaveBeenCalled()
+  })
+
+  it('refuses a missing or empty upload_id before any read', async () => {
+    const from = vi.fn()
+    for (const args of [{}, { upload_id: '' }, { upload_id: 'not-a-uuid' }]) {
+      await expect(
+        findTool('gnubok_complete_document_upload').execute(args, companyId, userId, { from } as never),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    }
+    expect(from).not.toHaveBeenCalled()
+  })
+
+  it('refuses a missing file_name or file content with VALIDATION_ERROR on the tools that cannot derive it', async () => {
+    await expect(
+      findTool('gnubok_create_document_upload').execute({}, companyId, userId, {} as never),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    await expect(
+      findTool('gnubok_upload_document').execute({ file_content_base64: 'JVBERi0=', mime_type: 'application/pdf' }, companyId, userId, {} as never),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    await expect(
+      findTool('gnubok_upload_document').execute({ file_name: 'a.pdf' }, companyId, userId, {} as never),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    expect(mocks.createPendingDocumentUpload).not.toHaveBeenCalled()
+    expect(mocks.uploadDocument).not.toHaveBeenCalled()
   })
 
   it('without the AI capability archives the underlag with an empty reading and no OCR call', async () => {

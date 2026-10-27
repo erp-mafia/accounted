@@ -54,6 +54,12 @@ interface DocumentUploadZoneProps {
    * pins it to its bank transaction right away.
    */
   onUploaded?: (file: UploadedFile) => void
+  /**
+   * Receives the zone's file input, so a host button can open the file
+   * picker in its own click (one click to the OS picker) instead of only
+   * revealing the zone and waiting for a second click inside it.
+   */
+  fileInputRef?: React.RefObject<HTMLInputElement | null>
 }
 
 let uploadCounter = 0
@@ -136,6 +142,7 @@ export default function DocumentUploadZone({
   compact = false,
   dropSurfaceRef,
   onUploaded,
+  fileInputRef,
 }: DocumentUploadZoneProps) {
   const t = useTranslations('document_upload')
   const locale = useLocale()
@@ -382,7 +389,10 @@ export default function DocumentUploadZone({
         onClick={() => inputRef.current?.click()}
       >
         <input
-          ref={inputRef}
+          ref={(element) => {
+            inputRef.current = element
+            if (fileInputRef) fileInputRef.current = element
+          }}
           type="file"
           multiple
           accept={DOCUMENT_UPLOAD_ACCEPT}

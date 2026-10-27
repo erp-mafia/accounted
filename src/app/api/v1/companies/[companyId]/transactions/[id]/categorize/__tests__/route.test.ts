@@ -912,6 +912,10 @@ describe('POST /api/v1/.../transactions/{id}/categorize duplicate-payment guard 
     expect(refused.status).toBe(409)
     expect((await refused.json()).error.code).toBe('TRANSACTION_BOOK_POSSIBLE_DUPLICATE')
 
+    // A second request reads the row afresh (the first spent the queued read).
+    const again = happyPathSupabase()
+    again.setTable('fiscal_periods', { data: { id: 'period-1', is_closed: false, locked_at: null }, error: null })
+    mockServiceClient.mockReturnValue(again.supabase)
     const forced = await POST(
       dryRequest({
         is_business: true,

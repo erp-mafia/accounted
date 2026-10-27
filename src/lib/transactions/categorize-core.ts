@@ -625,6 +625,34 @@ export async function buildCategorizeMapping(
       },
     })
   }
+
+  // The bank side of the pair (credit for money out, debit for money in) is
+  // what the voucher books on the bank account, and commit_journal_entry
+  // refuses it unless that is the row's own ledger (guard_bank_booking_context,
+  // BANK_BOOKING_SETTLEMENT_CHANGED). settleBankLeg only moves a cash-ledger
+  // leg, so a mall or category built for the other direction (D 1630 / K 1930
+  // on a deposit) or one that never touches the bank (2440 on the bank side)
+  // reached the database as a draft and came back as a bare refusal. Say
+  // which account and which side here, in the preview as well, before any draft.
+  const bankSide = transaction.amount < 0 ? guarded.mappingResult.credit_account : guarded.mappingResult.debit_account
+  if (transaction.amount !== 0 && bankSide !== settlementAccount) {
+    const withdrawal = transaction.amount < 0
+    return refuse('TRANSACTION_BOOK_BANK_LINE_DIRECTION', {
+      settlement_account: settlementAccount,
+      required_side: withdrawal ? 'credit' : 'debit',
+      booked_account: bankSide,
+    }, {
+      message: withdrawal
+        ? {
+          sv: `Transaktionen är ett uttag från bankkontot, så konto ${settlementAccount} ska stå i kredit, men den valda konteringen sätter konto ${bankSide} där. Välj en kategori eller mall som passar ett uttag, eller bokför raden manuellt.`,
+          en: `The transaction is a withdrawal from the bank account, so account ${settlementAccount} must be credited, but the chosen booking puts account ${bankSide} there. Choose a category or template that fits a withdrawal, or book the row manually.`,
+        }
+        : {
+          sv: `Transaktionen är en insättning till bankkontot, så konto ${settlementAccount} ska stå i debet, men den valda konteringen sätter konto ${bankSide} där. Välj en kategori eller mall som passar en insättning, eller bokför raden manuellt.`,
+          en: `The transaction is a deposit into the bank account, so account ${settlementAccount} must be debited, but the chosen booking puts account ${bankSide} there. Choose a category or template that fits a deposit, or book the row manually.`,
+        },
+    })
+  }
   return { ok: true, mappingResult: guarded.mappingResult, settlementAccount }
 }
 
@@ -973,9 +1001,17 @@ export async function categorizeTransaction(
     if (err instanceof TransactionMissingSekValueError) return missingSekRefusal(err, transaction)
     // Fail closed (issue #1947): the verifikat IS the booking, so nothing is
     // written and the row stays in "Att bokföra".
-    txLog.error('journal entry creation failed', err as Error)
+    // A named database refusal (PT409: the bank row changed, another bank
+    // change holds the lock) is answered as a 409 the person can act on:
+    // warn. Anything else is a failure of ours.
+    const causeCode = getStructuredError(err).code
+    if (getErrorEntry(causeCode)?.httpStatus === 409) {
+      txLog.warn('journal entry creation failed', err as Error)
+    } else {
+      txLog.error('journal entry creation failed', err as Error)
+    }
     const sv = getErrorMessage(err, { context: 'transaction' })
-    return refuseFor('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED', { cause: getStructuredError(err).code, message: sv }, {
+    return refuseFor('TX_CATEGORIZE_JOURNAL_ENTRY_FAILED', { cause: causeCode, message: sv }, {
       message: { sv, en: getErrorMessage(err, { context: 'transaction', locale: 'en' }) },
       cause: err,
     })
