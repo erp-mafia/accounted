@@ -41,7 +41,7 @@ function uuid(n: number): string {
 function membership(over: {
   id: string
   name: string
-  role?: 'owner' | 'admin' | 'member' | 'viewer'
+  role?: 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
   teamId?: string | null
   archived?: boolean
   asArray?: boolean
@@ -111,6 +111,21 @@ describe('resolveCompanyScope', () => {
     const inCalls = findCalls('company_settings', 'in')
     expect(inCalls).toHaveLength(1)
     expect(inCalls[0][1]).toEqual([uuid(1), uuid(2), uuid(4)])
+  })
+
+  it('leaves an invoicing-only membership out of every portfolio read, even when named', async () => {
+    mocks.getUserCompanies.mockResolvedValue([
+      membership({ id: uuid(1), name: 'Egna AB', role: 'owner' }),
+      membership({ id: uuid(2), name: 'Säljbolaget AB', role: 'invoicer' }),
+    ])
+    enqueue({ data: [] })
+    const all = await resolveCompanyScope(client, USER_ID, {})
+    expect(all.companies.map((c) => c.companyId)).toEqual([uuid(1)])
+
+    enqueue({ data: [] })
+    const named = await resolveCompanyScope(client, USER_ID, { companies: [uuid(2), uuid(1)] })
+    expect(named.companies.map((c) => c.companyId)).toEqual([uuid(1)])
+    expect(named.unresolved).toEqual([uuid(2)])
   })
 
   it('returns an empty scope without querying settings when the user has no memberships', async () => {

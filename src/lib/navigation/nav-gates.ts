@@ -1,6 +1,7 @@
 import type { NavGateFlags, NavV2Item } from '@/components/dashboard/nav-v2'
 import type { CapabilitySurface } from '@/lib/modules/capabilities'
 import type { ModuleId } from '@/lib/modules/manifest'
+import { isInvoicerPagePath, isInvoicerRole } from '@/lib/auth/invoicer-role'
 import type { EntityType } from '@/types'
 
 /**
@@ -43,6 +44,13 @@ export interface NavGateContext {
   autogiroEnabled: boolean
   capabilities: readonly string[]
   hiddenNavHrefs: ReadonlySet<string>
+  /**
+   * The caller's role in the company, when the surface knows it. The
+   * invoicing-only role sees only the pages it may open
+   * (lib/auth/invoicer-role.ts); every other role, and an unknown one, is
+   * gated as before.
+   */
+  role?: string | null
 }
 
 /** `entityOnly` accepts one form or a list of forms. */
@@ -59,6 +67,7 @@ export function menuShowsModule(surface: CapabilitySurface, moduleId: ModuleId):
 export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean {
   if (item.hidden) return false
   if (ctx.hiddenNavHrefs.has(item.href)) return false
+  if (isInvoicerRole(ctx.role) && !isInvoicerPagePath(item.href)) return false
   // The resolved capabilities: a module whose package is switched off or not
   // in the company's country is hidden, as its tools are in MCP's
   // tools/list; so is a module the legal form does not offer (payroll until

@@ -11,6 +11,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import { loadAttestPolicy } from './attest-policy-read'
 import type { AttestPolicy } from './attest-policy'
 import { loadAttestPeople } from './attest-service'
+import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 
 export interface AttestCandidate {
   user_id: string
@@ -45,7 +46,7 @@ export async function loadAttestSettingsView(
     supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
   ])
   if (membersError) throw membersError
-  const writers = ((members ?? []) as Array<{ user_id: string; role: string }>).filter((m) => m.role !== 'viewer')
+  const writers = ((members ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isBookkeepingWriterRole(m.role))
   const people = await loadAttestPeople(service, writers.map((m) => m.user_id))
   return {
     policy,

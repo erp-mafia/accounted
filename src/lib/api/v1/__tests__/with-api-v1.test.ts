@@ -1316,6 +1316,56 @@ describe('withApiV1: read-only role gate (viewer)', () => {
   })
 })
 
+describe('withApiV1: invoicing-only role (invoicer)', () => {
+  // The key may hold any scope: an invoicer membership reaches customers,
+  // invoices and articles only, read or write (lib/auth/invoicer-role.ts).
+  const COMPANY = 'c0ffee01-0000-4000-8000-000000000001'
+  function invoicerKey(scopes: string[]) {
+    mockValidate.mockResolvedValue({ userId: 'user-invoicer', companyId: COMPANY, scopes, mode: 'live' })
+    mockServiceClient.mockReturnValue(makeSupabaseStub({ company_id: COMPANY, role: 'invoicer' }))
+  }
+
+  it.each([
+    ['payroll:read', 'salary-runs.list'],
+    ['reports:read', 'journal-entries.list'],
+    ['transactions:read', 'transactions.list'],
+    ['documents:read', 'documents.list'],
+    ['events:read', 'events.list'],
+    ['webhooks:manage', 'webhooks.list'],
+    ['operations:read', 'operations.get'],
+  ] as const)('refuses a read on %s with 403 ROLE_SCOPE_LIMITED before the handler runs', async (scope, operation) => {
+    invoicerKey([scope])
+    const handlerSpy = vi.fn(async (_req: Request, ctx: { requestId: string }) => ok({}, { requestId: ctx.requestId }))
+    const handler = withApiV1<{ params: Promise<{ companyId: string }> }>(operation, handlerSpy, { requireScope: scope })
+
+    const res = await handler(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY}/anything`, { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      companyParams(COMPANY),
+    )
+
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error.details.code).toBe('ROLE_SCOPE_LIMITED')
+    expect(body.error.details.role).toBe('invoicer')
+    expect(body.error.details.required_scope).toBe(scope)
+    expect(handlerSpy).not.toHaveBeenCalled()
+  })
+
+  it('lets an invoicer read and write invoices', async () => {
+    invoicerKey(['invoices:read', 'invoices:write'])
+    const read = withApiV1<{ params: Promise<{ companyId: string }> }>(
+      'invoices.list',
+      async (_req, ctx) => ok({ invoices: [] }, { requestId: ctx.requestId }),
+      { requireScope: 'invoices:read' },
+    )
+    const res = await read(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY}/invoices`, { headers: { Authorization: 'Bearer gnubok_sk_x' } }),
+      companyParams(COMPANY),
+    )
+    expect(res.status).toBe(200)
+  })
+})
+
 describe('withApiV1: read-only company access (per-company access level)', () => {
   // A key can reach a company yet be limited to reading there
   // (api_key_companies.access = 'read'). Same write test as the viewer gate,

@@ -28,7 +28,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { handlePattern, toHandle } from '@/lib/handles'
 import type { ApiKeyServiceAccount } from '@/lib/auth/api-keys'
 
-const ROLES = ['owner', 'admin', 'member', 'viewer'] as const
+const ROLES = ['owner', 'admin', 'member', 'viewer', 'invoicer'] as const
 
 const KeyCompany = z.object({
   id: z.string().uuid(),

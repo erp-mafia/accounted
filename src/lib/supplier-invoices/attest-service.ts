@@ -42,6 +42,7 @@ import {
 } from './attest-policy'
 import { canApproveSupplierInvoice, resolveUnsettledStatus } from './lifecycle'
 import { loadAttestBlockedInvoiceIds, loadAttestPolicy, POLICY_COLUMNS, toPolicy, type PolicyRow } from './attest-policy-read'
+import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 
 export { loadAttestBlockedInvoiceIds, loadAttestPolicy }
 
@@ -70,7 +71,7 @@ export async function loadActiveAttestMembers(service: SupabaseClient, companyId
   const { data, error } = await service.from('company_members').select('user_id, role').eq('company_id', companyId)
   if (error) throw error
   return new Set(
-    ((data ?? []) as Array<{ user_id: string; role: string }>).filter((m) => m.role !== 'viewer').map((m) => m.user_id),
+    ((data ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isBookkeepingWriterRole(m.role)).map((m) => m.user_id),
   )
 }
 

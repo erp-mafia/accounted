@@ -276,6 +276,18 @@ describe('capScopesForRole', () => {
     expect(capScopesForRole(mixed, 'viewer')).toEqual(['transactions:read', 'reports:read'])
   })
 
+  it('caps an invoicer to the customer, invoice and article scopes, read and write', () => {
+    expect([...capScopesForRole(ALL_SCOPES, 'invoicer')].sort()).toEqual([
+      'articles:read',
+      'articles:write',
+      'customers:read',
+      'customers:write',
+      'invoices:read',
+      'invoices:write',
+    ])
+    expect(capScopesForRole(mixed, 'invoicer')).toEqual([])
+  })
+
   it('caps an unknown role and a missing membership to :read scopes', () => {
     expect(capScopesForRole(mixed, 'superuser')).toEqual(['transactions:read', 'reports:read'])
     expect(capScopesForRole(mixed, null)).toEqual(['transactions:read', 'reports:read'])

@@ -17,6 +17,7 @@ import { minimisePayload } from '@/lib/webhooks/handler'
 import { PAYROLL_EVENT_PREFIXES, isPayrollEvent } from '@/lib/webhooks/public-events'
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
 import { createLogger } from '@/lib/logger'
+import { roleAllowsScope } from '@/lib/auth/invoicer-role'
 
 const log = createLogger('api/events')
 
@@ -186,6 +187,15 @@ export async function GET(request: Request) {
     // no events either. Owners pass without a read; no read while the gate
     // is off.
     const role = (membership as { role?: string }).role ?? ''
+    // The invoicing-only role (lib/auth/invoicer-role.ts) reaches customers,
+    // invoices and articles; the event log spans the whole company.
+    if (!roleAllowsScope(role, REQUIRED_SCOPE)) {
+      log.warn('invoicer membership refused the event log', { companyId })
+      return errorResponseFromCode('FORBIDDEN', log, {
+        reason: 'role_scope_limited',
+        details: { code: 'ROLE_SCOPE_LIMITED', companyId, required_scope: REQUIRED_SCOPE },
+      })
+    }
     if (!(await isMembershipActive(supabase, companyId, role))) {
       log.warn('multi-user seat gate refused frozen membership', { companyId })
       return errorResponseFromCode('FORBIDDEN', log, {

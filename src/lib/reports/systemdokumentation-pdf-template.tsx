@@ -62,7 +62,7 @@ const ENTITY_LABEL: Record<string, string> = {
 const METHOD_LABEL: Record<string, string> = { accrual: 'Faktureringsmetoden', cash: 'Kontantmetoden' }
 const FRAMEWORK_LABEL: Record<string, string> = { k2: 'K2', k3: 'K3' }
 const MOMS_LABEL: Record<string, string> = { monthly: 'Månad', quarterly: 'Kvartal', yearly: 'Helår' }
-const ROLE_LABEL: Record<string, string> = { owner: 'Ägare', admin: 'Administratör', member: 'Medlem', viewer: 'Läsare' }
+const ROLE_LABEL: Record<string, string> = { owner: 'Ägare', admin: 'Administratör', member: 'Medlem', viewer: 'Läsare', invoicer: 'Fakturering' }
 
 const NUMBER = new Intl.NumberFormat('sv-SE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 

@@ -12,9 +12,11 @@ import {
   ArrowsRightLeftIcon,
   Bars3Icon,
   Cog6ToothIcon,
+  DocumentTextIcon,
   HomeIcon,
   QuestionMarkCircleIcon,
   SparklesIcon,
+  UsersIcon,
   XMarkIcon,
   type Icon,
 } from '@/components/icons'
@@ -33,6 +35,7 @@ import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import type { EntityType } from '@/types'
 import type { CapabilitySurface } from '@/lib/modules/capabilities'
 import { gateNavTree, passesNavGates, type NavGateContext } from '@/lib/navigation/nav-gates'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { SidebarV2 } from './SidebarV2'
 import { signOutAndNavigate } from '@/lib/auth/session-client'
 import { NAV_V2_COMPANY, NAV_V2_TOP, claimedRowActive, type NavGateFlags, type NavV2Item } from './nav-v2'
@@ -127,7 +130,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
 export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
-  const { company, capabilities, byraTeam } = useCompany()
+  const { company, capabilities, byraTeam, role } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
   // generic sparkles glyph.
@@ -329,6 +332,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     autogiroEnabled,
     capabilities,
     hiddenNavHrefs,
+    role,
   }
   const passesGates = (item: NavGateFlags) => passesNavGates(item, gateContext)
   const filteredItems = (cockpitMode ? cockpitNavItems : navItems).filter(passesGates)
@@ -370,7 +374,13 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
 
   const mobileNavItems: { href: string; labelKey: NavLabelKey; icon: Icon }[] = cockpitMode
     ? cockpitNavItems.map(({ href, labelKey, icon }) => ({ href, labelKey, icon }))
-    : [
+    : isInvoicerRole(role)
+      ? [
+          // The invoicing-only role opens only the invoicing pages.
+          { href: '/invoices', labelKey: 'invoices', icon: DocumentTextIcon },
+          { href: '/customers', labelKey: 'customers', icon: UsersIcon },
+        ]
+      : [
         // The phone bar names the page the way the sidebar does: Att göra.
         { href: '/', labelKey: 'v2_todo' as NavLabelKey, icon: HomeIcon },
         { href: '/chat', labelKey: 'assistant', icon: SparklesIcon },

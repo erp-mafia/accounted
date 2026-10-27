@@ -32,7 +32,7 @@ const Company = z.object({
   name: z.string(),
   org_number: z.string().nullable(),
   entity_type: z.string(),
-  role: z.enum(['owner', 'admin', 'member', 'viewer']),
+  role: z.enum(['owner', 'admin', 'member', 'viewer', 'invoicer']),
   created_at: z.string(),
 })
 
@@ -348,7 +348,7 @@ export const GET = withApiV1('companies.list', async (request, ctx) => {
     // `company_members.id`: the membership row's own UUID, used as the
     // cursor's secondary key. Not exposed in the response.
     id: string
-    role: 'owner' | 'admin' | 'member' | 'viewer'
+    role: 'owner' | 'admin' | 'member' | 'viewer' | 'invoicer'
     joined_at: string
     // PostgREST returns the joined company as either an object (one-to-one FK
     // resolution) or an array. Accept both: Supabase's auto-typing chooses

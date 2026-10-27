@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import { getActiveCompanyId } from '@/lib/company/context'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import { getIntent } from '@/lib/agent/intents/registry'
 import { checkAgentRateLimit, agentRateLimitResponseBody } from '@/lib/rate-limits/agent'
 import { runChatTurn, friendlyModelError } from '@/lib/agent/chat/run-turn'
@@ -110,6 +111,9 @@ export async function POST(request: Request) {
     .eq('user_id', user.id)
     .maybeSingle()
   if (!membership) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+  // The invoicing-only role (lib/auth/invoicer-role.ts) never reaches the
+  // assistant: it runs as the service role and reads the whole company.
+  if (isInvoicerRole(membership.role)) return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
 
   // No Anthropic Bedrock calls in the sandbox: the demo runs entirely on
   // seed data and the assistant is gated to a "look, don't touch" preview.

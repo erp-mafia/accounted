@@ -155,6 +155,8 @@ async function isMember(
     .select('company_id, companies!inner(archived_at)')
     .eq('user_id', userId)
     .eq('company_id', companyId)
+    // An invoicing-only membership (lib/auth/invoicer-role.ts) takes no receipts.
+    .neq('role', 'invoicer')
     .is('companies.archived_at', null)
     .limit(1)
     .maybeSingle()
@@ -340,6 +342,8 @@ async function resolveCompanyTarget(
     .from('company_members')
     .select('company_id, companies!inner(archived_at)')
     .eq('user_id', link.user_id)
+    // An invoicing-only membership (lib/auth/invoicer-role.ts) takes no receipts.
+    .neq('role', 'invoicer')
     .is('companies.archived_at', null)
   if (membershipsError) {
     log.warn('membership query failed during company resolution; will retry', {

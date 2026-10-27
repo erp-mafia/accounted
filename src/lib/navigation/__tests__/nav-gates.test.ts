@@ -100,3 +100,19 @@ describe('gateNavTree', () => {
     ])
   })
 })
+
+describe('the invoicer role', () => {
+  it('sees only the invoicing pages in the real menu, and every other role sees the menu as before', async () => {
+    const { NAV_V2_COMPANY, NAV_V2_TOP } = await import('@/components/dashboard/nav-v2')
+    const hrefs = (role: string | undefined) => {
+      const tree = gateNavTree([...NAV_V2_TOP, ...NAV_V2_COMPANY], ctx({ role }))
+      return tree.flatMap((i) => [i.href, ...(i.sub ?? []).map((s) => s.href)])
+    }
+    const invoicer = new Set(hrefs('invoicer'))
+    expect([...invoicer].sort()).toEqual(['/articles', '/customers', '/invoices', '/quotes', '/sales-orders'])
+    for (const role of ['owner', 'member', 'viewer', undefined]) {
+      expect(hrefs(role), String(role)).toEqual(hrefs('owner'))
+    }
+    expect(hrefs('owner')).toEqual(expect.arrayContaining(['/salary', '/bookkeeping', '/transactions']))
+  })
+})

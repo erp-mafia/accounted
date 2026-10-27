@@ -330,6 +330,23 @@ describe('MCP company routing', () => {
     }
   )
 
+  it('limits an invoicer to the customer, invoice and article scopes, read or write', () => {
+    const context = { companyId: OTHER_COMPANY_ID, companyName: 'Other AB', role: 'invoicer' as const, isDefault: false, keyAccess: 'write' as const }
+    const allowed = ['customers:read', 'customers:write', 'invoices:read', 'invoices:write', 'articles:read', 'articles:write']
+    for (const scope of ALL_SCOPES) {
+      if (allowed.includes(scope)) {
+        expect(() => assertMcpCompanyWriteAccess(context, scope), scope).not.toThrow()
+      } else {
+        expect(() => assertMcpCompanyWriteAccess(context, scope), scope).toThrow(
+          expect.objectContaining({ code: 'FORBIDDEN', message: expect.stringMatching(/Invoicing role/) })
+        )
+      }
+    }
+    expect(() => assertMcpCompanyWriteAccess(context, undefined)).toThrow(
+      expect.objectContaining({ code: 'FORBIDDEN', message: expect.stringMatching(/Invoicing role/) })
+    )
+  })
+
   it('keeps the viewer refusal first when the role and the connection both say read', () => {
     const context = {
       companyId: OTHER_COMPANY_ID,

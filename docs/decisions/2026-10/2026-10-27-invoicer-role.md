@@ -1,0 +1,1 @@
+[2026-10-27] The invoicing-only role is stored as 'invoicer' (UI: Fakturering), a noun like the other roles; deny-by-default in RLS with reads on the invoicing tables only, its writes through a company-scoped service client behind one route allowlist (accounted#39).

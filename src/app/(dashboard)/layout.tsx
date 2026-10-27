@@ -54,6 +54,8 @@ import { LegalAcceptanceGate } from '@/components/legal/LegalAcceptanceGate'
 import { readAcceptanceState } from '@/lib/legal/acceptance'
 import type { AccountingFramework, EntityType, CompanyRole, Team } from '@/types'
 import { parseEntityType } from '@/lib/company/entity-type'
+import { INVOICER_HOME, isInvoicerPagePath, isInvoicerRole } from '@/lib/auth/invoicer-role'
+import { createCompanyScopedClient } from '@/lib/auth/company-scoped-client'
 import {
   getDashboardAuthContext,
   getDashboardCompanyId,
@@ -293,6 +295,13 @@ export default async function DashboardLayout({
   const companyRow = (activeMembership?.companies as unknown as import('@/types').Company | null) ?? null
   const memberRow = activeMembership ? { role: activeMembership.role } : null
 
+  // The invoicing-only role opens only the invoicing pages
+  // (lib/auth/invoicer-role.ts); every other page sends it to the invoices.
+  const isInvoicer = isInvoicerRole(memberRow?.role)
+  if (isInvoicer && !isInvoicerPagePath(pathname)) {
+    redirect(INVOICER_HOME)
+  }
+
   // Home-domain rule (WL-01): which brand serves this host, and which brand
   // (if any) each membership company's team owns. Both resolvers are ~60s
   // cached (the domain-gate lookup above already warmed the host entry);
@@ -321,7 +330,13 @@ export default async function DashboardLayout({
     getResolvedDashboardAgentProfile(),
     // teamId comes from the membership join, so the entitlements read is one
     // wave (grants in parallel with config + subscription).
-    getCompanyEntitlements(supabase, companyId, { teamId: companyRow?.team_id ?? null }),
+    // The invoicer's own session reads no plan rows, so the plan it works
+    // under is read for it through the company-scoped client.
+    getCompanyEntitlements(
+      isInvoicer && companyId && user ? createCompanyScopedClient({ companyId, userId: user.id }) : supabase,
+      companyId,
+      { teamId: companyRow?.team_id ?? null },
+    ),
     // Current display names for ALL the user's companies (the switcher list).
     // RLS scopes company_settings SELECT to user_company_ids(), so this bare
     // select returns exactly the caller's companies, letting non-active rows
@@ -573,7 +588,8 @@ export default async function DashboardLayout({
     foreignCompanies,
     isSandbox,
     capabilities: entitlements.capabilities,
-    assistantAvailable,
+    // The assistant reads the whole company: never offered to the invoicer.
+    assistantAvailable: assistantAvailable && !isInvoicer,
     trialEndsAt: entitlements.trialEndsAt,
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
