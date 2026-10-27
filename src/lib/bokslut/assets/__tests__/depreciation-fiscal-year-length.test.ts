@@ -244,50 +244,51 @@ describe('förlängt first year (15 months)', () => {
 })
 
 /**
- * Known residual at life end, pinned so it is visible rather than hidden.
+ * Life end with a year that is not 12 months: lands exactly on cost.
  *
  * The year-length factor turns the day share of a long or short year into
  * months at that year's average month length, while a 12-month year keeps
- * converting at 365 or 366 days. The plain linear path computes every year
- * from cost with no cap at the remaining value and no catch-up at life end,
- * so a life that ends in or after a year that is not 12 months can land a
- * few kronor under cost, or up to about 0.3 percent over it. Scale only is
- * the scoped fix; the cap and the life-end catch-up are a separate issue.
- * When that lands, these expectations change to land exactly on cost.
+ * converting at 365 or 366 days, so the per-year amounts of a life that ends
+ * in or after such a year sum to a few kronor under cost, or up to about 0.3
+ * percent over it. These cases were pinned as a known residual while the
+ * year-length fix was scale only. The charge is now capped at what is left
+ * and, when the posted history is known, the period that reaches the end of
+ * the life takes exactly what is left.
  */
-describe('life end with a year that is not 12 months: residual (scale only)', () => {
+describe('life end with a year that is not 12 months: lands on cost', () => {
   /** Förlängt first year of 18 months, the longest a first year may run. */
   const LONG_18_MONTHS = { period_start: '2025-01-01', period_end: '2026-06-30' }
 
-  it('a life that ends inside an 18-month year books more than cost', () => {
+  it('a life that ends inside an 18-month year books exactly cost', () => {
     // 100 000 kr over 12 months, held 2025-01-01..2025-12-31: 365/546 days
-    // x 18/12 x 100 000 = 100 275, 275 kr over cost. Before: 66 850, and
-    // the other 33 150 was never booked.
+    // x 18/12 x 100 000 = 100 275 before the cap, 275 kr over cost.
     const result = computeAnnualDepreciation(
       makeAsset({ acquisition_cost: 100_000, useful_life_months: 12 }),
       LONG_18_MONTHS,
     )
-    expect(result).toEqual({ amount: 100_275, proRated: true })
+    expect(result).toEqual({ amount: 100_000, proRated: true })
   })
 
-  it('a life that ends in the 12-month year after an 18-month year books more than cost', () => {
+  it('a life that ends in the 12-month year after an 18-month year books exactly cost', () => {
     // 100 000 kr over 24 months: 18 months in the long year (75 000), then
-    // 2026-07-01..2026-12-31 as 184/365 of a 12-month charge (25 205).
+    // 2026-07-01..2026-12-31 takes what is left (184/365 of a 12-month charge
+    // was 25 205, 205 kr over cost).
     const asset = makeAsset({ acquisition_cost: 100_000, useful_life_months: 24 })
     const long = computeAnnualDepreciation(asset, LONG_18_MONTHS)
-    const next = computeAnnualDepreciation(asset, {
-      period_start: '2026-07-01',
-      period_end: '2027-06-30',
-    })
+    const next = computeAnnualDepreciation(
+      asset,
+      { period_start: '2026-07-01', period_end: '2027-06-30' },
+      [{ ...LONG_18_MONTHS, amount: long.amount }],
+    )
     expect(long).toEqual({ amount: 75_000, proRated: false })
-    expect(next).toEqual({ amount: 25_205, proRated: true })
-    expect(long.amount + next.amount).toBe(100_205)
+    expect(next).toEqual({ amount: 25_000, proRated: true })
+    expect(long.amount + next.amount).toBe(100_000)
   })
 
-  it('a mid-year acquisition in a 15-month year strands a few kronor over the life', () => {
+  it('a mid-year acquisition in a 15-month year books exactly cost over the life', () => {
     // 12 000 kr over 60 months, acquired 2025-09-01: 2 396 in the long year,
     // then four full 12-month years to the end of the life on 2030-08-31.
-    // Total 11 996: 4 kr are never booked.
+    // The last year takes the 4 kr the per-year amounts left (11 996 before).
     const asset = makeAsset({ acquisition_date: '2025-09-01' })
     const years = [
       LONG_15_MONTHS,
@@ -296,9 +297,20 @@ describe('life end with a year that is not 12 months: residual (scale only)', ()
       { period_start: '2028-09-01', period_end: '2029-08-31' },
       { period_start: '2029-09-01', period_end: '2030-08-31' },
     ]
-    const amounts = years.map((year) => computeAnnualDepreciation(asset, year).amount)
-    expect(amounts).toEqual([2_396, 2_400, 2_400, 2_400, 2_400])
-    expect(amounts.reduce((sum, amount) => sum + amount, 0)).toBe(11_996)
+    const posted: { period_start: string; period_end: string; amount: number }[] = []
+    for (const year of years) {
+      posted.push({ ...year, amount: computeAnnualDepreciation(asset, year, posted).amount })
+    }
+    expect(posted.map((p) => p.amount)).toEqual([2_396, 2_400, 2_400, 2_400, 2_404])
+    expect(posted.reduce((sum, p) => sum + p.amount, 0)).toBe(12_000)
+  })
+
+  it('without the posted periods (a bare total) the final year is capped, not trued up', () => {
+    // Older callers pass only the total. The engine cannot tell rounding from
+    // years missing from the register, so it keeps the plain amount.
+    const asset = makeAsset({ acquisition_date: '2025-09-01' })
+    const last = { period_start: '2029-09-01', period_end: '2030-08-31' }
+    expect(computeAnnualDepreciation(asset, last, 9_596).amount).toBe(2_400)
   })
 })
 

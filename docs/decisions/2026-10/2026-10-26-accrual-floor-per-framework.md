@@ -1,0 +1,1 @@
+[2026-10-26] Accrual floor per framework and year (K2 5 000/7 000 kr by BFNAR 2025:2, K3 none, K1 forms 5 000 kr) tested on the invoice amount per BFN's kommentar to K2 2.4; årsbokslut forms keep 5 000 kr because nothing stores förenklat vs fullt årsbokslut (BFNAR 2017:3 goes to 7 000 kr in 2027).

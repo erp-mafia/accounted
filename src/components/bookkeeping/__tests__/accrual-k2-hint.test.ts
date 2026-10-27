@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   K2_ACCRUAL_THRESHOLD_SEK,
+  accrualFrameworkOf,
   accrualHintKey,
   accrualThresholdSek,
   accrualWorthOpening,
@@ -141,6 +142,37 @@ describe('accrualThresholdSek', () => {
     expect(shouldShowK2AccrualHint({ amount: 6000, currency: 'SEK', thresholdSek: 7000 })).toBe(true)
     expect(shouldShowK2AccrualHint({ amount: 6000, currency: 'SEK' })).toBe(false)
   })
+
+  it('gives 7 000 kr to a förlängt first year beginning after 2025-06-30 that ends 2026-12-31 or later', () => {
+    expect(
+      accrualThresholdSek({ entityType: 'aktiebolag', framework: 'k2', fiscalYearStart: '2025-09-01', fiscalYearEnd: '2026-12-31' }),
+    ).toBe(7000)
+    expect(
+      accrualThresholdSek({ entityType: 'aktiebolag', framework: 'k2', fiscalYearStart: '2025-09-01', fiscalYearEnd: '2026-08-31' }),
+    ).toBe(5000)
+  })
+
+  it('has no limit under K3, so a K3 company never sees the hint', () => {
+    for (const fiscalYearStart of ['2025-01-01', '2026-01-01', null]) {
+      expect(accrualThresholdSek({ entityType: 'aktiebolag', framework: 'k3', fiscalYearStart })).toBeNull()
+    }
+    expect(shouldShowK2AccrualHint({ amount: 100, currency: 'SEK', thresholdSek: null })).toBe(false)
+  })
+
+  it('agrees with the year-end auto-detect (accrualMateriality) for every framework', () => {
+    expect(accrualThresholdSek({ entityType: 'aktiebolag', framework: 'k2', fiscalYearStart: '2026-01-01' })).toBe(7000)
+    expect(accrualThresholdSek({ entityType: 'enskild_firma', framework: 'k2', fiscalYearStart: '2027-01-01' })).toBe(5000)
+    expect(accrualThresholdSek({ entityType: null, framework: null, fiscalYearStart: '2026-01-01' })).toBe(7000)
+  })
+})
+
+describe('accrualFrameworkOf', () => {
+  it('reads the company framework, null without a company or with an unknown value', () => {
+    expect(accrualFrameworkOf({ accounting_framework: 'k3' })).toBe('k3')
+    expect(accrualFrameworkOf({ accounting_framework: 'k2' })).toBe('k2')
+    expect(accrualFrameworkOf(null)).toBeNull()
+    expect(accrualFrameworkOf({ accounting_framework: 'x' as never })).toBeNull()
+  })
 })
 
 describe('accrualWorthOpening', () => {
@@ -149,5 +181,9 @@ describe('accrualWorthOpening', () => {
     expect(accrualWorthOpening({ amount: 6999, currency: 'SEK', thresholdSek: 7000 })).toBe(false)
     expect(accrualWorthOpening({ amount: 100, currency: 'EUR', thresholdSek: 7000 })).toBe(true)
     expect(accrualWorthOpening({ amount: 100, currency: 'EUR', exchangeRate: 11.5, thresholdSek: 7000 })).toBe(false)
+  })
+
+  it('opens every line under K3, which has no limit', () => {
+    expect(accrualWorthOpening({ amount: 100, currency: 'SEK', thresholdSek: null })).toBe(true)
   })
 })

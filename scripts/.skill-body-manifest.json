@@ -12,8 +12,8 @@
     "version": 4
   },
   "horizontal/swedish-accounting-compliance/changes-2025-2026": {
-    "hash": "3226580ef724a0f62a1484d7f196e2eb9ea541510736b7bd504878cbda65297b",
-    "version": 4
+    "hash": "64ea85d12d40343e15dcc9b2e1464125a10a39941f016faca7113225bf45c575",
+    "version": 5
   },
   "horizontal/swedish-accounting-compliance/skatteverket": {
     "hash": "b6e73c29e287ea1c4990532fa39a50b63c4cc78388d913bc18a2d5d660f27884",
@@ -28,8 +28,8 @@
     "version": 3
   },
   "horizontal/swedish-asset-accounting/depreciation": {
-    "hash": "dd6b697672295dae19598cd0607dc1d3e62db52ec0dd9fa271d7b21efc20ac5f",
-    "version": 3
+    "hash": "2722aed634874044485aca9ca3e00b5bb49509c77513dbd911d0ab3c90f5a941",
+    "version": 4
   },
   "horizontal/swedish-asset-accounting/leasing-and-disposal": {
     "hash": "82a26cc32147123f0de4d3cb581c97549016d82e2ce921bcac42ac71a467db85",
@@ -136,20 +136,20 @@
     "version": 1
   },
   "horizontal/swedish-financial-reporting": {
-    "hash": "ac83a9ee608f5ab886286eabc978a88dce795bdfd7c8a4e0c5c02f87defd9a64",
-    "version": 4
+    "hash": "42beacb0b2d742d060f4f77630d2dc68a80e831f4f15d30186354930936cbc03",
+    "version": 5
   },
   "horizontal/swedish-financial-reporting/arsredovisning-structure": {
-    "hash": "8afd040fc3c4d6ba5bea480aa4fc56da4f55bcc0065ff5149f84090412f48fed",
-    "version": 2
+    "hash": "e2a26ac3220b14dbfb21126b09701438182097ce06c032161585992badf034a5",
+    "version": 3
   },
   "horizontal/swedish-financial-reporting/bolagsverket-filing": {
-    "hash": "1fd497765318c6d8bf0ede1b1cb50eda24cd932a1fa169f76f77861a1647458d",
-    "version": 2
+    "hash": "4cbe5f967acb7b40f307383d04286ba4511b80a90f89f9a4305ad17f648cd16d",
+    "version": 3
   },
   "horizontal/swedish-financial-reporting/ink2-form-logic": {
-    "hash": "7df9ee2afdf86680689431313594106cec7359caf27ef954c57847d88cb5c7e7",
-    "version": 2
+    "hash": "ae51d53b88a0ee27d1f5862a5730a47d52c3ab62f5a61a2bf7b8bec2189548e0",
+    "version": 3
   },
   "horizontal/swedish-inventory": {
     "hash": "f08818dc317bba28168ff8d4ae9dccdbc75baf0cb9c369a7b88f6be19afc7eb5",
@@ -324,16 +324,16 @@
     "version": 1
   },
   "horizontal/swedish-year-end-closing/k2-vs-k3": {
-    "hash": "2ba888f5e6becdd9e354645a2bbf13d1a7cedf1b73027374996d0a68db46de18",
-    "version": 3
+    "hash": "7ca39883c08d1329a2cf1272e4c85d580a0a640316a5310cb8e3a6aec52a7393",
+    "version": 4
   },
   "horizontal/swedish-year-end-closing/legal-framework": {
-    "hash": "45c8f104d1524bf64cdfb5c43717de6ddeb270c71dc86ed8a9bc16a54be57b23",
-    "version": 3
+    "hash": "7e4b55fdaa90da73bcf6c80982a8acdd51b0099c2a6bdd23aa7d6c59176fd7b7",
+    "version": 4
   },
   "horizontal/swedish-year-end-closing/pitfalls-and-rates": {
-    "hash": "40187b8eb491a9cf4ce021c460dce8d276bbceedf5d8c8cb655ce2d4dd0d4759",
-    "version": 3
+    "hash": "06f3a02b359970d79add039a99021b672f59ac381bad95a83064b4730b382614",
+    "version": 4
   },
   "horizontal/swedish-year-end-closing/reporting-and-filing": {
     "hash": "ea5224f8513bccf1d908edb21ee7ad2b824276ec6c676f09ef341850c0cee143",

@@ -1,0 +1,1 @@
+[2026-10-26] Resultat före skatt adds back every income-tax account (the INK2 7528 set, 8900-8989) read from the income statement, not a widened getBookedBolagsskatt: that stays the 8910 check before the tax voucher, and the income statement already leaves out the flow's own tax.

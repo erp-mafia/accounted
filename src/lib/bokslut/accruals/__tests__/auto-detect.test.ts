@@ -613,3 +613,94 @@ describe('detectPeriodisering', () => {
     }
   })
 })
+
+describe('detectPeriodisering: the floor follows the rules for the company and the year', () => {
+  let mock: ReturnType<typeof createQueuedMockSupabase>
+
+  beforeEach(() => {
+    mock = createQueuedMockSupabase()
+    vi.clearAllMocks()
+  })
+
+  /** One SEK supplier invoice for `subtotal`, `months` of it after the year end. */
+  function enqueue(args: {
+    period: { period_start: string; period_end: string }
+    subtotal: number
+    window: [string, string]
+    framework: 'k2' | 'k3' | null
+  }) {
+    mock.enqueue({ data: { id: 'period-1', ...args.period }, error: null })
+    mock.enqueue({ data: [], error: null }) // accrual_schedules
+    mock.enqueue({ data: [], error: null }) // invoices
+    mock.enqueue({
+      data: [
+        {
+          id: 'sup-1',
+          supplier_invoice_number: 'LF-1',
+          invoice_date: args.period.period_end,
+          subtotal: args.subtotal,
+          currency: 'SEK',
+          subtotal_sek: args.subtotal,
+          notes: `Tjänst period ${args.window[0]} till ${args.window[1]}`,
+          suppliers: { name: 'Leverantör AB' },
+          supplier_invoice_items: [{ description: 'Tjänst', account_number: '6550' }],
+        },
+      ],
+      error: null,
+    })
+    // companies.accounting_framework, read last.
+    mock.enqueue({ data: args.framework ? { accounting_framework: args.framework } : null, error: null })
+  }
+
+  const FY_2026 = { period_start: '2026-01-01', period_end: '2026-12-31' }
+  const FY_2025 = { period_start: '2025-01-01', period_end: '2025-12-31' }
+
+  it('K2 from a year starting 2026: 7 000 kr (BFNAR 2025:2)', async () => {
+    enqueue({ period: FY_2026, subtotal: 6_000, window: ['2027-01-01', '2027-12-31'], framework: 'k2' })
+    const [suggestion] = await detectPeriodisering(mock.supabase as never, 'co', 'period-1', { entityType: 'aktiebolag' })
+    expect(suggestion.confidence).toBe('low')
+    expect(suggestion.reason).toContain('Under 7 000 kr: behöver normalt inte periodiseras (K2).')
+    expect(mock.findCalls('companies', 'select')).toEqual([['accounting_framework']])
+  })
+
+  it('K2 for a year starting 2025: still 5 000 kr, so 6 000 kr stays high', async () => {
+    enqueue({ period: FY_2025, subtotal: 6_000, window: ['2026-01-01', '2026-12-31'], framework: 'k2' })
+    const [suggestion] = await detectPeriodisering(mock.supabase as never, 'co', 'period-1', { entityType: 'aktiebolag' })
+    expect(suggestion.confidence).toBe('high')
+    expect(suggestion.reason).not.toContain('behöver normalt inte')
+  })
+
+  it('K3 has no blanket limit: a small item is never called immaterial', async () => {
+    enqueue({ period: FY_2026, subtotal: 1_200, window: ['2027-01-01', '2027-12-31'], framework: 'k3' })
+    const [suggestion] = await detectPeriodisering(mock.supabase as never, 'co', 'period-1', { entityType: 'aktiebolag' })
+    expect(suggestion.confidence).toBe('high')
+    expect(suggestion.reason).not.toContain('behöver normalt inte')
+  })
+
+  it('an enskild firma keeps the K1 5 000 kr limit in 2026', async () => {
+    enqueue({ period: FY_2026, subtotal: 6_000, window: ['2027-01-01', '2027-12-31'], framework: 'k2' })
+    const [suggestion] = await detectPeriodisering(mock.supabase as never, 'co', 'period-1', { entityType: 'enskild_firma' })
+    expect(suggestion.confidence).toBe('high')
+
+    mock = createQueuedMockSupabase()
+    enqueue({ period: FY_2026, subtotal: 4_000, window: ['2027-01-01', '2027-12-31'], framework: 'k2' })
+    const [small] = await detectPeriodisering(mock.supabase as never, 'co', 'period-1', { entityType: 'enskild_firma' })
+    expect(small.reason).toContain('Under 5 000 kr: behöver normalt inte periodiseras (K1).')
+  })
+
+  it('tests the invoice amount, not the periodiseringsbelopp (BFN kommentar to K2 2.4)', async () => {
+    // A 24 000 kr invoice for 2026-01-01..2027-01-31: only 31 of 396 days
+    // (about 1 879 kr) fall after the year end.
+    enqueue({ period: FY_2026, subtotal: 24_000, window: ['2026-01-01', '2027-01-31'], framework: 'k2' })
+    const [suggestion] = await detectPeriodisering(mock.supabase as never, 'co', 'period-1', { entityType: 'aktiebolag' })
+    expect(suggestion.periodisering_amount).toBeLessThan(7_000)
+    // Before, the share under the limit tagged it low; the invoice is 24 000 kr.
+    expect(suggestion.confidence).toBe('high')
+  })
+
+  it('an unreadable framework counts as K2, the column default', async () => {
+    enqueue({ period: FY_2026, subtotal: 6_000, window: ['2027-01-01', '2027-12-31'], framework: null })
+    const [suggestion] = await detectPeriodisering(mock.supabase as never, 'co', 'period-1', { entityType: 'aktiebolag' })
+    expect(suggestion.reason).toContain('Under 7 000 kr')
+  })
+})

@@ -240,3 +240,48 @@ describe('buildDispositionsProposal: forms without corporate tax dispositions', 
     )
   })
 })
+
+describe('buildDispositionsProposal: income tax booked outside the flow (INK2 4.3a)', () => {
+  // The income statement excludes the flow's own year_end tax, so every
+  // income-tax account it still holds was booked outside the flow. Before,
+  // only 8910 was added back: a deferred tax on 8940 shrank the base and a
+  // refund on 8930 inflated it.
+  it('adds back every income-tax account the income statement holds, signed', async () => {
+    vi.mocked(generateIncomeStatement).mockResolvedValue({
+      net_result: 100_000,
+      financial_sections: [
+        {
+          title: 'Skatter och årets resultat',
+          rows: [
+            // Financial rows are credit - debit: expenses are negative.
+            { account_number: '8910', account_name: 'Skatt som belastar årets resultat', amount: -30_000 },
+            { account_number: '8940', account_name: 'Uppskjuten skatt', amount: -10_000 },
+            { account_number: '8930', account_name: 'Restituerad skatt', amount: 5_000 },
+          ],
+          subtotal: -35_000,
+        },
+        {
+          title: 'Bokslutsdispositioner',
+          rows: [{ account_number: '8811', account_name: 'Avsättning till periodiseringsfond', amount: -1_000 }],
+          subtotal: -1_000,
+        },
+      ],
+    } as unknown as Awaited<ReturnType<typeof generateIncomeStatement>>)
+    const supabase = supabaseFor({ period_start: '2025-01-01', period_end: '2025-12-31' })
+
+    const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')
+
+    // 100 000 + 30 000 (8910) + 10 000 (8940) - 5 000 (8930); 8811 is not tax.
+    expect(result.netResultBefore).toBe(135_000)
+    // The periodiseringsfond cap is 25 % of that base, and the bolagsskatt
+    // base is the same result after the avsättning.
+    const avsattning = result.proposals.find((p) => p.kind === 'periodiseringsfond_avsattning')
+    expect(avsattning?.amount).toBe(33_750)
+    expect(vi.mocked(calculateBolagsskatt)).toHaveBeenCalledWith(
+      supabase,
+      'company-1',
+      'period-1',
+      expect.objectContaining({ resultBeforeTaxOverride: 135_000 - 33_750 }),
+    )
+  })
+})
