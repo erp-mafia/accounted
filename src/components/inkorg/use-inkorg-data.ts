@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { createClient } from '@/lib/supabase/client'
+import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
 import type { InkorgItem } from '@/lib/inkorg/items'
 import type { MissingPurchase } from '@/lib/inkorg/missing'
 
@@ -92,9 +93,10 @@ export function useInkorgData(companyId: string | null): InkorgData {
           }, REALTIME_COALESCE_MS)
         },
       )
-      .subscribe()
+    const stopJoin = subscribeAsUser(supabase, channel)
     return () => {
       if (pending) clearTimeout(pending)
+      stopJoin()
       void supabase.removeChannel(channel)
     }
   }, [companyId, fetchItems])

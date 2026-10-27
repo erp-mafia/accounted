@@ -707,5 +707,8 @@ describe('GET /audit-trail', () => {
       method: 'or',
       args: [`created_at.lt.2026-03-02T09:14:00Z,and(created_at.eq.2026-03-02T09:14:00Z,id.lt.${ID1})`],
     })
+    // The plain bound the (company_id, created_at, id) index can start from;
+    // the .or() alone made Postgres walk every newer row of the company.
+    expect(next.calls).toContainEqual({ table: 'audit_log', method: 'lte', args: ['created_at', '2026-03-02T09:14:00Z'] })
   })
 })

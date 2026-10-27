@@ -1,0 +1,1 @@
+[2026-10-27] Every postgres_changes channel joins through subscribeAsUser (lib/supabase/realtime-subscribe.ts), which waits for the user token and never joins without one, because a join made before the token arrived ran as anon, whose RLS check fails on user_company_ids() and aborts Realtime's WAL poll for all subscribers (about 3 900 failed polls on 2026-10-26) (O04).

@@ -78,6 +78,8 @@ const state = vi.hoisted(() => ({
   userPreferencesError: null as unknown,
   // Row returned for the bankid_enrichment read in the no-company branch.
   bankidEnrichment: null as null | { user_id: string },
+  // resolve_active_company calls made through the proxy's client.
+  rpcCalls: 0,
 }))
 
 vi.mock('@supabase/ssr', () => ({
@@ -132,7 +134,10 @@ vi.mock('@supabase/ssr', () => ({
         listFactors: () => state.listFactors(),
       },
     },
-    rpc: vi.fn(async () => state.company),
+    rpc: vi.fn(async () => {
+      state.rpcCalls += 1
+      return state.company
+    }),
     from: vi.fn((table: string) => {
       const chain: Record<string, unknown> = {}
       const self = new Proxy(chain, {
@@ -210,6 +215,12 @@ import {
 } from '@/lib/auth/session-timeout'
 import { SESSION_TIMEOUT_COOKIE } from '@/lib/auth/session-timeout-shared'
 import { MFA_ASSURANCE_HEADER, verifyNoVerifiedFactor } from '@/lib/auth/mfa-assurance'
+import {
+  ACTIVE_COMPANY_HEADER,
+  signActiveCompany,
+  verifyActiveCompany,
+} from '@/lib/auth/active-company-verdict'
+import { createServerClient } from '@supabase/ssr'
 import { ACCOUNT_DELETION_PATH } from '@/lib/company/no-company-routes'
 
 const ORIGIN = 'http://localhost:3000'
@@ -263,6 +274,7 @@ describe('updateSession redirect destinations', () => {
     state.userPreferences = null
     state.userPreferencesError = null
     state.bankidEnrichment = null
+    state.rpcCalls = 0
     delete process.env.NEXT_PUBLIC_REQUIRE_MFA
     delete process.env.NEXT_PUBLIC_SELF_HOSTED
     process.env.SESSION_TIMEOUT_SECRET = 'middleware-test-secret'
@@ -592,6 +604,39 @@ describe('updateSession redirect destinations', () => {
       expect(cleared?.value).toBe('')
       expect(cleared?.maxAge).toBe(0)
       expect(response.cookies.get(SESSION_TIMEOUT_COOKIE)?.value).toBe('')
+    })
+
+    it('treats a dead refresh token on an API call as signed out: cookies cleared, the route sees no session', async () => {
+      state.authError = { name: 'AuthApiError', code: 'refresh_token_not_found' }
+      state.cookieWrites = [
+        { name: 'sb-test-auth-token', value: '', options: { path: '/', maxAge: 0 } },
+      ]
+
+      const response = await run('/api/invoices', {
+        headers: { cookie: 'sb-test-auth-token=dead' },
+      })
+
+      // Passed through: the route's own guard answers 401 for the missing session.
+      expect(response.status).toBe(200)
+      expect(response.cookies.get('sb-test-auth-token')?.value).toBe('')
+      expect(response.headers.get('x-middleware-request-cookie') ?? '').not.toContain('dead')
+      expect(state.signOut).toHaveBeenCalledWith({ scope: 'local' })
+    })
+
+    it('logs the refused refresh auth-js reports as one quiet line, not a console error with a stack', () => {
+      const refused = Object.assign(new Error('Invalid Refresh Token: Refresh Token Not Found'), {
+        __isAuthError: true,
+        status: 400,
+        code: 'refresh_token_not_found',
+      })
+
+      // The proxy module routes this one console.error shape to its logger.
+      console.error(refused)
+
+      expect(logState.info).toHaveBeenCalledWith(
+        'refresh token not found; session treated as signed out',
+        { code: 'refresh_token_not_found' },
+      )
     })
 
     it('drops a request path that normalises to a protocol-relative URL', async () => {
@@ -1018,6 +1063,131 @@ describe('updateSession redirect destinations', () => {
           expect(response.headers.get('x-middleware-override-headers') ?? '', path).not.toContain(MFA_ASSURANCE_HEADER)
         }
       })
+    })
+  })
+
+  // ── The active company, resolved once per request (O02) ────────────────
+  // The dashboard render takes this verdict instead of a second
+  // resolve_active_company round trip (lib/auth/active-company-verdict.ts).
+
+  describe('the active-company verdict for the page render', () => {
+    const COMPANY = '0b7c6f6e-2f4a-4c1e-9d55-3a1f0c2b9e10'
+    const OTHER_COMPANY = '5d2e8a41-7c3b-4f0a-8e6d-1b9c4a7f2e33'
+    const forwarded = (response: Response) =>
+      response.headers.get(`x-middleware-request-${ACTIVE_COMPANY_HEADER}`)
+
+    beforeEach(() => {
+      state.user = SIGNED_IN
+      state.company = {
+        data: [{ company_id: COMPANY, locale: 'sv', used_fallback: false }],
+        error: null,
+      }
+    })
+
+    it('vouches for exactly the company it resolved, for this user and session, resolving once', async () => {
+      state.cookieWrites = [{ name: 'sb-test-auth-token', value: 'rotated', options: { path: '/' } }]
+
+      const response = await run('/transactions')
+
+      expect(response.status).toBe(200)
+      expect(state.rpcCalls).toBe(1)
+      const verdict = forwarded(response)
+      await expect(verifyActiveCompany(verdict, { userId: 'user-1', sessionId: 'session-1' })).resolves.toBe(COMPANY)
+      await expect(verifyActiveCompany(verdict, { userId: 'user-1', sessionId: 'session-2' })).resolves.toBeNull()
+      await expect(verifyActiveCompany(verdict, { userId: 'user-2', sessionId: 'session-1' })).resolves.toBeNull()
+      // The forwarded request is rebuilt: the rotated cookie, the pathname
+      // the layout branches on and the company hint all travel as before.
+      expect(response.cookies.get('sb-test-auth-token')?.value).toBe('rotated')
+      expect(response.headers.get('x-pathname')).toBe('/transactions')
+      expect(response.cookies.get('gnubok-company-id')?.value).toBe(COMPANY)
+    })
+
+    it('vouches for the fallback company it wrote back, the same one the render would resolve', async () => {
+      state.company = {
+        data: [{ company_id: OTHER_COMPANY, locale: 'sv', used_fallback: true }],
+        error: null,
+      }
+
+      const verdict = forwarded(await run('/'))
+
+      await expect(verifyActiveCompany(verdict, { userId: 'user-1', sessionId: 'session-1' })).resolves.toBe(OTHER_COMPANY)
+    })
+
+    it('vouches for nothing on a Server Action POST, which may switch the company before it renders', async () => {
+      const response = await run('/settings/company', { method: 'POST', headers: { 'next-action': 'abc123' } })
+
+      expect(forwarded(response)).toBeNull()
+    })
+
+    it('vouches for nothing when the resolution failed, found no company, or has no session id to bind to', async () => {
+      state.company = { data: [], error: { code: 'XX000', message: 'boom' } }
+      expect(forwarded(await run('/transactions'))).toBeNull()
+
+      state.company = { data: [{ company_id: null, locale: 'sv', used_fallback: true }], error: null }
+      expect(forwarded(await run('/settings/account'))).toBeNull()
+
+      state.company = { data: [{ company_id: COMPANY, locale: 'sv', used_fallback: false }], error: null }
+      state.sessionId = null
+      expect(forwarded(await run('/transactions'))).toBeNull()
+    })
+
+    it('leaves API routes to resolve the company themselves, as before', async () => {
+      const response = await run('/api/invoices')
+
+      expect(state.rpcCalls).toBe(0)
+      expect(forwarded(response)).toBeNull()
+    })
+
+    it('never forwards a client-sent verdict, even a validly signed one', async () => {
+      // A verdict this deployment really signed, replayed by the client.
+      const replayed = await signActiveCompany({ userId: 'user-1', sessionId: 'session-1', companyId: OTHER_COMPANY })
+      const headers = { [ACTIVE_COMPANY_HEADER]: replayed! }
+      for (const [path, init] of [
+        ['/settings/company', { method: 'POST', headers }],
+        ['/api/invoices', { headers }],
+        ['/invite/abc', { headers }],
+      ] as const) {
+        const response = await run(path, init)
+        expect(forwarded(response), path).toBeNull()
+        expect(response.headers.get('x-middleware-override-headers') ?? '', path).not.toContain(ACTIVE_COMPANY_HEADER)
+      }
+      // On a page GET the proxy's own verdict replaces it.
+      const page = await run('/transactions', { headers })
+      await expect(verifyActiveCompany(forwarded(page), { userId: 'user-1', sessionId: 'session-1' })).resolves.toBe(COMPANY)
+    })
+  })
+
+  describe('public API endpoints that never read the session', () => {
+    it('get no Supabase client, no auth round trip and no cookie writes', async () => {
+      state.user = SIGNED_IN
+      state.cookieWrites = [{ name: 'sb-test-auth-token', value: 'rotated', options: { path: '/' } }]
+
+      for (const path of ['/api/version', '/api/health', '/api/log']) {
+        vi.mocked(createServerClient).mockClear()
+        const response = await run(path, {
+          headers: {
+            cookie: 'sb-test-auth-token=current',
+            [MFA_ASSURANCE_HEADER]: 'forged.verdict',
+            [ACTIVE_COMPANY_HEADER]: 'forged.verdict.x',
+          },
+        })
+
+        expect(response.status, path).toBe(200)
+        expect(createServerClient, path).not.toHaveBeenCalled()
+        expect(response.cookies.getAll(), path).toEqual([])
+        expect(response.headers.get(`x-middleware-request-${MFA_ASSURANCE_HEADER}`), path).toBeNull()
+        expect(response.headers.get(`x-middleware-request-${ACTIVE_COMPANY_HEADER}`), path).toBeNull()
+      }
+    })
+
+    it('keeps the full session handling on every other API path, look-alikes included', async () => {
+      state.user = SIGNED_IN
+
+      for (const path of ['/api/versions', '/api/version/history', '/api/health-report', '/api/auth/heartbeat']) {
+        vi.mocked(createServerClient).mockClear()
+        await run(path)
+        expect(createServerClient, path).toHaveBeenCalledTimes(1)
+      }
     })
   })
 
@@ -1596,12 +1766,12 @@ describe('updateSession redirect destinations', () => {
       try {
         process.env.NEXT_PUBLIC_SUPABASE_URL = 'https://project.supabase.co'
         delete process.env.SUPABASE_SECRET_KEY
-        await run('/api/health', { headers: { 'x-forwarded-for': '203.0.113.7' } })
+        await run('/api/auth/heartbeat', { headers: { 'x-forwarded-for': '203.0.113.7' } })
         let options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as { global?: { fetch?: unknown } }
         expect(options.global).toBeUndefined()
 
         process.env.SUPABASE_SECRET_KEY = 'sb_secret_test-key'
-        await run('/api/health', { headers: { 'x-forwarded-for': '203.0.113.7' } })
+        await run('/api/auth/heartbeat', { headers: { 'x-forwarded-for': '203.0.113.7' } })
         options = vi.mocked(createServerClient).mock.calls.at(-1)?.[2] as { global?: { fetch?: unknown } }
         expect(typeof options.global?.fetch).toBe('function')
       } finally {

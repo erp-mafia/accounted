@@ -1,4 +1,4 @@
-import { getSigningSecret } from './session-timeout'
+import { base64UrlToBytes, bytesToBase64Url, importVerdictKey, type Environment } from './proxy-verdict-key'
 
 /**
  * The proxy's MFA verdict for one API request, handed to the route it
@@ -26,43 +26,8 @@ const TTL_MS = 30_000
 /** The proxy and the route can run on machines whose clocks differ a little. */
 const CLOCK_SKEW_MS = 5_000
 
-type Environment = Record<string, string | undefined>
-
-function bytesToBase64Url(bytes: Uint8Array): string {
-  let binary = ''
-  for (const byte of bytes) binary += String.fromCharCode(byte)
-  return btoa(binary).replaceAll('+', '-').replaceAll('/', '_').replace(/=+$/u, '')
-}
-
-function base64UrlToBytes(value: string): Uint8Array<ArrayBuffer> | null {
-  try {
-    const base64 = value.replaceAll('-', '+').replaceAll('_', '/')
-    const binary = atob(base64.padEnd(Math.ceil(base64.length / 4) * 4, '='))
-    const bytes = new Uint8Array(binary.length)
-    for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index)
-    return bytes
-  } catch {
-    return null
-  }
-}
-
 async function importKey(env: Environment): Promise<CryptoKey> {
-  // HKDF-derived with its own info string, like the session timeout's key:
-  // never the raw secret, and never the same key as another signer.
-  const baseKey = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(getSigningSecret(env)),
-    'HKDF',
-    false,
-    ['deriveKey'],
-  )
-  return crypto.subtle.deriveKey(
-    { name: 'HKDF', hash: 'SHA-256', salt: new Uint8Array(32), info: new TextEncoder().encode(SIGNING_CONTEXT) },
-    baseKey,
-    { name: 'HMAC', hash: 'SHA-256', length: 256 },
-    false,
-    ['sign', 'verify'],
-  )
+  return importVerdictKey(SIGNING_CONTEXT, env)
 }
 
 function message(userId: string, sessionId: string, expiresAt: number): Uint8Array<ArrayBuffer> {

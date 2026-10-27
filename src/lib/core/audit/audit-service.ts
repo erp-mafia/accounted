@@ -20,6 +20,20 @@ export interface AuditLogFilters {
   pageSize?: number
   /** Full exports can skip the expensive exact count and stop on a short page. */
   includeCount?: boolean
+  /**
+   * Keyset cursor: only the rows after this one in the newest-first order,
+   * and `page` is ignored. A reader that walks the whole log (the full
+   * archive export) passes the last row it got; an OFFSET makes Postgres
+   * fetch and discard every earlier row, which for a company with 570 000
+   * audit rows took 16 s at offset 200 000, past the statement timeout.
+   */
+  after?: AuditLogCursor
+}
+
+/** A position in the newest-first (created_at, id) order: a row's own two values. */
+export interface AuditLogCursor {
+  created_at: string
+  id: string
 }
 
 /**
@@ -33,7 +47,7 @@ export async function getAuditLog(
   const page = filters.page ?? 1
   const pageSize = filters.pageSize ?? 50
   const includeCount = filters.includeCount ?? true
-  const offset = (page - 1) * pageSize
+  const offset = filters.after ? 0 : (page - 1) * pageSize
 
   const auditTable = supabase.from('audit_log')
   let query = (includeCount
@@ -45,6 +59,7 @@ export async function getAuditLog(
     .range(offset, offset + pageSize - 1)
 
   query = applyAuditFilters(query, filters)
+  if (filters.after) query = applyAfterCursor(query, filters.after)
 
   const { data, error, count } = await query
 
@@ -81,6 +96,22 @@ function applyAuditFilters(
   return q
 }
 
+/**
+ * Rows strictly after `cursor` in the (created_at DESC, id DESC) order. The
+ * .or() alone is exact but no index bound: Postgres cannot start a btree
+ * scan from an OR across two columns, so it walked
+ * idx_audit_log_company_created_id from the company's newest row and
+ * filtered every row before the cursor (187 ms and 200 000 buffers on page
+ * 400 of the largest company). The redundant `created_at <= ts` is the
+ * bound it can start from (1.6 ms, 544 buffers); the .or() then only drops
+ * the rows that share the cursor's timestamp.
+ */
+function applyAfterCursor(query: AuditQuery, cursor: AuditLogCursor): AuditQuery {
+  return query
+    .lte('created_at', cursor.created_at)
+    .or(`created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`)
+}
+
 export interface AuditLogPageFilters
   extends Pick<AuditLogFilters, 'action' | 'table_name' | 'record_id' | 'from_date' | 'to_date'> {
   cursor?: string
@@ -107,9 +138,7 @@ export async function listAuditLogPage(
     .order('id', { ascending: false })
     .limit(limit + 1)
   query = applyAuditFilters(query, filters)
-  if (decoded) {
-    query = query.or(`created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.lt.${decoded.id})`)
-  }
+  if (decoded) query = applyAfterCursor(query, { created_at: decoded.ts, id: decoded.id })
   const { data, error } = await query
   if (error) {
     ctx.log.error('audit log page read failed', error)

@@ -2,6 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
@@ -173,26 +174,45 @@ async function findBookedRefundCandidates(
   amount: number,
   since: string,
 ): Promise<BookedRefundCandidate[]> {
-  const { data, error } = await supabase
-    .from('journal_entry_lines')
-    .select('journal_entry_id, journal_entries!inner(company_id, status, entry_date, source_type, voucher_series, voucher_number)')
-    .eq('account_number', RECEIVABLE_ACCOUNT)
-    .gte('debit_amount', roundOre(amount - ORE_TOLERANCE))
-    .lte('debit_amount', roundOre(amount + ORE_TOLERANCE))
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.status', 'posted')
-    .in('journal_entries.source_type', ['manual', 'bank_transaction'])
-    .gte('journal_entries.entry_date', since)
-    .limit(10)
-  if (error || !data || data.length === 0) return []
-
   type Row = {
     journal_entry_id: string
     journal_entries:
       | { entry_date: string; source_type: string; voucher_series: string | null; voucher_number: number | null }
-      | Array<{ entry_date: string; source_type: string; voucher_series: string | null; voucher_number: number | null }>
+      | undefined
   }
-  const rows = data as unknown as Row[]
+  // Entry first (lib/bookkeeping/entry-lines.ts): the company's hand-booked
+  // verifikat since the window opened, then their 1510 debits of the amount.
+  // A journal_entry_lines read filtered through a journal_entries!inner embed
+  // is planned from the line side: every tenant's 1510 lines, one entry probe
+  // each, and a timeout here silently switched the guard off.
+  let rows: Row[]
+  try {
+    rows = await fetchEntryLines<Row>({
+      supabase,
+      entryColumns: 'id, entry_date, source_type, voucher_series, voucher_number',
+      lineColumns: 'journal_entry_id',
+      filterEntries: (q: EntryLinesQuery) =>
+        q
+          .eq('company_id', companyId)
+          .eq('status', 'posted')
+          .in('source_type', ['manual', 'bank_transaction'])
+          .gte('entry_date', since),
+      filterLines: (q: EntryLinesQuery) =>
+        q
+          .eq('account_number', RECEIVABLE_ACCOUNT)
+          .gte('debit_amount', roundOre(amount - ORE_TOLERANCE))
+          .lte('debit_amount', roundOre(amount + ORE_TOLERANCE)),
+    })
+  } catch {
+    // Advisory guard, as documented above: a failed read finds nothing and
+    // never refuses a refund, exactly as the error branch here always did.
+    return []
+  }
+  if (rows.length === 0) return []
+  // Ten lines are enough to name (the read used to stop there); the guard
+  // only asks "already booked?".
+  rows = rows.slice(0, 10)
+
   const entryIds = [...new Set(rows.map((row) => row.journal_entry_id))]
   const { data: claimed, error: claimedError } = await supabase
     .from('invoice_payments')
@@ -207,7 +227,7 @@ async function findBookedRefundCandidates(
   for (const row of rows) {
     if (claimedIds.has(row.journal_entry_id) || seen.has(row.journal_entry_id)) continue
     seen.add(row.journal_entry_id)
-    const entry = Array.isArray(row.journal_entries) ? row.journal_entries[0] : row.journal_entries
+    const entry = row.journal_entries
     if (!entry) continue
     candidates.push({
       journal_entry_id: row.journal_entry_id,

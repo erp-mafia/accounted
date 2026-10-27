@@ -29,7 +29,6 @@ import SubscriptionTouchpoint from '@/components/billing/SubscriptionTouchpoint'
 import AgentAvatar from '@/components/agent/AgentAvatar'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { useCompany } from '@/contexts/CompanyContext'
-import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
 import { useWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import type { EntityType } from '@/types'
 import type { CapabilitySurface } from '@/lib/modules/capabilities'
@@ -128,7 +127,6 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
 export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
-  const supabase = useRealtimeSupabase()
   const { company, capabilities, byraTeam } = useCompany()
   // Agent identity drives the "Assistent" nav icon: when the user has
   // built their assistant we show its chosen avatar instead of the
@@ -140,14 +138,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
   const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false)
   const [isClosing, setIsClosing] = useState(false)
   const closeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
-  // Badge counts load client-side after mount (and revalidate via the
-  // realtime subscriptions below). They used to arrive as server props, which
+  // Badge counts load client-side after mount (and refresh as described in
+  // lib/hooks/use-worklist-badges). They used to arrive as server props, which
   // put two head-count queries on the critical path of every dashboard
   // navigation for numbers nobody needs before first paint.
   const {
     uncategorized: uncategorizedCount,
     pendingOperations: pendingOpsCount,
-    refresh: refreshBadges,
+    nudge: nudgeBadges,
   } = useWorklistBadges(company?.id)
   const hasCompany = !!company
   // Byrå cockpit mode: lean sidebar on cockpit routes, full sidebar (with a
@@ -271,58 +269,14 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     }, 150)
   }
 
+  // The badges refresh on return to the tab and on a slow backstop
+  // (lib/hooks/use-worklist-badges). A navigation re-reads them too when the
+  // last answer is stale, so a change made in a dialog on one page shows on
+  // the next. No realtime channel here: one per open tab kept the Realtime
+  // WAL poller (the biggest database consumer) running around the clock.
   useEffect(() => {
-    if (!company?.id) return
-
-    // Realtime keeps the badges live (bank rows, skattekonto rows, staged
-    // operations); a trailing debounce collapses event bursts (bulk booking
-    // / bulk approvals emit one event per row) into a single SWR
-    // revalidation instead of a request stampede.
-    let debounce: ReturnType<typeof setTimeout> | null = null
-    const queueRefresh = () => {
-      if (debounce) clearTimeout(debounce)
-      debounce = setTimeout(() => void refreshBadges(), 400)
-    }
-
-    const channel = supabase
-      .channel(`dashboard-nav:badges:${company.id}`)
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'transactions',
-          filter: `company_id=eq.${company.id}`,
-        },
-        queueRefresh,
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'skattekonto_transactions',
-          filter: `company_id=eq.${company.id}`,
-        },
-        queueRefresh,
-      )
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'pending_operations',
-          filter: `company_id=eq.${company.id}`,
-        },
-        queueRefresh,
-      )
-      .subscribe()
-
-    return () => {
-      if (debounce) clearTimeout(debounce)
-      void supabase.removeChannel(channel)
-    }
-  }, [company?.id, supabase, refreshBadges])
+    nudgeBadges()
+  }, [pathname, nudgeBadges])
 
   const hiddenNavHrefs = new Set(getBranding().hiddenNavHrefs)
 

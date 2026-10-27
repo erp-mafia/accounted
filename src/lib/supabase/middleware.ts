@@ -18,6 +18,7 @@ import { isMultiUserEnforced } from '@/lib/entitlements/multi-user'
 import { MULTI_USER_GRACE_DAYS } from '@/lib/entitlements/multi-user-state'
 import { apiPathSkipsMfaGate } from '@/lib/auth/api-mfa-gate'
 import { MFA_ASSURANCE_HEADER, signNoVerifiedFactor } from '@/lib/auth/mfa-assurance'
+import { ACTIVE_COMPANY_HEADER, signActiveCompany } from '@/lib/auth/active-company-verdict'
 import { DEFAULT_LOCALE, LOCALE_COOKIE, isLocale } from '@/i18n/config'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { isEmailOnBrandAllowlist } from '@/lib/auth/brand-signup-gate'
@@ -46,6 +47,7 @@ import {
   supabaseAuthCookieOptions,
 } from '@/lib/supabase/cookie-options'
 import { upgradeLegacyAuthCookies } from '@/lib/supabase/auth-cookies'
+import { quietRejectedRefreshTokenErrors } from '@/lib/supabase/refresh-token-errors'
 import { authForwardingFetch, clientIpFromHeaders } from '@/lib/supabase/auth-forwarding'
 import {
   isSessionAuthMethod,
@@ -57,6 +59,19 @@ import {
 } from '@/lib/auth/session-timeout-shared'
 
 const log = createLogger('proxy')
+
+// An expired or rotated refresh token is a sign-out, not an error: auth-js
+// logs the refused refresh with console.error (the INITIAL_SESSION event
+// that createServerClient's own subscription triggers) while this proxy
+// clears the cookies and bounces the request anyway
+// (lib/supabase/refresh-token-errors.ts). One quiet line instead.
+quietRejectedRefreshTokenErrors(console, (code) => {
+  if (code === 'refresh_token_already_used') {
+    log.warn('refresh token already used; session treated as signed out', { code })
+  } else {
+    log.info('refresh token not found; session treated as signed out', { code })
+  }
+})
 
 /**
  * Marker that the signed-in user is on their home domain, so the affinity
@@ -80,6 +95,22 @@ const HOME_DOMAIN_OK_MAX_AGE = 15 * 60
 function homeDomainOkValue(userId: string, host: string): string {
   return `${userId}~${host}`
 }
+
+/**
+ * Public API endpoints that never read the session: the build-version probe
+ * every open tab polls, the health probe and the anonymous client log sink.
+ * They get no Supabase client at all: no getUser() round trip to Supabase
+ * Auth, so no token refresh racing the tab's real requests either. Exact
+ * paths only. Nothing on them depends on the session, so no session or MFA
+ * check is weakened: every route that does read it keeps the full treatment
+ * below, and the next one of those refreshes the token and enforces the
+ * session timeout as before.
+ */
+const SESSIONLESS_API_PATHS: ReadonlySet<string> = new Set([
+  '/api/version',
+  '/api/health',
+  '/api/log',
+])
 
 /**
  * Auth proxy entry point. Wraps the real work so every request emits one
@@ -120,9 +151,15 @@ async function updateSessionInner(
   request: NextRequest,
   timing: ProxyTimings,
 ): Promise<NextResponse> {
-  // Only this proxy may hand a route an MFA verdict, and only below, for the
-  // request it checked: a client-sent one never travels on.
+  // Only this proxy may hand a route an MFA verdict or a page render an
+  // active-company verdict, and only below, for the request it checked: a
+  // client-sent one never travels on.
   request.headers.delete(MFA_ASSURANCE_HEADER)
+  request.headers.delete(ACTIVE_COMPANY_HEADER)
+
+  if (SESSIONLESS_API_PATHS.has(request.nextUrl.pathname)) {
+    return NextResponse.next({ request })
+  }
 
   let supabaseResponse = NextResponse.next({
     request,
@@ -594,13 +631,32 @@ async function updateSessionInner(
     }
   }
 
-  // Forward the pathname so server layouts can branch on it (e.g. render a
-  // no-company shell for /settings/account).
-  supabaseResponse.headers.set('x-pathname', pathname)
-
   // Company context resolution
   const cookieCompanyId = request.cookies.get('gnubok-company-id')?.value
   const { companyId, locale: dbLocale, degraded } = await resolveCompanyOnce()
+
+  // Hand the render the company resolved here, so the dashboard does not
+  // resolve it a second time for the same request (lib/auth/
+  // active-company-verdict.ts). GET only: a Server Action (POST) can switch
+  // the company before its own render, so it keeps resolving for itself. A
+  // degraded resolution vouches for nothing.
+  if (!degraded && companyId && request.method === 'GET') {
+    const verdict = await timed(timing, 'companyMs', async () => {
+      const sessionId = await getSupabaseSessionId(supabase)
+      return sessionId ? signActiveCompany({ userId: user.id, sessionId, companyId }) : null
+    })
+    if (verdict) {
+      request.headers.set(ACTIVE_COMPANY_HEADER, verdict)
+      // The forwarded request headers are fixed when the response is made.
+      const forwarded = NextResponse.next({ request })
+      copyResponseCookies(supabaseResponse, forwarded)
+      supabaseResponse = forwarded
+    }
+  }
+
+  // Forward the pathname so server layouts can branch on it (e.g. render a
+  // no-company shell for /settings/account).
+  supabaseResponse.headers.set('x-pathname', pathname)
 
   // If the cookie pointed at a company we can no longer resolve (e.g.
   // archived), clear it so the browser stops sending it. Never on degraded

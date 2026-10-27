@@ -1,6 +1,7 @@
 import { warnIfAnalyticsMisconfigured } from '@/lib/analytics/enabled'
 import { bufferEarlyErrors } from '@/lib/analytics/early-errors'
 import { purgeLegacyAnalyticsStorage } from '@/lib/analytics/purge-legacy-storage'
+import { installStaleDeployListener } from '@/lib/browser/stale-deploy'
 
 // Clear anything Recapt left on the device. Runs unconditionally, BEFORE the
 // analytics gate: a browser carrying `__recapt_record_engine` must get cleaned
@@ -28,3 +29,8 @@ purgeLegacyAnalyticsStorage()
  * sees a React #418; nothing is sent unless initAnalytics() runs.
  */
 if (warnIfAnalyticsMisconfigured()) bufferEarlyErrors(window)
+
+// A click on a Server Action an older build defined (a tab opened before a
+// deploy) throws UnrecognizedActionError; DeployReloadPrompt then offers the
+// reload instead of leaving a dead click (lib/browser/stale-deploy.ts).
+installStaleDeployListener(window)

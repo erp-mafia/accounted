@@ -143,14 +143,11 @@ describe('refundCreditNote', () => {
 
   it('refuses when a hand-booked verifikat already debits 1510 with the amount, unless forced', async () => {
     enqueueReads()
+    // Entry first: the company's hand-booked verifikat, then their 1510 debits of the amount.
     enqueue({
-      data: [
-        {
-          journal_entry_id: 'je-manual',
-          journal_entries: { entry_date: '2026-10-20', source_type: 'bank_transaction', voucher_series: 'A', voucher_number: 1077 },
-        },
-      ],
+      data: [{ id: 'je-manual', entry_date: '2026-10-20', source_type: 'bank_transaction', voucher_series: 'A', voucher_number: 1077 }],
     })
+    enqueue({ data: [{ id: 'line-1', journal_entry_id: 'je-manual' }] })
     enqueue({ data: [] }) // no payment row claims it
 
     const refused = await refundCreditNote(supabase as never, 'company-1', 'user-1', {
@@ -167,8 +164,16 @@ describe('refundCreditNote', () => {
       },
     })
     expect(mockPostJournalEntry).not.toHaveBeenCalled()
-    // The guard looks a week before the credit note.
-    expect(findCalls('journal_entry_lines', 'gte')).toContainEqual(['journal_entries.entry_date', '2026-10-04'])
+    // The guard looks a week before the credit note, from the entry side:
+    // never lines filtered through a journal_entries!inner embed.
+    expect(findCalls('journal_entries', 'gte')).toContainEqual(['entry_date', '2026-10-04'])
+    expect(findCalls('journal_entries', 'eq')).toContainEqual(['company_id', 'company-1'])
+    expect(findCalls('journal_entries', 'in')).toContainEqual(['source_type', ['manual', 'bank_transaction']])
+    expect(findCalls('journal_entry_lines', 'in')).toContainEqual(['journal_entry_id', ['je-manual']])
+    expect(findCalls('journal_entry_lines', 'eq')).toContainEqual(['account_number', '1510'])
+    for (const [select] of findCalls('journal_entry_lines', 'select')) {
+      expect(String(select)).not.toContain('journal_entries')
+    }
 
     reset()
     enqueueReads()
@@ -184,9 +189,8 @@ describe('refundCreditNote', () => {
 
   it('ignores a matching verifikat that a payment row already claims', async () => {
     enqueueReads()
-    enqueue({
-      data: [{ journal_entry_id: 'je-paid', journal_entries: { entry_date: '2026-10-20', source_type: 'manual', voucher_series: 'A', voucher_number: 3 } }],
-    })
+    enqueue({ data: [{ id: 'je-paid', entry_date: '2026-10-20', source_type: 'manual', voucher_series: 'A', voucher_number: 3 }] })
+    enqueue({ data: [{ id: 'line-1', journal_entry_id: 'je-paid' }] })
     enqueue({ data: [{ journal_entry_id: 'je-paid' }] })
     enqueue({ data: [{ id: 'cn-1' }] })
 

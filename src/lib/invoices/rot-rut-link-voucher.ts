@@ -24,6 +24,7 @@ import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { accountClass } from '@/lib/invariants/account-number'
 import { VAT_OUTPUT_ACCOUNTS } from '@/lib/reports/vat-declaration'
+import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
 
 export type LinkRotRutPayoutVoucherErrorCode =
   | 'ROT_RUT_REQUEST_NOT_FOUND'
@@ -174,39 +175,42 @@ export async function listRotRutPayoutVoucherCandidates(
   since: string,
   twoStep?: { expectedAmount: number },
 ): Promise<{ data: RotRutPayoutVoucherCandidate[]; error: unknown }> {
-  const { data: lineRows, error: lineError } = await supabase
-    .from('journal_entry_lines')
-    .select('journal_entry_id, journal_entries!inner(company_id, status, entry_date)')
-    .eq('account_number', ROT_RUT_RECEIVABLE)
-    .gt('credit_amount', 0)
-    .eq('journal_entries.company_id', companyId)
-    .eq('journal_entries.status', 'posted')
-    .gte('journal_entries.entry_date', since)
-    .limit(500)
-  if (lineError) return { data: [], error: lineError }
-
   const expected = twoStep ? roundOre(twoStep.expectedAmount) : 0
-  let moneyInRows: Array<{ journal_entry_id: string; account_number: string }> = []
-  if (twoStep && expected > 0) {
-    const { data: rows, error: moneyInError } = await supabase
-      .from('journal_entry_lines')
-      .select('journal_entry_id, account_number, journal_entries!inner(company_id, status, entry_date)')
-      .eq('debit_amount', expected)
-      .eq('journal_entries.company_id', companyId)
-      .eq('journal_entries.status', 'posted')
-      .gte('journal_entries.entry_date', since)
-      .limit(500)
-    if (moneyInError) return { data: [], error: moneyInError }
-    moneyInRows = ((rows ?? []) as Array<{ journal_entry_id: string; account_number: string }>).filter((row) =>
-      isBankAccount(row.account_number),
-    )
+  const withMoneyIn = Boolean(twoStep) && expected > 0
+
+  // Entry first (lib/bookkeeping/entry-lines.ts): the company's verifikat
+  // since the begäran, then only their lines that credit 1513 or (the two
+  // steps) debit exactly the expected payout. These were journal_entry_lines
+  // reads filtered through a journal_entries!inner embed, which PostgREST
+  // plans from the line side: the debit filter has no index, so it scanned
+  // every tenant's lines and ran into the statement timeout.
+  let lineRows: Array<{ journal_entry_id: string; account_number: string; debit_amount: number | string; credit_amount: number | string }>
+  try {
+    lineRows = await fetchEntryLines({
+      supabase,
+      lineColumns: 'journal_entry_id, account_number, debit_amount, credit_amount',
+      filterEntries: (q: EntryLinesQuery) =>
+        q.eq('company_id', companyId).eq('status', 'posted').is('reversed_by_id', null).gte('entry_date', since),
+      filterLines: (q: EntryLinesQuery) =>
+        withMoneyIn
+          ? q.or(`and(account_number.eq.${ROT_RUT_RECEIVABLE},credit_amount.gt.0),debit_amount.eq.${expected}`)
+          : q.eq('account_number', ROT_RUT_RECEIVABLE).gt('credit_amount', 0),
+      attachEntriesAs: null,
+    })
+  } catch (lineError) {
+    return { data: [], error: lineError }
   }
 
   const ids = [
-    ...new Set([
-      ...((lineRows ?? []) as Array<{ journal_entry_id: string }>).map((r) => r.journal_entry_id),
-      ...moneyInRows.map((r) => r.journal_entry_id),
-    ]),
+    ...new Set(
+      lineRows
+        .filter((row) =>
+          row.account_number === ROT_RUT_RECEIVABLE
+            ? Number(row.credit_amount) > 0
+            : withMoneyIn && isBankAccount(row.account_number) && roundOre(Number(row.debit_amount)) === expected,
+        )
+        .map((row) => row.journal_entry_id),
+    ),
   ]
   if (ids.length === 0) return { data: [], error: null }
 

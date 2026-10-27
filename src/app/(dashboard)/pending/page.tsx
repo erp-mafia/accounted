@@ -37,6 +37,8 @@ import { ToastAction } from '@/components/ui/toast'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
+import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
+import { refreshWorklistBadges } from '@/lib/hooks/use-worklist-badges'
 import { collectPages } from '@/lib/lists/collect-pages'
 import { booksInvoicesOnIssue } from '@/lib/bookkeeping/booking-mode'
 import {
@@ -608,12 +610,15 @@ export default function PendingOperationsPage() {
           if (debounce) clearTimeout(debounce)
           debounce = setTimeout(() => {
             fetchOperations()
+            // The Granskning badge has no channel of its own any more.
+            refreshWorklistBadges()
           }, 400)
         }
       )
-      .subscribe()
+    const stopJoin = subscribeAsUser(supabase, channel)
     return () => {
       if (debounce) clearTimeout(debounce)
+      stopJoin()
       void supabase.removeChannel(channel)
     }
   }, [companyId, fetchOperations])
@@ -624,7 +629,8 @@ export default function PendingOperationsPage() {
   // walked back to the counts from before the approvals and had to hard-reload
   // (crm#1003). router.refresh() drops those cached renders, the contract the
   // 30 s router cache was introduced under for every mutation flow. This list
-  // reconciles through fetchOperations; the sidebar badges through realtime.
+  // reconciles through fetchOperations; the sidebar badges through this
+  // page's realtime channel (refreshWorklistBadges).
   function afterResolve() {
     router.refresh()
     fetchOperations()
