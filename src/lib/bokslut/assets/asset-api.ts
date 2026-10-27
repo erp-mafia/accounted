@@ -29,6 +29,7 @@ import {
 import { validateComponents } from './k3-components'
 import { validateOpeningDepreciation } from './opening-depreciation'
 import { findK2ExcludedAccount, k2ExcludedAccountMessages } from './k2-account-guard'
+import { chartAwareDefaultAccounts, unusableAssetAccounts } from './asset-chart-accounts'
 import type {
   AccountingFramework,
   Asset,
@@ -266,7 +267,7 @@ export type DisposeAssetBody = z.infer<typeof DisposeAssetSchema>
 // ── Framework gates ──────────────────────────────────────────────
 
 export interface AssetGateFailure {
-  code: 'K3_REQUIRED_FOR_COMPONENTS' | 'K2_EXCLUDED_ACCOUNT' | 'INVALID_K3_COMPONENTS'
+  code: 'K3_REQUIRED_FOR_COMPONENTS' | 'K2_EXCLUDED_ACCOUNT' | 'INVALID_K3_COMPONENTS' | 'ACCOUNTS_NOT_IN_CHART'
   status: 400 | 422
   message_sv: string
   message_en: string
@@ -341,7 +342,26 @@ export async function checkCreateAssetGates(
     ])
     if (excluded) return k2Failure(excluded, company?.entity_type)
   }
+  // crm#1452: refuse at staging what the create would refuse at commit.
+  const accounts = await resolveCreateAccounts(supabase, companyId, body)
+  const unusable = await unusableAssetAccounts(supabase, companyId, [
+    accounts.asset,
+    accounts.accumulated,
+    accounts.expense,
+  ])
+  if (unusable.length > 0) return accountsNotInChartFailure(unusable)
   return null
+}
+
+function accountsNotInChartFailure(accountNumbers: string[]): AssetGateFailure {
+  const list = accountNumbers.join(', ')
+  return {
+    code: 'ACCOUNTS_NOT_IN_CHART',
+    status: 422,
+    message_sv: `Konto ${list} är inaktiverat eller saknas i kontoplanen och kan inte läggas till automatiskt. Aktivera kontot i kontoplanen eller välj ett annat konto.`,
+    message_en: `Account ${list} is inactive or missing in the chart of accounts and cannot be added automatically. Activate it in the chart of accounts or choose another account.`,
+    details: { account_numbers: accountNumbers },
+  }
 }
 
 /**
@@ -610,7 +630,12 @@ export async function resolveCreateAccounts(
   body: Pick<CreateAssetBody, 'category' | 'bas_asset_account' | 'bas_accumulated_account' | 'bas_expense_account'>,
 ): Promise<{ asset: string; accumulated: string; expense: string }> {
   const company = await loadCompanyFramework(supabase, companyId)
-  const defaults = defaultAccountsForCategory(body.category, company?.accounting_framework)
+  const defaults = await chartAwareDefaultAccounts(
+    supabase,
+    companyId,
+    body.category,
+    defaultAccountsForCategory(body.category, company?.accounting_framework),
+  )
   return {
     asset: body.bas_asset_account ?? defaults.asset,
     accumulated: body.bas_accumulated_account ?? defaults.accumulated,

@@ -9,18 +9,19 @@
  * or an AGI, skattekonto-sources.ts), it pays what that declaration asks
  * for, by its due date, and the synced saldo is shown, never netted. Named
  * from a day (source due_date), it pays everything declared due that day as
- * one payment: the database holds one open skattekonto order per company,
- * so moms and AGI due together are paid together. A declaration paid on its
- * own warns when another one is due the same day. The person may pay in
+ * one payment. The database holds one open skattekonto order per execution
+ * day: a payment for a day whose order nobody has signed yet is added to it
+ * (the total is approved again), a day whose order is signed or at the bank
+ * refuses, and another day gets its own order (crm#1485). A declaration paid
+ * on its own warns when another one is due the same day. The person may pay in
  * another amount. The day defaults to the last banking day before
  * Skatteverket draws the charge, so the money is on the skattekonto by the
  * due date; a day on or after it is allowed with a warning, because
  * Skatteverket charges interest (kostnadsränta) on what is missing.
  *
  * Everything else follows the supplier payment (prepare.ts): the same door,
- * the sandbox refusal, the same debtor, a draft nobody approved replaced by
- * the new one, and a service-role RPC, create_skattekonto_payment_order, that
- * sets the payee itself. Nothing reaches the bank here: a person approves the
+ * the sandbox refusal, the same debtor, and a service-role RPC,
+ * create_skattekonto_payment_order, that sets the payee itself. Nothing reaches the bank here: a person approves the
  * draft and signs it with BankID. In v1 nothing books the debit when it
  * arrives: the bank row is booked the normal way, against the skattekonto
  * account.
@@ -49,14 +50,14 @@ import {
   type SkattekontoSourceDue,
 } from './skattekonto-sources'
 import { openPaymentsDoor } from './switched-on'
-import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
+import type { PaymentOrderRow } from './types'
 
 /** The name every skattekonto order carries as its payee (set by create_skattekonto_payment_order). */
 export const SKATTEKONTO_PAYEE_NAME = 'Skatteverket'
 
 /**
  * An open skattekonto order: from the draft until the bank accepted it. The
- * database allows one per company (uq_payment_orders_open_skattekonto_per_company).
+ * database allows one per company and execution day (uq_payment_orders_open_skattekonto_per_date).
  */
 export const OPEN_SKATTEKONTO_ORDER_STATUSES = [
   'draft',
@@ -113,11 +114,21 @@ export interface SkattekontoPaymentWarning {
   suggested_source?: { source: 'due_date'; due_date: string }
 }
 
+/** The open order of the same execution day the payment is added to: its amount before, and the total after. */
+export interface SkattekontoMergedInto {
+  payment_order_id: string
+  status: string
+  amount: number
+  total: number
+}
+
 export interface PrepareSkattekontoPaymentResult {
   order: PaymentOrderRow
   warnings: SkattekontoPaymentWarning[]
-  /** A skattekonto draft nobody approved, cancelled here so the person's latest choice wins. */
+  /** Always empty since crm#1485: a same-day order nobody signed is added to (merged_into), never replaced. */
   replaced_draft_ids: string[]
+  /** Set when the amount was added to the open order of the same day; the order is then a draft again. */
+  merged_into?: SkattekontoMergedInto
   /** The declaration paid, when the payment was named from one (or pays exactly one declaration due on the day). */
   source: SkattekontoSourceDue | null
   /**
@@ -251,23 +262,6 @@ export async function prepareSkattekontoPaymentOrder(
   const debtor = await loadDebtor(supabase, companyId, input.cashAccountId)
   if (!debtor.ok) return { ok: false, code: 'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE', details: { reason: debtor.reason } }
 
-  // One skattekonto payment at a time. A draft nobody approved does not
-  // block: it is replaced below, so a second Betala via banken never fails on
-  // the first one's leftovers. Anything further along is in payment already.
-  const { data: openData, error: openError } = await supabase
-    .from('payment_orders')
-    .select('id, status')
-    .eq('company_id', companyId)
-    .eq('purpose', 'skattekonto')
-    .in('status', [...OPEN_SKATTEKONTO_ORDER_STATUSES])
-  if (openError) throw openError
-  const open = (openData ?? []) as Array<{ id: string; status: string }>
-  const inPayment = open.find((o) => o.status !== 'draft')
-  if (inPayment) {
-    return { ok: false, code: 'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT', details: { payment_order_id: inPayment.id, status: inPayment.status } }
-  }
-  const staleDraftIds = open.filter((o) => o.status === 'draft').map((o) => o.id)
-
   // A declaration names its own amount and due date; a day names every
   // declaration due on it, summed. Without either, what Hem asks for: the
   // next charge, the shortfall against the saldo, and the bank payments
@@ -334,6 +328,35 @@ export async function prepareSkattekontoPaymentOrder(
     warnings.push({ code: 'date_moved', from: input.executionDate, to: executionDate })
   }
   if (dueDate && executionDate >= dueDate) warnings.push({ code: 'late', due: dueDate })
+
+  // One open skattekonto payment per execution day (crm#1485). The day's
+  // order nobody signed yet (a draft, or approved and not claimed for
+  // signing) takes this payment as an addition, approved again as a whole;
+  // signed or at the bank, the day is in payment. Another day gets its own.
+  const { data: openData, error: openError } = await supabase
+    .from('payment_orders')
+    .select('id, status, amount, batch_id')
+    .eq('company_id', companyId)
+    .eq('purpose', 'skattekonto')
+    .eq('requested_execution_date', executionDate)
+    .in('status', [...OPEN_SKATTEKONTO_ORDER_STATUSES])
+  if (openError) throw openError
+  const sameDay = ((openData ?? []) as Array<{ id: string; status: string; amount: number | string; batch_id: string | null }>)[0]
+  if (sameDay && ((sameDay.status !== 'draft' && sameDay.status !== 'approved') || sameDay.batch_id)) {
+    return {
+      ok: false,
+      code: 'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT',
+      details: { payment_order_id: sameDay.id, status: sameDay.status, requested_execution_date: executionDate },
+    }
+  }
+  const mergesInto: SkattekontoMergedInto | null = sameDay
+    ? {
+        payment_order_id: sameDay.id,
+        status: sameDay.status,
+        amount: roundOre(Number(sameDay.amount)),
+        total: roundOre(Number(sameDay.amount) + amount),
+      }
+    : null
   let balance: SkattekontoBalance | null = null
   if (input.source) {
     // Several declarations in one payment: each warning names the one it is about.
@@ -363,7 +386,7 @@ export async function prepareSkattekontoPaymentOrder(
         companyId,
         { source: input.source, due: source },
         input.today,
-        staleDraftIds.length > 0,
+        false,
         log,
       )
       if (sameDay) warnings.push(sameDay)
@@ -391,44 +414,13 @@ export async function prepareSkattekontoPaymentOrder(
         payee: { type: 'bankgiro', label: formatPayeeLabel({ type: 'bankgiro', bankgiro }), name: SKATTEKONTO_PAYEE_NAME },
         reference: { type: 'ocr', value: ocr },
         warnings,
-        replaces_drafts: staleDraftIds.length,
+        replaces_drafts: 0,
+        ...(mergesInto ? { merges_into: mergesInto } : {}),
       },
     }
   }
 
   const writer = createServiceClient()
-  let replaced: string[] = []
-  if (staleDraftIds.length > 0) {
-    // The database refuses a second open skattekonto order, so the stale
-    // draft goes first. Only drafts: the status filter keeps anything a
-    // person approved meanwhile out of reach.
-    const { data: cancelled, error: cancelError } = await writer
-      .from('payment_orders')
-      .update({ status: 'cancelled', cancelled_by: userId, cancelled_at: new Date().toISOString() })
-      .in('id', staleDraftIds)
-      .eq('company_id', companyId)
-      .eq('purpose', 'skattekonto')
-      .eq('status', 'draft')
-      .select('id')
-    if (cancelError) throw cancelError
-    replaced = ((cancelled ?? []) as Array<{ id: string }>).map((o) => o.id)
-    if (replaced.length > 0) {
-      await logPaymentOrderEvents(
-        writer,
-        replaced.map((id) => ({
-          company_id: companyId,
-          payment_order_id: id,
-          event_type: 'cancelled',
-          from_status: 'draft',
-          to_status: 'cancelled',
-          actor_user_id: userId,
-          detail: { replaced_by_new_draft: true },
-        })),
-        log,
-      )
-    }
-  }
-
   const { data: rpc, error: rpcError } = await writer.rpc('create_skattekonto_payment_order', {
     p_company_id: companyId,
     p_cash_account_id: input.cashAccountId,
@@ -440,7 +432,13 @@ export async function prepareSkattekontoPaymentOrder(
     p_user_id: userId,
   })
   if (rpcError) throw rpcError
-  const result = rpc as { ok: boolean; code?: string; details?: unknown; order?: PaymentOrderRow }
+  const result = rpc as {
+    ok: boolean
+    code?: string
+    details?: unknown
+    order?: PaymentOrderRow
+    merged?: { previous_amount: number | string; added_amount: number | string }
+  }
   if (!result.ok || !result.order) {
     log.warn('create_skattekonto_payment_order refused', { code: result.code })
     return {
@@ -449,8 +447,18 @@ export async function prepareSkattekontoPaymentOrder(
       details: { rpc_code: result.code, rpc_details: result.details as Record<string, unknown> | undefined },
     }
   }
+  const merged = result.merged
+    ? {
+        merged_into: {
+          payment_order_id: result.order.id,
+          status: String(result.order.status),
+          amount: roundOre(Number(result.merged.previous_amount)),
+          total: roundOre(Number(result.order.amount)),
+        },
+      }
+    : {}
   return {
     ok: true,
-    data: { order: result.order, warnings, replaced_draft_ids: replaced, source, ...(combined ? { combined } : {}), balance },
+    data: { order: result.order, warnings, replaced_draft_ids: [], ...merged, source, ...(combined ? { combined } : {}), balance },
   }
 }

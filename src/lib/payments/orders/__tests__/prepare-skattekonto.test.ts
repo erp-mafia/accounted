@@ -34,18 +34,29 @@ const ACCOUNT = {
 const provider = { id: 'open_payments', isAvailableFor: () => true } as unknown as PaymentInitiationProvider
 
 type Chain = Array<{ method: string; args: unknown[] }>
-type OrderRow = { id: string; status: string; amount?: number; executed_at?: string | null }
+type OrderRow = {
+  id: string
+  status: string
+  amount?: number
+  executed_at?: string | null
+  requested_execution_date?: string
+  batch_id?: string | null
+}
 
 /**
- * payment_orders answers by what the chain asks: the open-order check
- * ('id, status'), the worklist's payments underway (amount, status,
- * executed_at), or the cancel of a stale draft (an update).
+ * payment_orders answers by what the chain asks: the open order of the
+ * execution day ('id, status, amount, batch_id', filtered by the day asked
+ * for; a row without a day is on every day), or the worklist's payments
+ * underway (amount, status, executed_at).
  */
-function paymentOrders(open: OrderRow[], underway: OrderRow[] = [], cancelled: Array<{ id: string }> = []) {
+function paymentOrders(open: OrderRow[], underway: OrderRow[] = []) {
   return (calls: Chain) => {
-    if (calls.some((c) => c.method === 'update')) return { data: cancelled }
+    if (calls.some((c) => c.method === 'update')) throw new Error('no payment order is updated by the service')
     const select = calls.find((c) => c.method === 'select')?.args[0]
-    if (select === 'id, status') return { data: open }
+    if (select === 'id, status, amount, batch_id') {
+      const day = calls.find((c) => c.method === 'eq' && c.args[0] === 'requested_execution_date')?.args[1]
+      return { data: open.filter((o) => !o.requested_execution_date || o.requested_execution_date === day) }
+    }
     return { data: underway }
   }
 }
@@ -191,7 +202,7 @@ describe('prepareSkattekontoPaymentOrder', () => {
   })
 
   it('answers the payment it would make on a dry run and writes nothing', async () => {
-    db.setTable('payment_orders', paymentOrders([{ id: 'old-draft', status: 'draft' }]))
+    db.setTable('payment_orders', paymentOrders([{ id: 'old-draft', status: 'draft', amount: 3433 }]))
 
     const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', today: TODAY, dryRun: true })
 
@@ -209,7 +220,8 @@ describe('prepareSkattekontoPaymentOrder', () => {
         payee: { type: 'bankgiro', label: 'BG 5050-1055', name: 'Skatteverket' },
         reference: { type: 'ocr', value: OCR },
         warnings: [],
-        replaces_drafts: 1,
+        replaces_drafts: 0,
+        merges_into: { payment_order_id: 'old-draft', status: 'draft', amount: 3433, total: 14433 },
         source: null,
         balance: null,
       },
@@ -219,26 +231,54 @@ describe('prepareSkattekontoPaymentOrder', () => {
     expect(db.findCalls('payment_order_events', 'insert')).toEqual([])
   })
 
-  it('replaces a skattekonto draft nobody approved, so the latest choice wins', async () => {
-    db.setTable('payment_orders', paymentOrders([{ id: 'old-draft', status: 'draft' }], [], [{ id: 'old-draft' }]))
+  it('adds to the same day\'s order nobody signed yet instead of replacing it, and answers what it was added to (crm#1485)', async () => {
+    db.setTable('payment_orders', paymentOrders([{ id: 'agi-order', status: 'approved', amount: 30232, requested_execution_date: '2026-11-11' }]))
+    db.setTable('rpc:create_skattekonto_payment_order', {
+      data: {
+        ok: true,
+        order: { id: 'agi-order', purpose: 'skattekonto', status: 'draft', amount: 33665 },
+        merged: { previous_amount: '30232.00', added_amount: '3433.00' },
+      },
+    })
 
-    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', today: TODAY })
+    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', amount: 3433, today: TODAY })
 
-    expect(result).toMatchObject({ ok: true, data: { replaced_draft_ids: ['old-draft'] } })
-    const [patch] = db.findCall('payment_orders', 'update') as [Record<string, unknown>]
-    expect(patch).toMatchObject({ status: 'cancelled', cancelled_by: 'user-1' })
-    expect(db.findCalls('payment_orders', 'eq')).toEqual(expect.arrayContaining([['status', 'draft'], ['purpose', 'skattekonto']]))
-    const [events] = db.findCall('payment_order_events', 'insert') as [Array<Record<string, unknown>>]
-    expect(events).toEqual([expect.objectContaining({ payment_order_id: 'old-draft', event_type: 'cancelled', detail: { replaced_by_new_draft: true } })])
-    expect(db.findCall('rpc:create_skattekonto_payment_order', 'rpc')).toBeDefined()
+    expect(result).toMatchObject({
+      ok: true,
+      data: {
+        order: { id: 'agi-order', status: 'draft', amount: 33665 },
+        replaced_draft_ids: [],
+        merged_into: { payment_order_id: 'agi-order', status: 'draft', amount: 30232, total: 33665 },
+      },
+    })
+    expect(rpcArgs()).toMatchObject({ p_amount: 3433, p_requested_execution_date: '2026-11-11' })
+    // Nothing is cancelled any more: the database adds to the day's order.
+    expect(db.findCalls('payment_orders', 'update')).toEqual([])
   })
 
-  it('refuses while a skattekonto payment is already on its way, and maps the database refusal the same way', async () => {
-    db.setTable('payment_orders', paymentOrders([{ id: 'signed-1', status: 'awaiting_signature' }]))
+  it('lets another day have its own payment while one is signed (crm#1485)', async () => {
+    db.setTable('payment_orders', paymentOrders([{ id: 'signed-1', status: 'accepted', amount: 30232, requested_execution_date: '2026-11-11' }]))
+
+    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', amount: 3433, executionDate: '2026-11-10', today: TODAY })
+
+    expect(result).toMatchObject({ ok: true, data: { order: CREATED } })
+    expect(rpcArgs()).toMatchObject({ p_amount: 3433, p_requested_execution_date: '2026-11-10' })
+  })
+
+  it('refuses while the same day\'s payment is signed or at the bank, and maps the database refusal the same way', async () => {
+    db.setTable('payment_orders', paymentOrders([{ id: 'signed-1', status: 'awaiting_signature', amount: 30232 }]))
     expect(await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', today: TODAY })).toEqual({
       ok: false,
       code: 'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT',
-      details: { payment_order_id: 'signed-1', status: 'awaiting_signature' },
+      details: { payment_order_id: 'signed-1', status: 'awaiting_signature', requested_execution_date: '2026-11-11' },
+    })
+    expect(db.findCall('rpc:create_skattekonto_payment_order', 'rpc')).toBeUndefined()
+
+    // Approved but already claimed for signing is in payment too.
+    db.setTable('payment_orders', paymentOrders([{ id: 'claimed-1', status: 'approved', amount: 30232, batch_id: 'batch-1' }]))
+    expect(await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', today: TODAY })).toMatchObject({
+      ok: false,
+      code: 'SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT',
     })
     expect(db.findCall('rpc:create_skattekonto_payment_order', 'rpc')).toBeUndefined()
 

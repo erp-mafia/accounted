@@ -51,6 +51,9 @@ export type BatchExclusionReason =
   | 'reference_missing'
   // The attest policy requires attest for the invoice and it has not been given.
   | 'attest_required'
+  // The supplier debits the invoice itself (autogiro, account debit): paying
+  // it as well would pay it twice (crm#1463).
+  | 'auto_debit'
   // The invoice states an account the company does not have for the supplier
   // and nobody has confirmed it (lib/payments/payee-alerts.ts), or a person
   // rejected it: no payment until a person decides.
@@ -75,6 +78,8 @@ export interface BatchInvoiceFacts {
   is_credit_note: boolean
   payment_reference: string | null
   supplier_invoice_number: string | null
+  /** Paid by the supplier's own debit (autogiro, account debit); absent reads as false. */
+  auto_debit?: boolean
   /**
    * What holds a payment of the invoice back until a person decides on the
    * account it states (loadPayeeHolds); absent or null when nothing does.
@@ -121,6 +126,7 @@ export function evaluateInvoiceForBatch(
   if (invoice.remaining_amount <= ORE_TOLERANCE) {
     return { eligible: false, reason: 'nothing_remaining' }
   }
+  if (invoice.auto_debit) return { eligible: false, reason: 'auto_debit' }
   if (invoice.currency !== 'SEK') return { eligible: false, reason: 'foreign_currency' }
   // Before the payee: the card may be the old account or empty, and the
   // reason a person must act on is the account the invoice states.

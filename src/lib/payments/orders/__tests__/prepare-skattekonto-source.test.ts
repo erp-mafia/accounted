@@ -46,11 +46,11 @@ const provider = { id: 'open_payments', isAvailableFor: () => true } as unknown 
 
 type Chain = Array<{ method: string; args: unknown[] }>
 
-/** payment_orders by what the chain asks: the open-order check, or executed payments of the same declaration. */
+/** payment_orders by what the chain asks: the open order of the day, or executed payments of the same declaration. */
 function paymentOrders(open: Array<{ id: string; status: string }>, executed: Array<Record<string, unknown>> = []) {
   return (calls: Chain) => {
     const select = calls.find((c) => c.method === 'select')?.args[0]
-    if (select === 'id, status') return { data: open }
+    if (select === 'id, status, amount, batch_id') return { data: open }
     if (select === 'id, amount, executed_at') return { data: executed }
     return { data: [] }
   }

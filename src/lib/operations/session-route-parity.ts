@@ -308,6 +308,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/cash-accounts': covered([`POST ${V}/cash-accounts`, 'gnubok_create_cash_account']),
   'PATCH /api/cash-accounts/:id': covered([`PATCH ${V}/cash-accounts/:id`, 'gnubok_update_cash_account'], 'the ledger account is not editable on any door'),
   'DELETE /api/cash-accounts/:id': gap('P3', 'removing a wrongly synced, unbooked bank account (#3130) deletes bank rows; whether an API key or agent may do that is a founder call, so it ships dashboard-only'),
+  'POST /api/cash-accounts/:id/archive': gap('P3', 'archiving a mistakenly connected bank account (PH 222) hides its open rows; like removal it ships dashboard-only until it is decided whether an API key or agent may do that'),
   'POST /api/cash-accounts/:id/primary': covered([`POST ${V}/cash-accounts/:id/set-primary`, 'gnubok_set_primary_cash_account']),
   'PUT /api/cash-accounts/payee-defaults': covered([`PUT ${V}/cash-accounts/payee-defaults`, 'gnubok_set_invoice_payee_default']),
 
@@ -629,7 +630,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Assets ─────────────────────────────────────────────────────────
   'POST /api/assets': covered([`POST ${V}/assets`, 'gnubok_create_asset']),
   'PATCH /api/assets/:id': covered([`PATCH ${V}/assets/:id`, 'gnubok_update_asset']),
-  'DELETE /api/assets/:id': covered([`DELETE ${V}/assets/:id`]),
+  'DELETE /api/assets/:id': covered([`DELETE ${V}/assets/:id`, 'gnubok_delete_asset']),
   'POST /api/assets/:id/dispose': covered([`POST ${V}/assets/:id/dispose`, 'gnubok_dispose_asset']),
 
   // ── Payroll ────────────────────────────────────────────────────────
@@ -874,6 +875,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/invoice-inbox/items/:id/suggest-booking': covered(['gnubok_suggest_categories']),
   'POST /api/extensions/ext/invoice-inbox/items/bulk-book': covered(['gnubok_bulk_book_inbox_items']),
   'DELETE /api/extensions/ext/invoice-inbox/items/:id': covered([`DELETE ${V}/inbox-items/:id`, 'gnubok_delete_inbox_item']),
+  'POST /api/extensions/ext/invoice-inbox/inbox/previous/stop': gap('P3', 'stop an earlier inbox address a rename kept (crm#1209), like rotate'),
   'POST /api/extensions/ext/invoice-inbox/inbox/rotate': gap('P3', 'rotate the inbound e-mail address'),
   'POST /api/extensions/ext/invoice-inbox/inbound': machine(WEBHOOK),
 
@@ -941,5 +943,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * only in v1.
  * 156 -> 157 (2026-10-27, accounted#104): excluding a customer from
  * reminders, a P3 gap like the collections exclusion.
+ * 157 -> 159 (2026-10-27): archiving a mistakenly connected bank account
+ * (PH 222) and stopping an earlier inbox address (crm#1209), dashboard only
+ * like their siblings removal and rotate.
  */
-export const GAP_CEILING = 157
+export const GAP_CEILING = 159

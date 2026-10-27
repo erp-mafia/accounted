@@ -48,12 +48,12 @@ const provider = { id: 'open_payments', isAvailableFor: () => true } as unknown 
 type Chain = Array<{ method: string; args: unknown[] }>
 type Executed = { id: string; amount: number; executed_at: string; created_at: string }
 
-/** payment_orders by what the chain asks: the open-order check, executed payments since a day, or the cancel of a stale draft. */
-function paymentOrders(open: Array<{ id: string; status: string }>, executed: Executed[] = []) {
+/** payment_orders by what the chain asks: the open order of the day, or executed payments since a day. */
+function paymentOrders(open: Array<{ id: string; status: string; amount?: number }>, executed: Executed[] = []) {
   return (calls: Chain) => {
-    if (calls.some((c) => c.method === 'update')) return { data: open.filter((o) => o.status === 'draft').map((o) => ({ id: o.id })) }
+    if (calls.some((c) => c.method === 'update')) throw new Error('no payment order is updated by the service')
     const select = calls.find((c) => c.method === 'select')?.args[0]
-    if (select === 'id, status') return { data: open }
+    if (select === 'id, status, amount, batch_id') return { data: open }
     if (select === 'id, amount, executed_at') {
       const since = String(calls.find((c) => c.method === 'gte')?.args[1] ?? '')
       return { data: executed.filter((row) => row.created_at >= since) }
@@ -262,21 +262,23 @@ describe('a declaration paid on its own with another due the same day', () => {
     expect(vat.computeVatDeclaration).toHaveBeenCalledTimes(1)
   })
 
-  it('makes the replaced unapproved draft visible, and still replaces it as before', async () => {
-    db.setTable('payment_orders', paymentOrders([{ id: 'draft-moms', status: 'draft' }]))
+  it('adds to an unapproved draft of the same day instead of replacing it (crm#1485)', async () => {
+    db.setTable('payment_orders', paymentOrders([{ id: 'draft-moms', status: 'draft', amount: 77404 }]))
 
-    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', source: AGI_OCT, today: TODAY })
+    const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', source: AGI_OCT, today: TODAY, dryRun: true })
 
     expect(result).toMatchObject({
       ok: true,
-      data: {
-        replaced_draft_ids: ['draft-moms'],
+      dryRun: true,
+      preview: {
+        replaces_drafts: 0,
+        merges_into: { payment_order_id: 'draft-moms', status: 'draft', amount: 77404, total: 107972 },
         warnings: [
           {
             code: 'same_due_date_parts',
             parts: [{ source: 'vat_declaration', period: '2026-Q3', amount: 77404 }],
             total: 107972,
-            replaces_draft: true,
+            replaces_draft: false,
           },
         ],
       },

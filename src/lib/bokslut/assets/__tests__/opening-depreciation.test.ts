@@ -24,6 +24,13 @@ import {
 import { computeAssetNoteFigures } from '@/lib/bokslut/arsredovisning/asset-note-figures'
 import type { Asset } from '@/types'
 
+// crm#1452: the chart lookups are covered in assets/__tests__/asset-chart-accounts.test.ts.
+vi.mock('../asset-chart-accounts', () => ({
+  chartAwareDefaultAccounts: vi.fn(async (_s: unknown, _c: unknown, _cat: unknown, defaults: unknown) => defaults),
+  ensureAssetAccountsInChart: vi.fn(async () => undefined),
+  unusableAssetAccounts: vi.fn(async () => []),
+}))
+
 function makeAsset(overrides: Partial<Asset> = {}): Asset {
   return {
     id: 'asset-1',

@@ -1201,6 +1201,13 @@ export interface Supplier {
    */
   self_billing_agreement_ref?: string | null
 
+  /**
+   * The supplier debits its invoices from the company account itself
+   * (autogiro, account debit): new invoices inherit it and stay out of
+   * to-pay lists and payments (crm#1463). Optional: narrow selects.
+   */
+  auto_debit?: boolean
+
   notes: string | null
 
   created_at: string
@@ -1529,6 +1536,13 @@ export interface SupplierInvoice {
    * betald, never a status. Cleared by a DB trigger when a payment lands.
    */
   bank_entered_at: string | null
+
+  /**
+   * "Dras automatiskt" (crm#1463): the supplier debits the invoice itself
+   * (autogiro, account debit) on the due date, so there is nothing to pay;
+   * settled when the debit is matched. Optional: narrow selects.
+   */
+  auto_debit?: boolean
 
   notes: string | null
 
@@ -2106,6 +2120,8 @@ export interface CreateSupplierInput {
   default_currency?: string
   /** The self-billing agreement with the supplier (crm#1367); empty clears it. */
   self_billing_agreement_ref?: string | null
+  /** The supplier debits its invoices itself (crm#1463). */
+  auto_debit?: boolean
   notes?: string
 }
 

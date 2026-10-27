@@ -174,6 +174,7 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
     'gnubok_get_asset',
     'gnubok_list_assets',
     'gnubok_dispose_asset',
+    'gnubok_delete_asset',
     'gnubok_propose_annual_depreciation',
     'gnubok_post_annual_depreciation',
   ],

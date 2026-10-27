@@ -198,7 +198,7 @@ export default function SupplierInvoiceDetailPage() {
   // shows the spinner while the others only disable. A single boolean put
   // identical pending feedback (none) on every button at once.
   const [processingAction, setProcessingAction] = useState<
-    'approve' | 'book' | 'bank_entered' | 'credit' | 'uncredit' | 'delete' | null
+    'approve' | 'book' | 'bank_entered' | 'auto_debit' | 'credit' | 'uncredit' | 'delete' | null
   >(null)
   const isProcessing = processingAction !== null
   const [isFileDialogOpen, setIsFileDialogOpen] = useState(false)
@@ -330,6 +330,29 @@ export default function SupplierInvoiceDetailPage() {
       }
     } catch (err) {
       toast({ title: t('bank_entered_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
+    } finally {
+      setProcessingAction(null)
+    }
+  }
+
+  // "Dras automatiskt" (crm#1463): the supplier debits this invoice itself,
+  // so it leaves the to-pay lists and payments. Metadata on the invoice, set
+  // through the same update as its dates and reference.
+  async function handleAutoDebit(autoDebit: boolean) {
+    setProcessingAction('auto_debit')
+    try {
+      const res = await fetch(`/api/supplier-invoices/${params.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ auto_debit: autoDebit }),
+      })
+      const result = await res.json()
+      if (!res.ok) {
+        toast({ title: t('auto_debit_failed_title'), description: getErrorMessage(result, { context: 'supplier_invoice' }), variant: 'destructive' })
+      }
+      await fetchInvoice()
+    } catch (err) {
+      toast({ title: t('auto_debit_failed_title'), description: getErrorMessage(err, { context: 'supplier_invoice' }), variant: 'destructive' })
     } finally {
       setProcessingAction(null)
     }
@@ -614,6 +637,7 @@ export default function SupplierInvoiceDetailPage() {
   // registered invoice is ready to pay as it stands, as on the list.
   const canAddToFile =
     !invoice.is_credit_note &&
+    !invoice.auto_debit &&
     ['registered', 'approved', 'overdue'].includes(invoice.status) &&
     (!!invoice.approved_at || !companyAttestsSupplierInvoices(companySettings?.accounting_method)) &&
     !lifecycle?.batch &&
@@ -624,8 +648,17 @@ export default function SupplierInvoiceDetailPage() {
   // "Inlagd i banken" (#2220) sits on the same rows as Markera som betald:
   // it is the step right before it. Viewers see the bock only when it is set.
   const showBankEntered =
+    !invoice.auto_debit &&
     canMarkSupplierInvoiceBankEntered(invoice, companySettings?.accounting_method) &&
     (canWrite || !!invoice.bank_entered_at)
+  // "Dras automatiskt" (crm#1463): changeable while the invoice is unsettled
+  // and no payment file or bank payment covers it; shown when set.
+  const canSetAutoDebit =
+    canWrite &&
+    !invoice.is_credit_note &&
+    isUnsettledSupplierInvoiceStatus(invoice.status) &&
+    !lifecycle?.batch &&
+    !lifecycle?.payment_order
   // Kreditera on the statuses the shared rule names (creditable-statuses.ts);
   // a kontantmetod company has no attest step, so its registered invoice is
   // creditable as it stands, as it is payable (payableSupplierInvoiceStatuses).
@@ -1016,6 +1049,25 @@ export default function SupplierInvoiceDetailPage() {
             <Link href="/payments" className="hover:underline underline-offset-4">
               {t('bank_payment_created', { date: formatDate(lifecycle.payment_order.created_at) })}
             </Link>
+          </DefRow>
+        )}
+        {(canSetAutoDebit || (invoice.auto_debit && !invoice.is_credit_note)) && (
+          <DefRow label={t('payment_method_label')}>
+            {canSetAutoDebit ? (
+              <label className={cn('inline-flex select-none items-center gap-2', !isProcessing ? 'cursor-pointer' : 'cursor-default', processingAction === 'auto_debit' && 'opacity-50')}>
+                <Checkbox
+                  checked={!!invoice.auto_debit}
+                  disabled={isProcessing}
+                  onCheckedChange={(value) => void handleAutoDebit(value === true)}
+                  aria-label={t('auto_debit_aria')}
+                />
+                <span className="text-muted-foreground">
+                  {invoice.auto_debit ? t('auto_debit_on', { date: formatDate(invoice.due_date) }) : t('auto_debit_hint')}
+                </span>
+              </label>
+            ) : (
+              <span className="text-muted-foreground">{t('auto_debit_on', { date: formatDate(invoice.due_date) })}</span>
+            )}
           </DefRow>
         )}
         {/* The bock (#2220): "I have entered this payment in the bank". A

@@ -62,7 +62,7 @@ type InvoiceRow = BatchInvoiceFacts &
   }
 
 const INVOICE_SELECT =
-  'id, supplier_id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, ' +
+  'id, supplier_id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, auto_debit, ' +
   'payment_reference, supplier_invoice_number, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban, ' +
   'supplier:suppliers(id, name, city, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban)'
 

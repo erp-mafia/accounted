@@ -123,6 +123,7 @@ import { executeCurrencyRevaluation } from '@/lib/bookkeeping/currency-revaluati
 import {
   AssetCorrectionBlockedError,
   createAsset as createFixedAsset,
+  deleteNeverPostedAsset,
   disposeAsset as disposeFixedAsset,
   getAsset as getFixedAsset,
   hasPostedDepreciation,
@@ -4608,6 +4609,34 @@ async function commitUpdateAsset(
   }
 }
 
+/**
+ * Remove a register row that never reached the books (crm#1452). The rule is
+ * decided again here, under the asset row lock, by delete_never_posted_asset:
+ * a depreciation posted after staging refuses the delete.
+ */
+async function commitDeleteAsset(
+  supabase: SupabaseClient,
+  companyId: string,
+  params: Record<string, unknown>
+): Promise<ExecutorResult> {
+  const assetId = params.asset_id
+  if (typeof assetId !== 'string' || !assetId) return { error: 'asset_id is required', status: 400 }
+  try {
+    const asset = await deleteNeverPostedAsset(supabase, companyId, assetId)
+    return { data: { asset_id: asset.id, name: asset.name, deleted: true } }
+  } catch (err) {
+    const code = (err as { code?: unknown }).code
+    if (code === 'ASSET_NOT_FOUND' || code === 'ASSET_DELETE_BLOCKED') {
+      return {
+        error: (err instanceof Error && err.message) || code,
+        errorCode: code,
+        status: code === 'ASSET_NOT_FOUND' ? 404 : 409,
+      }
+    }
+    return failUnlessBookkeepingError(err, 'Asset deletion failed', 400)
+  }
+}
+
 async function commitDisposeAsset(
   supabase: SupabaseClient,
   userId: string,
@@ -7679,6 +7708,9 @@ async function commitPendingOperationInner(
         break
       case 'dispose_asset':
         result = await commitDisposeAsset(supabase, userId, companyId, pendingOp.params)
+        break
+      case 'delete_asset':
+        result = await commitDeleteAsset(supabase, companyId, pendingOp.params)
         break
       case 'create_salary_run':
         result = await commitCreateSalaryRun(supabase, userId, companyId, pendingOp.params)

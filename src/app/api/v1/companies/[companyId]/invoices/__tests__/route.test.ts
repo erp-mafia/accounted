@@ -193,6 +193,47 @@ describe('GET /api/v1/companies/:companyId/invoices', () => {
     expect(body.meta.request_id).toMatch(/^req_/)
   })
 
+  // crm#1487: what each invoice asks for, from its own rounding choice; the
+  // company setting decides only a draft that has none.
+  it('returns amount_to_pay and ore_rounding_amount on every row', async () => {
+    const selects: Array<{ table: string; columns: string }> = []
+    mockServiceClient.mockReturnValue(
+      makeFlexibleSupabase(
+        {
+          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+          invoices: {
+            data: [
+              { ...SAMPLE_INVOICE, total: 4.38, ore_rounding: false, deduction_total: 0, credited_invoice_id: null },
+              { ...SAMPLE_INVOICE, id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd', total: -4.38, ore_rounding: true, deduction_total: 0, credited_invoice_id: INVOICE_ID },
+              { ...SAMPLE_INVOICE, id: 'ffffffff-ffff-4fff-8fff-ffffffffffff', status: 'draft', total: 4.38, ore_rounding: null, deduction_total: 0, credited_invoice_id: null },
+            ],
+            error: null,
+          },
+          company_settings: { data: { ore_rounding: true }, error: null },
+        },
+        [],
+        [],
+        selects,
+      ),
+    )
+
+    const res = await listInvoices(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/invoices`),
+      companyParams(COMPANY_ID),
+    )
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.map((r: { amount_to_pay: number }) => r.amount_to_pay)).toEqual([4.38, -4, 4])
+    expect(body.data.map((r: { ore_rounding_amount: number }) => r.ore_rounding_amount)).toEqual([0, 0.38, -0.38])
+    // Read for the computation only, never returned.
+    expect(body.data[0].ore_rounding).toBeUndefined()
+    expect(body.data[0].deduction_total).toBeUndefined()
+    const invoiceSelect = selects.find((s) => s.table === 'invoices')!.columns
+    expect(invoiceSelect).toContain('ore_rounding')
+    expect(invoiceSelect).toContain('deduction_total')
+  })
+
   // crm#1367: a received self-billed sale has invoice_number null by design;
   // without the customer's number it listed like an unsent draft.
   it('returns external_invoice_number and is_self_billed on every row', async () => {
@@ -680,6 +721,9 @@ describe('POST /api/v1/companies/:companyId/invoices', () => {
     const body = await res.json()
     expect(body.data.customer_id).toBe(CUSTOMER_ID)
     expect(body.data.total).toBe(12500)
+    // The same shape as GET (crm#1487).
+    expect(body.data.amount_to_pay).toBe(12500)
+    expect(body.data.ore_rounding_amount).toBe(0)
     // A domestic customer has nothing to explain: meta carries no warnings.
     expect(body.meta.warnings).toBeUndefined()
   })

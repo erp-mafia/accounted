@@ -324,7 +324,6 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
               </li>
             ))}
           </ul>
-          {sameDay.replaces_draft && <p>{t('same_due_date_replaces_draft')}</p>}
           <Button variant="outline" size="sm" onClick={() => payAllDueOn(sameDay.due ?? null)}>
             {t('pay_all_due', { date: formatDate(sameDay.due), amount: formatCurrency(sameDay.total ?? 0) })}
           </Button>
@@ -401,8 +400,14 @@ export default function PaySkattekontoViaBankDialog({ open, onOpenChange, onDone
 
       {preview && (
         <>
-          {preview.replaces_drafts > 0 && !sameDay?.replaces_draft && (
-            <p className="text-[12.5px] text-muted-foreground">{t('replaces_draft')}</p>
+          {preview.merges_into && (
+            <p className="text-[12.5px] text-muted-foreground">
+              {t('merges_into', {
+                amount: formatCurrency(preview.merges_into.amount),
+                date: formatDate(preview.requested_execution_date),
+                total: formatCurrency(preview.merges_into.total),
+              })}
+            </p>
           )}
           <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>
           <BankPaymentsAllowanceLine usage={usage} count={1} canRequest />

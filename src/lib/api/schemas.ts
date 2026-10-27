@@ -1807,6 +1807,9 @@ export const CreateSupplierSchema = z.object({
   // p.1): the reference a självfaktura to it prints (crm#1367). Without one
   // no self-billing invoice can be issued to the supplier.
   self_billing_agreement_ref: emptyStringAsUndefined(z.string().trim().min(1).max(128)),
+  // The supplier debits its invoices itself (autogiro, account debit):
+  // they stay out of to-pay lists and payments (crm#1463).
+  auto_debit: z.boolean().optional(),
   notes: z.string().max(2000).optional(),
 })
 
@@ -2164,6 +2167,10 @@ export const UpdateSupplierInvoiceSchema = z.object({
   delivery_date: optionalIsoDate,
   payment_reference: z.string().optional(),
   notes: z.string().optional(),
+  // "Dras automatiskt" (crm#1463): the supplier debits the invoice itself, so
+  // it stays out of to-pay lists and payments. New invoices take it from the
+  // supplier card (inherit_supplier_auto_debit); this changes one invoice.
+  auto_debit: z.boolean().optional(),
 })
 
 /**

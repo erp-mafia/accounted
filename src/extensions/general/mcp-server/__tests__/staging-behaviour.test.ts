@@ -896,6 +896,8 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_propose_fact: { args: { subject_ref: `company:${COMPANY_ID}`, predicate: 'vat_period', value: 'kvartal', rationale: 'Enligt registreringsbeviset' } },
   // "At least one field" tools: the schema requires only the id.
   gnubok_update_asset: { args: { name: 'Bandsåg' } },
+  // A register row that never reached the books: no posted depreciation.
+  gnubok_delete_asset: { empty: ['depreciation_schedules'] },
   gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
   gnubok_update_supplier: { args: { city: 'Göteborg' }, rows: { suppliers: { name: 'Leverantören AB', city: null, archived_at: null } } },
   // Two distinct cards (the synthesized ids would be one and the same, which

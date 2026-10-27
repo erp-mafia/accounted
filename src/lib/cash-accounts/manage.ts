@@ -567,6 +567,95 @@ export async function removeCashAccount(
 }
 
 // ---------------------------------------------------------------------------
+// Archive
+// ---------------------------------------------------------------------------
+
+/** Why archive_cash_account refused, as the RPC names it. */
+export type CashAccountArchiveRefusal =
+  | 'already_archived'
+  | 'bank_connected'
+  | 'primary'
+  | 'invoice_payee'
+  | 'removable'
+
+/** Connection and primary keep removal's codes: the same way out applies. */
+export const CASH_ACCOUNT_ARCHIVE_CODES: Record<CashAccountArchiveRefusal, string> = {
+  already_archived: 'CASH_ACCOUNT_ARCHIVE_ALREADY',
+  bank_connected: 'CASH_ACCOUNT_REMOVE_BANK_CONNECTED',
+  primary: 'CASH_ACCOUNT_REMOVE_PRIMARY',
+  invoice_payee: 'CASH_ACCOUNT_ARCHIVE_INVOICE_PAYEE',
+  removable: 'CASH_ACCOUNT_ARCHIVE_REMOVABLE',
+}
+
+export type ArchivedCashAccount = {
+  cash_account_id: string
+  ledger_account: string
+  /** The removal refusal that keeps the rows. */
+  kept_because: string
+  /** Unbooked, not ignored rows kept with the account. */
+  open_transactions: number
+}
+
+type ArchiveResult =
+  | ({ ok: false; reason: CashAccountArchiveRefusal | 'not_found' } & Record<string, unknown>)
+  | ({ ok: true; dry_run: boolean } & ArchivedCashAccount)
+
+/**
+ * Archive a bank account that removal must keep (PH 222): a mistaken
+ * connection whose ledger already holds history, or with a row booked,
+ * ignored or matched. The account is turned off (enabled = false), so it
+ * leaves Konton and the booking flows; every row stays and nothing posted is
+ * touched. Decided inside archive_cash_account (migration 20261027051317),
+ * which asks remove_cash_account's dry run, so the two never disagree. A
+ * refusal names the reason and changes nothing.
+ */
+export async function archiveCashAccount(
+  ctx: OperationContext,
+  cashAccountId: string,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<ArchivedCashAccount>> {
+  const { supabase, companyId, userId, log } = ctx
+  if (!UUID_RE.test(cashAccountId)) return NOT_FOUND
+  const denied = await requireCompanyAdmin(ctx, BANK_ADMIN_MESSAGE)
+  if (denied) return denied
+
+  const { data, error } = await supabase.rpc('archive_cash_account', {
+    p_company_id: companyId,
+    p_cash_account_id: cashAccountId,
+    p_user_id: userId,
+    p_dry_run: options.dryRun === true,
+  })
+  if (error) {
+    if (error.code === '42501') {
+      return { ok: false, code: 'FORBIDDEN', messageSv: BANK_ADMIN_MESSAGE, details: { required_roles: ['owner', 'admin'] } }
+    }
+    log.error('cash_accounts archive failed', error)
+    return failed(error)
+  }
+
+  const result = data as ArchiveResult | null
+  if (!result) return failed(new Error('archive_cash_account returned no result'))
+  if (!result.ok) {
+    if (result.reason === 'not_found') return NOT_FOUND
+    const { ok: _ok, reason, ...rest } = result
+    return {
+      ok: false,
+      code: CASH_ACCOUNT_ARCHIVE_CODES[reason] ?? 'UNKNOWN_ERROR',
+      details: { cash_account_id: cashAccountId, reason, ...rest },
+    }
+  }
+  const archived: ArchivedCashAccount = {
+    cash_account_id: result.cash_account_id,
+    ledger_account: result.ledger_account,
+    kept_because: result.kept_because,
+    open_transactions: result.open_transactions,
+  }
+  if (result.dry_run) return { ok: true, dryRun: true, preview: archived }
+  log.info('cash account archived', { companyId, cashAccountId, keptBecause: result.kept_because })
+  return { ok: true, data: archived }
+}
+
+// ---------------------------------------------------------------------------
 // Per-currency payee default
 // ---------------------------------------------------------------------------
 

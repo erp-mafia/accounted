@@ -192,3 +192,88 @@ describe('POST /inbox/rotate', () => {
     },
   )
 })
+
+/**
+ * Stopping an earlier address (crm#1209): a company renamed after a test
+ * name kept the old address receiving and had no way to remove it. One
+ * 'previous' row becomes 'deprecated' (the webhook answers 410 from then on);
+ * the active address is never touched, and nothing received is deleted.
+ */
+describe('POST /inbox/previous/stop', () => {
+  const stopRoute = findRoute('POST', '/inbox/previous/stop')
+
+  function stopRequest(body: string) {
+    return new Request('http://localhost/inbox/previous/stop', {
+      method: 'POST',
+      body,
+      headers: { 'Content-Type': 'application/json' },
+    })
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+  })
+
+  it('deprecates the previous address of this company and nothing else', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'owner' } }) // company_members
+    enqueue({ data: [{ id: 'inbox-1' }] }) // company_inboxes update
+
+    const res = await stopRoute.handler(
+      stopRequest('{"address":"Tidigare-AB-x7f2@in.example.test"}'),
+      buildCtx(supabase),
+    )
+    const { status, body } = await parseJsonResponse<{ data: Record<string, unknown> }>(res)
+
+    expect(status).toBe(200)
+    expect(body.data).toEqual({ stopped: true })
+    const update = findCalls('company_inboxes', 'update')
+    expect(update).toHaveLength(1)
+    expect(update[0][0]).toMatchObject({ status: 'deprecated' })
+    expect(typeof (update[0][0] as { deprecated_at?: unknown }).deprecated_at).toBe('string')
+    const eqs = findCalls('company_inboxes', 'eq')
+    expect(eqs).toContainEqual(['company_id', 'company-1'])
+    // Only an earlier address: the active one is never stopped here.
+    expect(eqs).toContainEqual(['status', 'previous'])
+    expect(eqs).toContainEqual(['local_part', 'tidigare-ab-x7f2'])
+    expect(findCalls('company_inboxes', 'delete')).toHaveLength(0)
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('answers 404 when the address is not one of the company\'s previous addresses (the active one, another company\'s)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'admin' } })
+    enqueue({ data: [] }) // no 'previous' row matched
+
+    const res = await stopRoute.handler(stopRequest('{"address":"nytt-namn-ab-m4tz@in.example.test"}'), buildCtx(supabase))
+    expect(res.status).toBe(404)
+  })
+
+  it('refuses members below admin before any address changes', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'member' } })
+
+    const res = await stopRoute.handler(stopRequest('{"address":"tidigare-ab-x7f2@in.example.test"}'), buildCtx(supabase))
+    expect(res.status).toBe(403)
+    expect(findCalls('company_inboxes', 'update')).toHaveLength(0)
+  })
+
+  it.each(['{not json', '{}', '{"address":""}', '{"address":"a@b","extra":1}'])(
+    'refuses a malformed body (%s)',
+    async (raw) => {
+      const { supabase, findCalls } = createQueuedMockSupabase()
+      const res = await stopRoute.handler(stopRequest(raw), buildCtx(supabase))
+      expect(res.status).toBe(400)
+      expect(findCalls('company_inboxes', 'update')).toHaveLength(0)
+    },
+  )
+
+  it('answers 500 without detail when the write fails', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { role: 'owner' } })
+    enqueue({ data: null, error: { message: 'boom' } })
+
+    const res = await stopRoute.handler(stopRequest('{"address":"tidigare-ab-x7f2@in.example.test"}'), buildCtx(supabase))
+    expect(res.status).toBe(500)
+  })
+})

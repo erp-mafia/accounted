@@ -6,7 +6,8 @@ import { insertAuthUser, insertCashAccount, insertCompanyMember, seedCompany } f
 // pg-real coverage for 20261016180000_payment_orders_skattekonto.sql: the
 // widened purpose and payee source, the CHECK that pins a skattekonto order to
 // Skatteverket's bankgiro and an OCR number, the one open skattekonto order per
-// company, create_skattekonto_payment_order (its payee set by the function,
+// company and execution day (20261027051717: a same-day addition is added to
+// the order nobody signed), create_skattekonto_payment_order (its payee set by the function,
 // the 'created' event, idempotent replay and its mismatch, the payload
 // refusals, the write-role, sandbox and EXECUTE guards), the claim accepting a
 // tax order unchanged, and release_payment_order (directly and through the
@@ -233,17 +234,48 @@ describe('create_skattekonto_payment_order', () => {
   })
 })
 
-describe('one open skattekonto order per company', () => {
-  it('refuses a second order while one is open, from draft through accepted', async () => {
+describe('one open skattekonto order per company and execution day (20261027051717, crm#1485)', () => {
+  it('adds to the day\'s draft, and to an approved order sent back to draft, keeping what was added', async () => {
     const ctx = await seedTaxPayer()
     const first = await createdTaxOrder(ctx)
-    expect(await createTaxOrder(ctx)).toMatchObject({ ok: false, code: 'already_in_payment', details: { payment_order_id: first.id } })
+    const key = randomUUID()
+    const added = await createTaxOrder(ctx, { amount: 3433, idempotencyKey: key })
+    expect(added).toMatchObject({
+      ok: true,
+      order: { id: first.id, status: 'draft', amount: 18433.5 },
+      merged: { previous_amount: 15000.5, added_amount: 3433 },
+    })
+    // A replay of the same key never adds twice.
+    expect(await createTaxOrder(ctx, { amount: 3433, idempotencyKey: key })).toMatchObject({ ok: true, order: { id: first.id, amount: 18433.5 } })
 
+    await setStatus(first.id, 'approved', `, approved_by = '${ctx.userId}', approved_at = now()`)
+    expect(await createTaxOrder(ctx, { amount: 100 })).toMatchObject({ ok: true, order: { id: first.id, status: 'draft', amount: 18533.5, approved_at: null } })
+
+    const { rows: events } = await getPool().query<{ event_type: string; detail: Record<string, unknown> | null }>(
+      `SELECT event_type, detail FROM public.payment_order_events WHERE payment_order_id = $1 ORDER BY occurred_at, event_type`,
+      [first.id],
+    )
+    expect(events.filter((e) => e.event_type === 'edited')).toHaveLength(2)
+    expect(events.filter((e) => e.event_type === 'unapproved')).toHaveLength(1)
+    expect(events.find((e) => e.event_type === 'edited')?.detail).toMatchObject({ reason: 'amount_added', idempotency_key: key })
+  })
+
+  it('refuses the day while its order is claimed for signing or at the bank, and lets another day have its own', async () => {
+    const ctx = await seedTaxPayer()
+    const first = await createdTaxOrder(ctx)
     await setStatus(first.id, 'approved')
-    expect(await createTaxOrder(ctx)).toMatchObject({ ok: false, code: 'already_in_payment' })
     await setStatus(first.id, 'submitted', `, provider = 'open_payments'`)
+    expect(await createTaxOrder(ctx)).toMatchObject({
+      ok: false,
+      code: 'already_in_payment',
+      details: { payment_order_id: first.id, status: 'submitted' },
+    })
     await setStatus(first.id, 'accepted')
     expect(await createTaxOrder(ctx)).toMatchObject({ ok: false, code: 'already_in_payment' })
+
+    const other = await createTaxOrder(ctx, { amount: 3433, date: '2026-11-10' })
+    expect(other).toMatchObject({ ok: true, order: { status: 'draft', amount: 3433, requested_execution_date: '2026-11-10' } })
+    expect((other.order as { id: string }).id).not.toBe(first.id)
 
     // The index is the last word on a writer that skipped the function.
     await expect(
@@ -255,7 +287,7 @@ describe('one open skattekonto order per company', () => {
                  'bankgiro', '50501055', 'Skatteverket', 'skatteverket', 'ocr', $5, $6)`,
         [ctx.companyId, ctx.userId, ctx.cashAccountId, JSON.stringify(DEBTOR), OCR, randomUUID()],
       ),
-    ).rejects.toThrow(/uq_payment_orders_open_skattekonto_per_company/)
+    ).rejects.toThrow(/uq_payment_orders_open_skattekonto_per_date/)
   })
 
   it('allows the next order once the open one is executed or cancelled, and never counts another company', async () => {

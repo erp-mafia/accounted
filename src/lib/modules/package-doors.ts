@@ -454,6 +454,8 @@ const RECEIPTS_AND_DOCUMENTS: PackageDoors = {
     'PATCH /api/inkorg/portals/:id',
     'DELETE /api/inkorg/portals/:id',
     'POST /api/extensions/ext/invoice-inbox/inbox/rotate',
+    // Stopping an earlier address closes a way in; it starts nothing.
+    'POST /api/extensions/ext/invoice-inbox/inbox/previous/stop',
     'DELETE /api/extensions/ext/invoice-inbox/items/:id',
     'POST /api/extensions/ext/invoice-inbox/items/:id/book-direct',
     'PATCH /api/extensions/ext/invoice-inbox/items/:id/fields',
@@ -627,6 +629,7 @@ const ASSETS: PackageDoors = {
     'DELETE /api/v1/companies/:companyId/assets/:id',
     'PATCH /api/v1/companies/:companyId/assets/:id',
     'POST /api/v1/companies/:companyId/assets/:id/dispose',
+    'mcp:gnubok_delete_asset',
     'mcp:gnubok_dispose_asset',
     'mcp:gnubok_post_annual_depreciation',
     'mcp:gnubok_update_asset',

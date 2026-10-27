@@ -452,8 +452,10 @@ export interface SkattekontoPaymentPreview {
   payee: { type: 'bankgiro'; label: string; name: string }
   reference: { type: 'ocr'; value: string }
   warnings: SkattekontoPaymentWarning[]
-  /** A skattekonto draft nobody approved that this payment replaces. */
+  /** Always 0 since crm#1485: a same-day order nobody signed is added to (merges_into), never replaced. */
   replaces_drafts: number
+  /** The same day's order nobody signed yet that this amount is added to: its amount now and the total after. */
+  merges_into?: { payment_order_id: string; status: string; amount: number; total: number }
   /** The declaration paid, when the payment is named from one (or pays the one declaration due on the day). */
   source: SkattekontoPaymentSourceDue | null
   /** With source due_date: what the payment consists of, and the declarations due that day left out. */

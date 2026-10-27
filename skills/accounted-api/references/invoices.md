@@ -348,7 +348,7 @@ Cursor-paginated invoice list ordered by created_at DESC, id ASC (newest-registe
 Response `200`:
 ```ts
 {
-  data: { id: string, handle?: string, invoice_number: string | null, external_invoice_number: string | null, is_self_billed: boolean, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited" | "written_off", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, remaining_amount: number, paid_at: string | null, created_at: string }[],
+  data: { id: string, handle?: string, invoice_number: string | null, external_invoice_number: string | null, is_self_billed: boolean, customer_id: string, customer_name: string, invoice_date: string, due_date: string, status: "draft" | "sent" | "paid" | "partially_paid" | "overdue" | "cancelled" | "credited" | "written_off", document_type: "invoice" | "proforma" | "delivery_note" | "quote", valid_until: string | null, quote_status: "open" | "accepted" | "declined" | "expired" | null, currency: string, subtotal: number, vat_amount: number, total: number, amount_to_pay: number, ore_rounding_amount: number, remaining_amount: number, paid_at: string | null, created_at: string }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -378,6 +378,8 @@ Example response `200`:
       "subtotal": 10000,
       "vat_amount": 2500,
       "total": 12500,
+      "amount_to_pay": 12500,
+      "ore_rounding_amount": 0,
       "remaining_amount": 12500,
       "paid_at": null,
       "created_at": "2026-05-01T09:14:33Z"
@@ -502,6 +504,8 @@ Response `200`:
     subtotal: number,
     vat_amount: number,
     total: number,
+    amount_to_pay: number,
+    ore_rounding_amount: number,
     remaining_amount: number,
     created_at: string
   },
@@ -531,6 +535,8 @@ Example response `200`:
     "subtotal": 10000,
     "vat_amount": 2500,
     "total": 12500,
+    "amount_to_pay": 12500,
+    "ore_rounding_amount": 0,
     "remaining_amount": 12500
   },
   "meta": {
@@ -555,6 +561,7 @@ Returns the full invoice record with the customer embedded. Pass ?expand=items f
 **Pitfalls:**
 - Returns 404 if the invoice does not belong to the company in the URL: does not leak existence across companies.
 - paid_at and remaining_amount can lag behind the latest payment by a few seconds during high-volume reconciliation.
+- total is the exact invoice total the books carry; amount_to_pay is what the invoice asks the customer for: total after öresavrundning (ore_rounding_amount), minus any ROT/RUT deduction. Reconcile payments against amount_to_pay. A credit note carries the credited invoice's rounding choice, so a whole credit has the same ore_rounding_amount with the opposite sign. An issued invoice keeps the rounding it was issued with: a later change of the company setting changes neither field.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -581,6 +588,9 @@ Response `200`:
     quote_decided_at?: string | null,
     currency: string,
     total: number,
+    amount_to_pay: number,
+    ore_rounding_amount: number,
+    ore_rounding?: boolean | null,
     remaining_amount: number,
     paid_at: string | null,
     created_at: string
@@ -612,6 +622,8 @@ Example response `200`:
     "due_date": "2026-05-31",
     "status": "sent",
     "total": 12500,
+    "amount_to_pay": 12500,
+    "ore_rounding_amount": 0,
     "remaining_amount": 12500,
     "paid_at": null,
     "created_at": "2026-05-01T09:14:33Z"
@@ -695,6 +707,9 @@ Response `200`:
     quote_decided_at?: string | null,
     currency: string,
     total: number,
+    amount_to_pay: number,
+    ore_rounding_amount: number,
+    ore_rounding?: boolean | null,
     remaining_amount: number,
     paid_at: string | null,
     created_at: string

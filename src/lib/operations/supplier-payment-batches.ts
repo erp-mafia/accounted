@@ -237,6 +237,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
           'payee_invalid',
           'reference_missing',
           'attest_required',
+          'auto_debit',
           'payee_unconfirmed',
           'payee_rejected',
           'not_found',

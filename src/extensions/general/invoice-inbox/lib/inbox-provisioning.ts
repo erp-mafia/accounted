@@ -68,6 +68,31 @@ export async function listPreviousInboxes(
 }
 
 /**
+ * Stops one earlier address a rename kept (crm#1209): it becomes 'deprecated',
+ * the status rotation leaves behind, so the inbound webhook answers 410 from
+ * then on and the address leaves the list. What already came in through it
+ * stays. Only a 'previous' row of this company matches: the active address is
+ * never stopped here (rotation is the tool for that). The row stays, so the
+ * address is never handed to another company. False when no such address.
+ */
+export async function stopPreviousInbox(
+  supabase: SupabaseClient,
+  companyId: string,
+  localPart: string
+): Promise<boolean> {
+  const { data, error } = await supabase
+    .from('company_inboxes')
+    .update({ status: 'deprecated', deprecated_at: new Date().toISOString() })
+    .eq('company_id', companyId)
+    .eq('status', 'previous')
+    .eq('local_part', localPart)
+    .select('id')
+
+  if (error) throw new Error(`Failed to stop inbox address: ${error.message}`)
+  return ((data ?? []) as unknown[]).length > 0
+}
+
+/**
  * Why rename_company_inbox refused: the address already carries the
  * company's name (PT409), or there is no active address to rename (P0002).
  */
