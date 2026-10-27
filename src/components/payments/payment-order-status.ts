@@ -3,7 +3,7 @@ import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
 /**
  * How a payment order's status reads on screen. The labels are the plan's
  * seven words (Att betala, I betalning, Signerad, Planerad, Betald, Väntar på
- * andra attestant, Misslyckad) mapped onto payment_orders.status; the keys
+ * signering i banken, Misslyckad) mapped onto payment_orders.status; the keys
  * live in the `bank_payments` message namespace (status_<status>).
  *
  * Chips mark exceptions (design convention 5): the normal flow (approved,
