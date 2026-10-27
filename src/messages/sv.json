@@ -9659,6 +9659,7 @@
   },
   "invoices": {
     "rot_rut_payout_action": "Begär utbetalning",
+    "late_interest_action": "Dröjsmålsränta",
     "rot_rut_payout_title": "Begär utbetalning av skattereduktion",
     "rot_rut_payout_description": "Välj betalda fakturor och hämta en XML-fil för Skatteverkets e-tjänst. Filen skickas inte automatiskt: du laddar upp och signerar den hos Skatteverket.",
     "rot_rut_type_aria": "Välj avdragstyp",
@@ -17462,5 +17463,31 @@
     "open_employees": "Öppna Anställda",
     "not_ready": "Lönekörningen måste vara godkänd innan lönen kan betalas via banken.",
     "prepare_failed_title": "Lönerna kunde inte förberedas"
+  },
+  "latePaymentInterest": {
+    "title": "Dröjsmålsränta",
+    "help": "Räntan räknas enligt räntelagen: Riksbankens referensränta för varje halvår plus åtta procentenheter, eller företagets egen räntesats om ni har angett en. Varje betalning som kom in efter förfallodagen ger ränta på sitt eget belopp, från förfallodagen till betalningsdagen. Bara betalningar som bokförts i Accounted räknas, så fakturor som betalades för sent innan ni flyttade hit syns inte. Beloppen är underlag för en räntefaktura. Ingenting bokförs eller skickas härifrån.",
+    "rate_line": "Räntesats idag {rate} per år, referensräntan plus åtta procentenheter. Beräknat till och med {date}.",
+    "rate_line_override": "Räntesats {rate} per år, företagets egen. Beräknat till och med {date}.",
+    "load_failed": "Det gick inte att hämta räntan.",
+    "retry": "Försök igen",
+    "empty_title": "Ingen dröjsmålsränta",
+    "empty_description": "Ingen faktura har betalats för sent och ingen är förfallen.",
+    "paid_late_heading": "Betalda för sent",
+    "paid_late_scope": "Bara betalningar som bokförts i Accounted räknas. Betalningsdatum från importerad historik ingår inte.",
+    "paid_late_empty": "Ingen faktura har betalats för sent.",
+    "overdue_heading": "Förfallna och obetalda",
+    "overdue_empty": "Ingen faktura är förfallen.",
+    "col_invoice": "Faktura",
+    "col_customer": "Kund",
+    "col_due": "Förfallodag",
+    "col_paid": "Betald",
+    "col_days_late": "Dagar sent",
+    "col_paid_late_amount": "Betalt sent",
+    "col_interest": "Ränta",
+    "col_days_overdue": "Dagar",
+    "col_remaining": "Kvar att betala",
+    "col_accrued": "Upplupen ränta",
+    "total": "Summa"
   }
 }

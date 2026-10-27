@@ -9659,6 +9659,7 @@
   },
   "invoices": {
     "rot_rut_payout_action": "Request payout",
+    "late_interest_action": "Late interest",
     "rot_rut_payout_title": "Request a tax reduction payout",
     "rot_rut_payout_description": "Select paid invoices and download an XML file for Skatteverket's e-service. The file is not submitted automatically: upload and sign it at Skatteverket.",
     "rot_rut_type_aria": "Select deduction type",
@@ -17462,5 +17463,31 @@
     "open_employees": "Open Employees",
     "not_ready": "The salary run must be approved before the salaries can be paid through the bank.",
     "prepare_failed_title": "The salaries could not be prepared"
+  },
+  "latePaymentInterest": {
+    "title": "Late payment interest",
+    "help": "Interest follows the Swedish Interest Act: Riksbanken's reference rate for each half-year plus eight percentage points, or the company's own rate if you have set one. Each payment that arrived after the due date earns interest on its own amount, from the due date to the payment date. Only payments booked in Accounted count, so invoices paid late before you moved here are not shown. The amounts are the basis for an interest invoice. Nothing is booked or sent from here.",
+    "rate_line": "Rate today {rate} per year, the reference rate plus eight percentage points. Calculated up to and including {date}.",
+    "rate_line_override": "Rate {rate} per year, the company's own. Calculated up to and including {date}.",
+    "load_failed": "The interest could not be loaded.",
+    "retry": "Try again",
+    "empty_title": "No late payment interest",
+    "empty_description": "No invoice has been paid late and none is overdue.",
+    "paid_late_heading": "Paid late",
+    "paid_late_scope": "Only payments booked in Accounted count. Payment dates from imported history are not included.",
+    "paid_late_empty": "No invoice has been paid late.",
+    "overdue_heading": "Overdue and unpaid",
+    "overdue_empty": "No invoice is overdue.",
+    "col_invoice": "Invoice",
+    "col_customer": "Customer",
+    "col_due": "Due date",
+    "col_paid": "Paid",
+    "col_days_late": "Days late",
+    "col_paid_late_amount": "Paid late",
+    "col_interest": "Interest",
+    "col_days_overdue": "Days",
+    "col_remaining": "Left to pay",
+    "col_accrued": "Accrued interest",
+    "total": "Total"
   }
 }

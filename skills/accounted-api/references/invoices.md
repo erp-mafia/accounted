@@ -2092,6 +2092,86 @@ Example response `200`:
 
 ---
 
+### `GET /api/v1/companies/{companyId}/invoices/late-payment-interest`
+
+**Dröjsmålsränta per customer invoice: interest earned by invoices paid late, and interest accrued on overdue unpaid ones.**
+`scope:invoices:read · risk:low · idempotent`
+
+Statutory late-payment interest (Räntelagen 6 §): Riksbankens referensränta for each half-year plus eight percentage points, or the company's own rate when it set one, on 365 days. Each payment that arrived after the due date earns interest on its own amount from the due date to its payment date; an open invoice accrues on its remaining amount up to as_of. Only payments booked in Accounted count: payment dates that came with an import, payments linked to imported verifikat, credit notes, customer losses and collection-provider payments are left out. Amounts are in each invoice's currency. Nothing is booked or sent.
+
+**Use when:** Preparing a räntefaktura (interest invoice) after late payments, or checking what an overdue customer owes in interest.
+**Do not use for:** Listing unpaid invoices without interest (GET /invoices) or invoices that could go to collection (GET /collections/candidates).
+
+**Pitfalls:**
+- An invoice paid late before the company moved to Accounted is not listed: its payment date came with the import.
+- The interest is per invoice currency; totals are grouped by currency, never converted.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `as_of` | query | `string` | no | Compute up to this date (YYYY-MM-DD): payments after it are ignored and open invoices accrue to it. Default today, Europe/Stockholm. |
+
+Response `200`:
+```ts
+{
+  data: {
+    as_of: string,
+    rate: number,
+    rate_is_override: boolean,
+    paid_late: { invoice_id: string, invoice_number: string, customer_name: string | null, currency: string, due_date: string, paid_late_amount: number, last_payment_date: string, days_late: number, interest: number }[],
+    overdue_open: { invoice_id: string, invoice_number: string, customer_name: string | null, currency: string, due_date: string, remaining_amount: number, days_overdue: number, interest: number }[],
+    totals: { currency: string, paid_late_interest: number, overdue_interest: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "as_of": "2026-10-26",
+    "rate": 0.1,
+    "rate_is_override": false,
+    "paid_late": [
+      {
+        "invoice_id": "7d1e…",
+        "invoice_number": "F-1042",
+        "customer_name": "Kund AB",
+        "currency": "SEK",
+        "due_date": "2026-09-01",
+        "paid_late_amount": 12500,
+        "last_payment_date": "2026-09-21",
+        "days_late": 20,
+        "interest": 68.49
+      }
+    ],
+    "overdue_open": [],
+    "totals": [
+      {
+        "currency": "SEK",
+        "paid_late_interest": 68.49,
+        "overdue_interest": 0
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `POST /api/v1/companies/{companyId}/setoffs`
 
 **Set off (kvitta) an open customer invoice against an open supplier invoice of the same counterparty: one verifikat, both invoices lowered, the net left to pay or receive.**
