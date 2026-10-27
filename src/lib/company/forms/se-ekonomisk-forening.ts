@@ -36,6 +36,7 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     hasOwners: false,
     settlement: { withdrawal: '2890', contribution: '2890' },
     memberCapital: true,
+    maintenanceFund: null,
   },
   filings: {
     incomeReturn: 'INK2',
@@ -46,6 +47,8 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     ixbrl: false,
     auditorAlwaysRequired: true,
     forenklatArsbokslut: null,
+    cashFlowStatement: 'larger',
+    housingKeyRatios: false,
   },
   glossary: { entity: 'föreningen', owner: 'Medlem', meeting: 'föreningsstämma' },
 }

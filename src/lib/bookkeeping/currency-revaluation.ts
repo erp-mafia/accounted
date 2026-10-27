@@ -152,7 +152,7 @@ export async function fetchFxExposureScope(
  * would revalue a kontantmetod or deferring company's unbooked rows and post
  * a write-down of an account standing at zero.
  */
-async function requireFxExposureScope(
+export async function requireFxExposureScope(
   supabase: SupabaseClient,
   companyId: string
 ): Promise<FxExposureScope> {

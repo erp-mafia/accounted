@@ -62,7 +62,7 @@ export interface BokslutReadinessReport {
     closing_entry_id: string | null
   }
   /** Entity type drives which dispositions apply (e.g. bolagsskatt only for AB). */
-  entityType: 'aktiebolag' | 'enskild_firma' | 'ideell_forening' | 'handelsbolag' | 'kommanditbolag' | 'ekonomisk_forening'
+  entityType: EntityType | 'handelsbolag' | 'kommanditbolag'
   /** The period holds history imported from a previous bookkeeping system
    *  (an imported verifikat or a completed SIE import for the year). The
    *  wizard asks "bokslutet redan gjort i ett tidigare program?" only then. */

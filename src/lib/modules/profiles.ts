@@ -226,6 +226,7 @@ const SIGNUP_PROFILE_BY_FORM: Readonly<Record<EntityType, ProfileId>> = Object.f
   enskild_firma: 'sole-trader',
   ideell_forening: 'association',
   ekonomisk_forening: 'association',
+  bostadsrattsforening: 'association',
 })
 
 /**

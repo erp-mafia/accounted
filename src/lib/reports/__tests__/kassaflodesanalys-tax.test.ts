@@ -46,7 +46,7 @@ const fixtures: Fixture[] = [
   { name: 'foreign tax expense reclassified when paid', entries: [entry('6997', '2517'), entry('2517', '1930'), entry('6996', '6997')], expectedTax: -1000, expectedCash: -1000 },
   { name: 'foreign income tax refund on operating expense account', entries: [entry('1930', '6996')], expectedTax: 1000, expectedCash: 1000 },
   { name: 'imported unpaid income tax on 2510', entries: [entry('8910', '2510', 1000, 'import')], expectedTax: 0, expectedCash: 0 },
-  { name: 'native year-end provision remains excluded', entries: [entry('8910', '2512', 1000, 'year_end')], expectedTax: 0, expectedCash: 0 },
+  { name: 'native year-end provision is an unpaid tax', entries: [entry('8910', '2512', 1000, 'year_end')], expectedTax: 0, expectedCash: 0 },
   { name: '2510 accrual and full payment', entries: [entry('8910', '2510'), entry('2510', '1930')], expectedTax: -1000, expectedCash: -1000 },
   { name: '2512 accrual and full payment', entries: [entry('8910', '2512'), entry('2512', '1930')], expectedTax: -1000, expectedCash: -1000 },
   { name: '2510 accrual and partial payment', entries: [entry('8910', '2510'), entry('2510', '1930', 400)], expectedTax: -400, expectedCash: -400 },
@@ -147,28 +147,32 @@ function makeClient(fixture: Fixture) {
       expect(args.p_period_start).toBe(period.period_start)
       return { data: aggregate(fixture.opening ?? []), error: null }
     }
-    // The 'exclude-all-year-end' set: on these fixtures (no resultatavslut
-    // shapes) the period's year_end entries and the storno/rättelse of a
-    // reversed one, as year_end_chain_entry_ids returns them.
-    const reversedYearEnd = new Set(entries.filter(e => e.source_type === 'year_end' && e.status === 'reversed').map(e => e.id))
-    const yearEndIds = entries.filter(e => e.fiscal_period_id === 'period-1' && ['posted', 'reversed'].includes(e.status)
-      && (e.source_type === 'year_end' || reversedYearEnd.has(e.reverses_id ?? '') || reversedYearEnd.has(e.correction_of_id ?? '')))
+    // The 'exclude-final' set, as result_closing_entry_ids returns it: posted
+    // entries that only move result accounts (3-8) against 2099/2019/2069.
+    // Every other year-end entry (skatt, avskrivningar, dispositioner) stays.
+    const closingAccounts = ['2099', '2019', '2069']
+    const isResultAccount = (account: string) => account >= '3' && account < '9'
+    const closingIds = entries.filter((e, i) => e.fiscal_period_id === 'period-1' && e.status === 'posted'
+      && !e.reverses_id
+      && fixture.entries[i].lines.every(l => isResultAccount(l.account_number) || closingAccounts.includes(l.account_number))
+      && fixture.entries[i].lines.some(l => closingAccounts.includes(l.account_number))
+      && fixture.entries[i].lines.some(l => isResultAccount(l.account_number)))
       .map(e => e.id)
-    if (name === 'year_end_chain_entry_ids') {
+    if (name === 'result_closing_entry_ids') {
       expect(args).toEqual({ p_company_id: 'company-1', p_fiscal_period_id: 'period-1' })
-      return { data: yearEndIds, error: null }
+      return { data: closingIds, error: null }
     }
     if (name !== 'get_trial_balance_aggregates') throw new Error(`Unexpected RPC: ${name}`)
     expect(args).toEqual({
       p_company_id: 'company-1', p_fiscal_period_id: 'period-1',
-      p_closing_mode: 'exclude-all-year-end', p_from_date: null, p_to_date: null,
+      p_closing_mode: 'exclude-final', p_from_date: null, p_to_date: null,
       p_exclude_entry_id: period.opening_balance_entry_id, p_dimensions: null,
     })
     // This simulates the inspected SQL predicate; it is not a SQL execution.
     const included = fixture.entries.filter((_, i) => {
       const e = entries[i]
       return e.fiscal_period_id === 'period-1' && ['posted', 'reversed'].includes(e.status)
-        && e.id !== period.opening_balance_entry_id && !yearEndIds.includes(e.id)
+        && e.id !== period.opening_balance_entry_id && !closingIds.includes(e.id)
     })
     return { data: aggregate(included.flatMap(e => e.lines)).map(row => ({ bucket: 'period', ...row })), error: null }
   })
@@ -183,7 +187,7 @@ describe('cash-flow tax verification against balanced journal fixtures', () => {
     const client = makeClient(fixture)
     const report = await generateKassaflodesanalys(client, 'company-1', 'period-1')
     const { isBalanced } = await generateTrialBalance(client, 'company-1', 'period-1', {
-      closingEntry: 'exclude-all-year-end',
+      closingEntry: 'exclude-final',
     })
     expect(isBalanced).toBe(true)
     expect.soft(report.reconciliation.delta_actual).toBe(fixture.expectedCash)
@@ -258,7 +262,7 @@ describe('tax allocation evidence and boundaries', () => {
     expect(report.total_cash_flow).toBe(0)
   })
 
-  it('excludes year-end reversals and corrections across period boundaries', async () => {
+  it('nets year-end reversals and corrections across period boundaries', async () => {
     const report = await run([
       { ...entry('2514', '2510', 9000, 'year_end'), status: 'reversed', fiscal_period_id: 'previous-period' },
       { ...entry('2510', '2514', 9000, 'storno'), reverses_id: 'entry-0' },

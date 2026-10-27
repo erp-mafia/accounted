@@ -1,0 +1,1 @@
+[2026-10-26] The kassaflödesanalys is laid out to K3 chapter 7 as a separate statement (from rörelseresultat, interest and dividends as cash lines, investments per kind and loans gross, kursdifferens apart, previous year); the old summary sections stay until the K3 PDF reads the statement.

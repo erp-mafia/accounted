@@ -99,6 +99,9 @@ export const MAPPING_SOURCES = {
   yearEndDispositions: 'se.year-end-dispositions',
   accrualSchedule: 'se.accrual-schedule',
   yearEndAccruals: 'se.year-end-accruals',
+  // Pågående arbeten on balansdagen (lib/bokslut/pagaende-arbeten): successiv
+  // vinstavräkning or the färdigställandemetod, K3 kapitel 23.
+  contractRevenue: 'se.contract-revenue',
   customerPayment: 'se.customer-payment-lines',
   rotRut: 'se.rot-rut-lines',
   // The reconciliation worksheet's residual (lib/reconciliation/residual.ts,
@@ -122,6 +125,9 @@ export const MAPPING_SOURCES = {
   // invoice's 244x / Cr the customer invoice's 151x, drawn in SQL by
   // book_counterparty_setoff.
   counterpartySetoff: 'se.counterparty-setoff-lines',
+  // Finansiella leasingavtal on balansdagen (lib/bokslut/leasing): the
+  // year's payments as interest and amortisation, and the depreciation.
+  financeLease: 'se.finance-lease',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

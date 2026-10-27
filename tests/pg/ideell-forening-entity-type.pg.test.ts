@@ -51,8 +51,15 @@ describe('ideell_forening: CHECK constraints', () => {
 
   it('supported_entity_types() is the list the RPCs validate against', async () => {
     const res = await getPool().query<{ list: string[] }>(`SELECT public.supported_entity_types() AS list`)
-    // 20261002200000 appended ekonomisk_forening to the same list.
-    expect(res.rows[0].list).toEqual(['enskild_firma', 'aktiebolag', 'ideell_forening', 'ekonomisk_forening'])
+    // 20261002200000 appended ekonomisk_forening to the same list, and
+    // 20261027180101 bostadsrattsforening.
+    expect(res.rows[0].list).toEqual([
+      'enskild_firma',
+      'aktiebolag',
+      'ideell_forening',
+      'ekonomisk_forening',
+      'bostadsrattsforening',
+    ])
   })
 })
 

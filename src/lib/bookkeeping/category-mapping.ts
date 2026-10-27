@@ -8,7 +8,7 @@ import {
 import { resolveSekAmount } from './currency-utils'
 import { roundOre } from '@/lib/money'
 import { grossVat } from '@/lib/bookkeeping/gross-split'
-import { byEntityType, ownerSettlementAccount } from '@/lib/company/entity-type'
+import { ownerSettlementAccount, templateAccountForForm } from '@/lib/company/entity-type'
 import {
   isNotVatRegistered,
   vatTreatmentForRegistration,
@@ -83,12 +83,9 @@ function getExpenseAccount(category: string, entityType: EntityType): string {
   if (category === 'expense_education') {
     // 7610 is a personnel cost: only a form with employees by default books
     // education there; the others take the general external-cost account.
-    return byEntityType(entityType, {
-      aktiebolag: '7610',
-      enskild_firma: '6991',
-      ideell_forening: '6991',
-      ekonomisk_forening: '7610',
-    })
+    // A form that books like an aktiebolag (templateColumn 'ab') has
+    // employees; the others take the general account.
+    return templateAccountForForm(entityType, '6991', '7610') ?? '6991'
   }
   return EXPENSE_ACCOUNTS[category] || '6991'
 }

@@ -1,0 +1,1 @@
+[2026-10-26] A bostadsrättsförening gets no upplåtelseavgift account: BAS 2026 has none and renaming 2087 Bunden överkursfond (the research note's proposal) would mislead every SIE and BAS consumer; insatser go on 2083 named Insatser as K3 kapitel 38 does.

@@ -1,0 +1,1 @@
+[2026-10-26] The kassaflödesanalys reads the statutory scope (exclude-final: bokslut entries in, only the resultatavslut out), not the operational one: its rörelseresultat must equal the årsredovisning's resultaträkning, and year-end avskrivningar and skatt are cash-flow adjustments.

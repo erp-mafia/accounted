@@ -14,6 +14,8 @@ import { applyDefaultSeriesToMap, voucherSeriesLabel } from '@/lib/bookkeeping/v
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
 import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
+import { MonthlyFxRevaluationAction } from '@/components/settings/MonthlyFxRevaluationAction'
+import { fxMonthlyRevaluationEnabled } from '@/lib/env/fx-monthly-revaluation-switch'
 import {
   SettingsGroup,
   SettingsReveal,
@@ -23,8 +25,10 @@ import {
   SettingsTextarea,
 } from '@/components/settings/SettingsRows'
 import { useSettings } from '@/components/settings/useSettings'
+import { contractRevenueEnabled } from '@/lib/env/contract-revenue-switch'
 import { useCompany } from '@/contexts/CompanyContext'
 import { ArrowTopRightOnSquareIcon } from '@/components/icons'
+import { financeLeaseEnabled } from '@/lib/env/finance-lease-switch'
 import type { AccountingFramework, CompanySettings } from '@/types'
 
 import { isEntityType, preparesArsredovisning, supportsAccountingFramework } from '@/lib/company/entity-type'
@@ -32,8 +36,10 @@ const SERIES_OPTIONS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('')
 
 export function BookkeepingSettingsContent() {
   const t = useTranslations('settings_bookkeeping')
+  const tContract = useTranslations('contract_revenue')
   const tNav = useTranslations('settings_nav')
   const tIntro = useTranslations('settings_intro')
+  const tLease = useTranslations('finance_leases')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
   const { company } = useCompany()
   // Local mirror of the company-level accounting_framework so the K2/K3
@@ -74,6 +80,10 @@ export function BookkeepingSettingsContent() {
       default_voucher_series: defaultVoucherSeries,
       defer_invoice_booking: deferInvoiceBooking,
       ...(methodChanged && correctionReason ? { accounting_method_correction_reason: correctionReason } : {}),
+      // #523: only while the switch shows the row; otherwise untouched.
+      ...(fxMonthlyRevaluationEnabled()
+        ? { fx_revaluation_monthly: formData.get('fx_revaluation_monthly') === 'true' }
+        : {}),
     }
 
     // Write-through: the booking engine resolves the series from the
@@ -199,10 +209,30 @@ export function BookkeepingSettingsContent() {
               })}
             </SettingsSelect>
           </SettingsRow>
+          {/* #523: revalue foreign-currency items at every month end too, not
+              only at balansdagen. The action below books one month end. */}
+          {fxMonthlyRevaluationEnabled() && (
+            <SettingsRow
+              label={t('fx_revaluation_label')}
+              htmlFor="fx_revaluation_monthly"
+              help={t('fx_revaluation_help')}
+            >
+              <SettingsSelect
+                id="fx_revaluation_monthly"
+                name="fx_revaluation_monthly"
+                defaultValue={settings.fx_revaluation_monthly ? 'true' : 'false'}
+              >
+                <option value="false">{t('fx_revaluation_yearly')}</option>
+                <option value="true">{t('fx_revaluation_monthly')}</option>
+              </SettingsSelect>
+            </SettingsRow>
+          )}
         </SettingsGroup>
 
         <PeriodLockingSettings settings={settings} />
       </SettingsFormWrapper>
+
+      {fxMonthlyRevaluationEnabled() && settings.fx_revaluation_monthly && <MonthlyFxRevaluationAction />}
 
       <VoucherSeriesPerSourceTypeForm
         settings={settings}
@@ -226,9 +256,33 @@ export function BookkeepingSettingsContent() {
             {t('periodisering_open_wizard')}
           </Link>
         </SettingsRow>
+        {/* K3 kapitel 20: the lessee's register and the opt-in live on their own page. */}
+        {financeLeaseEnabled() && (
+          <SettingsRow label={tLease('settings_label')} help={tLease('settings_help')}>
+            <Link
+              href="/bookkeeping/year-end/leasing"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+              {tLease('settings_open')}
+            </Link>
+          </SettingsRow>
+        )}
         <DimensionsToggle />
         <NavGateToggle setting="mileage_enabled" namespace="mileage" href="/mileage" />
         <NavGateToggle setting="sales_orders_enabled" namespace="sales_orders" href="/sales-orders" />
+        {/* K3 kapitel 23: pågående arbeten live on their own page under bokslut. */}
+        {contractRevenueEnabled() && (
+          <SettingsRow label={tContract('settings_label')} help={tContract('settings_help')}>
+            <Link
+              href="/bookkeeping/year-end/pagaende-arbeten"
+              className="inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <ArrowTopRightOnSquareIcon className="h-3.5 w-3.5" />
+              {tContract('settings_open')}
+            </Link>
+          </SettingsRow>
+        )}
       </SettingsGroup>
 
       <SettingsGroup>

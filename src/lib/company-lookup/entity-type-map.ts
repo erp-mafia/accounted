@@ -46,6 +46,18 @@ const EKONOMISK_FORENING_VALUES = new Set<string>([
   'ekonomiska föreningar',
 ])
 
+/**
+ * Bostadsrättsförening: an ekonomisk förening by law (BRL 1 kap. 2 §) with
+ * its own equity, framework (K3 kapitel 38) and filings, so never mapped to
+ * ekonomisk_forening. Behind its creation flag the journey stops on it
+ * through mapSetupEntityType returning null for it.
+ */
+const BOSTADSRATTSFORENING_VALUES = new Set<string>([
+  'bostadsrättsförening',
+  'bostadsrattsforening',
+  'brf',
+])
+
 export function mapEntityType(ticType: string | null | undefined): EntityType | null {
   if (!ticType) return null
   const normalized = ticType.trim().toLowerCase()
@@ -53,6 +65,7 @@ export function mapEntityType(ticType: string | null | undefined): EntityType | 
   if (ENSKILD_FIRMA_VALUES.has(normalized)) return 'enskild_firma'
   if (IDEELL_FORENING_VALUES.has(normalized)) return 'ideell_forening'
   if (EKONOMISK_FORENING_VALUES.has(normalized)) return 'ekonomisk_forening'
+  if (BOSTADSRATTSFORENING_VALUES.has(normalized)) return 'bostadsrattsforening'
   return null
 }
 
@@ -78,7 +91,6 @@ export function mapSetupEntityType(ticType: string | null | undefined): EntityTy
  * are TIC's stiftelse categories.
  */
 const PLANNED_FORM_VALUES: Readonly<Record<string, ReadonlySet<string>>> = {
-  bostadsrattsforening: new Set(['bostadsrättsförening', 'bostadsrattsforening', 'brf']),
   samfallighetsforening: new Set(['samfällighetsförening', 'samfallighetsforening', 'samfällighet']),
   stiftelse: new Set(['stiftelse', 'annan stiftelse', 'familjestiftelse', 'stiftelser']),
 }

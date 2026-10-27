@@ -26,6 +26,7 @@ export const SE_ENSKILD_FIRMA: LegalFormProfile = {
     hasOwners: true,
     settlement: { withdrawal: '2013', contribution: '2018' },
     memberCapital: false,
+    maintenanceFund: null,
   },
   filings: {
     incomeReturn: 'NE',
@@ -36,6 +37,8 @@ export const SE_ENSKILD_FIRMA: LegalFormProfile = {
     ixbrl: false,
     auditorAlwaysRequired: false,
     forenklatArsbokslut: null,
+    cashFlowStatement: null,
+    housingKeyRatios: false,
   },
   glossary: { entity: 'firman', owner: 'Ägare', meeting: null },
 }

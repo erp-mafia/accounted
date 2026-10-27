@@ -26,6 +26,7 @@ const NOT_ON_THE_API: Record<string, string> = {
   org_number: 'legal identity, fixed once onboarding is complete',
   default_our_reference: 'exposed as contact_person',
   ai_flow_enabled: 'column dropped in 20260504120000_remove_ai_subsystem',
+  fx_revaluation_monthly: 'monthly currency revaluation (#523): dashboard first, behind NEXT_PUBLIC_FX_MONTHLY_REVALUATION_ENABLED',
   preferred_payment_format: 'payroll: PATCH /salary/settings',
   salary_pay_day: 'payroll: PATCH /salary/settings',
   salary_default_bank: 'payroll: PATCH /salary/settings',
@@ -35,6 +36,7 @@ const NOT_ON_THE_API: Record<string, string> = {
   salary_calculation_policy: 'payroll: PATCH /salary/settings (merged, not replaced)',
   salary_deviation_period: 'payroll: PATCH /salary/settings',
   salary_regional_support: 'payroll: dashboard switch only so far (PH 208); the PATCH /salary/settings door is a follow-up',
+  finance_lease_capitalisation: 'K3 kapitel 20 opt-in: dashboard first, behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED',
 }
 
 /** Dashboard fields that are not columns but a parameter of one door's save. */

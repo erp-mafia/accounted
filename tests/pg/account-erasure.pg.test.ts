@@ -73,6 +73,7 @@ const RETAINED = new Set([
   'accrual_schedule_installments.user_id',
   'accrual_schedules.user_id',
   'assets.user_id',
+  'finance_leases.user_id', // Who registered a finansiellt leasingavtal; part of the books (K3 kapitel 20), the company keeps it.
   'bank_file_imports.user_id',
   'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
   'payment_signing_links.created_by', // Who asked the firmatecknare to sign a basket of payments; the company keeps the record.
@@ -96,6 +97,8 @@ const RETAINED = new Set([
   'company_bank_payment_allowances.granted_by', // The founder who set a company's monthly bank payment allowance; the company keeps the record.
   'bokslut_checklist_items.done_by',
   'bokslut_checklist_items.updated_by',
+  'contract_revenue_contracts.user_id',
+  'contract_revenue_settings.user_id',
   'forenklat_arsbokslut_inputs.eligibility_confirmed_by', // Who confirmed the förening may close with a förenklat årsbokslut; the company keeps the record.
   'forenklat_arsbokslut_inputs.updated_by',
   'chart_of_accounts.user_id',

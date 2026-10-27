@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { generateKassaflodesanalys } from '@/lib/reports/kassaflodesanalys'
+import { generateKassaflodesanalysWithStatement } from '@/lib/reports/kassaflodesanalys'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import type { CompanySettings } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -43,7 +43,7 @@ export const GET = withRouteContext('report.kassaflodesanalys.pdf', async (reque
   }
 
   try {
-    const report = await generateKassaflodesanalys(supabase, companyId, periodId)
+    const report = await generateKassaflodesanalysWithStatement(supabase, companyId, periodId, { includePreviousYear: true })
 
     const [{ renderToBuffer }, { KassaflodesanalysPDF }] = await Promise.all([
       import('@react-pdf/renderer'),

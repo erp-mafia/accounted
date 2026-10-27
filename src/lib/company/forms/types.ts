@@ -75,6 +75,12 @@ export interface LegalFormProfile {
      * 2084, ÅRL 3 kap. 10 b §) rather than aktiekapital 2081.
      */
     memberCapital: boolean
+    /**
+     * Fond för yttre underhåll, a bundet post of its own moved only by
+     * omföring (K3 38.14-38.15, BRL 9 kap. 5 §): BAS 2088 for a
+     * bostadsrättsförening, null for a form without one.
+     */
+    maintenanceFund: string | null
   }
   filings: {
     /** The income return the product prepares for the form; null when none is modelled. */
@@ -97,6 +103,18 @@ export interface LegalFormProfile {
      * it follows; null when none. BFNAR 2006:1 (enskild firma) can join later.
      */
     forenklatArsbokslut: 'BFNAR 2010:1' | null
+    /**
+     * When the årsredovisning must hold a kassaflödesanalys (ÅRL 2 kap. 1 §
+     * andra stycket): 'always' for a bostadsrättsförening, 'larger' for a
+     * form that needs one only as a större företag, null when the product
+     * prepares no årsredovisning for the form.
+     */
+    cashFlowStatement: 'always' | 'larger' | null
+    /**
+     * The förvaltningsberättelse carries the bostadsrättsförening key ratios
+     * for four years (ÅRL 6 kap. 3 a §, K3 38.3-38.11).
+     */
+    housingKeyRatios: boolean
   }
   /**
    * Swedish nouns that differ by law, for labels that name the thing on its

@@ -38,7 +38,7 @@ import {
 import { buildPeriodiskSammanstallningCsv, PsCsvBuildError } from '@/lib/reports/periodisk-sammanstallning-csv'
 import { calculateVatDeclaration } from '@/lib/reports/vat-declaration'
 import { buildESkdFile } from '@/lib/reports/vat-eskd-file'
-import { generateKassaflodesanalys, type KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
+import { generateKassaflodesanalysWithStatement, type KassaflodesanalysFullReport } from '@/lib/reports/kassaflodesanalys'
 import { generateBokslutsbilagor } from '@/lib/reports/bokslutsbilagor'
 import {
   generateBehandlingshistorik,
@@ -397,11 +397,14 @@ export async function getVatEskdFile(
 export async function getKassaflodesanalys(
   ctx: OperationContext,
   periodId: string,
-): Promise<OperationOutcome<KassaflodesanalysReport>> {
+): Promise<OperationOutcome<KassaflodesanalysFullReport>> {
   const period = await loadReportPeriod(ctx, periodId)
   if (!period.ok) return period
   try {
-    return { ok: true, data: await generateKassaflodesanalys(ctx.supabase, ctx.companyId, periodId) }
+    return {
+      ok: true,
+      data: await generateKassaflodesanalysWithStatement(ctx.supabase, ctx.companyId, periodId, { includePreviousYear: true }),
+    }
   } catch (err) {
     // The tax bridge refuses a year whose tax postings it cannot split: a
     // stable code the caller can act on, not a server fault.

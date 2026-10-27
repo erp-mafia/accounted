@@ -27,6 +27,7 @@ export const ENTITY_TYPES = [
   'aktiebolag',
   'ideell_forening',
   'ekonomisk_forening',
+  'bostadsrattsforening',
 ] as const satisfies readonly EntityType[]
 
 // Compile-time proof that ENTITY_TYPES lists every member of the union.
@@ -109,6 +110,7 @@ export async function resolveCompanyEntityType(
 
 export const IDEELL_FORENING_FLAG = 'NEXT_PUBLIC_IDEELL_FORENING_ENABLED'
 export const EKONOMISK_FORENING_FLAG = 'NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED'
+export const BOSTADSRATTSFORENING_FLAG = 'NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED'
 
 /**
  * One reader per `creationFlag` a profile declares. The literal
@@ -120,6 +122,7 @@ export const EKONOMISK_FORENING_FLAG = 'NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED'
 const CREATION_FLAG_READERS: Readonly<Record<string, () => string | undefined>> = {
   [IDEELL_FORENING_FLAG]: () => process.env.NEXT_PUBLIC_IDEELL_FORENING_ENABLED,
   [EKONOMISK_FORENING_FLAG]: () => process.env.NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED,
+  [BOSTADSRATTSFORENING_FLAG]: () => process.env.NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED,
 }
 
 export function creationFlagReader(flag: string): (() => string | undefined) | undefined {
@@ -307,4 +310,28 @@ export function simplifiedYearEndRegelverk(entityType: EntityType): 'K1' | 'K2' 
 /** Swedish nouns that differ by law, for standalone labels. Sentences stay form-neutral. */
 export function legalFormGlossary(entityType: EntityType): LegalFormProfile['glossary'] {
   return legalFormProfile(entityType).glossary
+}
+
+/**
+ * Fond för yttre underhåll (K3 38.14-38.15): the bundet account its omföring
+ * moves to and from, or null for a form without one.
+ */
+export function maintenanceFundAccount(entityType: EntityType): string | null {
+  return legalFormProfile(entityType).equity.maintenanceFund
+}
+
+/**
+ * When the årsredovisning must hold a kassaflödesanalys (ÅRL 2 kap. 1 §
+ * andra stycket): always for a bostadsrättsförening, as a större företag
+ * otherwise, null when no årsredovisning is prepared.
+ */
+export function cashFlowStatementRequirement(
+  entityType: EntityType,
+): LegalFormProfile['filings']['cashFlowStatement'] {
+  return legalFormProfile(entityType).filings.cashFlowStatement
+}
+
+/** The förvaltningsberättelse carries the ÅRL 6 kap. 3 a § key ratios (bostadsrättsförening). */
+export function requiresHousingKeyRatios(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).filings.housingKeyRatios
 }

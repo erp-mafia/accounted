@@ -82,12 +82,17 @@ function pickerForms(orgNumber: string | null | undefined): { chips: EntityType[
 /** i18n key per legal form for the picker chips and the summary card. */
 const FORM_LABEL_KEY: Record<
   EntityType,
-  'journey_form_ab' | 'journey_form_ef' | 'journey_form_forening' | 'journey_form_ekonomisk_forening'
+  | 'journey_form_ab'
+  | 'journey_form_ef'
+  | 'journey_form_forening'
+  | 'journey_form_ekonomisk_forening'
+  | 'journey_form_bostadsrattsforening'
 > = {
   aktiebolag: 'journey_form_ab',
   enskild_firma: 'journey_form_ef',
   ideell_forening: 'journey_form_forening',
   ekonomisk_forening: 'journey_form_ekonomisk_forening',
+  bostadsrattsforening: 'journey_form_bostadsrattsforening',
 }
 
 /**
@@ -99,6 +104,7 @@ const FORM_INFO_KEY: Record<EntityType, 'journey_form_info_forening' | null> = {
   enskild_firma: null,
   ideell_forening: 'journey_form_info_forening',
   ekonomisk_forening: null,
+  bostadsrattsforening: null,
 }
 
 /** Statutory label for a planned-form code the reducer stored, or null. */
