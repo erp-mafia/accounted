@@ -41,9 +41,13 @@ export async function readCompanyDataChoices(supabase: SupabaseClient, companyId
 }
 
 /**
- * Of `companyIds`, the ones that opted out of pooling. Throws on a failed
- * read, so a caller that shares across companies can refuse to share instead
- * of counting a company that said no.
+ * Of `companyIds`, the ones whose data must not join what is shared across
+ * companies: the ones that opted out of pooling, and every sandbox company
+ * (company_settings.is_sandbox), whose books are seeded demo data. Every
+ * sandbox carries the same seeded bank texts, so counting them would promote
+ * a demo reading to the shared directory on its own (2026-10-26 forensic
+ * sweep). Throws on a failed read, so a caller that shares across companies
+ * can refuse to share instead of counting a company that said no.
  */
 export async function companiesWithPoolingOff(supabase: SupabaseClient, companyIds: readonly string[]): Promise<Set<string>> {
   const ids = [...new Set(companyIds.filter(isUuid))]
@@ -55,7 +59,15 @@ export async function companiesWithPoolingOff(supabase: SupabaseClient, companyI
     .eq('enabled', false)
     .in('company_id', ids)
   if (error) throw new Error(`Failed to read pooling choices: ${error.message}`)
-  return new Set(((data ?? []) as Array<{ company_id: string }>).map((r) => r.company_id))
+  const { data: sandboxes, error: sandboxError } = await supabase
+    .from('company_settings')
+    .select('company_id')
+    .eq('is_sandbox', true)
+    .in('company_id', ids)
+  if (sandboxError) throw new Error(`Failed to read sandbox companies: ${sandboxError.message}`)
+  return new Set(
+    [...((data ?? []) as Array<{ company_id: string }>), ...((sandboxes ?? []) as Array<{ company_id: string }>)].map((r) => r.company_id),
+  )
 }
 
 /** Whether one company's patterns may join the shared ones. False on a failed read. */
