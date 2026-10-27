@@ -396,7 +396,7 @@ const BANKID_START_COOLDOWN_MS = 5_000
 function handleTicError(
   error: unknown,
   log: { error: (msg: string, meta?: unknown) => void } | Console,
-  route: 'lookup' | 'profile' | 'search',
+  route: 'lookup' | 'search',
   orgNumber: string,
   fallbackMessage: string
 ): Response {
@@ -520,9 +520,9 @@ export const ticExtension: Extension = {
 
   // Core-callable services, resolved via the extension registry (core never
   // imports extension code). The agent onboarding snapshot
-  // (lib/agent/composer/tic-fetch) reads the profile here instead of calling
-  // this server's own /profile route over HTTP. The BankID signing ceremony
-  // (lib/signing/bankid-provider) starts and polls sign sessions here.
+  // (lib/agent/composer/tic-fetch) reads the company profile here. The BankID
+  // signing ceremony (lib/signing/bankid-provider) starts and polls sign
+  // sessions here.
   services: {
     fetchCompanyProfile: (orgNumber: string) => buildCompanyProfile(orgNumber, console),
     ...bankIdSigningServices,
@@ -580,41 +580,6 @@ export const ticExtension: Extension = {
           return NextResponse.json({ data: result })
         } catch (error) {
           return handleTicError(error, log, 'lookup', cleanedOrgNumber, 'Failed to look up company')
-        }
-      },
-    },
-    {
-      // A POST for the same reason as /lookup; its one caller is the
-      // Bolagsuppgifter workspace (TicWorkspace).
-      method: 'POST',
-      path: '/profile',
-      // Renders richer company profile details: user is authenticated but
-      // may not yet have a company. See /lookup.
-      skipCompanyContext: true,
-      handler: async (request: Request) => {
-        const log = console
-        const orgNumber = await orgNumberFromBody(request)
-
-        if (!orgNumber) {
-          return NextResponse.json(
-            { error: 'org_number is required in the request body' },
-            { status: 400 }
-          )
-        }
-
-        const cleanedOrgNumber = orgNumber.replace(/[\s-]/g, '')
-
-        try {
-          const profile = await buildCompanyProfile(orgNumber, log)
-          if (!profile) {
-            return NextResponse.json(
-              { error: 'Company not found' },
-              { status: 404 }
-            )
-          }
-          return NextResponse.json({ data: profile })
-        } catch (error) {
-          return handleTicError(error, log, 'profile', cleanedOrgNumber, 'Failed to fetch company profile')
         }
       },
     },

@@ -12,15 +12,14 @@ import { pickCompanyName, registrationDateToMs } from './lookup'
 import { isLensDocumentCeased } from './lens-status'
 
 /**
- * The company profile behind GET /profile and the extension's
- * `fetchCompanyProfile` service: the Lens search document plus six detail
- * calls (documents, fiscal years, payrolls, representatives, status,
- * beneficial owners), folded into the shape TicWorkspace and the agent
- * onboarding snapshot read.
+ * The company profile behind the extension's `fetchCompanyProfile` service:
+ * the Lens search document plus six detail calls (documents, fiscal years,
+ * payrolls, representatives, status, beneficial owners), folded into the
+ * shape the agent onboarding snapshot reads.
  *
  * Null when TIC has no company under the org number. Throws what the TIC
- * client throws (not configured, quota, timeout, upstream errors); the route
- * maps those to HTTP statuses, the service caller degrades to its cache.
+ * client throws (not configured, quota, timeout, upstream errors); the
+ * service caller degrades to its cache.
  */
 
 interface ProfileLog {
@@ -29,7 +28,7 @@ interface ProfileLog {
 
 /**
  * Map a v2 `CompanyDocument` (financial-report subset) into the legacy
- * `TICFinancialReportSummary` shape consumed by TicWorkspace. v2 nests
+ * `TICFinancialReportSummary` shape the profile carries. v2 nests
  * the metadata under `financialReportMetadata` and replaces v1's
  * `isAudited` boolean / `auditOpinion` string with auditor identity
  * fields: we derive `isAudited` from the presence of an auditor.
@@ -335,10 +334,8 @@ export async function buildCompanyProfile(
       }
     : null
 
-  // Translate v2's activityStatus enum into the v1 string the
-  // TicWorkspace `!== 'ceased'` check still compares against, so
-  // the UI keeps showing "Avregistrerat" for deregistered
-  // companies without UI changes.
+  // Translate v2's activityStatus enum into the v1 string ('ceased'
+  // for a deregistered company) that the profile has always carried.
   const isCeasedProfile = isLensDocumentCeased(doc)
   const profile: TICCompanyProfile = {
     companyId,

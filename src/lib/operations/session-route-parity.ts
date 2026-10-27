@@ -708,7 +708,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
     [`POST ${V}/pending-operations/:id/reject`, 'gnubok_reject_pending_operation'],
     'one at a time',
   ),
-  'PATCH /api/pending-operations/:id': gap('P3', 'edit a staged categorization before approval (reject and restage works)'),
   'PATCH /api/pending-operations/:id/items': uiOnly(
     'taking invoices out of the daily collections batch in the review dialog; only a person approves that batch, in the browser',
   ),
@@ -812,7 +811,6 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/extensions/ext/tic/bankid/link': uiOnly('links a BankID identity to the logged-in person'),
   'POST /api/extensions/ext/tic/bankid/unlink': uiOnly('unlinks a BankID identity from the logged-in person'),
   'POST /api/extensions/ext/tic/lookup': covered(['gnubok_lookup_company'], 'read-only registry lookup, a POST so the org number stays out of the URL'),
-  'POST /api/extensions/ext/tic/profile': uiOnly('read-only registry profile for the Bolagsuppgifter page, a POST so the org number stays out of the URL'),
 
   // mcp-server
   'POST /api/extensions/ext/mcp-server/mcp': machine('machine endpoint: the MCP door itself'),
@@ -961,5 +959,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * leasingavtal, dashboard first behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED.
  * 166 -> 167 (2026-10-27, #523, K3 build): the monthly currency
  * revaluation, dashboard first behind NEXT_PUBLIC_FX_MONTHLY_REVALUATION_ENABLED.
+ * 167 -> 166 (2026-10-27): PATCH /api/pending-operations/:id is removed; no
+ * page called it, and reject and restage covers the edit.
  */
-export const GAP_CEILING = 167
+export const GAP_CEILING = 166

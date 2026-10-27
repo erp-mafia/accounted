@@ -92,9 +92,7 @@ describe('TIC lookup route', () => {
 
   it('is a POST that reads the body, so the org number stays out of the URL (#95)', async () => {
     const routes = ticExtension.apiRoutes ?? []
-    for (const path of ['/lookup', '/profile']) {
-      expect(routes.filter((r) => r.path === path).map((r) => r.method)).toEqual(['POST'])
-    }
+    expect(routes.filter((r) => r.path === '/lookup').map((r) => r.method)).toEqual(['POST'])
     // A query parameter is no longer read.
     const res = await lookupHandler(
       new Request('http://localhost/api/extensions/ext/tic/lookup?org_number=5560360793', { method: 'POST' }),

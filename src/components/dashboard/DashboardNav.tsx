@@ -115,7 +115,6 @@ const isCockpitPath = (pathname: string) =>
 // Map known extension hrefs to nav translation keys so sidebar labels translate.
 // Extensions whose manifest label happens to be English-ready can stay null.
 function extensionLabelKey(href: string): string | null {
-  if (href === '/e/general/tic') return 'ext_tic'
   if (href === '/e/general/invoice-inbox') return 'ext_invoice_inbox'
   return null
 }
@@ -339,13 +338,8 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
 
   const topItems = filteredItems.filter((i) => i.group === 'top')
 
-  // The TIC workspace (/e/general/tic, labelled "Företagsprofil") surfaces
-  // the same Bolagsuppgifter now shown under Inställningar → Företagsprofil.
-  // Drop it from the nav so the company profile lives in exactly one place.
   // Extension workspaces are company surfaces: none in cockpit mode.
-  const visibleExtensionNavItems = cockpitMode
-    ? []
-    : extensionNavItems.filter((i) => i.href !== '/e/general/tic')
+  const visibleExtensionNavItems = cockpitMode ? [] : extensionNavItems
 
   const sidebarGroups: { key: ExpandableGroup; items: NavItem[] }[] = cockpitMode
     ? []

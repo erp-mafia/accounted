@@ -1253,6 +1253,18 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       company_settings: { bookkeeping_locked_through: null },
     },
   },
+  // ROT/RUT payout: an incoming SEK row, not yet booked, that equals one
+  // open begäran's requested total to the öre.
+  gnubok_settle_rot_rut_payout: {
+    args: { transaction_id: SOME_UUID, request_ids: [SOME_UUID] },
+    rows: {
+      transactions: { amount: 1000, currency: 'SEK', journal_entry_id: null, transaction_voucher_links: [] },
+      rot_rut_payout_requests: {
+        id: SOME_UUID, name: 'ROT 1', deduction_type: 'rot', status: 'submitted',
+        requested_total: 1000, decided_total: null, settlement_journal_entry_id: null,
+      },
+    },
+  },
 }
 
 describe('a tool that declares the staged envelope only stages', () => {

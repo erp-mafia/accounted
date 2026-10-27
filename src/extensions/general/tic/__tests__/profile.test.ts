@@ -21,7 +21,6 @@ import {
   getBeneficialOwners,
 } from '../lib/tic-client'
 import type { TICCompanyDocument } from '../lib/tic-types'
-import { testRoutes } from '@/tests/helpers'
 
 const mockSearch = vi.mocked(searchCompanyByOrgNumber)
 const mockDocuments = vi.mocked(getCompanyDocuments)
@@ -31,19 +30,11 @@ const mockRepresentatives = vi.mocked(getRepresentatives)
 const mockStatus = vi.mocked(getCompanyStatus)
 const mockBeneficialOwners = vi.mocked(getBeneficialOwners)
 
-function makeRequest(orgNumber?: string): Request {
-  return new Request('http://localhost/api/extensions/ext/tic/profile', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(orgNumber === undefined ? {} : { org_number: orgNumber }),
-  })
-}
-
-const profileHandler = testRoutes(ticExtension)[1].handler
+const fetchProfile = ticExtension.services!.fetchCompanyProfile
 
 // The search doc now carries everything we used to pull from dedicated v2
 // endpoints: sniCodes, bankAccounts, emailAddresses, phoneNumbers,
-// mostRecentSignatory: at the top level. /profile reads those directly.
+// mostRecentSignatory: at the top level. The profile reads those directly.
 const mockDoc: TICCompanyDocument = {
   companyId: 42,
   registrationNumber: '5560360793',
@@ -52,7 +43,7 @@ const mockDoc: TICCompanyDocument = {
     { nameOrIdentifier: 'Test AB', companyNamingType: 'legalName' },
   ],
   legalEntityType: 'AB',
-  // 2000-01-01 in Unix seconds (TIC's native unit; the route converts to ms)
+  // 2000-01-01 in Unix seconds (TIC's native unit; the profile converts to ms)
   registrationDate: 946684800,
   mostRecentPurpose: 'Software development',
   mostRecentRegisteredAddress: {
@@ -186,30 +177,16 @@ function mockKeptSupplementary() {
   ])
 }
 
-describe('TIC profile route', () => {
+describe('TIC company profile (fetchCompanyProfile service)', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-  })
-
-  it('returns 400 when org_number is missing', async () => {
-    const res = await profileHandler(makeRequest())
-    expect(res.status).toBe(400)
-  })
-
-  it('returns 404 when company not found', async () => {
-    mockSearch.mockResolvedValue(null)
-    const res = await profileHandler(makeRequest('000000-0000'))
-    expect(res.status).toBe(404)
   })
 
   it('returns full profile on happy path', async () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockKeptSupplementary()
 
-    const res = await profileHandler(makeRequest('556036-0793'))
-    expect(res.status).toBe(200)
-
-    const { data } = await res.json()
+    const data = await fetchProfile('556036-0793')
     expect(data.companyId).toBe(42)
     expect(data.orgNumber).toBe('5560360793')
     expect(data.companyName).toBe('Test AB')
@@ -236,31 +213,16 @@ describe('TIC profile route', () => {
     expect(data.fetchedAt).toBeDefined()
   })
 
-  it('serves the same profile to core through the fetchCompanyProfile service', async () => {
-    // Parity: the agent onboarding snapshot used to call /profile over HTTP;
-    // it now reads the service, which must answer exactly what the route does.
-    mockSearch.mockResolvedValue(mockDoc)
-    mockKeptSupplementary()
-    const { data: fromRoute } = await (await profileHandler(makeRequest('556036-0793'))).json()
-
-    mockSearch.mockResolvedValue(mockDoc)
-    mockKeptSupplementary()
-    const fromService = await ticExtension.services!.fetchCompanyProfile('556036-0793')
-
-    expect({ ...fromService, fetchedAt: 'x' }).toEqual({ ...fromRoute, fetchedAt: 'x' })
-  })
-
-  it('answers null from the service when TIC has no such company', async () => {
+  it('answers null when TIC has no such company', async () => {
     mockSearch.mockResolvedValue(null)
-    expect(await ticExtension.services!.fetchCompanyProfile('000000-0000')).toBeNull()
+    expect(await fetchProfile('000000-0000')).toBeNull()
   })
 
   it('maps activityStatus to "ceased" when isCeased is true', async () => {
     mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isNoLongerActive' })
     mockKeptSupplementary()
 
-    const res = await profileHandler(makeRequest('556036-0793'))
-    const { data } = await res.json()
+    const data = await fetchProfile('556036-0793')
     expect(data.activityStatus).toBe('ceased')
   })
 
@@ -268,8 +230,7 @@ describe('TIC profile route', () => {
     mockSearch.mockResolvedValue({ ...mockDoc, isCeased: true, activityStatus: 'isActive' })
     mockKeptSupplementary()
 
-    const res = await profileHandler(makeRequest('556036-0793'))
-    const { data } = await res.json()
+    const data = await fetchProfile('556036-0793')
     expect(data.activityStatus).toBe('isActive')
   })
 
@@ -277,8 +238,7 @@ describe('TIC profile route', () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockKeptSupplementary()
 
-    const res = await profileHandler(makeRequest('556036-0793'))
-    const { data } = await res.json()
+    const data = await fetchProfile('556036-0793')
 
     expect(data.financials).toEqual({
       periodStart: 1672531200000,
@@ -297,8 +257,7 @@ describe('TIC profile route', () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockKeptSupplementary()
 
-    const res = await profileHandler(makeRequest('556036-0793'))
-    const { data } = await res.json()
+    const data = await fetchProfile('556036-0793')
 
     expect(data.financialReports).toHaveLength(1)
     expect(data.financialReportsComplete).toBe(true)
@@ -317,8 +276,7 @@ describe('TIC profile route', () => {
     mockSearch.mockResolvedValue(docWithoutFinancials)
     mockKeptSupplementary()
 
-    const res = await profileHandler(makeRequest('556036-0793'))
-    const { data } = await res.json()
+    const data = await fetchProfile('556036-0793')
 
     expect(data.financials).toBeNull()
   })
@@ -334,10 +292,7 @@ describe('TIC profile route', () => {
     mockStatus.mockRejectedValue(new Error('timeout'))
     mockBeneficialOwners.mockRejectedValue(new Error('timeout'))
 
-    const res = await profileHandler(makeRequest('556036-0793'))
-    expect(res.status).toBe(200)
-
-    const { data } = await res.json()
+    const data = await fetchProfile('556036-0793')
     expect(data.companyName).toBe('Test AB')
     // These come from the search doc, so they survive Phase 2 failures
     expect(data.bankAccounts).toHaveLength(1)
@@ -362,8 +317,7 @@ describe('TIC profile route', () => {
     mockSearch.mockResolvedValue(mockDoc)
     mockKeptSupplementary()
 
-    const res = await profileHandler(makeRequest('556036-0793'))
-    const { data } = await res.json()
+    const data = await fetchProfile('556036-0793')
 
     expect(data.fiscalYear).toEqual({
       startMonthDay: '01-01',
@@ -422,8 +376,7 @@ describe('TIC profile route', () => {
     mockStatus.mockResolvedValue(null)
     mockBeneficialOwners.mockResolvedValue(null)
 
-    const res = await profileHandler(makeRequest('1234567890'))
-    const { data } = await res.json()
+    const data = await fetchProfile('1234567890')
 
     expect(data.companyName).toBe('Minimal AB')
     expect(data.activityStatus).toBeNull()
