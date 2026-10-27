@@ -15403,6 +15403,8 @@
     "payee_new": "New account",
     "confirm_payees_intro": "Check the account with the supplier before approving. Each new or changed account is confirmed on its own.",
     "confirm_payee_row": "{supplier}: I have checked {payee}",
+    "confirm_new_payee": "New account {payee}: I have checked it with the supplier",
+    "confirm_changed_payee": "Changed account {payee}: I have checked it with the supplier",
     "drafts_hint": "The payments are drafts until you approve them. Drafts you do not approve stay under Payments.",
     "approve": "{count, plural, one {Approve the payment} other {Approve # payments}}",
     "approve_title": "{count, plural, one {Approve the payment} other {Approve # payments}}",

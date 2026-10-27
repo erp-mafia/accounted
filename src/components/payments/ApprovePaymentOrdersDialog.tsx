@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatCurrency } from '@/lib/utils'
+import { cn, formatCurrency } from '@/lib/utils'
 import { approvePaymentOrders, orderInvoiceLabel, payeeLabel, PaymentsClientError, type PaymentOrder } from './payments-client'
 import { RequestSigningLinkButton } from './RequestSigningLinkDialog'
 import { DocumentCheckLine, InvoiceDocumentButton, InvoiceDocumentSheet, PaymentBesideDocument, paymentFromOrder } from './InvoiceDocumentPreview'
@@ -42,6 +42,28 @@ export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved, o
   const total = useMemo(() => orders.reduce((sum, o) => sum + Number(o.amount), 0), [orders])
   const allConfirmed = toConfirm.every((o) => o.supplier_invoice_id && confirmed.has(o.supplier_invoice_id))
 
+  /** A new or changed account, confirmed where it is shown: the account appears once. */
+  function confirmPayee(order: PaymentOrder) {
+    const invoiceId = order.supplier_invoice_id as string
+    return (
+      <label className="flex items-start gap-2 text-[13px]">
+        <Checkbox
+          className="mt-0.5 border-foreground"
+          checked={confirmed.has(invoiceId)}
+          onCheckedChange={(v) =>
+            setConfirmed((prev) => {
+              const next = new Set(prev)
+              if (v === true) next.add(invoiceId)
+              else next.delete(invoiceId)
+              return next
+            })
+          }
+        />
+        <span>{t(order.payee_check === 'changed' ? 'confirm_changed_payee' : 'confirm_new_payee', { payee: payeeLabel(order) })}</span>
+      </label>
+    )
+  }
+
   async function approve(next: 'close' | 'request' = 'close') {
     setThen(next)
     setBusy(true)
@@ -60,57 +82,55 @@ export function ApprovePaymentOrdersDialog({ orders, onOpenChange, onApproved, o
 
   return (
     <Dialog open onOpenChange={onOpenChange}>
-      <DialogContent className={payments.length === 1 ? 'max-w-4xl' : undefined}>
+      <DialogContent
+        // max-w-xl keeps the three footer buttons on one line for the usual case.
+        className={cn('outline-none', payments.length === 1 ? 'max-w-4xl' : 'max-w-xl')}
+        // Focus starts on the dialog itself, not on the first document icon:
+        // Tab reaches the rows from the top.
+        onOpenAutoFocus={(event) => {
+          event.preventDefault()
+          const content = event.currentTarget as HTMLElement
+          content.focus()
+        }}
+      >
         <DialogHeader>
           <DialogTitle>{t('approve_title', { count: orders.length })}</DialogTitle>
           <DialogDescription>{t('approve_description', { total: formatCurrency(total, orders[0]?.currency ?? 'SEK') })}</DialogDescription>
         </DialogHeader>
         {payments.length === 1 ? (
-          <PaymentBesideDocument payment={payments[0]} />
+          <>
+            <PaymentBesideDocument payment={payments[0]} />
+            {toConfirm.length > 0 && confirmPayee(toConfirm[0])}
+          </>
         ) : (
-          <ul className="max-h-64 space-y-2 overflow-y-auto text-[13px]">
-            {orders.map((o, index) => (
-              <li key={o.id} className="flex items-center justify-between gap-3 border-b border-border py-2">
-                <div className="min-w-0">
-                  <span className="block truncate">{orderInvoiceLabel(o)}</span>
-                  <span className="block truncate text-[11px] text-muted-foreground tabular-nums">{payeeLabel(o)}</span>
-                  <DocumentCheckLine payment={payments[index]} />
-                </div>
-                <span className="flex shrink-0 items-center gap-1 tabular-nums">
-                  <InvoiceDocumentButton payment={payments[index]} onOpen={setDocumentKey} />
-                  {formatCurrency(Number(o.amount), o.currency)}
-                </span>
-              </li>
-            ))}
+          <ul className="max-h-80 overflow-y-auto text-[13px]">
+            {orders.map((o, index) => {
+              const needsConfirmation = toConfirm.includes(o)
+              return (
+                <li key={o.id} className="space-y-1 border-b border-border py-2.5">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="min-w-0 truncate">{orderInvoiceLabel(o)}</span>
+                    <span className="flex shrink-0 items-center gap-2 tabular-nums">
+                      <InvoiceDocumentButton payment={payments[index]} onOpen={setDocumentKey} />
+                      {formatCurrency(Number(o.amount), o.currency)}
+                    </span>
+                  </div>
+                  {needsConfirmation ? (
+                    <>
+                      {confirmPayee(o)}
+                      <DocumentCheckLine payment={payments[index]} skipMissing className="pl-6" />
+                    </>
+                  ) : (
+                    <DocumentCheckLine payment={payments[index]} lead={payeeLabel(o)} skipMissing />
+                  )}
+                </li>
+              )
+            })}
           </ul>
         )}
         <InvoiceDocumentSheet payment={payments.find((p) => p.key === documentKey) ?? null} onClose={() => setDocumentKey(null)} />
-        {toConfirm.length > 0 && (
-          <div className="space-y-2">
-            <p className="text-[12.5px] text-muted-foreground">{t('confirm_payees_intro')}</p>
-            {toConfirm.map((order) => {
-              const invoiceId = order.supplier_invoice_id as string
-              return (
-                <label key={order.id} className="flex items-center gap-2 text-[13px]">
-                  <Checkbox
-                    className="border-foreground"
-                    checked={confirmed.has(invoiceId)}
-                    onCheckedChange={(v) =>
-                      setConfirmed((prev) => {
-                        const next = new Set(prev)
-                        if (v === true) next.add(invoiceId)
-                        else next.delete(invoiceId)
-                        return next
-                      })
-                    }
-                  />
-                  <span>{t('confirm_payee_row', { supplier: order.payee_name, payee: payeeLabel(order) })}</span>
-                </label>
-              )
-            })}
-          </div>
-        )}
-        <DialogFooter>
+        {/* Three buttons can outgrow one line (a longer count, English): let the footer wrap instead of clipping the first button. */}
+        <DialogFooter className="sm:flex-wrap sm:gap-y-2">
           <Button variant="secondary" onClick={() => onOpenChange(false)} disabled={busy}>
             {t('cancel')}
           </Button>

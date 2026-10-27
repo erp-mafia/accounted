@@ -15403,6 +15403,8 @@
     "payee_new": "Nytt konto",
     "confirm_payees_intro": "Kontrollera kontot med leverantören innan du godkänner. Varje nytt eller ändrat konto bekräftas för sig.",
     "confirm_payee_row": "{supplier}: jag har kontrollerat {payee}",
+    "confirm_new_payee": "Nytt konto {payee}: jag har kontrollerat det med leverantören",
+    "confirm_changed_payee": "Ändrat konto {payee}: jag har kontrollerat det med leverantören",
     "drafts_hint": "Betalningarna är utkast tills du godkänner dem. Utkast som inte godkänns ligger kvar under Betalningar.",
     "approve": "{count, plural, one {Godkänn betalningen} other {Godkänn # betalningar}}",
     "approve_title": "{count, plural, one {Godkänn betalningen} other {Godkänn # betalningar}}",
