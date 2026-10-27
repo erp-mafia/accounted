@@ -1,0 +1,1 @@
+[2026-10-26] A first import asks for the extended history only with the person present, and a period the bank refuses is stepped later in Connect (effective_date_from), not retried here: Swedbank refuses an unattended extended read and a start before a young account existed.

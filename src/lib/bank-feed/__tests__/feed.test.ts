@@ -61,6 +61,8 @@ import {
 const NOW = Date.parse('2026-10-12T10:00:00Z')
 const DAY = 24 * 60 * 60 * 1000
 const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+/** The person at the screen, as the route forwards them: the bank serves the extended history to them only. */
+const PRESENT = { personalNumber: null, ipAddress: '203.0.113.1', userAgent: 'UA' }
 const connect = {} as BankFeedConnect
 
 /** The shared per-table Supabase mock (tests/helpers.ts), keyed by table, answers consumed in call order. */
@@ -167,10 +169,11 @@ describe('bank history limits (Länsförsäkringar)', () => {
     const lf = connectWithBank({ transactionHistoryMaxDays: 180, extendedTransactionHistoryAvailableWindowMinutes: 60 })
     const { supabase } = stub({
       bank_connections: [{ data: row({ bic: 'ELLFSESS', initial_sync_completed_at: null, last_synced_at: null, created_at: new Date(NOW - 5 * 60_000).toISOString(), consent_attempt: { selection: { extended_history_days: 395 } } }), error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
       transactions: [{ data: null, error: null }],
       sie_imports: [{ data: null, error: null }],
     })
-    const result = await run(supabase, { trigger: 'cron', unattended: true, connect: lf })
+    const result = await run(supabase, { trigger: 'initial', signer: PRESENT, connect: lf })
     expect(result).toMatchObject({ ok: true, history_window: 'extended' })
     expect(EXTENDED_HISTORY_MARGIN_DAYS).toBe(3)
     expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ fromDate: new Date(NOW - 392 * 24 * 60 * 60_000).toISOString().slice(0, 10) }))
@@ -261,7 +264,7 @@ describe('runOpenPaymentsSync', () => {
       transactions: [{ data: { date: '2026-10-01' }, error: null }],
       sie_imports: [{ data: { id: 'sie' }, error: null }],
     })
-    const result = await run(supabase, { trigger: 'initial' })
+    const result = await run(supabase, { trigger: 'initial', signer: PRESENT })
     expect(result).toMatchObject({ ok: true, from_date: '2026-09-24', history_window: 'extended' })
     expect(mocks.syncAccount).toHaveBeenCalledWith(supabase, expect.objectContaining({ fromDate: '2026-09-24', options: { rawInsertOnly: true, skipAutoCategorization: true } }))
     expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ initialSync: expect.objectContaining({ requestedFrom: '2026-09-24', returnedMin: '2026-10-05', lookbackDays: 18 }) }))
@@ -322,14 +325,37 @@ describe('runOpenPaymentsSync', () => {
     expect(mocks.persistResult).toHaveBeenCalledWith(supabase, expect.objectContaining({ initialSync: expect.objectContaining({ requestedFrom: '2026-07-16', lookbackDays: 88 }) }))
     expect(bank.getBankDetails).toHaveBeenCalledWith('co-1', 'SWEDSESS')
 
-    // Inside the window the extended range stands, from the Enable Banking history when there is one.
-    const soon = stub({
+    // Inside the window the extended range stands for the person present only.
+    const soon = () => stub({
       bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, created_at: new Date(NOW - 20 * 60_000).toISOString(), consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
       transactions: [{ data: null, error: null }],
       sie_imports: [{ data: null, error: null }],
     })
     // Three days off the bank's listed edge (760): a dateFrom exactly on it is refused by some banks.
-    expect(await run(soon.supabase, { trigger: 'cron', unattended: true, connect: bank })).toMatchObject({ ok: true, from_date: '2024-09-15', history_window: 'extended' })
+    expect(await run(soon().supabase, { trigger: 'initial', signer: PRESENT, connect: bank })).toMatchObject({ ok: true, from_date: '2024-09-15', history_window: 'extended' })
+  })
+
+  it('a first import nobody is present for asks for the ordinary window even while the extended one is open', async () => {
+    // Swedbank, 2026-10-26: the cron retried a refused first import 15 minutes
+    // after the consent, asked for 757 days unattended and was refused with
+    // "Mandatory header is missing: PSU-User-Agent".
+    const bank = connectWithBank({ transactionHistoryMaxDays: 88, extendedTransactionHistoryAvailableWindowMinutes: 60 })
+    const fresh = () => stub({
+      bank_connections: [{ data: row({ initial_sync_completed_at: null, last_synced_at: null, created_at: new Date(NOW - 15 * 60_000).toISOString(), consent_attempt: { selection: { extended_history_days: 760 } } }), error: null }],
+      company_members: [{ data: { role: 'owner' }, error: null }],
+      transactions: [{ data: null, error: null }],
+      sie_imports: [{ data: null, error: null }],
+    })
+    const cron = fresh()
+    expect(await run(cron.supabase, { trigger: 'cron', unattended: true, connect: bank })).toMatchObject({ ok: true, from_date: '2026-07-16', history_window: 'ordinary' })
+    expect(mocks.syncAccount).toHaveBeenLastCalledWith(cron.supabase, expect.objectContaining({ fromDate: '2026-07-16' }))
+    // An agent's sync carries no IP address: nobody is at the bank either.
+    const agent = fresh()
+    expect(await run(agent.supabase, { trigger: 'agent', connect: bank })).toMatchObject({ ok: true, from_date: '2026-07-16', history_window: 'ordinary' })
+    // The person at the screen still gets the extended range.
+    const person = fresh()
+    expect(await run(person.supabase, { trigger: 'manual', signer: PRESENT, connect: bank })).toMatchObject({ ok: true, from_date: '2024-09-15', history_window: 'extended' })
   })
 
   it('clamps the incremental window to the bank\'s transactionHistoryMaxDays', async () => {
