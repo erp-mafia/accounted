@@ -224,7 +224,7 @@ export function TaxPaymentPanel({
               aria-label={t('format_label')}
               value={format}
               onChange={(e) => setFormat(e.target.value as PaymentFormat)}
-              wrapperClassName="-my-1"
+              wrapperClassName="-my-1 max-w-xs"
             >
               <option value="pain001">{FORMAT_LABEL.pain001}</option>
               <option value="bg_lb">{FORMAT_LABEL.bg_lb}</option>

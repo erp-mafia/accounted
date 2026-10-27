@@ -35,7 +35,11 @@ import { downloadFile, saveBlobToDisk } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
 import { AGIPanel } from '@/components/salary/AGIPanel'
 import { PaymentFilePanel } from '@/components/salary/PaymentFilePanel'
-import { SalaryBankPaymentSection } from '@/components/salary/SalaryBankPaymentSection'
+import {
+  SalaryBankPaymentDialog,
+  SalaryBankPaymentSection,
+  useSalaryBankPayments,
+} from '@/components/salary/SalaryBankPaymentSection'
 import { TaxPaymentPanel } from '@/components/salary/TaxPaymentPanel'
 import { RunHeader } from '@/components/salary/run/RunHeader'
 import { RunProgressBar } from '@/components/salary/run/RunProgressBar'
@@ -43,6 +47,7 @@ import { RunKpiCards } from '@/components/salary/run/RunKpiCards'
 import { RunEmployeesTable } from '@/components/salary/run/RunEmployeesTable'
 import { RunCalculationDetails } from '@/components/salary/run/RunCalculationDetails'
 import { RunJournalPreview, type PreviewData } from '@/components/salary/run/RunJournalPreview'
+import { RunFoldSection } from '@/components/salary/run/RunFoldSection'
 import { ForaReportDialog } from '@/components/salary/run/ForaReportDialog'
 import { formatRunAmount, periodLabelOf, type RunDetail } from '@/components/salary/run/types'
 import { isPaymentDateAhead, needsFuturePayoutConfirm } from '@/lib/salary/payout-date'
@@ -79,6 +84,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const { toast } = useToast()
   const { canWrite } = useCanWrite()
   const t = useTranslations('salary_run')
+  const tBank = useTranslations('salary_bank_payment')
   const tCommon = useTranslations('common')
   const errorLocale = useLocale() as ErrorLocale
   const { dialogProps, confirm: confirmAction } = useDestructiveConfirm()
@@ -116,8 +122,12 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     payment_due_date?: string | null
   } | null>(null)
   const [taxPaymentLoading, setTaxPaymentLoading] = useState(false)
-  // A bank payment of the run is live: the payment file is left out, it would pay the month twice.
-  const [inBankPayment, setInBankPayment] = useState(false)
+  // The run's bank payments and whether the company can make them: they pick
+  // the header's button (Betala via banken before any payment) and, while one
+  // is live, keep the payment file away (it would pay the month twice).
+  const bankPayments = useSalaryBankPayments(id, !!run && ['approved', 'paid', 'booked'].includes(run.status))
+  const inBankPayment = bankPayments.live.length > 0
+  const [payDialogOpen, setPayDialogOpen] = useState(false)
   // How the payslips can go out: the email link, plus each digital mailbox
   // (Billo, Kivra) the company sends through, read once. A failed read
   // leaves the email link alone, as before the mailboxes.
@@ -1006,6 +1016,15 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     section.scrollIntoView({ behavior: reduceMotion ? 'auto' : 'smooth', block: 'start' })
   }
 
+  // Betala via banken is the way to pay an approved run where bank payments
+  // are on and none is live yet: the header's button, the payment file folded
+  // under the section as the other way. Markera som betald moves to the menu.
+  const canPayViaBank = canWrite && bankPayments.available === true && run.status === 'approved' && !noPayout
+  // Until both answers are in, the way to pay is unknown: no pay button and no
+  // payment panels yet, rather than the file first and then folded away.
+  const bankPaymentsKnown = bankPayments.available !== null && bankPayments.orders !== null
+  const payViaBankFirst = canPayViaBank && bankPaymentsKnown && !inBankPayment
+
   // The one next step for the current status, mirrored as a prominent header
   // button - the rail alone buried it (nobody found Godkänn).
   const primaryAction = !canWrite
@@ -1028,126 +1047,97 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
               onClick: () => handleCalculate({ fromReview: true }),
             }
         : run.status === 'approved'
-          ? { key: 'paid', label: noPayout ? t('action_continue') : t('action_mark_paid'), onClick: handleMarkPaid }
+          ? noPayout
+            ? { key: 'paid', label: t('action_continue'), onClick: handleMarkPaid }
+            : payViaBankFirst
+              ? { key: 'pay_bank', label: tBank('pay_button'), onClick: () => setPayDialogOpen(true) }
+              : // A bank payment is under way: the run moves to paid by itself
+                // once the bank has executed every payment.
+                inBankPayment || !bankPaymentsKnown
+                ? null
+                : { key: 'paid', label: t('action_mark_paid'), onClick: handleMarkPaid }
           : run.status === 'paid'
             ? { key: 'book', label: t('action_book'), onClick: handleBook }
             : run.status === 'booked' && agiState !== 'signed'
               ? { key: 'agi', label: t('action_submit_agi'), onClick: scrollToAgi }
               : null
 
-  return (
-    <div className="space-y-8 stagger-enter">
-      {/* Back row + header: serif title with one status chip, the quiet meta
-          line, the next step as the one default button and everything else
-          behind the ⋯ menu. */}
-      <RunHeader
-        run={run}
-        canWrite={canWrite}
-        actionLoading={actionLoading}
-        employeeCount={employees.length}
-        isCalculated={isCalculated}
-        primaryAction={primaryAction}
-        onPreview={handlePreview}
-        onRevert={() => handleAction('revert')}
-        onUnapprove={handleUnapprove}
-        payslipChannels={payslipChannels}
-        onSendPayslips={(channel) => void handleSendPayslips(channel)}
-        onDownloadPayslips={handleBulkPayslipDownload}
-        onDownloadAgi={handleDownloadAgi}
-        onOpenForaReport={reportsToFora ? () => setForaOpen(true) : null}
-        onDelete={handleDelete}
-        onCorrect={handleCorrect}
-        onUpdatePaymentDate={handleUpdatePaymentDate}
-      />
-
-      {/* The one attention sentence on the page (the two never coincide: a
-          nollkörning is a current calculation). A stale calculation: say why
-          the figures are gone and Godkänn is not offered; Beräkna om is the
-          header's primary action. An empty declaration will be filed for the
-          period, which should be deliberate. */}
-      {isStale && <AttnLine>{t('calculation_stale')}</AttnLine>}
-      {isNollkorning && (
-        <AttnLine>
-          {t('nollkorning_title')}: {t('nollkorning_body', { period: periodLabel })}
-        </AttnLine>
-      )}
-
-      {/* The month's steps as a flat rail: where the run stands and what the
-          stage means. Actions live in the header. */}
-      <RunProgressBar run={run} isCalculated={isCalculated} agiState={agiState} />
-
-      {/* Totals of a stale calculation are not the run's figures any more. */}
-      {!isStale && <RunKpiCards run={run} employees={employees} />}
-
-      <RunEmployeesTable
-        run={run}
-        runId={id}
+  // Calculation detail and the journal preview read best side by side on the
+  // wide canvas; they stack on smaller viewports.
+  const calculationAndVouchers = (
+    <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2 items-start">
+      <RunCalculationDetails
+        periodYear={run.period_year}
         employees={employees}
-        availableEmployees={availableEmployees}
-        canWrite={canWrite}
-        actionLoading={actionLoading}
-        dimensionsEnabled={dimensionsEnabled}
-        isCalculated={isCalculated}
-        onAddEmployee={handleAddEmployee}
-        onRemoveEmployee={handleRemoveEmployee}
-        onSalaryEdit={handleSalaryEdit}
-        openExpenseClaims={openExpenseClaims}
-        onAddExpenseClaims={handleAddExpenseClaims}
+        calculationParams={run.calculation_params}
       />
-
-      {/* Calculation detail and the journal preview read best side by side on
-          the wide canvas; they stack on smaller viewports. */}
-      <div className="grid gap-x-12 gap-y-8 lg:grid-cols-2 items-start">
-        <RunCalculationDetails
-          periodYear={run.period_year}
-          employees={employees}
-          calculationParams={run.calculation_params}
+      {preview && (
+        <RunJournalPreview
+          preview={preview}
+          onRecalculate={run.status === 'draft' && canWrite ? () => handleCalculate() : undefined}
+          recalculating={actionLoading === 'calculate'}
+          underlagHref={
+            preview.booked ? `/api/salary/runs/${id}/underlag/pdf` : undefined
+          }
+          benefitValues={roundOre(employees.reduce((sum, sre) => sum + (sre.benefit_values ?? 0), 0))}
         />
-        {preview && (
-          <RunJournalPreview
-            preview={preview}
-            onRecalculate={run.status === 'draft' && canWrite ? () => handleCalculate() : undefined}
-            recalculating={actionLoading === 'calculate'}
-            underlagHref={
-              preview.booked ? `/api/salary/runs/${id}/underlag/pdf` : undefined
-            }
-            benefitValues={roundOre(employees.reduce((sum, sre) => sum + (sre.benefit_values ?? 0), 0))}
-          />
-        )}
-      </div>
+      )}
+    </div>
+  )
 
-      {/* Paying through the bank (one payment per employee, one BankID), and
-          the payment file: available once the run is approved, but only when
-          there is something to pay out. A zero-payout run generates no file
-          rows. While a bank payment is live the file is left out. */}
-      {['approved', 'paid', 'booked'].includes(run.status) && !noPayout && (
-        <SalaryBankPaymentSection
+  // The payment file of the run, while no bank payment is live (it would pay
+  // the month twice). Where Betala via banken comes first it folds under it.
+  const paymentFile = !inBankPayment && (
+    <PaymentFilePanel
+      salaryRunId={id}
+      periodLabel={periodLabel}
+      paymentFileFormat={run.payment_file_format}
+      paymentFileGeneratedAt={run.payment_file_generated_at}
+      paymentFileVersion={run.payment_file_version ?? 1}
+      defaultFormat={preferredPaymentFormat}
+      defaultBank={defaultBank}
+      senderBankgiro={senderBankgiro}
+      senderIban={senderIban}
+      readOnly={!canWrite}
+      settled={run.status === 'paid' || run.status === 'booked'}
+      folded={payViaBankFirst}
+      onDownloaded={loadRun}
+    />
+  )
+
+  // Paying: available once the run is approved, but only when there is
+  // something to pay out (a zero-payout run generates no file rows).
+  const payPanels = ['approved', 'paid', 'booked'].includes(run.status) && !noPayout && bankPaymentsKnown && (
+    <>
+      <SalaryBankPaymentSection payments={bankPayments} canPay={canPayViaBank} onPay={() => setPayDialogOpen(true)}>
+        {payViaBankFirst && paymentFile}
+      </SalaryBankPaymentSection>
+      {!payViaBankFirst && paymentFile}
+    </>
+  )
+  const payIsCurrent = run.status === 'approved'
+
+  // Filing: the AGI once the run is booked (the header's Lämna in AGI), then
+  // the tax payment (skatt + arbetsgivaravgifter) once the AGI is generated.
+  const filingPanels = run.status === 'booked' && (
+    <>
+      {/* AGI (Arbetsgivardeklaration). The XML download for manual filing
+          lives in the header's ⋯ menu. The anchor of the header's "Lämna in
+          AGI"; scroll-mt clears the sticky top bar. */}
+      <div id={AGI_SECTION_ID} className="scroll-mt-24">
+        <AGIPanel
           salaryRunId={id}
-          runStatus={run.status}
+          arbetsgivare={run.arbetsgivare ?? ''}
+          period={formatAgiPeriodCompact(agiReportingPeriod(run))}
+          agiGeneratedAt={run.agi_generated_at}
+          agiSubmittedAt={run.agi_submitted_at}
+          submission={agiSubmission}
+          onRefreshSubmission={refreshAgiSubmission}
           readOnly={!canWrite}
           onChange={loadRun}
-          onInBankPayment={setInBankPayment}
         />
-      )}
-      {['approved', 'paid', 'booked'].includes(run.status) && !noPayout && !inBankPayment && (
-        <PaymentFilePanel
-          salaryRunId={id}
-          periodLabel={periodLabel}
-          paymentFileFormat={run.payment_file_format}
-          paymentFileGeneratedAt={run.payment_file_generated_at}
-          paymentFileVersion={run.payment_file_version ?? 1}
-          defaultFormat={preferredPaymentFormat}
-          defaultBank={defaultBank}
-          senderBankgiro={senderBankgiro}
-          senderIban={senderIban}
-          readOnly={!canWrite}
-          settled={run.status === 'paid' || run.status === 'booked'}
-          onDownloaded={loadRun}
-        />
-      )}
-
-      {/* Tax payment (skatt + arbetsgivaravgifter): once AGI has been generated */}
-      {run.status === 'booked' && run.agi_generated_at && (
+      </div>
+      {run.agi_generated_at && (
         taxPaymentLoading ? (
           <div className="space-y-4">
             <Skeleton className="h-5 w-40" />
@@ -1177,29 +1167,94 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
           />
         )
       )}
+    </>
+  )
+  return (
+    <div className="space-y-8 stagger-enter">
+      {/* Back row + header: serif title with one status chip, the quiet meta
+          line, the next step as the one default button and everything else
+          behind the ⋯ menu. */}
+      <RunHeader
+        run={run}
+        canWrite={canWrite}
+        actionLoading={actionLoading}
+        employeeCount={employees.length}
+        isCalculated={isCalculated}
+        primaryAction={primaryAction}
+        onMarkPaid={run.status === 'approved' && !noPayout && primaryAction?.key !== 'paid' ? handleMarkPaid : null}
+        onPreview={handlePreview}
+        onRevert={() => handleAction('revert')}
+        onUnapprove={handleUnapprove}
+        payslipChannels={payslipChannels}
+        onSendPayslips={(channel) => void handleSendPayslips(channel)}
+        onDownloadPayslips={handleBulkPayslipDownload}
+        onDownloadAgi={handleDownloadAgi}
+        onOpenForaReport={reportsToFora ? () => setForaOpen(true) : null}
+        onDelete={handleDelete}
+        onCorrect={handleCorrect}
+        onUpdatePaymentDate={handleUpdatePaymentDate}
+      />
 
-      {/* AGI (Arbetsgivardeklaration): available once the run is booked. The
-          XML download for manual filing lives in the header's ⋯ menu. */}
-      {run.status === 'booked' && (
-        // The anchor of the header's "Lämna in AGI"; scroll-mt clears the
-        // sticky top bar.
-        <div id={AGI_SECTION_ID} className="scroll-mt-24">
-          <AGIPanel
-            salaryRunId={id}
-            arbetsgivare={run.arbetsgivare ?? ''}
-            period={formatAgiPeriodCompact(agiReportingPeriod(run))}
-            agiGeneratedAt={run.agi_generated_at}
-            agiSubmittedAt={run.agi_submitted_at}
-            submission={agiSubmission}
-            onRefreshSubmission={refreshAgiSubmission}
-            readOnly={!canWrite}
-            onChange={loadRun}
-          />
-        </div>
+      {/* The one attention sentence on the page (the two never coincide: a
+          nollkörning is a current calculation). A stale calculation: say why
+          the figures are gone and Godkänn is not offered; Beräkna om is the
+          header's primary action. An empty declaration will be filed for the
+          period, which should be deliberate. */}
+      {isStale && <AttnLine>{t('calculation_stale')}</AttnLine>}
+      {isNollkorning && (
+        <AttnLine>
+          {t('nollkorning_title')}: {t('nollkorning_body', { period: periodLabel })}
+        </AttnLine>
       )}
 
-      {/* Overridable approval guard: missing bank details don't dead-end -
-          the user can approve now and complete details before the payment file. */}
+      {/* The month's steps as a flat rail: where the run stands and what the
+          stage means. Actions live in the header. */}
+      <RunProgressBar run={run} isCalculated={isCalculated} agiState={agiState} />
+
+      {/* The step the run is in comes first, right under the rail: paying an
+          approved run, the AGI and the tax payment of a booked one. Paid, the
+          payment keeps its place further down as the run's record. */}
+      {payIsCurrent && payPanels}
+      {filingPanels}
+
+      {/* Totals of a stale calculation are not the run's figures any more. */}
+      {!isStale && <RunKpiCards run={run} employees={employees} />}
+
+      <RunEmployeesTable
+        run={run}
+        runId={id}
+        employees={employees}
+        availableEmployees={availableEmployees}
+        canWrite={canWrite}
+        actionLoading={actionLoading}
+        dimensionsEnabled={dimensionsEnabled}
+        isCalculated={isCalculated}
+        onAddEmployee={handleAddEmployee}
+        onRemoveEmployee={handleRemoveEmployee}
+        onSalaryEdit={handleSalaryEdit}
+        openExpenseClaims={openExpenseClaims}
+        onAddExpenseClaims={handleAddExpenseClaims}
+      />
+
+      {/* What is reviewed before approval; reference after it, folded. */}
+      {run.status === 'draft' || run.status === 'review' ? (
+        calculationAndVouchers
+      ) : (
+        <RunFoldSection kicker={t('underlag_fold_title')}>{calculationAndVouchers}</RunFoldSection>
+      )}
+
+      {!payIsCurrent && payPanels}
+
+      <SalaryBankPaymentDialog
+        salaryRunId={id}
+        open={payDialogOpen}
+        onClose={() => setPayDialogOpen(false)}
+        onDone={() => {
+          bankPayments.reload()
+          loadRun()
+        }}
+      />
+
       <Dialog open={approveOverride !== null} onOpenChange={(open) => { if (!open) setApproveOverride(null) }}>
         <DialogContent>
           <DialogHeader>
