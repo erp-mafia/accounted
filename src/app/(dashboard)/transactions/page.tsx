@@ -106,6 +106,8 @@ import { useCashAccounts } from '@/lib/reference-data/hooks'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { collectPages } from '@/lib/lists/collect-pages'
 import { useRealtimeSupabase } from '@/lib/hooks/use-realtime-supabase'
+import { refreshWorklistBadges } from '@/lib/hooks/use-worklist-badges'
+import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { resolveDetachErrorMessage } from '@/components/transactions/detach-underlag'
@@ -933,6 +935,15 @@ export default function TransactionsPage() {
     () => skvRows.filter((row) => !row.journal_entry_id && !row.is_ignored),
     [skvRows],
   )
+  // Booking, matching or ignoring a skattekonto row here changes the nav
+  // badge, which counts these rows too; skattekonto has no realtime channel,
+  // so the reloaded list moves it. The first count is the page load itself.
+  const skvUnmatchedCountRef = useRef<number | null>(null)
+  useEffect(() => {
+    const previous = skvUnmatchedCountRef.current
+    skvUnmatchedCountRef.current = skvUnmatched.length
+    if (previous !== null && previous !== skvUnmatched.length) refreshWorklistBadges()
+  }, [skvUnmatched.length])
 
   const bankToSkvHints = useMemo(
     () => findBankSkvCounterparts({
@@ -1788,6 +1799,9 @@ export default function TransactionsPage() {
 
     const refreshFromRealtime = async () => {
       if (cancelled) return
+      // The nav badge has no channel of its own any more: this one, live
+      // while the user looks at the inbox, moves it.
+      refreshWorklistBadges()
       await refreshTransactions()
     }
 
@@ -1805,10 +1819,11 @@ export default function TransactionsPage() {
           void refreshFromRealtime()
         },
       )
-      .subscribe()
+    const stopJoin = subscribeAsUser(supabase, channel)
 
     return () => {
       cancelled = true
+      stopJoin()
       void supabase.removeChannel(channel)
     }
   }, [companyId, refreshTransactions, supabase])

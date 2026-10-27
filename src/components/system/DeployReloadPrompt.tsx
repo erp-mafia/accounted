@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { useTranslations } from 'next-intl'
+import { onStaleDeploy } from '@/lib/browser/stale-deploy'
 import { Button } from '@/components/ui/button'
 import { POPOVER_ENTER_UP_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { cn } from '@/lib/utils'
@@ -54,6 +55,10 @@ export function DeployReloadPrompt() {
       document.removeEventListener('visibilitychange', poller.nudge)
     }
   }, [stale])
+
+  // A Server Action this build knows but the server no longer has: the tab
+  // is behind a deploy whether or not /api/version has said so yet.
+  useEffect(() => onStaleDeploy(window, () => setStale(true)), [])
 
   if (!stale) return null
 

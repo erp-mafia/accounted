@@ -1,0 +1,1 @@
+[2026-10-27] journal_entries gets a (company_id, id) index rather than a new order on each paged read: every fetchAllRows and fetchEntryLines page orders by id, and for big companies Postgres walked the primary key across all tenants; the smaller (company_id) index stays.

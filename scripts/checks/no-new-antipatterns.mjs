@@ -246,6 +246,12 @@
  *      catch, a catch that only returns, `.catch(() => {})` / `=> null`).
  *      Per-file count ratchet. Implementation and exemptions in
  *      error-masking.mjs.
+ *   30. lines-inner-embed: a journal_entry_lines read filtered through a
+ *      `journal_entries!inner` embed. PostgREST plans it from the line side
+ *      (every tenant's lines) and it ran into the statement timeout again and
+ *      again. Read entry first (lib/bookkeeping/entry-lines.ts) or call a
+ *      ledger RPC. Allowlisted file-set, may only shrink. Implementation and
+ *      rationale in lines-inner-embed.mjs.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -285,6 +291,7 @@ import {
 } from './extension-route-guards.mjs'
 import { findInitReach } from './static-init-import.mjs'
 import { findLimitsAbovePage, LIMIT_ABOVE_PAGE_ALLOWED } from './limit-above-page.mjs'
+import { findLinesInnerEmbeds, LINES_INNER_EMBED_ALLOWED } from './lines-inner-embed.mjs'
 import { findLocalTestMocks, LOCAL_SUPABASE_CHAIN_ALLOWED } from './local-test-mock.mjs'
 import {
   checkWorkingChange as checkUnsignedProviderNames,
@@ -1319,6 +1326,7 @@ const current = {
   uiUniformity: findUiUniformityFindings(SOURCE_ROOT),
   tableWithoutGrant: findTablesWithoutGrant(ROOT),
   limitsAbovePage: findLimitsAbovePage(SOURCE_ROOT),
+  linesInnerEmbeds: findLinesInnerEmbeds(SOURCE_ROOT),
   localTestMocks: findLocalTestMocks(ROOT),
   utcToday: findUtcTodaySites(SOURCE_ROOT),
   unsignedProviderNames: checkUnsignedProviderNames(),
@@ -1850,6 +1858,32 @@ if (newLimitsAbovePage.length) {
       '    { maxRows } to keep a deliberate cap. Read an aggregate for a sum or a count. A sample stays at\n' +
       '    .limit(1000) or below, with a comment saying it is a sample.',
   )
+}
+
+// 1g3. lines-inner-embed: allowlist lives in lines-inner-embed.mjs
+// (LINES_INNER_EMBED_ALLOWED) and may only shrink. A journal_entry_lines read
+// filtered through a journal_entries!inner embed walks every tenant's lines.
+const newLinesInnerEmbeds = current.linesInnerEmbeds.filter((f) => !LINES_INNER_EMBED_ALLOWED.has(f.file))
+if (newLinesInnerEmbeds.length) {
+  failed = true
+  console.error(
+    `\n✗ lines-inner-embed: ${newLinesInnerEmbeds.length} journal_entry_lines read(s) filtered through a journal_entries!inner ` +
+      'embed, which PostgREST plans from every tenant\'s lines:',
+  )
+  newLinesInnerEmbeds.forEach((f) => console.error(`    ${f.file}:${f.line}  select('${f.select}')`))
+  console.error(
+    '  → read entry first: fetchEntryLines / fetchLinesByEntryIds (lib/bookkeeping/entry-lines.ts) filter\n' +
+      '    journal_entries on its own columns and read the lines by journal_entry_id; or call a ledger RPC.',
+  )
+}
+const linesInnerEmbedFilesNow = new Set(current.linesInnerEmbeds.map((f) => f.file))
+const staleLinesInnerEmbedAllowed = [...LINES_INNER_EMBED_ALLOWED].filter((f) => !linesInnerEmbedFilesNow.has(f))
+if (staleLinesInnerEmbedAllowed.length) {
+  console.log(
+    `\n✓ lines-inner-embed progress: ${staleLinesInnerEmbedAllowed.length} allowlisted file(s) no longer embed journal_entries!inner.` +
+      ' Remove them from LINES_INNER_EMBED_ALLOWED in scripts/checks/lines-inner-embed.mjs to lock it in:',
+  )
+  staleLinesInnerEmbedAllowed.forEach((f) => console.log(`    ${f}`))
 }
 
 // 1h. static-init-import: no allowlist. lib/init is imported by

@@ -1362,10 +1362,12 @@ describe('model-free signed document uploads', () => {
 
     const removed = await cleanupExpiredPendingDocumentUploads(company, user, now)
 
+    // Name order: storage.search serves it from the (bucket_id, name) index;
+    // a created_at sort scans every object in the bucket.
     expect(list).toHaveBeenCalledWith(`documents/${company}/${user}/pending`, {
       limit: 100,
       offset: 0,
-      sortBy: { column: 'created_at', order: 'asc' },
+      sortBy: { column: 'name', order: 'asc' },
     })
     expect(remove).toHaveBeenCalledWith([
       `documents/${company}/${user}/pending/${uploadId}_old.pdf`,

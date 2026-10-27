@@ -66,6 +66,7 @@ import { useMailConnections } from '@/components/extensions/general/use-mail-con
 import { useReceiptHunt } from '@/components/extensions/general/use-receipt-hunt'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createClient } from '@/lib/supabase/client'
+import { subscribeAsUser } from '@/lib/supabase/realtime-subscribe'
 import { fetchWithTimeout } from '@/lib/http/fetch-with-timeout'
 import { copyInboxAddress, type AddressCopyState } from '@/components/extensions/general/inbox-address-copy'
 import { useAssistantAvailable, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
@@ -656,8 +657,9 @@ export default function InvoiceInboxWorkspace(_props: WorkspaceComponentProps) {
           fetchItems()
         }
       )
-      .subscribe()
+    const stopJoin = subscribeAsUser(supabase, channel)
     return () => {
+      stopJoin()
       void supabase.removeChannel(channel)
     }
   }, [companyId, fetchItems])

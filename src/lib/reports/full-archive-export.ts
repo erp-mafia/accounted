@@ -10,7 +10,7 @@ import { balanceSheetFromTrialBalance } from './balance-sheet'
 import { generateGeneralLedger } from './general-ledger'
 import { generateJournalRegister } from './journal-register'
 import { calculateVatDeclaration } from './vat-declaration'
-import { getAuditLog } from '@/lib/core/audit/audit-service'
+import { getAuditLog, type AuditLogCursor } from '@/lib/core/audit/audit-service'
 import { downloadDocumentObject } from '@/lib/core/documents/document-service'
 import { listAttachmentRowsInRange } from '@/lib/reconciliation/attachments-store'
 import { generateBokslutsbilagor } from './bokslutsbilagor'
@@ -1821,21 +1821,24 @@ async function fetchAllAuditEntries(
   filters: { from_date?: string; to_date?: string }
 ): Promise<AuditLogEntry[]> {
   const all: AuditLogEntry[] = []
-  let page = 1
   const pageSize = 500
+  // Keyset, not page numbers: each page starts after the last row of the one
+  // before, so page 400 costs what page 1 does (getAuditLog's `after`).
+  let after: AuditLogCursor | undefined
 
   while (true) {
     const result = await getAuditLog(supabase, companyId, {
       ...filters,
-      page,
       pageSize,
       includeCount: false,
+      ...(after ? { after } : {}),
     })
     all.push(...result.data)
     if (result.data.length < pageSize) {
       break
     }
-    page++
+    const last = result.data[result.data.length - 1]
+    after = { created_at: last.created_at, id: last.id }
   }
   return all
 }

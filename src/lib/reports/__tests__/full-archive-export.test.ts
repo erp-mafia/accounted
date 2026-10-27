@@ -598,6 +598,36 @@ describe('generateFullArchive', () => {
       expect(zip.file('bokforing.se')).toBeNull()
     })
 
+    it('walks the audit trail by keyset: each page starts after the last row of the one before', async () => {
+      const auditRow = (i: number) => ({
+        id: `00000000-0000-4000-8000-${String(i).padStart(12, '0')}`,
+        created_at: `2026-09-27T19:22:19.${String(999999 - i).padStart(6, '0')}+00:00`,
+        action: 'INSERT',
+      })
+      const firstPage = Array.from({ length: 500 }, (_, i) => auditRow(i))
+      mockGetAuditLog
+        .mockResolvedValueOnce({ data: firstPage as never, count: 0 })
+        .mockResolvedValueOnce({ data: [auditRow(500)] as never, count: 0 })
+      enqueueMany([
+        { data: COMPANY_ROW },
+        { data: [PERIOD_2024] },
+        { data: [] },
+      ])
+
+      await generateFullArchive(supabase as any, 'company-1', { scope: 'all' })
+
+      expect(mockGetAuditLog).toHaveBeenCalledTimes(2)
+      const [first, second] = mockGetAuditLog.mock.calls.map((call) => call[2])
+      expect(first).not.toHaveProperty('after')
+      expect(second).toMatchObject({
+        pageSize: 500,
+        includeCount: false,
+        after: { created_at: firstPage[499].created_at, id: firstPage[499].id },
+      })
+      // No page numbers: an OFFSET re-reads every earlier row on each page.
+      expect(second).not.toHaveProperty('page')
+    })
+
     it('does not filter audit trail by date in all-mode', async () => {
       enqueueMany([
         { data: COMPANY_ROW },

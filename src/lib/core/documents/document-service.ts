@@ -516,10 +516,17 @@ export async function cleanupExpiredPendingDocumentUploads(
   const serviceClient = createServiceClientNoCookies()
   const prefix = `${DOCUMENTS_PATH_ROOT}/${companyId}/${userId}/pending`
   const storage = serviceClient.storage.from(DOCUMENTS_BUCKET)
+  // Sorted by name, never by created_at: storage.search answers a name sort
+  // from the (bucket_id, name) index, but any other sort column makes it
+  // match `name ILIKE prefix%` over every object in the bucket. On the
+  // documents bucket (254k objects) that was ~1.1 s per call against ~9 ms,
+  // twice per signed upload, and the largest storage cost in the database.
+  // Age is checked per object below, so the order only decides which 100
+  // are looked at when a prefix holds more (production peak: 29).
   const { data, error } = await storage.list(prefix, {
     limit: PENDING_DOCUMENT_UPLOAD_CLEANUP_LIMIT,
     offset: 0,
-    sortBy: { column: 'created_at', order: 'asc' },
+    sortBy: { column: 'name', order: 'asc' },
   })
   if (error || !data) return 0
 

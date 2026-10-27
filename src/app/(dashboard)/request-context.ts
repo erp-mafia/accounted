@@ -1,9 +1,11 @@
 import 'server-only'
 
 import { cache } from 'react'
+import { headers } from 'next/headers'
 import type { User } from '@supabase/supabase-js'
 import { createClient } from '@/lib/supabase/server'
 import { claimsPinned, userFromClaims } from '@/lib/auth/claims'
+import { ACTIVE_COMPANY_HEADER, verifyActiveCompany } from '@/lib/auth/active-company-verdict'
 import { getActiveCompanyId } from '@/lib/company/context'
 import { ensureSandboxAgentProfile } from '@/lib/sandbox/ensure-agent'
 import { loadOpenObligations, type ObligationCode } from '@/lib/modules/obligations'
@@ -23,10 +25,16 @@ export const getDashboardAuthContext = cache(async () => {
   // router.refresh() bought nothing. getUser() stays as the authoritative
   // fallback when claims are missing, unpinned or unverifiable.
   let user: User | null = null
+  // The verified session id, which the proxy's active-company verdict is
+  // bound to. Null on the getUser() fallback, where no verified claims exist.
+  let sessionId: string | null = null
   if (typeof supabase.auth.getClaims === 'function') {
     try {
       const { data } = await supabase.auth.getClaims()
-      if (data?.claims?.sub && claimsPinned(data.claims)) user = userFromClaims(data.claims)
+      if (data?.claims?.sub && claimsPinned(data.claims)) {
+        user = userFromClaims(data.claims)
+        sessionId = typeof data.claims.session_id === 'string' ? data.claims.session_id : null
+      }
     } catch {
       // Fall through to the network check.
     }
@@ -38,17 +46,38 @@ export const getDashboardAuthContext = cache(async () => {
     user = fetched
   }
 
-  return { supabase, user }
+  return { supabase, user, sessionId }
 })
+
+/**
+ * The active company the proxy resolved for this very request, when it
+ * vouched for one (lib/auth/active-company-verdict.ts): GET page requests of
+ * a signed-in user with a company. Null otherwise, and then the caller
+ * resolves it itself.
+ */
+async function proxyResolvedCompanyId(userId: string, sessionId: string | null): Promise<string | null> {
+  if (!sessionId) return null
+  let verdict: string | null
+  try {
+    verdict = (await headers()).get(ACTIVE_COMPANY_HEADER)
+  } catch {
+    // Outside a request (a script, a test): there is no verdict.
+    return null
+  }
+  return verifyActiveCompany(verdict, { userId, sessionId })
+}
 
 /**
  * Request-local active company resolution. Nested layouts and pages commonly
  * need the same value, so resolving it once removes repeated preference and
- * membership round trips without caching anything across requests.
+ * membership round trips without caching anything across requests. The
+ * proxy has usually resolved it a moment earlier for the same request; its
+ * signed verdict then replaces the resolve_active_company round trip.
  */
 export const getDashboardCompanyId = cache(async () => {
-  const { supabase, user } = await getDashboardAuthContext()
-  return user ? getActiveCompanyId(supabase, user.id) : null
+  const { supabase, user, sessionId } = await getDashboardAuthContext()
+  if (!user) return null
+  return (await proxyResolvedCompanyId(user.id, sessionId)) ?? getActiveCompanyId(supabase, user.id)
 })
 
 export interface DashboardTeamMembership {
