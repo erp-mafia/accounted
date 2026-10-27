@@ -1,0 +1,1 @@
+[2026-10-27] Settings › API & MCP shows the Claude connect hero until the viewer has a connection of their own, and marks a colleague's row instead of hiding it: admins read every member's key, so one owner's Claude hid the only one-click path from the rest, though each person signs in alone.

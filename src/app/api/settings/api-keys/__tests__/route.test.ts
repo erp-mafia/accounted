@@ -758,6 +758,74 @@ describe('GET /api/settings/api-keys', () => {
     expect(service.calls.some((c) => c.table === 'service_accounts')).toBe(false)
   })
 
+  it("names a colleague's key by full name, else e-mail, and never the caller's own", async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    const ACCOUNT = '5b6c1d2e-0000-4000-8000-0000000000a2'
+    setupFrom({
+      listResult: {
+        data: [
+          { id: 'ak-own', key_prefix: 'gnubok_sk_o', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-21T11:36:59Z', user_id: 'user-1', client: 'local' },
+          { id: 'ak-anna', key_prefix: 'gnubok_sk_a', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-19T15:00:24Z', user_id: 'user-2', client: 'claude' },
+          { id: 'ak-bo', key_prefix: 'gnubok_sk_b', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-18T09:00:00Z', user_id: 'user-3', client: 'chatgpt' },
+          { id: 'ak-sa', key_prefix: 'gnubok_sk_s', name: 'Nyckel', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-17T09:00:00Z', user_id: 'user-4', service_account_id: ACCOUNT },
+        ],
+      },
+    })
+    const service = setupServiceFrom({
+      api_key_companies: { data: [] },
+      service_accounts: { data: [{ id: ACCOUNT, name: 'Nattlig synk' }] },
+      profiles: {
+        data: [
+          { id: 'user-2', full_name: 'Anna Andersson', email: 'anna@example.se' },
+          { id: 'user-3', full_name: '  ', email: 'bo@example.se' },
+        ],
+      },
+    })
+
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual([
+      expect.objectContaining({ id: 'ak-own', is_own: true, owner_name: null }),
+      expect.objectContaining({ id: 'ak-anna', is_own: false, owner_name: 'Anna Andersson' }),
+      expect.objectContaining({ id: 'ak-bo', is_own: false, owner_name: 'bo@example.se' }),
+      expect.objectContaining({ id: 'ak-sa', is_own: false, owner_name: null }),
+    ])
+    // Only colleagues' person keys are looked up: not the caller, not a service account's sponsor.
+    expect(service.find('profiles', 'select')).toEqual(['id, full_name, email'])
+    expect(service.find('profiles', 'in')).toEqual(['id', ['user-2', 'user-3']])
+  })
+
+  it("reads no profiles when every key is the caller's own", async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    setupFrom({
+      listResult: {
+        data: [{ id: 'ak-p', key_prefix: 'gnubok_sk_p', name: 'Min nyckel', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-15T10:00:00Z', user_id: 'user-1' }],
+      },
+    })
+    const service = setupServiceFrom({ api_key_companies: { data: [] } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    expect(res.status).toBe(200)
+    expect(service.calls.some((c) => c.table === 'profiles')).toBe(false)
+  })
+
+  it('still lists the keys, unnamed, when the owner names cannot be read', async () => {
+    getActiveCompanyIdMock.mockResolvedValue(ACTIVE)
+    listUserCompaniesForPickerMock.mockResolvedValue(memberships)
+    setupFrom({
+      listResult: {
+        data: [{ id: 'ak-anna', key_prefix: 'gnubok_sk_a', name: 'MCP-klient (OAuth)', scopes: ['reports:read'], revoked_at: null, created_at: '2026-10-19T15:00:24Z', user_id: 'user-2', client: 'claude' }],
+      },
+    })
+    setupServiceFrom({ api_key_companies: { data: [] }, profiles: { error: { message: 'boom' } } })
+    const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
+    const { status, body } = await parseJsonResponse<{ data: Array<Record<string, unknown>> }>(res)
+    expect(status).toBe(200)
+    expect(body.data).toEqual([expect.objectContaining({ id: 'ak-anna', is_own: false, owner_name: null })])
+  })
+
   it('skips the allowlist query when there are no keys', async () => {
     setupFrom({ listResult: { data: [] } })
     const res = await GET(createMockRequest('/api/settings/api-keys'), noParams)
