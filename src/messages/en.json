@@ -9041,8 +9041,6 @@
     "review_rerun_failed": "Matching could not run",
     "review_rerun_done_title": "Matching finished",
     "review_rerun_done_description": "{applied, plural, one {# transaction was linked automatically} other {# transactions were linked automatically}}, {suggested, plural, one {# new suggestion to review} other {# new suggestions to review}}.",
-    "recon_attn": "{count, plural, one {1 unbooked bank transaction: the bank reconciliation can find automatic matches against existing vouchers.} other {# unbooked bank transactions: the bank reconciliation can find automatic matches against existing vouchers.}}",
-    "recon_attn_action": "Preview matches",
     "rot_rut_payout_matched_set_description": "The payout from Skatteverket was booked against {count} requests: {names}"
   },
   "bookkeeping": {

@@ -1,0 +1,1 @@
+[2026-10-27] Removed the static "bankavstämningen kan hitta automatiska träffar" attn line on /transactions: founder feedback that speculative hints are noise; an attn line names real state (a broken connection, a real count of proposals), not a feature that might help.

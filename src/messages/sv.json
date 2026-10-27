@@ -9041,8 +9041,6 @@
     "review_rerun_failed": "Matchningen kunde inte köras",
     "review_rerun_done_title": "Matchning klar",
     "review_rerun_done_description": "{applied, plural, one {# transaktion kopplades automatiskt} other {# transaktioner kopplades automatiskt}}, {suggested, plural, one {# nytt förslag att granska} other {# nya förslag att granska}}.",
-    "recon_attn": "{count, plural, one {1 obokförd banktransaktion: bankavstämningen kan hitta automatiska träffar mot befintliga verifikationer.} other {# obokförda banktransaktioner: bankavstämningen kan hitta automatiska träffar mot befintliga verifikationer.}}",
-    "recon_attn_action": "Förhandsgranska träffar",
     "rot_rut_payout_matched_set_description": "Utbetalningen från Skatteverket bokfördes mot {count} begäran: {names}"
   },
   "bookkeeping": {

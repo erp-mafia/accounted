@@ -4444,22 +4444,6 @@ export default function TransactionsPage() {
         >
           {t('review_attn_body', { count: suggestionItems.length })}
         </AttnLine>
-      ) : !isLoading && mode === 'inbox' && selectableInboxIds.length >= 5 ? (
-        // Bridge to the bulk-match flow: a backlog of unbooked bank rows is
-        // usually a migration/import whose counterpart vouchers already
-        // exist, and the only match affordance here is per-row. Static text
-        // + count (no probe): the reconciliation preview is the honest source
-        // of how many actually match. Last in the chain: the lines above name
-        // a more precise cause or destination for the same backlog (the
-        // ledger mapping, the persisted review suggestions).
-        <AttnLine
-          action={{
-            label: t('recon_attn_action'),
-            href: '/reconciliation?autorun=1',
-          }}
-        >
-          {t('recon_attn', { count: selectableInboxIds.length })}
-        </AttnLine>
       ) : null}
 
       {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
