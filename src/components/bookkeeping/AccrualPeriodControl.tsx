@@ -18,7 +18,13 @@ import {
   computeInstallmentAmounts,
   countCalendarMonths,
 } from '@/lib/bookkeeping/accruals/compute'
-import { accrualHintKey, accrualThresholdSek, shouldShowK2AccrualHint } from '@/components/bookkeeping/accrual-k2-hint'
+import {
+  accrualFrameworkOf,
+  accrualHintKey,
+  accrualThresholdSek,
+  shouldShowK2AccrualHint,
+} from '@/components/bookkeeping/accrual-k2-hint'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import {
   DEFAULT_ACCRUED_REVENUE_ACCOUNT,
   isAccruedBalanceAccount,
@@ -79,6 +85,7 @@ export default function AccrualPeriodControl({
   entityType,
   invoiceDate,
   fiscalYearStart = null,
+  fiscalYearEnd = null,
 }: {
   direction: AccrualDirection
   /** Net line amount (ex VAT), in `currency`: drives the preview and the K2 hint. */
@@ -114,9 +121,14 @@ export default function AccrualPeriodControl({
    * Missing keeps 5 000 kr.
    */
   fiscalYearStart?: string | null
+  /** The end of that fiscal year, when known: a förlängt first year beginning
+   *  after 2025-06-30 and ending 2026-12-31 or later also gets 7 000 kr. */
+  fiscalYearEnd?: string | null
 }) {
   const t = useTranslations('accruals')
   const locale = useLocale()
+  // K3 has no blanket limit: a K3 company never sees the hint.
+  const framework = accrualFrameworkOf(useCompanyOptional()?.company)
 
   // Upplupen kostnad (expense on 29xx) or intäkt (revenue on 17xx). Its
   // months must lie before the invoice month (the API refuses anything else).
@@ -153,12 +165,13 @@ export default function AccrualPeriodControl({
   }
 
   // The vasentlighetsgrans (K1 5 000 kr, K2 5 000 or 7 000 kr by the fiscal
-  // year) is measured in kronor, and it is a simplification the company may
-  // use, not an obligation. So when the line is in a foreign currency and no
-  // rate is available, show nothing at all rather than compare the raw
-  // foreign amount against a SEK threshold.
-  const thresholdSek = accrualThresholdSek({ entityType, fiscalYearStart })
-  const showMaterialityHint = shouldShowK2AccrualHint({ amount, currency, exchangeRate, thresholdSek })
+  // year, K3 none) is measured in kronor, and it is a simplification the
+  // company may use, not an obligation. So when the line is in a foreign
+  // currency and no rate is available, show nothing at all rather than
+  // compare the raw foreign amount against a SEK threshold.
+  const thresholdSek = accrualThresholdSek({ entityType, framework, fiscalYearStart, fiscalYearEnd })
+  const showMaterialityHint =
+    thresholdSek !== null && shouldShowK2AccrualHint({ amount, currency, exchangeRate, thresholdSek })
   const materialityHintKey = accrualHintKey(entityType)
 
   return (
@@ -239,7 +252,7 @@ export default function AccrualPeriodControl({
       )}
       {showMaterialityHint && (
         <p className="text-xs text-muted-foreground">
-          {t(materialityHintKey, { amount: new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'sv-SE').format(thresholdSek) })}
+          {t(materialityHintKey, { amount: new Intl.NumberFormat(locale === 'en' ? 'en-US' : 'sv-SE').format(thresholdSek ?? 0) })}
         </p>
       )}
     </div>

@@ -1,0 +1,1 @@
+[2026-10-26] Planenlig avskrivning re-plans a changed life or salvage value (rest over the remaining life from the year start) and trues up the final year only when the engine gets the posted periods and they cover the plan without a gap: a bare total cannot tell an edit from pre-Accounted years.

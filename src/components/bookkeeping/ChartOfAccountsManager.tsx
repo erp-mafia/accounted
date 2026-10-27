@@ -39,7 +39,11 @@ import { PruneAccountsDialog } from './PruneAccountsDialog'
 import { ChevronRightIcon, FunnelIcon, PencilIcon, PlusIcon, TrashIcon } from '@/components/icons'
 import { cn } from '@/lib/utils'
 import type { BASAccount } from '@/types'
-import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
+import {
+  currentAccountingFramework,
+  hideNotForK2AccountsByDefault,
+} from '@/lib/bookkeeping/not-for-k2-accounts'
 import type { BASReferenceAccount } from '@/lib/bookkeeping/bas-reference'
 import { isStandardBASAccountNumber } from '@/lib/bookkeeping/bas-account-numbers'
 import { ensureBasLoaded } from '@/lib/bookkeeping/bas-lazy'
@@ -129,7 +133,7 @@ export default function ChartOfAccountsManager() {
   const [collapsedMyClasses, setCollapsedMyClasses] = useState<Set<number>>(new Set())
   const [expandedCatalogClasses, setExpandedCatalogClasses] = useState<Set<number>>(new Set())
   const [hideK2Excluded, setHideK2Excluded] = useState<boolean | null>(null)
-  const { settings: companySettings } = useCompanySettings()
+  const accountingFramework = currentAccountingFramework(useCompanyOptional()?.company)
   // Off by default: the list endpoint's `?active=false` means "no filter", so
   // leaving it off keeps first paint on the smaller active-only payload.
   // A deactivated account is otherwise invisible everywhere and unrecoverable.
@@ -261,8 +265,8 @@ export default function ChartOfAccountsManager() {
     void fetchAccounts()
   }, [showInactive, fetchAccounts])
 
-  // Loads the BAS catalog and the K2 default on demand, once, the first time
-  // the user opens the "BAS-katalog" tab.
+  // Loads the BAS catalog and the "hide not-for-K2 accounts" default on
+  // demand, once, the first time the user opens the "BAS-katalog" tab.
   const ensureReferenceLoaded = useCallback(async () => {
     if (referenceLoaded || referenceLoading) return
     setReferenceLoading(true)
@@ -271,18 +275,17 @@ export default function ChartOfAccountsManager() {
         fetchReference(),
         (async () => {
           if (hideK2Excluded !== null) return
-          // Default to hiding K2-excluded accounts if the company uses K2
-          // (plan_type === 'k1'). Settings come from the session cache.
-          setHideK2Excluded(
-            (companySettings as { plan_type?: string } | null)?.plan_type === 'k1',
-          )
+          // Hidden by default unless the company reports under K3 (BAS 2026
+          // marks them #). This read plan_type before, a chart_of_accounts
+          // column the settings never carry, so the default never applied.
+          setHideK2Excluded(hideNotForK2AccountsByDefault(accountingFramework))
         })(),
       ])
       setReferenceLoaded(true)
     } finally {
       setReferenceLoading(false)
     }
-  }, [referenceLoaded, referenceLoading, fetchReference, hideK2Excluded, companySettings])
+  }, [referenceLoaded, referenceLoading, fetchReference, hideK2Excluded, accountingFramework])
 
   const refreshAll = useCallback(async () => {
     await Promise.all([

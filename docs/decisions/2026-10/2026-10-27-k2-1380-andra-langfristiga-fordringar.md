@@ -1,0 +1,1 @@
+[2026-10-27] BAS 1380-1389 (1385 Kapitalförsäkring included) maps to the K2 post Andra långfristiga fordringar, not Andra långfristiga värdepappersinnehav: BAS groups 138x as Andra långfristiga fordringar, K2 kapitel 11 lists värde av kapitalförsäkring there, and INK2R 2.12 already agreed.

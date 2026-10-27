@@ -7,7 +7,11 @@ import type { BusinessEventDraft } from '@/lib/posting/types'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { fetchEntryLines, type EntryLinesQuery } from '@/lib/bookkeeping/entry-lines'
-import { computeAnnualDepreciation, openingDepreciationOf } from './depreciation-engine'
+import {
+  computeAnnualDepreciation,
+  openingDepreciationOf,
+  postedDepreciationHistory,
+} from './depreciation-engine'
 import {
   AssetOpeningDepreciationInvalidError,
   validateOpeningDepreciation,
@@ -733,7 +737,7 @@ export function buildAssetDisposalPlan(args: {
   asset: Asset
   input: DisposeAssetInput
   fiscalPeriod: Pick<FiscalPeriod, 'id' | 'period_start' | 'period_end'>
-  periods: Array<Pick<FiscalPeriod, 'id' | 'period_start'>>
+  periods: Array<Pick<FiscalPeriod, 'id' | 'period_start'> & { period_end?: string }>
   schedules: DisposalScheduleRow[]
 }): DisposalPlan {
   const { asset, input, fiscalPeriod, periods, schedules } = args
@@ -751,23 +755,36 @@ export function buildAssetDisposalPlan(args: {
   const currentPosted = posted.find(
     (schedule) => schedule.fiscal_period_id === fiscalPeriod.id,
   )
+  const priorPosted = posted.filter((schedule) => {
+    const start = periodStartById.get(schedule.fiscal_period_id)
+    return start !== undefined && start < fiscalPeriod.period_start
+  })
   const priorAccumulated = roundOre(
-    posted
-      .filter((schedule) => {
-        const start = periodStartById.get(schedule.fiscal_period_id)
-        return start !== undefined && start < fiscalPeriod.period_start
-      })
-      .reduce((sum, schedule) => sum + Number(schedule.planned_depreciation), 0),
+    priorPosted.reduce((sum, schedule) => sum + Number(schedule.planned_depreciation), 0),
   )
+  // The posted periods when their dates are loaded, so the charge is the one
+  // the depreciation proposal books (a changed life or salvage value applied
+  // prospectively, the final period trued up); else the bare total.
+  const datedPeriods = periods.flatMap((p) => (p.period_end ? [{ ...p, period_end: p.period_end }] : []))
   const requiredCurrent = computeAnnualDepreciation(
     { ...asset, disposed_at: input.disposed_at },
     fiscalPeriod,
-    priorAccumulated,
+    postedDepreciationHistory(priorPosted, datedPeriods) ?? priorAccumulated,
   ).amount
 
   let currentDepreciation = requiredCurrent
   if (currentPosted) {
-    if (Math.abs(Number(currentPosted.planned_depreciation) - requiredCurrent) > 0.01) {
+    // A year posted before the prospective rule carries the old charge (the
+    // bare total: no re-plan, no final true-up). It was right when it was
+    // booked, so it is accepted too, and the disposal clears what is on the
+    // books: storno and repost would change nothing but the voucher trail.
+    const postedCurrent = Number(currentPosted.planned_depreciation)
+    const legacyCurrent = computeAnnualDepreciation(
+      { ...asset, disposed_at: input.disposed_at },
+      fiscalPeriod,
+      priorAccumulated,
+    ).amount
+    if (Math.abs(postedCurrent - requiredCurrent) > 0.01 && Math.abs(postedCurrent - legacyCurrent) > 0.01) {
       throw new AssetDisposalBlockedError('current_depreciation_mismatch')
     }
     currentDepreciation = 0

@@ -62,7 +62,8 @@ import { useSupplierInvoiceData } from '@/components/supplier-invoices/use-suppl
 import { useCompanySettings } from '@/lib/reference-data/hooks'
 import { isInvoiceTypeEnabled } from '@/lib/invoices/invoice-type-toggles'
 import { useInboxPrefill, type InboxItemData } from '@/components/supplier-invoices/use-inbox-prefill'
-import { accrualThresholdSek } from '@/components/bookkeeping/accrual-k2-hint'
+import { accrualFrameworkOf, accrualThresholdSek } from '@/components/bookkeeping/accrual-k2-hint'
+import { useCompanyOptional } from '@/contexts/CompanyContext'
 import { regionOfCountry, sellerCountry, supplierTypeForRegion } from '@/lib/vat/seller-country'
 import { useSupplierInvoiceSubmit } from '@/components/supplier-invoices/use-supplier-invoice-submit'
 import { PayerChoiceSelect } from '@/components/expenses/PayerChoiceSelect'
@@ -248,9 +249,14 @@ export default function NewSupplierInvoiceForm({
   } = useSupplierInvoiceData()
   const { settings: companySettingsRow } = useCompanySettings()
 
+  /** The fiscal year a date is booked in, when the periods are known. */
+  const fiscalYearOf = (date: string | null | undefined) =>
+    (date ? periods.find((p) => date >= p.period_start && date <= p.period_end) : undefined) ?? null
   /** The start of the fiscal year a date is booked in, when the periods are known. */
   const fiscalYearStartOf = (date: string | null | undefined): string | null =>
-    (date ? periods.find((p) => date >= p.period_start && date <= p.period_end)?.period_start : null) ?? null
+    fiscalYearOf(date)?.period_start ?? null
+  // The accrual limit follows the framework too (K3: none).
+  const accrualFramework = accrualFrameworkOf(useCompanyOptional()?.company)
 
   const [defaultDims, setDefaultDims] = useState<Record<string, string>>({})
   const [showNewSupplier, setShowNewSupplier] = useState(false)
@@ -481,7 +487,13 @@ export default function NewSupplierInvoiceForm({
     t,
     onFieldPrefilled: handleFieldPrefilled,
     prefillAccount,
-    accrualThresholdFor: (invoiceDate) => accrualThresholdSek({ entityType, fiscalYearStart: fiscalYearStartOf(invoiceDate) }),
+    accrualThresholdFor: (invoiceDate) =>
+      accrualThresholdSek({
+        entityType,
+        framework: accrualFramework,
+        fiscalYearStart: fiscalYearStartOf(invoiceDate),
+        fiscalYearEnd: fiscalYearOf(invoiceDate)?.period_end ?? null,
+      }),
   })
 
   // Returns true when the field currently matches whatever the AI wrote
@@ -1171,6 +1183,7 @@ export default function NewSupplierInvoiceForm({
         invoiceDate={watchedInvoiceDate}
         // K2's limit follows the fiscal year: 7 000 kr from a year starting 2026.
         fiscalYearStart={fiscalYearStartOf(watchedInvoiceDate)}
+        fiscalYearEnd={fiscalYearOf(watchedInvoiceDate)?.period_end ?? null}
         idPrefix={idPrefix}
         value={accrualValue}
         onChange={(next) => {

@@ -41,11 +41,12 @@ interface UseInboxPrefillParams {
    */
   prefillAccount?: string | null
   /**
-   * K2's accrual limit for the fiscal year an invoice date is booked in
-   * (7 000 kr from a year starting 2026, 5 000 kr before): a line below it
-   * does not open its periodisering on its own.
+   * The accrual limit for the fiscal year an invoice date is booked in
+   * (K2 7 000 kr from a year starting 2026, 5 000 kr before; null under K3,
+   * which has none): a line below it does not open its periodisering on its
+   * own.
    */
-  accrualThresholdFor?: (invoiceDate: string | null) => number
+  accrualThresholdFor?: (invoiceDate: string | null) => number | null
 }
 
 /**
@@ -160,7 +161,10 @@ export function useInboxPrefill({
             prefillAccrual = false
           }
         }
-        const thresholdSek = accrualThresholdRef.current?.(extracted.invoice?.invoiceDate ?? null) ?? K2_ACCRUAL_THRESHOLD_SEK
+        const thresholdFor = accrualThresholdRef.current
+        const thresholdSek = thresholdFor
+          ? thresholdFor(extracted.invoice?.invoiceDate ?? null)
+          : K2_ACCRUAL_THRESHOLD_SEK
         replace(
           extracted.lineItems.map((li) => {
             const amount = typeof li.lineTotal === 'number' ? li.lineTotal : 0

@@ -1,11 +1,13 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolveCompanyEntityType, supportsCorporateTaxDispositions } from '@/lib/company/entity-type'
+import { roundOre } from '@/lib/money'
 import { generateIncomeStatement } from '@/lib/reports/income-statement'
 import {
   calculateBolagsskatt,
   getBookedBolagsskatt,
   sumPostedYearEndDispositions,
 } from './tax-provision/bolagsskatt-calculator'
+import { incomeTaxInResult } from './tax-provision/income-tax-accounts'
 import { loadTaxAdjustmentSnapshot } from './tax-provision/tax-adjustment-service'
 import type { TaxAdjustmentSnapshot } from './types'
 import { calculateSarskildLoneskatt } from './tax-provision/sarskild-loneskatt-calculator'
@@ -31,6 +33,12 @@ export interface DispositionState {
   fiscalYear: number
   /** The income statement's result: source_type year_end excluded. */
   netResult: number
+  /**
+   * Income tax inside netResult (incomeTaxInResult): every income-tax
+   * account INK2 adds back on 4.3a, booked outside this flow. Expense
+   * positive, tax income negative.
+   */
+  incomeTaxInResult: number
   /** Dispositions already posted in this period (sumPostedYearEndDispositions). */
   postedEffect: Awaited<ReturnType<typeof sumPostedYearEndDispositions>>
   taxAdjustments: TaxAdjustmentSnapshot
@@ -62,6 +70,7 @@ export async function loadDispositionState(
     fiscalPeriodId: period.id,
     fiscalYear: parseInt(period.period_end.slice(0, 4), 10),
     netResult: incomeStatement.net_result,
+    incomeTaxInResult: incomeTaxInResult(incomeStatement),
     postedEffect,
     taxAdjustments,
     bookedTax,
@@ -70,12 +79,15 @@ export async function loadDispositionState(
 }
 
 /**
- * Resultat före skatt, stable on reload: the income statement excludes the tax
- * this flow posts but includes a manually posted 8910, so the latter is added
- * back.
+ * Resultat före skatt, stable on reload: the income statement's result with
+ * the income tax in it added back. The income statement excludes the tax this
+ * flow posts (year_end) but includes tax booked outside the flow on any
+ * income-tax account (8900-8989, the INK2 4.3a set): a manual 8910, a
+ * deferred tax on 8940, a refund on 8930. All of it is added back, signed,
+ * as INK2 does.
  */
 export function resultBeforeTax(state: DispositionState): number {
-  return state.netResult + Math.max(0, state.bookedTax - state.postedEffect.taxProvisionPortion)
+  return roundOre(state.netResult + state.incomeTaxInResult)
 }
 
 /** The återföringar (and the schablonintäkt on the fonder's opening balance). */

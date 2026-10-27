@@ -231,16 +231,17 @@ export const K2_BR_MAPPINGS: PostMapping[] = [
     balance: 'debit',
     ranges: [r('1346', '1347')],
   },
-  {
-    concept: 'AndraLangfristigaVardepappersinnehav',
-    balance: 'debit',
-    ranges: [r('1350', '1359'), r('1380', '1389')],
-  },
+  { concept: 'AndraLangfristigaVardepappersinnehav', balance: 'debit', ranges: [r('1350', '1359')] },
   { concept: 'LanDelagareNarstaende', balance: 'debit', ranges: [r('1360', '1369')] },
   {
+    // 138x is BAS "Andra långfristiga fordringar" (reversfordringar,
+    // depositioner, kapitalförsäkring, kontraktsfordringar, 1389 its
+    // nedskrivningar). K2 kapitel 11 lists "värde av kapitalförsäkring" under
+    // the post Andra långfristiga fordringar, and INK2R 2.12 (SRU 7235) takes
+    // 137x and 138x together. It used to land in AndraLangfristigaVardepappersinnehav.
     concept: 'AndraLangfristigaFordringar',
     balance: 'debit',
-    ranges: [r('1370', '1379'), r('1390', '1399')],
+    ranges: [r('1370', '1379'), r('1380', '1389'), r('1390', '1399')],
   },
   // Varulager m.m.
   { concept: 'LagerRavarorFornodenheter', balance: 'debit', ranges: [r('1400', '1439')] },
