@@ -21,6 +21,9 @@ import { getBranding } from '@/lib/branding/service'
 const branding = getBranding()
 const connectorName = branding.appName.toLowerCase()
 
+/** claude.ai's connector list, where a Team member finds the connector their owner added. */
+export const CLAUDE_CONNECTORS_HOME = AI_CLIENTS.find((c) => c.id === 'claude')?.home ?? 'https://claude.ai/customize/connectors'
+
 /** The clients the Settings tiles offer, in display order. */
 export const CONNECT_TARGETS = ['claude', 'chatgpt', 'grok', 'gemini', 'claude-code', 'cursor', 'other'] as const
 export type ConnectTarget = (typeof CONNECT_TARGETS)[number]
@@ -32,6 +35,7 @@ export type ConnectTarget = (typeof CONNECT_TARGETS)[number]
  */
 type StepSet =
   | 'claude_signin'
+  | 'claude_team'
   | 'claude_desktop'
   | 'chatgpt'
   | 'grok'
@@ -47,9 +51,12 @@ interface Mode {
   steps: number
   /** i18n key for the mode's segment label; omitted when there is one mode. */
   label?: string
-  snippet: (origin: string) => string
+  /** What to copy; omitted when there is nothing to paste. */
+  snippet?: (origin: string) => string
   /** i18n key for a line above the snippet. */
   snippetLabel?: string
+  /** Where the Open button goes in this mode, overriding the client's page. */
+  href?: string
 }
 
 const MODES: Record<ConnectTarget, Mode[]> = {
@@ -65,6 +72,16 @@ const MODES: Record<ConnectTarget, Mode[]> = {
       // (extensions/general/mcp-server/auth-mode.ts).
       snippet: (origin) => mcpServerUrl({ origin, client: 'claude-connector', eagerAuth: true }),
       snippetLabel: 'claude_manual_label',
+    },
+    {
+      // On Claude Team and Enterprise only an owner adds a custom connector;
+      // every other member clicks Connect on the one already there, so the
+      // prefilled Add link is a dead end for them. Each member still signs in
+      // to us on their own: the connector is shared, the grant is personal.
+      set: 'claude_team',
+      steps: 3,
+      label: 'mode_team',
+      href: CLAUDE_CONNECTORS_HOME,
     },
     {
       set: 'claude_desktop',
@@ -177,23 +194,28 @@ export function ConnectClientDialog({
   target,
   origin,
   onClose,
+  initialSet,
 }: {
   target: ConnectTarget | null
   /** window.location.origin, resolved after mount; '' until then. */
   origin: string
   onClose: () => void
+  /** The mode to open on, when the caller knows better than the first one. */
+  initialSet?: StepSet
 }) {
   const t = useTranslations('settings_api_keys')
   const targetName = useConnectTargetName()
-  const [modeIndex, setModeIndex] = useState(0)
+  // null until the user picks a mode: the dialog then opens on initialSet.
+  const [pickedIndex, setPickedIndex] = useState<number | null>(null)
 
   const modes = target ? MODES[target] : []
+  const modeIndex = pickedIndex ?? Math.max(0, modes.findIndex((m) => m.set === initialSet))
   const mode = modes[modeIndex] ?? modes[0]
-  const href = target && origin ? openHref(target, origin) : null
+  const href = mode?.href ?? (target && origin ? openHref(target, origin) : null)
   const name = target ? targetName(target) : ''
 
   function close() {
-    setModeIndex(0)
+    setPickedIndex(null)
     onClose()
   }
 
@@ -211,7 +233,7 @@ export function ConnectClientDialog({
               <SettingsSeg
                 aria-label={t('connect_mode_aria')}
                 value={String(modeIndex)}
-                onChange={(v) => setModeIndex(Number(v))}
+                onChange={(v) => setPickedIndex(Number(v))}
                 options={modes.map((m, i) => ({ value: String(i), label: t(m.label ?? 'mode_signin') }))}
               />
             )}
@@ -236,7 +258,7 @@ export function ConnectClientDialog({
             {mode.snippetLabel && (
               <p className="text-xs text-muted-foreground">{t(mode.snippetLabel)}</p>
             )}
-            {origin ? <CopyBlock text={mode.snippet(origin)} copyAriaLabel={t('copy_aria')} /> : null}
+            {origin && mode.snippet ? <CopyBlock text={mode.snippet(origin)} copyAriaLabel={t('copy_aria')} /> : null}
           </div>
         )}
 

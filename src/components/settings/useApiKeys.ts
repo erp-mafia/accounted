@@ -24,6 +24,8 @@ export interface ApiKeyRow {
   read_only_company_ids?: string[] | null
   /** The caller's own key: only the owner may change its companies. */
   is_own?: boolean
+  /** Whose key a colleague's row is (full name, else e-mail); null for the caller's own. */
+  owner_name?: string | null
   /** The service account the key belongs to; null for a person's key. */
   service_account?: { id: string; name: string } | null
 }

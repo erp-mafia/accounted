@@ -50,7 +50,9 @@ const listQuerySchema = z.object({ scope: z.enum(['mine']).optional() })
  * `meta.companies`, the caller's companies for the picker, so the panel
  * needs no second endpoint. `is_own` marks the caller's own keys: only the
  * owner may change a key's companies (PATCH), so only they get the editor.
- * The owner's user id itself is not returned. `service_account` names the
+ * The owner's user id itself is not returned; a colleague's key carries
+ * `owner_name` (full name, else e-mail; null for the caller's own keys and
+ * service-account keys) so the row says whose sign-in it is. `service_account` names the
  * service account a key belongs to ({ id, name }, null for a person's key),
  * so the list can mark it.
  */
@@ -145,10 +147,35 @@ export const GET = withRouteContext(
       for (const account of accounts ?? []) accountNames.set(account.id, account.name)
     }
 
+    // A colleague's key carries its owner's name, so a row an admin sees
+    // (api_keys_select lets them read every member's key) says whose sign-in
+    // it is. Service client like the members list: other members' profiles
+    // are not readable through the session. The name only decorates the row,
+    // so a failed read leaves it unnamed instead of failing the list.
+    const colleagueIds = [
+      ...new Set(keys.filter((key) => key.user_id !== user.id && !key.service_account_id).map((key) => key.user_id)),
+    ]
+    const ownerNames = new Map<string, string>()
+    if (colleagueIds.length > 0) {
+      const { data: owners, error: ownersError } = await createServiceClient()
+        .from('profiles')
+        .select('id, full_name, email')
+        .in('id', colleagueIds)
+      if (ownersError) {
+        log.warn('key owner names read failed', ownersError)
+      } else {
+        for (const owner of owners ?? []) {
+          const name = owner.full_name?.trim() || owner.email
+          if (name) ownerNames.set(owner.id, name)
+        }
+      }
+    }
+
     return NextResponse.json({
       data: keys.map(({ user_id: ownerId, service_account_id: serviceAccountId, company_id: _keyCompanyId, ...key }) => ({
         ...key,
         is_own: ownerId === user.id,
+        owner_name: ownerId === user.id ? null : ownerNames.get(ownerId) ?? null,
         service_account:
           serviceAccountId && accountNames.has(serviceAccountId)
             ? { id: serviceAccountId, name: accountNames.get(serviceAccountId)! }

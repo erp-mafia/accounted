@@ -27,6 +27,8 @@ Länken öppnar claude.ai med namn och adress ifyllda. Du granskar värdena och 
 
 **Du behöver inget Accounted-konto ännu.** Inloggningen öppnas direkt när du lägger till anslutningen, och där skapar du som ny kontot på plats (BankID eller e-post + 2FA).
 
+**Claude Team eller Enterprise?** Där lägger bara organisationens ägare till kopplingar, och länken ovan fungerar inte för övriga medlemmar. Har ägaren redan lagt till Accounted: öppna Customize → Connectors i Claude, välj Accounted och klicka **Connect**. Varje person loggar in med sitt eget Accounted-konto, så flera i samma bolag kan vara anslutna samtidigt.
+
 **Alla behörigheter förvalda, varje skrivning stannar ändå.** Godkännandesidan ger hela behörighetslistan med ett klick. Fäll ut **Behörigheter** och välj **Endast läs** för en läsande anslutning (lista fakturor, läsa rapporter, räkna moms): så kan en granskare ansluta läsande medan du själv har en anslutning med skrivrättigheter för det dagliga arbetet. Oavsett behörigheter lägger skrivverktygen (skapa faktura, kontera, bokföra verifikat, köra bokslut) bara upp en pending operation som du bekräftar innan något bokförs, och åtkomsten går att återkalla under Inställningar → API & MCP.
 
 #### Vad som händer efter klicket

@@ -20,6 +20,8 @@ The link opens claude.ai with the connector name and URL already filled in. You 
 
 **You do not need an Accounted account yet.** Adding the connector opens the Accounted sign-in straight away, and a new user creates the account right there (BankID or e-mail + 2FA).
 
+**Claude Team or Enterprise?** There, only the organization's owners add connectors, and the link above does not work for other members. If an owner has already added Accounted: open Customize → Connectors in Claude, pick Accounted and click **Connect**. Every person signs in with their own Accounted account, so several people in the same company can be connected at once.
+
 **All permissions pre-selected, every write still staged.** The consent page grants the full scope set with one click. Expand **Behörigheter** and choose **Endast läs** to connect read-only (list invoices, read reports, compute VAT): a reviewer can do that while you keep a write-enabled connection for daily work. Whatever the scopes, write tools (create invoice, categorise, book vouchers, run year-end) only stage a pending operation that you confirm before anything is booked, and the grant can be revoked under Settings → API & MCP.
 
 #### What happens after you click
