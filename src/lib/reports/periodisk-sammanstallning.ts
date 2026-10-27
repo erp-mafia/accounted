@@ -2,7 +2,7 @@ import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { fetchEntriesWithAccountLines } from '@/lib/bookkeeping/entry-lines'
-import { chunk, formatCurrency } from '@/lib/utils'
+import { chunk, formatCurrency, formatWholeKr } from '@/lib/utils'
 import {
   INVOICE_SOURCED_ENTRY_TYPES,
   LINK_LOOKUP_CHUNK,
@@ -82,6 +82,8 @@ export type PsWarningCode =
   | 'MIXED_CUSTOMER_SETTLEMENT'
   /** A posted EU sale the declaration counts but no invoice names a buyer for. */
   | 'UNATTRIBUTED_EU_SALE'
+  /** A bucket's total differs from the ruta the declaration counts for the same dates. */
+  | 'RUTA_DIFFERENCE'
 
 export interface PsWarning {
   level: 'error' | 'warning'
@@ -92,6 +94,16 @@ export interface PsWarning {
   invoiceId?: string
   /** The verifikat a MIXED_CUSTOMER_SETTLEMENT or UNATTRIBUTED_EU_SALE warning is about. */
   journalEntryId?: string
+  /** Its voucher label ("A66"). */
+  voucher?: string
+  /** The momsdeklaration ruta an UNATTRIBUTED_EU_SALE or RUTA_DIFFERENCE is about. */
+  ruta?: '35' | '38' | '39'
+  /**
+   * How the buyer is added for an UNATTRIBUTED_EU_SALE: register the customer
+   * invoice against the verifikat (any currency its 151x lines carry), which
+   * links it and files the sale under that customer's VAT number.
+   */
+  resolveWith?: 'register_booked_invoice'
   amount?: number
 }
 
@@ -143,7 +155,7 @@ const RUTA_TO_BUCKET: Readonly<Record<string, PsBucket>> = {
   ruta38: 'triangulation',
 }
 
-const BUCKET_RUTA: Readonly<Record<PsBucket, string>> = { services: '39', goods: '35', triangulation: '38' }
+const BUCKET_RUTA: Readonly<Record<PsBucket, '35' | '38' | '39'>> = { services: '39', goods: '35', triangulation: '38' }
 
 /**
  * The company's PS accounts and the bucket each feeds, resolved the way the
@@ -370,6 +382,9 @@ function unattributedWarnings(
             'beskattas i köparens land ska köparen redovisas: koppla verifikatet till kundfakturan, eller lägg till ' +
             'raden i Skatteverkets e-tjänst.',
           journalEntryId: live.id,
+          voucher: voucherLabel(live),
+          ruta: BUCKET_RUTA[group.bucket],
+          resolveWith: 'register_booked_invoice',
           amount,
         }
       : {
@@ -380,6 +395,9 @@ function unattributedWarnings(
             'ska alltid redovisas per köpare. Koppla verifikatet till kundfakturan, eller lämna sammanställningen i ' +
             'Skatteverkets e-tjänst och ta med köparen där.',
           journalEntryId: live.id,
+          voucher: voucherLabel(live),
+          ruta: BUCKET_RUTA[group.bucket],
+          resolveWith: 'register_booked_invoice',
           amount,
         })
   }
@@ -896,27 +914,58 @@ function bucketRow(
 }
 
 /**
- * Cross-check PS totals against momsdeklaration Ruta 35/38/39.
- *
- * Only meaningful when the PS period coincides with the momsdeklaration period.
- * Returns the report with reconciliation populated; matches=null indicates the
- * caller asked for a check that doesn't make sense (different periods).
+ * RUTA_DIFFERENCE findings: one per bucket whose total is off the ruta the
+ * declaration counts for the same dates by more than the rounding tolerance,
+ * naming the difference and the verifikat without a buyer on that ruta
+ * (crm#1336). A warning, never blocking: the UNATTRIBUTED_EU_SALE findings
+ * already carry the severity per sale.
+ */
+export function reconciliationWarnings(
+  report: PeriodiskSammanstallningReport,
+  rutor: { ruta39: number; ruta35: number; ruta38: number },
+): PsWarning[] {
+  const warnings: PsWarning[] = []
+  const tolerance = report.reconciliation.tolerance
+  const checks: Array<{ bucket: PsBucket; label: string; listed: number; declared: number }> = [
+    { bucket: 'services', label: 'tjänster', listed: report.totals.services, declared: rutor.ruta39 },
+    { bucket: 'goods', label: 'varor', listed: report.totals.goods, declared: rutor.ruta35 },
+    { bucket: 'triangulation', label: 'trepartshandel', listed: report.totals.triangulation, declared: rutor.ruta38 },
+  ]
+  for (const { bucket, label, listed, declared } of checks) {
+    const difference = declared - listed
+    if (Math.abs(difference) <= tolerance) continue
+    const ruta = BUCKET_RUTA[bucket]
+    const missing = report.warnings.filter((w) => w.code === 'UNATTRIBUTED_EU_SALE' && w.ruta === ruta)
+    const which = missing.length > 0
+      ? ` Verifikat utan köparens VAT-nummer: ${missing.map((w) => `${w.voucher ?? w.journalEntryId} (${formatCurrency(w.amount ?? 0)})`).join(', ')}. ` +
+        'Registrera kundfakturan mot verifikatet, så redovisas försäljningen under köparen.'
+      : ' Kontrollera bokföringen på EU-försäljningskontona.'
+    warnings.push({
+      level: 'warning',
+      code: 'RUTA_DIFFERENCE',
+      message:
+        `Sammanställningen redovisar ${formatWholeKr(listed)} kr i ${label} men ruta ${ruta} i momsdeklarationen ` +
+        `för samma period är ${formatWholeKr(declared)} kr, en skillnad på ${formatWholeKr(difference)} kr.${which}`,
+      ruta,
+      amount: difference,
+    })
+  }
+  return warnings
+}
+
+/**
+ * Cross-check PS totals against momsdeklaration Ruta 35/38/39 for the same
+ * dates. Skatteverket matches the list against the rutor of the months it
+ * covers, so a quarterly list of a monthly filer is checked against the
+ * quarter's three months, which is the declaration over the quarter's dates.
+ * Before, the check ran only when the two periods coincided, so a monthly
+ * filer's quarterly list was never reconciled (crm#1336).
  */
 export async function reconcilePsAgainstVatDeclaration(
   supabase: SupabaseClient,
   companyId: string,
   report: PeriodiskSammanstallningReport,
-  momsPeriod: 'monthly' | 'quarterly' | 'yearly' | null,
 ): Promise<PeriodiskSammanstallningReport> {
-  // Reconciliation only valid when periods coincide. Yearly is never valid for PS.
-  const periodsCoincide =
-    (report.period.type === 'monthly' && momsPeriod === 'monthly') ||
-    (report.period.type === 'quarterly' && momsPeriod === 'quarterly')
-
-  if (!periodsCoincide) {
-    return report
-  }
-
   const vat = await calculateVatDeclaration(
     supabase,
     companyId,
@@ -925,24 +974,20 @@ export async function reconcilePsAgainstVatDeclaration(
     report.period.period,
   )
 
-  const ruta35 = Math.round(vat.rutor.ruta35)
-  const ruta38 = Math.round(vat.rutor.ruta38 ?? 0)
-  const ruta39 = Math.round(vat.rutor.ruta39)
-
-  const tolerance = report.reconciliation.tolerance
-  const matches =
-    Math.abs(report.totals.services - ruta39) <= tolerance &&
-    Math.abs(report.totals.goods - ruta35) <= tolerance &&
-    Math.abs(report.totals.triangulation - ruta38) <= tolerance
+  const rutor = {
+    ruta35: Math.round(vat.rutor.ruta35),
+    ruta38: Math.round(vat.rutor.ruta38 ?? 0),
+    ruta39: Math.round(vat.rutor.ruta39),
+  }
+  const differences = reconciliationWarnings(report, rutor)
 
   return {
     ...report,
+    warnings: [...report.warnings, ...differences],
     reconciliation: {
-      ruta39,
-      ruta35,
-      ruta38,
-      matches,
-      tolerance,
+      ...rutor,
+      matches: differences.length === 0,
+      tolerance: report.reconciliation.tolerance,
     },
   }
 }

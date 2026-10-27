@@ -14,6 +14,7 @@ import { Button } from '@/components/ui/button'
 import { CheckCircleIcon, ExclamationTriangleIcon, SpinnerIcon } from '@/components/icons'
 import { daysBetween } from '@/lib/company/fiscal-year'
 import type { StoredAccount } from '../types'
+import { describeEmptySync } from '../lib/empty-sync-text'
 
 export interface SyncProgressSummary {
   imported: number
@@ -27,6 +28,8 @@ export interface SyncProgressSummary {
   requested_from: string
   returned_min_date: string | null
   returned_max_date: string | null
+  /** Entries the bank sent but has not booked (PH 221). Optional: older responses omit it. */
+  not_booked?: number
 }
 
 export interface SyncProgressError {
@@ -243,7 +246,14 @@ function DoneBody({
     summary.returned_min_date && summary.returned_max_date
       ? daysBetween(summary.returned_min_date, new Date(summary.returned_max_date))
       : 0
-  const wasTruncated = requestedDays - returnedDays > 7
+  // An answer with no booked entry is not a short history (PH 221): it gets
+  // its own sentence below instead of "kortare historik än begärt".
+  const emptyText = describeEmptySync({
+    imported: summary.imported,
+    duplicates: summary.duplicates,
+    notBooked: summary.not_booked,
+  })
+  const wasTruncated = summary.returned_min_date !== null && requestedDays - returnedDays > 7
 
   return (
     <div className="space-y-3 py-2">
@@ -272,6 +282,18 @@ function DoneBody({
           )}
         </div>
       </div>
+
+      {emptyText && (
+        <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">
+          <ExclamationTriangleIcon className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>
+            {emptyText}{' '}
+            <Link href="/import?mode=bank" className="text-foreground underline underline-offset-2">
+              Till bankfilsimporten
+            </Link>
+          </span>
+        </div>
+      )}
 
       {wasTruncated && (
         <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">

@@ -1,0 +1,1 @@
+[2026-10-27] The utlandstraktamente normalbelopp is entered by the operator per row and caps the tax-free à-pris; no per-country table ships because the swedish-payroll skill gives no 2026 country amounts with a source, and inventing them would put wrong tax-free amounts on payslips (crm#1468, PH 218).

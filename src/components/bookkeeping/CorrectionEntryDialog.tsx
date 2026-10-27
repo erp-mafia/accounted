@@ -22,6 +22,11 @@ import {
   correctionDescriptionForSubmit,
 } from '@/components/bookkeeping/correction-entry-description'
 import { nextLineDescriptionForAccountChange } from '@/components/bookkeeping/correction-line-description'
+import {
+  correctionLinesNegateOriginal,
+  originalToCorrectionLines,
+  type CorrectionFormLine,
+} from '@/components/bookkeeping/correction-negation'
 import { useToast } from '@/components/ui/use-toast'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
@@ -37,12 +42,7 @@ import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-pref
 import { loadBasCatalog, type CatalogAccount } from '@/lib/bookkeeping/bas-catalog-client'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 
-interface CorrectionLine {
-  account_number: string
-  debit_amount: string
-  credit_amount: string
-  line_description: string
-}
+type CorrectionLine = CorrectionFormLine
 
 /** The overrides a resubmit carries after the user confirmed a refusal. */
 interface SubmitFlags {
@@ -112,15 +112,9 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
 
   useEffect(() => {
     if (open) {
-      // Pre-fill with original entry's lines
-      setLines(
-        originalLines.map((l) => ({
-          account_number: l.account_number,
-          debit_amount: Number(l.debit_amount) > 0 ? String(Number(l.debit_amount)) : '',
-          credit_amount: Number(l.credit_amount) > 0 ? String(Number(l.credit_amount)) : '',
-          line_description: l.line_description || '',
-        }))
-      )
+      // Pre-fill with the original entry's lines, sides as posted: the user
+      // edits what the verifikat should have been, the storno is automatic.
+      setLines(originalToCorrectionLines(originalLines))
       // Pre-fill the verifikationstext with the same auto text the server
       // would generate; only a user edit is sent along (see handleSubmit).
       setDescription(autoCorrectionDescription(entry.description))
@@ -217,10 +211,21 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   const originalDate = entry.entry_date?.slice(0, 10) || ''
   const dateChanged = entryDate.length > 0 && entryDate !== originalDate
 
+  // The lines are the original with debit and credit swapped: typing the
+  // reversal by hand on top of the automatic storno reverses it twice
+  // (crm#1397). Same verdict as the engine's guard, known before posting.
+  const linesNegateOriginal = isBalanced && hasValidLines && correctionLinesNegateOriginal(lines, originalLines)
+
   async function handleSubmit(flags: SubmitFlags = {}) {
     if (!isBalanced || !hasValidLines) return
 
     lastFlags.current = flags
+    // Ask first; only a user who says the original had the sides swapped
+    // resubmits (the engine refuses it anyway without that override).
+    if (!flags.sidesSwapped && linesNegateOriginal) {
+      setNegatesOriginal(true)
+      return
+    }
     setIsSubmitting(true)
     try {
       const apiLines = lines.map((l) => ({
@@ -375,7 +380,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           <div className="space-y-1">
             <p className="text-sm font-medium">Rättade rader</p>
             <p className="text-xs text-muted-foreground">
-              Det här är hela den nya verifikationen: alla konton som ska finnas kvar måste stå kvar.
+              {t('correction_lines_hint', { voucher: formatVoucher(entry) })}
             </p>
           </div>
 
@@ -437,6 +442,19 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           {!isBalanced && roundedDebit + roundedCredit > 0 && (
             <p className="text-sm text-destructive">
               Debet och kredit måste vara lika och större än 0.
+            </p>
+          )}
+
+          {linesNegateOriginal && (
+            <p className="attn text-[12.5px]">
+              {t('negates_original_inline', { voucher: formatVoucher(entry) })}{' '}
+              <button
+                type="button"
+                className="underline underline-offset-4"
+                onClick={() => setLines(originalToCorrectionLines(originalLines))}
+              >
+                {t('negates_original_reset')}
+              </button>
             </p>
           )}
         </div>

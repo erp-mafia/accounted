@@ -370,6 +370,14 @@ export const documentsDelete = defineOperation({
   },
 })
 
+/** Why a document that looks like another purchase's belongs here: lets DOC_ROW_MISMATCH through. */
+export const MISMATCH_REASON = z
+  .string()
+  .trim()
+  .max(300)
+  .optional()
+  .describe('Only after a DOC_ROW_MISMATCH refusal: why the document belongs to this transaction anyway.')
+
 const AttachOut = z.object({
   transaction_id: z.string().uuid(),
   document_id: z.string().uuid(),
@@ -395,6 +403,7 @@ export const transactionsAttachDocument = defineOperation({
     doNotUseFor:
       'Linking a document to a verifikat with no bank transaction (POST /documents/{id}/link) or uploading a file (POST /documents).',
     pitfalls: [
+      'A document that asks for more than the transaction paid AND names another seller returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway (an invoice paid in parts, a statement covering several payments).',
       'A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT.',
       'Replacing a pinned document that is already linked to a verifikat returns 409 DOC_ATTACH_REPLACES_POSTED: reverse the entry first.',
       'On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED.',
@@ -411,11 +420,13 @@ export const transactionsAttachDocument = defineOperation({
   input: AttachDocumentSchema.extend({
     transaction_id: TRANSACTION_ID,
     document_id: DOCUMENT_ID,
+    mismatch_reason: MISMATCH_REASON,
   }),
   output: AttachOut,
   errorCodes: [
     'TX_CATEGORIZE_TX_NOT_FOUND',
     'DOC_NOT_FOUND',
+    'DOC_ROW_MISMATCH',
     'DOC_ATTACH_OTHER_VERIFIKAT',
     'DOC_ATTACH_REPLACES_POSTED',
     'DOC_ATTACH_PERIOD_LOCKED',
@@ -431,6 +442,8 @@ export const transactionsAttachDocument = defineOperation({
     title: 'Attach Document to Transaction',
     description:
       'Stage attaching a document to a bank transaction. Check that date, amount and counterparty match the document first: the approver sees both sides.',
+    // Sent only after DOC_ROW_MISMATCH, whose remediation names it (crm#1479).
+    undeclaredInputs: ['mismatch_reason'],
     visibility: 'default',
     keywords: ['bifoga underlag', 'kvitto', 'koppla underlag'],
     hints: { idempotent: true },
@@ -452,6 +465,8 @@ export const transactionsAttachDocument = defineOperation({
         document_amount: preview.document_amount,
         document_currency: preview.document_currency,
         document_invoice_date: preview.document_invoice_date,
+        // Why the caller says a document that looks like another purchase's belongs here.
+        ...(preview.mismatch_reason ? { mismatch_reason: preview.mismatch_reason } : {}),
         will_overwrite_existing: preview.replaces_document === true,
         existing_document_id: preview.replaces_document === true ? preview.previous_document_id : null,
         existing_document_file_name: preview.replaces_document === true ? preview.previous_document_file_name : null,
@@ -473,8 +488,14 @@ export const transactionsAttachDocument = defineOperation({
       }),
     },
   },
-  run: (ctx, { transaction_id, document_id }, { dryRun }) =>
-    attachDocumentToTransaction(ctx, transaction_id, document_id, { dryRun }),
+  // Every agent and API door compares the two sides (crm#1479); the
+  // dashboard route keeps its own, unchecked call.
+  run: (ctx, { transaction_id, document_id, mismatch_reason }, { dryRun }) =>
+    attachDocumentToTransaction(ctx, transaction_id, document_id, {
+      dryRun,
+      checkFit: true,
+      mismatchReason: mismatch_reason ?? null,
+    }),
 })
 
 export const transactionsDetachDocument = defineOperation({

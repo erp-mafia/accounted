@@ -222,7 +222,13 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
     if (!stage) {
       throw new Error(`operation ${op.id} is a write without mcp.stage: MCP writes always stage`)
     }
-    const properties = { ...((inputSchema.properties as JsonSchema) ?? {}), ...deps.stagingArgs }
+    // An input only a refusal asks for is accepted without being listed
+    // (binding.undeclaredInputs); validation still reads the full input.
+    const hidden = new Set(binding.undeclaredInputs ?? [])
+    const listed = Object.fromEntries(
+      Object.entries((inputSchema.properties as JsonSchema) ?? {}).filter(([key]) => !hidden.has(key)),
+    )
+    const properties = { ...listed, ...deps.stagingArgs }
     tools.push({
       name: binding.name,
       title: binding.title,
@@ -236,7 +242,7 @@ export function createOperationTools(operations: readonly AnyOperation[], deps: 
       },
       catalogVisibility: binding.visibility ?? 'search',
       keywords: binding.keywords,
-      undeclaredArgs: UNDECLARED_STAGING_ARGS,
+      undeclaredArgs: [...UNDECLARED_STAGING_ARGS, ...hidden],
       async execute(args, companyId, userId, supabase, actor) {
         // __keyScopes: the calling key's grant, injected by the dispatcher
         // for the tools whose refusal names a follow-up call.

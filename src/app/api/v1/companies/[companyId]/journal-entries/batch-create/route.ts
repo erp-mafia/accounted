@@ -28,7 +28,7 @@ import { manualVoucherBusinessEvent } from '@/lib/bookkeeping/ledger-business-ev
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
-import { chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
+import { chartAccountNamesLoader, chartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { expandVoucherLineVatCodes, type ExpandedVoucherLines } from '@/lib/bookkeeping/voucher-line-vat-code'
 import type { Logger } from '@/lib/logger'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
@@ -63,14 +63,14 @@ registerEndpoint({
   description:
     'Bulk-create endpoint mirroring /invoices/bulk-create and /suppliers/bulk-create. Each entry is validated and inserted independently: per-item failures do not roll back items that succeeded. Returns DRAFTS only; commit each separately. Idempotent over the whole batch. Dry-runnable.',
   useWhen:
-    'You\'re replaying historical bookkeeping from another system, or batching a set of manual verifikationer from a spreadsheet. Use dry-run first to validate the batch.',
+    'You\'re batching a set of manual verifikationer, e.g. from a spreadsheet. Use dry-run first to validate the batch.',
   doNotUseFor:
-    'Committing posted entries: use POST /{id}/commit per entry. Transactional all-or-nothing imports: passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
+    'Committing posted entries: use POST /{id}/commit per entry. Replaying a whole history from another system: export it as SIE4 and use POST /imports/sie (one batch with its own provenance and undo). Transactional all-or-nothing imports: passing all_or_nothing: true returns 501 NOT_IMPLEMENTED.',
   pitfalls: [
     'Idempotency-Key is mandatory and covers the WHOLE batch.',
     'all_or_nothing: true returns 501 NOT_IMPLEMENTED. Today only partial-success batches exist.',
     'Each entry must balance independently. Per-item JOURNAL_ENTRY_NOT_BALANCED appears in the results array.',
-    'source_type follows the single POST: "manual" by default, a business source type or "import" (history replayed from another system). An engine-owned, rule-exempt type (e.g. opening_balance, storno, accrual, system) fails the whole batch with 400 VALIDATION_ERROR.',
+    'source_type follows the single POST: "manual" by default, or a business source type. An engine-owned, rule-exempt type (e.g. opening_balance, storno, accrual, system) or "import" (only the SIE import writes import vouchers: use POST /imports/sie) fails the whole batch with 400 VALIDATION_ERROR.',
     'lines[].vat_code (omvänd moms) works as on the single POST: the server adds the reverse-charge lines under the line, and the dry-run preview shows them. A vat_code its account or the voucher cannot take (the single POST\'s lines.N.vat_code refusals) fails only its own entry, with VALIDATION_ERROR and details.issues in the results array. A malformed vat_code (unknown kind, a rate other than 0.25, 0.12 or 0.06) is a schema error and fails the whole batch with 400, its field under journal_entries.i.lines.N.vat_code.',
   ],
   example: {
@@ -212,10 +212,11 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     // goes on unexpanded, so the engine refuses it with the totals the caller
     // sent, not totals that include lines the server would have added.
     const loadChart = chartVatTreatmentsLoader(ctx.supabase, ctx.companyId!)
+    const loadNames = chartAccountNamesLoader(ctx.supabase, ctx.companyId!)
     const expanded = await Promise.all(
       body.journal_entries.map((entry): ExpandedVoucherLines | Promise<ExpandedVoucherLines> =>
         validateBalance(entry.lines).valid
-          ? expandVoucherLineVatCodes(entry.lines, loadChart)
+          ? expandVoucherLineVatCodes(entry.lines, loadChart, loadNames)
           : { ok: true, lines: entry.lines },
       ),
     )

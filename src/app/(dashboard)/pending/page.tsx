@@ -34,7 +34,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { ToastAction } from '@/components/ui/toast'
-import { cn, formatDate } from '@/lib/utils'
+import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { createClient } from '@/lib/supabase/client'
 import { collectPages } from '@/lib/lists/collect-pages'
@@ -64,6 +64,7 @@ import {
   useComplianceWarningText,
 } from '@/components/pending-operations/OperationPreview'
 import { useAccountNamesSource } from '@/components/pending-operations/use-account-names'
+import { SigningStep, signingUrlOf } from '@/components/pending-operations/SigningStep'
 import {
   complianceWarningOf,
   operationLabel,
@@ -75,6 +76,12 @@ import {
   rejectionCategoryLabel,
 } from '@/components/pending-operations/vocabulary'
 import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
+import {
+  chunkIds,
+  sharedAcknowledgmentGroup,
+  summarizeSharedAcknowledgment,
+  type SharedAcknowledgmentGroup,
+} from '@/lib/pending-operations/shared-acknowledgment'
 import { registerBookedLedgerOf } from '@/lib/invoices/register-booked-invoice-mode'
 import { HandoverBatchDialog } from '@/components/collections/HandoverBatchDialog'
 import { COLLECTIONS_BATCH_TYPE } from '@/lib/collections/batch'
@@ -169,6 +176,26 @@ function getPeriodStatus(op: PendingOperation): PeriodStatusShape | null {
     status,
     lock_date: typeof obj.lock_date === 'string' ? obj.lock_date : null,
   }
+}
+
+/**
+ * Whether an operation may join a bulk approval: pending, in an open period,
+ * and not high risk unless it belongs to a group one acknowledgment covers
+ * (lib/pending-operations/shared-acknowledgment.ts, crm#1489). The bulk
+ * dialog asks for that acknowledgment; without it those rows are left out.
+ */
+function isBulkSelectable(op: PendingOperation): boolean {
+  if (op.status !== 'pending') return false
+  if (op.risk_level === 'high' && sharedAcknowledgmentGroup(op) == null) return false
+  const period = getPeriodStatus(op)
+  return !(period && period.status !== 'open')
+}
+
+/** One operation's outcome in a bulk approval (bulk-commit route). */
+interface BulkItemResult {
+  id: string
+  status: 'committed' | 'failed' | 'skipped' | 'rejected'
+  error?: string
 }
 
 const SORT_ORDER_STORAGE_KEY = 'pending.sortOrder'
@@ -311,6 +338,7 @@ export default function PendingOperationsPage() {
   const tReminders = useTranslations('reminders')
   const tSkills = useTranslations('skills_registry')
   const tCommon = useTranslations('common')
+  const tSigning = useTranslations('skv_signing')
   const complianceWarningText = useComplianceWarningText()
   const router = useRouter()
   const accountNames = useAccountNamesSource()
@@ -354,6 +382,16 @@ export default function PendingOperationsPage() {
   const shiftHeld = useRef(false)
   const [showBulkDialog, setShowBulkDialog] = useState(false)
   const [isBulkCommitting, setIsBulkCommitting] = useState(false)
+  // The one explicit acknowledgment the bulk dialog asks for before routine
+  // high-risk operations join the approval (crm#1489). Cleared on every open.
+  const [groupAcknowledged, setGroupAcknowledged] = useState(false)
+  // What a bulk approval left undone, per operation and why (crm#1488): shown
+  // in a dialog instead of a count toast.
+  const [bulkOutcome, setBulkOutcome] = useState<{
+    summary: string
+    items: Array<{ id: string; title: string; reason: string | null }>
+    draftsHint: boolean
+  } | null>(null)
   // Reject dialog state: separate from the generic destructive-confirm so we
   // can ask for a category + free-text reason that feeds back to the agent.
   // 'bulk' targets the current checkbox selection instead of a single op.
@@ -367,6 +405,9 @@ export default function PendingOperationsPage() {
   const [rejectCategory, setRejectCategory] = useState<PendingOperationRejectionCategory | ''>('')
   const [rejectReason, setRejectReason] = useState('')
   const [isRejecting, setIsRejecting] = useState(false)
+  // An approved Skatteverket filing is locked there, not filed: its BankID
+  // signing link opens in a dialog right after the approval (crm#1478).
+  const [signingPrompt, setSigningPrompt] = useState<{ title: string; url: string } | null>(null)
   const { toast } = useToast()
   // Whether the "Bokför utkasten" toast CTA leads anywhere: bulk Bokför on
   // /invoices only selects drafts when the company books at issue. Under
@@ -603,7 +644,9 @@ export default function PendingOperationsPage() {
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
       if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
-      toast({ title: 'Godkänd', description: op.title })
+      const signingUrl = signingUrlOf(json.data)
+      if (signingUrl) setSigningPrompt({ title: op.title, url: signingUrl })
+      else toast({ title: 'Godkänd', description: op.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
       // Drop the committed op from the bulk selection now: the row leaves
@@ -625,31 +668,73 @@ export default function PendingOperationsPage() {
     await commitOp(selectedOp)
   }
 
-  async function handleBulkCommit(ids: string[]) {
+  /**
+   * Approve a selection in request-sized chunks. The route takes at most 100
+   * ids per request: "Godkänn alla" over a longer list used to send them all
+   * at once, got a 400 back and showed "Något gick fel" with nothing approved
+   * (crm#1488). Each chunk commits what it can; what was left undone is
+   * listed per operation with its reason. A chunk the server refuses as a
+   * whole (session, timeout) stops the run: the rest stays pending.
+   */
+  async function handleBulkCommit(ids: string[], acknowledgedGroups: SharedAcknowledgmentGroup[]) {
     if (ids.length === 0) return
     setIsBulkCommitting(true)
-    try {
-      const res = await fetch('/api/pending-operations/bulk-commit', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ids }),
+    const results: BulkItemResult[] = []
+    const chunks = chunkIds(ids)
+    for (let index = 0; index < chunks.length; index++) {
+      const chunk = chunks[index]
+      let chunkError: string | null = null
+      try {
+        const res = await fetch('/api/pending-operations/bulk-commit', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            ids: chunk,
+            ...(acknowledgedGroups.length > 0 ? { acknowledged_groups: acknowledgedGroups } : {}),
+          }),
+        })
+        const json = await res.json().catch(() => ({}))
+        if (res.ok) {
+          results.push(...((json.data?.results ?? []) as BulkItemResult[]))
+        } else {
+          chunkError = getErrorMessage(json, { statusCode: res.status })
+        }
+      } catch {
+        chunkError = t('bulk_request_failed')
+      }
+      if (chunkError !== null) {
+        for (const id of chunk) results.push({ id, status: 'failed', error: chunkError })
+        for (const id of chunks.slice(index + 1).flat()) {
+          results.push({ id, status: 'skipped', error: t('bulk_not_attempted') })
+        }
+        break
+      }
+    }
+
+    const count = (status: BulkItemResult['status']) => results.filter((r) => r.status === status).length
+    const summary = { committed: count('committed'), failed: count('failed'), skipped: count('skipped'), rejected: count('rejected') }
+    const parts: string[] = []
+    if (summary.committed > 0) parts.push(`${summary.committed} godkända`)
+    if (summary.failed > 0) parts.push(`${summary.failed} misslyckades`)
+    if (summary.rejected > 0) parts.push(`${summary.rejected} avvisade`)
+    if (summary.skipped > 0) parts.push(`${summary.skipped} hoppades över`)
+
+    // Committed create_invoice ops land as unnumbered DRAFTS: point the
+    // user at the draft view where bulk Bokför finishes the job.
+    const committedIds = new Set(results.filter((r) => r.status === 'committed').map((r) => r.id))
+    const committedInvoiceDrafts = operations.some(
+      (op) => committedIds.has(op.id) && bulkActionKey(op) === 'create_invoice',
+    )
+
+    const undone = results.filter((r) => r.status !== 'committed')
+    if (undone.length > 0) {
+      const titles = new Map(operations.map((op) => [op.id, op.title]))
+      setBulkOutcome({
+        summary: parts.join(', '),
+        items: undone.map((r) => ({ id: r.id, title: titles.get(r.id) ?? r.id, reason: r.error ?? null })),
+        draftsHint: committedInvoiceDrafts && invoiceDraftsCtaUseful,
       })
-      const json = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
-
-      const summary = json.data?.summary as
-        | { committed: number; failed: number; skipped: number; rejected: number }
-        | undefined
-
-      // Committed create_invoice ops land as unnumbered DRAFTS: point the
-      // user at the draft view where bulk Bokför finishes the job.
-      const results = (json.data?.results ?? []) as Array<{ id: string; status: string }>
-      const committedIds = new Set(
-        results.filter((r) => r.status === 'committed').map((r) => r.id),
-      )
-      const committedInvoiceDrafts = operations.some(
-        (op) => committedIds.has(op.id) && bulkActionKey(op) === 'create_invoice',
-      )
+    } else {
       const draftsCta = committedInvoiceDrafts && invoiceDraftsCtaUseful
         ? {
             action: (
@@ -662,36 +747,16 @@ export default function PendingOperationsPage() {
             ),
           }
         : {}
-
-      if (summary) {
-        const parts: string[] = []
-        if (summary.committed > 0) parts.push(`${summary.committed} godkända`)
-        if (summary.failed > 0) parts.push(`${summary.failed} misslyckades`)
-        if (summary.rejected > 0) parts.push(`${summary.rejected} avvisade`)
-        if (summary.skipped > 0) parts.push(`${summary.skipped} hoppades över`)
-
-        toast({
-          title: summary.failed > 0 ? 'Klart med fel' : 'Godkänt',
-          description: committedInvoiceDrafts
-            ? `${parts.join(', ')}. ${t('bulk_invoice_drafts_hint')}`
-            : parts.join(', '),
-          variant: summary.failed > 0 ? 'destructive' : 'default',
-          ...draftsCta,
-        })
-      } else {
-        toast({ title: 'Godkänt', ...draftsCta })
-      }
-
-      setShowBulkDialog(false)
-      selection.clear()
-      afterResolve()
-    } catch (err) {
       toast({
-        title: 'Misslyckades',
-        description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
-        variant: 'destructive',
+        title: 'Godkänt',
+        description: committedInvoiceDrafts ? `${parts.join(', ')}. ${t('bulk_invoice_drafts_hint')}` : parts.join(', '),
+        ...draftsCta,
       })
     }
+
+    setShowBulkDialog(false)
+    selection.clear()
+    afterResolve()
     setIsBulkCommitting(false)
   }
 
@@ -711,17 +776,26 @@ export default function PendingOperationsPage() {
       }
 
       if (rejectTarget === 'bulk') {
-        const res = await fetch('/api/pending-operations/bulk-reject', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ ids: Array.from(selection.selectedIds), ...feedback }),
-        })
-        const json = await res.json().catch(() => ({}))
-        if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
-
-        const summary = json.data?.summary as
-          | { rejected: number; skipped: number; failed: number }
-          | undefined
+        // Same 100-id cap as bulk approval (crm#1488): send request-sized
+        // chunks and add up their summaries.
+        let summary: { rejected: number; skipped: number; failed: number } | undefined
+        for (const chunk of chunkIds(Array.from(selection.selectedIds))) {
+          const res = await fetch('/api/pending-operations/bulk-reject', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ ids: chunk, ...feedback }),
+          })
+          const json = await res.json().catch(() => ({}))
+          if (!res.ok) throw new Error(getErrorMessage(json, { statusCode: res.status }))
+          const part = json.data?.summary as { rejected: number; skipped: number; failed: number } | undefined
+          if (part) {
+            summary = {
+              rejected: (summary?.rejected ?? 0) + part.rejected,
+              skipped: (summary?.skipped ?? 0) + part.skipped,
+              failed: (summary?.failed ?? 0) + part.failed,
+            }
+          }
+        }
         if (summary) {
           const parts: string[] = []
           if (summary.rejected > 0) parts.push(`${summary.rejected} avvisade`)
@@ -784,19 +858,13 @@ export default function PendingOperationsPage() {
   })
 
   const showBulkControls = activeTab === 'pending'
-  // Pending ops that meet two criteria: not high risk AND the period covering
-  // them is open. We exclude locked/closed periods from bulk because they will
-  // be rejected at commit time anyway: silently letting the user "select all"
-  // and watching some fail is a worse UX than excluding them up front.
+  // Pending ops that meet two criteria: not high risk (bar the groups one
+  // acknowledgment covers) AND the period covering them is open. We exclude
+  // locked/closed periods from bulk because they will be rejected at commit
+  // time anyway: silently letting the user "select all" and watching some
+  // fail is a worse UX than excluding them up front.
   const bulkEligible = useMemo(
-    () =>
-      filteredOperations.filter((op) => {
-        if (op.status !== 'pending') return false
-        if (op.risk_level === 'high') return false
-        const period = getPeriodStatus(op)
-        if (period && period.status !== 'open') return false
-        return true
-      }),
+    () => filteredOperations.filter(isBulkSelectable),
     [filteredOperations]
   )
   const bulkEligibleIds = useMemo(() => bulkEligible.map((op) => op.id), [bulkEligible])
@@ -826,10 +894,19 @@ export default function PendingOperationsPage() {
 
   const selectedCount = selectedIds.size
 
+  // Selected high-risk operations that join only under the dialog's one
+  // acknowledgment (crm#1489), and what that acknowledgment approves.
+  const selectedGroupOps = useMemo(
+    () => bulkEligible.filter((op) => selectedIds.has(op.id) && op.risk_level === 'high'),
+    [bulkEligible, selectedIds],
+  )
+  const groupSummary = useMemo(() => summarizeSharedAcknowledgment(selectedGroupOps), [selectedGroupOps])
+  const bulkConfirmCount = selectedCount - (groupAcknowledged ? 0 : selectedGroupOps.length)
+
   const selectedBreakdown = useMemo(() => {
     const counts = new Map<string, number>()
     for (const op of bulkEligible) {
-      if (selectedIds.has(op.id)) {
+      if (selectedIds.has(op.id) && op.risk_level !== 'high') {
         const key = bulkActionKey(op)
         counts.set(key, (counts.get(key) ?? 0) + 1)
       }
@@ -892,6 +969,7 @@ export default function PendingOperationsPage() {
             disabled={isBulkCommitting || isRejecting}
             onClick={() => {
               selection.selectAll()
+              setGroupAcknowledged(false)
               setShowBulkDialog(true)
             }}
           >
@@ -988,7 +1066,10 @@ export default function PendingOperationsPage() {
             <Button
               size="sm"
               disabled={isBulkCommitting || isRejecting}
-              onClick={() => setShowBulkDialog(true)}
+              onClick={() => {
+                setGroupAcknowledged(false)
+                setShowBulkDialog(true)
+              }}
             >
               {t('approve_count', { count: selectedCount })}
             </Button>
@@ -1043,8 +1124,7 @@ export default function PendingOperationsPage() {
             {filteredOperations.map((op) => {
               const period = getPeriodStatus(op)
               const periodLocked = period != null && period.status !== 'open'
-              const canBulkSelect =
-                showBulkControls && op.status === 'pending' && op.risk_level !== 'high' && !periodLocked
+              const canBulkSelect = showBulkControls && isBulkSelectable(op)
               const isSelected = selectedIds.has(op.id)
               const batchType = dailyBatchTypeOf(op.operation_type)
               // A daily batch (the collections run, the reminders) is the
@@ -1099,7 +1179,10 @@ export default function PendingOperationsPage() {
                     </span>
                     {/* Chips mark exceptions: an approved operation is the
                         normal outcome and reads as muted text. */}
-                    {op.status === 'committed' && !isAutoExpired(op) ? (
+                    {op.status === 'committed' && signingUrlOf(op.result_data) ? (
+                      // Approved but locked at Skatteverket until signed (crm#1478).
+                      <Badge variant="warning" className="mt-0.5 shrink-0 font-normal">{tSigning('sent_badge')}</Badge>
+                    ) : op.status === 'committed' && !isAutoExpired(op) ? (
                       <span className="mt-0.5 shrink-0 text-xs text-muted-foreground">{t('badge_approved')}</span>
                     ) : (
                       <Badge
@@ -1354,6 +1437,9 @@ export default function PendingOperationsPage() {
                     </p>
                   </div>
                 )}
+                {detailOp.status === 'committed' && signingUrlOf(detailOp.result_data) && (
+                  <SigningStep url={signingUrlOf(detailOp.result_data)!} afterwards />
+                )}
                 {isAutoExpired(detailOp) && (
                   <p className="text-xs text-muted-foreground">{t('auto_expired_detail')}</p>
                 )}
@@ -1434,6 +1520,21 @@ export default function PendingOperationsPage() {
         />
       )}
 
+      {/* After approving a Skatteverket filing: the declaration is locked
+          there and filed only once someone signs with BankID (crm#1478). */}
+      <Dialog open={signingPrompt != null} onOpenChange={(open) => { if (!open) setSigningPrompt(null) }}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>{tSigning('sign_action')}</DialogTitle>
+            <DialogDescription data-ph-mask="">{signingPrompt?.title}</DialogDescription>
+          </DialogHeader>
+          {signingPrompt && <SigningStep url={signingPrompt.url} />}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSigningPrompt(null)}>{tCommon('close')}</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Commit confirmation dialog */}
       <ConfirmationDialog
         open={showCommitDialog}
@@ -1451,22 +1552,97 @@ export default function PendingOperationsPage() {
       <ConfirmationDialog
         open={showBulkDialog}
         onOpenChange={setShowBulkDialog}
-        title={t('approve_bulk_title', { count: selectedCount })}
+        title={t('approve_bulk_title', { count: bulkConfirmCount })}
         warningText={selectedWarnedCount > 0 ? t('bulk_warning_note', { count: selectedWarnedCount }) : ''}
-        confirmLabel={t('approve_count', { count: selectedCount })}
+        confirmLabel={t('approve_count', { count: bulkConfirmCount })}
+        confirmDisabled={bulkConfirmCount === 0}
         isSubmitting={isBulkCommitting}
-        onConfirm={() => handleBulkCommit(Array.from(selectedIds))}
+        onConfirm={() => {
+          // Without the acknowledgment the routine high-risk rows stay out:
+          // the rest of the selection is still approved.
+          const groups = groupAcknowledged
+            ? [...new Set(selectedGroupOps.map(sharedAcknowledgmentGroup).filter((g): g is SharedAcknowledgmentGroup => g != null))]
+            : []
+          const groupIds = new Set(selectedGroupOps.map((op) => op.id))
+          const ids = Array.from(selectedIds).filter((id) => groupAcknowledged || !groupIds.has(id))
+          void handleBulkCommit(ids, groups)
+        }}
       >
         <div className="space-y-3 text-sm">
           <p>{t('bulk_confirm_intro')}</p>
-          <ul className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2">
-            {selectedBreakdown.map(({ type, count }) => (
-              <li key={type} className="flex justify-between font-mono tabular-nums">
-                <span className="font-sans">{bulkActionLabel(type, count, t)}</span>
-                <span className="text-muted-foreground">{count}</span>
-              </li>
-            ))}
-          </ul>
+          {selectedBreakdown.length > 0 && (
+            <ul className="space-y-1 rounded-lg border bg-muted/30 px-3 py-2">
+              {selectedBreakdown.map(({ type, count }) => (
+                <li key={type} className="flex justify-between font-mono tabular-nums">
+                  <span className="font-sans">{bulkActionLabel(type, count, t)}</span>
+                  <span className="text-muted-foreground">{count}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+          {/* Routine high-risk rows (crm#1489): one acknowledgment for the
+              whole group, stating what it posts, instead of one per row. */}
+          {selectedGroupOps.length > 0 && (
+            <div className="space-y-2 rounded-lg border bg-muted/30 px-3 py-2">
+              <p className="font-medium">{t('shared_ack_title', { count: groupSummary.count })}</p>
+              <p className="text-xs text-muted-foreground">{t('shared_ack_body')}</p>
+              <dl className="grid grid-cols-[auto_minmax(0,1fr)] gap-x-4 gap-y-1 text-xs tabular-nums">
+                {groupSummary.date_from && (
+                  <>
+                    <dt className="text-muted-foreground">{t('shared_ack_dates_label')}</dt>
+                    <dd>
+                      {groupSummary.date_from === groupSummary.date_to
+                        ? groupSummary.date_from
+                        : t('shared_ack_dates', { from: groupSummary.date_from, to: groupSummary.date_to ?? '' })}
+                    </dd>
+                  </>
+                )}
+                {groupSummary.incoming > 0 && (
+                  <>
+                    <dt className="text-muted-foreground">{t('shared_ack_incoming')}</dt>
+                    <dd>{formatCurrency(groupSummary.incoming)}</dd>
+                  </>
+                )}
+                {groupSummary.outgoing > 0 && (
+                  <>
+                    <dt className="text-muted-foreground">{t('shared_ack_outgoing')}</dt>
+                    <dd>{formatCurrency(groupSummary.outgoing)}</dd>
+                  </>
+                )}
+              </dl>
+              {groupSummary.accounts.length > 0 && (
+                <table className="w-full text-xs tabular-nums">
+                  <thead>
+                    <tr className="text-[11px] text-muted-foreground">
+                      <th className="py-1 text-left font-normal">{t('shared_ack_account')}</th>
+                      <th className="py-1 text-right font-normal">{t('shared_ack_debit')}</th>
+                      <th className="py-1 text-right font-normal">{t('shared_ack_credit')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {groupSummary.accounts.map((account) => (
+                      <tr key={account.account_number}>
+                        <td className="py-1">
+                          <span className="font-mono">{account.account_number}</span>
+                          {account.account_name ? ` ${account.account_name}` : ''}
+                        </td>
+                        <td className="py-1 text-right font-mono">{account.debit > 0 ? formatAmount(account.debit) : ''}</td>
+                        <td className="py-1 text-right font-mono">{account.credit > 0 ? formatAmount(account.credit) : ''}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              )}
+              <label className="flex cursor-pointer items-start gap-2 pt-1">
+                <Checkbox
+                  checked={groupAcknowledged}
+                  onCheckedChange={(checked) => setGroupAcknowledged(checked === true)}
+                  className="mt-0.5"
+                />
+                <span>{t('shared_ack_confirm', { count: groupSummary.count })}</span>
+              </label>
+            </div>
+          )}
           <p className="text-xs text-muted-foreground">
             {t('bulk_confirm_footer')}
           </p>
@@ -1532,6 +1708,31 @@ export default function PendingOperationsPage() {
             <Button variant="destructive" onClick={handleReject} loading={isRejecting} disabled={!rejectCategory}>
               {rejectTarget === 'bulk' ? t('reject_count', { count: selectedCount }) : t('reject')}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* What a bulk approval left undone, one line per operation with the
+          reason (crm#1488): the footer of the confirmation promises it. */}
+      <Dialog open={bulkOutcome != null} onOpenChange={(open) => { if (!open) setBulkOutcome(null) }}>
+        <DialogContent className="sm:max-w-lg">
+          <DialogHeader>
+            <DialogTitle>{t('bulk_outcome_title')}</DialogTitle>
+            <DialogDescription>{bulkOutcome?.summary}</DialogDescription>
+          </DialogHeader>
+          <ul className="max-h-[50vh] space-y-2 overflow-y-auto text-[13px]">
+            {bulkOutcome?.items.map((item) => (
+              <li key={item.id} className="border-b border-border pb-2 last:border-b-0">
+                <p data-ph-mask="" className="break-words">{item.title}</p>
+                <p className="text-xs text-muted-foreground">{item.reason ?? t('bulk_outcome_no_reason')}</p>
+              </li>
+            ))}
+          </ul>
+          {bulkOutcome?.draftsHint && (
+            <p className="text-xs text-muted-foreground">{t('bulk_invoice_drafts_hint')}</p>
+          )}
+          <DialogFooter>
+            <Button onClick={() => setBulkOutcome(null)}>{tCommon('close')}</Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

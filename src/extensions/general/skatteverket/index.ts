@@ -37,6 +37,7 @@ import {
   type VatDeclarationPrep,
 } from './lib/declaration-prep'
 import { submitVatDeclarationChain, vatDeclarationIncompleteFailure } from './lib/vat-submit'
+import { awaitingSignatureOf } from './lib/submission-state'
 import { vatFilingVerdict } from '@/lib/reports/vat-close-check'
 import {
   agiRunTarget,
@@ -1420,6 +1421,25 @@ export const skatteverketExtension: Extension = {
         } catch (err) {
           return handleSkvError(err)
         }
+      },
+    },
+
+    // ── Awaiting signature ──────────────────────────────────────────
+    // The period's locked declaration and its BankID link, from the state
+    // the lock step stored: read-only and local, no call to Skatteverket.
+    // The Moms page shows "Väntar på signering" from it when the lock
+    // happened elsewhere, e.g. an approved submit_vat_declaration in
+    // /pending, or before a reload (crm#1478).
+    {
+      method: 'GET',
+      path: '/declaration/signing',
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const redovisningsperiod = new URL(request.url).searchParams.get('redovisningsperiod') ?? ''
+        if (!/^\d{6}$/.test(redovisningsperiod)) {
+          return NextResponse.json({ error: 'Ogiltig redovisningsperiod' }, { status: 400 })
+        }
+        const stored = await ctx.settings.get<unknown>(`submission_${redovisningsperiod}`)
+        return NextResponse.json({ data: awaitingSignatureOf(stored) })
       },
     },
 

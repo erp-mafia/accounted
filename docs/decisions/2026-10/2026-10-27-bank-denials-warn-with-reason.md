@@ -1,0 +1,1 @@
+[2026-10-27] Every Enable Banking callback denial (cancel, refused login, missing fullmakt, bank server_error) logs at warn with a reason field instead of error: it is the bank's outcome, the reason keeps fullmakt problems filterable and event_log keeps each attempt (O16).

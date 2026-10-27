@@ -82,6 +82,7 @@ import {
   cleanupExpiredPendingDocumentUploads,
   createPendingDocumentUpload,
   completePendingDocumentUpload,
+  findPendingDocumentUploadName,
   computeSHA256,
   resolveStoredMimeType,
   PENDING_DOCUMENT_UPLOAD_RETENTION_MS,
@@ -1016,6 +1017,60 @@ describe('model-free signed document uploads', () => {
   const company = '11111111-1111-4111-8111-111111111111'
   const user = '22222222-2222-4222-8222-222222222222'
   const uploadId = '33333333-3333-4333-8333-333333333333'
+
+  // crm#1474: complete with only upload_id. The reservation already knows
+  // the name: the completed row once completed, the object key before that.
+  describe('findPendingDocumentUploadName', () => {
+    it('reads the name and stored type off the completed row', async () => {
+      results = [{ data: makeDocumentAttachment({ id: uploadId, file_name: 'invoice.pdf', mime_type: 'application/pdf' }), error: null }]
+      const list = vi.fn()
+      serviceClientOverride = makeClient({ list })
+
+      await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toEqual({
+        fileName: 'invoice.pdf',
+        mimeType: 'application/pdf',
+      })
+      expect(list).not.toHaveBeenCalled()
+    })
+
+    it('reads the sanitized name out of the pending object key', async () => {
+      results = [{ data: null, error: null }]
+      const list = vi.fn().mockResolvedValue({
+        data: [{ id: 'obj-1', name: `${uploadId}_Leverant_r_faktura.pdf` }],
+        error: null,
+      })
+      serviceClientOverride = makeClient({ list })
+
+      await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toEqual({
+        fileName: 'Leverant_r_faktura.pdf',
+        mimeType: null,
+      })
+      expect(list).toHaveBeenCalledWith(`documents/${company}/${user}/pending`, { search: `${uploadId}_`, limit: 10 })
+      // The name rebuilds the very key the bytes were PUT to.
+      expect(buildPendingDocumentStoragePath(company, user, uploadId, 'Leverant_r_faktura.pdf')).toBe(
+        `documents/${company}/${user}/pending/${uploadId}_Leverant_r_faktura.pdf`,
+      )
+    })
+
+    it('falls back to the permanent key, and answers null when no object carries the upload id', async () => {
+      results = [{ data: null, error: null }, { data: null, error: null }]
+      const list = vi
+        .fn()
+        .mockResolvedValueOnce({ data: [], error: null })
+        .mockResolvedValueOnce({ data: [{ id: 'obj-2', name: `${uploadId}_kvitto.png` }], error: null })
+        .mockResolvedValue({ data: [{ id: null, name: `${uploadId}_folder` }], error: null })
+      serviceClientOverride = makeClient({ list })
+
+      await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toEqual({
+        fileName: 'kvitto.png',
+        mimeType: null,
+      })
+      expect(list).toHaveBeenLastCalledWith(`documents/${company}/${user}`, { search: `${uploadId}_`, limit: 10 })
+
+      // A folder entry (no id) is not an upload.
+      await expect(findPendingDocumentUploadName(makeClient() as never, company, user, uploadId)).resolves.toBeNull()
+    })
+  })
 
   it('creates a company-scoped signed upload reservation with a two-hour expiry', async () => {
     const now = Date.parse('2026-08-03T10:00:00.000Z')

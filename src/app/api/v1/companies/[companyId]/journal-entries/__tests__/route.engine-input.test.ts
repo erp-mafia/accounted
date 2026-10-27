@@ -142,12 +142,12 @@ const SCENARIOS: Scenario[] = [
   },
   { name: 'create: the engine refuses the draft', refuse: true, call: () => createPOST(v1('', entry()), params()) },
   {
-    name: 'batch-create: two drafts, history replayed and a manual one',
+    name: 'batch-create: two drafts, a backdated one and one in series B',
     call: () =>
       batchPOST(
         v1('/batch-create', {
           journal_entries: [
-            entry({ description: 'Historik 2025-12', entry_date: '2026-01-02', source_type: 'import' }),
+            entry({ description: 'Bankavgift december', entry_date: '2026-01-02' }),
             entry({ description: 'Bankavgift juni', entry_date: '2026-06-01', voucher_series: 'B' }),
           ],
         }),
@@ -346,7 +346,7 @@ describe('v1 voucher doors engine input (posting port parity)', () => {
     }
     const count = (name: string) => shadow.find((r) => r.name === name)!.events.length
     expect(count('commit: a draft posted')).toBe(0)
-    expect(count('batch-create: two drafts, history replayed and a manual one')).toBe(2)
+    expect(count('batch-create: two drafts, a backdated one and one in series B')).toBe(2)
     expect(count('correct: new lines and text')).toBe(2)
     expect(count('redate: moved to another date')).toBe(2)
   })
@@ -393,8 +393,8 @@ describe('v1 voucher doors engine input (posting port parity)', () => {
     expect(events('create: a draft an integration labels as its own (webshop_order)')).toEqual([
       expect.objectContaining({ ...common, kind: 'sale.webshop_order' }),
     ])
-    expect(events('batch-create: two drafts, history replayed and a manual one').map((e) => [e.kind, e.occurred_on])).toEqual([
-      ['ledger.history_import', '2026-01-02'],
+    expect(events('batch-create: two drafts, a backdated one and one in series B').map((e) => [e.kind, e.occurred_on])).toEqual([
+      ['ledger.manual', '2026-01-02'],
       ['ledger.manual', '2026-06-01'],
     ])
     expect(events('reverse: a posted voucher reversed on its own date')).toEqual([

@@ -19,6 +19,7 @@ import { ACCOUNT_VAT_BOXES } from '@/lib/vat/account-vat-box'
 import { VAT_DECLARATION_CHECK_CODES } from '@/lib/reports/vat-declaration-checks'
 import { BEHANDLINGSHISTORIK_CATEGORIES } from '@/lib/reports/behandlingshistorik-types'
 import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
+import { BULK_IDS_MAX, SHARED_ACKNOWLEDGMENT_GROUPS } from '@/lib/pending-operations/shared-acknowledgment'
 import {
   accountNumberSchema,
   isoDateSchema,
@@ -2271,26 +2272,31 @@ export const CreateJournalEntrySchema = z.object({
  * a policy exemption and show a false source in the ledger.
  *
  *   API (v1 POST /journal-entries and /journal-entries/batch-create): every
- *     source type the dimension-rule policy ENFORCES, plus 'import' for
- *     history replayed from another system (the documented batch-create use;
- *     imported history is rule-exempt by design, and the label says so in
- *     the ledger). Integrations label their own business vouchers with the
- *     enforced types (a webshop integration posts 'webshop_order' vouchers
- *     through this door), and those labels claim nothing. The rule-exempt,
- *     engine-owned types (opening balances, bokslut, storno, corrections,
- *     credit notes, accruals, settlements, 'system') are refused. Derived
- *     from DIMENSION_RULE_POLICY, so a new source type is classified once
- *     there and this door follows.
+ *     source type the dimension-rule policy ENFORCES. Integrations label
+ *     their own business vouchers with them (a webshop integration posts
+ *     'webshop_order' vouchers through this door), and those labels claim
+ *     nothing. The rule-exempt, engine-owned types (opening balances,
+ *     bokslut, storno, corrections, credit notes, accruals, settlements,
+ *     'system') are refused. 'import' is refused too: an import voucher
+ *     needs the durable batch identity only the SIE import engine writes
+ *     (guard_sie_entry_provenance raises 23514 without one), so the label
+ *     could never post here and answered 500. History from another system
+ *     goes through POST /imports/sie, or is booked as 'manual'. Derived from
+ *     DIMENSION_RULE_POLICY, so a new source type is classified once there
+ *     and this door follows.
  *   Dashboard (POST /api/bookkeeping/journal-entries): 'manual', plus
  *     'vat_settlement' for the reviewed momsredovisning proposal and VAT
  *     booking templates (lib/bookkeeping/template-source-type.ts).
  */
-export const API_VOUCHER_SOURCE_TYPES: readonly JournalEntrySourceType[] = [
-  ...(Object.keys(DIMENSION_RULE_POLICY) as JournalEntrySourceType[]).filter(
-    (sourceType) => DIMENSION_RULE_POLICY[sourceType] === 'enforced'
-  ),
-  'import',
-]
+export const API_VOUCHER_SOURCE_TYPES: readonly JournalEntrySourceType[] = (
+  Object.keys(DIMENSION_RULE_POLICY) as JournalEntrySourceType[]
+).filter((sourceType) => DIMENSION_RULE_POLICY[sourceType] === 'enforced')
+
+/** The v1 voucher doors' answer to source_type 'import': what to use instead. */
+export const API_IMPORT_SOURCE_TYPE_MESSAGE =
+  'source_type "import" kan inte sättas här: importerade verifikat kräver en importbatch, och den skapar bara ' +
+  'SIE-importen. Importera historik från ett annat system som en SIE4-fil med POST ' +
+  '/api/v1/companies/{companyId}/imports/sie, eller bokför verifikaten med source_type "manual" (standard).'
 export const DASHBOARD_VOUCHER_SOURCE_TYPES = ['manual', 'vat_settlement'] as const
 
 /**
@@ -2332,10 +2338,12 @@ export const CreateApiJournalEntrySchema = CreateJournalEntrySchema.extend({
     .min(2, 'At least two lines are required for double-entry'),
   source_type: z
     .enum(API_VOUCHER_SOURCE_TYPES, {
-      error:
-        'source_type kan inte vara en motorägd källtyp här: ingående balans, bokslut, storno, rättelser, ' +
-        'kreditnotor, periodiseringar, avräkningar och systemverifikat sätts av sina egna flöden och undantas ' +
-        `från dimensionsreglerna. Tillåtna värden: ${API_VOUCHER_SOURCE_TYPES.join(', ')}.`,
+      error: (issue) =>
+        issue.input === 'import'
+          ? API_IMPORT_SOURCE_TYPE_MESSAGE
+          : 'source_type kan inte vara en motorägd källtyp här: ingående balans, bokslut, storno, rättelser, ' +
+            'kreditnotor, periodiseringar, avräkningar och systemverifikat sätts av sina egna flöden och undantas ' +
+            `från dimensionsreglerna. Tillåtna värden: ${API_VOUCHER_SOURCE_TYPES.join(', ')}.`,
     })
     .default('manual'),
 })
@@ -4186,13 +4194,17 @@ export const PendingOperationsQuerySchema = z.object({
 })
 
 export const PendingOperationsBulkSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(100),
+  ids: z.array(z.string().uuid()).min(1).max(BULK_IDS_MAX),
+  // The routine high-risk groups the person acknowledged in the bulk dialog
+  // (lib/pending-operations/shared-acknowledgment.ts). A high-risk operation
+  // outside an acknowledged group is skipped, as before.
+  acknowledged_groups: z.array(z.enum(SHARED_ACKNOWLEDGMENT_GROUPS)).max(SHARED_ACKNOWLEDGMENT_GROUPS.length).optional(),
 })
 
 // Bulk reject: same id list plus the person's category (required) and an
 // optional reason, applied to every rejected row.
 export const PendingOperationsBulkRejectSchema = z.object({
-  ids: z.array(z.string().uuid()).min(1).max(100),
+  ids: z.array(z.string().uuid()).min(1).max(BULK_IDS_MAX),
   rejection_category: z.enum(PERSON_REJECTION_CATEGORIES),
   rejection_reason: z.string().max(2000).optional(),
 })

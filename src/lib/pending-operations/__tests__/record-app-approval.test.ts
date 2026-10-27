@@ -49,6 +49,27 @@ describe('recordAppApproval', () => {
     })
   })
 
+  it('says when a high-risk operation was approved under one acknowledgment for its group (crm#1489)', async () => {
+    await recordAppApproval({
+      companyId: 'company-1',
+      userId: 'user-1',
+      operation: { id: 'op-2', operation_type: 'bulk_book_transactions', risk_level: 'high' },
+      commitMethod: 'bulk_accept',
+      outcome: 'committed',
+      sharedAcknowledgment: 'bulk_book_create_new',
+    })
+
+    expect(mockAppend).toHaveBeenCalledWith(
+      expect.objectContaining({
+        payload: expect.objectContaining({
+          risk_level: 'high',
+          commit_method: 'bulk_accept',
+          shared_acknowledgment: 'bulk_book_create_new',
+        }),
+      }),
+    )
+  })
+
   it('records a failed attempt with its outcome', async () => {
     await recordAppApproval({
       companyId: 'company-1',

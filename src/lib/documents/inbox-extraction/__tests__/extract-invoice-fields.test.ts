@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterAll } from 'vitest'
 import {
+  EXTRACTION_DEADLINE_MS,
   extractInvoiceFields,
   extractJsonObject,
   stripOwnCompanyAsSupplier,
@@ -448,6 +449,49 @@ describe('extractInvoiceFields', () => {
     // passes through unchanged even though it contains valid JSON.
     const oversized = 'x'.repeat(300 * 1024) + JSON.stringify(VALID_RESULT)
     expect(extractJsonObject(oversized)).toBe(oversized)
+  })
+
+  // ── deadline (2026-10-26: a Bedrock call that never answered held an
+  // upload's deferred work until Vercel killed the function at 300 s) ──
+
+  it('gives the reading one deadline: both calls carry the same signal', async () => {
+    const timeout = vi.spyOn(AbortSignal, 'timeout')
+    mockCreate
+      .mockResolvedValueOnce({
+        content: [{ type: 'text', text: JSON.stringify(VALID_RESULT).slice(0, 40) }],
+        stop_reason: 'max_tokens',
+      })
+      .mockReturnValueOnce(aiResponse(VALID_RESULT))
+    await extractInvoiceFields({ buffer: Buffer.from('%PDF'), mimeType: 'application/pdf', fileName: 'f.pdf' })
+
+    expect(timeout).toHaveBeenCalledTimes(1)
+    expect(timeout).toHaveBeenCalledWith(EXTRACTION_DEADLINE_MS)
+    expect(EXTRACTION_DEADLINE_MS).toBeLessThan(300_000)
+    const signal = mockCreate.mock.calls[0][1]?.signal
+    expect(signal).toBeInstanceOf(AbortSignal)
+    expect(mockCreate.mock.calls[1][1]?.signal).toBe(signal)
+    timeout.mockRestore()
+  })
+
+  it('ends a reading that never answers at the deadline with no reading instead of hanging', async () => {
+    const deadline = new AbortController()
+    const timeout = vi.spyOn(AbortSignal, 'timeout').mockReturnValue(deadline.signal)
+    // A call that only ends when its signal fires, as the SDK aborts a request.
+    mockCreate.mockImplementationOnce(
+      (_params: unknown, options?: { signal?: AbortSignal }) =>
+        new Promise((_resolve, reject) => {
+          options?.signal?.addEventListener('abort', () => reject(new Error('Request was aborted.')))
+        }),
+    )
+    const pending = extractInvoiceFields({ buffer: Buffer.from('%PDF'), mimeType: 'application/pdf', fileName: 'f.pdf' })
+    await vi.waitFor(() => expect(mockCreate).toHaveBeenCalledTimes(1))
+    deadline.abort()
+    const { data, rawText } = await pending
+
+    expect(rawText).toBeNull()
+    expect(data.totals.total).toBeNull()
+    expect(data.confidence).toBe(0)
+    timeout.mockRestore()
   })
 
   // ── max_tokens truncation retry (2026-08) ──────────────────

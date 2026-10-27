@@ -133,6 +133,13 @@ export interface OperationMcpBinding {
   /** Lowercase matcher synonyms (Swedish domain terms). Never serialized. */
   keywords?: string[]
   /**
+   * Input keys the tool takes but does not list in tools/list
+   * (McpTool.undeclaredArgs): an argument only a refusal asks for, and that
+   * refusal says how to send it, so it costs nothing in the catalog budget.
+   * The v1 endpoint still declares it.
+   */
+  undeclaredInputs?: readonly string[]
+  /**
    * MCP annotation hints for a write: `destructive` asks the client to
    * confirm before calling, `idempotent` tells it a retry with the same
    * input is safe. Both default to false.

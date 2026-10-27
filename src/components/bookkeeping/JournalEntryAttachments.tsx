@@ -45,7 +45,6 @@ interface DocumentRecord {
   storage_path: string
   created_at: string
   sha256_hash?: string | null
-  download_url?: string
   referenced?: boolean
 }
 
@@ -94,6 +93,10 @@ export default function JournalEntryAttachments({
   const [detachingDocId, setDetachingDocId] = useState<string | null>(null)
   const replaceFileInputRef = useRef<HTMLInputElement | null>(null)
   const replaceTargetIdRef = useRef<string | null>(null)
+  // The upload zone's own file input: "Lägg till underlag" opens the OS
+  // picker in the same click. It used to only toggle the zone, so a second
+  // click (the one users made, expecting the picker) closed it again.
+  const addFileInputRef = useRef<HTMLInputElement | null>(null)
 
   const onCountChangeRef = useRef(onCountChange)
   onCountChangeRef.current = onCountChange
@@ -182,27 +185,17 @@ export default function JournalEntryAttachments({
     }
   }
 
-  const handlePreviewToggle = async (doc: DocumentRecord) => {
-    if (expandedDoc === doc.id) {
-      setExpandedDoc(null)
-      return
-    }
+  // Opens at once: the preview loads from the same-origin inline route, so
+  // nothing has to be fetched first. A signed-URL round trip used to sit
+  // before the expand with no feedback, and the clicks made while waiting
+  // toggled the preview shut again.
+  const handlePreviewToggle = (doc: DocumentRecord) => {
+    setExpandedDoc((current) => (current === doc.id ? null : doc.id))
+  }
 
-    if (!doc.download_url) {
-      try {
-        const res = await fetch(`/api/documents/${doc.id}`)
-        const { data } = await res.json()
-        if (data?.download_url) {
-          setDocuments((prev) =>
-            prev.map((d) => (d.id === doc.id ? { ...d, download_url: data.download_url } : d))
-          )
-        }
-      } catch {
-        return
-      }
-    }
-
-    setExpandedDoc(doc.id)
+  const handleAddClick = () => {
+    setShowUpload(true)
+    addFileInputRef.current?.click()
   }
 
   const handleRequestRemove = (doc: DocumentRecord) => {
@@ -322,7 +315,7 @@ export default function JournalEntryAttachments({
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setShowUpload(!showUpload)}
+            onClick={handleAddClick}
           >
             <PlusIcon className="h-3 w-3 mr-1" />
             {t('add')}
@@ -330,16 +323,17 @@ export default function JournalEntryAttachments({
         </div>
       </div>
 
-      {showUpload && (
-        <div className="mb-3">
-          <DocumentUploadZone
-            files={uploadFiles}
-            onFilesChange={setUploadFiles}
-            journalEntryId={journalEntryId}
-            compact
-          />
-        </div>
-      )}
+      {/* Always mounted so the button can reach its file input; shown once
+          the button was used, for drag and drop and the upload progress. */}
+      <div className={showUpload ? 'mb-3' : 'hidden'}>
+        <DocumentUploadZone
+          files={uploadFiles}
+          onFilesChange={setUploadFiles}
+          journalEntryId={journalEntryId}
+          fileInputRef={addFileInputRef}
+          compact
+        />
+      </div>
 
       {documents.length === 0 && !showUpload ? (
         !embedded && (
@@ -353,33 +347,40 @@ export default function JournalEntryAttachments({
             const isReplacing = replacingDocId === doc.id
             const kind = documentPreviewKind(doc.mime_type, doc.file_name)
             const previewable = kind === 'pdf' || kind === 'image'
+            const isExpanded = expandedDoc === doc.id
             return (
               <div key={doc.id}>
                 <div className="flex items-center gap-2 text-sm py-1.5 px-2 rounded-sm bg-muted/50">
                   {previewable ? (
+                    // The chevron, the icon and the file name are one toggle:
+                    // the 16 px chevron alone was the most rage-clicked target
+                    // on /bookkeeping.
                     <button
+                      type="button"
                       onClick={() => handlePreviewToggle(doc)}
-                      className="shrink-0 hover:text-primary transition-colors"
+                      aria-expanded={isExpanded}
+                      className="flex min-w-0 flex-1 items-center gap-2 text-left hover:text-primary transition-colors"
                     >
-                      {expandedDoc === doc.id ? (
-                        <ChevronUpIcon className="h-4 w-4" />
+                      {isExpanded ? (
+                        <ChevronUpIcon className="h-4 w-4 shrink-0" />
                       ) : (
-                        <ChevronDownIcon className="h-4 w-4" />
+                        <ChevronDownIcon className="h-4 w-4 shrink-0" />
                       )}
+                      {!isExpanded && (
+                        kind === 'image' ? (
+                          <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        ) : (
+                          <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                        )
+                      )}
+                      <span className="truncate flex-1">{doc.file_name}</span>
                     </button>
                   ) : (
-                    <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
-                  )}
-
-                  {previewable && expandedDoc !== doc.id && (
-                    kind === 'image' ? (
-                      <PhotoIcon className="h-4 w-4 text-muted-foreground shrink-0" />
-                    ) : (
+                    <>
                       <DocumentTextIcon className="h-4 w-4 text-muted-foreground shrink-0" />
-                    )
+                      <span className="truncate flex-1">{doc.file_name}</span>
+                    </>
                   )}
-
-                  <span className="truncate flex-1">{doc.file_name}</span>
                   {doc.referenced && (
                     <Badge variant="secondary" className="shrink-0">
                       {t('via_supplier_invoice')}
@@ -428,7 +429,7 @@ export default function JournalEntryAttachments({
                   </Button>
                 </div>
 
-                {expandedDoc === doc.id && doc.download_url && previewable && (
+                {isExpanded && previewable && (
                   <div className="px-2 py-2">
                     <DocumentPreview
                       src={`/api/documents/${doc.id}/inline`}
@@ -437,14 +438,13 @@ export default function JournalEntryAttachments({
                       className="h-[60vh] w-full rounded-lg border"
                       imageClassName="max-h-48 rounded-lg object-contain"
                       fallback={
-                        <a
-                          href={doc.download_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
+                        <button
+                          type="button"
+                          onClick={() => handleDownload(doc.id)}
                           className="block px-4 py-2 text-sm text-muted-foreground underline"
                         >
                           {t('download')}
-                        </a>
+                        </button>
                       }
                     />
                   </div>

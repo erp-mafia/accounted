@@ -13,6 +13,10 @@
  *   - a document that is the underlag of ANOTHER verifikat is refused; the
  *     same verifikat (directly or through a bulk-book voucher link) is an
  *     idempotent re-attach;
+ *   - with checkFit, a document that plainly belongs to another purchase
+ *     (lib/documents/bank-match/fit.ts: it asks for more than the row paid
+ *     and names another seller) is refused, DOC_ROW_MISMATCH, unless the
+ *     caller states a mismatchReason (crm#1479);
  *   - on a booked transaction the link propagates to
  *     document_attachments.journal_entry_id at once (BFL 5 kap 6 §: the
  *     verifikat must reference its underlag), and a failed propagation is an
@@ -40,6 +44,7 @@ import {
   resolveVoucherLinkedEntryIds,
 } from '@/lib/transactions/inbox-underlag'
 import { linkBasisColumns } from '@/lib/links/stamp'
+import { documentFitGate, type DocumentFitDeps } from '@/lib/documents/bank-match/fit'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -76,7 +81,14 @@ export async function attachDocumentToTransaction(
   ctx: OperationContext,
   transactionId: string,
   documentId: string,
-  options: { dryRun?: boolean } = {},
+  options: {
+    dryRun?: boolean
+    /** Refuse a document that plainly belongs to another purchase (DOC_ROW_MISMATCH). */
+    checkFit?: boolean
+    /** Why the document belongs here anyway; lets a mismatch through. */
+    mismatchReason?: string | null
+    fitDeps?: DocumentFitDeps
+  } = {},
 ): Promise<OperationOutcome<AttachDocumentResult>> {
   const { supabase, companyId, userId, log } = ctx
 
@@ -84,7 +96,7 @@ export async function attachDocumentToTransaction(
   // error in Postgres): the same answer the dashboard route always gave.
   const { data: tx, error: txError } = await supabase
     .from('transactions')
-    .select('id, document_id, journal_entry_id, description, merchant_name, amount, currency, date')
+    .select('id, document_id, journal_entry_id, description, original_description, merchant_name, amount, currency, amount_sek, exchange_rate, instructed_amount, instructed_currency, date')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .maybeSingle()
@@ -130,6 +142,14 @@ export async function attachDocumentToTransaction(
     }
   }
 
+  // The two sides are compared before anything is written (crm#1479): once
+  // the row is booked the document is underlag for good. Re-attaching the
+  // document already pinned changes nothing and is not judged again.
+  if (options.checkFit && previousDocumentId !== documentId) {
+    const refusal = await documentFitGate(supabase, companyId, options.mismatchReason, options.fitDeps)(documentId, tx)
+    if (refusal) return { ok: false, ...refusal }
+  }
+
   if (options.dryRun) {
     // What the document says (the hints the pairing was chosen on), and who
     // else already holds it: one document normally backs one purchase.
@@ -171,6 +191,8 @@ export async function attachDocumentToTransaction(
         transaction_booked: tx.journal_entry_id != null,
         journal_entry_id: (tx.journal_entry_id as string | null) ?? null,
         shared_document_warning: sharedDocumentWarning(claims.get(documentId) ?? [], { transaction_id: transactionId }),
+        // The caller's reason for a document that may look like another purchase's.
+        ...(options.checkFit && options.mismatchReason ? { mismatch_reason: options.mismatchReason } : {}),
       },
     }
   }

@@ -45,8 +45,14 @@ vi.mock('@/lib/supabase/server', () => ({
   createServiceClient: vi.fn(),
 }))
 
+vi.mock('../lib/key-use', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../lib/key-use')>()),
+  readProviderKeyUseFacts: vi.fn(),
+}))
+
 import { arcimMigrationExtension } from '../index'
 import { listConsents } from '../lib/provider-client'
+import { readProviderKeyUseFacts } from '../lib/key-use'
 import { createServiceClient } from '@/lib/supabase/server'
 
 const route = (arcimMigrationExtension.apiRoutes ?? []).find(
@@ -387,5 +393,67 @@ describe('GET /status: latest underlag run (crm#1410)', () => {
   it('answers null before any run, and for a value that is not a run', async () => {
     expect((await latestDocumentImport(null)).body.latestDocumentImport).toBeNull()
     expect((await latestDocumentImport({ linked: 3 })).body.latestDocumentImport).toBeNull()
+  })
+})
+
+/**
+ * GET /status `consents[].keyUse` (crm#1476, PH 219): whether each stored key
+ * still has work to do, so a finished migration can say the key is no longer
+ * used and offer to remove it.
+ */
+describe('GET /status: what each stored key is still for', () => {
+  const consent = (id: string, createdAt: string) => ({ id, provider: 'bokio', status: 1, companyName: 'Bolaget AB', createdAt })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    ;(createServiceClient as Mock).mockReturnValue(buildService({}))
+    // Newest first, as listConsents orders them.
+    ;(listConsents as Mock).mockResolvedValue([consent('consent-new', '2026-10-20'), consent('consent-old', '2026-09-01')])
+  })
+
+  it('tags the connection the invoice-row pass reads with, and calls the other idle', async () => {
+    ;(readProviderKeyUseFacts as Mock).mockResolvedValue({
+      jobStates: ['completed'],
+      importedWithoutJob: false,
+      invoicesAwaitingRows: true,
+      supplierCompletionConsentIds: new Set(),
+      newestConsentId: 'consent-new',
+    })
+    const { supabase } = buildSupabase({ history: [], latestCompleted: null })
+
+    const res = await handler(statusRequest(), buildCtx(supabase))
+    const { body } = await parseJsonResponse<{ consents: { id: string; keyUse?: string }[] }>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.consents.map((c) => [c.id, c.keyUse])).toEqual([
+      ['consent-new', 'invoice_rows'],
+      ['consent-old', 'idle'],
+    ])
+    expect(readProviderKeyUseFacts).toHaveBeenCalledWith(expect.anything(), 'company-1', {
+      hasCompletedSieImport: false,
+      importedRecords: 0,
+      newestConsentId: 'consent-new',
+    })
+  })
+
+  it('says nothing about the key when the read fails, and still answers', async () => {
+    ;(readProviderKeyUseFacts as Mock).mockRejectedValue(new Error('PROVIDER_KEY_USE_READ_FAILED'))
+    const { supabase } = buildSupabase({ history: [], latestCompleted: null })
+
+    const res = await handler(statusRequest(), buildCtx(supabase))
+    const { body } = await parseJsonResponse<{ consents: { id: string; keyUse?: string }[] }>(res)
+
+    expect(res.status).toBe(200)
+    expect(body.consents).toHaveLength(2)
+    expect(body.consents.every((c) => c.keyUse === undefined)).toBe(true)
+  })
+
+  it('does not read for a company with no connection', async () => {
+    ;(listConsents as Mock).mockResolvedValue([])
+    const { supabase } = buildSupabase({ history: [], latestCompleted: null })
+
+    await handler(statusRequest(), buildCtx(supabase))
+
+    expect(readProviderKeyUseFacts).not.toHaveBeenCalled()
   })
 })

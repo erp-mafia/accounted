@@ -125,7 +125,7 @@
     }
   },
   {
-    "name": "batch-create: two drafts, history replayed and a manual one",
+    "name": "batch-create: two drafts, a backdated one and one in series B",
     "calls": {
       "createDraftEntry": [
         [
@@ -136,8 +136,8 @@
           {
             "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
             "entry_date": "2026-01-02",
-            "description": "Historik 2025-12",
-            "source_type": "import",
+            "description": "Bankavgift december",
+            "source_type": "manual",
             "lines": [
               {
                 "account_number": "6570",

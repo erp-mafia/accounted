@@ -7,6 +7,8 @@ import {
   buildManualPayslipLine,
   isManualPayslipLineType,
   manualLineCapsFromRunParams,
+  storedLineItemType,
+  taxableCounterpart,
   mealBenefitSchablonFromRunParams,
   mealBenefitUnit,
   MEAL_BENEFIT_KINDS,
@@ -22,9 +24,9 @@ const body = (r: ReturnType<typeof buildManualPayslipLine>): ManualLineBody => {
 }
 
 describe('manual payslip line catalogue', () => {
-  it('offers only types the line schema accepts, and never a derived or claim-linked one', () => {
+  it('stores only types the line schema accepts, and never offers a derived or claim-linked one', () => {
     for (const type of MANUAL_PAYSLIP_LINE_TYPES) {
-      expect(SalaryLineItemTypeSchema.safeParse(type).success, type).toBe(true)
+      expect(SalaryLineItemTypeSchema.safeParse(storedLineItemType(type)).success, type).toBe(true)
     }
     for (const derived of [
       'monthly_salary', 'hourly_salary', 'sick_karens', 'sick_day2_14', 'sick_day15_plus',
@@ -36,8 +38,8 @@ describe('manual payslip line catalogue', () => {
   })
 
   it('tax-free reimbursements carry no gross flag at all: the engine pays them by type into net', () => {
-    for (const type of ['mileage_taxfree', 'traktamente_taxfree'] as const) {
-      expect(TAX_FREE_REIMBURSEMENT_TYPES).toContain(type)
+    for (const type of ['mileage_taxfree', 'traktamente_taxfree', 'traktamente_night_taxfree', 'traktamente_foreign_taxfree'] as const) {
+      expect(TAX_FREE_REIMBURSEMENT_TYPES).toContain(storedLineItemType(type))
       expect(MANUAL_PAYSLIP_LINE_SPECS[type].flags).toEqual({
         is_taxable: false,
         is_avgift_basis: false,
@@ -49,7 +51,7 @@ describe('manual payslip line catalogue', () => {
   })
 
   it('the taxable excess of a reimbursement is taxed and avgift basis but not semestergrundande', () => {
-    for (const type of ['mileage_taxable', 'traktamente_taxable'] as const) {
+    for (const type of ['mileage_taxable', 'traktamente_taxable', 'traktamente_foreign_taxable'] as const) {
       const f = MANUAL_PAYSLIP_LINE_SPECS[type].flags
       expect(f.is_taxable).toBe(true)
       expect(f.is_avgift_basis).toBe(true)
@@ -229,6 +231,133 @@ describe('buildManualPayslipLine', () => {
   })
 })
 
+describe('utlandstraktamente and nattraktamente (crm#1468, PH 218)', () => {
+  const caps = { mileage_taxfree: 25, traktamente_taxfree: 300, traktamente_night_taxfree: 150 }
+
+  it('stores a foreign row as a traktamente row on 7323 / 7324 with the country in the description', () => {
+    expect(
+      body(
+        buildManualPayslipLine(
+          { item_type: 'traktamente_foreign_taxfree', quantity: 3, unit_price: 600, country: ' Tyskland ', normalbelopp: 600 },
+          caps,
+        ),
+      ),
+    ).toEqual({
+      item_type: 'traktamente_taxfree',
+      description: 'Utlandstraktamente (skattefritt), Tyskland',
+      quantity: 3,
+      unit_price: 600,
+      amount: 1800,
+      account_number: '7323',
+      is_taxable: false,
+      is_avgift_basis: false,
+      is_vacation_basis: false,
+      is_gross_deduction: false,
+      is_net_deduction: false,
+    })
+    const excess = body(
+      buildManualPayslipLine({ item_type: 'traktamente_foreign_taxable', quantity: 3, unit_price: 100, country: 'Tyskland' }, caps),
+    )
+    expect(excess).toMatchObject({
+      item_type: 'traktamente_taxable',
+      description: 'Utlandstraktamente (skattepliktigt), Tyskland',
+      amount: 300,
+      account_number: '7324',
+      is_taxable: true,
+      is_avgift_basis: true,
+      is_vacation_basis: false,
+    })
+  })
+
+  it('caps the tax-free foreign à-pris at the entered normalbelopp, not at the domestic 300 kr', () => {
+    // The ticket: a foreign day above 300 kr was refused by the domestic cap.
+    expect(
+      buildManualPayslipLine({ item_type: 'traktamente_foreign_taxfree', quantity: 2, unit_price: 812.5, country: 'Norge', normalbelopp: 812.5 }, caps).ok,
+    ).toBe(true)
+    expect(
+      buildManualPayslipLine({ item_type: 'traktamente_foreign_taxfree', quantity: 2, unit_price: 900, country: 'Norge', normalbelopp: 812.5 }, caps),
+    ).toEqual({ ok: false, reason: 'above_tax_free_cap', cap: 812.5, unit: 'dagar' })
+    // Amount over days is a price too; a reduced à-pris (meals, tremånadersregeln) passes.
+    expect(
+      buildManualPayslipLine({ item_type: 'traktamente_foreign_taxfree', quantity: 2, amount: 2000, country: 'Norge', normalbelopp: 812.5 }, caps).ok,
+    ).toBe(false)
+    expect(
+      buildManualPayslipLine({ item_type: 'traktamente_foreign_taxfree', quantity: 2, unit_price: 568.75, country: 'Norge', normalbelopp: 812.5 }, caps).ok,
+    ).toBe(true)
+    // The domestic row keeps its 300 kr cap.
+    expect(buildManualPayslipLine({ item_type: 'traktamente_taxfree', quantity: 2, unit_price: 600 }, caps)).toMatchObject({
+      ok: false,
+      cap: 300,
+    })
+  })
+
+  it('needs the country, and the normalbelopp on the tax-free row only', () => {
+    expect(buildManualPayslipLine({ item_type: 'traktamente_foreign_taxfree', quantity: 1, unit_price: 500, country: '  ', normalbelopp: 500 })).toEqual({
+      ok: false,
+      reason: 'no_country',
+    })
+    for (const normalbelopp of [undefined, null, 0, -1, Number.NaN]) {
+      expect(
+        buildManualPayslipLine({ item_type: 'traktamente_foreign_taxfree', quantity: 1, unit_price: 500, country: 'Polen', normalbelopp }),
+        String(normalbelopp),
+      ).toEqual({ ok: false, reason: 'no_normalbelopp' })
+    }
+    expect(buildManualPayslipLine({ item_type: 'traktamente_foreign_taxable', quantity: 1, unit_price: 500 })).toEqual({
+      ok: false,
+      reason: 'no_country',
+    })
+    expect(buildManualPayslipLine({ item_type: 'traktamente_foreign_taxable', amount: 500, country: 'Polen' }).ok).toBe(true)
+    // An amount is still needed first.
+    expect(buildManualPayslipLine({ item_type: 'traktamente_foreign_taxfree', country: 'Polen', normalbelopp: 500 })).toEqual({
+      ok: false,
+      reason: 'no_amount',
+    })
+  })
+
+  it('keeps a typed description and lets the foreign fields alone off the domestic rows', () => {
+    expect(
+      body(
+        buildManualPayslipLine({
+          item_type: 'traktamente_foreign_taxfree',
+          description: 'Mässa Berlin v. 41',
+          quantity: 1,
+          unit_price: 500,
+          country: 'Tyskland',
+          normalbelopp: 600,
+        }),
+      ).description,
+    ).toBe('Mässa Berlin v. 41')
+    const domestic = body(
+      buildManualPayslipLine({ item_type: 'traktamente_taxfree', quantity: 1, unit_price: 300, country: 'Tyskland', normalbelopp: 900 }, caps),
+    )
+    expect(domestic.description).toBe('Traktamente (skattefritt)')
+    expect('account_number' in domestic).toBe(false)
+  })
+
+  it('stores nattraktamente as a tax-free traktamente row capped per night at the year schablon', () => {
+    expect(body(buildManualPayslipLine({ item_type: 'traktamente_night_taxfree', quantity: 2, unit_price: 150 }, caps))).toMatchObject({
+      item_type: 'traktamente_taxfree',
+      description: 'Nattraktamente (skattefritt)',
+      amount: 300,
+      is_taxable: false,
+    })
+    expect(buildManualPayslipLine({ item_type: 'traktamente_night_taxfree', quantity: 1, unit_price: 151 }, caps)).toEqual({
+      ok: false,
+      reason: 'above_tax_free_cap',
+      cap: 150,
+      unit: 'natter',
+    })
+    expect('account_number' in body(buildManualPayslipLine({ item_type: 'traktamente_night_taxfree', quantity: 1, unit_price: 150 }, caps))).toBe(false)
+  })
+
+  it('points the part above a cap at the matching taxable row', () => {
+    expect(taxableCounterpart('mileage_taxfree')).toBe('mileage_taxable')
+    expect(taxableCounterpart('traktamente_taxfree')).toBe('traktamente_taxable')
+    expect(taxableCounterpart('traktamente_night_taxfree')).toBe('traktamente_taxable')
+    expect(taxableCounterpart('traktamente_foreign_taxfree')).toBe('traktamente_foreign_taxable')
+  })
+})
+
 describe('manualLineCapsFromRunParams', () => {
   it('reads the serialized payroll config in either casing, ignores junk, empty without params', () => {
     expect(manualLineCapsFromRunParams({ milersattning_egen_bil: 25, traktamente_heldag: 300 })).toEqual({
@@ -239,6 +368,11 @@ describe('manualLineCapsFromRunParams', () => {
       mileage_taxfree: 25,
       traktamente_taxfree: 290,
     })
+    expect(manualLineCapsFromRunParams({ traktamenteHeldag: 300, traktamenteNatt: 150 })).toEqual({
+      traktamente_taxfree: 300,
+      traktamente_night_taxfree: 150,
+    })
+    expect(manualLineCapsFromRunParams({ traktamente_natt: 145 })).toEqual({ traktamente_night_taxfree: 145 })
     expect(manualLineCapsFromRunParams({ milersattning_egen_bil: '25', traktamente_heldag: -1 })).toEqual({})
     expect(manualLineCapsFromRunParams(null)).toEqual({})
     expect(manualLineCapsFromRunParams(undefined)).toEqual({})

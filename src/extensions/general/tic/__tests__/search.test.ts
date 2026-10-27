@@ -6,6 +6,13 @@ vi.mock('../lib/tic-client', () => ({
   getFiscalYears: vi.fn(),
 }))
 
+vi.mock('@/lib/auth/require-auth', () => ({
+  requireAuth: vi.fn(),
+}))
+
+import { NextResponse } from 'next/server'
+import { requireAuth } from '@/lib/auth/require-auth'
+import { hashPersonalNumber } from '@/lib/auth/bankid'
 import { ticExtension } from '../index'
 import { searchCompaniesByName } from '../lib/tic-client'
 import { lensRegistrationToOrgNumber, searchCompaniesForLookup } from '../lib/lookup'
@@ -14,6 +21,25 @@ import type { TICCompanyDocument } from '../lib/tic-types'
 import { testRoutes } from '@/tests/helpers'
 
 const mockSearch = vi.mocked(searchCompaniesByName)
+
+/**
+ * The signed-in caller, as requireAuth answers. `bankIdPersonalNumber` is the
+ * personnummer of a proven BankID link (stored only as its hash), or null for
+ * an account without one.
+ */
+function signIn(bankIdPersonalNumber: string | null) {
+  const identity = bankIdPersonalNumber
+    ? { personal_number_hash: hashPersonalNumber(bankIdPersonalNumber), email_verified_at: '2026-10-01T00:00:00Z' }
+    : null
+  const maybeSingle = vi.fn().mockResolvedValue({ data: identity, error: null })
+  const from = vi.fn(() => ({ select: () => ({ eq: () => ({ maybeSingle }) }) }))
+  vi.mocked(requireAuth).mockResolvedValue({
+    user: { id: 'user-1' },
+    supabase: { from },
+    error: null,
+  } as unknown as Awaited<ReturnType<typeof requireAuth>>)
+  return { from }
+}
 
 function makeRequest(q?: string): Request {
   const url = q
@@ -123,6 +149,18 @@ describe('lensRegistrationToOrgNumber', () => {
 describe('TIC search route', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    signIn(null)
+  })
+
+  it('returns 401 and never searches when the caller is not signed in', async () => {
+    vi.mocked(requireAuth).mockResolvedValue({
+      user: null,
+      supabase: {},
+      error: NextResponse.json({ error: 'Unauthorized' }, { status: 401 }),
+    } as unknown as Awaited<ReturnType<typeof requireAuth>>)
+    const res = await searchHandler(makeRequest('Testbrand'))
+    expect(res.status).toBe(401)
+    expect(mockSearch).not.toHaveBeenCalled()
   })
 
   it('is registered with skipCompanyContext (user has no company yet)', () => {
@@ -169,6 +207,50 @@ describe('TIC search route', () => {
       result: { companyName: 'Testbrand AB', registration: { fTax: true, vat: true } },
     })
     expect(data[1].result.companyName).toBe('Testbrand Bygg AB')
+  })
+
+  describe('sole traders who share a name (crm#1456)', () => {
+    // Synthetic personnummer. Three firms registered under the same owner
+    // name; only the middle one is the signed-in person's own.
+    const OWN = '198209094872'
+    const sameName = (registrationNumber: string, companyId: number) =>
+      doc({
+        companyId,
+        registrationNumber,
+        legalEntityType: 'EF',
+        names: [{ nameOrIdentifier: 'Andersson, Anna', companyNamingType: 'name' }],
+      })
+    const docs = () => [
+      sameName('1982083002390001', 11),
+      sameName('1982090948720001', 12),
+      sameName('2002011732750001', 13),
+      doc({ companyId: 14, registrationNumber: '5560360793' }),
+    ]
+
+    it("offers only the firm whose org number is the caller's BankID personnummer", async () => {
+      const { from } = signIn(OWN)
+      mockSearch.mockResolvedValue(docs())
+      const res = await searchHandler(makeRequest('Anna Andersson'))
+      expect(res.status).toBe(200)
+      const { data } = await res.json()
+      expect(data.map((h: { orgNumber: string }) => h.orgNumber)).toEqual(['8209094872', '5560360793'])
+      expect(from).toHaveBeenCalledWith('bankid_identities')
+    })
+
+    it('offers no sole trader by name to an account without BankID', async () => {
+      mockSearch.mockResolvedValue(docs())
+      const res = await searchHandler(makeRequest('Anna Andersson'))
+      const { data } = await res.json()
+      expect(data.map((h: { orgNumber: string }) => h.orgNumber)).toEqual(['5560360793'])
+    })
+
+    it("answers not found when every hit is someone else's sole trader firm", async () => {
+      signIn(OWN)
+      mockSearch.mockResolvedValue([sameName('1982083002390001', 11), sameName('2002011732750001', 13)])
+      const res = await searchHandler(makeRequest('Anna Andersson'))
+      expect(res.status).toBe(404)
+      expect(await res.json()).toEqual({ error: 'Company not found' })
+    })
   })
 
   it('maps a rate limit to 429', async () => {

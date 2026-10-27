@@ -68,13 +68,34 @@ export async function uploadToInbox(original: File, locale: ErrorLocale): Promis
  * Make an inbox item the underlag of one bank purchase: the match the
  * Underlag workspace makes after a purchase's upload, which also pins the
  * document on the transaction, so the purchase leaves Saknar underlag.
+ *
+ * The file was dropped without its contents in view, so the server compares
+ * the document with the purchase first (check_fit) and answers
+ * DOC_ROW_MISMATCH when it plainly belongs to another one (crm#1479);
+ * `confirmed` is the person's "attach anyway".
  */
-export function matchToPurchase(itemId: string, transactionId: string): Promise<Response> {
+export function matchToPurchase(itemId: string, transactionId: string, confirmed = false): Promise<Response> {
   return fetch(`${INBOX_URL}/items/${itemId}/match-transaction`, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
-    body: JSON.stringify({ transaction_id: transactionId }),
+    body: JSON.stringify({
+      transaction_id: transactionId,
+      check_fit: true,
+      ...(confirmed ? { mismatch_reason: 'confirmed_in_app' } : {}),
+    }),
   })
+}
+
+/** The refusal code a failed match answered with, or null. Reads a clone: the body stays readable. */
+export async function failureCode(res: Response): Promise<string | null> {
+  try {
+    const body = (await res.clone().json()) as { error?: { code?: unknown } }
+    return typeof body.error?.code === 'string' ? body.error.code : null
+  } catch {
+    // A body that is not the JSON error envelope carries no code: the caller
+    // shows the generic "not linked" answer, as before this read existed.
+    return null
+  }
 }
 
 /**

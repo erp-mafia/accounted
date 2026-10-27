@@ -233,6 +233,7 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
           messages,
           maxOutputTokens: req.maxTokens,
           output: Output.object({ schema: jsonSchema<Record<string, unknown>>(req.jsonSchema) }),
+          ...(req.signal ? { abortSignal: req.signal } : {}),
         })
         return {
           ok: true,
@@ -248,6 +249,7 @@ export function createOpenAICompatibleService(cfg: ResolvedAiConfig): AiService 
         system: req.system,
         messages,
         maxOutputTokens: req.maxTokens,
+        ...(req.signal ? { abortSignal: req.signal } : {}),
       })
       return {
         ok: true,

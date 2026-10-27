@@ -204,3 +204,42 @@ describe('ProviderStep, the provider cards', () => {
     expect(offeredProviders({}).map((p) => p.id)).toEqual(['fortnox', 'visma', 'bokio', 'bjornlunden', 'briox'])
   })
 })
+
+// crm#1476 / PH 219: "is the Bokio key still used after the migration, and can
+// Accounted change anything in Bokio with it?" The row answers both.
+describe('ProviderStep, what the stored key is still for', () => {
+  const idle = { ...BOKIO_CONSENT, keyUse: 'idle' as const }
+  const idleLine = sv.extensions.ext_arcim_key_idle.replaceAll('{provider}', 'Bokio')
+  const removeKey = sv.extensions.ext_arcim_key_remove
+
+  it('says a finished migration no longer uses the key, that Accounted only reads, and offers to remove it', () => {
+    const html = render(status(true, [idle]))
+    expect(html).toContain(idleLine)
+    expect(idleLine).toContain('läser bara')
+    expect(html).toContain(removeKey)
+    // One way out per row: the named button replaces the bare icon.
+    expect(html).not.toContain('aria-label="Koppla från Bokio"')
+  })
+
+  it('says the key still fetches missing invoice rows, and keeps only the icon', () => {
+    const html = render(status(true, [{ ...BOKIO_CONSENT, keyUse: 'invoice_rows' }]))
+    expect(html).toContain(sv.extensions.ext_arcim_key_in_use_rows.replaceAll('{provider}', 'Bokio'))
+    expect(html).not.toContain(removeKey)
+    expect(html).toContain('aria-label="Koppla från Bokio"')
+  })
+
+  it('says nothing about the key while the migration runs or when the server did not tell', () => {
+    for (const consent of [{ ...BOKIO_CONSENT, keyUse: 'migration' as const }, BOKIO_CONSENT]) {
+      const html = render(status(true, [consent]))
+      expect(html).not.toContain(idleLine)
+      expect(html).not.toContain(removeKey)
+      expect(html).toContain('aria-label="Koppla från Bokio"')
+    }
+  })
+
+  it('names the key and the button in English', () => {
+    const html = render(status(true, [idle]), 'en')
+    expect(html).toContain(en.extensions.ext_arcim_key_idle.replaceAll('{provider}', 'Bokio'))
+    expect(html).toContain(en.extensions.ext_arcim_key_remove)
+  })
+})

@@ -359,3 +359,59 @@ describe('the basis pair lands in the ruta and momssats that were asked for, or 
     expect((await expand(lines, rows)).map((l) => l.account_number)).toEqual(['6560', '2645', '2624', '1930'])
   })
 })
+
+describe('expandVoucherLineVatCodes: a BAS basis number the company renamed (crm#1453)', () => {
+  const namesOf = (names: Record<string, string>) =>
+    vi.fn(async (accounts: readonly string[]) => new Map(accounts.filter((a) => a in names).map((a) => [a, names[a]])))
+
+  it('refuses to post the basis on a renamed 4531 when the company has no basis account of its own', async () => {
+    const loadNames = namesOf({ '4531': 'Förråd - studio och location' })
+    const result = await expandVoucherLineVatCodes(
+      [line('5410', 1000, 0, NON_EU_25), line('1930', 0, 1000)],
+      loaderOf(),
+      loadNames,
+    )
+    expect(result.ok).toBe(false)
+    if (result.ok) return
+    expect(result.refusals).toHaveLength(1)
+    expect(result.refusals[0].field).toBe('lines.0.vat_code')
+    expect(result.refusals[0].en).toContain('Förråd - studio och location')
+    expect(result.refusals[0].sv).toContain('ruta 22')
+  })
+
+  it('books the basis on the company\'s own ruta 22 account when 4531 is renamed', async () => {
+    const rows = [...KONTOPLAN, row('4539', 'reverse_charge_non_eu_services', 0.25)]
+    const loadNames = namesOf({ '4531': 'Säkerhet', '4539': 'Import tjänster utanför EU 25%' })
+    const result = await expandVoucherLineVatCodes(
+      [line('5410', 1000, 0, NON_EU_25), line('1930', 0, 1000)],
+      loaderOf(rows),
+      loadNames,
+    )
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    const accounts = result.lines.map((l) => l.account_number)
+    expect(accounts).toContain('4539')
+    expect(accounts).not.toContain('4531')
+    expect(result.lines.find((l) => l.account_number === '4539')?.debit_amount).toBe(1000)
+  })
+
+  it('keeps 4531 when its name reads as the basis account, in any of the spellings charts use', async () => {
+    for (const name of ['Inköp av tjänster från ett land utanför EU, 25 % moms', 'Purchases of services from a country outside the EU, 25%', 'Impo tj utanf EU 25%', 'Inköp av tjänster från ett lan']) {
+      const result = await expandVoucherLineVatCodes(
+        [line('5410', 1000, 0, NON_EU_25), line('1930', 0, 1000)],
+        loaderOf(),
+        namesOf({ '4531': name }),
+      )
+      expect(result.ok, name).toBe(true)
+      if (result.ok) expect(result.lines.map((l) => l.account_number)).toContain('4531')
+    }
+  })
+
+  it('reads no names when no basis pair is generated, and keeps the old behaviour without a loader', async () => {
+    const loadNames = namesOf({})
+    await expandVoucherLineVatCodes([line('5410', 1000), line('1930', 0, 1000)], loaderOf(), loadNames)
+    expect(loadNames).not.toHaveBeenCalled()
+    const noLoader = await expandVoucherLineVatCodes([line('5410', 1000, 0, EU_SERVICES_25), line('1930', 0, 1000)], loaderOf())
+    expect(noLoader.ok).toBe(true)
+  })
+})

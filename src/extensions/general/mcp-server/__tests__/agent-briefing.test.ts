@@ -44,6 +44,8 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
 
 /** Builds a supabase mock whose three relevant tables resolve to canned data. */
 function mockSupabase(opts: {
+  // bank_connections.last_synced_at of the latest sync (crm#1454). undefined → no connection.
+  bankLastSyncedAt?: string
   profile?: {
     profile_summary: string | null
     horizontal_atoms: string[] | null
@@ -207,6 +209,15 @@ function mockSupabase(opts: {
       if (table === 'skatteverket_tokens') {
         return chainResolving(opts.skvTokenRows ?? [])
       }
+      if (table === 'bank_connections') {
+        const chain: Record<string, unknown> = {}
+        for (const method of ['select', 'eq', 'not', 'order', 'limit']) chain[method] = vi.fn(() => chain)
+        chain.maybeSingle = vi.fn().mockResolvedValue({
+          data: opts.bankLastSyncedAt ? { last_synced_at: opts.bankLastSyncedAt } : null,
+          error: null,
+        })
+        return chain
+      }
       if (table === 'company_inboxes') {
         const chain = chainResolving(null) as Record<string, unknown>
         chain.maybeSingle = vi.fn().mockResolvedValue({
@@ -238,6 +249,18 @@ describe('gnubok_get_agent_briefing tool', () => {
     const input = tool.inputSchema as { properties?: Record<string, unknown>; required?: string[]; additionalProperties: boolean }
     expect(input.additionalProperties).toBe(false)
     expect(input.required).toBeUndefined()
+  })
+
+  it('reports the latest bank sync in data_status, null without a bank connection (crm#1454)', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const synced = (await tool.execute({}, 'company-1', 'user-1', mockSupabase({ profile: null, bankLastSyncedAt: '2026-10-25T06:00:00Z' }) as never, { type: 'api_key' })) as {
+      data_status: { bank_last_synced_at: string | null }
+    }
+    expect(synced.data_status).toEqual({ bank_last_synced_at: '2026-10-25T06:00:00Z' })
+    const none = (await tool.execute({}, 'company-1', 'user-1', mockSupabase({ profile: null }) as never, { type: 'api_key' })) as {
+      data_status: { bank_last_synced_at: string | null }
+    }
+    expect(none.data_status).toEqual({ bank_last_synced_at: null })
   })
 
   it('returns null summary, empty atoms, empty memory, null user_name when nothing exists', async () => {

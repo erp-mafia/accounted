@@ -65,6 +65,15 @@ vi.mock('@/lib/currency/riksbanken', async () => {
   }
 })
 
+// The attach operation compares the document with the row first
+// (lib/documents/bank-match/fit.ts, crm#1479), which reads the document's
+// reading; the commit cases below queue their reads exactly, so the check
+// answers "no verdict" here. It has its own tests.
+vi.mock('@/lib/documents/bank-match/fit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/documents/bank-match/fit')>()),
+  documentFitGate: vi.fn(() => async () => null),
+}))
+
 vi.mock('@/lib/import/sie-parser', () => ({
   parseSIEFile: vi.fn(),
   calculateFileHash: vi.fn(async () => 'mock-hash'),

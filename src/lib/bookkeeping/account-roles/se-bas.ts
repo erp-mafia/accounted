@@ -53,4 +53,8 @@ export const SE_BAS_ACCOUNT_ROLES: Readonly<Record<AccountRole, string>> = Objec
   oss_output_vat: '2670',
   /** 3105 Försäljning varor till land utanför EU. */
   export_goods_sales: '3105',
+  /** 7323 Skattefria traktamenten, utlandet. */
+  foreign_per_diem_tax_free: '7323',
+  /** 7324 Skattepliktiga traktamenten, utlandet. */
+  foreign_per_diem_taxable: '7324',
 })

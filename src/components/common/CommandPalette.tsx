@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { useTranslations } from 'next-intl'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
 import {
   ArrowRightIcon,
@@ -16,6 +17,7 @@ import {
   CubeIcon,
   DocumentTextIcon,
   InboxIcon,
+  PlusIcon,
   QuestionMarkCircleIcon,
   QueueListIcon,
   ScaleIcon,
@@ -30,6 +32,7 @@ import { useCompany } from '@/contexts/CompanyContext'
 import { useAgentSheet } from '@/components/agent/AgentSheetProvider'
 import { requiredCapabilityForExtension } from '@/lib/entitlements/keys'
 import { inboxHref, INBOX_SEARCH_KEYWORDS, LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
+import { ADD_COMPANY_HREF } from '@/components/settings/company-deletion'
 
 type Entry = {
   id: string
@@ -49,6 +52,17 @@ const ACTION_ENTRIES: Entry[] = [
   { id: 'new-supplier-invoice', label: 'Skapa leverantörsfaktura', icon: WalletIcon, href: '/supplier-invoices?new=1', keywords: 'leverantörsfaktura supplier invoice ny' },
   { id: 'reports', label: 'Visa resultaträkning', hint: 'Rapporter', icon: ChartBarIcon, href: '/reports', keywords: 'rapport resultat balans report' },
 ]
+
+/**
+ * The actions, with "Lägg till företag" (the user menu's door, under the
+ * label the menu shows, found by the words people typed for it in PH 216 and
+ * PH 202: company_switcher.add_company_keywords) unless it is null: a sandbox
+ * has no such door.
+ */
+export function actionEntries(addCompany: { label: string; keywords: string } | null): Entry[] {
+  if (!addCompany) return ACTION_ENTRIES
+  return [...ACTION_ENTRIES, { id: 'add-company', icon: PlusIcon, href: ADD_COMPANY_HREF, ...addCompany }]
+}
 
 const PAGE_ENTRIES: Entry[] = [
   { id: 'kunder', label: 'Kunder', icon: UsersIcon, href: '/customers' },
@@ -106,7 +120,7 @@ function withInbox(entries: Entry[], inkorgV2Enabled: boolean): Entry[] {
   )
 }
 
-function matches(entry: Entry, q: string): boolean {
+export function matches(entry: Entry, q: string): boolean {
   const hay = `${entry.label} ${entry.hint ?? ''} ${entry.keywords ?? ''}`.toLowerCase()
   return q.split(/\s+/).filter(Boolean).every(t => hay.includes(t))
 }
@@ -123,8 +137,11 @@ export default function CommandPalette({
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { capabilities } = useCompany()
+  const { capabilities, isSandbox } = useCompany()
   const { identity } = useAgentSheet()
+  const tSwitcher = useTranslations('company_switcher')
+  const addCompanyLabel = isSandbox ? null : tSwitcher('add_company')
+  const addCompanyKeywords = tSwitcher('add_company_keywords')
 
   // Drop entries that jump to a paywalled extension workspace the active
   // company can't reach (e.g. the AI-only Dokumentinkorg). The page itself is
@@ -168,9 +185,10 @@ export default function CommandPalette({
   const q = query.trim().toLowerCase()
 
   const filteredActions = useMemo(() => {
-    const visible = ACTION_ENTRIES.filter(allowedByCapability)
+    const addCompany = addCompanyLabel ? { label: addCompanyLabel, keywords: addCompanyKeywords } : null
+    const visible = actionEntries(addCompany).filter(allowedByCapability)
     return q ? visible.filter(e => matches(e, q)) : visible
-  }, [q, allowedByCapability])
+  }, [q, allowedByCapability, addCompanyLabel, addCompanyKeywords])
   const filteredPages = useMemo(() => {
     const visible = withInbox(PAGE_ENTRIES, inkorgV2Enabled).filter(allowedByCapability)
     return q ? visible.filter(e => matches(e, q)) : visible.slice(0, 6)

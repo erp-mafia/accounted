@@ -101,6 +101,8 @@ export interface ConnectionSyncOutcome {
    * window is incomplete, and a first sync is not recorded as completed.
    */
   truncated: boolean
+  /** Entries the banks sent that are not booked yet, across the accounts (PH 221). */
+  notBooked: number
   completedAt: string
 }
 
@@ -152,6 +154,7 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
   const imported = results.reduce((sum, r) => sum + r.imported, 0)
   const duplicates = results.reduce((sum, r) => sum + r.duplicates, 0)
   const errors = results.reduce((sum, r) => sum + r.errors, 0)
+  const notBooked = results.reduce((sum, r) => sum + (r.notBooked ?? 0), 0)
   const minDates = results.map((r) => r.returnedMinBookingDate).filter((d): d is string => !!d)
   const maxDates = results.map((r) => r.returnedMaxBookingDate).filter((d): d is string => !!d)
   const returnedMin = minDates.length > 0 ? minDates.reduce((a, b) => (a < b ? a : b)) : null
@@ -223,6 +226,7 @@ export async function runConnectionSync(input: ConnectionSyncInput): Promise<Con
     sieOverlap: Boolean(sieOverlap),
     autoMatched,
     truncated,
+    notBooked,
     completedAt,
   }
 }

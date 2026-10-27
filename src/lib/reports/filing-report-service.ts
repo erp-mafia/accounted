@@ -52,7 +52,7 @@ import { parseReportDateRange } from '@/lib/reports/date-range'
 import { filesIncomeReturn, resolveCompanyEntityType, usesPersonnummerAsOrgNumber } from '@/lib/company/entity-type'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
-import type { DimensionPnlReport, MomsPeriod, VatPeriodType } from '@/types'
+import type { DimensionPnlReport, VatPeriodType } from '@/types'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -247,8 +247,8 @@ export interface PsPeriodInput {
 type ReconciledPs = Awaited<ReturnType<typeof reconcilePsAgainstVatDeclaration>>
 
 /**
- * The report plus the best-effort reconciliation against the momsdeklaration
- * when the periods coincide, exactly what GET /api/reports/periodisk-sammanstallning answers.
+ * The report reconciled against the momsdeklaration rutor for the same
+ * dates, exactly what GET /api/reports/periodisk-sammanstallning answers.
  */
 export async function getPeriodiskSammanstallning(
   ctx: OperationContext,
@@ -258,13 +258,7 @@ export async function getPeriodiskSammanstallning(
     const report = await generatePeriodiskSammanstallning(
       ctx.supabase, ctx.companyId, input.period_type, input.year, input.period,
     )
-    const { data: settings } = await ctx.supabase
-      .from('company_settings')
-      .select('moms_period')
-      .eq('company_id', ctx.companyId)
-      .single()
-    const momsPeriod = (settings?.moms_period ?? null) as MomsPeriod | null
-    return { ok: true, data: await reconcilePsAgainstVatDeclaration(ctx.supabase, ctx.companyId, report, momsPeriod) }
+    return { ok: true, data: await reconcilePsAgainstVatDeclaration(ctx.supabase, ctx.companyId, report) }
   } catch (err) {
     ctx.log.error('periodisk sammanställning calculation failed', err as Error, { ...input })
     return {

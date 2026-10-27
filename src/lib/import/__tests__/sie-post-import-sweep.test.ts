@@ -220,11 +220,61 @@ describe('runPendingSIEBankSweeps', () => {
       ['job_state', 'completed'],
       ['job_kind', 'import'],
     ])
+    // The every-minute listing never carries the manifest (O10).
+    const [columns] = mock.findCall('sie_imports', 'select') as [string]
+    expect(columns.split(',').map((column) => column.trim())).toEqual([
+      'id', 'company_id', 'user_id', 'execution_actor_id', 'job_state', 'job_kind',
+      'fiscal_year_start', 'fiscal_year_end', 'bank_sweep',
+    ])
+    expect(mock.findCalls('sie_imports', 'select')).toHaveLength(1)
     const since = mock.findCall('sie_imports', 'gte') as [string, string]
     expect(since[0]).toBe('imported_at')
     const ageMs = Date.now() - new Date(since[1]).getTime()
     expect(ageMs).toBeGreaterThan(23.9 * 3_600_000)
     expect(ageMs).toBeLessThan(24.1 * 3_600_000)
+  })
+
+  it('reads the manifest only for a pending row without fiscal-year columns, and sweeps its sealed year', async () => {
+    const done = { ...job({ id: '66666666-6666-4666-8666-666666666666' }), bank_sweep: { state: 'done' } }
+    const legacy = { ...job({ fiscal_year_start: null, fiscal_year_end: null }), bank_sweep: null }
+    delete (legacy as Partial<SIEBankSweepJob>).manifest
+    mock.enqueueMany([
+      { data: [done, legacy] },
+      { data: { manifest: { input: { fiscalYear: { start: '2025-07-01', end: '2026-06-30' } } } } },
+      { data: true }, // claimed
+      { count: 4 },
+      { data: true },
+    ])
+
+    const result = await runPendingSIEBankSweeps({ supabase })
+
+    expect(result).toEqual({ considered: 1, swept: 1 })
+    expect(mock.findCalls('sie_imports', 'select')).toEqual([
+      [expect.not.stringContaining('manifest')],
+      ['manifest'],
+    ])
+    expect(mock.findCalls('sie_imports', 'eq')).toContainEqual(['id', IMPORT])
+    expect(sweep).toHaveBeenCalledWith(supabase, COMPANY, ACTOR, { dateFrom: '2025-07-01', dateTo: '2026-06-30' })
+  })
+
+  it('leaves a row whose manifest cannot be read for the next run and goes on with the rest', async () => {
+    const legacy = { ...job({ fiscal_year_start: null, fiscal_year_end: null }), bank_sweep: null }
+    const unswept = { ...job({ id: '55555555-5555-4555-8555-555555555555' }), bank_sweep: null }
+    mock.enqueueMany([
+      { data: [legacy, unswept] },
+      { error: { message: 'statement timeout' } },
+      { data: true }, // unswept: claimed
+      { count: 0 },
+      { data: true },
+    ])
+
+    const result = await runPendingSIEBankSweeps({ supabase })
+
+    expect(result).toEqual({ considered: 2, swept: 1 })
+    expect(mock.supabase.rpc).not.toHaveBeenCalledWith(
+      'claim_sie_import_bank_sweep',
+      expect.objectContaining({ p_import_id: IMPORT }),
+    )
   })
 
   it('honours the worker pause switch', async () => {

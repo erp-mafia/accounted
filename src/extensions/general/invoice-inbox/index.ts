@@ -84,6 +84,7 @@ import { fetchPurchasesWithoutUnderlag } from '@/lib/transactions/purchases-with
 import { vendorLogoUrls } from '@/lib/vendor-logos/read'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { matchInboxItemTransaction } from '@/lib/documents/inbox-match'
+import { documentFitGate } from '@/lib/documents/bank-match/fit'
 import { bookInboxItemDirectly } from '@/lib/operations/inbox-book-direct'
 import type { OperationContext } from '@/lib/operations/types'
 import {
@@ -904,7 +905,7 @@ export const invoiceInboxExtension: Extension = {
         const id = url.searchParams.get('_id')
         if (!id) return NextResponse.json({ error: 'Missing id' }, { status: 400 })
 
-        let body: { transaction_id?: string }
+        let body: { transaction_id?: string; check_fit?: boolean; mismatch_reason?: string }
         try {
           body = await request.json()
         } catch {
@@ -914,7 +915,13 @@ export const invoiceInboxExtension: Extension = {
           return NextResponse.json({ error: 'transaction_id required' }, { status: 400 })
         }
 
-        const outcome = await matchInboxItemTransaction(operationContext(ctx), id, body.transaction_id)
+        // check_fit: the Inkorg's drop on a purchase, where the person never
+        // sees the document's amount and seller next to the row (crm#1479);
+        // mismatch_reason is their confirmation after DOC_ROW_MISMATCH. The
+        // pickers that show both sides call without it.
+        const outcome = await matchInboxItemTransaction(operationContext(ctx), id, body.transaction_id, {
+          fitCheck: body.check_fit === true ? documentFitGate(ctx.supabase, ctx.companyId, body.mismatch_reason) : undefined,
+        })
         if (!outcome.ok) return sessionFailureResponse(outcome, extensionLog, ctx.requestId ?? '')
         if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
         return NextResponse.json({ data: outcome.data })

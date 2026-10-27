@@ -10,7 +10,8 @@
  *   - plain reverse_charge takes the box the pinned underlag's seller and
  *     the category give, and is refused when they cannot tell it: never ruta
  *     21 by default (#94);
- *   - an override onto a basis account gets no second basis pair;
+ *   - an override onto a basis account gets no second basis pair, and its
+ *     own box is the one reported, never the EU default (crm#1454);
  *   - nor does a cost account whose momskod reports ruta 20-24 (crm#1096).
  * Companion suites: lib/bookkeeping/__tests__/category-mapping.test.ts (the
  * mapping), account-override.test.ts (override reconciliation) and
@@ -195,7 +196,40 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
     expect(lines.map((l) => l.account_number).sort()).toEqual(['1930', '2614', '2645', '4531'])
     expect(lines.find((l) => l.account_number === '4531')?.debit_amount).toBe(250)
     expect(balanced(lines)).toBe(true)
-    expect(result.preview.reverse_charge).toMatchObject({ basis_account: null, ruta: null })
+    expect(result.preview.reverse_charge).toMatchObject({
+      kind: 'non_eu_services', kind_source: 'account', basis_account: null, ruta: 'ruta22',
+    })
+  })
+
+  it('reads the box off a basis override when plain reverse_charge names none, never the EU default (crm#1454)', async () => {
+    const { lines, params, result } = await stage(
+      { vat_treatment: 'reverse_charge', account_override: '4531' },
+      { account_number: '4531', account_class: 4, is_active: true },
+    )
+    expect(lines.map((l) => l.account_number).sort()).toEqual(['1930', '2614', '2645', '4531'])
+    expect(params.reverse_charge_kind).toBeUndefined()
+    expect(result.preview.reverse_charge).toMatchObject({
+      kind: 'non_eu_services', kind_source: 'account', basis_account: null, ruta: 'ruta22',
+    })
+  })
+
+  it('refuses a named box that the override account contradicts, and stages nothing (crm#1454)', async () => {
+    const { supabase, enqueue, findCall } = createQueuedMockSupabase()
+    enqueue({ data: coreTxRow })
+    enqueue({ data: settingsRow })
+    enqueue({ data: [] }) // resolveSettlementAccount
+    enqueue({ data: { account_number: '4531', account_class: 4, is_active: true } }) // override chart row
+    enqueue({ data: [] }) // momskoder
+    await expect(
+      categorize.execute(
+        { transaction_id: TX_ID, category: 'expense_software', vat_treatment: 'reverse_charge_eu_services', account_override: '4531' },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' },
+      ),
+    ).rejects.toThrow(/account 4531 reports ruta22 itself/)
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
   })
 
   it('stages no basis pair on a cost account whose momskod reports ruta 20-24 itself (crm#1096)', async () => {
@@ -211,7 +245,9 @@ describe('gnubok_categorize_transaction: reverse-charge basis pair', () => {
       ['5420', 250, 0],
     ])
     expect(balanced(lines)).toBe(true)
-    expect(result.preview.reverse_charge).toMatchObject({ basis_account: null, ruta: null })
+    expect(result.preview.reverse_charge).toMatchObject({
+      kind: 'eu_services', kind_source: 'account', basis_account: null, ruta: 'ruta21',
+    })
   })
 
   it('keeps the basis pair on the issue override account (6540)', async () => {

@@ -334,7 +334,7 @@ export function createAnthropicFamilyService(cfg: ResolvedAiConfig): AiService {
         system: [{ type: 'text', text: req.system, cache_control: { type: 'ephemeral' } }],
         messages: [{ role: 'user', content: buildAnthropicDocumentContent(req.document, req.instruction) }],
       }
-      const resp = await (await getClient()).messages.create(params)
+      const resp = await (await getClient()).messages.create(params, req.signal ? { signal: req.signal } : undefined)
       return {
         ok: true,
         text: textOf(resp),

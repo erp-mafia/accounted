@@ -126,7 +126,7 @@ registerEndpoint({
     'The same external_ref with a different file answers 409 INBOX_DELIVERY_REF_CONFLICT: give each document its own external_ref.',
     'external_ref is unique per company across every partner delivering to it: prefix it with something of your own (billo-123, not 123).',
     'Do not send the same delivery twice concurrently: wait for the answer (or a timeout) before resending, or both requests may file.',
-    `Only PDF, JPEG, PNG, HEIC and WebP up to ${MAX_MB} MB: INBOX_UPLOAD_UNSUPPORTED_TYPE, INBOX_UPLOAD_TOO_LARGE, or DOC_UPLOAD_INVALID_CONTENT for bytes that do not match the declared type.`,
+    `Only PDF, JPEG, PNG, HEIC and WebP up to ${MAX_MB} MB: INBOX_UPLOAD_UNSUPPORTED_TYPE, INBOX_UPLOAD_TOO_LARGE, or DOC_UPLOAD_INVALID_CONTENT for bytes that do not match the declared type. On the hosted service the platform refuses a request body over 4.5 MB before it reaches Accounted (a plain-text 413, no error envelope), so keep files there under 4 MB.`,
     'The Inkorg takes at most 30 deliveries a minute and 500 a day per company, a person\'s uploads included: 429 RATE_LIMITED with Retry-After. Resend after it with the same Idempotency-Key.',
     'Extraction runs after the answer: GET /inbox-items/{id} shows status "processing" until the reading is in.',
     'Not dry-runnable: test keys are refused with TEST_KEY_WRITE_BLOCKED.',

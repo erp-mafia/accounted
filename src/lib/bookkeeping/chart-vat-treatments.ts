@@ -56,3 +56,24 @@ export function chartVatTreatmentsLoader(
     return pending
   }
 }
+
+/**
+ * The kontoplan names of the accounts asked, for expandVoucherLineVatCodes'
+ * renamed-basis check (crm#1453). One query, and only when a vat_code would
+ * book a basis pair on an account without a momskod.
+ */
+export function chartAccountNamesLoader(
+  supabase: SupabaseClient,
+  companyId: string,
+): (accounts: readonly string[]) => Promise<ReadonlyMap<string, string>> {
+  return async (accounts) => {
+    if (accounts.length === 0) return new Map()
+    const { data, error } = await supabase
+      .from('chart_of_accounts')
+      .select('account_number, account_name')
+      .eq('company_id', companyId)
+      .in('account_number', [...accounts])
+    if (error) throw error
+    return new Map((data ?? []).map((row: { account_number: string; account_name: string }) => [row.account_number, row.account_name]))
+  }
+}

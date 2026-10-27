@@ -71,6 +71,7 @@ describe('gnubok_create_voucher: lines[].vat_code', () => {
     enqueue({ data: null }) // company_settings: dimensions off, the P001 tag passes through
     enqueue({ data: PERIOD }) // fiscal_periods (explicit id)
     enqueue({ data: [] }) // chart_of_accounts momskoder: none configured
+    enqueue({ data: [] }) // chart_of_accounts names of the basis account: not in the chart (crm#1453)
     enqueue({
       data: [
         { account_number: '6540', account_name: 'IT-tjänster', is_active: true },
@@ -109,9 +110,10 @@ describe('gnubok_create_voucher: lines[].vat_code', () => {
     // The kontoplan's momskoder were read for the code, and the account gate saw every line.
     expect(findCalls('chart_of_accounts', 'select').map(([columns]) => columns)).toEqual([
       'account_number, default_vat_treatment, default_vat_rate',
+      'account_number, account_name',
       'account_number, account_name, is_active',
     ])
-    expect(findCalls('chart_of_accounts', 'in')[1]).toEqual(['account_number', ['6540', '2645', '2614', '4531', '4598', '1930']])
+    expect(findCalls('chart_of_accounts', 'in')[2]).toEqual(['account_number', ['6540', '2645', '2614', '4531', '4598', '1930']])
 
     // Staged as plain lines: the typed line keeps its dimensions, the generated ones carry none.
     const [insert] = findCall('pending_operations', 'insert') as [{ params: { lines: StagedLine[] } }]

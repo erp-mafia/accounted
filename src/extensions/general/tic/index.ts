@@ -27,6 +27,7 @@ import { isScbConfigured, scbConfigFromEnv } from '@/lib/parties/scb/config'
 import { isLegalPersonOrgNumber } from '@/lib/parties/scb/org-number'
 import { displayNameFromRegistry } from '@/lib/parties/registry-name'
 import { registrySummary } from '@/lib/parties/registry-summary'
+import { offerableSearchHits, ownCompanyRoles, ownPersonalNumberHash } from '@/lib/company-lookup/own-firm'
 import {
   hasForeignCredential,
   isUnadoptedPendingAccount,
@@ -203,9 +204,13 @@ async function consumeBankIdSession(
  * CompanyRoles is not free of national-ID data either: for an enskild
  * näringsidkare, `companyRegistrationNumber` starts with the owner's 12-digit
  * personnummer, because a sole trader's organisationsnummer is the
- * personnummer. The row is the signed-in user's own personal data, readable
- * only by them (RLS), and `erase_user_personal_data` deletes it when the
- * account is deleted.
+ * personnummer. Only the person's OWN sole-trader firm is kept
+ * (ownCompanyRoles against the BankID `personalNumber`): a role in another
+ * person's firm (a prokura, say) carries that person's personnummer, and the
+ * picker must never offer a firm that is provably someone else's (crm#1456).
+ * The row is the signed-in user's own personal data, readable only by them
+ * (RLS), and `erase_user_personal_data` deletes it when the account is
+ * deleted.
  *
  * Non-blocking: any failure is logged and swallowed: BankID auth must still
  * succeed even if enrichment is down.
@@ -259,6 +264,7 @@ async function completedUserFor(
 async function fetchAndStoreEnrichment(
   sessionId: string,
   userId: string,
+  personalNumber: string,
   supabase: SupabaseClient,
 ): Promise<void> {
   try {
@@ -335,12 +341,20 @@ async function fetchAndStoreEnrichment(
     })
 
     // Persist only what consumers actually read. See block comment on
-    // fetchAndStoreEnrichment for why SPAR + personnummer + name are excluded.
+    // fetchAndStoreEnrichment for why SPAR + personnummer + name are excluded,
+    // and why another person's sole-trader firm is dropped.
+    const roles = enrichmentData.companyRoles ?? []
+    const companyRoles = ownCompanyRoles(roles, personalNumber)
+    if (companyRoles.length < roles.length) {
+      log.info('enrichment dropped sole-trader roles that are not the user\'s own firm', {
+        dropped: roles.length - companyRoles.length,
+      })
+    }
     const { error: upsertError } = await supabase
       .from('bankid_enrichment')
       .upsert({
         user_id: userId,
-        company_roles: enrichmentData.companyRoles ?? [],
+        company_roles: companyRoles,
         enriched_at_utc: enrichmentData.enrichedAtUtc ?? null,
       }, { onConflict: 'user_id' })
 
@@ -353,7 +367,7 @@ async function fetchAndStoreEnrichment(
       })
     } else {
       log.info('enrichment persisted to bankid_enrichment', {
-        roleCount: enrichmentData.companyRoles?.length ?? 0,
+        roleCount: companyRoles.length,
       })
     }
   } catch (enrichError) {
@@ -768,7 +782,10 @@ export const ticExtension: Extension = {
               // the user has just started in another tab. The stale cookie is
               // harmless (it answers no_session again and expires on its own),
               // whereas deleting a live flow costs a billable session.
-              if (error instanceof TICAPIError && (error.statusCode === 404 || error.statusCode === 410)) {
+              // TIC also answers an order BankID has already expired with a
+              // 4xx "invalidParameters: No such order": the same outcome.
+              if (error instanceof TICAPIError && (error.statusCode === 404 || error.statusCode === 410 ||
+                (!!error.statusCode && error.statusCode >= 400 && error.statusCode < 500 && /no such order/i.test(error.message)))) {
                 log.info('poll no_session', {
                   reason: 'tic_gone',
                   statusCode: error.statusCode,
@@ -1048,7 +1065,7 @@ export const ticExtension: Extension = {
             }
 
             // Refresh enrichment so /select-company sees current Bolagsverket roles.
-            await fetchAndStoreEnrichment(sessionId, existing.user_id, supabase)
+            await fetchAndStoreEnrichment(sessionId, existing.user_id, personalNumber, supabase)
 
             // settle(): the magic link is minted, so the flow is spent. A
             // second tab reaching here would mint another and invalidate this
@@ -1260,7 +1277,7 @@ export const ticExtension: Extension = {
           }
 
           // Enrichment (CompanyRoles): pre-fills /select-company picker.
-          await fetchAndStoreEnrichment(sessionId, userId, supabase)
+          await fetchAndStoreEnrichment(sessionId, userId, personalNumber, supabase)
 
           // settle(): account created and the mail is out. The flow is spent.
           // Same shape as POST /api/auth/signup, so the register page can show
@@ -1530,10 +1547,16 @@ export const ticExtension: Extension = {
       path: '/search',
       // Onboarding's orgnr field also accepts a company name: one Lens call
       // returns up to five hits in /lookup's shape so a pick needs no second
-      // call. User is authenticated but may not yet have a company.
+      // call. User is authenticated but may not yet have a company. A sole
+      // trader's firm is a hit only when it is the caller's own (its org
+      // number is their BankID personnummer): a name is no proof of whose
+      // firm it is, and every hit ships its number and register data to the
+      // browser (crm#1456). See offerableSearchHits.
       skipCompanyContext: true,
       handler: async (request: Request) => {
         const log = console
+        const auth = await requireAuth()
+        if (auth.error) return auth.error
         const url = new URL(request.url)
         const query = (url.searchParams.get('q') ?? '').trim()
 
@@ -1545,7 +1568,15 @@ export const ticExtension: Extension = {
         }
 
         try {
-          const hits = await searchCompaniesForLookup(query)
+          const [found, ownHash] = await Promise.all([
+            searchCompaniesForLookup(query),
+            ownPersonalNumberHash(auth.supabase, auth.user.id),
+          ])
+          const hits = offerableSearchHits(
+            found,
+            (hit) => ({ orgNumber: hit.orgNumber, legalForm: hit.result.legalEntityType }),
+            ownHash,
+          )
           if (hits.length === 0) {
             return NextResponse.json({ error: 'Company not found' }, { status: 404 })
           }

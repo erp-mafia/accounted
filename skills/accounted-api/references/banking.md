@@ -3593,6 +3593,7 @@ Pins the document to the transaction. On an unbooked transaction the pin rides a
 **Do not use for:** Linking a document to a verifikat with no bank transaction (POST /documents/{id}/link) or uploading a file (POST /documents).
 
 **Pitfalls:**
+- A document that asks for more than the transaction paid AND names another seller returns 409 DOC_ROW_MISMATCH with both sides in details; send mismatch_reason when it belongs anyway (an invoice paid in parts, a statement covering several payments).
 - A document already underlag of ANOTHER verifikat returns 409 DOC_ATTACH_OTHER_VERIFIKAT.
 - Replacing a pinned document that is already linked to a verifikat returns 409 DOC_ATTACH_REPLACES_POSTED: reverse the entry first.
 - On a booked transaction in a locked period the pin is saved but the verifikat link is refused: 409 DOC_ATTACH_PERIOD_LOCKED.
@@ -3607,7 +3608,7 @@ Pins the document to the transaction. On an unbooked transaction the pin rides a
 
 Request body:
 ```ts
-{ document_id: string }
+{ document_id: string, mismatch_reason?: string }
 ```
 
 Example request:

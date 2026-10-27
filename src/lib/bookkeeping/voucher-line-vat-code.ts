@@ -573,15 +573,91 @@ function basisAccountRefusal(
  * one would post); a code on a line without an amount; the form's conflict
  * rule, a code beside lines that book the accounts it creates by hand; and a
  * code whose basis account the kontoplan sets to another box or sats
- * (basisAccountRefusal).
+ * (basisAccountRefusal). With `loadNames`, a basis account the company renamed
+ * to something else takes the company's own basis account, or is refused
+ * (renamedBasisAccounts, crm#1453).
  *
  * `loadChart` (chartVatTreatmentsLoader on the server) runs only when a line
  * carries a code: the kontoplan's momskoder decide each account's rule, read
  * as the momsdeklaration reads them.
  */
+/**
+ * Words a reverse-charge basis account's name carries in every chart we have
+ * seen (BAS, Fortnox, Visma, English and truncated imports): the region or the
+ * reverse charge itself. A name without any of them ("Förråd - studio och
+ * location", "Säkerhet") is the company's own account that reuses the BAS
+ * number for something else (crm#1453).
+ */
+const BASIS_NAME_VOCABULARY =
+  /\b(?:eu|eg)\b|eu-|utanf|utom|import|impo\b|omv|reverse|countr|sverige|\bsv\b|byggmoms|ueu|fr(?:å|a)n (?:ett|annat)|\bfr annat|förvärv|forvarv/i
+
+/** Whether a kontoplan name reads as a reverse-charge basis account (BASIS_NAME_VOCABULARY). */
+export function namesReverseChargeBasis(accountName: string): boolean {
+  return BASIS_NAME_VOCABULARY.test(accountName)
+}
+
+/** Account names by number for the accounts asked, as the kontoplan holds them (absent: not in the chart). */
+export type AccountNamesLoader = (accounts: readonly string[]) => Promise<ReadonlyMap<string, string>>
+
+/**
+ * Where the basis pair of each line goes when the BAS basis account is one
+ * the company renamed to something else (crm#1453): the company's own basis
+ * account for the same box and rate (a class 4-6 account whose momskod
+ * reports it and whose name reads as a basis account), or a refusal when it
+ * has none. An unconfigured account is read by its number in the
+ * momsdeklaration either way; this only stops the producer from posting the
+ * basis onto an account the company uses for something else.
+ */
+async function renamedBasisAccounts(
+  groups: ReadonlyArray<VoucherLineGroup<VoucherVatCodeLine>>,
+  chart: ChartVatTreatments,
+  loadNames: AccountNamesLoader,
+): Promise<{ substitutes: Map<string, string>; refusals: FieldIssue[] }> {
+  const substitutes = new Map<string, string>()
+  const refusals: FieldIssue[] = []
+  const basisAccounts = [...new Set(groups.flatMap((group) =>
+    group.generated.map((line) => line.account_number).filter((account) =>
+      isReverseChargeBasisAccount(account) && !chart.has(account))))]
+  if (basisAccounts.length === 0) return { substitutes, refusals }
+
+  const candidates = [...chart.keys()].filter((account) =>
+    COST_ACCOUNT.test(account) && account !== RC_BASIS_OFFSET_ACCOUNT && !isReverseChargeBasisAccount(account) &&
+    vatCodeRuleForAccount(account, chart.get(account)).mode === 'fixed')
+  const names = await loadNames([...basisAccounts, ...candidates])
+  const renamed = new Set<string>()
+  for (const account of basisAccounts) {
+    const name = names.get(account)
+    // Not in the chart: the booking activates it from BAS, with its BAS meaning.
+    if (name === undefined || namesReverseChargeBasis(name)) continue
+    const reports = vatCodeRuleForAccount(account, undefined)
+    const own = reports.mode === 'fixed'
+      ? candidates.find((candidate) => {
+          const rule = vatCodeRuleForAccount(candidate, chart.get(candidate))
+          return rule.mode === 'fixed' && rule.box === reports.box && rule.code.rate === reports.code.rate &&
+            namesReverseChargeBasis(names.get(candidate) ?? '')
+        })
+      : undefined
+    if (own) substitutes.set(account, own)
+    else renamed.add(account)
+  }
+  groups.forEach((group, index) => {
+    const account = group.generated.find((line) => renamed.has(line.account_number))?.account_number
+    if (!account) return
+    const box = (vatCodeRuleForAccount(account, undefined) as { box?: string }).box?.replace('ruta', '') ?? '20-24'
+    const name = names.get(account) ?? ''
+    refusals.push({
+      field: `lines.${index}.vat_code`,
+      en: `The vat_code books its basis (ruta ${box}) on ${account}, but the kontoplan names ${account} "${name}", not a reverse-charge basis account, and no other account reports ruta ${box}: the basis would land on an account used for something else. If ${account} is not used for anything else, rename it to its BAS meaning; otherwise give an account of your own the reverse-charge momskod for ruta ${box} in the kontoplan and book the purchase on it.`,
+      sv: `Momskoden bokför underlaget (ruta ${box}) på ${account}, men i kontoplanen heter ${account} "${name}" och är inget konto för underlag vid omvänd moms, och inget annat konto redovisar ruta ${box}: underlaget skulle hamna på ett konto som används till annat. Används ${account} inte till något annat, byt tillbaka namnet till BAS-betydelsen; annars ge ett eget konto momskoden för omvänd moms i ruta ${box} i kontoplanen och bokför inköpet på det.`,
+    })
+  })
+  return { substitutes, refusals }
+}
+
 export async function expandVoucherLineVatCodes(
   lines: readonly VatCodedVoucherLine[],
   loadChart: () => Promise<ChartVatTreatments>,
+  loadNames?: AccountNamesLoader,
 ): Promise<ExpandedVoucherLines> {
   const typed = lines.map(withoutVatCode)
   if (!lines.some((line) => line.vat_code)) return { ok: true, lines: typed }
@@ -609,8 +685,15 @@ export async function expandVoucherLineVatCodes(
   })
   if (refusals.length > 0) return { ok: false, refusals }
 
+  const renamed = loadNames ? await renamedBasisAccounts(groups, chart, loadNames) : null
+  if (renamed && renamed.refusals.length > 0) return { ok: false, refusals: renamed.refusals }
+  const basisOn = (account: string) => renamed?.substitutes.get(account) ?? account
+
   return {
     ok: true,
-    lines: groups.flatMap((group, index) => [typed[index], ...group.generated.map(toEngineShape)]),
+    lines: groups.flatMap((group, index) => [
+      typed[index],
+      ...group.generated.map((line) => toEngineShape({ ...line, account_number: basisOn(line.account_number) })),
+    ]),
   }
 }

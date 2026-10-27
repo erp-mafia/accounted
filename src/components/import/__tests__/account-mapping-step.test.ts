@@ -38,7 +38,7 @@ vi.mock('@/components/ui/select', () => {
   return { Select, SelectTrigger, SelectValue, SelectContent, SelectItem }
 })
 
-import AccountMappingStep, { TargetAccountOptions } from '../AccountMappingStep'
+import AccountMappingStep, { TargetAccountOptions, rowsInView } from '../AccountMappingStep'
 import { TooltipProvider } from '@/components/ui/info-tooltip'
 
 const IntlProvider = NextIntlClientProvider as (
@@ -308,5 +308,46 @@ describe('AccountMappingStep reverse-charge basis on a separate pair (crm#1096)'
   it('adds nothing to a row without a pair beside it', () => {
     const html = render([pendingRow({ account_number: '5420', account_name: 'Programvaror' })])
     expect(html).not.toContain(PAIR_NOTE)
+  })
+})
+
+describe('AccountMappingStep answered rows stay in the review view (O20)', () => {
+  const [A, B, C] = PENDING.slice(0, 3)
+  const NONE = new Set<string>()
+  const KNOWN = new Set(CHART.map((a) => a.account_number))
+  const confirmed = (m: AccountMapping): AccountMapping => ({ ...m, vatTreatmentSuggested: false, vatTreatmentReviewed: true })
+  const accounts = (rows: AccountMapping[]) => rows.map((m) => m.sourceAccount)
+
+  it('keeps a row confirmed in this view in its place, so the next row does not move under the pointer', () => {
+    const before = rowsInView([A, B, C], 'vat_review', '', KNOWN, NONE)
+    const after = rowsInView([confirmed(A), B, C], 'vat_review', '', KNOWN, new Set([A.sourceAccount]))
+    expect(accounts(after)).toEqual(accounts(before))
+  })
+
+  it('drops answered rows once the view changes (the caller empties the set), and pending rows stay', () => {
+    expect(accounts(rowsInView([confirmed(A), B, C], 'vat_review', '', KNOWN, NONE)))
+      .toEqual([B.sourceAccount, C.sourceAccount])
+    expect(accounts(rowsInView([confirmed(A), B, C], 'all', '', KNOWN, NONE)))
+      .toEqual([A.sourceAccount, B.sourceAccount, C.sourceAccount])
+  })
+
+  it('applies filter and search as before to rows not answered here', () => {
+    const unmapped: AccountMapping = { ...C, targetAccount: '', targetName: '' }
+    expect(accounts(rowsInView([A, B, unmapped], 'unmapped', '', KNOWN, NONE))).toEqual([C.sourceAccount])
+    expect(accounts(rowsInView([A, B, C], 'vat_review', B.sourceAccount, KNOWN, NONE))).toEqual([B.sourceAccount])
+    expect(accounts(rowsInView([A, B, C], 'vat_review', B.sourceName.toUpperCase(), KNOWN, NONE)))
+      .toEqual([B.sourceAccount])
+    // A row mapped in the unmapped view stays there until the view changes.
+    expect(accounts(rowsInView([A, B, C], 'unmapped', '', KNOWN, new Set([C.sourceAccount])))).toEqual([C.sourceAccount])
+  })
+
+  it('shows a confirmed row as done, with no confirm button', () => {
+    const html = render([confirmed(A), confirmed(B)])
+    expect(html).toContain('Bekräftad')
+    expect(html).not.toContain(`aria-label="Bekräfta: ${A.sourceAccount}"`)
+
+    const pending = render([A])
+    expect(pending).toContain(`aria-label="Bekräfta: ${A.sourceAccount}"`)
+    expect(pending).not.toContain('Bekräftad')
   })
 })

@@ -40,6 +40,7 @@ import {
   LockClosedIcon,
   PaperClipIcon,
   SpinnerIcon,
+  TrashIcon,
   XCircleIcon,
   type Icon as AppIcon,
 } from '@/components/icons'
@@ -617,6 +618,12 @@ interface ConnectionStatus {
     status: number
     companyName?: string
     createdAt?: string
+    /**
+     * Whether the stored key still has work to do (lib/key-use.ts, crm#1476).
+     * Absent when the server could not tell or predates the field: then the
+     * row says nothing about it.
+     */
+    keyUse?: 'migration' | 'invoice_rows' | 'supplier_rows' | 'idle'
   }[]
   /** The 10 newest imports of any status: display only. */
   sieImports: SieImportSummary[]
@@ -856,6 +863,19 @@ export function ProviderStep({
                       && connectionStatus?.latestDocumentImport?.provider === consent.provider && (
                       <DocumentImportRunLine run={connectionStatus.latestDocumentImport} />
                     )}
+                    {/* What the stored key is for now (crm#1476): customers
+                        asked whether it is still used and whether Accounted
+                        can change anything in the source. It only reads. */}
+                    {consent.keyUse === 'idle' && (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {t('ext_arcim_key_idle', { provider: providerInfo?.name ?? consent.provider })}
+                      </p>
+                    )}
+                    {(consent.keyUse === 'invoice_rows' || consent.keyUse === 'supplier_rows') && (
+                      <p className="mt-0.5 text-xs text-muted-foreground">
+                        {t('ext_arcim_key_in_use_rows', { provider: providerInfo?.name ?? consent.provider })}
+                      </p>
+                    )}
                   </div>
                   {/* Full width on a phone, so the buttons wrap under the name
                       instead of squeezing the date into a column; the
@@ -909,16 +929,26 @@ export function ProviderStep({
                         {connectionAction(consent.provider)}
                       </Button>
                     )}
+                    {/* A key nothing needs any more gets a named way out
+                        instead of the bare icon below. */}
+                    {consent.keyUse === 'idle' && (
+                      <Button variant="outline" size="sm" onClick={() => onDisconnect(consent.id)}>
+                        <TrashIcon className="mr-1.5 h-3.5 w-3.5" />
+                        {t('ext_arcim_key_remove')}
+                      </Button>
+                    )}
                   </div>
-                  <Button
-                    variant="ghost"
-                    size="icon-sm"
-                    className="order-1 shrink-0 self-start text-muted-foreground hover:text-destructive sm:order-none sm:self-auto"
-                    aria-label={`Koppla från ${providerInfo?.name ?? consent.provider}`}
-                    onClick={() => onDisconnect(consent.id)}
-                  >
-                    <XCircleIcon className="h-4 w-4" />
-                  </Button>
+                  {consent.keyUse !== 'idle' && (
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      className="order-1 shrink-0 self-start text-muted-foreground hover:text-destructive sm:order-none sm:self-auto"
+                      aria-label={`Koppla från ${providerInfo?.name ?? consent.provider}`}
+                      onClick={() => onDisconnect(consent.id)}
+                    >
+                      <XCircleIcon className="h-4 w-4" />
+                    </Button>
+                  )}
                 </div>
               )
             })}

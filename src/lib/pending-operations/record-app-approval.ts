@@ -16,6 +16,7 @@ import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { createLogger } from '@/lib/logger'
 import type { PendingOperation } from '@/types'
 import type { CommitResult } from './commit'
+import type { SharedAcknowledgmentGroup } from './shared-acknowledgment'
 
 const log = createLogger('pending-operations/record-app-approval')
 
@@ -25,8 +26,14 @@ export async function recordAppApproval(params: {
   operation: Pick<PendingOperation, 'id' | 'operation_type' | 'risk_level'>
   commitMethod: 'user_accept' | 'bulk_accept'
   outcome: CommitResult['status']
+  /**
+   * A high-risk operation approved in bulk under one acknowledgment for its
+   * group (shared-acknowledgment.ts): the record says so, so behandlingshistorik
+   * tells it apart from a one-by-one confirmation.
+   */
+  sharedAcknowledgment?: SharedAcknowledgmentGroup
 }): Promise<void> {
-  const { companyId, userId, operation, commitMethod, outcome } = params
+  const { companyId, userId, operation, commitMethod, outcome, sharedAcknowledgment } = params
   try {
     await appendProcessingHistory({
       companyId,
@@ -41,6 +48,7 @@ export async function recordAppApproval(params: {
         outcome,
         commit_method: commitMethod,
         channel: 'app',
+        ...(sharedAcknowledgment ? { shared_acknowledgment: sharedAcknowledgment } : {}),
       },
       actor: { type: 'user', id: userId },
       occurredAt: new Date(),

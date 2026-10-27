@@ -926,6 +926,9 @@ export const enableBankingExtension: Extension = {
             // The bank had not handed out every page when the read stopped:
             // the window is incomplete, never "Synkronisering klar" (PH 195).
             incomplete: outcome.truncated,
+            // Entries the bank sent but has not booked: a sync that imported
+            // nothing says why (PH 221).
+            not_booked: outcome.notBooked,
           })
         } catch (error) {
           // One durable row per failed sync, whichever branch below answers
@@ -1733,6 +1736,7 @@ export const enableBankingExtension: Extension = {
               requested_from: fromDate,
               returned_min_date: outcome.returnedMin,
               returned_max_date: outcome.returnedMax,
+              not_booked: outcome.notBooked,
             }
             if (outcome.truncated) {
               // The bank had not finished: the first import stays owed (the

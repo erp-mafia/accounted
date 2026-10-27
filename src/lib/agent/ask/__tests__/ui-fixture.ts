@@ -17,6 +17,7 @@ function table(t: Record<string, unknown>): (key: string) => string {
 export const SV_LABELS: UiLabels = {
   nav: table(sv.nav as Record<string, unknown>),
   settings: table(sv.settings_nav as Record<string, unknown>),
+  switcher: table(sv.company_switcher as Record<string, unknown>),
 }
 
 /**

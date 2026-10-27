@@ -549,6 +549,19 @@ export function htmlToText(html: string, maxLength: number = MAX_EXTRACTION_TEXT
 
 const EXTRACTION_INSTRUCTION = 'Extract the fields per the schema. JSON only.'
 
+/**
+ * The longest one extraction may take, its truncation retry included. Every
+ * door that reads a document runs inside a route's 300 s, most of them after
+ * the response (the upload's deferred document.uploaded handlers, the inbox's
+ * deferred reading). The SDK's own ceiling is 10 minutes per attempt, so a
+ * Bedrock call that never answered held POST /api/documents until Vercel
+ * killed the function at 300 s and the document was left with no reading at
+ * all (2026-10-26). A legitimate reading stays well inside this: output p99
+ * is one full 8 192-token answer. The 50 s left cover the upload, the
+ * download and stamping the outcome.
+ */
+export const EXTRACTION_DEADLINE_MS = 250_000
+
 /** Map an upload to the service's document input. HTML becomes plain text. */
 function toDocumentInput(input: ExtractionInput): AiDocumentInput {
   if (input.mimeType === 'text/html') {
@@ -704,6 +717,8 @@ export async function extractInvoiceFields(
 
   const fileNameHash = createHash('sha256').update(input.fileName).digest('hex').slice(0, 12)
   const service = getAiService()
+  // One deadline for the whole reading: the truncation retry spends what the first call left.
+  const signal = AbortSignal.timeout(EXTRACTION_DEADLINE_MS)
 
   let rawText: string | null = null
   let model: string | null = null
@@ -715,6 +730,7 @@ export async function extractInvoiceFields(
       system: SYSTEM_PROMPT,
       instruction: EXTRACTION_INSTRUCTION,
       jsonSchema: EXTRACTION_JSON_SCHEMA,
+      signal,
     }
     let result = await service.extractFromDocument({ ...request, maxTokens: baseMaxTokens })
     if (!result.ok) {

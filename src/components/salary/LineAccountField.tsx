@@ -20,6 +20,7 @@ import { lineAccountOverride } from '@/lib/salary/line-account-override'
 export function LineAccountField({
   id,
   itemType,
+  defaultAccount: rowDefaultAccount,
   employmentType,
   personnelCategory,
   value,
@@ -28,6 +29,8 @@ export function LineAccountField({
 }: {
   id: string
   itemType: string
+  /** The account the row is written with when nothing is picked (an utlandstraktamente: 7323 / 7324). */
+  defaultAccount?: string
   employmentType: string
   personnelCategory: string | null | undefined
   value: string
@@ -49,7 +52,8 @@ export function LineAccountField({
   )
 
   if (rule === 'none') return null
-  const defaultAccount = lineItemAccount(itemType as MoneyLineItemType, { employmentType, personnelCategory })
+  const defaultAccount =
+    rowDefaultAccount ?? lineItemAccount(itemType as MoneyLineItemType, { employmentType, personnelCategory })
 
   return (
     <div className="space-y-2">

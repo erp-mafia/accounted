@@ -1,0 +1,1 @@
+[2026-10-27] No pre-BankID guard for a missing affiliated bank id (crm#1471): no Open Payments connection predates the column, the six without one are Swedbank itself where none is owed, and the reported refusal was the payee's OCR control, fixed on main (!883).

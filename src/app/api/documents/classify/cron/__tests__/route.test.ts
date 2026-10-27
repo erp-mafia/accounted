@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { parseJsonResponse } from '@/tests/helpers'
 
@@ -31,6 +31,10 @@ beforeEach(() => {
   asMock(classifyUnclassifiedDocuments).mockResolvedValue({ processed: 2, classified: 2, held: 1, skipped: 0, errors: 0 })
 })
 
+afterEach(() => {
+  vi.restoreAllMocks()
+})
+
 describe('GET /api/documents/classify/cron', () => {
   it('rejects a request without the cron secret', async () => {
     asMock(verifyCronSecret).mockReturnValueOnce(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }))
@@ -45,5 +49,30 @@ describe('GET /api/documents/classify/cron', () => {
     scanReturning(['co-9', 'co-9', null, 'co-3'])
     await GET(request())
     expect(asMock(classifyUnclassifiedDocuments).mock.calls.map((c) => c[1])).toEqual(['co-9', 'co-3'])
+    expect(asMock(classifyUnclassifiedDocuments).mock.calls.map((c) => c[2])).toEqual([10, 10])
+  })
+
+  it('stops starting documents at its time budget and leaves the rest to the next run', async () => {
+    // Each company's batch takes a minute (a provider outage: ~15 s a document).
+    let now = 1_000_000
+    vi.spyOn(Date, 'now').mockImplementation(() => now)
+    asMock(classifyUnclassifiedDocuments).mockImplementation(async () => {
+      now += 60_000
+      return { processed: 4, classified: 0, held: 0, skipped: 0, errors: 4 }
+    })
+    scanReturning(['co-1', 'co-2', 'co-3', 'co-4', 'co-5', 'co-6'])
+
+    const { status, body } = await parseJsonResponse<{ processed: number; deferredCompanies: number }>(await GET(request()))
+
+    expect(status).toBe(200)
+    // 200 s at 20 s a document: 10, then what the remaining 140, 80 and 20 s pay for.
+    expect(asMock(classifyUnclassifiedDocuments).mock.calls.map((c) => [c[1], c[2]])).toEqual([
+      ['co-1', 10],
+      ['co-2', 7],
+      ['co-3', 4],
+      ['co-4', 1],
+    ])
+    expect(body.deferredCompanies).toBe(2)
+    expect(body.processed).toBe(16)
   })
 })

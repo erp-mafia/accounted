@@ -74,6 +74,12 @@ export interface SyncResult {
   returnedMinBookingDate?: string
   /** Latest booking date the ASPSP returned. Undefined when no transactions came back. */
   returnedMaxBookingDate?: string
+  /**
+   * Entries the bank sent that are not booked (pending, or no booking date),
+   * so not imported. Omitted when none: a sync that imported nothing can then
+   * say why instead of reading as "the connection only reads the balance" (PH 221).
+   */
+  notBooked?: number
   /** The date_from asked of the bank. */
   requestedFromDate: string
   /**
@@ -643,6 +649,7 @@ export async function syncAccountTransactions(
     effectiveFromDate,
     historyNarrowed,
     ...(truncated ? { truncated: true } : {}),
+    ...(skippedPending > 0 ? { notBooked: skippedPending } : {}),
   }
 }
 

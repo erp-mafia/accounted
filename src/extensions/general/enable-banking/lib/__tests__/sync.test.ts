@@ -336,7 +336,7 @@ describe('syncAccountTransactions', () => {
       rawPages: ['{}'],
     })
 
-    await syncAccountTransactions(
+    const result = await syncAccountTransactions(
       {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
       '2026-01-01', '2026-06-01', mockIngest
     )
@@ -345,6 +345,31 @@ describe('syncAccountTransactions', () => {
     expect(batch).toHaveLength(1)
     expect(batch[0].date).toBe('2026-03-01')
     expect(batch[0].external_id).toBe('eb_acc-uid-1_2026-03-01_-7500_0')
+    // The skipped entry is counted, so an empty sync can say why (PH 221).
+    expect(result.notBooked).toBe(1)
+  })
+
+  it('reports no unbooked entries when every entry is booked (PH 221)', async () => {
+    mockConvertTransaction.mockImplementation((tx: { transaction_amount: { amount: string }, booking_date?: string }) => ({
+      id: 'x',
+      date: tx.booking_date,
+      booking_date: tx.booking_date,
+      amount: -parseFloat(tx.transaction_amount.amount),
+      currency: 'SEK',
+      description: 'T',
+    }))
+    mockUploadDocument.mockResolvedValue({ id: 'doc-1' })
+    mockGetAllTransactionsWithRaw.mockResolvedValue({
+      transactions: [{ transaction_amount: { amount: '75', currency: 'SEK' }, booking_date: '2026-03-01' }],
+      rawPages: ['{}'],
+    })
+
+    const result = await syncAccountTransactions(
+      {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, makeAccount(),
+      '2026-01-01', '2026-06-01', mockIngest
+    )
+
+    expect(result).not.toHaveProperty('notBooked')
   })
 
   it('skips entries the bank marks as not booked even when they carry a booking_date (Svea PDNG card purchase in USD)', async () => {
