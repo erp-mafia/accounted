@@ -21,7 +21,11 @@
  *      not found / not booked / already corrected.
  *   2. Storno every journal entry the run points at, in the fixed order
  *      salary, avgifter, vacation, pension. An entry a concurrent call
- *      already reversed (EntryAlreadyReversedError) is skipped.
+ *      already reversed (EntryAlreadyReversedError) is skipped. An entry
+ *      someone corrected with storno + rättelse is reversed already, but its
+ *      pay lives on in the rättelse: that posted rättelse is stornoed in its
+ *      place (postedRattelserOf), or the correction run books the period a
+ *      second time.
  *   3. Mark the original run `corrected`.
  *   4. Revoke the original's emailed payslip links (they now show "ersatt").
  *   5. Insert the correction run: same period, payment date, deviation
@@ -125,7 +129,11 @@ export interface CorrectSalaryRunPreview {
     deviation_period_start: string | null
     deviation_period_end: string | null
   }
-  /** Original journal entries the live call would storno, in reversal order. */
+  /**
+   * Journal entries the live call would storno, in reversal order: the run's
+   * posted entries, and for one already corrected with storno + rättelse the
+   * posted rättelse that replaced it.
+   */
   entries_to_reverse: string[]
   /** The draft the live call would insert. */
   correction_run: {
@@ -146,7 +154,11 @@ export type CorrectSalaryRunLiveResult = {
   dryRun: false
   originalRunId: string
   correctionRun: CorrectionSalaryRunRow
-  /** Original entries that are reversed after this call (including ones a concurrent call reversed first). */
+  /**
+   * Entries that are reversed after this call: the run's own (including ones
+   * a concurrent call reversed first) and any posted rättelse of them it
+   * stornoed in their place.
+   */
   reversedEntryIds: string[]
   /** ISO timestamp taken when the original was marked `corrected`. */
   stampedAt: string
@@ -258,6 +270,75 @@ function entryIdsOf(run: CorrectableSalaryRunRow): string[] {
     run.vacation_entry_id,
     run.pension_entry_id,
   ].filter((id): id is string => Boolean(id))
+}
+
+/** Deepest rättelse-of-a-rättelse chain followed; real chains are one or two long. */
+const MAX_RATTELSE_DEPTH = 10
+
+/**
+ * The posted rättelser that replace `entryId`. Correcting a run verifikat with
+ * storno + rättelse (storno-service: the original is reversed and a new
+ * verifikat carries correction_of_id = the original) leaves the run pointing at
+ * the reversed original while the pay lives on in the rättelse. A rättelse can
+ * itself be corrected, so the chain is followed down to what is posted now.
+ */
+async function postedRattelserOf(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryId: string,
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: unknown }> {
+  const posted: string[] = []
+  let frontier = [entryId]
+  for (let depth = 0; depth < MAX_RATTELSE_DEPTH && frontier.length > 0; depth++) {
+    const { data, error } = await supabase
+      .from('journal_entries')
+      .select('id, status')
+      .eq('company_id', companyId)
+      .in('correction_of_id', frontier)
+    if (error) return { ok: false, error }
+    const rows = (data || []) as Array<{ id: string; status: string }>
+    posted.push(...rows.filter((row) => row.status === 'posted').map((row) => row.id))
+    frontier = rows.filter((row) => row.status === 'reversed').map((row) => row.id)
+  }
+  return { ok: true, ids: posted }
+}
+
+/** An entry that is already reversed: by a concurrent call, an earlier attempt or a user's storno. */
+function isAlreadyReversed(err: unknown): boolean {
+  return (
+    err instanceof EntryAlreadyReversedError ||
+    (err instanceof CannotReverseNonPostedError && err.currentStatus === 'reversed')
+  )
+}
+
+/**
+ * What the live call would storno, for the preview: each posted run entry, and
+ * for a reversed one the posted rättelser that replace it. Read-only.
+ */
+async function entriesToReverse(
+  supabase: SupabaseClient,
+  companyId: string,
+  entryIds: string[],
+): Promise<{ ok: true; ids: string[] } | { ok: false; error: unknown }> {
+  if (entryIds.length === 0) return { ok: true, ids: [] }
+  const { data, error } = await supabase
+    .from('journal_entries')
+    .select('id, status')
+    .eq('company_id', companyId)
+    .in('id', entryIds)
+  if (error) return { ok: false, error }
+  const statusById = new Map(((data || []) as Array<{ id: string; status: string }>).map((row) => [row.id, row.status]))
+  const ids: string[] = []
+  for (const entryId of entryIds) {
+    if (statusById.get(entryId) !== 'reversed') {
+      ids.push(entryId)
+      continue
+    }
+    const replacements = await postedRattelserOf(supabase, companyId, entryId)
+    if (!replacements.ok) return replacements
+    ids.push(...replacements.ids)
+  }
+  return { ok: true, ids }
 }
 
 function correctionNotes(run: CorrectableSalaryRunRow): string {
@@ -436,6 +517,11 @@ export async function correctSalaryRun(
   const entryIds = entryIdsOf(originalRun)
 
   if (args.dryRun) {
+    // Reading the run's verifikat is part of loading the run.
+    const toReverse = resume ? { ok: true as const, ids: [] } : await entriesToReverse(supabase, companyId, entryIds)
+    if (!toReverse.ok) {
+      return { ok: false, code: 'DB_ERROR', stage: 'load_run', error: toReverse.error }
+    }
     return {
       ok: true,
       dryRun: true,
@@ -450,7 +536,7 @@ export async function correctSalaryRun(
           deviation_period_start: originalRun.deviation_period_start ?? null,
           deviation_period_end: originalRun.deviation_period_end ?? null,
         },
-        entries_to_reverse: resume ? [] : entryIds,
+        entries_to_reverse: toReverse.ids,
         correction_run: {
           period_year: originalRun.period_year,
           period_month: originalRun.period_month,
@@ -474,39 +560,47 @@ export async function correctSalaryRun(
   const stampedAt = new Date().toISOString()
   if (!resume) {
   const correctedOn = todayIsoStockholm()
+  const storno = (entryId: string) =>
+    postingPort.reverseJournalEntry({
+      supabase,
+      companyId,
+      userId,
+      entryId,
+      // Built only while the port is on: off, reverseEntry gets the call it always did.
+      event: () => salaryRunCorrectionBusinessEvent(runId, correctedOn, linkBasisColumns('user_created')),
+      role: 'reversal',
+    })
+  const reversalFailed = (entryId: string, err: unknown, index: number): CorrectSalaryRunFailure => ({
+    ok: false,
+    code: 'REVERSAL_FAILED',
+    error: err,
+    details: {
+      entry_id: entryId,
+      reversed_entry_ids: [...reversedEntryIds],
+      remaining_entry_ids: entryIds.slice(index + 1),
+    },
+  })
   for (const [index, entryId] of entryIds.entries()) {
     try {
-      await postingPort.reverseJournalEntry({
-        supabase,
-        companyId,
-        userId,
-        entryId,
-        // Built only while the port is on: off, reverseEntry gets the call it always did.
-        event: () => salaryRunCorrectionBusinessEvent(runId, correctedOn, linkBasisColumns('user_created')),
-        role: 'reversal',
-      })
+      await storno(entryId)
     } catch (err) {
-      // Already reversed: by a concurrent call (EntryAlreadyReversedError) or
-      // by an earlier attempt of this verb that failed further down the loop
-      // (the entry is then in status 'reversed'). Either way the outcome is
-      // the one we want, so a retry resumes instead of dead-ending.
-      if (
-        err instanceof EntryAlreadyReversedError ||
-        (err instanceof CannotReverseNonPostedError && err.currentStatus === 'reversed')
-      ) {
-        reversedEntryIds.push(entryId)
-        continue
+      if (!isAlreadyReversed(err)) return reversalFailed(entryId, err, index)
+      // Already reversed: by a concurrent call, by an earlier attempt of this
+      // verb that failed further down the loop, or by a user's storno +
+      // rättelse. In the last case the pay lives on in the rättelse, so it is
+      // stornoed in the original's place; the first two leave none to find.
+      const replacements = await postedRattelserOf(supabase, companyId, entryId)
+      if (!replacements.ok) return reversalFailed(entryId, replacements.error, index)
+      reversedEntryIds.push(entryId)
+      for (const replacementId of replacements.ids) {
+        try {
+          await storno(replacementId)
+        } catch (replacementErr) {
+          if (!isAlreadyReversed(replacementErr)) return reversalFailed(replacementId, replacementErr, index)
+        }
+        reversedEntryIds.push(replacementId)
       }
-      return {
-        ok: false,
-        code: 'REVERSAL_FAILED',
-        error: err,
-        details: {
-          entry_id: entryId,
-          reversed_entry_ids: [...reversedEntryIds],
-          remaining_entry_ids: entryIds.slice(index + 1),
-        },
-      }
+      continue
     }
     reversedEntryIds.push(entryId)
   }

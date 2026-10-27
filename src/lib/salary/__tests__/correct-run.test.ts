@@ -146,8 +146,11 @@ describe('correctSalaryRun preconditions', () => {
 
 describe('correctSalaryRun dry run', () => {
   it('returns the preview and performs no writes', async () => {
-    const { supabase, enqueue, calls, order } = trackedSupabase()
-    enqueue({ data: makeBookedRun() })
+    const { supabase, enqueueMany, calls, order } = trackedSupabase()
+    enqueueMany([
+      { data: makeBookedRun() },
+      { data: [{ id: 'je-salary', status: 'posted' }, { id: 'je-avg', status: 'posted' }, { id: 'je-vac', status: 'posted' }] },
+    ])
 
     const result = await correctSalaryRun(supabase as never, { ...ARGS, dryRun: true })
 
@@ -179,11 +182,36 @@ describe('correctSalaryRun dry run', () => {
         },
       },
     })
-    expect(order).toEqual(['from:salary_runs'])
+    expect(order).toEqual(['from:salary_runs', 'from:journal_entries'])
     expect(reverseEntry).not.toHaveBeenCalled()
     expect(revokeLinksForRun).not.toHaveBeenCalled()
     expect(syncVacationLedgerForEmployees).not.toHaveBeenCalled()
     expect(calls.filter((c) => c.method === 'update' || c.method === 'insert')).toEqual([])
+  })
+
+  it('previews the rättelse that replaced a user-corrected entry instead of the reversed original', async () => {
+    const { supabase, enqueueMany, calls } = trackedSupabase()
+    enqueueMany([
+      { data: makeBookedRun() },
+      { data: [{ id: 'je-salary', status: 'reversed' }, { id: 'je-avg', status: 'posted' }, { id: 'je-vac', status: 'posted' }] },
+      { data: [{ id: 'je-rattelse', status: 'posted' }] }, // rättelser of je-salary
+    ])
+
+    const result = await correctSalaryRun(supabase as never, { ...ARGS, dryRun: true })
+
+    expect(result).toMatchObject({ ok: true, dryRun: true, preview: { entries_to_reverse: ['je-rattelse', 'je-avg', 'je-vac'] } })
+    expect(calls.find((c) => c.table === 'journal_entries' && c.method === 'in' && c.args[0] === 'correction_of_id')?.args)
+      .toEqual(['correction_of_id', ['je-salary']])
+    expect(calls.filter((c) => c.method === 'update' || c.method === 'insert')).toEqual([])
+  })
+
+  it('passes a failed verifikat read through as DB_ERROR at stage load_run', async () => {
+    const { supabase, enqueueMany } = trackedSupabase()
+    enqueueMany([{ data: makeBookedRun() }, { data: null, error: { message: 'connection reset' } }])
+
+    const result = await correctSalaryRun(supabase as never, { ...ARGS, dryRun: true })
+
+    expect(result).toMatchObject({ ok: false, code: 'DB_ERROR', stage: 'load_run' })
   })
 })
 
@@ -312,6 +340,7 @@ describe('correctSalaryRun live', () => {
     const { supabase, enqueueMany } = trackedSupabase()
     enqueueMany([
       { data: makeBookedRun({ vacation_entry_id: null }) },
+      { data: [] }, // no rättelse replaced je-salary
       { data: null },
       { data: CORRECTION_ROW },
       { data: [] },
@@ -355,6 +384,7 @@ describe('correctSalaryRun live', () => {
     const { supabase, enqueueMany } = trackedSupabase()
     enqueueMany([
       { data: makeBookedRun({ vacation_entry_id: null }) },
+      { data: [] }, // no rättelse replaced je-salary
       { data: null },
       { data: CORRECTION_ROW },
       { data: [] },
@@ -368,6 +398,75 @@ describe('correctSalaryRun live', () => {
     expect(result).toMatchObject({ ok: true, reversedEntryIds: ['je-salary', 'je-avg'] })
     expect(reverseEntry).toHaveBeenCalledTimes(2)
     expect(revokeLinksForRun).toHaveBeenCalledOnce()
+  })
+
+  it('stornos the posted rättelse of a user-corrected entry, so the correction run does not book the period twice', async () => {
+    // A user corrected the salary verifikat with storno + rättelse before the
+    // run was corrected: the run still points at the reversed original, and
+    // the pay lives on in the rättelse (prod 2026-09: both stayed posted next
+    // to the correction run's new verifikat).
+    const { supabase, enqueueMany, calls, order } = trackedSupabase()
+    enqueueMany([
+      { data: makeBookedRun({ vacation_entry_id: null }) },
+      { data: [{ id: 'je-rattelse', status: 'posted' }] }, // rättelser of je-salary
+      { data: null },
+      { data: CORRECTION_ROW },
+      { data: [] },
+    ])
+    vi.mocked(reverseEntry).mockImplementationOnce(async () => {
+      throw new CannotReverseNonPostedError('reversed')
+    })
+
+    const result = await correctSalaryRun(supabase as never, ARGS)
+
+    expect(result).toMatchObject({ ok: true, reversedEntryIds: ['je-salary', 'je-rattelse', 'je-avg'] })
+    expect(vi.mocked(reverseEntry).mock.calls.map((call) => call[3])).toEqual(['je-salary', 'je-rattelse', 'je-avg'])
+    expect(calls.find((c) => c.table === 'journal_entries' && c.method === 'eq' && c.args[0] === 'company_id')?.args)
+      .toEqual(['company_id', 'company-1'])
+    expect(order.indexOf('reverse:je-rattelse')).toBeLessThan(order.indexOf('revoke'))
+  })
+
+  it('follows a rättelse of a rättelse down to the verifikat posted now', async () => {
+    const { supabase, enqueueMany } = trackedSupabase()
+    enqueueMany([
+      { data: makeBookedRun({ vacation_entry_id: null }) },
+      { data: [{ id: 'je-r1', status: 'reversed' }] }, // rättelser of je-salary
+      { data: [{ id: 'je-r2', status: 'posted' }] }, // rättelser of je-r1
+      { data: null },
+      { data: CORRECTION_ROW },
+      { data: [] },
+    ])
+    vi.mocked(reverseEntry).mockImplementationOnce(async () => {
+      throw new CannotReverseNonPostedError('reversed')
+    })
+
+    const result = await correctSalaryRun(supabase as never, ARGS)
+
+    expect(result).toMatchObject({ ok: true, reversedEntryIds: ['je-salary', 'je-r2', 'je-avg'] })
+    expect(vi.mocked(reverseEntry).mock.calls.map((call) => call[3])).toEqual(['je-salary', 'je-r2', 'je-avg'])
+  })
+
+  it('stops as REVERSAL_FAILED on the entry whose rättelser cannot be read', async () => {
+    const { supabase, enqueueMany, calls } = trackedSupabase()
+    const lookupError = { message: 'connection reset' }
+    enqueueMany([
+      { data: makeBookedRun({ vacation_entry_id: null }) },
+      { data: null, error: lookupError },
+    ])
+    vi.mocked(reverseEntry).mockImplementationOnce(async () => {
+      throw new CannotReverseNonPostedError('reversed')
+    })
+
+    const result = await correctSalaryRun(supabase as never, ARGS)
+
+    expect(result).toEqual({
+      ok: false,
+      code: 'REVERSAL_FAILED',
+      error: lookupError,
+      details: { entry_id: 'je-salary', reversed_entry_ids: [], remaining_entry_ids: ['je-avg'] },
+    })
+    expect(revokeLinksForRun).not.toHaveBeenCalled()
+    expect(calls.filter((c) => c.method === 'update' || c.method === 'insert')).toEqual([])
   })
 
   it('stops at the first storno failure: no status flip, no revoke, no insert', async () => {
