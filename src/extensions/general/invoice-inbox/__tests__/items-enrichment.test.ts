@@ -141,6 +141,45 @@ describe('GET /items', () => {
     expect(byId.bare).toMatchObject({ extracted_data: null, extraction_skipped: true })
   })
 
+  it("says when the AI provider could not take an empty reading, from the document's stamp in the same read", async () => {
+    const empty = { supplier: { name: null }, invoice: { currency: 'SEK' }, totals: { total: null }, lineItems: [], vatBreakdown: [] }
+    const recent = new Date(Date.now() - 30 * 60 * 1000).toISOString()
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { ...makeInvoiceInboxItem({ id: 'outage', document_id: 'doc-o', extracted_data: empty, created_at: recent }), extraction_skipped: false },
+        { ...makeInvoiceInboxItem({ id: 'retried', document_id: 'doc-r2', extracted_data: empty, created_at: recent }), extraction_skipped: false },
+        { ...makeInvoiceInboxItem({ id: 'given-up', document_id: 'doc-g', extracted_data: empty, created_at: recent }), extraction_skipped: false },
+        { ...makeInvoiceInboxItem({ id: 'unreadable', document_id: 'doc-u', extracted_data: empty, created_at: recent }), extraction_skipped: false },
+        { ...makeInvoiceInboxItem({ id: 'read', document_id: 'doc-ok', extracted_data: { ...empty, totals: { total: 99 } }, created_at: recent }), extraction_skipped: false },
+        { ...makeInvoiceInboxItem({ id: 'booked', document_id: 'doc-b', extracted_data: empty, created_journal_entry_id: 'je-9', created_at: recent }), extraction_skipped: false },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'doc-o', extracted_data: null, extraction_model: 'failed:provider_unavailable' },
+        { id: 'doc-r2', extracted_data: null, extraction_model: 'failed:provider_unavailable:2' },
+        { id: 'doc-g', extracted_data: null, extraction_model: 'failed:provider_unavailable:3' },
+        { id: 'doc-u', extracted_data: null, extraction_model: 'failed:no_raw_text' },
+      ],
+    })
+    const { body } = await parseJsonResponse<{ data: { items: Array<Record<string, unknown>> } }>(await route.handler(req(), buildCtx(supabase)))
+    const byId = Object.fromEntries(body.data.items.map((i) => [i.id as string, i]))
+
+    expect(byId.outage.reading_retry).toBe('scheduled')
+    expect(byId.retried.reading_retry).toBe('scheduled_later')
+    expect(byId['given-up'].reading_retry).toBe('exhausted')
+    expect(byId.unreadable.reading_retry).toBeNull()
+    expect(byId.read.reading_retry).toBeNull()
+    expect(byId.booked.reading_retry).toBeNull()
+    // One read for all of them, extended with the stamp; nothing read or booked is asked about.
+    const docReads = findCalls('document_attachments', 'select')
+    expect(docReads).toEqual([['id, extracted_data, extraction_model']])
+    expect(findCalls('document_attachments', 'in')[0][1]).toEqual(['doc-o', 'doc-r2', 'doc-g', 'doc-u'])
+    // The empty reading stays the item's: only a null one is stood in for.
+    expect(byId.outage.extracted_data).toEqual(empty)
+  })
+
   it("carries the vendor's stored icon, resolved from the supplier as read and the sender", async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({

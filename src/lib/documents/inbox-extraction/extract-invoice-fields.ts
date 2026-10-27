@@ -22,6 +22,7 @@ import { isMalformedEuVatNumber } from '@/lib/invariants/vat-number'
 import type { AiDocumentInput, AiImageMediaType, ExtractionSkipReason } from '@/lib/ai'
 import { createLogger } from '@/lib/logger'
 import { fitImageForModel, HEIC_MIME_TYPES } from '@/lib/documents/read/image'
+import { classifyExtractionError, type ExtractionFailure } from './extraction-failure'
 
 // Re-exported for callers and tests that import it from here.
 export { extractJsonObject }
@@ -79,6 +80,13 @@ export interface ExtractionOutput {
   model?: string | null
   /** Set when no model call was made at all (and why). */
   skipped?: ExtractionSkipped | null
+  /**
+   * Set when a call was made and failed: `provider_unavailable` when the AI
+   * provider could not take it (an outage, a throttle, a dropped connection,
+   * the reading's deadline), `error` for anything else. Absent on success
+   * and on a skip.
+   */
+  failure?: ExtractionFailure | null
 }
 
 // Classification fields are nullable AND .catch(null): a hallucinated enum
@@ -702,7 +710,9 @@ const EXTRACTION_JSON_SCHEMA: Record<string, unknown> = {
  * InvoiceExtractionResult. Empty fields are null. `skipped` is set when no
  * model call was made (unsupported file type, AI not configured, no vision
  * on this backend, PDF rasterizer missing), so callers can tell "nothing to
- * read" from "read and found nothing".
+ * read" from "read and found nothing". `failure` is set when the call failed,
+ * so they can also tell "the provider was down" from "the document could not
+ * be read".
  */
 export async function extractInvoiceFields(
   rawInput: ExtractionInput
@@ -813,12 +823,25 @@ export async function extractInvoiceFields(
       model,
     }
   } catch (err) {
+    // With rawText set the provider answered and the answer did not parse:
+    // the document's problem, never the provider's. Otherwise the call itself
+    // failed, and the classification says whether reading it again later can
+    // help. The deadline counts as the provider being unavailable: a
+    // legitimate reading's p99 is one full 8 192-token answer, well inside
+    // EXTRACTION_DEADLINE_MS, so a reading that hits it is a provider that
+    // stopped answering (the 2026-10-26 Bedrock calls that hung until the
+    // function was killed), not a property of the document. The automatic
+    // retry is capped, so the rare document that truly needs longer costs at
+    // most the capped number of extra readings.
+    const failure: ExtractionFailure =
+      rawText != null ? 'error' : classifyExtractionError(err, { deadlineReached: signal.aborted })
     log.warn('AI extraction failed', {
       file_name_hash: fileNameHash,
       mimeType: input.mimeType,
       error: err instanceof Error ? err.message : String(err),
       hasRawText: rawText != null,
+      failure,
     })
-    return { data: emptyResult(), rawText, model }
+    return { data: emptyResult(), rawText, model, failure }
   }
 }

@@ -273,7 +273,7 @@ export default function NewSupplierInvoiceForm({
   // upload through /api/documents stays a plain attached document.
   const [uploadedInboxItemId, setUploadedInboxItemId] = useState<string | null>(null)
   const uploadedInboxItemIdRef = useRef<string | null>(null)
-  const [extractionPhase, setExtractionPhase] = useState<'idle' | 'processing' | 'done'>('idle')
+  const [extractionPhase, setExtractionPhase] = useState<'idle' | 'processing' | 'slow' | 'done' | 'failed'>('idle')
   const extractionPollTokenRef = useRef(0)
   const underlagInputRef = useRef<HTMLInputElement | null>(null)
   const [isDraggingUnderlag, setIsDraggingUnderlag] = useState(false)
@@ -1366,36 +1366,88 @@ export default function NewSupplierInvoiceForm({
     afterUploadExtraction(item.extracted_data)
   }
 
+  // A finished reading: fill the form, or say it could not be read and offer
+  // another try instead of going quiet (the provider may have been down). A
+  // document that was never sent for reading (extraction_skipped: no AI,
+  // unsupported file) stays quiet: another try would read nothing either.
+  function settleReading(
+    itemId: string,
+    documentId: string,
+    data: { extracted_data?: InvoiceExtractionResult | null; matched_supplier_id?: string | null; extraction_skipped?: boolean } | null,
+  ) {
+    if (hasExtractionContent(data?.extracted_data)) {
+      applyExtractionIfPristine({
+        id: itemId,
+        extracted_data: data?.extracted_data ?? null,
+        matched_supplier_id: data?.matched_supplier_id ?? null,
+        document_id: documentId,
+      })
+      return
+    }
+    setExtractionPhase(data?.extraction_skipped ? 'idle' : 'failed')
+  }
+
+  // "Läs igen" on the uploaded underlag: the inbox's own retry-extraction,
+  // then the item as it now stands.
+  async function retryUnderlagReading() {
+    const itemId = uploadedInboxItemId
+    const documentId = documentFiles[0]?.id
+    if (!itemId || !documentId) return
+    const token = ++extractionPollTokenRef.current
+    setExtractionPhase('processing')
+    try {
+      const retry = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}/retry-extraction`, { method: 'POST' })
+      if (retry.ok) {
+        const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`)
+        const json = res.ok ? await res.json().catch(() => null) : null
+        if (extractionPollTokenRef.current !== token) return
+        if (json?.data) {
+          settleReading(itemId, documentId, json.data)
+          return
+        }
+      }
+    } catch {
+      // Falls through to the failed state: the user can try again or type.
+    }
+    if (extractionPollTokenRef.current === token) setExtractionPhase('failed')
+  }
+
   async function pollExtraction(itemId: string, documentId: string) {
     const token = ++extractionPollTokenRef.current
     const startedAt = Date.now()
+    // A reading may run to its 250 s deadline: one still running when the
+    // poll gives up is said as such, with a way to look again, not dropped.
+    let stillReading = true
     while (Date.now() - startedAt < 90_000) {
       await new Promise((resolve) => setTimeout(resolve, 1500))
       if (extractionPollTokenRef.current !== token) return
       try {
         const res = await fetch(`/api/extensions/ext/invoice-inbox/items/${itemId}`)
-        if (!res.ok) break
+        if (!res.ok) {
+          stillReading = false
+          break
+        }
         const { data } = await res.json()
         if (extractionPollTokenRef.current !== token) return
         if (data?.status !== 'processing') {
-          if (hasExtractionContent(data?.extracted_data)) {
-            applyExtractionIfPristine({
-              id: itemId,
-              extracted_data: data.extracted_data,
-              matched_supplier_id: data.matched_supplier_id ?? null,
-              document_id: documentId,
-            })
-          } else {
-            // Extraction failed or read nothing: keep the plain attachment.
-            setExtractionPhase('idle')
-          }
+          settleReading(itemId, documentId, data)
           return
         }
       } catch {
+        stillReading = false
         break
       }
     }
-    if (extractionPollTokenRef.current === token) setExtractionPhase('idle')
+    if (extractionPollTokenRef.current === token) setExtractionPhase(stillReading ? 'slow' : 'idle')
+  }
+
+  // "Kolla igen" after a slow reading: the same poll, for the same item.
+  function checkReadingAgain() {
+    const itemId = uploadedInboxItemId
+    const documentId = documentFiles[0]?.id
+    if (!itemId || !documentId) return
+    setExtractionPhase('processing')
+    void pollExtraction(itemId, documentId)
   }
 
   async function uploadPlainDocument(entry: UploadedFile) {
@@ -1800,6 +1852,22 @@ export default function NewSupplierInvoiceForm({
                     )}
                     {underlagFile.status === 'error' && (
                       <p className="text-xs text-destructive">{underlagFile.error}</p>
+                    )}
+                    {underlagFile.status === 'uploaded' && extractionPhase === 'slow' && (
+                      <p className="text-xs text-muted-foreground">
+                        {t('underlag_read_slow')}{' '}
+                        <button type="button" className={QUIET_LINK_CLASS} onClick={checkReadingAgain}>
+                          {t('underlag_read_check_again')}
+                        </button>
+                      </p>
+                    )}
+                    {underlagFile.status === 'uploaded' && extractionPhase === 'failed' && (
+                      <p className="text-xs text-muted-foreground">
+                        {t('underlag_read_failed')}{' '}
+                        <button type="button" className={QUIET_LINK_CLASS} onClick={() => void retryUnderlagReading()}>
+                          {t('underlag_read_retry')}
+                        </button>
+                      </p>
                     )}
                   </div>
                 </div>

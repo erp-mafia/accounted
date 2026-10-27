@@ -27,6 +27,7 @@ export async function extractAndMirror(
     rawText: extraction.rawText,
     model: extraction.model ?? null,
     skipped: extraction.skipped ?? null,
+    failure: extraction.failure ?? null,
   })
   return extraction
 }

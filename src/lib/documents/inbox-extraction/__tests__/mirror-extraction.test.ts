@@ -6,7 +6,14 @@ vi.mock('@/lib/auth/api-keys', () => ({
   createServiceClientNoCookies: () => supabase,
 }))
 
-import { mirrorExtractionToDocument } from '../mirror-extraction'
+import {
+  extractionStamp,
+  mirrorExtractionToDocument,
+  providerUnavailableAttempt,
+  providerUnavailableStamp,
+} from '../mirror-extraction'
+import { isModelExtraction } from '@/lib/documents/model-reading'
+import { deriveExtractionStatus } from '@/app/api/documents/[id]/extraction-status/route'
 
 function lastUpdate() {
   const updates = findCalls('document_attachments', 'update')
@@ -45,9 +52,48 @@ describe('mirrorExtractionToDocument', () => {
     expect(lastUpdate()).toMatchObject({ extracted_data: null, extraction_model: 'failed:no_raw_text' })
   })
 
+  it('stamps a provider outage distinctly, never as failed:no_raw_text', async () => {
+    await mirrorExtractionToDocument('doc-1', { data: {} as never, rawText: null, failure: 'provider_unavailable' })
+    expect(lastUpdate()).toMatchObject({ extracted_data: null, extraction_model: 'failed:provider_unavailable' })
+  })
+
+  it('records the attempt of a retried provider outage in the stamp', async () => {
+    await mirrorExtractionToDocument('doc-1', { data: {} as never, rawText: null, failure: 'provider_unavailable', attempt: 3 })
+    expect(lastUpdate()).toMatchObject({ extraction_model: 'failed:provider_unavailable:3' })
+  })
+
+  it('keeps failed:no_raw_text for every failure that is not the provider', async () => {
+    await mirrorExtractionToDocument('doc-1', { data: {} as never, rawText: null, failure: 'error' })
+    expect(lastUpdate()).toMatchObject({ extracted_data: null, extraction_model: 'failed:no_raw_text' })
+  })
+
   it('never throws: a failed update is logged and swallowed', async () => {
     reset()
     enqueue({ error: { message: 'rls says no' } })
     await expect(mirrorExtractionToDocument('doc-1', { data: {} as never, rawText: null })).resolves.toBeUndefined()
+  })
+})
+
+describe('extraction stamps', () => {
+  it('a skip wins over a failure, and a reading over both', () => {
+    expect(extractionStamp({ data: {} as never, rawText: null, skipped: 'sandbox', failure: 'provider_unavailable' })).toBe('skipped:sandbox')
+    expect(extractionStamp({ data: {} as never, rawText: '{}', model: 'm', failure: 'error' })).toBe('m')
+  })
+
+  it('round-trips the attempt through the stamp', () => {
+    expect(providerUnavailableStamp(1)).toBe('failed:provider_unavailable')
+    expect(providerUnavailableStamp(2)).toBe('failed:provider_unavailable:2')
+    expect(providerUnavailableAttempt('failed:provider_unavailable')).toBe(1)
+    expect(providerUnavailableAttempt('failed:provider_unavailable:3')).toBe(3)
+    expect(providerUnavailableAttempt('failed:no_raw_text')).toBeNull()
+    expect(providerUnavailableAttempt('failed:provider_unavailable:x')).toBeNull()
+    expect(providerUnavailableAttempt(null)).toBeNull()
+  })
+
+  it('reads as a reading that never happened everywhere failed:* does', () => {
+    for (const stamp of ['failed:provider_unavailable', 'failed:provider_unavailable:3']) {
+      expect(isModelExtraction(stamp)).toBe(false)
+      expect(deriveExtractionStatus({ extracted_at: '2026-10-26T09:00:00Z', extracted_data: null, extraction_model: stamp }, true)).toBe('failed')
+    }
   })
 })

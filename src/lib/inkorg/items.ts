@@ -20,6 +20,16 @@ import type { InboxPairing } from './pairs'
  */
 export type UnderlagStatus = 'anchored' | 'unlinked' | 'unlinked_locked' | 'anchored_elsewhere' | 'unknown'
 
+/**
+ * Where an empty reading stands when the AI provider could not take the
+ * call (its document is stamped failed:provider_unavailable): the inbox sweep
+ * reads it again within a quarter of an hour (scheduled) or within two hours
+ * (scheduled_later, after one retry), or no automatic reading is coming
+ * (exhausted: the attempts are used up, or the item is older than the retry
+ * window). The list route derives it; null for any other reading.
+ */
+export type ReadingRetry = 'scheduled' | 'scheduled_later' | 'exhausted'
+
 /** One row of GET /items, as far as the page reads it. */
 export interface InkorgItem {
   id: string
@@ -48,6 +58,8 @@ export interface InkorgItem {
    * computed when the list was read; null for none.
    */
   pairing?: InboxPairing | null
+  /** The provider retry of an empty reading, derived when the list was read; null for none. */
+  reading_retry?: ReadingRetry | null
 }
 
 /**

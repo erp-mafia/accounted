@@ -3,6 +3,7 @@ import { uploadDocument } from '@/lib/core/documents/document-service'
 import { INBOX_UPLOAD_TYPES } from '@/lib/documents/upload-types'
 import { extractInvoiceFields, emptyResult, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { mirrorExtractionToDocument } from '@/lib/documents/inbox-extraction/mirror-extraction'
+import type { ExtractionFailure } from '@/lib/documents/inbox-extraction/extraction-failure'
 import { keepStoredPersonChoices } from '@/lib/documents/person-corrections'
 import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
 import type { InboxKindHint } from './resend-inbound'
@@ -638,7 +639,7 @@ async function processArchivedDocumentInner(
   // invoice. extracted_data is never null in the DB; an empty skeleton
   // keeps downstream readers (UI, MCP) happy.
   const extraction = skipExtraction
-    ? { data: emptyResult(), rawText: null, model: null, skipped: null }
+    ? { data: emptyResult(), rawText: null, model: null, skipped: null, failure: null }
     : await extractInvoiceFields({
         buffer: Buffer.from(slicedBuffer ?? file.buffer),
         mimeType: file.type,
@@ -736,6 +737,7 @@ async function processArchivedDocumentInner(
     rawText,
     model: extraction.model ?? null,
     skipped: skipReason ?? extraction.skipped ?? null,
+    failure: extraction.failure ?? null,
   })
 
   try {
@@ -795,6 +797,76 @@ interface DeferredExtractionJob {
   maxAutoExtractPages: number
 }
 
+export interface InboxReading {
+  extracted: InvoiceExtractionResult
+  rawText: string | null
+  model: string | null
+  extractionSkipped: boolean
+  skipReason: string | null
+  /** extractInvoiceFields' failure; 'error' as well when the reading threw. */
+  failure: ExtractionFailure | null
+}
+
+/**
+ * The inbox's reading of one archived document, off the request: the page
+ * gate's slice (first pages plus the last), then extractInvoiceFields. Shared
+ * by the deferred upload worker and the sweep's provider retry, so a retried
+ * document is read exactly as its upload was. Never throws: extraction
+ * failures are swallowed into the empty skeleton (extractInvoiceFields does
+ * most of that itself), and an unsliceable long PDF becomes the
+ * too_many_pages skip.
+ */
+export async function readForInbox(
+  supabase: import('@supabase/supabase-js').SupabaseClient,
+  job: Pick<DeferredExtractionJob, 'companyId' | 'file' | 'pageCount' | 'gatedByPageCount' | 'maxAutoExtractPages'>,
+): Promise<InboxReading> {
+  const reading: InboxReading = {
+    extracted: emptyResult(),
+    rawText: null,
+    model: null,
+    extractionSkipped: false,
+    skipReason: null,
+    failure: null,
+  }
+  try {
+    const slicedBuffer = job.gatedByPageCount
+      ? await slicePdfForExtraction(job.file.buffer, job.maxAutoExtractPages)
+      : null
+    if (job.gatedByPageCount && slicedBuffer == null) {
+      reading.extractionSkipped = true
+      reading.skipReason = 'too_many_pages'
+      return reading
+    }
+    const result = await extractInvoiceFields({
+      buffer: Buffer.from(slicedBuffer ?? job.file.buffer),
+      mimeType: job.file.type,
+      fileName: job.file.name,
+      ownCompany: await fetchOwnCompanyIdentity(supabase, job.companyId),
+    })
+    reading.extracted = result.data
+    reading.rawText = result.rawText
+    reading.model = result.model ?? null
+    reading.failure = result.failure ?? null
+    if (result.skipped) {
+      // No model call could be made (AI unconfigured, no vision on this
+      // backend, rasterizer missing). Same UI affordance as the other
+      // skips: the row lands with the empty skeleton and the hint.
+      reading.extractionSkipped = true
+      reading.skipReason = result.skipped
+    }
+    if (slicedBuffer != null && job.pageCount != null) {
+      reading.extracted.pages = { total: job.pageCount, analyzed: job.maxAutoExtractPages }
+    }
+  } catch (err) {
+    // The empty skeleton stands, exactly like the sync path on a swallowed
+    // failure: the row becomes a normal received item with empty fields, and
+    // the manual-edit / retry affordances take over.
+    console.error('[invoice-inbox] Reading failed:', err)
+    reading.failure = 'error'
+  }
+  return reading
+}
+
 /**
  * Run extraction after the upload response is sent, then CAS-flip the
  * 'processing' row to 'received'. Exact dispatch-kick idiom (whatsapp-inbox
@@ -808,48 +880,7 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
     try {
       const supabase = createServiceClientNoCookies()
 
-      // Mirrors the synchronous path: extraction failures are swallowed into
-      // the empty skeleton (extractInvoiceFields does most of that itself);
-      // an unsliceable long PDF becomes the too_many_pages skip.
-      let extracted: InvoiceExtractionResult = emptyResult()
-      let rawText: string | null = null
-      let model: string | null = null
-      let extractionSkipped = false
-      let skipReason: string | null = null
-      try {
-        const slicedBuffer = job.gatedByPageCount
-          ? await slicePdfForExtraction(job.file.buffer, job.maxAutoExtractPages)
-          : null
-        if (job.gatedByPageCount && slicedBuffer == null) {
-          extractionSkipped = true
-          skipReason = 'too_many_pages'
-        } else {
-          const result = await extractInvoiceFields({
-            buffer: Buffer.from(slicedBuffer ?? job.file.buffer),
-            mimeType: job.file.type,
-            fileName: job.file.name,
-            ownCompany: await fetchOwnCompanyIdentity(supabase, job.companyId),
-          })
-          extracted = result.data
-          rawText = result.rawText
-          model = result.model ?? null
-          if (result.skipped) {
-            // No model call could be made (AI unconfigured, no vision on this
-            // backend, rasterizer missing). Same UI affordance as the other
-            // skips: the row lands with the empty skeleton and the hint.
-            extractionSkipped = true
-            skipReason = result.skipped
-          }
-          if (slicedBuffer != null && job.pageCount != null) {
-            extracted.pages = { total: job.pageCount, analyzed: job.maxAutoExtractPages }
-          }
-        }
-      } catch (err) {
-        // Persist the empty skeleton below, exactly like the sync path does
-        // on a swallowed failure: the row becomes a normal received item with
-        // empty fields, and the manual-edit / retry affordances take over.
-        console.error('[invoice-inbox] Deferred extraction failed:', err)
-      }
+      const { extracted, rawText, model, extractionSkipped, skipReason, failure } = await readForInbox(supabase, job)
 
       // Supplier match by org-nr, then VAT number, then case-insensitive name
       // (no AI fuzz).
@@ -888,6 +919,7 @@ function scheduleDeferredExtraction(job: DeferredExtractionJob): void {
         rawText,
         model,
         skipped: skipReason,
+        failure,
       })
       // The document holds the model's reading now; a person's carried
       // corrections follow it there, as after an edit.

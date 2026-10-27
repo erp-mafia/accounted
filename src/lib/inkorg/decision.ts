@@ -59,7 +59,7 @@ import type { ExtractedPaymentMethod } from '@/types'
 import { resolveInboxKind, type InboxDocumentKind } from '@/lib/documents/inbox-kind'
 import type { BankMatch } from '@/lib/documents/inbox-bank-match'
 import { cardEvidence } from '@/lib/documents/bank-match/card-token'
-import { isUnderlagDivergent, itemHeadline, itemStage, type InkorgItem, type UnderlagStatus } from './items'
+import { isUnderlagDivergent, itemHeadline, itemStage, type InkorgItem, type ReadingRetry, type UnderlagStatus } from './items'
 
 export type DecisionAction =
   | 'accept_bank_match'
@@ -101,7 +101,11 @@ export type DecisionQuestion =
 export type DecisionEvidence =
   | { kind: 'reading' }
   | { kind: 'unreadable' }
-  | { kind: 'not_read' }
+  | {
+      kind: 'not_read'
+      /** The AI provider could not take the last reading: whether the sweep reads it again (./items.ts ReadingRetry). */
+      retry?: ReadingRetry
+    }
   | { kind: 'due'; date: string }
   | { kind: 'issued'; date: string }
   | { kind: 'paid_with'; method: ExtractedPaymentMethod; cardLast4: string | null }
@@ -298,11 +302,12 @@ export function focusDecision(
 
   // Never read, and the company can have it read: a document filed before its reading (a receipt dropped in Dokument,
   // a mailbox, a company that had no reading then) asked who paid with nothing to go on, and only a failed reading
-  // offered "Läs igen" (PH 101). Reading it is the first answer; who paid stays one click away.
+  // offered "Läs igen" (PH 101). Reading it is the first answer; who paid stays one click away. A reading the AI
+  // provider could not take says so, and whether the sweep reads it again, so an outage never reads as "not read".
   if (context.canRead && item.document_id && nothingRead(item.extracted_data)) {
     return {
       question: 'not_read',
-      evidence: { kind: 'not_read' },
+      evidence: item.reading_retry ? { kind: 'not_read', retry: item.reading_retry } : { kind: 'not_read' },
       actions: ['retry_reading', 'match_purchase', privatelyPaid(startable)],
       quietActions: ['not_underlag'],
       editorEscape: true,
