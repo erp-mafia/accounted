@@ -325,7 +325,13 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
           setMotionState({ direction: -1, completed: false })
           setFocusId(id)
           const code = json?.error?.code ?? ''
-          if (PERIOD_REFUSALS.has(code) || (code === 'INKORG_BOOKING_NEEDS_ANSWER' && json?.error?.details?.ask === 'editor')) {
+          // A plan the voucher guard questions opens in the editor too: the
+          // person sees the lines and confirms or corrects them there.
+          if (
+            PERIOD_REFUSALS.has(code) ||
+            code === 'VOUCHER_NEEDS_CONFIRMATION' ||
+            (code === 'INKORG_BOOKING_NEEDS_ANSWER' && json?.error?.details?.ask === 'editor')
+          ) {
             setEditorRequest({ itemId: id, nonce: Date.now() })
           }
           setRevision((r) => r + 1)

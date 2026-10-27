@@ -7,6 +7,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 // The pair guard (lib/operations/inbox-pair-guard.ts, tested there): here only that the door asks and obeys.
 const refuseWhenPairBookedMock = vi.hoisted(() => vi.fn())
+// The booking-time voucher warnings have their own tests
+// (lib/bookkeeping/__tests__/voucher-*.test.ts); here they pass, so the
+// queued mock answers stay in step.
+const mockVoucherGuard = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bookkeeping/voucher-warnings-guard', () => ({
+  runVoucherWarningsGuard: (...args: unknown[]) => mockVoucherGuard(...args),
+  recordVoucherWarningsAcknowledged: vi.fn(),
+}))
+
 vi.mock('@/lib/operations/inbox-pair-guard', () => ({
   refuseWhenPairBooked: (...args: unknown[]) => refuseWhenPairBookedMock(...args),
 }))
@@ -82,6 +91,8 @@ function makePendingOp(overrides: Partial<PendingOperation>): PendingOperation {
 }
 
 beforeEach(() => {
+  mockVoucherGuard.mockReset()
+  mockVoucherGuard.mockResolvedValue({ ok: true, acknowledged: [] })
   vi.clearAllMocks()
   eventBus.clear()
 })

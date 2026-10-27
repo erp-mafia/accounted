@@ -24,6 +24,7 @@ import { formatCurrency } from '@/lib/utils'
 import type { Transaction } from '@/types'
 import { linkBasisColumns } from '@/lib/links/stamp'
 import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
+import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'transaction.book',
@@ -32,7 +33,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
     const validation = await validateBody(request, BookTransactionSchema)
     if (!validation.success) return validation.response
-    const { fiscal_period_id, entry_date, description, lines, force, expected_duplicate_transaction_id, expected_duplicate_journal_entry_id } = validation.data
+    const { fiscal_period_id, entry_date, description, lines, force, expected_duplicate_transaction_id, expected_duplicate_journal_entry_id, acknowledged_warnings } = validation.data
 
     // Fetch transaction (validates ownership)
     const { data: transaction, error: fetchError } = await supabase
@@ -252,6 +253,17 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     }
     checks.push(passed('bank_line_direction'))
 
+    // The lines are the person's own: the booking-time VAT and revenue
+    // warnings apply (lib/bookkeeping/voucher-warnings-guard.ts). Duplicates
+    // are this door's own guard above, so only the plausibility half runs.
+    const voucherGuard = await runVoucherWarningsGuard(supabase, companyId, { entry_date, description, lines }, log, {
+      acknowledged: acknowledged_warnings,
+      checkDuplicates: false,
+    })
+    if (!voucherGuard.ok) {
+      return errorResponseFromCode(voucherGuard.code, log, { requestId, details: voucherGuard.details })
+    }
+
     // What was on offer, taken before the booking.
     const suggestionSnapshot = await snapshotSuggestions(supabase, companyId, [id])
 
@@ -296,6 +308,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
         { status: 400 }
       )
     }
+    await recordVoucherWarningsAcknowledged({
+      companyId,
+      userId: user.id,
+      journalEntryId: journalEntry.id,
+      warnings: voucherGuard.acknowledged,
+      door: 'bank_row_booking',
+      log,
+    })
 
     // Link transaction to the journal entry. CAS on the pointer value read
     // above (NULL, or a stale pointer at a reversed verifikat), like the

@@ -1,4 +1,13 @@
 {
+  "voucherWarnings": {
+    "title": "Kontrollera verifikationen",
+    "help": "Varningarna jämför raderna med hur en sådan verifikation brukar se ut och med det som redan är bokfört. Stämmer raderna mot underlaget bokför du ändå; annars stänger du och rättar raderna.",
+    "intro": "Den här verifikationen avviker:",
+    "confirm": "Bokför ändå",
+    "cancel": "Rätta raderna",
+    "view_voucher": "Visa verifikationen",
+    "pending_heading": "Varningar som bekräftades när förslaget lades"
+  },
   "common": {
     "sort_by": "Sortera efter {column}",
     "undo": "Ångra",

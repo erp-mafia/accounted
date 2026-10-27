@@ -17,15 +17,22 @@ import { ok } from '@/lib/api/v1/response'
 import { dryRunPreview } from '@/lib/api/v1/dry-run'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { peekNextVoucherNumber } from '@/lib/bookkeeping/engine'
 import { postingPort } from '@/lib/posting/port'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { roundOre } from '@/lib/money'
 import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AcknowledgedWarningsSchema, DASHBOARD_VOUCHER_SOURCE_TYPES } from '@/lib/api/schemas'
+import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 
 const JE_RESPONSE_COLUMNS =
   'id, fiscal_period_id, voucher_series, voucher_number, entry_date, description, status, source_type, source_id, created_at, updated_at'
+
+// Optional: the warnings the caller confirmed after a VOUCHER_NEEDS_CONFIRMATION answer.
+const CommitRequest = z.object({
+  acknowledged_warnings: AcknowledgedWarningsSchema,
+})
 
 const JournalEntryCommitted = z.object({
   id: z.string().uuid(),
@@ -51,8 +58,10 @@ registerEndpoint({
     'Posted entries cannot be edited. Plan the lines carefully or call /correct after commit if you need to change them.',
     'Voucher numbers are sequential within (fiscal_period_id, voucher_series). A commit failure (e.g. period locked between draft creation and commit) does not advance the sequence.',
     'If the key has an unattended commit limit, an entry above it returns 403 UNATTENDED_COMMIT_LIMIT_EXCEEDED and stays a draft for a human to commit. Do not split it into smaller entries: one affärshändelse is one verifikat (BFL 5 kap. 6 §).',
+    'A manual draft whose lines look wrong (VAT above 25 % of what it applies to, VAT on the wrong kind of account, one-sided reverse charge, a revenue account debited in a purchase, a duplicate of a posted verifikat or of booked bank money) returns 409 VOUCHER_NEEDS_CONFIRMATION with error.details.warnings and stays a draft. Show the warnings to a person; commit again with acknowledged_warnings only if they confirm the lines.',
   ],
   example: {
+    request: { acknowledged_warnings: ['INPUT_VAT_ABOVE_RATE'] },
     response: {
       data: { id: '0e9c…', voucher_series: 'A', voucher_number: 143, status: 'posted', entry_date: '2026-05-12' },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -63,12 +72,13 @@ registerEndpoint({
   idempotent: true,
   reversible: true,
   dryRunSupported: true,
+  request: { body: CommitRequest },
   response: { success: dataEnvelope(JournalEntryCommitted) },
 })
 
 export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string }> }>(
   'journal-entries.commit',
-  async (_request, ctx, params) => {
+  async (request, ctx, params) => {
     const { id } = await params.params
     const idParse = z.string().uuid().safeParse(id)
     if (!idParse.success) {
@@ -79,10 +89,29 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
     const entryId = idParse.data
 
+    // The body is optional: its one field is the confirmed warnings.
+    let acknowledged: string[] | undefined
+    let rawBody: unknown = null
+    try {
+      const text = await request.text()
+      if (text.trim()) rawBody = JSON.parse(text)
+    } catch {
+      // Not swallowed: a body that is not JSON is the caller's bug, answered as 400.
+      return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+        requestId: ctx.requestId,
+        details: { field: 'body', message: 'Body is not valid JSON.' },
+      })
+    }
+    if (rawBody) {
+      const parsed = CommitRequest.safeParse(rawBody)
+      if (!parsed.success) return v1ValidationError(ctx, parsed.error)
+      acknowledged = parsed.data.acknowledged_warnings
+    }
+
     // Pre-flight: confirm the draft exists, status='draft', and is in this company.
     const { data: existing, error: fetchErr } = await ctx.supabase
       .from('journal_entries')
-      .select('id, status, fiscal_period_id, voucher_series, entry_date')
+      .select('id, status, fiscal_period_id, voucher_series, entry_date, description, source_type, lines:journal_entry_lines(account_number, debit_amount, credit_amount)')
       .eq('company_id', ctx.companyId!)
       .eq('id', entryId)
       .maybeSingle()
@@ -91,12 +120,36 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     if (!existing) {
       return v1ErrorResponseFromCode('JOURNAL_ENTRY_NOT_FOUND', ctx.log, { requestId: ctx.requestId })
     }
-    const typed = existing as { id: string; status: string; fiscal_period_id: string; voucher_series: string; entry_date: string }
+    const typed = existing as {
+      id: string
+      status: string
+      fiscal_period_id: string
+      voucher_series: string
+      entry_date: string
+      description: string | null
+      source_type: string
+      lines: Array<{ account_number: string; debit_amount: number; credit_amount: number }> | null
+    }
     if (typed.status !== 'draft') {
       return v1ErrorResponseFromCode('VALIDATION_ERROR', ctx.log, {
         requestId: ctx.requestId,
         details: { field: 'status', message: 'Only draft entries can be committed.', current_status: typed.status },
       })
+    }
+
+    // Booking-time warnings on a typed draft, before the dry run so a dry run
+    // answers what the commit would (lib/bookkeeping/voucher-warnings-guard.ts).
+    const voucherGuard = (DASHBOARD_VOUCHER_SOURCE_TYPES as readonly string[]).includes(typed.source_type)
+      ? await runVoucherWarningsGuard(
+          ctx.supabase,
+          ctx.companyId!,
+          { entry_date: typed.entry_date, description: typed.description ?? '', lines: typed.lines ?? [] },
+          ctx.log,
+          { acknowledged, excludeJournalEntryId: entryId },
+        )
+      : null
+    if (voucherGuard && !voucherGuard.ok) {
+      return v1ErrorResponseFromCode(voucherGuard.code, ctx.log, { requestId: ctx.requestId, details: voucherGuard.details })
     }
 
     // ── Approval-authority ceiling.
@@ -184,6 +237,16 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         userId: ctx.userId,
         entryId,
       })
+      if (voucherGuard?.ok) {
+        await recordVoucherWarningsAcknowledged({
+          companyId: ctx.companyId!,
+          userId: ctx.userId,
+          journalEntryId: entryId,
+          warnings: voucherGuard.acknowledged,
+          door: 'v1_commit',
+          log: ctx.log,
+        })
+      }
       // Refetch the projection-only columns to keep the response shape tight.
       const { data } = await ctx.supabase
         .from('journal_entries')

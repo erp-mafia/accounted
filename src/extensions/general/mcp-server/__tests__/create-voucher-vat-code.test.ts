@@ -12,6 +12,15 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { VOUCHER_LINE_VAT_KINDS, VOUCHER_LINE_VAT_RATES } from '@/lib/bookkeeping/voucher-line-vat-code'
 
+// The booking-time voucher warnings have their own tests
+// (lib/bookkeeping/__tests__/voucher-*.test.ts); here they pass, so the
+// queued mock answers stay in step.
+const mockVoucherGuard = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/bookkeeping/voucher-warnings-guard', () => ({
+  runVoucherWarningsGuard: (...args: unknown[]) => mockVoucherGuard(...args),
+  recordVoucherWarningsAcknowledged: vi.fn(),
+}))
+
 vi.mock('@/lib/bookkeeping/engine', async () => {
   const actual = await vi.importActual<typeof import('@/lib/bookkeeping/engine')>('@/lib/bookkeeping/engine')
   return { ...actual, findFiscalPeriod: vi.fn() }
@@ -51,6 +60,8 @@ type StagedLine = { account_number: string; debit_amount: number; credit_amount:
 type ToolError = Error & { code?: string; issues?: Array<{ field: string; message: string }> }
 
 beforeEach(() => {
+  mockVoucherGuard.mockReset()
+  mockVoucherGuard.mockResolvedValue({ ok: true, acknowledged: [] })
   vi.clearAllMocks()
 })
 

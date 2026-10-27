@@ -310,6 +310,31 @@ describe('POST /api/transactions/[id]/book', () => {
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 
+  it('asks for confirmation before booking reverse-charge VAT as a lone 2614 debit, before any draft', async () => {
+    // A foreign invoice with no VAT, booked as if 20 % of it were Swedish
+    // VAT on the reverse-charge output account (2026-10-26 sweep).
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: -195.3, journal_entry_id: null }), error: null })
+
+    const request = createMockRequest('/api/transactions/tx-1/book', {
+      method: 'POST',
+      body: {
+        ...validBody,
+        lines: [
+          { account_number: '6540', debit_amount: 156.24, credit_amount: 0 },
+          { account_number: '2614', debit_amount: 39.06, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 195.3 },
+        ],
+      },
+    })
+    const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { warnings: Array<{ code: string }> } } }>(response)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('VOUCHER_NEEDS_CONFIRMATION')
+    expect(body.error.details.warnings.map((w) => w.code)).toEqual(['REVERSE_CHARGE_ONE_SIDED'])
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
   it('refuses a deposit that credits the bank ledger', async () => {
     enqueue({ data: makeTransaction({ id: 'tx-1', amount: 500, journal_entry_id: null }), error: null })
 

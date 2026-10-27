@@ -39,12 +39,16 @@ export interface AgentToolError {
  * which the message alone cannot tell apart (crm#1314).
  * SALARY_RUN_VACATION_PAY_UNDETERMINED names each employee whose vacation
  * days cannot be priced, with the reason in English (issue #85).
+ * VOUCHER_NEEDS_CONFIRMATION carries the booking-time warnings the person
+ * must see before a voucher is staged again with acknowledge_warnings
+ * (lib/bookkeeping/voucher-warnings-guard.ts).
  */
 const CODES_WITH_DETAILS = new Set([
   'PREVIEW_STALE',
   'TRANSACTION_ALREADY_STAGED',
   'PAYMENT_ORDERS_ACCOUNT_NOT_PAYABLE',
   'SALARY_RUN_VACATION_PAY_UNDETERMINED',
+  'VOUCHER_NEEDS_CONFIRMATION',
 ])
 
 /**

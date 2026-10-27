@@ -42,6 +42,8 @@ import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccount
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import { splitCreateAccountPrefill } from '@/lib/bookkeeping/create-account-prefill'
 import DuplicateBookingDialog, { type DuplicateMatchTransaction } from '@/components/transactions/DuplicateBookingDialog'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import { Skeleton } from '@/components/ui/skeleton'
 import {
   useSubmitWithAccountActivation,
@@ -252,6 +254,12 @@ export default function JournalEntryForm({
   // that retry, never on a normal submit or to the manual journal-entry endpoint.
   const [duplicateCandidate, setDuplicateCandidate] = useState<BookedDuplicateCandidate | null>(null)
   const forceDuplicateRef = useRef<{ force: true; expected_duplicate_journal_entry_id: string } | null>(null)
+  // Booking-time voucher warnings (VOUCHER_NEEDS_CONFIRMATION): shown in a
+  // dialog; "Bokför ändå" resends with the codes in acknowledged_warnings,
+  // and with the duplicate override of the attempt that met them, if any.
+  const [voucherWarnings, setVoucherWarnings] = useState<VoucherWarning[] | null>(null)
+  const acknowledgedWarningsRef = useRef<{ acknowledged_warnings: string[] } | null>(null)
+  const warningsForceRef = useRef<{ force: true; expected_duplicate_journal_entry_id: string } | null>(null)
   const [showReview, setShowReview] = useState(false)
   const [isSavingDraft, setIsSavingDraft] = useState(false)
   const saveAsDraftRef = useRef(false)
@@ -1160,6 +1168,9 @@ export default function JournalEntryForm({
         // handleBookAnyway). Stripped by schemas that don't declare it, so a
         // stray value never reaches the manual journal-entry endpoint.
         ...(forceDuplicateRef.current ?? {}),
+        // Set only when resending past the booking-time voucher warnings
+        // (handleConfirmWarnings). Same strip-safety as the force fields.
+        ...(acknowledgedWarningsRef.current ?? {}),
         // Fields only the caller's endpoint knows about. Same safety as above:
         // a schema that does not declare a key strips it, so this cannot leak
         // into the manual journal-entry route.
@@ -1266,11 +1277,16 @@ export default function JournalEntryForm({
         // User dismissed the activation dialog: no toast needed
       } else {
         const anyErr = err as {
-          body?: { error?: { code?: string; details?: { candidate?: BookedDuplicateCandidate } } }
+          body?: { error?: { code?: string; details?: { candidate?: BookedDuplicateCandidate; warnings?: VoucherWarning[] } } }
           status?: number
         }
         const candidate = anyErr.body?.error?.details?.candidate
-        if (anyErr.body?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
+        const warnings = anyErr.body?.error?.details?.warnings
+        if (anyErr.body?.error?.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(warnings)) {
+          // Keep the duplicate override of this attempt for the resend.
+          warningsForceRef.current = forceDuplicateRef.current
+          setVoucherWarnings(warnings)
+        } else if (anyErr.body?.error?.code === 'TRANSACTION_BOOK_POSSIBLE_DUPLICATE' && candidate) {
           // Soft duplicate guard fired: don't dead-end on a toast that merely
           // says "book anyway". Open the dialog so the user can review the
           // existing verifikat or confirm. handleBookAnyway re-submits with
@@ -1307,6 +1323,24 @@ export default function JournalEntryForm({
       await handleConfirm()
     } finally {
       forceDuplicateRef.current = null
+    }
+  }
+
+  // Resend past the booking-time voucher warnings the person just read: the
+  // server checks again and refuses anything new, so this confirms exactly
+  // what the dialog showed.
+  const handleConfirmWarnings = async () => {
+    const warnings = voucherWarnings
+    if (!warnings) return
+    acknowledgedWarningsRef.current = { acknowledged_warnings: warnings.map((w) => w.code) }
+    forceDuplicateRef.current = warningsForceRef.current
+    setVoucherWarnings(null)
+    try {
+      await handleConfirm()
+    } finally {
+      acknowledgedWarningsRef.current = null
+      forceDuplicateRef.current = null
+      warningsForceRef.current = null
     }
   }
 
@@ -2128,6 +2162,16 @@ export default function JournalEntryForm({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <VoucherWarningsDialog
+        warnings={voucherWarnings}
+        processing={isSubmitting}
+        onCancel={() => {
+          setVoucherWarnings(null)
+          warningsForceRef.current = null
+        }}
+        onConfirm={handleConfirmWarnings}
+      />
 
       <DuplicateBookingDialog
         candidate={duplicateCandidate}

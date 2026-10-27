@@ -1,4 +1,13 @@
 {
+  "voucherWarnings": {
+    "title": "Check the voucher",
+    "help": "The warnings compare the lines with what such a voucher normally looks like and with what is already booked. If the lines match the underlag, book anyway; otherwise close and correct the lines.",
+    "intro": "This voucher deviates:",
+    "confirm": "Book anyway",
+    "cancel": "Correct the lines",
+    "view_voucher": "View the voucher",
+    "pending_heading": "Warnings confirmed when the proposal was made"
+  },
   "common": {
     "sort_by": "Sort by {column}",
     "undo": "Undo",

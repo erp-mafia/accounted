@@ -176,6 +176,7 @@ import {
 } from '@/lib/documents/link-holder'
 import { linkDocumentCopyToVoucher, linkDocumentToVoucher, type LinkDocumentRefusal } from '@/lib/documents/link-document'
 import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
+import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import { requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
@@ -5894,6 +5895,24 @@ async function commitCreateVoucher(
     if (pairBooked) return { error: pairBooked.messageSv, errorCode: pairBooked.code, status: 409, data: pairBooked.details }
   }
 
+  // The booking-time warnings again at approval, against the books as they
+  // are now: a duplicate posted since the staging is refused until it too is
+  // confirmed (lib/bookkeeping/voucher-warnings-guard.ts). An IB is never asked.
+  const voucherGuard =
+    sourceType === 'manual'
+      ? await runVoucherWarningsGuard(supabase, companyId, { entry_date: entryDate, description, lines }, log, {
+          acknowledged: Array.isArray(params.acknowledged_warnings) ? (params.acknowledged_warnings as string[]) : undefined,
+        })
+      : null
+  if (voucherGuard && !voucherGuard.ok) {
+    return {
+      error: getErrorEntry('VOUCHER_NEEDS_CONFIRMATION')?.message_sv ?? 'Verifikationen behöver bekräftas.',
+      errorCode: voucherGuard.code,
+      status: 409,
+      data: voucherGuard.details,
+    }
+  }
+
   try {
     // Posting port (step 2i): while POSTING_EVENTS is on, the voucher's
     // event (the kind its source type names; agent_proposed_user_approved,
@@ -5926,6 +5945,16 @@ async function commitCreateVoucher(
       // rejects anything else (migrations 20260420120001, 20260618120001).
       commitMethod: opts.commitMethod ?? 'user_accept',
     })
+    if (voucherGuard?.ok) {
+      await recordVoucherWarningsAcknowledged({
+        companyId,
+        userId,
+        journalEntryId: entry.id,
+        warnings: voucherGuard.acknowledged,
+        door: 'mcp_create_voucher',
+        log,
+      })
+    }
 
     // Claim the inbox item for this verifikat. Two approvals of different
     // staged ops for the same item can both pass the read above; the

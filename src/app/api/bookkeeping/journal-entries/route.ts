@@ -9,6 +9,8 @@ import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import {
   MissingUnderlagQueryError,
   listMissingUnderlagPage,
@@ -361,10 +363,19 @@ export const POST = withRouteContext(
   // (CreateDashboardJournalEntrySchema).
   const validation = await validateBody(request, CreateDashboardJournalEntrySchema)
   if (!validation.success) return validation.response
-  const body = validation.data
+  const { acknowledged_warnings: acknowledgedWarnings, ...body } = validation.data
 
   const { searchParams } = new URL(request.url)
   const asDraft = searchParams.get('as_draft') === 'true'
+
+  // Booking-time warnings on typed lines: a draft is checked when it is
+  // committed, a posting now (lib/bookkeeping/voucher-warnings-guard.ts).
+  const guard = asDraft
+    ? null
+    : await runVoucherWarningsGuard(supabase, companyId, body, log, { acknowledged: acknowledgedWarnings })
+  if (guard && !guard.ok) {
+    return errorResponseFromCode(guard.code, log, { details: guard.details, requestId: ctx.requestId })
+  }
 
   // Posting port (step 2i): the engine gets the body unchanged and, while
   // POSTING_EVENTS is shadow or strict, the voucher's event (the kind its
@@ -378,6 +389,16 @@ export const POST = withRouteContext(
     const entry = asDraft
       ? await postingPort.draftJournalEntry({ supabase, companyId, userId: user.id, event, input: body })
       : await postingPort.postJournalEntry({ supabase, companyId, userId: user.id, event, input: body })
+    if (guard?.ok && guard.acknowledged.length > 0) {
+      await recordVoucherWarningsAcknowledged({
+        companyId,
+        userId: user.id,
+        journalEntryId: entry.id,
+        warnings: guard.acknowledged,
+        door: 'dashboard_voucher',
+        log,
+      })
+    }
     return NextResponse.json({ data: entry })
   } catch (err) {
     const typed = bookkeepingErrorResponse(err)

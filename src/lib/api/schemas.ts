@@ -39,6 +39,7 @@ import {
   periodEndsBeforeInvoiceMonth,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
+import { VOUCHER_WARNING_CODES } from '@/lib/bookkeeping/voucher-plausibility'
 import { isPaidAtIssueAccount } from '@/lib/invoices/paid-at-issue'
 import { DIMENSION_RULE_TYPES, ruleValueProblem } from '@/lib/dimensions/rule-value'
 import { validateEmployeeBankAccount } from '@/lib/payments/bank-account'
@@ -2356,6 +2357,13 @@ export const CreateApiJournalEntrySchema = CreateJournalEntrySchema.extend({
 })
 
 /** POST /api/bookkeeping/journal-entries: what the dashboard's own forms send. */
+/**
+ * The warning codes a person confirmed after a VOUCHER_NEEDS_CONFIRMATION
+ * answer (lib/bookkeeping/voucher-warnings-guard.ts). The checks run again on
+ * every send, so this names what was seen, never a blanket override.
+ */
+export const AcknowledgedWarningsSchema = z.array(z.enum(VOUCHER_WARNING_CODES)).max(VOUCHER_WARNING_CODES.length).optional()
+
 export const CreateDashboardJournalEntrySchema = CreateJournalEntrySchema.extend({
   source_type: z
     .enum(DASHBOARD_VOUCHER_SOURCE_TYPES, {
@@ -2363,6 +2371,12 @@ export const CreateDashboardJournalEntrySchema = CreateJournalEntrySchema.extend
         'source_type kan bara vara "manual" eller "vat_settlement" här. Övriga källtyper sätts av sina egna flöden.',
     })
     .default('manual'),
+  acknowledged_warnings: AcknowledgedWarningsSchema,
+})
+
+/** Body of the dashboard's draft commit: only the confirmed warnings. */
+export const CommitJournalEntryDraftSchema = z.object({
+  acknowledged_warnings: AcknowledgedWarningsSchema,
 })
 
 export const CorrectJournalEntrySchema = z.object({
@@ -2391,6 +2405,8 @@ export const CorrectJournalEntrySchema = z.object({
  */
 export const CorrectJournalEntryAppSchema = CorrectJournalEntrySchema.extend({
   entry_date: isoDate.optional(),
+  // Booking-time warnings on the corrected lines (AcknowledgedWarningsSchema).
+  acknowledged_warnings: AcknowledgedWarningsSchema,
 })
 
 // ============================================================
@@ -2683,6 +2699,8 @@ export const BookTransactionSchema = z
     force: z.boolean().optional(),
     expected_duplicate_transaction_id: uuid.optional(),
     expected_duplicate_journal_entry_id: uuid.optional(),
+    // Booking-time warnings on the typed lines (AcknowledgedWarningsSchema).
+    acknowledged_warnings: AcknowledgedWarningsSchema,
   })
   .refine((v) => !v.force || !!v.expected_duplicate_transaction_id || !!v.expected_duplicate_journal_entry_id, {
     message: 'expected_duplicate_transaction_id or expected_duplicate_journal_entry_id is required when force=true',
@@ -2902,6 +2920,8 @@ export const BookInboxItemDirectlySchema = z.object({
   notes: z.string().max(2000).optional(),
   lines: z.array(CreateJournalEntryLineSchema).min(2, 'Minst två rader krävs för dubbel bokföring'),
   transaction_id: uuid.optional(),
+  // Booking-time warnings on the typed lines (AcknowledgedWarningsSchema).
+  acknowledged_warnings: AcknowledgedWarningsSchema,
 })
 
 /**

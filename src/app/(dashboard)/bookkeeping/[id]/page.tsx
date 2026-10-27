@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { useCommitDraft } from '@/components/bookkeeping/use-commit-draft'
 import { AccountNumber } from '@/components/ui/account-number'
 import { VoucherLinesTable, type VoucherTableLine } from '@/components/bookkeeping/VoucherLinesTable'
 import { voucherLineView } from '@/lib/bookkeeping/voucher-line-view'
@@ -333,27 +334,35 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
       .catch(() => {})
   }, [])
 
+  // The commit meets the booking-time voucher warnings (useCommitDraft).
+  const onDraftPosted = useCallback(
+    async (posted: { voucher_series?: string | null; voucher_number?: number | null } | null) => {
+      toast({
+        title: t('toast_posted_title'),
+        description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
+      })
+      await fetchData()
+    },
+    [toast, t, fetchData],
+  )
+  const onDraftCommitFailed = useCallback(
+    (result: unknown) => {
+      toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
+    },
+    [toast, t],
+  )
+  const { commit: commitDraft, dialog: commitWarningsDialog } = useCommitDraft({ onPosted: onDraftPosted, onFailed: onDraftCommitFailed })
+
   const handleCommit = useCallback(async () => {
     setIsCommitting(true)
     try {
-      const res = await fetch(`/api/bookkeeping/journal-entries/${id}/commit`, { method: 'POST' })
-      const result = await res.json()
-      if (res.ok) {
-        const posted = result.data
-        toast({
-          title: t('toast_posted_title'),
-          description: t('toast_posted_description', { voucher: formatVoucher(posted ?? {}) }),
-        })
-        await fetchData()
-      } else {
-        toast({ title: t('toast_post_failed'), description: getErrorMessage(result, { context: 'journal_entry' }), variant: 'destructive' })
-      }
+      await commitDraft(id)
     } catch {
       toast({ title: t('toast_post_failed_generic'), variant: 'destructive' })
     } finally {
       setIsCommitting(false)
     }
-  }, [id, toast, fetchData, t])
+  }, [id, toast, t, commitDraft])
 
   const handleDelete = useCallback(async () => {
     setIsDeleting(true)
@@ -1278,6 +1287,9 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
           <p className="text-muted-foreground">{t('deep_chain_reverse_body')}</p>
         </div>
       </ConfirmationDialog>
+
+      {/* Booking-time voucher warnings on the draft's commit */}
+      {commitWarningsDialog}
     </div>
   )
 }

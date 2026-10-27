@@ -17,6 +17,8 @@ import { KonteringLinesEditor } from '@/components/bookkeeping/KonteringLinesEdi
 import RattelseExplainer from '@/components/bookkeeping/RattelseExplainer'
 import { AddAccountDialog } from '@/components/bookkeeping/AddAccountDialog'
 import CorrectionPreview from '@/components/bookkeeping/CorrectionPreview'
+import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
+import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
 import {
   autoCorrectionDescription,
   correctionDescriptionForSubmit,
@@ -48,6 +50,8 @@ type CorrectionLine = CorrectionFormLine
 interface SubmitFlags {
   allowDeepChain?: boolean
   sidesSwapped?: boolean
+  /** The booking-time warning codes the person confirmed (VoucherWarningsDialog). */
+  acknowledgedWarnings?: string[]
 }
 
 interface Props {
@@ -86,6 +90,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
   // credit swapped (MEANINGLESS_CORRECTION, negates_original): a second
   // reversal unless the original itself had the sides swapped (crm#1397).
   const [negatesOriginal, setNegatesOriginal] = useState(false)
+  const [voucherWarnings, setVoucherWarnings] = useState<VoucherWarning[] | null>(null)
   // The overrides of the last submit, so a second confirm keeps the first.
   const lastFlags = useRef<SubmitFlags>({})
   // Index of the line whose combobox opened the create dialog, and the search
@@ -246,6 +251,7 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           ...(dateChanged ? { entry_date: entryDate } : {}),
           ...(flags.allowDeepChain ? { allow_deep_chain: true } : {}),
           ...(flags.sidesSwapped ? { sides_swapped: true } : {}),
+          ...(flags.acknowledgedWarnings ? { acknowledged_warnings: flags.acknowledgedWarnings } : {}),
         }),
       })
 
@@ -254,7 +260,13 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
       if (!res.ok) {
         // Chain-depth guard: open the bypass confirm instead of a dead-end
         // toast. "Rätta ändå" resubmits with allow_deep_chain=true.
-        const structured = (result as { error?: { code?: string; details?: { depth?: number; reason?: string } } })?.error
+        const structured = (result as { error?: { code?: string; details?: { depth?: number; reason?: string; warnings?: VoucherWarning[] } } })?.error
+        // Booking-time warnings on the corrected lines: "Bokför ändå" resends
+        // with every flag of this attempt plus the codes the dialog showed.
+        if (structured?.code === 'VOUCHER_NEEDS_CONFIRMATION' && Array.isArray(structured.details?.warnings)) {
+          setVoucherWarnings(structured.details.warnings)
+          return
+        }
         if (structured?.code === 'CORRECTION_CHAIN_TOO_DEEP') {
           setDeepChainDepth(structured.details?.depth ?? 3)
           return
@@ -521,6 +533,17 @@ export default function CorrectionEntryDialog({ entry, open, onOpenChange, onCor
           </DialogContent>
         </Dialog>
       </DialogContent>
+
+      <VoucherWarningsDialog
+        warnings={voucherWarnings}
+        processing={isSubmitting}
+        onCancel={() => setVoucherWarnings(null)}
+        onConfirm={() => {
+          const codes = (voucherWarnings ?? []).map((w) => w.code)
+          setVoucherWarnings(null)
+          void handleSubmit({ ...lastFlags.current, acknowledgedWarnings: codes })
+        }}
+      />
 
       {/* Nested on purpose: closing this one (Esc, click-outside, Avbryt) must
           leave the half-filled ändringsverifikation behind it untouched. */}
