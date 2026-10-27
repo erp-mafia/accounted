@@ -19,10 +19,10 @@ import {
   type PickedSendResult,
 } from '../turn-on'
 
-const OFF = { available: true, enabled: false, collectionsConnected: false, overdueCount: 3 }
+const OFF = { available: true, enabled: false, collectionsConnected: false, offerableCount: 3 }
 
 describe('turnOnEntry', () => {
-  it('offers turning on when reminders are off and something is overdue', () => {
+  it('offers turning on when reminders are off and an overdue invoice could be offered', () => {
     expect(turnOnEntry(OFF)).toBe('offer')
   })
 
@@ -35,8 +35,8 @@ describe('turnOnEntry', () => {
     expect(turnOnEntry(null)).toBeNull()
   })
 
-  it('offers nothing when nothing is overdue', () => {
-    expect(turnOnEntry({ ...OFF, overdueCount: 0 })).toBeNull()
+  it('offers nothing when no overdue invoice could be offered (a migrated backlog)', () => {
+    expect(turnOnEntry({ ...OFF, offerableCount: 0 })).toBeNull()
   })
 
   it('offers nothing when a collections provider reminds the customers', () => {
@@ -45,7 +45,7 @@ describe('turnOnEntry', () => {
 
   it('shows the status control once reminders are on, also beside a collections connection', () => {
     expect(turnOnEntry({ ...OFF, enabled: true })).toBe('status')
-    expect(turnOnEntry({ ...OFF, enabled: true, overdueCount: 0, collectionsConnected: true })).toBe('status')
+    expect(turnOnEntry({ ...OFF, enabled: true, offerableCount: 0, collectionsConnected: true })).toBe('status')
   })
 })
 

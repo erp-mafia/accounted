@@ -125,6 +125,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { getCountryName } from '@/lib/vat/country-codes'
 import { REMINDERS_SENDING_ENABLED, remindersActiveFor } from '@/lib/invoices/reminders-enabled'
 import { SendReminderDialog } from '@/components/reminders/SendReminderDialog'
+import { useInvoiceReminderLadder } from '@/components/reminders/use-invoice-reminder-ladder'
 import { DetailPageSkeleton } from '@/components/common/DetailPageSkeleton'
 import { CollectionCaseCard } from '@/components/collections/CollectionCaseCard'
 import { SendToCollectionDialog } from '@/components/collections/SendToCollectionDialog'
@@ -469,20 +470,22 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     }
     setAccountingMethod(settings.accounting_method === 'cash' ? 'cash' : 'accrual')
     setDeferInvoiceBooking(!!settings.defer_invoice_booking)
-    setReminderDays([
-      settings.reminder_days_level_1 ?? 15,
-      settings.reminder_days_level_2 ?? 30,
-      settings.reminder_days_level_3 ?? 45,
-    ])
     setAutoRemindersEnabled(remindersActiveFor(settings.send_invoice_reminders))
   }, [companySettings])
   const [showBookConfirm, setShowBookConfirm] = useState(false)
   const [bookVoucherPreview, setBookVoucherPreview] = useState<string | null>(null)
-  const [reminderDays, setReminderDays] = useState<[number, number, number]>([15, 30, 45])
   // null = settings row not loaded; don't promise a reminder schedule then.
   // Otherwise the product-wide kill switch AND the company toggle (crm#95):
   // the toggle alone defaults to on and would claim a schedule nothing runs.
   const [autoRemindersEnabled, setAutoRemindersEnabled] = useState<boolean | null>(null)
+  // Reminders on still remind only the invoices the ladder follows (dated
+  // after the turn-on, sent from Accounted, nothing stopping it): asked of
+  // the policy for this invoice, and read again when its history grows.
+  const reminderLadder = useInvoiceReminderLadder(
+    id,
+    autoRemindersEnabled === true && invoice?.id === id && (invoice.status === 'sent' || invoice.status === 'overdue'),
+    reminders.length,
+  )
 
   // The plain status, as every invoice surface shows it (lib/invoices/status-display.ts).
   const baseStatus = (
@@ -2113,9 +2116,11 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
     ? tCollections(collectionAside.key, collectionAside.key === 'reminders_batch' ? { days: collectionAside.days } : {})
     : null
   // "Skicka påminnelse": an owed invoice of our own past its due date, while
-  // reminders exist at all and no open collection case reminds the customer
-  // already; the send decides the rest from fresh facts.
-  const showReminderItem = REMINDERS_SENDING_ENABLED && !isSelfBilled && isInvoiceOverdue(invoice) && !collectionCaseOnTop
+  // reminders exist at all and no collections provider or open case reminds
+  // the customer already; the send decides the rest from fresh facts.
+  const collectionsConnected = collection.data?.availability.connection?.state === 'active'
+  const showReminderItem =
+    REMINDERS_SENDING_ENABLED && !isSelfBilled && isInvoiceOverdue(invoice) && !collectionCaseOnTop && !collectionsConnected
   const showCustomerLossItem = customerLoss.view?.menuVisible === true
   const showRecoveryItem = customerLoss.view?.recovery?.available === true
   // Correcting the invoice's voucher (storno + rättelse) is a rare repair,
@@ -3338,15 +3343,17 @@ export default function InvoiceDetailPage({ params }: { params: Promise<{ id: st
           aside={
             collectionRemindersAside ? (
               <span className="text-[11px] text-muted-foreground">{collectionRemindersAside}</span>
-            ) : autoRemindersEnabled !== null ? (
+            ) : autoRemindersEnabled === false ? (
+              <span className="text-[11px] text-muted-foreground">{t('reminders_disabled_aside')}</span>
+            ) : reminderLadder?.on ? (
               <span className="text-[11px] tabular-nums text-muted-foreground">
-                {autoRemindersEnabled
+                {reminderLadder.follows
                   ? t('reminders_schedule_aside', {
-                      day1: reminderDays[0],
-                      day2: reminderDays[1],
-                      day3: reminderDays[2],
+                      day1: reminderLadder.days[0],
+                      day2: reminderLadder.days[1],
+                      day3: reminderLadder.days[2],
                     })
-                  : t('reminders_disabled_aside')}
+                  : tReminders('invoice_not_in_ladder')}
               </span>
             ) : undefined
           }

@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
 import { createMockRequest, parseJsonResponse, createQueuedMockSupabase } from '@/tests/helpers'
 
-const { supabase, enqueue, enqueueMany, reset, findCall } = createQueuedMockSupabase()
+const { supabase, enqueue, enqueueMany, reset, findCall, findCalls } = createQueuedMockSupabase()
 
 const requireAuthMock = vi.fn()
 // The payee write-through is its own unit (lib/cash-accounts/__tests__/invoice-payee.test.ts);
@@ -139,6 +139,64 @@ describe('PUT /api/settings', () => {
     expect(status).toBe(200)
     expect(body.data.company_name).toBe('New Name')
     expect(deadlineMocks.regenerate).not.toHaveBeenCalled()
+  })
+
+  // accounted#104: a pending reminder batch can no longer be approved once
+  // reminders are off; it used to wait in Att göra for the next cron sweep.
+  describe('turning reminders off', () => {
+    const put = (body: Record<string, unknown>) =>
+      PUT(createMockRequest('/api/settings', { method: 'PUT', body }), { params: Promise.resolve({}) })
+
+    it("withdraws the company's pending reminder batch as the cron would", async () => {
+      enqueueMany([
+        { data: { send_invoice_reminders: true } },            // fetch oldSettings
+        { data: { id: 's1', send_invoice_reminders: false } }, // update ... returning
+        { data: [{ id: 'op-1' }] },                            // pending_operations withdrawal
+        { data: null, count: 5 },                              // deadlines count
+      ])
+      const response = await put({ send_invoice_reminders: false })
+      expect(response.status).toBe(200)
+      expect(findCall('pending_operations', 'update')?.[0]).toMatchObject({
+        status: 'rejected',
+        rejection_category: 'superseded',
+        result_data: { auto_rejected: true, reason: 'reminders_off' },
+      })
+      expect(findCalls('pending_operations', 'eq')).toEqual([
+        ['company_id', 'company-1'],
+        ['operation_type', 'reminder_daily_batch'],
+        ['status', 'pending'],
+      ])
+    })
+
+    it('leaves the batch alone when reminders stay on, or were off already', async () => {
+      enqueueMany([
+        { data: { send_invoice_reminders: true, reminder_days_level_1: 15, reminder_days_level_2: 30, reminder_days_level_3: 45 } },
+        { data: { id: 's1', send_invoice_reminders: true, reminder_days_level_1: 10 } },
+        { data: null, count: 5 },
+      ])
+      expect((await put({ reminder_days_level_1: 10 })).status).toBe(200)
+
+      enqueueMany([
+        { data: { send_invoice_reminders: false } },
+        { data: { id: 's1', send_invoice_reminders: false } },
+        { data: null, count: 5 },
+      ])
+      expect((await put({ send_invoice_reminders: false })).status).toBe(200)
+      expect(findCall('pending_operations', 'update')).toBeUndefined()
+    })
+
+    it('still saves when the withdrawal fails: the cron sweeps behind it', async () => {
+      enqueueMany([
+        { data: { send_invoice_reminders: true } },
+        { data: { id: 's1', send_invoice_reminders: false } },
+        { data: null, error: { message: 'boom' } },
+        { data: null, count: 5 },
+      ])
+      const response = await put({ send_invoice_reminders: false })
+      const { status, body } = await parseJsonResponse<{ data: { send_invoice_reminders: boolean } }>(response)
+      expect(status).toBe(200)
+      expect(body.data.send_invoice_reminders).toBe(false)
+    })
   })
 
   // crm#1378: the identity reached the Stripe customer once, at checkout, so

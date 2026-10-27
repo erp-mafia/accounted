@@ -34,9 +34,44 @@ describe('renderReminderEmail', () => {
     expect(renderReminderEmail(data()).text).not.toContain('Betalt:')
   })
 
+  it("names a ROT/RUT invoice's amount as the customer's share, not the total the PDF prints", () => {
+    const rot = makeInvoice({ invoice_number: 'F-1042', invoice_date: '2026-11-02', due_date: '2026-12-02', status: 'sent', total: 12500, deduction_total: 5000 })
+    const mail = renderReminderEmail(data({ invoice: rot, amount: 7500, remaining: 2500 }))
+    expect(mail.text).toMatch(/Ditt belopp enligt fakturan: 7\s500,00\sSEK\nBetalt: 5\s000,00\sSEK/)
+    expect(mail.text).not.toContain('Fakturabelopp:')
+    const en = renderReminderEmail(data({ invoice: rot, amount: 7500, remaining: 2500, customer: makeCustomer({ language: 'en' }) }))
+    expect(en.text).toMatch(/Your amount on the invoice: 7,500\.00\sSEK/)
+  })
+
   it('asks for payment by a date in the final reminder', () => {
     expect(renderReminderEmail(data({ level: 3 })).text).toContain('ber dig betala senast den 2027-01-24.')
     expect(renderReminderEmail(data({ level: 3, customer: makeCustomer({ language: 'en' }) })).text).toContain('ask you to pay by 2027-01-24.')
+  })
+
+  it('carries the pay-by date as a row of its own in the final reminder, whatever its text says', () => {
+    const company = makeCompanySettings({ company_name: 'Säljaren AB', reminder_text_overrides: { level_3: { body: 'Betala omgående, tack.' } } })
+    const mail = renderReminderEmail(data({ level: 3, company }))
+    expect(mail.text).not.toContain('senast den')
+    expect(mail.text).toContain('Förfallodatum: 2026-12-02\nBetala senast: 2027-01-24\n')
+    expect(mail.html).toContain('Betala senast:')
+    expect(renderReminderEmail(data({ level: 3, customer: makeCustomer({ language: 'en' }) })).text).toContain('Pay by: 2027-01-24\n')
+    for (const level of [1, 2] as const) expect(renderReminderEmail(data({ level })).text).not.toContain('Betala senast:')
+  })
+
+  it("shows the invoice's payment link as the invoice email does, until a payment comes in", () => {
+    const linked = makeInvoice({ invoice_number: 'F-1042', invoice_date: '2026-11-02', due_date: '2026-12-02', status: 'sent', payment_link_url: 'https://pay.example.se/l/abc' })
+    const mail = renderReminderEmail(data({ invoice: linked }))
+    expect(mail.html).toMatch(/<a href="https:\/\/pay\.example\.se\/l\/abc"[^>]*>Betala online<\/a>/)
+    expect(mail.text).toContain('Betalningsinformation:\nBetala online: https://pay.example.se/l/abc\n')
+    expect(renderReminderEmail(data({ invoice: linked, customer: makeCustomer({ language: 'en' }) })).text).toContain('Pay online: https://pay.example.se/l/abc')
+    // A link for the full amount would ask too much after a part payment.
+    const partPaid = renderReminderEmail(data({ invoice: linked, amount: 12500, remaining: 2500 }))
+    expect(partPaid.html).not.toContain('pay.example.se')
+    expect(partPaid.text).not.toContain('pay.example.se')
+    // Bankgirot debits an Autogiro invoice: no button to pay it by hand.
+    const autogiro = makeInvoice({ ...linked, autogiro_payer_number: '1234567' })
+    expect(renderReminderEmail(data({ invoice: autogiro })).html).not.toContain('pay.example.se')
+    expect(renderReminderEmail(data()).text).not.toContain('Betala online')
   })
 
   it('words each level, and level 3 is a final reminder with no inkasso threat', () => {

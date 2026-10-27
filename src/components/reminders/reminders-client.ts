@@ -3,7 +3,8 @@
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { invalidateReferenceData } from '@/lib/reference-data/invalidate'
 import type { AutomaticReminderState } from '@/lib/reminders/automatic'
-import type { ReminderOverview } from '@/lib/reminders/overview'
+import type { InvoiceReminderLadder } from '@/lib/reminders/invoice-ladder'
+import type { ReminderOverview, ReminderSummary } from '@/lib/reminders/overview'
 import type { ReminderLevel } from '@/lib/reminders/policy'
 import type { ReminderPreview } from '@/lib/reminders/preview'
 import {
@@ -58,8 +59,14 @@ async function reminderCall<T>(
   }
 }
 
+/** The whole sheet: switches, days, automatic sending and the pick list. */
 export function fetchReminderOverview(locale: ErrorLocale): Promise<ReminderCall<ReminderOverview>> {
   return reminderCall<ReminderOverview>('/api/reminders/overview', locale)
+}
+
+/** The invoice list's read: the switches and the offer's count, no pick list. */
+export function fetchReminderSummary(locale: ErrorLocale): Promise<ReminderCall<ReminderSummary>> {
+  return reminderCall<ReminderSummary>('/api/reminders/overview?view=summary', locale)
 }
 
 /** The mail for one invoice (or the company's latest overdue one), at a level or the one a pick would send. */
@@ -72,6 +79,11 @@ export function fetchReminderPreview(
   if (request.level) params.set('level', String(request.level))
   const query = params.toString()
   return reminderCall<ReminderPreview>(`/api/reminders/preview${query ? `?${query}` : ''}`, locale)
+}
+
+/** Whether the daily ladder reminds the invoice by itself, and after which days. */
+export function fetchInvoiceReminderLadder(locale: ErrorLocale, invoiceId: string): Promise<ReminderCall<InvoiceReminderLadder>> {
+  return reminderCall<InvoiceReminderLadder>(`/api/reminders/ladder?invoice_id=${encodeURIComponent(invoiceId)}`, locale)
 }
 
 /** PUT /api/settings (owner or administrator): the toggle and/or the days. */

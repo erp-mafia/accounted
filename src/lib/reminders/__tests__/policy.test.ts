@@ -3,6 +3,7 @@ import {
   decideReminder,
   DEFAULT_REMINDER_DAYS,
   reminderSchedule,
+  sendsAutomatically,
   type ReminderDecisionInput,
   type ReminderHistoryEntry,
   type ReminderInvoiceFacts,
@@ -142,6 +143,31 @@ describe('decideReminder: stops', () => {
     }
     // Delivered or merely delayed does not stop it.
     expect(decide({ today: '2027-01-01', history: [{ ...base, providerStatus: 'delayed' }] })).toEqual({ kind: 'remind', level: 2 })
+  })
+
+  it('stops on a failed send whose outcome is unknown, or not on record', () => {
+    const failed = { ...sent(1, '2026-12-17'), status: 'failed' as const, sentOn: null }
+    expect(decide({ history: [{ ...failed, outcomeUnknown: true }] })).toMatchObject({ reason: 'send_failed' })
+    expect(decide({ history: [failed] })).toMatchObject({ reason: 'send_failed' })
+    expect(decide({ history: [{ ...failed, outcomeUnknown: true }], picked: true })).toMatchObject({ reason: 'send_failed' })
+  })
+
+  it('makes the level due again after a send the provider refused', () => {
+    const refused = { ...sent(1, '2026-12-17'), status: 'failed' as const, sentOn: null, outcomeUnknown: false }
+    expect(decide({ history: [refused] })).toEqual({ kind: 'remind', level: 1 })
+    // Level 2 refused after level 1 went out: level 2 again, on its usual day.
+    const history = [sent(1, '2026-12-17'), { ...refused, level: 2 as const }]
+    expect(decide({ today: '2026-12-31', history })).toMatchObject({ reason: 'not_due', nextOn: '2027-01-01' })
+    expect(decide({ today: '2027-01-01', history })).toEqual({ kind: 'remind', level: 2 })
+  })
+})
+
+describe('sendsAutomatically', () => {
+  it('only an invoice issued and delivered from Accounted', () => {
+    expect(sendsAutomatically(invoice())).toBe(true)
+    expect(sendsAutomatically(invoice({ imported: true }))).toBe(false)
+    expect(sendsAutomatically(invoice({ delivery: 'not_delivered' }))).toBe(false)
+    expect(sendsAutomatically(invoice({ delivery: 'no_history' }))).toBe(false)
   })
 })
 

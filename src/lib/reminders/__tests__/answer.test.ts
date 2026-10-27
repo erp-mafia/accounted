@@ -15,6 +15,7 @@ function reminderRow(overrides: Record<string, unknown> = {}, invoiceOverrides: 
     interest_days: null,
     reminder_fee: 0,
     invoice: {
+      status: 'sent',
       invoice_number: 'F-1042',
       invoice_date: '2026-11-02',
       due_date: '2026-12-02',
@@ -56,10 +57,15 @@ describe('loadReminderAnswer', () => {
       feeDueSeparately: 0,
       alreadyResponded: false,
     })
-    expect(findCalls('invoice_reminders', 'eq')).toEqual([
-      ['action_token', 'tok-1'],
-      ['status', 'sent'],
-    ])
+    expect(findCalls('invoice_reminders', 'eq')).toEqual([['action_token', 'tok-1']])
+  })
+
+  it('opens the link of a mail the provider took, even when the row never reached sent', async () => {
+    const { client, findCalls } = db(reminderRow())
+    await loadReminderAnswer(client, 'tok-1')
+    // Sent, or reserved/failed with the provider's message id: the mail most likely
+    // went out. A reservation the provider never took leads nowhere.
+    expect(findCalls('invoice_reminders', 'or')).toEqual([['status.eq.sent,and(status.in.(reserved,failed),provider_message_id.not.is.null)']])
   })
 
   it("keeps the old sender's fee and interest on its reminders, the fee apart on a foreign invoice", async () => {
@@ -72,7 +78,20 @@ describe('loadReminderAnswer', () => {
 
   it('owes nothing once the books say the invoice is paid', async () => {
     const answer = await loadReminderAnswer(db(reminderRow({}, { remaining_amount: 0, paid_amount: 12500 })).client, 'tok')
-    expect(answer?.view).toMatchObject({ remaining: 0, paid: 12500 })
+    expect(answer?.view).toMatchObject({ remaining: 0, paid: 12500, closedAs: null })
+  })
+
+  it('owes nothing on a credited, cancelled or written-off invoice, without calling it paid', async () => {
+    for (const status of ['credited', 'cancelled', 'written_off'] as const) {
+      // Crediting changes the status, not remaining_amount.
+      const answer = await loadReminderAnswer(
+        db(reminderRow({ reminder_fee: 60, interest_amount: 10 }, { status, remaining_amount: 12500 })).client,
+        'tok',
+      )
+      expect(answer?.view).toMatchObject({ closedAs: status, remaining: 0, paid: 0, totalDue: 0, feeDueSeparately: 0 })
+    }
+    const open = await loadReminderAnswer(db(reminderRow({}, { status: 'overdue' })).client, 'tok')
+    expect(open?.view).toMatchObject({ closedAs: null, remaining: 12500 })
   })
 
   it('knows no other token', async () => {

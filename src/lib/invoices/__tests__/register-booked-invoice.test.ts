@@ -24,8 +24,8 @@ import { REGISTER_BOOKED_INVOICE_MODE, isRegisterBookedInvoiceParams } from '../
 import { rateGivingBack } from '../register-booked-rules'
 import { DOMESTIC_REVERSE_CHARGE_NOTICE, EU_REVERSE_CHARGE_NOTICE, EXPORT_NOTICE_SV } from '../vat-rules'
 
-// Automatic reminder sending is off product-wide (reminders-enabled.ts). The
-// warning must follow that switch, so the tests set it per case.
+// Reminder sending is off product-wide (reminders-enabled.ts). The warning
+// must follow that switch, so the tests set it per case.
 const reminders = vi.hoisted(() => ({ sendingEnabled: false }))
 vi.mock('@/lib/invoices/reminders-enabled', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/invoices/reminders-enabled')>()
@@ -371,7 +371,7 @@ describe('planBookedInvoiceRegistration', () => {
     expect(result.ok && result.plan).toMatchObject({ status: 'partially_paid', paidAmount: 7500, remainingAmount: 5000, paidAsOf: '2026-03-31' })
   })
 
-  it('warns about reminders only while sending is on, product-wide and for the company, and names Utskick', async () => {
+  it('says an overdue registered invoice is not reminded by itself, only while reminders are on, product-wide and for the company', async () => {
     const overdue = { today: '2026-05-01' }
     const customer = { id: CUSTOMER_ID, name: 'Testkund AB', email: 'faktura@example.test' }
     const codes = async (state: Books, overrides: Partial<RegisterBookedInvoiceInput> = {}) => {
@@ -379,15 +379,19 @@ describe('planBookedInvoiceRegistration', () => {
       return result.ok ? result.plan.warnings : []
     }
 
-    // Product-wide switch off (the state today): no reminder goes out, so no promise is made.
+    // Product-wide switch off: no reminder goes out for any invoice, so there is nothing to tell apart.
     expect(await codes({ customer })).toEqual([])
 
     reminders.sendingEnabled = true
     const warned = await codes({ customer })
-    expect(warned.map((w) => w.code)).toEqual(['REGISTER_OVERDUE_REMINDERS'])
-    expect(warned[0].message_sv).toContain('Inställningar, Utskick')
+    // The ladder follows only invoices sent from here: never one with no delivery history (policy.ts).
+    expect(warned.map((w) => w.code)).toEqual(['REGISTER_OVERDUE_NOT_REMINDED'])
+    expect(warned[0].message_sv).toContain('får inga påminnelser av sig själv')
+    expect(warned[0].message_sv).not.toContain('Stäng av')
+    // Partly paid is owed too.
+    expect((await codes({ customer }, { remaining_amount: 100, balance_as_of: '2026-03-31' })).map((w) => w.code)).toEqual(['REGISTER_OVERDUE_NOT_REMINDED'])
     expect(await codes({ customer, settings: { ...SETTINGS, send_invoice_reminders: false } })).toEqual([])
-    expect(await codes({ customer }, { remaining_amount: 100, balance_as_of: '2026-03-31' })).toEqual([])
+    expect(await codes({ customer: { ...customer, email: null } })).toEqual([])
   })
 
   it('warns when the verifikat neither names the invoice number nor sits near the invoice date', async () => {

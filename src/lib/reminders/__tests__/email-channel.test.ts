@@ -34,9 +34,25 @@ describe('createEmailReminderChannel', () => {
     expect(vi.mocked(email.sendEmail).mock.calls[0]![0]).not.toHaveProperty('attachments')
   })
 
+  it('hands the idempotency key to the email service when there is one', async () => {
+    const email = service(async () => ({ success: true, provider: 'resend', messageId: 'msg-1' }))
+    await createEmailReminderChannel(email).send({ ...MESSAGE, idempotencyKey: 'reminder-rem-1-1' })
+    expect(email.sendEmail).toHaveBeenCalledWith(expect.objectContaining({ idempotencyKey: 'reminder-rem-1-1' }))
+    await createEmailReminderChannel(email).send(MESSAGE)
+    expect(vi.mocked(email.sendEmail).mock.calls[1]![0]).not.toHaveProperty('idempotencyKey')
+  })
+
   it('says whether a failure may have gone out', async () => {
-    const refused = createEmailReminderChannel(service(async () => ({ success: false, error: 'rejected' })))
+    const refused = createEmailReminderChannel(service(async () => ({ success: false, error: 'rejected', outcomeUnknown: false })))
     await expect(refused.send(MESSAGE)).rejects.toMatchObject({ code: 'EMAIL_SEND_FAILED', outcomeUnknown: false })
+
+    // No answer, or a server error after the provider took it (Resend).
+    const unknown = createEmailReminderChannel(service(async () => ({ success: false, error: 'Unable to fetch data', outcomeUnknown: true })))
+    await expect(unknown.send(MESSAGE)).rejects.toMatchObject({ code: 'EMAIL_SEND_FAILED', outcomeUnknown: true })
+
+    // A service that cannot tell (SMTP) is read as unknown: a retry could remind twice.
+    const silent = createEmailReminderChannel(service(async () => ({ success: false, error: 'connection timeout' })))
+    await expect(silent.send(MESSAGE)).rejects.toMatchObject({ code: 'EMAIL_SEND_FAILED', outcomeUnknown: true })
 
     const threw = createEmailReminderChannel(service(async () => Promise.reject(new Error('socket hang up'))))
     await expect(threw.send(MESSAGE)).rejects.toMatchObject({ code: 'EMAIL_SEND_THREW', outcomeUnknown: true })

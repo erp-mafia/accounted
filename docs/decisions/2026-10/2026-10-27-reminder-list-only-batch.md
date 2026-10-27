@@ -1,0 +1,1 @@
+[2026-10-27] A reminder that failed with an unknown outcome since the last run stages a reminder batch that only lists, even with nothing due; it never holds back a batch with reminders and counts neither way in the clean streak: no other surface shows failed reminders, and a daily list would nag.

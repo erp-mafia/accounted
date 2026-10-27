@@ -74,7 +74,7 @@ export async function loadReminderContext(
     loadInvoiceDeliveryFacts(db, companyId, invoiceId),
     db
       .from('invoice_reminders')
-      .select('reminder_level, status, sent_at, provider_status, response_type, mode')
+      .select('reminder_level, status, sent_at, provider_status, response_type, mode, outcome_unknown')
       .eq('company_id', companyId)
       .eq('invoice_id', invoiceId),
     // Fail closed: the guard throws when it cannot tell.
@@ -137,6 +137,7 @@ export async function loadReminderContext(
       provider_status: InvoiceDeliveryProviderStatus | null
       response_type: ReminderHistoryEntry['responseType']
       mode: string | null
+      outcome_unknown?: boolean | null
     }>
   ).map((r) => ({
     level: r.reminder_level as ReminderLevel,
@@ -145,6 +146,8 @@ export async function loadReminderContext(
     providerStatus: r.provider_status,
     responseType: r.response_type,
     legacy: r.mode === null,
+    // Only a refusal on record frees the level again; anything else may have gone out.
+    ...(r.status === 'failed' ? { outcomeUnknown: r.outcome_unknown !== false } : {}),
   }))
 
   return { invoice, customer, company: companySettings, companyInactive, amount: claim.amount, facts, history }

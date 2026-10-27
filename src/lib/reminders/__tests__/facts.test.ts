@@ -165,6 +165,19 @@ describe('loadReminderContext', () => {
     ])
   })
 
+  it('reads a failed send as unknown unless the refusal is on record', async () => {
+    const failed = { reminder_level: 1, status: 'failed', sent_at: null, provider_status: null, response_type: null, mode: 'approved' }
+    const ctx = await load({
+      invoice: invoiceRow(),
+      reminders: [
+        { ...failed, outcome_unknown: false },
+        { ...failed, reminder_level: 2, outcome_unknown: true },
+        { ...failed, reminder_level: 3, outcome_unknown: null },
+      ],
+    })
+    expect(ctx.history.map((h) => h.outcomeUnknown)).toEqual([false, true, true])
+  })
+
   it('refuses an invoice the company does not have', async () => {
     await expect(load({ invoice: null })).rejects.toBeInstanceOf(ReminderInvoiceNotFoundError)
   })

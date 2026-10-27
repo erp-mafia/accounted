@@ -430,7 +430,7 @@ const UNSUPPORTED_SHAPE_TEXT: Record<UnsupportedVoucherShape | 'rot_rut', string
 }
 
 export interface BookedInvoiceWarning {
-  code: 'REGISTER_VOUCHER_TEXT' | 'REGISTER_VOUCHER_DATE' | 'REGISTER_OVERDUE_REMINDERS'
+  code: 'REGISTER_VOUCHER_TEXT' | 'REGISTER_VOUCHER_DATE' | 'REGISTER_OVERDUE_NOT_REMINDED'
   message_sv: string
   message_en: string
 }
@@ -729,16 +729,23 @@ export async function planBookedInvoiceRegistration(
     texts: [voucher.description, ...lines.map((line) => line.line_description ?? null)],
     references: [input.invoice_number],
   })
-  // The reminder run writes to every unpaid 'sent' invoice past its due date
-  // whose customer has an e-mail address (partially_paid is never reminded),
-  // but only while sending is on, product-wide and for the company: the
-  // company setting alone promises reminders that never go out (crm#95).
+  // The daily reminder ladder follows only invoices sent from here
+  // (lib/reminders/policy.ts): a registered one has no delivery history, so
+  // with reminders on it is still never reminded by itself. Said where a
+  // person could expect otherwise: owed, past due, a customer with an e-mail
+  // address, and reminders actually on (product-wide and for the company,
+  // crm#95).
   const today = options.today ?? todayIsoStockholm()
-  if (status === 'sent' && input.due_date < today && customer.email && remindersActiveFor(settings?.send_invoice_reminders)) {
+  if (
+    (status === 'sent' || status === 'partially_paid') &&
+    input.due_date < today &&
+    customer.email &&
+    remindersActiveFor(settings?.send_invoice_reminders)
+  ) {
     warnings.push({
-      code: 'REGISTER_OVERDUE_REMINDERS',
-      message_sv: 'Fakturan har förfallit och kunden har en e-postadress: Accounted skickar automatiska betalningspåminnelser för den. Stäng av påminnelser under Inställningar, Utskick om det gamla systemet sköter dem.',
-      message_en: 'The invoice is past due and the customer has an e-mail address: Accounted will send it automatic payment reminders. Turn send_invoice_reminders off first (Inställningar, Utskick) if the old system handles reminders.',
+      code: 'REGISTER_OVERDUE_NOT_REMINDED',
+      message_sv: 'Fakturan har förfallit. En registrerad faktura får inga påminnelser av sig själv, eftersom den inte skickades härifrån: skicka en påminnelse från fakturan om kunden ska få en.',
+      message_en: 'The invoice is past due. A registered invoice gets no reminders by itself, as it was not sent from here: send a reminder from the invoice if the customer should get one.',
     })
   }
 

@@ -23,6 +23,9 @@ import { decideReminder, reminderSchedule, type ReminderSchedule } from './polic
 /** Overdue invoices read for the pick list, newest due date first. */
 export const PICKABLE_SCAN_LIMIT = 100
 
+/** The statuses of an issued invoice that may still be owed (policy.ts). */
+const OWED_STATUSES = ['sent', 'overdue', 'partially_paid']
+
 /** Invoices decided at once while building the pick list. */
 const SCAN_CONCURRENCY = 6
 
@@ -37,15 +40,28 @@ export interface PickableInvoice {
   currency: string
 }
 
-export interface ReminderOverview {
+/**
+ * What the invoice list needs to choose between the offer, the status
+ * control and nothing: flags and one count, a handful of queries, never the
+ * pick list (loadReminderSummary).
+ */
+export interface ReminderSummary {
   /** The product switch (REMINDERS_SENDING_ENABLED): without it nothing can be turned on. */
   available: boolean
   /** The company's reminders are on (and the product switch is). */
   enabled: boolean
   enabledAt: string | null
-  schedule: ReminderSchedule
   /** A collections provider reminds this company's customers; our reminders stay off. */
   collectionsConnected: boolean
+  /**
+   * Overdue invoices the sheet could offer to pick: in the summary one count
+   * (countOfferableInvoices), in the full overview the pick list's length.
+   */
+  offerableCount: number
+}
+
+export interface ReminderOverview extends ReminderSummary {
+  schedule: ReminderSchedule
   /** Issued invoices still owed past their due date. */
   overdueCount: number
   /** Overdue invoices issued and delivered from Accounted before reminders were on: remindable once, now. */
@@ -56,15 +72,39 @@ export interface ReminderOverview {
   automatic: AutomaticReminderState
 }
 
-export async function loadReminderOverview(
-  db: SupabaseClient,
-  companyId: string,
-  options: { now: Date; sendingEnabled?: boolean },
-): Promise<ReminderOverview> {
-  const sendingEnabled = options.sendingEnabled ?? REMINDERS_SENDING_ENABLED
-  const today = todayIsoStockholm(options.now)
+/**
+ * The overdue invoices the sheet could offer, as far as one count can tell
+ * them apart: an owed customer invoice of our own (not a credit note, not
+ * self-billed, not on autogiro) past its due date, whose customer has an
+ * email address and is not marked "Skicka aldrig påminnelser", with an email
+ * send from Accounted on record (sent or marked sent). What only the full
+ * decision sees stays out of it: a bounced send, a delivery by Peppol alone,
+ * a credit note against the invoice, an address the send would refuse,
+ * history from another system. So a migrated company, whose invoices have no
+ * send of ours, is not offered its imported backlog.
+ */
+async function countOfferableInvoices(db: SupabaseClient, companyId: string, today: string): Promise<number> {
+  const { count, error } = await db
+    .from('invoices')
+    .select('id, customer:customers!inner(email, reminders_excluded), invoice_deliveries!inner(status)', { count: 'exact', head: true })
+    .eq('company_id', companyId)
+    .eq('document_type', 'invoice')
+    .is('credited_invoice_id', null)
+    .eq('is_self_billed', false)
+    .is('autogiro_payer_number', null)
+    .in('status', OWED_STATUSES)
+    .gt('remaining_amount', 0)
+    .lt('due_date', today)
+    .not('customer.email', 'is', null)
+    .neq('customer.email', '')
+    .eq('customer.reminders_excluded', false)
+    .in('invoice_deliveries.status', ['sent', 'marked_sent'])
+  if (error) throw new Error(`offerable invoices count failed: ${error.message}`)
+  return count ?? 0
+}
 
-  const [settings, connections, overdue, automatic] = await Promise.all([
+async function loadSwitches(db: SupabaseClient, companyId: string) {
+  const [settings, connections] = await Promise.all([
     db
       .from('company_settings')
       .select('send_invoice_reminders, reminders_enabled_at, reminder_days_level_1, reminder_days_level_2, reminder_days_level_3')
@@ -72,20 +112,8 @@ export async function loadReminderOverview(
       .maybeSingle(),
     // The provider reminds a connected company's customers (reminder-guard.ts).
     db.from('collection_connections').select('id').eq('company_id', companyId).eq('state', 'active').limit(1),
-    db
-      .from('invoices')
-      .select('id', { count: 'exact' })
-      .eq('company_id', companyId)
-      .in('status', ['sent', 'overdue', 'partially_paid'])
-      .gt('remaining_amount', 0)
-      .lt('due_date', today)
-      .order('due_date', { ascending: false })
-      .order('id', { ascending: true })
-      .limit(PICKABLE_SCAN_LIMIT),
-    loadAutomaticReminderState(db, companyId),
   ])
   if (settings.error) throw new Error(`company_settings lookup failed: ${settings.error.message}`)
-  if (overdue.error) throw new Error(`overdue invoices lookup failed: ${overdue.error.message}`)
   // Fail closed: if we cannot tell, nothing is offered.
   if (connections.error) throw new Error(`collection_connections lookup failed: ${connections.error.message}`)
   const row = (settings.data ?? {}) as {
@@ -95,7 +123,55 @@ export async function loadReminderOverview(
     reminder_days_level_2?: number | null
     reminder_days_level_3?: number | null
   }
-  const collectionsConnected = (connections.data ?? []).length > 0
+  return { row, collectionsConnected: (connections.data ?? []).length > 0 }
+}
+
+/**
+ * The invoice list's read: the switches and the offer's count, without the
+ * pick list (each of its invoices reads a dozen tables). The count is asked
+ * only where the offer can show: reminders off, no collections provider.
+ */
+export async function loadReminderSummary(
+  db: SupabaseClient,
+  companyId: string,
+  options: { now: Date; sendingEnabled?: boolean },
+): Promise<ReminderSummary> {
+  const sendingEnabled = options.sendingEnabled ?? REMINDERS_SENDING_ENABLED
+  const { row, collectionsConnected } = await loadSwitches(db, companyId)
+  const enabled = remindersActiveFor(row.send_invoice_reminders, sendingEnabled)
+  const offerable = sendingEnabled && !enabled && !collectionsConnected
+  return {
+    available: sendingEnabled,
+    enabled,
+    enabledAt: row.reminders_enabled_at ?? null,
+    collectionsConnected,
+    offerableCount: offerable ? await countOfferableInvoices(db, companyId, todayIsoStockholm(options.now)) : 0,
+  }
+}
+
+export async function loadReminderOverview(
+  db: SupabaseClient,
+  companyId: string,
+  options: { now: Date; sendingEnabled?: boolean },
+): Promise<ReminderOverview> {
+  const sendingEnabled = options.sendingEnabled ?? REMINDERS_SENDING_ENABLED
+  const today = todayIsoStockholm(options.now)
+
+  const [{ row, collectionsConnected }, overdue, automatic] = await Promise.all([
+    loadSwitches(db, companyId),
+    db
+      .from('invoices')
+      .select('id', { count: 'exact' })
+      .eq('company_id', companyId)
+      .in('status', OWED_STATUSES)
+      .gt('remaining_amount', 0)
+      .lt('due_date', today)
+      .order('due_date', { ascending: false })
+      .order('id', { ascending: true })
+      .limit(PICKABLE_SCAN_LIMIT),
+    loadAutomaticReminderState(db, companyId),
+  ])
+  if (overdue.error) throw new Error(`overdue invoices lookup failed: ${overdue.error.message}`)
   const overdueRows = (overdue.data ?? []) as Array<{ id: string }>
   const overdueCount = overdue.count ?? overdueRows.length
 
@@ -108,17 +184,21 @@ export async function loadReminderOverview(
     overdueCount,
     automatic,
   }
-  if (!sendingEnabled || collectionsConnected) return { ...base, pickable: [], pickableTruncated: false }
+  if (!sendingEnabled || collectionsConnected) return { ...base, pickable: [], pickableTruncated: false, offerableCount: 0 }
+  // The ladder's own start while reminders are on, so what it already
+  // follows is never offered (a pick would send its level 1 early); while
+  // off, as if reminders started now.
+  const enabledAt = base.enabled ? (row.reminders_enabled_at ?? null) : options.now.toISOString()
 
   const decided = await mapWithConcurrency(overdueRows, SCAN_CONCURRENCY, async ({ id }) => {
     const ctx = await loadReminderContext(db, companyId, id)
     if (ctx.companyInactive || !ctx.facts.recipient) return null
-    // Decided as the ladder would, as if reminders started today: what it
-    // leaves out only for being older than the turn-on is what a person may pick.
+    // Decided as the ladder would: what it leaves out only for being older
+    // than the turn-on is what a person may pick.
     const decision = decideReminder({
       today,
       schedule: base.schedule,
-      enabledAt: options.now.toISOString(),
+      enabledAt,
       invoice: ctx.facts,
       history: ctx.history,
     })
@@ -137,9 +217,11 @@ export async function loadReminderOverview(
     return pick
   })
 
+  const pickable = decided.filter((p): p is PickableInvoice => p !== null).sort((a, b) => b.overdue_days - a.overdue_days)
   return {
     ...base,
-    pickable: decided.filter((p): p is PickableInvoice => p !== null).sort((a, b) => b.overdue_days - a.overdue_days),
+    pickable,
     pickableTruncated: overdueCount > overdueRows.length,
+    offerableCount: pickable.length,
   }
 }

@@ -92,6 +92,13 @@ export interface UpdateCompanySettingsResult {
    * failed, which the warnings say).
    */
   dimension_codes_imported: number | null
+  /**
+   * Whether this save turned the company's email reminders off. The settings
+   * page's route then withdraws the pending reminder batch at once
+   * (lib/reminders/withdraw.ts, a block the kernel may not import); on other
+   * doors the reminder cron's sweep withdraws it.
+   */
+  reminders_turned_off: boolean
 }
 
 
@@ -594,6 +601,9 @@ export async function updateCompanySettings(
     if (mirrorError) log.error('failed to mirror the filled-in org number to the company row', mirrorError)
   }
 
+  const remindersTurnedOff =
+    oldSettings?.send_invoice_reminders === true && (data as SettingsRow).send_invoice_reminders !== true
+
   let deadlinesRegenerated = false
   if (shouldRegenerateTaxDeadlines(taxFieldsInBody, await countSystemDeadlines())) {
     try {
@@ -651,6 +661,7 @@ export async function updateCompanySettings(
       settings: data as SettingsRow,
       deadlines_regenerated: deadlinesRegenerated,
       dimension_codes_imported: dimensionCodesImported,
+      reminders_turned_off: remindersTurnedOff,
     },
     ...(warnings.length > 0 ? { warnings } : {}),
   }

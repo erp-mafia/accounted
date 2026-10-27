@@ -9906,8 +9906,8 @@ const COLLECTIONS: Record<string, StructuredErrorEntry> = {
   },
   REMINDERS_UNAVAILABLE: {
     httpStatus: 409,
-    message_sv: 'Påminnelser kan inte skickas från Accounted ännu.',
-    message_en: 'Reminders cannot be sent from Accounted yet.',
+    message_sv: 'Påminnelser kan inte skickas ännu.',
+    message_en: 'Reminders cannot be sent yet.',
   },
   REMINDER_NO_INVOICE_TO_PREVIEW: {
     httpStatus: 404,
