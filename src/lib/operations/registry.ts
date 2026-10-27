@@ -89,6 +89,7 @@ import {
   supplierInvoicesBook,
 } from './invoice-booking'
 import { invoicesCancel } from './invoice-cancel'
+import { invoicesLatePaymentInterestGet } from './late-payment-interest'
 import {
   invoicesPeppolDeliveries,
   invoicesPeppolReadiness,
@@ -333,6 +334,8 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   supplierInvoicesBook,
   // invoice-cancel (makulera a quote or proforma; the dashboard route calls the same service)
   invoicesCancel,
+  // late-payment-interest (dröjsmålsränta per invoice; the dashboard route calls the same service)
+  invoicesLatePaymentInterestGet,
   // peppol
   invoicesPeppolReadiness,
   invoicesSendPeppol,

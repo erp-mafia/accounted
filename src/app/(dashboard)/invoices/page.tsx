@@ -99,6 +99,7 @@ import {
   DocumentArrowUpIcon,
   DocumentIcon,
   DocumentTextIcon,
+  PercentBadgeIcon,
   PlusIcon,
 } from '@/components/icons'
 import {
@@ -371,6 +372,18 @@ export default function InvoicesPage() {
   // The begäran column and its filter share that gate: a company without
   // ROT/RUT never sees an empty column or a picker with nothing to pick.
   const showRotRut = showRotRutAction
+  // Dröjsmålsränta (accounted#38) has its own page; the way there appears
+  // once an issued invoice is past its due date, the only case it can list.
+  const showLateInterestAction =
+    !isQuotesList &&
+    invoices.some(
+      (invoice) =>
+        invoice.document_type === 'invoice' &&
+        !invoice.credited_invoice_id &&
+        invoice.status !== 'draft' &&
+        invoice.status !== 'cancelled' &&
+        invoice.due_date < today,
+    )
   // An installer who only invoices grön teknik lands on its list, not an
   // empty ROT one.
   const rotRutPayoutType = useMemo(() => payoutDialogTypeFor(invoices), [invoices])
@@ -880,6 +893,12 @@ export default function InvoicesPage() {
             >
               <DocumentArrowDownIcon className="mr-2 h-4 w-4" />
               {t('rot_rut_payout_action')}
+            </Button>
+          )}
+          {showLateInterestAction && (
+            <Button size="sm" type="button" variant="outline" onClick={() => router.push('/invoices/late-payment-interest')}>
+              <PercentBadgeIcon className="mr-2 h-4 w-4" />
+              {t('late_interest_action')}
             </Button>
           )}
           {isQuotesList ? (

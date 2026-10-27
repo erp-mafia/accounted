@@ -1,0 +1,1 @@
+[2026-10-26] Dröjsmålsränta counts only payments booked in Accounted, never paid dates or verifikat from an import, so no one charges interest on old-system history (founder call, #38); the räntefaktura button waits on an outside-scope VAT treatment the editor lacks.
