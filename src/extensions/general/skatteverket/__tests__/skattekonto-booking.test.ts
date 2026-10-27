@@ -34,9 +34,11 @@ beforeEach(() => {
 /**
  * System seeds mirror supabase/migrations/20260519100000_skattekonto_rules.sql
  * plus the follow-up corrections 20260817120100 (EF preliminärskatt 2012 ->
- * 2013), 20260819200100 (requires_employer on the 'avdragen skatt' rule) and
- * 20261018132300 (the rot/rut kvittning rule ahead of utbetalning).
- * Kept in lockstep so the resolver behaves identically against mock and real DB.
+ * 2013), 20260819200100 (requires_employer on the 'avdragen skatt' rule),
+ * 20261018132300 (the rot/rut kvittning rule ahead of utbetalning) and
+ * 20261027190100 (the penalty rule ahead of the tax rules, with 'förs.avgift').
+ * Kept in lockstep, in the database's priority order, so the resolver behaves
+ * identically against mock and real DB.
  */
 const SEED_RULES = [
   {
@@ -56,6 +58,12 @@ const SEED_RULES = [
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '__PRIMARY_SEK__', counter_account_ef: null,
     label: 'Utbetalning från skattekonto', active: true, requires_employer: false,
+  },
+  {
+    id: 'sys-7', priority: 15, pattern: 'skattetillägg,förseningsavgift,förs.avgift',
+    amount_min: null, amount_max: null, company_type: 'all',
+    counter_account: '6992', counter_account_ef: null,
+    label: 'Ej avdragsgilla skatteavgifter', active: true, requires_employer: false,
   },
   {
     id: 'sys-3', priority: 20, pattern: 'debiterad preliminärskatt,preliminärskatt,f-skatt,fskatt',
@@ -80,12 +88,6 @@ const SEED_RULES = [
     amount_min: null, amount_max: null, company_type: 'all',
     counter_account: '2650', counter_account_ef: null,
     label: 'Redovisningskonto för moms', active: true, requires_employer: false,
-  },
-  {
-    id: 'sys-7', priority: 25, pattern: 'skattetillägg,förseningsavgift',
-    amount_min: null, amount_max: null, company_type: 'all',
-    counter_account: '6992', counter_account_ef: null,
-    label: 'Ej avdragsgilla skatteavgifter', active: true, requires_employer: false,
   },
   {
     id: 'sys-8', priority: 30, pattern: 'kostnadsränta',
@@ -281,12 +283,20 @@ describe('guessCounterAccount', () => {
     ).toBe('6992')
 
     enqueue({ data: SEED_RULES })
-    // Förseningsavgift contains the substring "förseningsavgift". The "moms" suffix
-    // would also match a lower-priority rule (2650), but priority 25 (penalty)
-    // beats priority 20 (moms): penalty routing wins.
     expect(
       (await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', 'Förseningsavgift arbetsgivardeklaration', 'aktiebolag'))?.account,
     ).toBe('6992')
+  })
+
+  it('routes a penalty that names its tax to 6992, ahead of the tax rule (20261027190100)', async () => {
+    // Skatteverket's own texts: the late fee abbreviates "Förs.avgift" and names
+    // the moms declaration, so the moms rule (2650) matched it first until the
+    // penalty rule moved ahead of the tax rules.
+    for (const text of ['Förs.avgift moms/arbetsgivardeklaration', 'Skattetillägg moms jul', 'Skattetillägg arbetsgivaravgift mars']) {
+      const { supabase, enqueue } = makeSupabase()
+      enqueue({ data: SEED_RULES })
+      expect((await guessCounterAccount(supabase as unknown as SupabaseClient, 'company-1', text, 'aktiebolag'))?.account).toBe('6992')
+    }
   })
 
   it('does NOT route plain omprövning to 6992: underlying tax rules win', async () => {
