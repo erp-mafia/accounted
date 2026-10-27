@@ -79,27 +79,44 @@ function paidReferenceLabel(reference: PaymentAgainstDocument['reference']): str
  * One line per invoice: whether the payment pays the account and reference
  * the document states. A difference reads in the attention tone and names
  * what the invoice says; the text carries it, never the colour alone.
+ * In a list of several, skipMissing leaves out what the invoice does not
+ * state (nothing to act on, and it repeats on every row) and lead, the
+ * account paid, opens the line.
  */
-export function DocumentCheckLine({ payment, className }: { payment: PaymentAgainstDocument; className?: string }) {
+export function DocumentCheckLine({
+  payment,
+  className,
+  lead,
+  skipMissing = false,
+}: {
+  payment: PaymentAgainstDocument
+  className?: string
+  lead?: string
+  skipMissing?: boolean
+}) {
   const t = useTranslations('bank_payments_document')
   const facts = payment.facts
-  if (!facts) return null
-  const checks = checkAgainstDocument({ payee: payment.payee, reference: payment.reference.value }, facts)
-  if (checks.payee === 'same' && checks.reference === 'same') {
-    return <p className={cn('text-[12.5px] text-muted-foreground', className)}>{t('both_same')}</p>
-  }
   const parts: Array<{ key: string; text: string; differs: boolean }> = []
-  if (checks.payee === 'differs') parts.push({ key: 'payee', text: t('states', { value: facts.payee ?? '' }), differs: true })
-  else if (checks.payee === 'missing') parts.push({ key: 'payee', text: t('states_no_payee'), differs: false })
-  else parts.push({ key: 'payee', text: t('payee_same'), differs: false })
-  if (checks.reference === 'differs') parts.push({ key: 'reference', text: t('states', { value: referenceLabel(facts.reference ?? '') }), differs: true })
-  else if (checks.reference === 'missing') parts.push({ key: 'reference', text: t('states_no_reference'), differs: false })
-  else parts.push({ key: 'reference', text: t('reference_same'), differs: false })
+  if (facts) {
+    const checks = checkAgainstDocument({ payee: payment.payee, reference: payment.reference.value }, facts)
+    if (checks.payee === 'same' && checks.reference === 'same') {
+      parts.push({ key: 'both', text: t('both_same'), differs: false })
+    } else {
+      if (checks.payee === 'differs') parts.push({ key: 'payee', text: t('states', { value: facts.payee ?? '' }), differs: true })
+      else if (checks.payee === 'same') parts.push({ key: 'payee', text: t('payee_same'), differs: false })
+      else if (!skipMissing) parts.push({ key: 'payee', text: t('states_no_payee'), differs: false })
+      if (checks.reference === 'differs') parts.push({ key: 'reference', text: t('states', { value: referenceLabel(facts.reference ?? '') }), differs: true })
+      else if (checks.reference === 'same') parts.push({ key: 'reference', text: t('reference_same'), differs: false })
+      else if (!skipMissing) parts.push({ key: 'reference', text: t('states_no_reference'), differs: false })
+    }
+  }
+  if (parts.length === 0 && !lead) return null
   return (
     <p className={cn('text-[12.5px] leading-5 text-muted-foreground', className)}>
+      {lead && <span className="tabular-nums">{lead}</span>}
       {parts.map((part, index) => (
         <span key={part.key}>
-          {index > 0 && ' · '}
+          {(index > 0 || lead) && ' · '}
           <span className={part.differs ? 'text-attn' : undefined}>{part.text}</span>
         </span>
       ))}
