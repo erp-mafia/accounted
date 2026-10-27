@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useId, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -38,7 +38,7 @@ type Busy = 'turn_on' | 'days' | 'turn_off' | 'send' | null
 interface TurnOnRemindersSheetProps {
   open: boolean
   onOpenChange: (open: boolean) => void
-  /** The overview after reminders went on or off, so the page's entry point follows. */
+  /** The overview after reminders went on or off or the days were saved, so the page's entry point follows. */
   onChanged?: (overview: ReminderOverview) => void
 }
 
@@ -80,6 +80,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
   const [sentNames, setSentNames] = useState<Readonly<Record<string, string>>>({})
   const [sendError, setSendError] = useState<string | null>(null)
   const [confirmOff, setConfirmOff] = useState(false)
+  const daysErrorId = useId()
   const preview = useReminderPreview(undefined, level, open && overview !== null && !overview.collectionsConnected)
 
   const load = useCallback(async (): Promise<ReminderOverview | null> => {
@@ -190,7 +191,8 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
       }
       setTypedDays(null)
       toast({ title: t('toast_days_saved') })
-      await load()
+      const next = await load()
+      if (next) onChanged?.(next)
     } finally {
       setBusy(null)
     }
@@ -240,6 +242,16 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                 </div>
               ))}
 
+            {/* A reload that failed after a change: the sheet still shows the state before it. */}
+            {mode !== 'loading' && loadError && (
+              <div className="flex items-center justify-between gap-3 text-[13px] text-destructive">
+                <span>{loadError}</span>
+                <Button variant="outline" size="sm" onClick={() => void load()}>
+                  {t('retry')}
+                </Button>
+              </div>
+            )}
+
             {results && (
               <ReminderSendResults
                 results={results}
@@ -255,9 +267,11 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
             {(mode === 'on' || mode === 'off') && overview && dayInputs && (
               <>
                 <p className="text-[13px] leading-relaxed">
-                  {mode === 'on'
-                    ? t('status_on', { date: overview.enabledAt ? formatDateLong(overview.enabledAt) : '' })
-                    : t('intro', { appName })}
+                  {mode === 'off'
+                    ? t('intro', { appName })
+                    : overview.enabledAt
+                      ? t('status_on', { date: formatDateLong(overview.enabledAt) })
+                      : t('status_on_undated')}
                 </p>
 
                 <section className="space-y-2">
@@ -275,13 +289,14 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                           onChange={(event) => setDay(dayLevel - 1, event.target.value)}
                           disabled={!canManage || busy !== null}
                           aria-invalid={daysCheck?.ok === false && daysCheck.level === dayLevel}
+                          aria-describedby={daysCheck?.ok === false && daysCheck.level === dayLevel ? daysErrorId : undefined}
                           className="tabular-nums"
                         />
                       </label>
                     ))}
                   </div>
                   {daysCheck && !daysCheck.ok && (
-                    <p className="text-[12.5px] text-destructive">
+                    <p id={daysErrorId} className="text-[12.5px] text-destructive">
                       {t(`days_error_${daysCheck.error}`, { level: t(`level_name_${daysCheck.level}`) })}
                     </p>
                   )}
@@ -316,13 +331,13 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                   </section>
                 )}
 
-                {mode === 'off' && <p className="text-[13px] leading-relaxed">{t('consequence')}</p>}
+                {mode === 'off' && <p className="text-[13px] leading-relaxed">{t('consequence', { appName })}</p>}
 
                 {pickable.length > 0 && (
                   <section className="space-y-2">
                     <p className="text-[13px]">{t('pick_question', { count: pickable.length })}</p>
                     <p className="text-[12.5px] text-muted-foreground">
-                      {t('pick_hint')}
+                      {mode === 'off' && !canManage ? t('pick_hint_send_only') : t('pick_hint')}
                       {overview.pickableTruncated && <> {t('pick_truncated')}</>}
                     </p>
                     <PickList invoices={pickable} picked={picked} onToggle={togglePick} disabled={!canWrite || busy !== null} />
@@ -333,7 +348,7 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
               </>
             )}
           </SlideOverBody>
-          <SlideOverFooter>
+          <SlideOverFooter className="flex-wrap">
             {mode === 'on' && canManage && (
               <Button variant="ghost" className="mr-auto" disabled={busy !== null} onClick={() => setConfirmOff(true)}>
                 {t('turn_off')}
@@ -344,13 +359,27 @@ function TurnOnRemindersSheetContent({ open, onOpenChange, onChanged }: TurnOnRe
                 <Button variant="ghost" disabled={busy !== null} onClick={() => handleOpenChange(false)}>
                   {tCommon('cancel')}
                 </Button>
-                <Button
-                  disabled={!canManage || !daysCheck?.ok || (busy !== null && busy !== 'turn_on')}
-                  loading={busy === 'turn_on'}
-                  onClick={() => void turnOn()}
-                >
-                  {picked.size > 0 ? t('turn_on_and_send', { count: picked.size }) : t('turn_on')}
-                </Button>
+                {canManage ? (
+                  <Button
+                    disabled={!daysCheck?.ok || (busy !== null && busy !== 'turn_on')}
+                    loading={busy === 'turn_on'}
+                    onClick={() => void turnOn()}
+                  >
+                    {picked.size > 0 ? t('turn_on_and_send', { count: picked.size }) : t('turn_on')}
+                  </Button>
+                ) : (
+                  // A member cannot turn reminders on, but may send the picked
+                  // ones now: the send route takes a pick with reminders off.
+                  picked.size > 0 && (
+                    <Button
+                      disabled={!canWrite || (busy !== null && busy !== 'send')}
+                      loading={busy === 'send'}
+                      onClick={() => void sendNow([...picked], false)}
+                    >
+                      {t('send_now', { count: picked.size })}
+                    </Button>
+                  )
+                )}
               </>
             ) : mode === 'on' ? (
               <>

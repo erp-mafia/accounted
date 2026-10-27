@@ -25,6 +25,7 @@ function reminderRow(overrides: Record<string, unknown> = {}) {
     interest_days: 30,
     reminder_fee: 60,
     invoice: {
+      status: 'overdue',
       invoice_number: 'F2026011',
       invoice_date: '2026-04-15',
       due_date: '2026-05-01',
@@ -48,7 +49,10 @@ function useDb(tables: Parameters<typeof createTableMockSupabase>[0]) {
   return mock
 }
 
-const post = (body: unknown) => POST(createMockRequest('/api/invoices/reminders/action', { method: 'POST', body }))
+// The route's rate limits are module-level state shared across this file:
+// each test uses its own tokens and client addresses.
+const post = (body: unknown, headers?: Record<string, string>) =>
+  POST(createMockRequest('/api/invoices/reminders/action', { method: 'POST', body, headers }))
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -77,5 +81,24 @@ describe('POST /api/invoices/reminders/action', () => {
     expect((await post({ token: 'nope', action: 'marked_paid' })).status).toBe(404)
     useDb({ invoice_reminders: { data: reminderRow({ action_token_used: true }) } })
     expect((await post({ token: 'tok', action: 'marked_paid' })).status).toBe(409)
+  })
+
+  it('answers 429 once a link is over its budget, before reading the database', async () => {
+    useDb({ invoice_reminders: { data: reminderRow({ action_token_used: true }) } })
+    for (let i = 0; i < 10; i++) expect((await post({ token: 'tok-budget', action: 'marked_paid' })).status).toBe(409)
+    const mock = useDb({ invoice_reminders: { data: reminderRow({ action_token_used: true }) } })
+    const limited = await post({ token: 'tok-budget', action: 'marked_paid' })
+    expect(limited.status).toBe(429)
+    expect(await limited.json()).toEqual({ error: 'RATE_LIMITED' })
+    expect(mock.tables()).toEqual([])
+  })
+
+  it('answers 429 to a client trying one made-up token after another', async () => {
+    useDb({ invoice_reminders: { data: null } })
+    const from = { 'x-forwarded-for': '203.0.113.7' }
+    for (let i = 0; i < 60; i++) expect((await post({ token: `guess-${i}`, action: 'marked_paid' }, from)).status).toBe(404)
+    expect((await post({ token: 'guess-60', action: 'marked_paid' }, from)).status).toBe(429)
+    // Another network keeps its own budget.
+    expect((await post({ token: 'guess-61', action: 'marked_paid' }, { 'x-forwarded-for': '198.51.100.7' })).status).toBe(404)
   })
 })

@@ -4,11 +4,12 @@ import { REMINDER_BATCH_ITEM_KIND, REMINDER_BATCH_TYPE } from './batch'
 /**
  * Automatic reminders (accounted#104, phase 4). By default every day's
  * reminders wait in Att göra for a person. Once a company's last
- * CLEAN_BATCHES_FOR_AUTOMATIC batches were approved without changes (nothing
- * taken out, nothing rejected), it is offered to let the batch send itself:
- * then the reminders whose bank check passed go out by themselves, and
- * anything uncertain (a bank not synced in 24 hours, or none connected)
- * still waits for a person. Turned off in the same places, and whenever
+ * CLEAN_BATCHES_FOR_AUTOMATIC batches since reminders went on were approved
+ * without changes (cleanBatchStreak), it is offered to let the batch send itself:
+ * then the reminders whose bank check passed, for invoices issued and
+ * delivered from Accounted, go out by themselves, and anything else (a bank
+ * not synced in 24 hours or none connected, an imported invoice) still
+ * waits for a person. Turned off in the same places, and whenever
  * reminders are turned off (migration 20261027120300).
  */
 
@@ -27,22 +28,60 @@ export interface AutomaticReminderState {
 
 type Db = Pick<SupabaseClient, 'from'>
 
-/** How many of the company's latest decided reminder batches in a row were approved without changes. */
+/**
+ * Decided batches read when counting the streak. More than the streak: a
+ * batch that only listed invoices (nothing staged to send) is passed over.
+ */
+const STREAK_LOOKBACK = CLEAN_BATCHES_FOR_AUTOMATIC * 5
+
+interface DecidedBatch {
+  id: string
+  status: string
+  /** preview_data.item_count: the reminders staged to send. */
+  item_count: unknown
+  /** result_data.sent_count and .skipped, written by the commit (batch-commit.ts). */
+  sent_count: unknown
+  skipped: unknown
+}
+
+/**
+ * How many of the company's latest decided reminder batches in a row were
+ * approved without changes, counting only batches staged since reminders
+ * were last turned on (company_settings.reminders_enabled_at). Clean:
+ * committed, at least one reminder sent, nothing taken out, and nothing
+ * found changed at the send (batch_skip_changed). A rejected batch, or one
+ * that sent nothing, ends the streak. A batch that only listed invoices
+ * counts neither way.
+ */
 export async function cleanBatchStreak(db: Db, companyId: string): Promise<number> {
+  const { data: settings, error: settingsError } = await db
+    .from('company_settings')
+    .select('reminders_enabled_at')
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (settingsError) throw new Error(`company_settings lookup failed: ${settingsError.message}`)
+  const enabledAt = (settings as { reminders_enabled_at?: string | null } | null)?.reminders_enabled_at ?? null
+  // Reminders off: no streak, and turning them on again starts a new one.
+  if (!enabledAt) return 0
+
   const { data: batches, error } = await db
     .from('pending_operations')
-    .select('id, status')
+    .select('id, status, item_count:preview_data->item_count, sent_count:result_data->sent_count, skipped:result_data->skipped')
     .eq('company_id', companyId)
     .eq('operation_type', REMINDER_BATCH_TYPE)
     .in('status', ['committed', 'rejected'])
+    .gt('created_at', enabledAt)
     .order('created_at', { ascending: false })
-    .limit(CLEAN_BATCHES_FOR_AUTOMATIC)
+    .limit(STREAK_LOOKBACK)
   if (error) throw new Error(`reminder batch lookup failed: ${error.message}`)
-  const recent = (batches ?? []) as Array<{ id: string; status: string }>
   const committed: string[] = []
-  for (const batch of recent) {
-    if (batch.status !== 'committed') break
+  for (const batch of (batches ?? []) as DecidedBatch[]) {
+    if (batch.item_count === 0) continue
+    const sent = typeof batch.sent_count === 'number' ? batch.sent_count : 0
+    const changed = Array.isArray(batch.skipped) && batch.skipped.some((s) => (s as { reason?: unknown } | null)?.reason === 'changed')
+    if (batch.status !== 'committed' || sent < 1 || changed) break
     committed.push(batch.id)
+    if (committed.length === CLEAN_BATCHES_FOR_AUTOMATIC) break
   }
   if (committed.length === 0) return 0
 

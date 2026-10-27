@@ -43,7 +43,11 @@ export const REMINDER_BATCH_EXCLUDED_REASONS = [
   'response',
   /** A reminder bounced or was reported as spam. */
   'undelivered',
-  /** A reminder could not be sent, or nobody knows whether it was. */
+  /**
+   * Nobody knows whether a reminder went out: no answer from the provider,
+   * or a send interrupted before it was recorded (swept, gather.ts). A send
+   * the provider refused is tried again instead.
+   */
   'send_failed',
   /** Reminded by the old sender (before 2026-10): a person decides what comes next. */
   'earlier_reminders',
@@ -119,7 +123,14 @@ export function remainingReminderItems(
   return params.items.filter((item) => !out.has(item.invoice_id))
 }
 
-/** Swedish, as every staged operation's title (the /pending list is in Swedish). */
-export function reminderBatchTitle(batchDate: string, count: number): string {
+/**
+ * Swedish, as every staged operation's title (the /pending list is in
+ * Swedish). A batch with nothing to send lists the reminders whose outcome
+ * nobody knows (unconfirmed, gather.ts).
+ */
+export function reminderBatchTitle(batchDate: string, count: number, unconfirmed = 0): string {
+  if (count === 0 && unconfirmed > 0) {
+    return `Påminnelser ${batchDate}: ${unconfirmed} ${unconfirmed === 1 ? 'påminnelse' : 'påminnelser'} att kontrollera`
+  }
   return `Påminnelser ${batchDate}: ${count} ${count === 1 ? 'faktura' : 'fakturor'} att granska`
 }

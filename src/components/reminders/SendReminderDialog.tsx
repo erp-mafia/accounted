@@ -57,8 +57,10 @@ interface SendReminderDialogProps {
  * mail at the level the policy picks and who gets it, a warning when the
  * invoice was imported (the old sender reminded imported history that was
  * long paid), then the outcome, including the bank check's retry once the
- * person attests the invoice is unpaid. Renders nothing while
- * REMINDERS_SENDING_ENABLED is false.
+ * person attests the invoice is unpaid. When the policy would skip the
+ * invoice (the next level not due yet, all three sent, an answer from the
+ * customer, ...) it says why instead, and offers no send. Renders nothing
+ * while REMINDERS_SENDING_ENABLED is false.
  */
 export function SendReminderDialog(props: SendReminderDialogProps) {
   if (!REMINDERS_SENDING_ENABLED) return null
@@ -76,6 +78,8 @@ function SendReminderDialogContent({ open, onOpenChange, invoiceId, companyId, c
   const [sending, setSending] = useState(false)
 
   const mail = preview.result?.ok ? preview.result.data : null
+  // What a pick would do now: a skip is said, not sent (the send would skip it too).
+  const skip = mail?.decision.kind === 'skip' ? mail.decision.reason : null
 
   const handleOpenChange = (next: boolean) => {
     if (sending) return
@@ -90,7 +94,11 @@ function SendReminderDialogContent({ open, onOpenChange, invoiceId, companyId, c
     const outcome = await sendPickedReminders(locale, [invoiceId], bankAttested)
     setResults((previous) => (bankAttested && previous ? mergeSendResults(previous, outcome.results) : outcome.results))
     setSendError(outcome.error)
-    if (outcome.results.some((result) => result.status === 'sent')) onSent()
+    if (outcome.results.some((result) => result.status === 'sent')) {
+      onSent()
+      // The next open shows the next level, or why there is none: never this read again.
+      preview.retry()
+    }
   }
 
   async function confirm(bankAttested: boolean) {
@@ -108,18 +116,20 @@ function SendReminderDialogContent({ open, onOpenChange, invoiceId, companyId, c
         <DialogHeader>
           <DialogTitle className="font-display text-lg tracking-tight">{t('invoice_dialog_title')}</DialogTitle>
         </DialogHeader>
-        {mail && (
+        {mail && !results && (
           <p data-ph-mask="" className="text-[13px] leading-relaxed">
-            {mail.to
-              ? t('invoice_dialog_body', { name: t(`level_name_${mail.level}`), to: mail.to })
-              : t('invoice_dialog_no_email')}
+            {skip
+              ? t(`skip_${skip}`)
+              : mail.to
+                ? t('invoice_dialog_body', { name: t(`level_name_${mail.level}`), to: mail.to })
+                : t('invoice_dialog_no_email')}
           </p>
         )}
-        {imported && !results && <p className="attn text-[12.5px]">{t('invoice_imported_warning')}</p>}
+        {imported && !results && !skip && <p className="attn text-[12.5px]">{t('invoice_imported_warning')}</p>}
         {results ? (
           <ReminderSendResults results={results} canWrite={canWrite} onAttestedRetry={() => confirm(true)} />
         ) : (
-          <ReminderMailPreview result={preview.result} onRetry={preview.retry} />
+          !skip && <ReminderMailPreview result={preview.result} onRetry={preview.retry} />
         )}
         {sendError && <p className="text-[13px] text-destructive">{sendError}</p>}
         <DialogFooter className="gap-2 sm:gap-2">
@@ -130,7 +140,7 @@ function SendReminderDialogContent({ open, onOpenChange, invoiceId, companyId, c
               <Button variant="ghost" disabled={sending} onClick={() => handleOpenChange(false)}>
                 {tCommon('cancel')}
               </Button>
-              <Button disabled={!canWrite || !mail?.to} loading={sending} onClick={() => void confirm(false)}>
+              <Button disabled={!canWrite || !mail?.to || skip !== null} loading={sending} onClick={() => void confirm(false)}>
                 {t('invoice_send')}
               </Button>
             </>

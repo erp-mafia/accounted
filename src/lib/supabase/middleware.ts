@@ -391,6 +391,14 @@ async function updateSessionInner(
     return supabaseResponse
   }
 
+  // The reminder mail's answer link: a customer opens /invoice-action/<token>
+  // to answer "Jag har betalat" or "Något stämmer inte" without an account
+  // (the token is resolved server-side against invoice_reminders). See
+  // app/(public)/invoice-action/[token]/page.tsx.
+  if (pathname.startsWith('/invoice-action/')) {
+    return supabaseResponse
+  }
+
   // Reset-password is reachable in both auth states. The recovery flow lands
   // here with a fresh session (created by the OTP exchange in /auth/callback)
   // precisely so the user can call supabase.auth.updateUser({ password }). If

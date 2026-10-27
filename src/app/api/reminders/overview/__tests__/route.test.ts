@@ -10,7 +10,8 @@ vi.mock('@/lib/company/context', () => ({
 }))
 vi.mock('@/lib/supabase/server', () => ({ createServiceClient: () => ({}) }))
 const overviewMock = vi.hoisted(() => vi.fn())
-vi.mock('@/lib/reminders/overview', () => ({ loadReminderOverview: overviewMock }))
+const summaryMock = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/reminders/overview', () => ({ loadReminderOverview: overviewMock, loadReminderSummary: summaryMock }))
 
 import { GET } from '../route'
 
@@ -31,5 +32,23 @@ describe('GET /api/reminders/overview', () => {
     const res = await GET(createMockRequest('/api/reminders/overview'), createMockRouteParams({}))
     expect((await parseJsonResponse(res)).body).toEqual({ data: { available: true, enabled: false, pickable: [] } })
     expect(overviewMock).toHaveBeenCalledWith(expect.anything(), 'company-1', expect.objectContaining({ now: expect.any(Date) }))
+    expect(summaryMock).not.toHaveBeenCalled()
+  })
+
+  it('answers only the summary for view=summary, without building the pick list', async () => {
+    summaryMock.mockResolvedValue({ available: true, enabled: false, enabledAt: null, collectionsConnected: false, offerableCount: 2 })
+    const res = await GET(createMockRequest('/api/reminders/overview', { searchParams: { view: 'summary' } }), createMockRouteParams({}))
+    expect((await parseJsonResponse(res)).body).toEqual({
+      data: { available: true, enabled: false, enabledAt: null, collectionsConnected: false, offerableCount: 2 },
+    })
+    expect(summaryMock).toHaveBeenCalledWith(expect.anything(), 'company-1', expect.objectContaining({ now: expect.any(Date) }))
+    expect(overviewMock).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 for an unknown view', async () => {
+    const res = await GET(createMockRequest('/api/reminders/overview', { searchParams: { view: 'everything' } }), createMockRouteParams({}))
+    expect(res.status).toBe(400)
+    expect(overviewMock).not.toHaveBeenCalled()
+    expect(summaryMock).not.toHaveBeenCalled()
   })
 })

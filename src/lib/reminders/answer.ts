@@ -13,6 +13,9 @@ import type { ReminderResponseType } from '@/types'
  * customer's language. "Jag har betalat" and "Något stämmer inte" both stop
  * further reminders of the invoice (policy.ts reads response_type), and the
  * customer may say why in a short note the company sees on the invoice.
+ * An invoice the company credited, cancelled or wrote off is closed: nothing
+ * is left to pay on it, whatever remaining_amount still says (crediting
+ * changes the status, not the amount).
  *
  * Reminders of the old sender (removed 2026-10-12) may carry a fee and
  * interest; they are shown as they were sent. New reminders carry neither.
@@ -34,6 +37,8 @@ export interface ReminderAnswerView {
   paid: number
   /** What is left to pay today, in `currency`, before the old sender's fee and interest. */
   remaining: number
+  /** The invoice is closed without being paid; null while it is open or paid. */
+  closedAs: ClosedInvoiceStatus | null
   reminderLevel: number
   alreadyResponded: boolean
   previousResponse: ReminderResponseType | null
@@ -48,6 +53,14 @@ export interface ReminderAnswerView {
   totalDue: number
   /** The fee in SEK when it cannot share the invoice's currency. */
   feeDueSeparately: number
+}
+
+/** Invoice statuses that leave nothing to pay without the invoice being paid. */
+const CLOSED_INVOICE_STATUSES = ['credited', 'cancelled', 'written_off'] as const
+export type ClosedInvoiceStatus = (typeof CLOSED_INVOICE_STATUSES)[number]
+
+function closedStatus(status: string | null): ClosedInvoiceStatus | null {
+  return (CLOSED_INVOICE_STATUSES as readonly string[]).includes(status ?? '') ? (status as ClosedInvoiceStatus) : null
 }
 
 type Db = Pick<SupabaseClient, 'from'>
@@ -66,6 +79,7 @@ interface ReminderRow {
 }
 
 interface InvoiceRow {
+  status: string | null
   invoice_number: string | null
   invoice_date: string
   due_date: string
@@ -88,7 +102,13 @@ function num(value: unknown): number {
   return value === null || value === undefined ? 0 : Number(value)
 }
 
-/** A reminder that reached the customer, by its link token; null for any other token. */
+/**
+ * A reminder that reached the customer, by its link token; null for any other
+ * token. Sent, or reserved or failed after the provider took the mail (it
+ * gave a message id): a send whose 'sent' record failed, or a reservation
+ * swept to failed with its outcome unknown, most likely reached the customer,
+ * and the link in it must still open.
+ */
 async function findSentReminder(db: Db, token: string): Promise<ReminderRow | null> {
   const { data, error } = await db
     .from('invoice_reminders')
@@ -96,13 +116,13 @@ async function findSentReminder(db: Db, token: string): Promise<ReminderRow | nu
       `id, company_id, reminder_level, response_type, action_token_used,
        interest_amount, interest_rate, interest_days, reminder_fee,
        invoice:invoices(
-         invoice_number, invoice_date, due_date, total, vat_amount, currency,
+         status, invoice_number, invoice_date, due_date, total, vat_amount, currency,
          paid_amount, deduction_total, remaining_amount, credited_invoice_id, ore_rounding,
          customer:customers(name, language)
        )`,
     )
     .eq('action_token', token)
-    .eq('status', 'sent')
+    .or('status.eq.sent,and(status.in.(reserved,failed),provider_message_id.not.is.null)')
     .maybeSingle()
   if (error) throw new Error(`reminder lookup failed: ${error.message}`)
   return (data as ReminderRow | null) ?? null
@@ -134,10 +154,15 @@ export async function loadReminderAnswer(db: Db, token: string): Promise<{ compa
     },
     company.ore_rounding ?? null,
   )
-  const remaining = num(invoice.remaining_amount) <= 0 ? 0 : claim.remaining
+  const owed = num(invoice.remaining_amount) <= 0 ? 0 : claim.remaining
+  const closedAs = closedStatus(invoice.status)
+  const remaining = closedAs ? 0 : owed
   const interestAmount = num(reminder.interest_amount)
   const reminderFee = num(reminder.reminder_fee)
-  const amounts = calculateReminderAmounts({ invoiceTotal: remaining, interestAmount, reminderFee, currency: invoice.currency })
+  // A closed invoice owes nothing, the old sender's fee and interest included.
+  const amounts = closedAs
+    ? { totalDue: 0, feeDueSeparately: 0 }
+    : calculateReminderAmounts({ invoiceTotal: remaining, interestAmount, reminderFee, currency: invoice.currency })
   const customer = one(invoice.customer)
 
   const view: ReminderAnswerView = {
@@ -149,8 +174,9 @@ export async function loadReminderAnswer(db: Db, token: string): Promise<{ compa
     dueDate: invoice.due_date,
     currency: invoice.currency,
     amount: claim.amount,
-    paid: Math.max(0, roundOre(claim.amount - remaining)),
+    paid: Math.max(0, roundOre(claim.amount - owed)),
     remaining,
+    closedAs,
     reminderLevel: reminder.reminder_level,
     alreadyResponded: reminder.action_token_used,
     previousResponse: reminder.response_type,

@@ -9,6 +9,8 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useCompany } from '@/contexts/CompanyContext'
+import { useBranding } from '@/lib/branding/brand-context'
 import { toggleUnticked } from '@/lib/collections/batch-dialog'
 import type { ReminderBatchCommitResult, ReminderBatchItem } from '@/lib/reminders/batch'
 import {
@@ -37,7 +39,9 @@ import { cn, formatCurrency, formatDate } from '@/lib/utils'
  * (removal only) right before the approval, and the send decides every
  * remaining invoice again against the books and the bank, then says which
  * it skipped and why. No typed confirmation word: a reminder is lighter
- * than an inkasso step.
+ * than an inkasso step. A member sees the batch but neither unticks nor
+ * sends it: the approval refuses anyone but an owner or administrator
+ * (batch-commit.ts).
  *
  * Mount it per batch (key it by the operation id) while it is open: it reads
  * the batch when it mounts and starts with everything ticked.
@@ -101,6 +105,9 @@ function InvoiceWithReason({ invoiceId, number, customer, reason }: { invoiceId:
 export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitted }: Props) {
   const t = useTranslations('reminders')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
+  const { appName } = useBranding()
+  const { role } = useCompany()
+  const canApprove = role === 'owner' || role === 'admin'
   const [view, setView] = useState<ReminderBatchView | null>(null)
   const [loading, setLoading] = useState(true)
   const [loadFailed, setLoadFailed] = useState(false)
@@ -265,9 +272,13 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
                             <TableCell className={cn(CELL, 'w-8')}>
                               <Checkbox
                                 checked={isTicked}
-                                disabled={!pending || sending}
+                                disabled={!pending || sending || !canApprove}
                                 onCheckedChange={() => setUnticked((current) => toggleUnticked(current, item.invoice_id))}
-                                aria-label={t('batch_item_aria', { number: item.invoice_number ?? '' })}
+                                aria-label={
+                                  item.invoice_number
+                                    ? t('batch_item_aria', { number: item.invoice_number })
+                                    : t('batch_item_aria_unnumbered', { customer: item.customer_name ?? item.recipient })
+                                }
                               />
                             </TableCell>
                             <TableCell className={cn(CELL, 'max-w-[12rem] truncate')}>{item.customer_name ?? ''}</TableCell>
@@ -313,7 +324,7 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
                       invoiceId={row.invoice_id}
                       number={row.invoice_number ?? t('batch_col_invoice')}
                       customer={row.customer_name}
-                      reason={t(REMINDER_EXCLUDED_REASON_KEY[row.reason])}
+                      reason={t(REMINDER_EXCLUDED_REASON_KEY[row.reason], { appName })}
                     />
                   ))}
                 </ul>
@@ -325,6 +336,7 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
                 {ticked.length > 0 ? t('batch_total', { count: ticked.length, amount: totals }) : t('batch_none_ticked')}
               </p>
             )}
+            {pending && !canApprove && <p className="text-[12.5px] text-muted-foreground">{t('batch_admin_only')}</p>}
           </div>
         )}
 
@@ -338,7 +350,7 @@ export function ReminderBatchDialog({ operationId, open, onOpenChange, onCommitt
               <Button variant="outline" disabled={sending} onClick={() => onOpenChange(false)}>
                 {t('batch_cancel')}
               </Button>
-              {pending && (
+              {pending && canApprove && (
                 <Button loading={sending} disabled={!canSend} onClick={() => void send()}>
                   {t('batch_confirm', { count: ticked.length })}
                 </Button>

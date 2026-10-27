@@ -7,10 +7,10 @@ import { Button } from '@/components/ui/button'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useBranding } from '@/lib/branding/brand-context'
 import { REMINDERS_SENDING_ENABLED } from '@/lib/invoices/reminders-enabled'
-import type { ReminderOverview } from '@/lib/reminders/overview'
+import type { ReminderSummary } from '@/lib/reminders/overview'
 import { TURN_ON_OFFER_NOTICE_ID, turnOnEntry } from '@/lib/reminders/turn-on'
 import { createClient } from '@/lib/supabase/client'
-import { errorLocale, fetchReminderOverview } from './reminders-client'
+import { errorLocale, fetchReminderSummary } from './reminders-client'
 
 /** Whether this user dismissed the offer for this company (POST /api/notices/dismiss; RLS reads only their own rows). */
 async function offerDismissed(companyId: string): Promise<boolean> {
@@ -27,17 +27,18 @@ async function offerDismissed(companyId: string): Promise<boolean> {
 
 interface ListRemindersState {
   companyId: string
-  overview: ReminderOverview | null
+  overview: ReminderSummary | null
   dismissed: boolean
 }
 
 /**
- * The invoice list's way to reminders (accounted#104, phase 3): the overview
- * read once, after the list has loaded, and only while
- * REMINDERS_SENDING_ENABLED is on, so the list does no extra work while the
- * feature is dark. It decides the offer (off, something overdue, not
- * dismissed by this user for this company) or the quiet status control (on),
- * and holds the sheet both open.
+ * The invoice list's way to reminders (accounted#104, phase 3): the summary
+ * (the switches and the offer's count, never the pick list) read once, after
+ * the list has loaded, and only while REMINDERS_SENDING_ENABLED is on, so the
+ * list does no extra work while the feature is dark. It decides the offer
+ * (off, an overdue invoice the sheet could offer, not dismissed by this user
+ * for this company) or the quiet status control (on), and holds the sheet
+ * both open; only the sheet reads the pick list.
  */
 export function useInvoiceListReminders(active: boolean) {
   const locale = errorLocale(useLocale())
@@ -52,7 +53,7 @@ export function useInvoiceListReminders(active: boolean) {
     if (!read || !companyId) return
     let cancelled = false
     void (async () => {
-      const result = await fetchReminderOverview(locale)
+      const result = await fetchReminderSummary(locale)
       // Without an overview the list offers nothing and carries on as before.
       const overview = result.ok ? result.data : null
       const dismissed = turnOnEntry(overview) === 'offer' ? await offerDismissed(companyId) : false
@@ -75,7 +76,7 @@ export function useInvoiceListReminders(active: boolean) {
   }, [])
 
   const onChanged = useCallback(
-    (overview: ReminderOverview) =>
+    (overview: ReminderSummary) =>
       setState((previous) => (companyId ? { companyId, overview, dismissed: previous?.dismissed ?? false } : previous)),
     [companyId],
   )
@@ -84,7 +85,7 @@ export function useInvoiceListReminders(active: boolean) {
   return {
     entry,
     offerShown: entry === 'offer' && current?.dismissed === false,
-    overdueCount: current?.overview?.overdueCount ?? 0,
+    offerCount: current?.overview?.offerableCount ?? 0,
     dismiss,
     openSheet: () => setSheetOpen(true),
     sheet: { open: sheetOpen, onOpenChange: setSheetOpen, onChanged },

@@ -532,6 +532,26 @@ describe('updateSession redirect destinations', () => {
     })
   })
 
+  describe("anonymous access to a reminder's answer link", () => {
+    it('serves /invoice-action/<token> without a login bounce', async () => {
+      const response = await run('/invoice-action/0f3a9c')
+      expect(response.status).not.toBe(307)
+      expect(locationOf(response)).toBeNull()
+    })
+
+    it('serves it to a signed-in user without redirecting away', async () => {
+      state.user = SIGNED_IN
+      const response = await run('/invoice-action/0f3a9c')
+      expect(response.status).not.toBe(307)
+    })
+
+    it('keeps the bare prefix protected', async () => {
+      const response = await run('/invoice-actions')
+      expect(response.status).toBe(307)
+      expect(new URL(locationOf(response)!).pathname).toBe('/login')
+    })
+  })
+
   // ── Site 1: protected-route bounce ────────────────────────────────────
 
   describe('protected route bounce to /login', () => {

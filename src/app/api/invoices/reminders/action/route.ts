@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server'
+import { requestClientIp, truncateIp } from '@/lib/api/ip'
+import { createTokenRateLimiter } from '@/lib/api/token-rate-limit'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { createLogger } from '@/lib/logger'
 import {
@@ -18,6 +20,13 @@ import type { ReminderResponseType } from '@/types'
 
 const log = createLogger('api/invoices/reminders/action')
 
+// Process-local, like the payslip link's limiter. A link answers once, so 10
+// posts per token per 10 minutes covers retries and a second tab; the client
+// budget bounds a caller trying made-up tokens, which a per-token limit never
+// sees twice.
+const tokenLimiter = createTokenRateLimiter({ max: 10, windowMs: 10 * 60_000 })
+const clientLimiter = createTokenRateLimiter({ max: 60, windowMs: 10 * 60_000 })
+
 export async function POST(request: Request) {
   let body: { token?: unknown; action?: unknown; note?: unknown }
   try {
@@ -36,6 +45,11 @@ export async function POST(request: Request) {
   }
   const note = typeof body.note === 'string' ? body.note.trim() : ''
   if (note.length > REMINDER_ANSWER_NOTE_MAX) return NextResponse.json({ error: 'NOTE_TOO_LONG' }, { status: 400 })
+
+  const client = truncateIp(requestClientIp(request))
+  if (!tokenLimiter.allow(token) || (client !== undefined && !clientLimiter.allow(client))) {
+    return NextResponse.json({ error: 'RATE_LIMITED' }, { status: 429 })
+  }
 
   try {
     const result = await recordReminderAnswer(createServiceClientNoCookies(), {

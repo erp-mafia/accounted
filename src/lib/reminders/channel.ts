@@ -27,6 +27,8 @@ export interface ReminderMessage {
   text: string
   /** The invoice PDF as the customer was first emailed it, when there is one. */
   attachments?: Array<{ filename: string; content: Buffer; contentType: string }>
+  /** One per send attempt (dispatch.ts): a provider that supports it never sends the same attempt twice. */
+  idempotencyKey?: string
 }
 
 export interface ReminderReceipt {
@@ -44,9 +46,11 @@ export interface ReminderChannel {
 export class ReminderChannelError extends Error {
   readonly code: string
   /**
-   * The provider may have sent it anyway (a timeout, a dropped connection).
-   * The reminder is recorded as failed either way and the ladder stops for a
-   * person to look: sending it again could remind the customer twice.
+   * The provider may have sent it anyway (a timeout, a dropped connection,
+   * a server error after it took the mail). The reminder is recorded as
+   * failed either way. A known refusal is tried again at the next decision;
+   * an unknown outcome stops the ladder for a person to look, since sending
+   * it again could remind the customer twice.
    */
   readonly outcomeUnknown: boolean
 

@@ -1,9 +1,11 @@
 import type { CompanySettings, Customer, Invoice, ReminderTextOverride } from '@/types'
+import { getAmountToPay } from '@/lib/bookkeeping/invoice-rounding'
 import { companyWithInvoicePaymentAccount } from '@/lib/cash-accounts/invoice-payment-accounts'
 import { formatCurrencyForCustomer, invoiceEmailPaymentRows, type EmailLang } from '@/lib/email/invoice-templates'
 import { applyPlaceholders, escapeHtml, sanitizeSubjectLine, userTextToHtml } from '@/lib/email/user-text'
 import { roundOre } from '@/lib/money'
 import { customerGreetingName } from '@/lib/invoices/customer-greeting-name'
+import { invoiceAutogiroPayerNumber } from '@/lib/invoices/payment-rows'
 import { formatDate, getCompanyDisplayName } from '@/lib/utils'
 import type { ReminderLevel } from './policy'
 
@@ -11,7 +13,12 @@ import type { ReminderLevel } from './policy'
  * The reminder email, per level, in the customer's language (customers.language,
  * Swedish unless 'en'). It shows what is left to pay, not the original total,
  * and the payment rows of the invoice email and the PDF, so the customer sees
- * one way to pay everywhere.
+ * one way to pay everywhere. The invoice's payment link is the invoice
+ * email's "Betala online" button, until a payment comes in: the link may ask
+ * for a fixed amount, which is too much after a part payment.
+ *
+ * The final reminder carries its pay-by date as a row of its own, so a
+ * company text that leaves out {betala_senast} still says by when.
  *
  * No fee and no interest in v1 (decided 2026-10-26, accounted#104): nothing
  * here adds to what is owed. Level 3 is a final reminder, not an
@@ -91,9 +98,13 @@ const WORDS = {
     invoiceNumber: 'Fakturanummer:',
     invoiceDate: 'Fakturadatum:',
     dueDate: 'Förfallodatum:',
+    payBy: 'Betala senast:',
     invoiceAmount: 'Fakturabelopp:',
+    // A ROT/RUT invoice prints a larger total, then the deduction: this is the customer's share.
+    invoiceAmountAfterDeduction: 'Ditt belopp enligt fakturan:',
     paid: 'Betalt:',
     remaining: 'Att betala:',
+    payOnline: 'Betala online',
     paymentHeading: 'Betalningsinformation',
     actionLead: 'Har du redan betalat, eller stämmer något inte med fakturan?',
     actionLink: 'Meddela oss här',
@@ -109,9 +120,12 @@ const WORDS = {
     invoiceNumber: 'Invoice number:',
     invoiceDate: 'Invoice date:',
     dueDate: 'Due date:',
+    payBy: 'Pay by:',
     invoiceAmount: 'Invoice amount:',
+    invoiceAmountAfterDeduction: 'Your amount on the invoice:',
     paid: 'Paid:',
     remaining: 'Amount due:',
+    payOnline: 'Pay online',
     paymentHeading: 'Payment information',
     actionLead: 'Already paid, or is something wrong with the invoice?',
     actionLink: 'Let us know here',
@@ -195,16 +209,20 @@ export function renderReminderEmail(data: ReminderEmailData): RenderedReminderEm
     [W.invoiceDate, formatDate(invoice.invoice_date)],
     [W.dueDate, formatDate(invoice.due_date)],
   ]
+  if (level === 3) summary.push([W.payBy, formatDate(data.payBy)])
   // A part payment shows what the invoice asked for and what came in, so the
   // smaller amount asked for is not a surprise.
   const paid = roundOre(data.amount - data.remaining)
   if (paid > 0) {
+    const deduction = getAmountToPay(invoice, company).deductionApplies
     summary.push(
-      [W.invoiceAmount, formatCurrencyForCustomer(data.amount, invoice.currency, lang)],
+      [deduction ? W.invoiceAmountAfterDeduction : W.invoiceAmount, formatCurrencyForCustomer(data.amount, invoice.currency, lang)],
       [W.paid, formatCurrencyForCustomer(paid, invoice.currency, lang)],
     )
   }
   const payment = invoiceEmailPaymentRows(company, invoice, lang)
+  // As on the invoice email; never on an Autogiro invoice, which Bankgirot debits.
+  const payLink = paid <= 0 && !invoiceAutogiroPayerNumber(invoice) ? invoice.payment_link_url?.trim() || null : null
   const footer = company.org_number
     ? [`${W.orgNo} ${company.org_number}`, company.vat_number ? `${W.vat} ${company.vat_number}` : null, company.f_skatt ? F_SKATT : null]
         .filter((part): part is string => part !== null)
@@ -213,8 +231,8 @@ export function renderReminderEmail(data: ReminderEmailData): RenderedReminderEm
 
   return {
     subject,
-    html: reminderHtml({ data, lang, body, summary, amount, payment, footer, companyName }),
-    text: reminderText({ data, lang, body, summary, amount, payment, footer, companyName }),
+    html: reminderHtml({ data, lang, body, summary, amount, payment, payLink, footer, companyName }),
+    text: reminderText({ data, lang, body, summary, amount, payment, payLink, footer, companyName }),
   }
 }
 
@@ -225,6 +243,8 @@ interface Parts {
   summary: Array<[string, string]>
   amount: string
   payment: Array<{ label: string; value: string; emphasis?: boolean }>
+  /** The invoice's own payment link; null leaves the button out. */
+  payLink: string | null
   footer: string | null
   companyName: string
 }
@@ -235,11 +255,16 @@ function cellRow(label: string, value: string, valueStyle = ''): string {
   return `<tr><td style="padding: 6px 0; ${MUTED}">${escapeHtml(label)}</td><td style="padding: 6px 0; text-align: right;${valueStyle}">${escapeHtml(value)}</td></tr>`
 }
 
-function reminderHtml({ data, lang, body, summary, amount, payment, footer, companyName }: Parts): string {
+function reminderHtml({ data, lang, body, summary, amount, payment, payLink, footer, companyName }: Parts): string {
   const W = WORDS[lang]
   const color = brandColor(data.company.invoice_primary_color)
   const heading = `${W.heading[data.level]} ${W.from(companyName)}`
   const paymentRows = payment.map((row) => cellRow(row.label, row.value, row.emphasis ? ' font-weight: 500;' : '')).join('')
+  // The invoice email's pay-online button. The URL is schema-validated
+  // (https-only) but still escaped for the attribute context.
+  const payOnline = payLink
+    ? `<div style="margin-bottom: 25px; text-align: center;"><a href="${escapeHtml(payLink)}" style="display: inline-block; background: ${color}; color: #ffffff; text-decoration: none; padding: 12px 32px; border-radius: 6px; font-size: 16px; font-weight: 600;">${escapeHtml(W.payOnline)}</a></div>`
+    : ''
   const action = data.actionUrl
     ? `<p style="margin: 0 0 20px 0;">${escapeHtml(W.actionLead)} <a href="${escapeHtml(data.actionUrl)}" style="color: ${color};">${escapeHtml(W.actionLink)}</a></p>`
     : ''
@@ -259,6 +284,7 @@ function reminderHtml({ data, lang, body, summary, amount, payment, footer, comp
     summary.map(([label, value]) => cellRow(label, value)).join(''),
     cellRow(W.remaining, amount, ` font-size: 18px; font-weight: 600; color: ${color};`),
     '</table>',
+    payOnline,
     `<h2 style="margin: 0 0 10px 0; font-size: 16px; font-weight: 600; color: ${color};">${escapeHtml(W.paymentHeading)}</h2>`,
     `<table style="width: 100%; border-collapse: collapse; margin-bottom: 25px;">${paymentRows}</table>`,
     action,
@@ -273,7 +299,7 @@ function reminderHtml({ data, lang, body, summary, amount, payment, footer, comp
   ].join('\n')
 }
 
-function reminderText({ data, lang, body, summary, amount, payment, footer, companyName }: Parts): string {
+function reminderText({ data, lang, body, summary, amount, payment, payLink, footer, companyName }: Parts): string {
   const W = WORDS[lang]
   const lines = [
     `${W.heading[data.level]} ${W.from(companyName)}`,
@@ -286,6 +312,7 @@ function reminderText({ data, lang, body, summary, amount, payment, footer, comp
     `${W.remaining} ${amount}`,
     '',
     `${W.paymentHeading}:`,
+    ...(payLink ? [`${W.payOnline}: ${payLink}`] : []),
     ...payment.map((row) => `${row.label} ${row.value}`),
     '',
   ]

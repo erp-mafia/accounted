@@ -1022,7 +1022,7 @@ export default function InvoicesPage() {
       )}
 
       {reminders.offerShown && (
-        <RemindersOfferRow count={reminders.overdueCount} onOpen={reminders.openSheet} onDismiss={reminders.dismiss} />
+        <RemindersOfferRow count={reminders.offerCount} onOpen={reminders.openSheet} onDismiss={reminders.dismiss} />
       )}
 
       {/* Bulkbar: appears once anything is selected (supplier-invoices shape). */}

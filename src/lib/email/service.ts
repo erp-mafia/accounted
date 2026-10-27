@@ -36,6 +36,12 @@ export interface SendEmailOptions {
     content: Buffer | string
     contentType?: string
   }>
+  /**
+   * The same key on a second request makes the provider answer the first
+   * one's result instead of sending again (Resend keeps it 24 hours). A
+   * provider without the concept (SMTP) ignores it.
+   */
+  idempotencyKey?: string
 }
 
 export interface SendEmailResult {
@@ -43,6 +49,14 @@ export interface SendEmailResult {
   provider?: string
   messageId?: string
   error?: string
+  /**
+   * On a failure: true when the mail may have gone out anyway (no answer, a
+   * server error after the provider took it, an idempotency conflict);
+   * false when the provider refused it, so nothing went out. Absent: the
+   * service cannot tell, and a caller that must not send twice reads it as
+   * unknown.
+   */
+  outcomeUnknown?: boolean
 }
 
 export interface EmailService {

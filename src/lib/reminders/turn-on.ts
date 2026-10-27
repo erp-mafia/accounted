@@ -1,5 +1,5 @@
 import type { DispatchSkipReason } from './dispatch'
-import type { ReminderOverview } from './overview'
+import type { ReminderSummary } from './overview'
 import { REMINDER_LEVELS, type ReminderLevel } from './policy'
 
 /**
@@ -27,17 +27,19 @@ export type TurnOnEntry = 'offer' | 'status' | null
 
 /**
  * What the invoice list shows for reminders: the offer to turn them on (off,
- * no collections provider, something overdue), the quiet status control
- * (on), or nothing. Reminders that are on keep their control even beside a
- * collections connection, so they can still be turned off.
+ * no collections provider, an overdue invoice the sheet could offer), the
+ * quiet status control (on), or nothing. Reminders that are on keep their
+ * control even beside a collections connection, so they can still be turned
+ * off. A company with nothing to offer turns reminders on from Försäljning →
+ * Utskick.
  */
 export function turnOnEntry(
-  overview: Pick<ReminderOverview, 'available' | 'enabled' | 'collectionsConnected' | 'overdueCount'> | null,
+  overview: Pick<ReminderSummary, 'available' | 'enabled' | 'collectionsConnected' | 'offerableCount'> | null,
 ): TurnOnEntry {
   if (!overview?.available) return null
   if (overview.enabled) return 'status'
   if (overview.collectionsConnected) return null
-  return overview.overdueCount > 0 ? 'offer' : null
+  return overview.offerableCount > 0 ? 'offer' : null
 }
 
 export type ReminderDaysInput = readonly [string, string, string]

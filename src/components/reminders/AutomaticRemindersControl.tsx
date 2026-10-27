@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
+import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useCompany } from '@/contexts/CompanyContext'
 import { useFormat } from '@/lib/hooks/use-format'
 import { CLEAN_BATCHES_FOR_AUTOMATIC, type AutomaticReminderState } from '@/lib/reminders/automatic'
@@ -14,7 +15,9 @@ import { errorLocale, fetchAutomaticReminders, saveAutomaticReminders } from './
  * batch send itself. Only reminders whose bank check passed then go out by
  * themselves; the uncertain ones still wait in Att göra. Shown in the
  * reminder settings sheet (state passed in) and after a batch is approved
- * (offerOnly: fetched here, shown only when it may be offered).
+ * (offerOnly: fetched here, shown only when it may be offered). Turning it
+ * on confirms first what will go out without approval (convention 10);
+ * turning it off, back to approving every batch, needs no confirmation.
  */
 export function AutomaticRemindersControl({
   state: given,
@@ -33,6 +36,7 @@ export function AutomaticRemindersControl({
   const [fetched, setFetched] = useState<AutomaticReminderState | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [confirmOn, setConfirmOn] = useState(false)
 
   useEffect(() => {
     if (given !== undefined) return
@@ -75,11 +79,24 @@ export function AutomaticRemindersControl({
         </p>
       )}
       {canManage && (state.on || state.eligible) && (
-        <Button size="sm" variant={state.on ? 'outline' : 'default'} loading={busy} onClick={() => change(!state.on)}>
+        <Button
+          size="sm"
+          variant={state.on ? 'outline' : 'default'}
+          loading={busy}
+          onClick={() => (state.on ? void change(false) : setConfirmOn(true))}
+        >
           {state.on ? t('automatic_turn_off') : t('automatic_turn_on')}
         </Button>
       )}
       {error && <p className="text-destructive">{error}</p>}
+      <ConfirmDialog
+        open={confirmOn}
+        onOpenChange={setConfirmOn}
+        title={t('automatic_confirm_title')}
+        description={t('automatic_confirm_body')}
+        confirmLabel={t('automatic_turn_on')}
+        onConfirm={() => change(true)}
+      />
     </div>
   )
 }

@@ -23,7 +23,12 @@ import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
  *   previous reminder, so a picked old invoice never gets level 2 the next
  *   morning.
  * - Anything a customer or a provider told us stops the ladder: an answer to
- *   a reminder, a bounce, a send whose outcome is unknown.
+ *   a reminder, a bounce, a send whose outcome is unknown. A send the
+ *   provider refused (nothing went out) does not: its level is due again,
+ *   and the sender tries the same row once more (dispatch.ts).
+ * - Automatic sending sends only for an invoice issued and delivered from
+ *   Accounted (sendsAutomatically): a picked imported or undelivered invoice
+ *   follows the ladder, but each later level waits for a person.
  */
 
 export const REMINDER_LEVELS = [1, 2, 3] as const
@@ -65,6 +70,12 @@ export interface ReminderHistoryEntry {
   responseType: 'marked_paid' | 'disputed' | null
   /** Written by the old sender (no mode): history, never a step of this ladder. */
   legacy: boolean
+  /**
+   * Failed rows: the reminder may have gone out (a provider without an
+   * answer, a send interrupted before it was recorded). false: the provider
+   * refused it and nothing went out. Absent on a failed row reads as unknown.
+   */
+  outcomeUnknown?: boolean
 }
 
 /** What the decision needs to know about the invoice and its customer. */
@@ -140,6 +151,16 @@ const OWED_STATUSES = new Set(['sent', 'overdue', 'partially_paid'])
 /** Provider outcomes that mean the reminder did not reach the customer. */
 const UNDELIVERED = new Set<InvoiceDeliveryProviderStatus>(['bounced', 'complained', 'failed', 'suppressed'])
 
+/**
+ * Whether automatic sending may send this invoice's reminder: issued in
+ * Accounted (not imported) and delivered from it, the invoices that join the
+ * ladder by themselves. Any other invoice is reminded only with a person's
+ * approval, whatever level it is on.
+ */
+export function sendsAutomatically(invoice: Pick<ReminderInvoiceFacts, 'imported' | 'delivery'>): boolean {
+  return !invoice.imported && invoice.delivery === 'delivered'
+}
+
 function skip(reason: ReminderSkipReason, nextOn?: string): ReminderDecision {
   return nextOn ? { kind: 'skip', reason, nextOn } : { kind: 'skip', reason }
 }
@@ -163,7 +184,7 @@ export function decideReminder(input: ReminderDecisionInput): ReminderDecision {
   // What the customer and the provider told us.
   if (history.some((h) => h.responseType !== null)) return skip('response')
   if (history.some((h) => h.status === 'reserved')) return skip('in_flight')
-  if (history.some((h) => h.status === 'failed')) return skip('send_failed')
+  if (history.some((h) => h.status === 'failed' && h.outcomeUnknown !== false)) return skip('send_failed')
   if (history.some((h) => h.providerStatus !== null && UNDELIVERED.has(h.providerStatus))) return skip('undelivered')
 
   const sent = history.filter((h) => h.status === 'sent')

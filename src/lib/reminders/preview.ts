@@ -3,7 +3,7 @@ import { addDaysIso, daysBetweenIso, todayIsoStockholm } from '@/lib/dates/iso'
 import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { resolveInvoiceReplyTo } from '@/lib/invoices/email-recipients'
 import { loadReminderContext } from './facts'
-import { decideReminder, reminderSchedule, type ReminderLevel } from './policy'
+import { decideReminder, reminderSchedule, type ReminderDecision, type ReminderLevel } from './policy'
 import { FINAL_REMINDER_PAY_WITHIN_DAYS, renderReminderEmail } from './templates'
 
 /**
@@ -12,13 +12,17 @@ import { FINAL_REMINDER_PAY_WITHIN_DAYS, renderReminderEmail } from './templates
  * own facts with the same template the send uses. Without an invoice it
  * shows the company's most recent overdue invoice, else its most recent
  * issued one. The answer link points at an example token (it opens nothing).
+ * It also says what a pick of the invoice would do now (the policy's
+ * decision), so the invoice's dialog never offers a send the send would skip.
  */
 
 export interface ReminderPreview {
   invoiceId: string
   invoiceNumber: string | null
-  /** The level shown: the one asked for, else the one a pick would send now. */
+  /** The level shown: the one asked for, else the one a pick would send now (1 when it would send none). */
   level: ReminderLevel
+  /** What a pick of this invoice would do now: remind at a level, or skip and why. */
+  decision: ReminderDecision
   subject: string
   html: string
   /** Recipients of the real send. */
@@ -91,5 +95,13 @@ export async function renderReminderPreview(
     actionUrl: `${await getBaseUrlForCompany(companyId)}/invoice-action/exempel`,
     replyTo: resolveInvoiceReplyTo(ctx.company),
   })
-  return { invoiceId, invoiceNumber: ctx.invoice.invoice_number ?? null, level, subject: mail.subject, html: mail.html, to: ctx.facts.recipient }
+  return {
+    invoiceId,
+    invoiceNumber: ctx.invoice.invoice_number ?? null,
+    level,
+    decision,
+    subject: mail.subject,
+    html: mail.html,
+    to: ctx.facts.recipient,
+  }
 }

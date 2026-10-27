@@ -116,7 +116,15 @@ export default async function InvoiceActionPage({ params }: { params: Promise<{ 
   }
 
   const hasLegacyCharges = view.interestAmount > 0 || view.reminderFee > 0
-  const settled = view.remaining <= 0 && !hasLegacyCharges
+  // A credited, cancelled or written-off invoice is settled without being
+  // paid: no amounts, no answer form, and a sentence that does not say paid.
+  const settled = view.closedAs !== null || (view.remaining <= 0 && !hasLegacyCharges)
+  const settledText =
+    view.closedAs === 'credited'
+      ? t('settled_credited', { company })
+      : view.closedAs
+        ? t('settled_closed', { company })
+        : t('settled', { company })
   const toPay = hasLegacyCharges ? view.totalDue : view.remaining
   const interestLabel =
     view.interestRate > 0 && view.interestDays != null
@@ -153,7 +161,7 @@ export default async function InvoiceActionPage({ params }: { params: Promise<{ 
         </div>
 
         {settled ? (
-          <p className="rounded-lg bg-muted p-4 text-sm">{t('settled', { company })}</p>
+          <p className="rounded-lg bg-muted p-4 text-sm">{settledText}</p>
         ) : (
           <div className="rounded-lg border border-border p-4 space-y-1 text-sm">
             {view.paid > 0 && (
@@ -200,7 +208,7 @@ export default async function InvoiceActionPage({ params }: { params: Promise<{ 
           </InvoiceActionForm>
         )}
 
-        <p className="text-center text-sm text-muted-foreground mt-6">{t('payment_delay', { company })}</p>
+        {!view.closedAs && <p className="text-center text-sm text-muted-foreground mt-6">{t('payment_delay', { company })}</p>}
       </div>
     </div>
   )

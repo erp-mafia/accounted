@@ -6,6 +6,7 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { updateCompanySettings, withEntityTypeFallback } from '@/lib/company/settings-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
+import { withdrawPendingReminderBatches } from '@/lib/reminders/withdraw'
 import type { OperationOutcome } from '@/lib/operations/types'
 import type { Logger } from '@/lib/logger'
 
@@ -72,6 +73,18 @@ export const PUT = withRouteContext(
     )
     if (!outcome.ok) return settingsFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
+    // Turning reminders off withdraws the pending reminder batch now: it can
+    // no longer be approved, so it must not wait in Att göra for the reminder
+    // cron's next sweep. A failed withdrawal is logged, not a failed save: the
+    // toggle is off either way and the cron sweeps behind it.
+    if (outcome.data.reminders_turned_off) {
+      try {
+        const withdrawn = await withdrawPendingReminderBatches(supabase, companyId, new Date())
+        if (withdrawn > 0) log.info('pending reminder batch withdrawn: reminders turned off')
+      } catch (err) {
+        log.error('failed to withdraw the pending reminder batch after reminders were turned off', err as Error)
+      }
+    }
     // The save itself registers the codes already on journal lines when it
     // turns dimensions on; the count lets the toggle confirm it without a
     // second scan (null: not attempted, or the registration failed).
