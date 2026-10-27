@@ -2436,6 +2436,23 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Bokföringskontot som bankkontot bokför på har redan bokförda verifikat, så bankkontot kan inte tas bort.',
     message_en: 'The ledger account this bank account books on already has posted vouchers, so the bank account cannot be removed.',
   },
+  // Archiving a bank account removal must keep (archive_cash_account, PH 222).
+  // A connected or primary account answers with the removal codes above.
+  CASH_ACCOUNT_ARCHIVE_ALREADY: {
+    httpStatus: 409,
+    message_sv: 'Kontot är redan arkiverat.',
+    message_en: 'The account is already archived.',
+  },
+  CASH_ACCOUNT_ARCHIVE_INVOICE_PAYEE: {
+    httpStatus: 409,
+    message_sv: 'Kontot skrivs ut som betalningsmottagare på kundfakturor och kan inte arkiveras. Välj ett annat konto för fakturor under Inställningar först.',
+    message_en: 'Customer invoices print this account as the payee, so it cannot be archived. Choose another account for invoices in Settings first.',
+  },
+  CASH_ACCOUNT_ARCHIVE_REMOVABLE: {
+    httpStatus: 409,
+    message_sv: 'Inget på kontot är bokfört, så det behöver inte arkiveras. Ta bort det i stället.',
+    message_en: 'Nothing on the account is booked, so it does not need archiving. Remove it instead.',
+  },
   INVOICE_SEND_PAYMENT_ACCOUNT_MISSING: {
     httpStatus: 400,
     // Currency-neutral by necessity (the registry has no details). Surfaces

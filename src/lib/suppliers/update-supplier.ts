@@ -16,7 +16,7 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 
 /** The supplier record every door reads back. */
 export const SUPPLIER_COLUMNS =
-  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, default_expense_account, default_payment_terms, default_currency, self_billing_agreement_ref, notes, party_id, archived_at, created_at, updated_at'
+  'id, name, supplier_type, email, phone, address_line1, address_line2, postal_code, city, country, org_number, vat_number, bankgiro, plusgiro, bank_account, clearing_number, account_number, iban, bic, default_expense_account, default_payment_terms, default_currency, self_billing_agreement_ref, auto_debit, notes, party_id, archived_at, created_at, updated_at'
 
 export const SupplierRecordSchema = z.object({
   id: z.string().uuid(),
@@ -50,6 +50,8 @@ export const SupplierRecordSchema = z.object({
   archived_at: z.string().nullable(),
   created_at: z.string(),
   updated_at: z.string(),
+  /** Debited by the supplier itself (autogiro, account debit), so kept out of to-pay and payments (crm#1463). */
+  auto_debit: z.boolean(),
 })
 
 export type SupplierRecord = z.infer<typeof SupplierRecordSchema>
@@ -80,9 +82,18 @@ const WRITABLE_FIELDS = [
   'default_payment_terms',
   'default_currency',
   'self_billing_agreement_ref',
+  'auto_debit',
   'notes',
   'archived_at',
 ] as const
+
+/**
+ * The invoices of the supplier still to be paid: a changed auto_debit
+ * applies to them as well as to new ones (the insert trigger
+ * inherit_supplier_auto_debit), so the open invoice of a supplier that turns
+ * out to debit itself leaves the to-pay lists at once (crm#1463).
+ */
+const UNSETTLED_INVOICE_STATUSES = ['registered', 'approved', 'partially_paid', 'overdue'] as const
 
 /**
  * The fields historical verifikationer reference through their join to the
@@ -227,5 +238,18 @@ export async function updateSupplier(
     return { ok: false, code: 'SUPPLIER_UPDATE_FAILED', error }
   }
   if (!data) return NOT_FOUND
+  if (changed.includes('auto_debit')) {
+    const { error: invoicesError } = await supabase
+      .from('supplier_invoices')
+      .update({ auto_debit: update.auto_debit })
+      .eq('company_id', companyId)
+      .eq('supplier_id', supplierId)
+      .eq('is_credit_note', false)
+      .in('status', [...UNSETTLED_INVOICE_STATUSES])
+    if (invoicesError) {
+      log.error('supplier auto_debit not carried to open invoices', invoicesError)
+      return { ok: false, code: 'SUPPLIER_UPDATE_FAILED', error: invoicesError }
+    }
+  }
   return { ok: true, data: data as unknown as SupplierRecord }
 }

@@ -80,13 +80,15 @@ const PayViaBankDialog = dynamic(
 )
 
 // Rough client-side gate for the payment-file bulk selection: the statuses
-// mark-paid accepts, SEK only, something left to pay, not a credit note. The
-// preview re-evaluates server-side (payee, OCR, active batches), so this only
-// decides which rows get a checkbox.
+// mark-paid accepts, SEK only, something left to pay, not a credit note, not
+// debited by the supplier itself (crm#1463). The preview re-evaluates
+// server-side (payee, OCR, active batches), so this only decides which rows
+// get a checkbox.
 function isBatchSelectable(inv: SupplierInvoice): boolean {
   return (
     ['registered', 'approved', 'partially_paid', 'overdue'].includes(inv.status) &&
     !inv.is_credit_note &&
+    !inv.auto_debit &&
     inv.currency === 'SEK' &&
     inv.remaining_amount > 0.005
   )
@@ -120,7 +122,17 @@ const TAB_LABEL_KEYS: Record<ListTab, string> = {
 function isToPay(inv: ListInvoice): boolean {
   return (
     (inv.status === 'registered' || inv.status === 'approved' || inv.status === 'overdue') &&
+    !inv.auto_debit &&
     openPaymentMarker(inv) !== 'bank_payment'
+  )
+}
+
+/** Debited by the supplier itself on the due date and not settled yet (crm#1463). */
+function awaitsAutoDebit(inv: ListInvoice): boolean {
+  return (
+    !!inv.auto_debit &&
+    !inv.is_credit_note &&
+    ['registered', 'approved', 'partially_paid', 'overdue'].includes(inv.status)
   )
 }
 
@@ -751,6 +763,7 @@ export default function SupplierInvoicesPage() {
                 const bankEntered = !!inv.bank_entered_at
                 const showBankEntered =
                   !canApprove &&
+                  !inv.auto_debit &&
                   canMarkSupplierInvoiceBankEntered(inv, companySettings?.accounting_method) &&
                   (bankEntered || (canWrite && openPayment !== 'bank_payment'))
                 // Same shape as the customer list: the section header is a
@@ -866,6 +879,11 @@ export default function SupplierInvoicesPage() {
                         {openPayment && (
                           <Badge variant="outline" className="font-normal">
                             {t(OPEN_PAYMENT_MARKER_LABEL_KEYS[openPayment])}
+                          </Badge>
+                        )}
+                        {awaitsAutoDebit(inv) && (
+                          <Badge variant="outline" className="font-normal">
+                            {t('auto_debit_badge', { date: formatDate(inv.due_date) })}
                           </Badge>
                         )}
                       </span>

@@ -75,6 +75,7 @@ interface InvoiceRow {
   remaining_amount: number
   currency: string
   is_credit_note: boolean
+  auto_debit: boolean
   payment_reference: string | null
   supplier_invoice_number: string
   payee_bankgiro: string | null
@@ -141,7 +142,7 @@ export async function preparePaymentOrders(
   const { data: invoiceData, error: invoiceError } = await supabase
     .from('supplier_invoices')
     .select(
-      'id, supplier_id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, payment_reference, supplier_invoice_number, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban',
+      'id, supplier_id, status, approved_at, due_date, remaining_amount, currency, is_credit_note, auto_debit, payment_reference, supplier_invoice_number, payee_bankgiro, payee_plusgiro, payee_clearing, payee_account, payee_iban',
     )
     .eq('company_id', companyId)
     .in('id', ids)

@@ -78,6 +78,14 @@ describe('evaluateInvoiceForBatch', () => {
     expect(justAbove.eligible).toBe(true)
   })
 
+  it('excludes an invoice the supplier debits itself, which a payment would pay twice (crm#1463)', () => {
+    expect(evaluateInvoiceForBatch(invoice({ auto_debit: true }), supplier, { today: TODAY })).toEqual({
+      eligible: false,
+      reason: 'auto_debit',
+    })
+    expect(evaluateInvoiceForBatch(invoice({ auto_debit: false }), supplier, { today: TODAY }).eligible).toBe(true)
+  })
+
   it('rejects foreign currency', () => {
     const result = evaluateInvoiceForBatch(invoice({ currency: 'EUR' }), supplier, { today: TODAY })
     expect(result).toEqual({ eligible: false, reason: 'foreign_currency' })

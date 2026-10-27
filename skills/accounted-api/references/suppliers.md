@@ -540,7 +540,7 @@ Creates one draft payment order per payable supplier invoice, from one of the co
 - use_stated_payee_for pays the account the invoice states instead of the supplier card for the listed invoices; the database then marks the order's payee changed and a person confirms it at approval.
 - Only SEK; at most 100 invoices per call; execution_date may not be in the past.
 - Send supplier_invoice_ids or skattekonto, never both.
-- One open payment to Skatteverket at a time: SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT while one is approved or at the bank, and a draft nobody approved is replaced (skattekonto.replaced_draft_ids). VAT and AGI due the same day are paid as one payment: source due_date with due_date. Paying one of them alone warns same_due_date_parts.
+- One open payment to Skatteverket per execution_date: an unsigned one takes the amount as an addition (skattekonto.merged_into); a signed one refuses SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT, pick another day. VAT and AGI due the same day: source due_date. Paying one alone warns same_due_date_parts.
 - source due_date never nets: a declaration asking for nothing (a refund in ruta 49, already paid) is left out and listed in skattekonto.combined.excluded.
 - SKATTEKONTO_PAYMENT_NOTHING_DUE: the declaration asks for no payment (details.reason refund, zero, already_paid, period_not_ended; for due_date also no_declaration, nothing_payable) or nothing is due on the skattekonto; skattekonto.amount pays in anyway.
 - skattekonto.warnings not_filed: the declaration is not on record as filed; possible_duplicate: a bank payment to the skattekonto of the same amount was executed since the period. Tell the person before they sign.
@@ -586,9 +586,9 @@ Response `200`:
 {
   data: {
     payment_orders: { payment_order_id: string, handle?: string, supplier_invoice_id: string | null, payment_order_batch_id: string | null, status: "draft" | "approved" | "submitted" | "awaiting_signature" | "awaiting_second_signer" | "accepted" | "executed" | "rejected" | "cancelled" | "failed", amount: number, currency: string, requested_execution_date: string, cash_account_id: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account" | "iban", label: string, name: string, source: "invoice" | "supplier" | "skatteverket" | "employee", check: "unchecked" | "known" | "new" | "changed" }, reference: { type: "ocr" | "message", value: string }, end_to_end_id: string, provider_status: string | null, provider_error_code: string | null, outcome_unknown: boolean, approved_at: string | null, submitted_at: string | null, signed_at: string | null, executed_at: string | null, cancelled_at: string | null, matched_at: string | null, created_at: string, updated_at: string, supplier_invoice: { supplier_invoice_number: string | null, due_date: string | null, supplier_name: string | null } | null }[],
-    skipped: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "payee_unconfirmed" | "payee_rejected" | "not_found" | "in_bank_payment" | "in_payment_file" | "already_in_payment" }[],
+    skipped: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "payee_unconfirmed" | "payee_rejected" | "not_found" | "in_bank_payment" | "in_payment_file" | "already_in_payment" | "auto_debit" }[],
     warnings: { supplier_invoice_id: string, code: "unattested" | "ocr_invalid" | "payee_changed" | "payee_new" | "date_moved", alternative_payee?: string | null, from?: string, to?: string }[],
-    skattekonto?: { source: { kind: "vat_declaration" | "agi", tax_period: string, declared: number, due_date: string | null, filed: boolean, paid_at: string | null } | null, combined?: { due_date: string, total: number, components: { source: "vat_declaration" | "agi", period: string, amount: number }[], excluded: { source: "vat_declaration" | "agi", period: string, declared: number, reason: "refund" | "zero" | "already_paid" | "period_not_ended" }[] } | null, balance: { saldo: number, fetched_at: string | null } | null, warnings: { code: "late" | "date_moved" | "not_filed" | "possible_duplicate" | "same_due_date_parts", due?: string, from?: string, to?: string, payment_order_id?: string, executed_at?: string | null, source?: "vat_declaration" | "agi", period?: string, parts?: { source: "vat_declaration" | "agi", period: string, amount: number }[], total?: number, replaces_draft?: boolean, suggested_source?: { source: "due_date", due_date: string } }[], replaced_draft_ids: string[] } | null,
+    skattekonto?: { source: { kind: "vat_declaration" | "agi", tax_period: string, declared: number, due_date: string | null, filed: boolean, paid_at: string | null } | null, combined?: { due_date: string, total: number, components: { source: "vat_declaration" | "agi", period: string, amount: number }[], excluded: { source: "vat_declaration" | "agi", period: string, declared: number, reason: "refund" | "zero" | "already_paid" | "period_not_ended" }[] } | null, balance: { saldo: number, fetched_at: string | null } | null, warnings: { code: "late" | "date_moved" | "not_filed" | "possible_duplicate" | "same_due_date_parts", due?: string, from?: string, to?: string, payment_order_id?: string, executed_at?: string | null, source?: "vat_declaration" | "agi", period?: string, parts?: { source: "vat_declaration" | "agi", period: string, amount: number }[], total?: number, replaces_draft?: boolean, suggested_source?: { source: "due_date", due_date: string } }[], replaced_draft_ids: string[], merged_into?: { payment_order_id: string, status: string, amount: number, total: number } } | null,
     next: { approve: string, sign_in_app: string }
   },
   meta: {
@@ -1852,7 +1852,8 @@ Request body:
   due_date?: string,
   delivery_date?: string | "",
   payment_reference?: string,
-  notes?: string
+  notes?: string,
+  auto_debit?: boolean
 }
 ```
 
@@ -3306,7 +3307,7 @@ Response `200`:
 {
   data: {
     eligible: { supplier_invoice_id: string, supplier_name: string, supplier_invoice_number: string | null, amount: number, payment_date: string, payee: { type: "bankgiro" | "plusgiro" | "bank_account", label: string }, reference: { type: "ocr" | "invoice_number", value: string }, warnings: ("unattested" | "already_batched" | "ocr_invalid" | "payee_city_missing")[], active_supplier_payment_batch_id: string | null }[],
-    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "payee_unconfirmed" | "payee_rejected" | "not_found" | "in_bank_payment" | "swedbank_iso2_giro_payee" | "lb_bank_account_payee" }[],
+    excluded: { supplier_invoice_id: string, reason: "not_payable" | "nothing_remaining" | "credit_note" | "foreign_currency" | "payee_missing" | "payee_invalid" | "reference_missing" | "attest_required" | "auto_debit" | "payee_unconfirmed" | "payee_rejected" | "not_found" | "in_bank_payment" | "swedbank_iso2_giro_payee" | "lb_bank_account_payee" }[],
     format: "pain001" | "bg_lb",
     total_amount: number,
     currency: "SEK",
@@ -3480,6 +3481,7 @@ Request body:
   default_payment_terms?: number,
   default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
   self_billing_agreement_ref?: string,
+  auto_debit?: boolean,
   notes?: string
 }
 ```
@@ -3530,7 +3532,8 @@ Response `200`:
     party_id: string | null,
     archived_at: string | null,
     created_at: string,
-    updated_at: string
+    updated_at: string,
+    auto_debit: boolean
   },
   meta: {
     request_id: string,
@@ -3633,6 +3636,7 @@ Response `200`:
     default_payment_terms: number,
     default_currency: string,
     self_billing_agreement_ref: string | null,
+    auto_debit: boolean,
     notes: string | null,
     party_id: string | null,
     archived_at: string | null,
@@ -3728,6 +3732,7 @@ Request body:
   default_payment_terms?: number,
   default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null,
   self_billing_agreement_ref?: string | null,
+  auto_debit?: boolean,
   notes?: string,
   archived_at?: unknown
 }
@@ -3773,7 +3778,8 @@ Response `200`:
     party_id: string | null,
     archived_at: string | null,
     created_at: string,
-    updated_at: string
+    updated_at: string,
+    auto_debit: boolean
   },
   meta: {
     request_id: string,
@@ -3877,7 +3883,7 @@ Bulk-create endpoint mirroring /customers/bulk-create. Each supplier is validate
 Request body:
 ```ts
 {
-  suppliers: { name: string, supplier_type?: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, self_billing_agreement_ref?: string, notes?: string }[],
+  suppliers: { name: string, supplier_type?: "swedish_business" | "eu_business" | "non_eu_business", email?: string, phone?: string, address_line1?: string, address_line2?: string, postal_code?: string, city?: string, country?: string, org_number?: string, vat_number?: string, bankgiro?: string, plusgiro?: string, bank_account?: string, iban?: string, bic?: string, clearing_number?: string, account_number?: string, default_expense_account?: string, default_payment_terms?: number, default_currency?: "SEK" | "EUR" | "USD" | "GBP" | "NOK" | "DKK" | "CHF" | "CAD" | null, self_billing_agreement_ref?: string, auto_debit?: boolean, notes?: string }[],
   all_or_nothing?: boolean
 }
 ```

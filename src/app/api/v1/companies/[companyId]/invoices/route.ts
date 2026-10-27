@@ -34,6 +34,7 @@ import { buildInvoiceWriteData } from '@/lib/invoices/build-invoice-write'
 import { yourReferenceForNewInvoice } from '@/lib/customers/invoice-reference'
 import { invoiceMarkingForNewInvoice } from '@/lib/customers/invoice-marking'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
+import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
 import { effectiveQuoteStatus } from '@/lib/invoices/quote-status'
 import { effectiveInvoiceStatus, filterInvoicesByReportedStatus } from '@/lib/invoices/overdue'
 import {
@@ -130,6 +131,10 @@ const InvoiceSummary = z.object({
   subtotal: z.number(),
   vat_amount: z.number(),
   total: z.number(),
+  // What the invoice asks for after öresavrundning and any ROT/RUT deduction
+  // (crm#1487); fixed once the invoice is issued.
+  amount_to_pay: z.number(),
+  ore_rounding_amount: z.number(),
   remaining_amount: z.number(),
   paid_at: z.string().nullable(),
   created_at: z.string(),
@@ -240,6 +245,8 @@ registerEndpoint({
           subtotal: 10000,
           vat_amount: 2500,
           total: 12500,
+          amount_to_pay: 12500,
+          ore_rounding_amount: 0,
           remaining_amount: 12500,
           paid_at: null,
           created_at: '2026-05-01T09:14:33Z',
@@ -304,8 +311,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       ? `customer:customers(${CUSTOMER_LIST_CONTEXT_COLUMNS})`
       : `customer:customers(${CUSTOMER_NAME_ONLY_COLUMNS})`
     const itemsSelect = expand.has('items') ? `, items:invoice_items(${INVOICE_ITEM_COLUMNS})` : ''
-    // credited_invoice_id is read by the overdue rule only, never returned.
-    const selectClause = `${INVOICE_SUMMARY_COLUMNS}, credited_invoice_id, ${customerSelect}${itemsSelect}`
+    // credited_invoice_id is read by the overdue rule, and with ore_rounding
+    // and deduction_total by amount_to_pay; none of the three is returned.
+    const selectClause = `${INVOICE_SUMMARY_COLUMNS}, credited_invoice_id, ore_rounding, deduction_total, ${customerSelect}${itemsSelect}`
 
     // Sort by (created_at DESC, id ASC). created_at is the stable cursor
     // anchor: it's a real timestamp (passes ISO-8601 validation in
@@ -381,10 +389,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
       created_at: string
       customer: CustomerObj | CustomerObj[] | null
       items?: unknown
-    } & Record<string, unknown>
+    } & AmountToPayRow & Record<string, unknown>
 
     const rows = ((data ?? []) as unknown) as InvoiceRow[]
-    const trimmed = rows.slice(0, limit)
+    const trimmed = await withAmountToPay(ctx.supabase, ctx.companyId!, rows.slice(0, limit))
     const hasMore = rows.length > limit
 
     const pickCustomer = (c: InvoiceRow['customer']): CustomerObj | null => {
@@ -411,6 +419,8 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
         subtotal: r.subtotal,
         vat_amount: r.vat_amount,
         total: r.total,
+        amount_to_pay: r.amount_to_pay,
+        ore_rounding_amount: r.ore_rounding_amount,
         remaining_amount: r.remaining_amount,
         paid_at: r.paid_at,
         created_at: r.created_at,
@@ -474,6 +484,11 @@ const InvoiceCreated = z.object({
   subtotal: z.number(),
   vat_amount: z.number(),
   total: z.number(),
+  // What the invoice asks for after öresavrundning and any ROT/RUT deduction,
+  // as GET /invoices/{id} returns it (crm#1487). A draft follows the company
+  // setting until it is issued.
+  amount_to_pay: z.number(),
+  ore_rounding_amount: z.number(),
   remaining_amount: z.number(),
   created_at: z.string(),
 })
@@ -527,6 +542,8 @@ registerEndpoint({
         subtotal: 10000,
         vat_amount: 2500,
         total: 12500,
+        amount_to_pay: 12500,
+        ore_rounding_amount: 0,
         remaining_amount: 12500,
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -903,7 +920,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
 
     // meta.warnings: why an EU customer got Swedish VAT, or a Swedish rate on
     // a reverse-charge invoice (#2749, #2558). Non-blocking; absent when clean.
-    return created(complete ?? invoice, { requestId: ctx.requestId, warnings: build.warnings })
+    const [response] = await withAmountToPay(ctx.supabase, ctx.companyId!, [
+      (complete ?? invoice) as unknown as AmountToPayRow,
+    ])
+    return created(response, { requestId: ctx.requestId, warnings: build.warnings })
   },
   { requireIdempotencyKey: true },
 )

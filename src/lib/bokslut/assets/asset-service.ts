@@ -13,6 +13,7 @@ import {
   validateOpeningDepreciation,
 } from './opening-depreciation'
 import { assessJamkning, assessJamkningEligibility } from './jamkning'
+import { chartAwareDefaultAccounts, ensureAssetAccountsInChart } from './asset-chart-accounts'
 import type {
   AccountingFramework,
   Asset,
@@ -118,14 +119,17 @@ export function defaultAccountsForCategory(
  * The companies read only happens for the intangible category, the one case
  * whose answer depends on it. A failed read throws instead of guessing a
  * framework: silently picking an account off an unchecked read is what put
- * purchased intangibles on 1010 in the first place.
+ * purchased intangibles on 1010 in the first place. Every other category
+ * follows the company's chart (chartAwareDefaultAccounts, crm#1452).
  */
 async function resolveDefaultAccounts(
   supabase: SupabaseClient,
   companyId: string,
   category: AssetCategory,
 ): Promise<AssetAccountTriple> {
-  if (category !== 'immaterial') return DEFAULT_ACCOUNTS_BY_CATEGORY[category]
+  if (category !== 'immaterial') {
+    return chartAwareDefaultAccounts(supabase, companyId, category, DEFAULT_ACCOUNTS_BY_CATEGORY[category])
+  }
   const { data, error } = await supabase
     .from('companies')
     .select('accounting_framework')
@@ -203,6 +207,12 @@ export async function createAsset(
     notes: input.notes ?? null,
   }
 
+  // crm#1452: the row may not point at an account the chart lacks.
+  await ensureAssetAccountsInChart(supabase, companyId, userId, [
+    row.bas_asset_account,
+    row.bas_accumulated_account,
+    row.bas_expense_account,
+  ])
   const { data, error } = await supabase
     .from('assets')
     .insert(row)

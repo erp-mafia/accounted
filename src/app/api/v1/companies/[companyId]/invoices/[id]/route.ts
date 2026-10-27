@@ -40,6 +40,7 @@ import { effectiveInvoiceStatus, type OverdueInvoiceInput } from '@/lib/invoices
 import { deleteDraftInvoice } from '@/lib/invoices/delete-draft-invoice'
 import { replaceInvoiceItems } from '@/lib/invoices/replace-invoice-items'
 import { resolveInvoicePayeeChoice } from '@/lib/invoices/invoice-payee'
+import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
 import type { Currency, InvoiceDocumentType } from '@/types'
 
 // Allowed PATCH fields for a draft invoice. Excludes customer_id / currency /
@@ -99,6 +100,14 @@ const InvoiceDetail = z.object({
   quote_decided_at: z.string().nullable().optional(),
   currency: z.string(),
   total: z.number(),
+  // The invoice's own "Att betala" (crm#1487): total after öresavrundning and
+  // any ROT/RUT deduction, as its PDF prints it. Negative on a credit note.
+  amount_to_pay: z.number(),
+  // The öresavrundning row the PDF prints, 0 when none (SEK only).
+  ore_rounding_amount: z.number(),
+  // The invoice's rounding choice. Frozen when it is issued; null only on a
+  // draft (it follows the company setting until issued).
+  ore_rounding: z.boolean().nullable().optional(),
   remaining_amount: z.number(),
   paid_at: z.string().nullable(),
   created_at: z.string(),
@@ -134,6 +143,7 @@ registerEndpoint({
   pitfalls: [
     'Returns 404 if the invoice does not belong to the company in the URL: does not leak existence across companies.',
     'paid_at and remaining_amount can lag behind the latest payment by a few seconds during high-volume reconciliation.',
+    'total is the exact invoice total the books carry; amount_to_pay is what the invoice asks the customer for: total after öresavrundning (ore_rounding_amount), minus any ROT/RUT deduction. Reconcile payments against amount_to_pay. A credit note carries the credited invoice\'s rounding choice, so a whole credit has the same ore_rounding_amount with the opposite sign. An issued invoice keeps the rounding it was issued with: a later change of the company setting changes neither field.',
   ],
   example: {
     response: {
@@ -146,6 +156,8 @@ registerEndpoint({
         due_date: '2026-05-31',
         status: 'sent',
         total: 12500,
+        amount_to_pay: 12500,
+        ore_rounding_amount: 0,
         remaining_amount: 12500,
         paid_at: null,
         created_at: '2026-05-01T09:14:33Z',
@@ -227,9 +239,10 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
     const row = data as unknown as Record<string, unknown> & {
       quote_status?: string | null
       valid_until?: string | null
-    } & OverdueInvoiceInput
+    } & OverdueInvoiceInput & AmountToPayRow
+    const [withAmounts] = await withAmountToPay(ctx.supabase, ctx.companyId!, [row])
     return ok(
-      { ...row, status: effectiveInvoiceStatus(row), quote_status: effectiveQuoteStatus(row) },
+      { ...withAmounts, status: effectiveInvoiceStatus(row), quote_status: effectiveQuoteStatus(row) },
       { requestId: ctx.requestId },
     )
   },
@@ -607,10 +620,12 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
           invoiceId,
           pgCode: (refetchErr as { code?: string } | null)?.code,
         })
-        return ok(updatedRow, { requestId: ctx.requestId, warnings: build.warnings })
+        const [header] = await withAmountToPay(ctx.supabase, ctx.companyId!, [updatedRow as unknown as AmountToPayRow])
+        return ok(header, { requestId: ctx.requestId, warnings: build.warnings })
       }
 
-      return ok(complete, { requestId: ctx.requestId, warnings: build.warnings })
+      const [withItems] = await withAmountToPay(ctx.supabase, ctx.companyId!, [complete as unknown as AmountToPayRow])
+      return ok(withItems, { requestId: ctx.requestId, warnings: build.warnings })
     }
 
     if (ctx.dryRun) {
@@ -639,7 +654,8 @@ export const PATCH = withApiV1<{ params: Promise<{ companyId: string; id: string
     }
 
     // Metadata-only update: no line changed, so no rate to explain.
-    return ok(data, { requestId: ctx.requestId })
+    const [updated] = await withAmountToPay(ctx.supabase, ctx.companyId!, [data as unknown as AmountToPayRow])
+    return ok(updated, { requestId: ctx.requestId })
   },
   { requireIdempotencyKey: true },
 )

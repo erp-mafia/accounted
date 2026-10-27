@@ -228,6 +228,8 @@ describe('gnubok_list_supplier_invoices: filters', () => {
       'status',
       ['approved', 'overdue', 'partially_paid'],
     ])
+    // One the supplier debits itself has nothing to pay (crm#1463).
+    expect(accrual.findCalls('supplier_invoices', 'eq')).toContainEqual(['auto_debit', false])
   })
 
   it('reads the accounting method only for to_pay', async () => {

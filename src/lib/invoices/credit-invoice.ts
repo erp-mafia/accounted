@@ -184,6 +184,8 @@ export async function createCreditNoteDraft(
           invoice_date: today,
           due_date: today,
           notes: input.reason || `Krediterar faktura ${originalRef}`,
+          // A draft written before the builder carried it (crm#1480).
+          ore_rounding: original.ore_rounding ?? null,
           updated_at: new Date().toISOString(),
         })
         .eq('id', existing.id)

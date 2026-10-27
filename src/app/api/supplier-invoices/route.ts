@@ -50,7 +50,8 @@ export const GET = withRouteContext(
 
         if (status && status !== 'all') {
           if (status === 'to_pay') {
-            query = query.in('status', [...toPayStatuses])
+            // One the supplier debits itself has nothing to pay (crm#1463).
+            query = query.in('status', [...toPayStatuses]).eq('auto_debit', false)
           } else {
             query = query.eq('status', status)
           }

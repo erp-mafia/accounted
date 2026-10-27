@@ -144,7 +144,7 @@ export const suppliersUpdate = defineOperation({
     name: 'gnubok_update_supplier',
     title: 'Update Supplier (Leverantör)',
     description:
-      'Stage a partial edit of a supplier: contact, address, org/VAT number, bankgiro, plusgiro, clearing+account number, IBAN/BIC, default account, payment terms, notes. "" clears; archived_at null un-archives. supplier_id from gnubok_list_suppliers.',
+      'Stage a partial edit of a supplier: contact, address, org/VAT number, bankgiro, plusgiro, clearing+account number, IBAN/BIC, default account, payment terms, auto_debit (autogiro), notes. "" clears; archived_at null un-archives. supplier_id from gnubok_list_suppliers.',
     keywords: [
       'ändra leverantör',
       'uppdatera leverantör',

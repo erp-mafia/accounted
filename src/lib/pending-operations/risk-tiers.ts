@@ -269,6 +269,8 @@ const RISK_TIERS = {
   // depreciation is posted (then ASSET_CORRECTION_BLOCKED routes to storno).
   create_asset: 'low',
   update_asset: 'low',
+  // Removes a register row that never reached the books (crm#1452).
+  delete_asset: 'medium',
   // Posts the avyttring voucher (gain/loss, VAT, jämkning). Reversible via
   // storno, but 'high' (2026-10-11) so it stays out of cross-company batch
   // staging and bulk approval, where the old hand-kept batch list kept it.

@@ -50,6 +50,7 @@ function supplierRow(input: SupplierCreateInput) {
     default_payment_terms: input.default_payment_terms ?? 30,
     default_currency: input.default_currency || 'SEK',
     self_billing_agreement_ref: setOrNull(input.self_billing_agreement_ref),
+    auto_debit: input.auto_debit ?? false,
     notes: setOrNull(input.notes),
   }
 }

@@ -40,8 +40,10 @@ import { getCanonicalBaseUrl, resolveDiscoveryBaseUrl } from '@/lib/api/v1/base-
 import { createCompanyCore } from '@/lib/company/create-company'
 import {
   AssetCorrectionBlockedError,
+  AssetDeleteBlockedError,
   AssetNotFoundError,
   getAsset as getFixedAsset,
+  getAssetDeleteBlock,
   hasPostedDepreciation,
   listAssets as listFixedAssets,
   previewAssetDisposal,
@@ -11654,7 +11656,7 @@ export const tools: McpTool[] = [
         .select(
           // is_self_billed: a självfaktura the company issued in the
           // supplier's name, numbered from its own series (crm#1367).
-          'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, approved_at, bank_entered_at, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, is_self_billed, self_billing_number, default_dimensions, ' +
+          'id, supplier_id, supplier_invoice_number, invoice_date, due_date, status, approved_at, bank_entered_at, auto_debit, total, total_sek, currency, vat_treatment, remaining_amount, is_credit_note, is_self_billed, self_billing_number, default_dimensions, ' +
             `${STATED_PAYEE_COLUMNS}, supplier:suppliers(id, name, ${CARD_PAYEE_COLUMNS})`,
           { count: 'exact' },
         )
@@ -11664,8 +11666,9 @@ export const tools: McpTool[] = [
         if (status === 'to_pay') {
           // The rows the app offers Markera som betald for: kontantmetoden
           // has no attest step, so its registered invoices are payable too
-          // (crm#1141).
-          query = query.in('status', [...payableSupplierInvoiceStatuses(accountingMethod)])
+          // (crm#1141). One the supplier debits itself has nothing to pay
+          // (auto_debit, crm#1463).
+          query = query.in('status', [...payableSupplierInvoiceStatuses(accountingMethod)]).eq('auto_debit', false)
         } else {
           query = query.eq('status', status)
         }
@@ -25555,6 +25558,56 @@ export const tools: McpTool[] = [
           asset_name: existing.name,
           changes,
           will: 'update the register row; no voucher is posted',
+        },
+        actor,
+        dryRun: Boolean(dry_run),
+        idempotencyKey: typeof idempotency_key === 'string' ? idempotency_key : undefined,
+      })
+    },
+  },
+  {
+    name: 'gnubok_delete_asset',
+    keywords: ['ta bort tillgång', 'radera anläggningstillgång', 'felregistrerad tillgång'],
+    title: 'Delete Fixed Asset',
+    description:
+      'Stage removal of an anläggningsregister row that never reached the books (deletable in gnubok_list_assets), e.g. one registered by mistake. Posted depreciation or a disposal refuses with ASSET_DELETE_BLOCKED. No voucher.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        asset_id: { type: 'string', description: 'Asset UUID from gnubok_list_assets' },
+        ...STAGING_ARGS_PROPERTIES,
+      },
+      required: ['asset_id'],
+    },
+    outputSchema: STAGED_OPERATION_SCHEMA,
+    annotations: ANNOTATIONS_DESTRUCTIVE_WRITE,
+    // Search-only like update/dispose: catalog net zero (crm#1452).
+    catalogVisibility: 'search',
+    async execute(args, companyId, userId, supabase, actor) {
+      const { dry_run, idempotency_key, asset_id: assetId } = args
+      if (typeof assetId !== 'string' || !UUID_RE.test(assetId)) throw badArgument('asset_id', 'asset_id must be a UUID')
+      const existing = await getFixedAsset(supabase, companyId, assetId)
+      if (!existing) throw new AssetNotFoundError()
+      // The same rule the v1 and dashboard deletes apply; the commit decides
+      // it again under the row lock (delete_never_posted_asset).
+      const block = await getAssetDeleteBlock(supabase, companyId, existing)
+      if (block) throw new AssetDeleteBlockedError(block)
+      return stage({
+        supabase,
+        companyId,
+        userId,
+        type: 'delete_asset',
+        title: `Ta bort anläggningstillgång: ${existing.name}`,
+        params: { asset_id: assetId },
+        preview: {
+          asset_id: assetId,
+          asset_name: existing.name,
+          category: existing.category,
+          acquisition_date: existing.acquisition_date,
+          acquisition_cost: Number(existing.acquisition_cost),
+          bas_asset_account: existing.bas_asset_account,
+          will: 'remove the register row and its unposted depreciation plan; no voucher is posted',
         },
         actor,
         dryRun: Boolean(dry_run),

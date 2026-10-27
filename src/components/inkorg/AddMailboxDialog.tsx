@@ -143,8 +143,10 @@ function MailboxRow({
 
 function IntakeAddressRow() {
   const t = useTranslations('inkorg')
+  const tCommon = useTranslations('common')
   const locale = useLocale()
   const { toast } = useToast()
+  const { dialogProps, confirm } = useDestructiveConfirm()
   const [state, setState] = useState<AddressState>({ status: 'loading' })
   const [copy, setCopy] = useState<AddressCopyState>('idle')
   const [creating, setCreating] = useState(false)
@@ -224,6 +226,35 @@ function IntakeAddressRow() {
     }
   }
 
+  // An earlier address a rename kept (crm#1209): it stops receiving and leaves
+  // the list; what came in through it stays.
+  async function onStopPrevious(address: string) {
+    const stopped = await confirm(
+      {
+        title: t('address_previous_stop_title', { address }),
+        description: t('address_previous_stop_body'),
+        confirmLabel: t('address_previous_stop'),
+        cancelLabel: tCommon('cancel'),
+      },
+      async () => {
+        const res = await fetch('/api/extensions/ext/invoice-inbox/inbox/previous/stop', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ address }),
+        })
+        if (!res.ok) {
+          const message = await getResponseErrorMessage(res, undefined, locale === 'en' ? 'en' : 'sv')
+          toast({ title: t('address_previous_stop_failed'), description: message, variant: 'destructive' })
+          // Keeps the confirm from resolving as done.
+          throw new Error(message)
+        }
+      },
+    )
+    if (!stopped) return
+    toast({ title: t('address_previous_stopped') })
+    await load()
+  }
+
   if (state.status === 'loading') {
     return (
       <MailboxRow door="intake_email" detail={<Skeleton className="mt-1 h-4 w-48 rounded-sm" />} />
@@ -250,14 +281,22 @@ function IntakeAddressRow() {
             {state.address}
           </code>
           {copy === 'failed' && <AttnLine>{t('address_copy_failed')}</AttnLine>}
-          {state.previous.length > 0 && (
-            <p className="mt-0.5 text-[12.5px]">
+          {state.previous.map((previous) => (
+            <p key={previous} className="mt-0.5 text-[12.5px]">
               {t('address_previous')}{' '}
               <code data-ph-mask="" className="break-all">
-                {state.previous.join(', ')}
-              </code>
+                {previous}
+              </code>{' '}
+              <button
+                type="button"
+                onClick={() => void onStopPrevious(previous)}
+                aria-label={t('address_previous_stop_aria', { address: previous })}
+                className="text-muted-foreground underline decoration-border underline-offset-2 hover:text-foreground"
+              >
+                {t('address_previous_stop')}
+              </button>
             </p>
-          )}
+          ))}
           {state.carriesName === false && (
             <AttnLine
               className="mt-0.5"
@@ -276,6 +315,7 @@ function IntakeAddressRow() {
       <span className="sr-only" aria-live="polite">
         {copy === 'copied' ? t('copied') : ''}
       </span>
+      <DestructiveConfirmDialog {...dialogProps} />
     </MailboxRow>
   )
 }

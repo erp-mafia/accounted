@@ -439,6 +439,7 @@ const SKIP_REASON = z
     'in_bank_payment',
     'in_payment_file',
     'already_in_payment',
+    'auto_debit',
   ])
   .describe(
     'not_payable: not approved (or paid, credited...); nothing_remaining; credit_note; foreign_currency (only SEK); payee_missing / payee_invalid ' +
@@ -533,11 +534,15 @@ const SkattekontoPrepared = z.object({
       period: z.string().optional(),
       parts: z.array(DueDatePart).optional(),
       total: z.number().optional(),
-      replaces_draft: z.boolean().optional().describe('same_due_date_parts: an unapproved draft (perhaps paying a part) is replaced by this payment.'),
+      replaces_draft: z.boolean().optional(),
       suggested_source: z.object({ source: z.literal('due_date'), due_date: z.string() }).optional(),
     }),
   ),
-  replaced_draft_ids: z.array(z.string().uuid()).describe('A skattekonto draft nobody approved, cancelled so this one replaces it.'),
+  replaced_draft_ids: z.array(z.string().uuid()),
+  merged_into: z
+    .object({ payment_order_id: z.string(), status: z.string(), amount: z.number(), total: z.number() })
+    .optional()
+    .describe('The same day\'s unsigned order this amount was added to (amount before, total after); approve it again.'),
 })
 
 /** payment-orders.prepare with skattekonto: one payment in to the skattekonto (lib/payments/orders/prepare-skattekonto.ts). */
@@ -556,7 +561,7 @@ async function prepareSkattekonto(
     dryRun,
   })
   if (!outcome.ok || outcome.dryRun) return outcome
-  const { order, warnings, replaced_draft_ids, source, combined, balance } = outcome.data
+  const { order, warnings, replaced_draft_ids, merged_into, source, combined, balance } = outcome.data
   return {
     ok: true as const,
     created: true,
@@ -579,6 +584,7 @@ async function prepareSkattekonto(
         balance,
         warnings,
         replaced_draft_ids,
+        ...(merged_into ? { merged_into } : {}),
       },
       next: {
         approve: '/api/v1/companies/{companyId}/payment-orders/approve',
@@ -628,7 +634,7 @@ export const paymentOrdersPrepare = defineOperation({
       'use_stated_payee_for pays the account the invoice states instead of the supplier card for the listed invoices; the database then marks the order\'s payee changed and a person confirms it at approval.',
       'Only SEK; at most 100 invoices per call; execution_date may not be in the past.',
       'Send supplier_invoice_ids or skattekonto, never both.',
-      'One open payment to Skatteverket at a time: SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT while one is approved or at the bank, and a draft nobody approved is replaced (skattekonto.replaced_draft_ids). VAT and AGI due the same day are paid as one payment: source due_date with due_date. Paying one of them alone warns same_due_date_parts.',
+      'One open payment to Skatteverket per execution_date: an unsigned one takes the amount as an addition (skattekonto.merged_into); a signed one refuses SKATTEKONTO_PAYMENT_ALREADY_IN_PAYMENT, pick another day. VAT and AGI due the same day: source due_date. Paying one alone warns same_due_date_parts.',
       'source due_date never nets: a declaration asking for nothing (a refund in ruta 49, already paid) is left out and listed in skattekonto.combined.excluded.',
       'SKATTEKONTO_PAYMENT_NOTHING_DUE: the declaration asks for no payment (details.reason refund, zero, already_paid, period_not_ended; for due_date also no_declaration, nothing_payable) or nothing is due on the skattekonto; skattekonto.amount pays in anyway.',
       'skattekonto.warnings not_filed: the declaration is not on record as filed; possible_duplicate: a bank payment to the skattekonto of the same amount was executed since the period. Tell the person before they sign.',

@@ -773,7 +773,7 @@ export function InvoicePDF({ invoice, customer, items, company, originalInvoiceN
                     <Text style={styles.rowSubline} hyphenationCallback={wrapDescriptionWords}>{L.discountLine(item.discount_percent ?? 0)}</Text>
                   )}
                 </View>
-                <Text style={styles.colQty}>{item.quantity} {unitLabel(item.unit, lang)}</Text>
+                <Text style={styles.colQty}>{item.quantity} {unitLabel(item.unit, lang, item.quantity)}</Text>
                 {!isDeliveryNote && (
                   <Text style={styles.colPrice}>{formatPdfAmount(item.unit_price, lang)}</Text>
                 )}

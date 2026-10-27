@@ -213,6 +213,8 @@ describe('GET /api/supplier-invoices', () => {
     expect(status).toBe(200)
     expect(findCall('supplier_invoices', 'in')).toEqual(['status', ['approved', 'overdue', 'partially_paid']])
     expect(findCalls('company_settings', 'eq')).toContainEqual(['company_id', 'company-1'])
+    // One the supplier debits itself has nothing to pay (crm#1463).
+    expect(findCalls('supplier_invoices', 'eq')).toContainEqual(['auto_debit', false])
   })
 
   // crm#1141: kontantmetoden has no attest step, so registered is to pay.

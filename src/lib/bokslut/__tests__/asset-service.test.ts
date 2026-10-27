@@ -12,6 +12,13 @@ import {
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 import type { AccountingFramework, Asset, AssetCategory } from '@/types'
 
+// crm#1452: the chart lookups are covered in assets/__tests__/asset-chart-accounts.test.ts.
+vi.mock('../assets/asset-chart-accounts', () => ({
+  chartAwareDefaultAccounts: vi.fn(async (_s: unknown, _c: unknown, _cat: unknown, defaults: unknown) => defaults),
+  ensureAssetAccountsInChart: vi.fn(async () => undefined),
+  unusableAssetAccounts: vi.fn(async () => []),
+}))
+
 describe('DEFAULT_ACCOUNTS_BY_CATEGORY', () => {
   it('maps every AssetCategory to a BAS-aligned account triple', () => {
     const expected = {

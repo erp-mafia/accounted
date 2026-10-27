@@ -8,10 +8,14 @@ import { useTranslations } from 'next-intl'
 import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { DefEmpty } from '@/components/ui/detail-section'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { EllipsisHorizontalIcon } from '@/components/icons'
+import { RemoveCashAccountDialog } from '@/components/settings/RemoveCashAccountDialog'
 import { AccountLogo } from '@/components/reconciliation/ReconciliationRail'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { reconciliationHref } from '@/lib/reconciliation/account-links'
-import type { ReconciliationAccount } from '@/lib/reconciliation/schemas'
+import { parseAccountKey, type ReconciliationAccount } from '@/lib/reconciliation/schemas'
 
 async function fetchAccounts(url: string): Promise<ReconciliationAccount[]> {
   const res = await fetch(url)
@@ -20,7 +24,7 @@ async function fetchAccounts(url: string): Promise<ReconciliationAccount[]> {
   return json.data?.accounts ?? []
 }
 
-const COLUMNS = 6
+const COLUMNS = 7
 
 /**
  * Konton: the one list of every account with an outside truth (founder
@@ -36,14 +40,19 @@ const COLUMNS = 6
  * The route is read without a window, so the counts and the unexplained
  * difference cover 1 January to today: the service default the v1 API and
  * the MCP resource share, so the list says what an agent sees.
+ *
+ * A bank row carries "Ta bort konto" (PH 222): the dialog asks removal's dry
+ * run and, when the rows must stay, offers to archive the account instead.
  */
 export default function AccountsOverview({ autorun = false }: { autorun?: boolean }) {
   const t = useTranslations('accounts_v2')
   const tRec = useTranslations('reconciliation')
   const tParm = useTranslations('bokslutsbilagor')
+  const tRemove = useTranslations('settings_voucher_series')
   const router = useRouter()
-  const { data, isLoading, error } = useSWR<ReconciliationAccount[]>('/api/reconciliation/accounts', fetchAccounts)
+  const { data, isLoading, error, mutate } = useSWR<ReconciliationAccount[]>('/api/reconciliation/accounts', fetchAccounts)
   const [manualOpen, setManualOpen] = useState(false)
+  const [removing, setRemoving] = useState<{ id: string; label: string } | null>(null)
   const accounts = data ?? []
   // A reconnect duplicate stays listed, muted with its marker: it may still
   // hold rows nobody linked.
@@ -74,6 +83,8 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
             ? 'text-warning'
             : ''
     const href = reconciliationHref(a, { autorun })
+    const key = parseAccountKey(a.account_key)
+    const cashAccountId = key?.kind === 'bank' ? key.cashAccountId : null
     return (
       <tr
         key={a.account_key}
@@ -110,8 +121,24 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
         <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums', tone)} data-ph-mask>
           {unexplained == null ? <DefEmpty /> : formatCurrency(unexplained, a.currency)}
         </td>
-        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums !pr-0')} data-ph-mask>
+        <td className={cn(TD_CLASS, 'whitespace-nowrap text-right tabular-nums')} data-ph-mask>
           {a.balance != null ? formatCurrency(a.balance, a.currency) : <DefEmpty />}
+        </td>
+        <td className={cn(TD_CLASS, 'w-0 !pr-0')} onClick={(e) => e.stopPropagation()}>
+          {cashAccountId && (
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <Button variant="ghost" size="icon-sm" aria-label={t('row_more', { account: a.name })}>
+                  <EllipsisHorizontalIcon className="h-[15px] w-[15px]" />
+                </Button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onSelect={() => setRemoving({ id: cashAccountId, label: a.name })}>
+                  {tRemove('remove_confirm_action')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
         </td>
       </tr>
     )
@@ -128,7 +155,8 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
               <th className={TH_CLASS}>{t('th_signed_off')}</th>
               <th className={TH_CLASS}>{t('th_review')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{tRec('v2_th_unexplained')}</th>
-              <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_balance')}</th>
+              <th className={cn(TH_CLASS, 'text-right')}>{t('th_balance')}</th>
+              <th className={cn(TH_CLASS, '!pr-0')} aria-hidden />
             </tr>
           </thead>
           <tbody>
@@ -191,6 +219,7 @@ export default function AccountsOverview({ autorun = false }: { autorun?: boolea
           </tbody>
         </table>
       </div>
+      <RemoveCashAccountDialog account={removing} onClose={() => setRemoving(null)} onRemoved={() => mutate()} />
       {/* The binder the reconciliations feed, the way there the Avstämning list carried. */}
       {!isLoading && !error && accounts.length > 0 && (
         <Link href="/reports/bokslutsbilagor" className={cn(QUIET_LINK_CLASS, 'mt-4 inline-block')}>

@@ -61,6 +61,7 @@ import {
   InboxRenameRefused,
   getActiveInbox,
   listPreviousInboxes,
+  stopPreviousInbox,
   inboxReceivesMail,
   composeInboxAddress,
 } from './lib/inbox-provisioning'
@@ -112,6 +113,8 @@ const MAX_ATTACHMENTS_PER_EMAIL = 20
 
 /** POST /inbox/rotate: an empty body rotates; keep_previous renames. */
 const RotateInboxSchema = z.object({ keep_previous: z.boolean().optional() }).strict()
+/** POST /inbox/previous/stop: one earlier address, as GET /inbox/address lists it. */
+const StopPreviousInboxSchema = z.object({ address: z.string().trim().min(1).max(320) }).strict()
 // Received-mail panel window (#2181): 30 days covers "the mail I sent last
 // week"; the hard cap keeps the query bounded.
 const INBOUND_HISTORY_DEFAULT_DAYS = 30
@@ -1235,6 +1238,38 @@ export const invoiceInboxExtension: Extension = {
             { error: err instanceof Error ? err.message : 'Rotation failed' },
             { status: 500 }
           )
+        }
+      },
+    },
+
+    // ── Stop an earlier address (admin/owner only, crm#1209) ─
+    // One address a rename kept stops receiving (410 from then on) and leaves
+    // the list; what came in through it stays. The active address is never
+    // stopped here: rotation is the tool for that.
+    {
+      method: 'POST',
+      path: '/inbox/previous/stop',
+      handler: async (request: Request, ctx: ExtensionContext) => {
+        const parsed = await validateBody(request, StopPreviousInboxSchema)
+        if (!parsed.success) return parsed.response
+
+        const isAdmin = await isCompanyAdmin(ctx.supabase, ctx.userId, ctx.companyId)
+        if (!isAdmin) return NextResponse.json({ error: 'Behörighet saknas.' }, { status: 403 })
+
+        // The list shows full addresses; the row holds the part before the @.
+        const address = parsed.data.address.toLowerCase()
+        const at = address.lastIndexOf('@')
+        const localPart = at === -1 ? address : address.slice(0, at)
+
+        try {
+          const stopped = await stopPreviousInbox(ctx.supabase, ctx.companyId, localPart)
+          if (!stopped) {
+            return NextResponse.json({ error: 'Adressen finns inte bland bolagets tidigare adresser.' }, { status: 404 })
+          }
+          return NextResponse.json({ data: { stopped: true } })
+        } catch (err) {
+          console.error('[invoice-inbox/inbox/previous/stop] Failed:', err)
+          return NextResponse.json({ error: 'Adressen kunde inte stängas.' }, { status: 500 })
         }
       },
     },

@@ -28,6 +28,7 @@ const STORED = {
   default_expense_account: null,
   default_payment_terms: 30,
   default_currency: 'SEK',
+  auto_debit: false,
   notes: null,
   party_id: null,
   archived_at: null,
@@ -138,6 +139,27 @@ describe('updateSupplier', () => {
       expect(outcome.ok).toBe(true)
       expect(findCalls('suppliers', 'update')[0]).toEqual([{ archived_at: null, name: 'Nytt namn AB', is_active: true }])
     })
+  })
+
+  it('carries a changed auto_debit to the supplier\'s unpaid invoices, and only then (crm#1463)', async () => {
+    enqueue({ data: STORED })
+    enqueue({ data: { ...STORED, auto_debit: true } })
+    enqueue({ data: null })
+    const outcome = await updateSupplier(ctx, SUPPLIER_ID, { auto_debit: true })
+    expect(outcome).toMatchObject({ ok: true, data: { auto_debit: true } })
+    expect(findCall('suppliers', 'update')).toEqual([{ auto_debit: true }])
+    expect(findCall('supplier_invoices', 'update')).toEqual([{ auto_debit: true }])
+    expect(findCalls('supplier_invoices', 'eq')).toEqual(
+      expect.arrayContaining([['company_id', 'company-1'], ['supplier_id', SUPPLIER_ID], ['is_credit_note', false]]),
+    )
+    expect(findCall('supplier_invoices', 'in')).toEqual(['status', ['registered', 'approved', 'partially_paid', 'overdue']])
+
+    // Unchanged (already false) or another field: the invoices are left alone.
+    reset()
+    enqueue({ data: STORED })
+    enqueue({ data: STORED })
+    expect((await updateSupplier(ctx, SUPPLIER_ID, { auto_debit: false, city: 'Lund' })).ok).toBe(true)
+    expect(findCall('supplier_invoices', 'update')).toBeUndefined()
   })
 
   it('answers SUPPLIER_DUPLICATE_ORG_NUMBER when the org number belongs to another supplier', async () => {

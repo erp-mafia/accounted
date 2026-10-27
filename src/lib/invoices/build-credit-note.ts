@@ -82,6 +82,11 @@ export function buildCreditNoteFields(
     vat_amount_sek: original.vat_amount_sek ? creditedAmount(original.vat_amount_sek) : null,
     total: creditedAmount(original.total),
     total_sek: original.total_sek ? creditedAmount(original.total_sek) : null,
+    // The original's own öresavrundning choice (crm#1480). Left out, the
+    // credit note inherited the company setting, so an invoice issued without
+    // rounding (4,38) got a credit note printing -4,00, and the reverse
+    // printed a credit larger than the invoice had asked for.
+    ore_rounding: original.ore_rounding ?? null,
     vat_treatment: original.vat_treatment,
     vat_rate: original.vat_rate,
     moms_ruta: original.moms_ruta,

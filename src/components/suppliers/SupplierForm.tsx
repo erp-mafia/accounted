@@ -94,6 +94,9 @@ export default function SupplierForm({
     // The self-billing agreement with the supplier (crm#1367): with one, a
     // självfaktura can be issued to it from the supplier invoice form.
     self_billing_agreement_ref: z.string().max(128, t('self_billing_agreement_invalid')).optional(),
+    // How the supplier is paid (crm#1463): by the company, or debited by the
+    // supplier itself (autogiro, account debit).
+    auto_debit: z.boolean(),
     notes: z.string().optional(),
   }), [t])
 
@@ -134,6 +137,7 @@ export default function SupplierForm({
       default_payment_terms: initialData?.default_payment_terms ?? 30,
       default_currency: initialData?.default_currency || 'SEK',
       self_billing_agreement_ref: initialData?.self_billing_agreement_ref || '',
+      auto_debit: initialData?.auto_debit ?? false,
       notes: initialData?.notes || '',
     },
   })
@@ -503,6 +507,27 @@ export default function SupplierForm({
             />
           </div>
         </div>
+      </div>
+
+      {/* Betalningssätt (crm#1463) */}
+      <div className="space-y-2">
+        <Label htmlFor="auto_debit">{t('payment_method_label')}</Label>
+        <Controller
+          name="auto_debit"
+          control={control}
+          render={({ field }) => (
+            <Select value={field.value ? 'auto_debit' : 'pay'} onValueChange={(v) => field.onChange(v === 'auto_debit')}>
+              <SelectTrigger id="auto_debit">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="pay">{t('payment_method_pay')}</SelectItem>
+                <SelectItem value="auto_debit">{t('payment_method_auto_debit')}</SelectItem>
+              </SelectContent>
+            </Select>
+          )}
+        />
+        <p className="text-xs text-muted-foreground">{t('payment_method_help')}</p>
       </div>
 
       {/* Självfaktureringsavtal (crm#1367) */}
