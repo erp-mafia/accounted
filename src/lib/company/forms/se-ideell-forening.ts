@@ -33,6 +33,7 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     hasOwners: false,
     settlement: { withdrawal: '2890', contribution: '2890' },
     memberCapital: false,
+    maintenanceFund: null,
   },
   filings: {
     incomeReturn: 'INK3',
@@ -43,6 +44,8 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     ixbrl: false,
     auditorAlwaysRequired: false,
     forenklatArsbokslut: 'BFNAR 2010:1',
+    cashFlowStatement: null,
+    housingKeyRatios: false,
   },
   glossary: { entity: 'föreningen', owner: 'Medlem', meeting: 'årsmöte' },
 }

@@ -65,7 +65,7 @@ vi.mock('@/lib/reports/vat-declaration', async (orig) => ({
   ...(await orig<typeof import('@/lib/reports/vat-declaration')>()),
   calculateVatDeclaration: m.vat,
 }))
-vi.mock('@/lib/reports/kassaflodesanalys', () => ({ generateKassaflodesanalys: m.kassa }))
+vi.mock('@/lib/reports/kassaflodesanalys', () => ({ generateKassaflodesanalysWithStatement: m.kassa }))
 vi.mock('@/lib/reports/bokslutsbilagor', () => ({ generateBokslutsbilagor: m.bokslut }))
 vi.mock('@/lib/reports/behandlingshistorik', async (orig) => ({
   ...(await orig<typeof import('@/lib/reports/behandlingshistorik')>()),

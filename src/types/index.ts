@@ -7,6 +7,7 @@ export type EntityType =
   | 'aktiebolag'
   | 'ideell_forening'
   | 'ekonomisk_forening'
+  | 'bostadsrattsforening'
 
 // Swedish accounting framework. K2 (BFNAR 2016:10) is the default simplified
 // ruleset for smaller AB; K3 (BFNAR 2012:1) is the principles-based ruleset
@@ -599,10 +600,14 @@ export interface CompanySettings {
   invoice_payment_accounts?: Partial<Record<Currency, InvoicePaymentAccount>>
 
   // Accounting method
+  /** Capitalise finansiella leasingavtal (K3 20.5) instead of the 20.29 relief (default off). */
+  finance_lease_capitalisation?: boolean
   accounting_method: AccountingMethod
   // #967: when true (accrual only), registering supplier invoices / sending
   // customer invoices does NOT book them; booking is a separate explicit step.
   defer_invoice_booking?: boolean
+  /** Revalue open foreign-currency items at each month end, reversed the next day (default off). */
+  fx_revaluation_monthly?: boolean
 
   // Invoice settings
   invoice_prefix: string | null

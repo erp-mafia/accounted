@@ -223,6 +223,12 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/no-doc-required/bulk-missing': gap('P3', 'filter-wide "inget underlag krävs"'),
   'POST /api/bookkeeping/journal-entry-lines/:lineId/retag': covered([`POST ${V}/dimensions/retag`, 'gnubok_tag_journal_lines']),
   'POST /api/bookkeeping/voucher-gaps': covered([`POST ${V}/voucher-gap-explanations`, 'gnubok_explain_voucher_gap']),
+  // Pågående arbeten (K3 kapitel 23), behind NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED: dashboard first.
+  'PUT /api/bookkeeping/contract-revenue': gap('P3', 'choose the method and the pinned adjustment account for pågående arbeten'),
+  'POST /api/bookkeeping/contract-revenue/contracts': gap('P3', 'add a pågående uppdrag with its figures on a balansdag'),
+  'PUT /api/bookkeeping/contract-revenue/contracts/:id': gap('P3', 'state a pågående uppdrag\'s figures anew'),
+  'DELETE /api/bookkeeping/contract-revenue/contracts/:id': gap('P3', 'remove a pågående uppdrag'),
+  'POST /api/bookkeeping/contract-revenue/year': gap('P3', 'book the year\'s change in pågående arbeten on balansdagen'),
 
   // ── Accruals (periodiseringar) ─────────────────────────────────────
   'POST /api/bookkeeping/fiscal-periods/:id/accruals': covered(
@@ -232,6 +238,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/accruals/:id/dissolve': gap('P3', 'dissolve an accrual schedule early'),
   'POST /api/bookkeeping/accruals/post-due': gap('P3', 'manual trigger of the daily accrual run (list via gnubok_list_accrual_schedules)'),
   'POST /api/bookkeeping/accruals/post-due/cron': machine(CRON),
+  'POST /api/bookkeeping/finance-leases': gap('P3', 'register a finansiellt leasingavtal (K3 kapitel 20, behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED), dashboard first'),
+  'POST /api/bookkeeping/finance-leases/book': gap('P3', 'book the year of the finansiella leasingavtal (start and year-end adjustment), dashboard first'),
 
   // ── Fiscal periods, year-end, årsredovisning ───────────────────────
   'POST /api/bookkeeping/fiscal-periods': covered([`POST ${V}/fiscal-periods`, 'gnubok_create_fiscal_period']),
@@ -242,6 +250,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/fiscal-periods/:id/close-external': covered([`POST ${V}/fiscal-periods/:id/close-external`, 'gnubok_close_fiscal_period_external']),
   'POST /api/bookkeeping/fiscal-periods/:id/reopen-external': covered([`POST ${V}/fiscal-periods/:id/reopen-external`, 'gnubok_reopen_fiscal_period_external']),
   'POST /api/bookkeeping/fiscal-periods/:id/reset': uiOnly('destructive owner-only fiscal year reset'),
+  'POST /api/bookkeeping/currency-revaluation/monthly': gap('P3', 'month-end currency revaluation with its next-day storno (#523); v1 and MCP revalue the balansdag only'),
   'POST /api/bookkeeping/fiscal-periods/:id/reopen': uiOnly('owner-only reopen of a year closed with a bokslut, on the owner\'s typed statement that the årsredovisning was not signed, adopted or filed'),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review': gap('P3', 'sign off the opening balance review'),
   'POST /api/bookkeeping/fiscal-periods/:id/opening-balance-review/sie-file': covered(
@@ -946,5 +955,11 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 157 -> 159 (2026-10-27): archiving a mistakenly connected bank account
  * (PH 222) and stopping an earlier inbox address (crm#1209), dashboard only
  * like their siblings removal and rotate.
+ * 159 -> 164 (2026-10-27, K3 kapitel 23): pågående arbeten (settings, uppdrag,
+ * the year's booking), dashboard first behind NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED.
+ * 164 -> 166 (2026-10-27, K3 kapitel 20): register and book finansiella
+ * leasingavtal, dashboard first behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED.
+ * 166 -> 167 (2026-10-27, #523, K3 build): the monthly currency
+ * revaluation, dashboard first behind NEXT_PUBLIC_FX_MONTHLY_REVALUATION_ENABLED.
  */
-export const GAP_CEILING = 159
+export const GAP_CEILING = 167

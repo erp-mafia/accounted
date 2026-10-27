@@ -159,7 +159,7 @@ Creates a new company owned by the API key user (or attached to one of their tea
 - Send an Idempotency-Key. With one, a retry with the same key and body returns the company the first call created (200, Idempotent-Replayed: true), never a second one; the same key with another body answers 409 IDEMPOTENCY_KEY_REUSE. Keep the key for the whole provisioning attempt (24 h). The header is optional for compatibility: without it, a retry after a network failure creates a second company.
 - org_number is required for a VAT-registered company (the invoice momsregistreringsnummer derives from it), and f_skatt must be stated explicitly: F-skatt approval is never assumed.
 - accounting_method may be omitted: it then defaults by form (aktiebolag accrual, enskild firma cash) and the response shows the resolved value. The cash default is only legal when turnover normally stays under 3 MSEK (BFL 4 kap 4 §): send accrual explicitly for a larger enskild firma.
-- ideell_forening and ekonomisk_forening are rolled out per installation behind the server-side flags NEXT_PUBLIC_IDEELL_FORENING_ENABLED and NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED. Until the flag is on, a request with that entity_type is refused with VALIDATION_ERROR on entity_type; enskild_firma and aktiebolag are always creatable.
+- ideell_forening, ekonomisk_forening and bostadsrattsforening are rolled out per installation behind the server-side flags NEXT_PUBLIC_IDEELL_FORENING_ENABLED, NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED and NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED. Until the flag is on, a request with that entity_type is refused with VALIDATION_ERROR on entity_type; enskild_firma and aktiebolag are always creatable.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -169,7 +169,7 @@ Request body:
 ```ts
 {
   name: string,
-  entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening",
+  entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening" | "bostadsrattsforening",
   org_number?: string,
   vat_registered: boolean,
   moms_period?: "monthly" | "quarterly" | "yearly" | null,
@@ -204,7 +204,7 @@ Response `200`:
     id: string,
     handle?: string,
     name: string,
-    entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening",
+    entity_type: "enskild_firma" | "aktiebolag" | "ideell_forening" | "ekonomisk_forening" | "bostadsrattsforening",
     org_number: string | null,
     vat_registered: boolean,
     moms_period: "monthly" | "quarterly" | "yearly" | null,

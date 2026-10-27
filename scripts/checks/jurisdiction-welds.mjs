@@ -62,6 +62,7 @@ export const SE_PACK_TERRITORY = [
   // forms/types.ts) is the jurisdiction-agnostic seam and stays BAS-free.
   'lib/company/forms/se-aktiebolag.ts',
   'lib/company/forms/se-ekonomisk-forening.ts',
+  'lib/company/forms/se-bostadsrattsforening.ts',
   'lib/company/forms/se-enskild-firma.ts',
   'lib/company/forms/se-ideell-forening.ts',
   // Swedish year-end: årsredovisning and iXBRL, periodiseringsfond, bolagsskatt, EF.
@@ -72,6 +73,11 @@ export const SE_PACK_TERRITORY = [
   'lib/reports/ne-bilaga/',
   'lib/reports/sru/',
   'lib/reports/sru-encoding.ts',
+  // The kassaflödesanalys to K3 kapitel 7: which BAS range is which line of
+  // the statement (interest, dividends, investing and financing by kind,
+  // likvida medel per 7.4). The ledger reports read it, so it lives beside
+  // them in the kernel rather than in lib/bokslut.
+  'lib/reports/kassaflodesanalys-statement.ts',
   // The momsdeklaration: rutor, their BAS 26xx mapping, and the eSKD file.
   'lib/reports/vat-declaration.ts',
   'lib/vat/moms-box-mapping.ts',

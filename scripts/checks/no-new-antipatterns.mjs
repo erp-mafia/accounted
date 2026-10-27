@@ -551,9 +551,13 @@ const LEDGER_SCAN_SANCTIONED = new Set([
   'lib/reports/monthly-breakdown.ts',
   // Tax balances/expenses come from generateTrialBalance; only mixed 2510
   // counterpart evidence needs vouchers, which account totals cannot retain.
-  // Mirrors exclude-all-year-end (including reversal/correction chains and
-  // linked opening entry); kassaflodesanalys-tax.test.ts pins those filters.
+  // The kassaflödesanalys reads per-voucher movements for the same reason
+  // (gross loans and acquisitions, exchange differences on likvida medel).
+  // Both mirror the statement's exclude-final scope (resultatavslut and the
+  // linked opening entry left out) through cash-flow-evidence.ts;
+  // kassaflodesanalys-tax.test.ts pins those filters.
   'lib/reports/cash-flow-tax.ts',
+  'lib/reports/cash-flow-evidence.ts',
   // Reconciliation and diagnostics: they compare against the ledger as posted.
   'lib/reports/ar-reconciliation.ts',
   'lib/reports/supplier-reconciliation.ts',

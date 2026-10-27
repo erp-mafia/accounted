@@ -1,7 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { TrialBalanceRow } from '@/types'
 import { fetchEntryLines } from '@/lib/bookkeeping/entry-lines'
-import { excludeYearEndChain, fetchYearEndEntryIds } from './trial-balance'
+import { scopeCashFlowEntries, type CashFlowEntryScope } from './cash-flow-evidence'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
 
 // BAS current income tax, including prior-year adjustments and refunds.
@@ -60,23 +60,14 @@ async function nonIncomeTaxTransfer(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  openingEntryId: string | null,
+  scope: CashFlowEntryScope,
 ): Promise<number> {
-  // The trial balance's 'exclude-all-year-end' set (fetchYearEndEntryIds),
-  // the same entries as the account totals this corrects.
-  const yearEndEntryIds = await fetchYearEndEntryIds(supabase, companyId, fiscalPeriodId)
+  // The same entries as the account totals this corrects.
   const lines = await fetchEntryLines<TaxLine>({
     supabase,
     attachEntriesAs: null,
     lineColumns: 'account_number, debit_amount, credit_amount',
-    filterEntries: query => {
-      const scoped = excludeYearEndChain(
-        query.eq('company_id', companyId).eq('fiscal_period_id', fiscalPeriodId)
-          .in('status', ['posted', 'reversed']),
-        yearEndEntryIds,
-      )
-      return openingEntryId ? scoped.neq('id', openingEntryId) : scoped
-    },
+    filterEntries: query => scopeCashFlowEntries(query, companyId, fiscalPeriodId, scope),
   })
   const entries = new Map<string, TaxLine[]>()
   for (const line of lines) {
@@ -125,7 +116,7 @@ async function nonIncomeTaxTransfer(
 /**
  * Indirect-method income-tax bridge: signed current tax expense minus the
  * debit-side change in tax liabilities, prepayments and tax receivables.
- * All inputs use the report's existing exclude-all-year-end scope.
+ * `rows` and `scope` must describe the same entries.
  *
  * Generic 2510 follows the report's BAS income-tax convention except where
  * current-period entries explicitly identify other taxes. Historical/custom
@@ -135,7 +126,7 @@ export async function calculateCashFlowTax(
   supabase: SupabaseClient,
   companyId: string,
   fiscalPeriodId: string,
-  openingEntryId: string | null,
+  scope: CashFlowEntryScope,
   rows: TrialBalanceRow[],
 ): Promise<{ paidIncomeTax: number; otherTaxLiabilityChange: number; expenseInOperatingProfit: number }> {
   let expense = 0
@@ -158,7 +149,7 @@ export async function calculateCashFlowTax(
   const needsEvidence = rows.some(row => row.account_number === '2510' && active(row))
     && rows.some(row => (OTHER_TAX_BALANCE.has(row.account_number) || OTHER_TAX_EXPENSE.has(row.account_number)) && active(row))
   const transferred = needsEvidence
-    ? await nonIncomeTaxTransfer(supabase, companyId, fiscalPeriodId, openingEntryId)
+    ? await nonIncomeTaxTransfer(supabase, companyId, fiscalPeriodId, scope)
     : 0
   return {
     paidIncomeTax: r2(expense - incomeTaxDelta - transferred),

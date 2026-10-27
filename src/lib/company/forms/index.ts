@@ -4,6 +4,7 @@ import { SE_ENSKILD_FIRMA } from './se-enskild-firma'
 import { SE_AKTIEBOLAG } from './se-aktiebolag'
 import { SE_IDEELL_FORENING } from './se-ideell-forening'
 import { SE_EKONOMISK_FORENING } from './se-ekonomisk-forening'
+import { SE_BOSTADSRATTSFORENING } from './se-bostadsrattsforening'
 
 export type { LegalFormProfile, PlannedLegalForm } from './types'
 
@@ -18,6 +19,7 @@ export const LEGAL_FORMS: Readonly<Record<EntityType, LegalFormProfile>> = {
   aktiebolag: SE_AKTIEBOLAG,
   ideell_forening: SE_IDEELL_FORENING,
   ekonomisk_forening: SE_EKONOMISK_FORENING,
+  bostadsrattsforening: SE_BOSTADSRATTSFORENING,
 }
 
 /**
@@ -26,7 +28,6 @@ export const LEGAL_FORMS: Readonly<Record<EntityType, LegalFormProfile>> = {
  * the nearest supported form and get the wrong equity chart.
  */
 export const PLANNED_LEGAL_FORMS: ReadonlyArray<PlannedLegalForm> = [
-  { jurisdiction: 'SE', code: 'bostadsrattsforening', label: 'Bostadsrättsförening', reference: '#2666' },
   { jurisdiction: 'SE', code: 'samfallighetsforening', label: 'Samfällighetsförening' },
   { jurisdiction: 'SE', code: 'stiftelse', label: 'Stiftelse', reference: '#2072' },
 ]

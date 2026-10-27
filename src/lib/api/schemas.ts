@@ -3630,6 +3630,8 @@ export const UpdateSettingsSchema = z.object({
     .optional(),
   // #967: register/send invoices without booking; booking is a separate step.
   defer_invoice_booking: z.boolean().optional(),
+  // #523: month-end currency revaluation, reversed the next day.
+  fx_revaluation_monthly: z.boolean().optional(),
   invoice_prefix: z.string().nullable().optional(),
   next_invoice_number: z.number().int().positive().optional(),
   next_arrival_number: z.number().int().positive().optional(),
@@ -3641,6 +3643,8 @@ export const UpdateSettingsSchema = z.object({
   website: z.string().optional().or(z.literal('')),
   pays_salaries: z.boolean().optional(),
   sector_slug: z.string().nullable().optional(),
+  // K3 kapitel 20: capitalise finansiella leasingavtal instead of the 20.29 relief.
+  finance_lease_capitalisation: z.boolean().optional(),
   // Bookkeeping lock
   bookkeeping_locked_through: z.string().regex(ISO_DATE_RE, ISO_DATE_MESSAGE_SV).nullable().optional(),
   auto_lock_period_days: z.number().int().positive().nullable().optional(),

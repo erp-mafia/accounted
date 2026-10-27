@@ -1,0 +1,1 @@
+[2026-10-26] The monthly currency revaluation is a manual action under Inställningar, Bokföring beside the choice, behind NEXT_PUBLIC_FX_MONTHLY_REVALUATION_ENABLED, not a schedule: a verifikat at a month end is booked when a person asks, as the balansdag revaluation runs only inside the year-end close.

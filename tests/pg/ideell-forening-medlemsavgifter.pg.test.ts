@@ -17,6 +17,23 @@ const MIGRATION_SQL = readFileSync(
   'utf8',
 )
 
+/**
+ * Replays the migration's backfill. The file also redefines
+ * seed_chart_of_accounts() with the body it had then; pg-real runs every test
+ * file against one database, so the current body (a later migration's) is put
+ * back afterwards, or the files after this one would seed an older chart.
+ */
+async function replayMigration(): Promise<void> {
+  const current = await getPool().query<{ def: string }>(
+    `SELECT pg_get_functiondef('public.seed_chart_of_accounts(uuid, text)'::regprocedure) AS def`,
+  )
+  try {
+    await getPool().query(MIGRATION_SQL)
+  } finally {
+    await getPool().query(current.rows[0].def)
+  }
+}
+
 interface ChartRow {
   account_number: string
   account_name: string
@@ -71,7 +88,7 @@ describe('ideell förening: the 3901 backfill', () => {
     const userId = await insertAuthUser()
     const emptyChart = await insertCompany({ createdBy: userId, entityType: 'ideell_forening' })
 
-    await getPool().query(MIGRATION_SQL)
+    await replayMigration()
 
     expect(await account(lacking, '3901')).toEqual({
       account_number: '3901',
@@ -86,8 +103,8 @@ describe('ideell förening: the 3901 backfill', () => {
 
   it('is safe to run twice', async () => {
     const companyId = await seeded('ideell_forening')
-    await getPool().query(MIGRATION_SQL)
-    await getPool().query(MIGRATION_SQL)
+    await replayMigration()
+    await replayMigration()
     const res = await getPool().query<{ n: number }>(
       `SELECT count(*)::int AS n FROM public.chart_of_accounts WHERE company_id = $1 AND account_number = '3901'`,
       [companyId],

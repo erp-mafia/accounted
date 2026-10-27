@@ -68,6 +68,7 @@ describe('ekonomisk_forening foundation: database contract', () => {
       'aktiebolag',
       'ideell_forening',
       'ekonomisk_forening',
+      'bostadsrattsforening',
     ])
   })
 

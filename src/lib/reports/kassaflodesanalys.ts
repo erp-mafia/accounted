@@ -1,8 +1,24 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { generateTrialBalance } from './trial-balance'
 import { calculateCashFlowTax, isCashFlowTaxBridgeAccount } from './cash-flow-tax'
+import { fetchVoucherMovements, type CashFlowEntryScope } from './cash-flow-evidence'
 import type { TrialBalanceRow } from '@/types'
 import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accounts'
+import { createLogger } from '@/lib/logger'
+import { addDaysIso } from '@/lib/dates/iso'
+import {
+  buildKassaflodesanalysYear,
+  hasPeriodActivity,
+  likvidaMedelDefinition,
+  needsVoucherEvidence,
+  type CashFlowTaxBridge,
+  type KassaflodesanalysPreviousStatus,
+  type KassaflodesanalysStatement,
+  type KassaflodesanalysYear,
+  type LikvidaMedelDefinition,
+} from '@/lib/reports/kassaflodesanalys-statement'
+
+const log = createLogger('reports/kassaflodesanalys')
 
 /**
  * Kassaflödesanalys (Cash Flow Statement): indirect method per BFNAR 2012:1 ch 7.
@@ -53,6 +69,18 @@ import { isAretsResultatAccount } from '@/lib/bookkeeping/bas-data/result-accoun
  * With every account classified, a mismatch against 19xx can only come from
  * postings in the period that do not balance; the reconciliation stays as
  * that guard.
+ *
+ * Scope: the statutory one, the same as the årsredovisning's resultaträkning
+ * ('exclude-final'): every entry of the year, bokslut entries (avskrivningar,
+ * skatt, bokslutsdispositioner) included, only the resultatavslut left out.
+ * The statement's rörelseresultat therefore equals the resultaträkning's.
+ *
+ * Two layouts come out of the same rows:
+ *   - the sections above (lopande / investerings / finansierings and their
+ *     reconciliation against 19xx), the summary the K3 årsredovisning PDF
+ *     prints today, kept field for field so its readers keep working;
+ *   - `statement`, the K3 chapter 7 statement with the previous year
+ *     (lib/reports/kassaflodesanalys-statement.ts). New readers use it.
  */
 
 export type KassaflodesanalysReport = {
@@ -98,6 +126,22 @@ export type KassaflodesanalysReport = {
     mismatch_amount: number
     is_reconciled: boolean
   }
+}
+
+export interface KassaflodesanalysOptions {
+  /** Also build the previous financial year's statement (K3 3.5 comparatives). */
+  includePreviousYear?: boolean
+  /**
+   * Accounts outside 19xx whose balance is likvida medel: a short-term
+   * placement that qualifies under K3 7.4 c, or a bostadsrättsförening's
+   * klientmedelskonto (K3 38.16). Prefixes, like '1689'.
+   */
+  extraLikvidaMedelAccounts?: string[]
+}
+
+/** The report with the K3 chapter 7 statement. */
+export type KassaflodesanalysFullReport = KassaflodesanalysReport & {
+  statement: KassaflodesanalysStatement
 }
 
 // Normalize -0 → 0 so callers (and tests) never observe a signed zero.
@@ -193,13 +237,140 @@ const isAccumulatedContra = (account: string) =>
   /^1[012][0-79][89]$/.test(account.slice(0, 4)) || FINANCIAL_ASSET_WRITE_DOWNS.has(account.slice(0, 4))
 const isConstructionOrAdvance = (account: string) => /^1[012]8/.test(account)
 
+interface CashFlowPeriod {
+  id: string
+  period_start: string
+  period_end: string
+  opening_balance_entry_id: string | null
+}
+
+/** One year's inputs: the trial balance and the tax bridge over the same entries. */
+interface CashFlowYearData {
+  rows: TrialBalanceRow[]
+  tax: CashFlowTaxBridge
+  scope: CashFlowEntryScope
+}
+
+/**
+ * The resultatavslut entries 'exclude-final' leaves out of the trial balance
+ * (result_closing_entry_ids), so the journal reads below see the same entries.
+ */
+async function fetchResultClosingEntryIds(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+): Promise<string[]> {
+  const { data, error } = await supabase.rpc('result_closing_entry_ids', {
+    p_company_id: companyId,
+    p_fiscal_period_id: fiscalPeriodId,
+  })
+  if (error) throw new Error(error.message)
+  return Array.isArray(data) ? data.map(String) : []
+}
+
+async function loadCashFlowYear(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: CashFlowPeriod,
+): Promise<CashFlowYearData> {
+  // Trial balance gives us opening + closing per account for the period.
+  // Statutory scope: the resultaträkning of the årsredovisning reads the same
+  // ('exclude-final'), so rörelseresultat here is the one printed there.
+  // Every line reads these same rows, resultat included, which is what makes
+  // the sections add up.
+  const [{ rows }, excludedEntryIds] = await Promise.all([
+    generateTrialBalance(supabase, companyId, period.id, { closingEntry: 'exclude-final' }),
+    fetchResultClosingEntryIds(supabase, companyId, period.id),
+  ])
+  const scope: CashFlowEntryScope = {
+    openingEntryId: period.opening_balance_entry_id ?? null,
+    excludedEntryIds,
+  }
+  const tax = await calculateCashFlowTax(supabase, companyId, period.id, scope, rows)
+  return { rows, tax, scope }
+}
+
+async function buildStatementYear(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: CashFlowPeriod,
+  data: CashFlowYearData,
+  definition: LikvidaMedelDefinition,
+): Promise<KassaflodesanalysYear> {
+  const vouchers = needsVoucherEvidence(data.rows, definition)
+    ? await fetchVoucherMovements(supabase, companyId, period.id, data.scope)
+    : null
+  return buildKassaflodesanalysYear({
+    periodStart: period.period_start,
+    periodEnd: period.period_end,
+    rows: data.rows,
+    tax: data.tax,
+    vouchers,
+    definition,
+  })
+}
+
+/**
+ * The comparative year: the period ending the day before this one starts,
+ * with the current year's likvida medel definition. A previous year that
+ * cannot be built (its tax postings cannot be split, its reads fail) leaves
+ * the column out instead of failing the report.
+ */
+async function buildPreviousYear(
+  supabase: SupabaseClient,
+  companyId: string,
+  current: CashFlowPeriod,
+  definition: LikvidaMedelDefinition,
+): Promise<{ previous: KassaflodesanalysYear | null; status: KassaflodesanalysPreviousStatus }> {
+  const { data: previousPeriod, error } = await supabase
+    .from('fiscal_periods')
+    .select('id, period_start, period_end, opening_balance_entry_id')
+    .eq('company_id', companyId)
+    .eq('period_end', addDaysIso(current.period_start, -1))
+    .maybeSingle()
+  if (error) return { previous: null, status: 'unavailable' }
+  if (!previousPeriod) return { previous: null, status: 'no_previous_period' }
+  try {
+    const period = previousPeriod as CashFlowPeriod
+    const data = await loadCashFlowYear(supabase, companyId, period)
+    if (!hasPeriodActivity(data.rows)) return { previous: null, status: 'no_activity' }
+    return {
+      previous: await buildStatementYear(supabase, companyId, period, data, definition),
+      status: 'included',
+    }
+  } catch (error) {
+    // The comparative column is left out, the report still renders; the
+    // status tells the reader, the log tells us.
+    log.warn('previous-year kassaflödesanalys unavailable', {
+      companyId,
+      fiscalPeriodId: previousPeriod.id,
+      error: error instanceof Error ? error.message : String(error),
+    })
+    return { previous: null, status: 'unavailable' }
+  }
+}
+
+/**
+ * The summary sections only, the shape the K3 årsredovisning reads today.
+ * Same computation as generateKassaflodesanalysWithStatement.
+ */
 export async function generateKassaflodesanalys(
   supabase: SupabaseClient,
   companyId: string,
-  fiscalPeriodId: string
+  fiscalPeriodId: string,
 ): Promise<KassaflodesanalysReport> {
+  return generateKassaflodesanalysWithStatement(supabase, companyId, fiscalPeriodId)
+}
+
+/** The summary sections and the K3 chapter 7 statement. */
+export async function generateKassaflodesanalysWithStatement(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  options: KassaflodesanalysOptions = {},
+): Promise<KassaflodesanalysFullReport> {
   // Fetch period info for the report header.
-  const { data: period, error: periodError } = await supabase
+  const { data: periodRow, error: periodError } = await supabase
     .from('fiscal_periods')
     .select('period_start, period_end, opening_balance_entry_id')
     .eq('id', fiscalPeriodId)
@@ -207,21 +378,37 @@ export async function generateKassaflodesanalys(
     .single()
 
   if (periodError) throw new Error(periodError.message)
-  if (!period) throw new Error('Fiscal period not found')
+  if (!periodRow) throw new Error('Fiscal period not found')
+  const period: CashFlowPeriod = { ...periodRow, id: fiscalPeriodId }
 
-  // Trial balance gives us opening + closing per account for the period.
-  // Preserve the operational-report convention: exclude all year_end entries
-  // and their correction chains, including native provisions. Changing that
-  // policy is separate. Every line below reads these same rows, resultat
-  // included, which is what makes the sections add up.
-  const { rows } = await generateTrialBalance(supabase, companyId, fiscalPeriodId, {
-    closingEntry: 'exclude-all-year-end',
-  })
+  const data = await loadCashFlowYear(supabase, companyId, period)
+  const sections = buildSections(period, data.rows, data.tax)
 
-  const tax = await calculateCashFlowTax(
-    supabase, companyId, fiscalPeriodId, period.opening_balance_entry_id ?? null, rows,
-  )
+  const definition = likvidaMedelDefinition(period.period_start, options.extraLikvidaMedelAccounts)
+  const [current, comparative] = await Promise.all([
+    buildStatementYear(supabase, companyId, period, data, definition),
+    options.includePreviousYear
+      ? buildPreviousYear(supabase, companyId, period, definition)
+      : Promise.resolve({ previous: null, status: 'not_requested' as const }),
+  ])
 
+  return {
+    ...sections,
+    statement: {
+      method: 'indirect',
+      current,
+      previous: comparative.previous,
+      previous_status: comparative.status,
+    },
+  }
+}
+
+/** The summary sections, reconciled against 19xx. */
+function buildSections(
+  period: CashFlowPeriod,
+  rows: readonly TrialBalanceRow[],
+  tax: CashFlowTaxBridge,
+): KassaflodesanalysReport {
   // Cash contribution per bucket: the negated debit-side change.
   const cashIn = new Map<Bucket, number>()
   let avskrivningar = 0
@@ -368,7 +555,7 @@ export async function generateKassaflodesanalys(
   const isReconciled = Math.abs(mismatchAmount) < 0.01
 
   return {
-    fiscal_period_id: fiscalPeriodId,
+    fiscal_period_id: period.id,
     period_start: period.period_start,
     period_end: period.period_end,
     lopande: {

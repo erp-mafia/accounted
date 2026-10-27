@@ -3823,6 +3823,48 @@ const YEAR_END: Record<string, StructuredErrorEntry> = {
     message_en: 'This voucher number gap already has an explanation; an explanation is write-once.',
     retryable: false,
   },
+  // Pågående arbeten under K3 kapitel 23 (lib/bokslut/pagaende-arbeten),
+  // behind NEXT_PUBLIC_CONTRACT_REVENUE_ENABLED.
+  CONTRACT_REVENUE_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Pågående arbeten finns inte här ännu.',
+    message_en: 'Work in progress is not available here yet.',
+  },
+  CONTRACT_REVENUE_NOT_CONFIGURED: {
+    httpStatus: 409,
+    message_sv: 'Välj först metod och intäktskonto för pågående arbeten.',
+    message_en: 'First choose the method and the revenue account for work in progress.',
+  },
+  CONTRACT_REVENUE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Uppdraget hittades inte.',
+    message_en: 'The contract was not found.',
+  },
+  CONTRACT_REVENUE_NO_PERIOD: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret hittades inte.',
+    message_en: 'The financial year was not found.',
+  },
+  CONTRACT_REVENUE_FIGURES_DATE: {
+    httpStatus: 409,
+    message_sv: 'Alla uppdrag ska ha siffror per balansdagen innan året bokförs.',
+    message_en: 'Every contract needs figures as of the balance sheet date before the year is booked.',
+  },
+  CONTRACT_REVENUE_INCOMPLETE: {
+    httpStatus: 409,
+    message_sv: 'Uppgifter saknas för ett uppdrag, till exempel färdigställandegraden eller det upparbetade värdet.',
+    message_en: 'A contract is missing figures, such as the stage of completion or the value of work performed.',
+  },
+  CONTRACT_REVENUE_ACCOUNT_MISSING: {
+    httpStatus: 404,
+    message_sv: 'Kontot finns inte i kontoplanen. Lägg till det först.',
+    message_en: 'The account is not in the chart of accounts. Add it first.',
+  },
+  CONTRACT_REVENUE_ACCOUNT_VAT: {
+    httpStatus: 409,
+    message_sv: 'Kontot ingår i momsdeklarationen eller har en momskod eller momssats. Välj ett intäktskonto utan moms för de upparbetade intäkterna.',
+    message_en: 'The account is part of the VAT return or has a VAT code or rate. Choose a revenue account without VAT for the earned revenue.',
+  },
 }
 
 const FX: Record<string, StructuredErrorEntry> = {
@@ -3854,6 +3896,31 @@ const FX: Record<string, StructuredErrorEntry> = {
       description:
         'Retry once Riksbanken has published the closing-date rate, or run the revaluation for a closing date that has a published observation.',
     },
+  },
+  FX_MONTHLY_REVALUATION_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Valutaomvärdering per månadsskifte är inte tillgänglig här ännu.',
+    message_en: 'Month-end currency revaluation is not available here yet.',
+  },
+  FX_MONTHLY_REVALUATION_NOT_ENABLED: {
+    httpStatus: 409,
+    message_sv: 'Välj valutaomvärdering per månadsskifte under Inställningar, Bokföring först.',
+    message_en: 'Choose month-end currency revaluation under Settings, Bookkeeping first.',
+  },
+  FX_MONTHLY_REVALUATION_DATE_INVALID: {
+    httpStatus: 422,
+    message_sv: 'Välj ett månadsskifte före räkenskapsårets sista dag. Balansdagen omvärderas i bokslutet.',
+    message_en: 'Choose a month end before the last day of the financial year. The closing date is revalued in the year-end close.',
+  },
+  FX_MONTHLY_REVALUATION_EXISTS: {
+    httpStatus: 409,
+    message_sv: 'Valutaomvärdering per det här månadsskiftet är redan bokförd.',
+    message_en: 'A currency revaluation for this month end is already booked.',
+  },
+  FX_MONTHLY_REVALUATION_NO_PERIOD: {
+    httpStatus: 404,
+    message_sv: 'Inget räkenskapsår omfattar det valda månadsskiftet.',
+    message_en: 'No financial year covers the chosen month end.',
   },
 }
 
@@ -8851,6 +8918,36 @@ const ASSETS: Record<string, StructuredErrorEntry> = {
       'Kontot är markerat Ej K2 i BAS-kontoplanen och förutsätter K3. Välj ett konto som är tillåtet enligt K2.',
     message_en:
       'The account is marked Ej K2 in the BAS chart of accounts and presumes the K3 framework. Pick an account that K2 permits.',
+  },
+  FINANCE_LEASE_DISABLED: {
+    httpStatus: 503,
+    message_sv: 'Finansiell leasing finns inte här ännu.',
+    message_en: 'Finance leases are not available here yet.',
+  },
+  FINANCE_LEASE_NOT_ENABLED: {
+    httpStatus: 409,
+    message_sv: 'Välj först att finansiella leasingavtal redovisas som tillgång och skuld (K3 20.5).',
+    message_en: 'First choose to report finance leases as an asset and a liability (K3 20.5).',
+  },
+  FINANCE_LEASE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Leasingavtalet hittades inte.',
+    message_en: 'The lease was not found.',
+  },
+  FINANCE_LEASE_NO_PERIOD: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret hittades inte.',
+    message_en: 'The financial year was not found.',
+  },
+  FINANCE_LEASE_YEAR_ALREADY_POSTED: {
+    httpStatus: 409,
+    message_sv: 'Leasingavtalen är redan bokförda för det här räkenskapsåret.',
+    message_en: 'The leases are already booked for this financial year.',
+  },
+  FINANCE_LEASE_START_NOT_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Ett leasingavtal började ett tidigare räkenskapsår och dess start är inte bokförd. Bokför det året först.',
+    message_en: 'A lease began in an earlier financial year and its start is not booked. Book that year first.',
   },
 }
 

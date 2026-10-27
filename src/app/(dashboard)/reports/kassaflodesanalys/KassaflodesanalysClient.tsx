@@ -15,7 +15,12 @@ import { ArrowDownTrayIcon, CheckCircleIcon, ExclamationTriangleIcon } from '@/c
 import { formatAmount } from '@/lib/utils'
 import { downloadFile } from '@/lib/browser/download-file'
 import { failureDescription } from '@/lib/browser/action-failure'
-import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
+import type { KassaflodesanalysFullReport } from '@/lib/reports/kassaflodesanalys'
+import {
+  KASSAFLODESANALYS_LAYOUT,
+  type KassaflodesanalysLayoutRow,
+  type KassaflodesanalysYear,
+} from '@/lib/reports/kassaflodesanalys-layout'
 import {
   getErrorMessage as getUserErrorMessage,
   type ErrorLocale,
@@ -35,26 +40,12 @@ function CashRow({ label, amount }: CashRowProps) {
   )
 }
 
-interface SubtotalRowProps {
-  label: string
-  amount: number
-}
-
-function SubtotalRow({ label, amount }: SubtotalRowProps) {
-  return (
-    <div className="flex items-center justify-between border-t border-border pt-3 mt-2 text-sm font-medium">
-      <span>{label}</span>
-      <span className="tabular-nums text-right">{formatAmount(amount)}</span>
-    </div>
-  )
-}
-
 export function KassaflodesanalysClient() {
   const t = useTranslations('reports')
   const locale = useLocale() as ErrorLocale
   const { toast } = useToast()
   const [selectedPeriod, setSelectedPeriod] = useState<string | null>(null)
-  const [report, setReport] = useState<KassaflodesanalysReport | null>(null)
+  const [report, setReport] = useState<KassaflodesanalysFullReport | null>(null)
   const [isLoadingPeriods, setIsLoadingPeriods] = useState(true)
   const [isLoadingReport, setIsLoadingReport] = useState(false)
   const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
@@ -200,170 +191,137 @@ export function KassaflodesanalysClient() {
           <CardContent className="p-6 text-sm text-destructive">{error}</CardContent>
         </Card>
       ) : report ? (
-        <div className="space-y-6">
-          {/* Section 1: Löpande verksamhet. One heading per section, the
-              statutory one the PDF uses. */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{t('cash_flow_section_operating')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <CashRow
-                label={t('cash_flow_result_after_financial')}
-                amount={report.lopande.resultat_efter_finansiella_poster}
-              />
-              <CashRow label={t('cash_flow_depreciation')} amount={report.lopande.avskrivningar} />
-              <CashRow
-                label={t('cash_flow_other_non_cash')}
-                amount={report.lopande.ovriga_ej_kassaflodesposter}
-              />
-              <CashRow
-                label={t('cash_flow_delta_receivables')}
-                amount={report.lopande.delta_kortfristiga_fordringar}
-              />
-              <CashRow
-                label={t('cash_flow_delta_inventory')}
-                amount={report.lopande.delta_varulager}
-              />
-              <CashRow
-                label={t('cash_flow_delta_payables')}
-                amount={report.lopande.delta_kortfristiga_skulder}
-              />
-              <CashRow label={t('cash_flow_tax_paid')} amount={report.lopande.skatt_betald} />
-              {report.lopande.koncernbidrag !== 0 && (
-                <CashRow
-                  label={t('cash_flow_group_contributions')}
-                  amount={report.lopande.koncernbidrag}
-                />
-              )}
-              {report.lopande.ovriga_poster !== 0 && (
-                <CashRow
-                  label={t('cash_flow_other_items', {
-                    accounts: report.unclassified_accounts.join(', '),
-                  })}
-                  amount={report.lopande.ovriga_poster}
-                />
-              )}
-              <SubtotalRow
-                label={t('cash_flow_total_operating')}
-                amount={report.lopande.total}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Section 2: Investeringsverksamhet */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{t('cash_flow_section_investing')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <CashRow
-                label={t('cash_flow_acquisitions')}
-                amount={report.investerings.forvarv_anlaggningar}
-              />
-              <CashRow
-                label={t('cash_flow_disposals')}
-                amount={report.investerings.avyttring_anlaggningar}
-              />
-              {report.investerings.kortfristiga_placeringar !== 0 && (
-                <CashRow
-                  label={t('cash_flow_short_term_investments')}
-                  amount={report.investerings.kortfristiga_placeringar}
-                />
-              )}
-              <SubtotalRow
-                label={t('cash_flow_total_investing')}
-                amount={report.investerings.total}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Section 3: Finansieringsverksamhet */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">{t('cash_flow_section_financing')}</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-1">
-              <CashRow
-                label={t('cash_flow_delta_loans')}
-                amount={report.finansierings.delta_lan}
-              />
-              <CashRow label={t('cash_flow_dividends')} amount={report.finansierings.utdelningar} />
-              <CashRow label={t('cash_flow_new_issue')} amount={report.finansierings.nyemission} />
-              <CashRow
-                label={t('cash_flow_shareholder_contributions')}
-                amount={report.finansierings.erhallna_aktieagartillskott}
-              />
-              <SubtotalRow
-                label={t('cash_flow_total_financing')}
-                amount={report.finansierings.total}
-              />
-            </CardContent>
-          </Card>
-
-          {/* Total */}
-          <Card>
-            <CardContent className="p-6">
-              <div className="flex items-center justify-between">
-                <span className="font-display text-lg">{t('cash_flow_year_total')}</span>
-                <span className="font-display text-lg tabular-nums">
-                  {formatAmount(report.total_cash_flow)}
-                </span>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Reconciliation banner */}
-          <Card
-            className={
-              report.reconciliation.is_reconciled
-                ? 'border-border bg-muted/30'
-                : 'border-destructive'
-            }
-          >
-            <CardContent className="p-6 space-y-3">
-              <div className="flex items-center gap-2">
-                {report.reconciliation.is_reconciled ? (
-                  <CheckCircleIcon className="h-5 w-5 text-success" />
-                ) : (
-                  <ExclamationTriangleIcon className="h-5 w-5 text-destructive" />
-                )}
-                <span className="font-medium">
-                  {report.reconciliation.is_reconciled
-                    ? t('cash_flow_reconciled')
-                    : t('cash_flow_not_reconciled')}
-                </span>
-              </div>
-              <div className="space-y-1 text-sm">
-                <CashRow
-                  label={t('cash_flow_opening_cash')}
-                  amount={report.reconciliation.opening_cash_1xxx}
-                />
-                <CashRow
-                  label={t('cash_flow_closing_cash')}
-                  amount={report.reconciliation.closing_cash_1xxx}
-                />
-                <CashRow
-                  label={t('cash_flow_delta_actual')}
-                  amount={report.reconciliation.delta_actual}
-                />
-                <CashRow
-                  label={t('cash_flow_delta_calculated')}
-                  amount={report.reconciliation.delta_calculated}
-                />
-                {!report.reconciliation.is_reconciled && (
-                  <div className="flex items-center justify-between border-t border-destructive pt-2 mt-2 text-sm font-medium text-destructive">
-                    <span>{t('cash_flow_mismatch')}</span>
-                    <span className="tabular-nums text-right">
-                      {formatAmount(report.reconciliation.mismatch_amount)}
-                    </span>
-                  </div>
-                )}
-              </div>
-            </CardContent>
-          </Card>
-        </div>
+        <KassaflodesanalysStatementView report={report} />
       ) : null}
+    </div>
+  )
+}
+
+/** A financial year's column heading: 2026, or 2025/26 for a broken year. */
+function yearLabel(year: KassaflodesanalysYear): string {
+  const start = year.period_start.slice(0, 4)
+  const end = year.period_end.slice(0, 4)
+  return start === end ? end : `${start}/${end.slice(2)}`
+}
+
+const SECTION_TITLE_KEYS = {
+  lopande: 'cash_flow_section_operating',
+  investering: 'cash_flow_section_investing',
+  finansiering: 'cash_flow_section_financing',
+} as const
+
+const LIQUIDITY_PARTS = [
+  ['kassamedel', 'cash_flow_liquid_cash'],
+  ['bank', 'cash_flow_liquid_bank'],
+  ['kortfristiga_placeringar', 'cash_flow_liquid_placements'],
+  ['koncernkonto', 'cash_flow_liquid_group_account'],
+] as const
+
+/**
+ * The K3 chapter 7 statement: the lines of KASSAFLODESANALYS_LAYOUT in their
+ * order, the comparative year beside the year when there is one, then
+ * likvida medel by part (7.18) and the reconciliation.
+ */
+function KassaflodesanalysStatementView({ report }: { report: KassaflodesanalysFullReport }) {
+  const t = useTranslations('reports')
+  const { current, previous } = report.statement
+  const recon = current.reconciliation
+  const shown = KASSAFLODESANALYS_LAYOUT.filter((row) => row.alwaysShow
+    || current.amounts[row.key] !== 0
+    || (previous !== null && previous.amounts[row.key] !== 0))
+  const unclassified = [...new Set([...current.unclassified_accounts, ...(previous?.unclassified_accounts ?? [])])]
+  const labelOf = (row: KassaflodesanalysLayoutRow) => row.key === 'ovriga_poster'
+    ? t('cash_flow_other_items', { accounts: unclassified.join(', ') })
+    : t(`cash_flow_lines.${row.key}`)
+
+  const amountRow = (
+    key: string,
+    label: string,
+    pick: (year: KassaflodesanalysYear) => number,
+    emphasis: boolean,
+  ) => (
+    <div
+      key={key}
+      className={
+        emphasis
+          ? 'flex items-center justify-between gap-4 border-t border-border pt-3 mt-2 text-sm font-medium'
+          : 'flex items-center justify-between gap-4 py-1 text-sm'
+      }
+    >
+      <span className="text-foreground">{label}</span>
+      <span className="flex shrink-0 gap-6">
+        <span className="w-28 tabular-nums text-right">{formatAmount(pick(current))}</span>
+        {previous && (
+          <span className="w-28 tabular-nums text-right text-muted-foreground">{formatAmount(pick(previous))}</span>
+        )}
+      </span>
+    </div>
+  )
+  const yearHeader = (
+    <div className="flex justify-end gap-6 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+      <span className="w-28 text-right">{yearLabel(current)}</span>
+      {previous && <span className="w-28 text-right">{yearLabel(previous)}</span>}
+    </div>
+  )
+
+  return (
+    <div className="space-y-6 stagger-enter">
+      {(['lopande', 'investering', 'finansiering'] as const).map((section) => (
+        <Card key={section}>
+          <CardHeader className="flex flex-row items-center justify-between gap-4">
+            <CardTitle className="text-base">{t(SECTION_TITLE_KEYS[section])}</CardTitle>
+            {yearHeader}
+          </CardHeader>
+          <CardContent className="space-y-1">
+            {shown
+              .filter((row) => row.section === section)
+              .map((row) => amountRow(row.key, labelOf(row), (year) => year.amounts[row.key], row.kind !== 'line'))}
+          </CardContent>
+        </Card>
+      ))}
+
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between gap-4">
+          <CardTitle className="text-base">{t('cash_flow_section_liquidity')}</CardTitle>
+          {yearHeader}
+        </CardHeader>
+        <CardContent className="space-y-1">
+          {shown
+            .filter((row) => row.section === 'likvida_medel')
+            .map((row) => amountRow(row.key, labelOf(row), (year) => year.amounts[row.key], row.kind !== 'line'))}
+          <div className="pt-4">
+            {LIQUIDITY_PARTS
+              .filter(([part]) => current.likvida_medel.ub[part] !== 0
+                || (previous !== null && previous.likvida_medel.ub[part] !== 0))
+              .map(([part, labelKey]) => amountRow(part, t(labelKey), (year) => year.likvida_medel.ub[part], false))}
+          </div>
+        </CardContent>
+      </Card>
+
+      <Card className={recon.is_reconciled ? 'border-border bg-muted/30' : 'border-destructive'}>
+        <CardContent className="p-6 space-y-3">
+          <div className="flex items-center gap-2">
+            {recon.is_reconciled ? (
+              <CheckCircleIcon className="h-5 w-5 text-success" />
+            ) : (
+              <ExclamationTriangleIcon className="h-5 w-5 text-destructive" />
+            )}
+            <span className="font-medium">
+              {recon.is_reconciled ? t('cash_flow_reconciled') : t('cash_flow_not_reconciled')}
+            </span>
+          </div>
+          <div className="space-y-1 text-sm">
+            <CashRow label={t('cash_flow_delta_actual')} amount={recon.delta_actual} />
+            <CashRow label={t('cash_flow_delta_calculated')} amount={recon.delta_calculated} />
+            {!recon.is_reconciled && (
+              <div className="flex items-center justify-between border-t border-destructive pt-2 mt-2 text-sm font-medium text-destructive">
+                <span>{t('cash_flow_mismatch')}</span>
+                <span className="tabular-nums text-right">{formatAmount(recon.mismatch_amount)}</span>
+              </div>
+            )}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

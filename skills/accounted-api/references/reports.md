@@ -1428,7 +1428,7 @@ Example response `200`:
 **Kassaflödesanalys (cash flow statement, indirect method) for a räkenskapsår.**
 `scope:reports:read · risk:low · idempotent`
 
-Derives the cash flow statement from the trial balance, with every account in exactly one line: löpande verksamhet (result after financial items, avskrivningar and other non-cash items, changes in receivables, inventory and short-term liabilities, tax paid, koncernbidrag), investeringsverksamhet (acquisitions, disposals at their proceeds, kortfristiga placeringar) and finansieringsverksamhet, reconciled against the actual change in cash (19xx). Read-only.
+Derives the cash flow statement from the trial balance, with every account in exactly one line: löpande verksamhet (result after financial items, avskrivningar and other non-cash items, changes in receivables, inventory and short-term liabilities, tax paid, koncernbidrag), investeringsverksamhet (acquisitions, disposals at their proceeds, kortfristiga placeringar) and finansieringsverksamhet, reconciled against the actual change in cash (19xx). `statement` holds the same year laid out to K3 chapter 7 (from rörelseresultat; interest and dividends received and paid as separate cash lines; investments per kind and loans gross; the exchange difference on likvida medel apart) with the previous year as `statement.previous`. Bokslut entries are included, only the resultatavslut is left out. Read-only.
 
 **Use when:** Preparing the årsredovisning for a K3 company (or a larger K2 one that includes it), or analysing where the year's cash went.
 **Do not use for:** Liquidity forecasts or bank balances (GET /reports/trial-balance for 19xx).
@@ -1436,6 +1436,7 @@ Derives the cash flow statement from the trial balance, with every account in ex
 **Pitfalls:**
 - lopande.ovriga_poster is the change on accounts outside every BAS range the analysis classifies, named in unclassified_accounts. reconciliation.is_reconciled false means the period's postings do not balance.
 - A year whose income tax cannot be separated from other taxes answers 422 CASH_FLOW_TAX_ALLOCATION_REQUIRED.
+- statement.current.amounts is keyed by line (rorelseresultat, erlagd_ranta, upptagna_lan, ...); statement.previous is null when there is no earlier year with activity, and statement.previous_status says why.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

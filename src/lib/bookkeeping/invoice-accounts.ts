@@ -7,7 +7,7 @@
  */
 
 import type { EntityType, VatTreatment } from '@/types'
-import { byEntityType } from '@/lib/company/entity-type'
+import { templateAccountForForm } from '@/lib/company/entity-type'
 
 /**
  * Stable code for the "foreign-currency customer invoice without a rate"
@@ -84,12 +84,9 @@ export function getRevenueAccount(
       // Försäljning varor till land utanför EU / Försäljning tjänst Export
       return goodsDeliveryCountry ? '3105' : '3305'
     case 'exempt':
-      return byEntityType(entityType, {
-        aktiebolag: '3004',
-        enskild_firma: '3100',
-        ideell_forening: '3100',
-        ekonomisk_forening: '3004',
-      })
+      // Momsfri försäljning: 3004 for a form that books like an aktiebolag
+      // (templateColumn 'ab'), 3100 for the others.
+      return templateAccountForForm(entityType, '3100', '3004') ?? '3100'
     default:
       return '3001'
   }

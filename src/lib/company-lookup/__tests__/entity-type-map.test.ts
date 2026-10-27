@@ -23,7 +23,6 @@ describe('mapEntityType', () => {
     expect(mapEntityType('KB')).toBeNull()
     expect(mapEntityType('Kommanditbolag')).toBeNull()
     expect(mapEntityType('Stiftelse')).toBeNull()
-    expect(mapEntityType('Bostadsrättsförening')).toBeNull()
   })
 
   it('does not false-match strings that merely contain "enskild" or "aktiebolag"', () => {
@@ -58,6 +57,16 @@ describe('mapSetupEntityType: only creatable forms are prefilled', () => {
     expect(mapSetupEntityType('Ideell förening')).toBe('ideell_forening')
   })
 
+  it('maps bostadsrättsförening only when the creation flag is on, never as an ekonomisk förening', () => {
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', '')
+    vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', 'true')
+    expect(mapEntityType('Bostadsrättsförening')).toBe('bostadsrattsforening')
+    expect(mapEntityType('BRF')).toBe('bostadsrattsforening')
+    expect(mapSetupEntityType('Bostadsrättsförening')).toBeNull()
+    vi.stubEnv('NEXT_PUBLIC_BOSTADSRATTSFORENING_ENABLED', 'true')
+    expect(mapSetupEntityType('Bostadsrättsförening')).toBe('bostadsrattsforening')
+  })
+
   it('maps ekonomisk förening only when the creation flag is on', () => {
     vi.stubEnv('NEXT_PUBLIC_EKONOMISK_FORENING_ENABLED', '')
     expect(mapSetupEntityType('Ekonomisk förening')).toBeNull()
@@ -68,15 +77,15 @@ describe('mapSetupEntityType: only creatable forms are prefilled', () => {
 
 describe('mapPlannedLegalForm: the scoped-but-not-creatable forms', () => {
   it('maps the registry spellings to the planned form and its label', () => {
-    expect(mapPlannedLegalForm('Bostadsrättsförening')).toMatchObject({
-      code: 'bostadsrattsforening',
-      label: 'Bostadsrättsförening',
+    expect(mapPlannedLegalForm('Samfällighetsförening')).toMatchObject({
+      code: 'samfallighetsforening',
+      label: 'Samfällighetsförening',
     })
     // A shipped form is never planned: behind its flag the journey stops on
     // it through mapEntityType instead.
     expect(mapPlannedLegalForm('Ekonomisk förening')).toBeNull()
-    expect(mapPlannedLegalForm('BRF')?.code).toBe('bostadsrattsforening')
-    expect(mapPlannedLegalForm('Samfällighetsförening')?.code).toBe('samfallighetsforening')
+    expect(mapPlannedLegalForm('Bostadsrättsförening')).toBeNull()
+    expect(mapPlannedLegalForm('BRF')).toBeNull()
     expect(mapPlannedLegalForm('Stiftelse')?.code).toBe('stiftelse')
     expect(mapPlannedLegalForm('Annan stiftelse')?.code).toBe('stiftelse')
   })
@@ -99,7 +108,7 @@ describe('mapEntityType: ideell förening (issue #2072)', () => {
   })
 
   it('does not map other föreningar or stiftelser', () => {
-    expect(mapEntityType('Bostadsrättsförening')).toBeNull()
+    expect(mapEntityType('Bostadsrättsförening')).not.toBe('ideell_forening')
     expect(mapEntityType('Registrerat trossamfund')).toBeNull()
     expect(mapEntityType('Stiftelse')).toBeNull()
   })
@@ -113,7 +122,7 @@ describe('mapEntityType: ekonomisk förening', () => {
   })
 
   it('does not map specially regulated or adjacent association forms', () => {
-    expect(mapEntityType('Bostadsrättsförening')).toBeNull()
+    expect(mapEntityType('Bostadsrättsförening')).not.toBe('ekonomisk_forening')
     expect(mapEntityType('Kooperativ hyresrättsförening')).toBeNull()
     expect(mapEntityType('Sambruksförening')).toBeNull()
   })

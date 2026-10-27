@@ -42,6 +42,7 @@ describe('entity-type: parsing', () => {
       'aktiebolag',
       'ideell_forening',
       'ekonomisk_forening',
+      'bostadsrattsforening',
     ])
   })
 
@@ -61,6 +62,7 @@ describe('entity-type: parsing', () => {
       aktiebolag: 2,
       ideell_forening: 3,
       ekonomisk_forening: 4,
+      bostadsrattsforening: 5,
     })).toBe(3)
     expect(() =>
       byEntityType('stiftelse' as never, {
@@ -68,6 +70,7 @@ describe('entity-type: parsing', () => {
         aktiebolag: 2,
         ideell_forening: 3,
         ekonomisk_forening: 4,
+        bostadsrattsforening: 5,
       }),
     ).toThrow(UnknownEntityTypeError)
   })

@@ -1,0 +1,1 @@
+[2026-10-26] Kassaflödesanalys likvida medel (K3 7.4): 19xx less 1974 spärrade bankmedel (not disponibla, shown in investering); 1960 koncernkonto counted only for years starting after 2025-12-31 (BFNAR 2025:3). Interest stays in löpande (7.15 option not offered), koncernbidrag too.
