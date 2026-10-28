@@ -146,7 +146,8 @@ describe('company twin plan and atomic receipt', () => {
     const payload = (await client.query('SELECT payload FROM processing_history WHERE event_id = $1', [operationId])).rows[0].payload
     expect(JSON.stringify(payload)).not.toContain(iban)
     expect(JSON.stringify(payload)).not.toContain('PG twin fixture')
-    await client.query('UPDATE cash_accounts SET balance = 123, balance_updated_at = now() WHERE id = $1', [keeperId])
+    await client.query(`UPDATE cash_accounts SET balance = 123, balance_updated_at = now(),
+      balance_reference = jsonb_build_object('date', '2026-01-01', 'type', 'closingBooked', 'fetched_at', now()) WHERE id = $1`, [keeperId])
     expect((await verify()).status).toBe('consistent')
   })
 
@@ -272,7 +273,8 @@ describe('company twin plan and atomic receipt', () => {
 
   it('ignores balance-only observations and sync timestamps in the fingerprint', async () => {
     const before = await plan()
-    await client.query('UPDATE cash_accounts SET balance = 123, available_balance = 120, balance_updated_at = now() WHERE id = $1', [twinId])
+    await client.query(`UPDATE cash_accounts SET balance = 123, available_balance = 120, balance_updated_at = now(),
+      balance_reference = jsonb_build_object('date', '2026-01-01', 'type', 'closingBooked', 'fetched_at', now()) WHERE id = $1`, [twinId])
     await client.query(`UPDATE bank_connections SET last_synced_at = now(),
       accounts_data = jsonb_set(accounts_data, '{0,balance}', '123') WHERE id = $1`, [connectionId])
     expect((await plan()).fingerprint).toBe(before.fingerprint)
