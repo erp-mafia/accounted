@@ -286,6 +286,7 @@ import '@/app/api/v1/companies/[companyId]/expense-claims/route'
 import '@/app/api/v1/companies/[companyId]/expense-claims/[id]/route'
 import '@/app/api/v1/companies/[companyId]/expense-claims/payouts/route'
 import '@/app/api/v1/companies/[companyId]/transactions/[id]/match-expense-payout/route'
+import '@/app/api/v1/companies/[companyId]/mileage-trips/route'
 // Operation registry, wave 1: setup capabilities.
 import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/route'
 import '@/app/api/v1/companies/[companyId]/cash-accounts/[id]/set-primary/route'

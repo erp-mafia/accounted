@@ -2,7 +2,7 @@
 
 # Employees endpoints
 
-The employee register plus absence (frånvaro), worked days (tidrapport for hourly staff and OB), benefits (förmåner), recurring lines (standing monthly rows), vacation balances and year close, payroll cutover opening balances, and the company salary settings (pay day, avvikelseperiod, payment file format). Running payroll itself: salary-runs.md.
+The employee register plus absence (frånvaro), worked days (tidrapport for hourly staff and OB), benefits (förmåner), recurring lines (standing monthly rows), vacation balances and year close, payroll cutover opening balances, the company salary settings (pay day, avvikelseperiod, payment file format) and the körjournal (mileage trips). Running payroll itself: salary-runs.md.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -1897,6 +1897,204 @@ Example response `200`:
         "locked": false
       }
     ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/mileage-trips`
+
+**List körjournal trips (mileage log) with total and unbooked distance.**
+`scope:payroll:read · risk:low · idempotent`
+
+Returns the company's körjournal trips, newest trip_date first, each with route, distance, purpose, vehicle and status (draft = not yet booked as milersättning, booked = in a verifikat or a salary run). Filter by trip_date range (from, to inclusive), status or employee_id. total_km sums every listed trip; draft_km sums the unbooked ones. Not paginated: every matching trip is returned.
+
+**Use when:** You show the trip log, check what is still unbooked before booking milersättning for a period, or need the underlag behind a milersättning verifikat.
+**Do not use for:** Expense claims (GET /expense-claims) or the milersättning amounts in a salary run (the salary-runs endpoints).
+
+**Pitfalls:**
+- distance_km is kilometres; milersättning is paid per mil (10 km) at the schablon rate for the vehicle type.
+- Trips without employee_id are the owner's; filtering on employee_id leaves them out.
+- from and to filter on trip_date, not on when the trip was logged.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `from` | query | `string` | no | First trip_date to include (YYYY-MM-DD). |
+| `to` | query | `string` | no | Last trip_date to include (YYYY-MM-DD). |
+| `status` | query | `"draft" \| "booked"` | no | draft = not yet booked, booked = booked. |
+| `employee_id` | query | `string` | no | Only this employee's trips. |
+
+Response `200`:
+```ts
+{
+  data: {
+    mileage_trips: { mileage_trip_id: string, trip_date: string, vehicle_type: "own_car" | "company_car_fossil" | "company_car_electric", vehicle_registration: string | null, odometer_start: number | null, odometer_end: number | null, distance_km: number, from_location: string, to_location: string, purpose: string, visited: string | null, is_round_trip: boolean, employee_id: string | null, status: "draft" | "booked", journal_entry_id: string | null, created_at: string }[],
+    total_km: number,
+    draft_km: number
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "mileage_trips": [
+      {
+        "mileage_trip_id": "3b7e…",
+        "trip_date": "2026-10-14",
+        "vehicle_type": "own_car",
+        "vehicle_registration": null,
+        "odometer_start": 48210,
+        "odometer_end": 48352,
+        "distance_km": 142,
+        "from_location": "Kontoret, Uppsala",
+        "to_location": "Kund AB, Stockholm",
+        "purpose": "Kundmöte, uppstart av projekt",
+        "visited": "Kund AB",
+        "is_round_trip": true,
+        "employee_id": null,
+        "status": "draft",
+        "journal_entry_id": null,
+        "created_at": "2026-10-14T16:02:00Z"
+      }
+    ],
+    "total_km": 142,
+    "draft_km": 142
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/mileage-trips`
+
+**Log a körjournal trip (mileage log entry).**
+`scope:payroll:write · risk:low · idempotent · dry-run · reversible`
+
+Records one business trip with what Skatteverket expects of a körjournal: date, start and destination, distance, purpose (ärende) and who was visited, plus odometer readings and the vehicle. The trip is saved as a draft; nothing is booked. Milersättning is booked later for a whole period at the tax-free schablon rate for the vehicle type. A förmånsbil trip must name the vehicle (vehicle_registration). Idempotent. Dry-runnable: the preview carries the schablon rate and the allowance the trip would add.
+
+**Use when:** A trip was driven in a private car or a förmånsbil for the business and should go into the körjournal.
+**Do not use for:** Fuel or parking receipts (expense claims or supplier invoices), or booking milersättning for a period (not on v1 yet).
+
+**Pitfalls:**
+- distance_km is kilometres, not mil; it is stored rounded to one decimal.
+- vehicle_type company_car_fossil or company_car_electric without vehicle_registration returns 400 VALIDATION_ERROR.
+- is_round_trip only labels the trip: distance_km must already include the return leg.
+- An employee_id from another company returns 404 EMPLOYEE_NOT_FOUND.
+- odometer_end must be greater than odometer_start when both are sent.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+
+Request body:
+```ts
+{
+  trip_date: string,
+  vehicle_type?: "own_car" | "company_car_fossil" | "company_car_electric",
+  vehicle_registration?: string | null,
+  odometer_start?: number | null,
+  odometer_end?: number | null,
+  distance_km: number,
+  from_location: string,
+  to_location: string,
+  purpose: string,
+  visited?: string | null,
+  is_round_trip?: boolean,
+  employee_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "trip_date": "2026-10-14",
+  "distance_km": 142,
+  "from_location": "Kontoret, Uppsala",
+  "to_location": "Kund AB, Stockholm",
+  "purpose": "Kundmöte, uppstart av projekt",
+  "visited": "Kund AB",
+  "is_round_trip": true,
+  "odometer_start": 48210,
+  "odometer_end": 48352
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    mileage_trip_id: string,
+    trip_date: string,
+    vehicle_type: "own_car" | "company_car_fossil" | "company_car_electric",
+    vehicle_registration: string | null,
+    odometer_start: number | null,
+    odometer_end: number | null,
+    distance_km: number,
+    from_location: string,
+    to_location: string,
+    purpose: string,
+    visited: string | null,
+    is_round_trip: boolean,
+    employee_id: string | null,
+    status: "draft" | "booked",
+    journal_entry_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "mileage_trip_id": "3b7e…",
+    "trip_date": "2026-10-14",
+    "vehicle_type": "own_car",
+    "vehicle_registration": null,
+    "odometer_start": 48210,
+    "odometer_end": 48352,
+    "distance_km": 142,
+    "from_location": "Kontoret, Uppsala",
+    "to_location": "Kund AB, Stockholm",
+    "purpose": "Kundmöte, uppstart av projekt",
+    "visited": "Kund AB",
+    "is_round_trip": true,
+    "employee_id": null,
+    "status": "draft",
+    "journal_entry_id": null,
+    "created_at": "2026-10-14T16:02:00Z"
   },
   "meta": {
     "request_id": "req_…",

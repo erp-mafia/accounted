@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 294 endpoints.
+  pagination, scopes), and all 296 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -149,7 +149,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 294 operations. Paths are shown without
+API version `2026-05-12`, 296 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (11)
@@ -399,7 +399,7 @@ POST /companies/{companyId}/transactions/bulk-book : Book several same-day SEK b
 POST /companies/{companyId}/transactions/ingest : Bulk-ingest transactions (up to 500 per call) [scope:transactions:write risk:medium idempotent dry-run]
 ```
 
-### Employees (26)
+### Employees (28)
 
 Full detail: [references/employees.md](references/employees.md)
 
@@ -427,6 +427,8 @@ GET /companies/{companyId}/employees/{id}/worked-days : List worked days (hours 
 PUT /companies/{companyId}/employees/{id}/worked-days : Register worked hours per day for an employee (bulk upsert) [scope:payroll:write risk:low idempotent dry-run reversible]
 DELETE /companies/{companyId}/employees/{id}/worked-days : Delete worked days for an employee in a date range [scope:payroll:write risk:low idempotent dry-run]
 PUT /companies/{companyId}/employees/opening-balances : Bulk-set payroll cutover opening balances (atomic) [scope:payroll:write risk:medium idempotent dry-run reversible]
+GET /companies/{companyId}/mileage-trips : List körjournal trips (mileage log) with total and unbooked distance [scope:payroll:read risk:low idempotent]
+POST /companies/{companyId}/mileage-trips : Log a körjournal trip (mileage log entry) [scope:payroll:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/salary/settings : Get the company payroll settings [scope:payroll:read risk:low idempotent]
 PATCH /companies/{companyId}/salary/settings : Partially update the company payroll settings [scope:payroll:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/salary/vacation-year-close : Close a vacation year (semesterberedning + arsavslut) [scope:payroll:write risk:high idempotent dry-run]

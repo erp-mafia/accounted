@@ -399,7 +399,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'DELETE /api/expense-claims/:id': covered([`DELETE ${V}/expense-claims/:id`, 'gnubok_delete_expense_claim']),
   'POST /api/expense-claims/payouts': covered([`POST ${V}/expense-claims/payouts`, 'gnubok_record_expense_payout']),
   'POST /api/expense-claims/suggest-template': uiOnly(PREVIEW),
-  'POST /api/mileage/trips': covered(['gnubok_log_mileage_trip']),
+  'POST /api/mileage/trips': covered([`POST ${V}/mileage-trips`, 'gnubok_log_mileage_trip']),
   'PATCH /api/mileage/trips/:id': gap('P3'),
   'DELETE /api/mileage/trips/:id': gap('P3'),
   'POST /api/mileage/book': covered(['gnubok_book_mileage_period']),

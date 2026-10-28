@@ -108,6 +108,7 @@ import {
   expenseClaimsRecordPayout,
   transactionsMatchExpensePayout,
 } from './expense-claims'
+import { mileageTripsCreate, mileageTripsList } from './mileage-trips'
 import {
   supplierPaymentBatchesCancel,
   supplierPaymentBatchesCreate,
@@ -291,6 +292,9 @@ export const OPERATIONS: readonly AnyOperation[] = [
   expenseClaimsDelete,
   expenseClaimsRecordPayout,
   transactionsMatchExpensePayout,
+  // mileage-trips (körjournal; v1 only, the MCP tools are still hand-written)
+  mileageTripsList,
+  mileageTripsCreate,
   // supplier-payment-batches
   supplierPaymentBatchesPreview,
   supplierPaymentBatchesCreate,

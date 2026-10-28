@@ -402,6 +402,9 @@ export const V1_ENDPOINT_SCOPES: Record<string, ApiKeyScope> = {
   'DELETE /api/v1/companies/:companyId/expense-claims/:id': 'suppliers:write',
   'POST /api/v1/companies/:companyId/expense-claims/payouts': 'suppliers:write',
   'POST /api/v1/companies/:companyId/transactions/:id/match-expense-payout': 'transactions:write',
+  // Körjournal (mileage trips): payroll surface, as the MCP tools are.
+  'GET /api/v1/companies/:companyId/mileage-trips': 'payroll:read',
+  'POST /api/v1/companies/:companyId/mileage-trips': 'payroll:write',
   // Operation registry, wave 1 (src/lib/operations): setup capabilities.
   'POST /api/v1/companies/:companyId/cash-accounts': 'companies:write',
   'PATCH /api/v1/companies/:companyId/cash-accounts/:id': 'companies:write',

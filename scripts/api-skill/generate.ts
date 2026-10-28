@@ -119,12 +119,13 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'employees.md',
     title: 'Employees',
-    members: ['employees', 'salary'],
+    members: ['employees', 'salary', 'mileage-trips'],
     blurb:
       'The employee register plus absence (frånvaro), worked days (tidrapport for hourly staff ' +
       'and OB), benefits (förmåner), recurring lines (standing monthly rows), vacation balances ' +
-      'and year close, payroll cutover opening balances, and the company salary settings (pay ' +
-      'day, avvikelseperiod, payment file format). Running payroll itself: salary-runs.md.',
+      'and year close, payroll cutover opening balances, the company salary settings (pay ' +
+      'day, avvikelseperiod, payment file format) and the körjournal (mileage trips). Running ' +
+      'payroll itself: salary-runs.md.',
   },
   {
     file: 'salary-runs.md',
