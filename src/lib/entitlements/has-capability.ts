@@ -393,6 +393,25 @@ export interface CapabilityBlockedError {
   capability: CapabilityKey
   message_sv: string
   message_en: string
+  /** The same call is refused until the plan (or the self-host's setup) changes. */
+  retryable: false
+  /** Who lifts the block and where, for an agent to tell the user. */
+  remediation: { description: string }
+}
+
+/**
+ * What lifts the block. An agent told only the upsell had no next step (57
+ * MCP sessions in 30 days on gnubok_connect_bank and
+ * gnubok_create_document_upload, 19 of them ended there): a person upgrades
+ * under Inställningar → Abonnemang, or on a self-host the operator adds the
+ * connector key, and the call waits for that.
+ */
+function blockedRemediation(key: CapabilityKey): { description: string } {
+  return {
+    description: isSelfHosted()
+      ? `This installation has no connector key or own API credentials for ${key}. Tell the user: the operator sets GNUBOK_CONNECTOR_KEY or the service's own credentials. Do not retry until they confirm.`
+      : `The company's plan does not include ${key}. Tell the user: a person upgrades in Accounted under Inställningar → Abonnemang (/settings/billing). Do not retry until they confirm the upgrade.`,
+  }
 }
 
 /**
@@ -408,7 +427,20 @@ export function capabilityBlockedError(key: CapabilityKey): CapabilityBlockedErr
     capability: key,
     message_sv: blockedMessageSv(),
     message_en: blockedMessageEn(),
+    retryable: false,
+    remediation: blockedRemediation(key),
   }
+}
+
+/**
+ * capabilityBlockedError as a thrown value, for a tool that refuses by
+ * throwing (a cross-company inner call, a feed backfill). The MCP toToolError
+ * answers it with the envelope the dispatcher's gate answers: its lowercase
+ * code is no registry code, so it read as UNKNOWN_ERROR before.
+ */
+export function capabilityBlockedRefusal(key: CapabilityKey): Error & CapabilityBlockedError {
+  const blocked = capabilityBlockedError(key)
+  return Object.assign(new Error(blocked.message_en), blocked)
 }
 
 /**

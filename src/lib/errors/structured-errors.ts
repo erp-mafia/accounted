@@ -6219,6 +6219,14 @@ export const SI_CREATE_INVALID_INPUT_REASONS = {
     message_sv: 'Underlaget saknar ett totalbelopp. Ange fakturans totalbelopp från underlaget och försök igen.',
     message_en: 'The underlag has no usable total: set totals.total from the underlag, then retry.',
   },
+  invoice_date_missing: {
+    message_sv: 'Underlaget saknar fakturadatum. Ange fakturadatumet från underlaget och försök igen.',
+    message_en: 'No invoice date was read from the underlag: pass invoice_date_override from the underlag, then retry.',
+  },
+  invoice_number_missing: {
+    message_sv: 'Underlaget saknar fakturanummer. Ange leverantörens fakturanummer från underlaget och försök igen.',
+    message_en: 'No invoice number was read from the underlag: set invoice.invoiceNumber from the underlag, then retry.',
+  },
   lines_missing: {
     message_sv: 'Underlaget saknar fakturarader. Lägg in raderna från underlaget och försök igen.',
     message_en: 'No line items were read from the underlag: set lineItems from the underlag, then retry.',
@@ -8612,7 +8620,8 @@ const SKATTEVERKET: Record<string, StructuredErrorEntry> = {
       'The Skatteverket connection is missing or has expired. If the company was connected before this is expected: Skatteverket personal sessions last about ten hours. Tell the user to connect (or reconnect) with BankID under Inställningar → Skatteverket in Accounted. Only a person can do this; do not retry until they confirm they have reconnected.',
     remediation: {
       description:
-        'A person must connect (or reconnect) to Skatteverket with BankID under Inställningar → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
+        'A person must connect (or reconnect) to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user, or they open Inställningar → Skatteverket. Personal Skatteverket sessions expire after about ten hours by SKV design, so an expired session is normal, not a fault. Do not retry until the user confirms they have reconnected.',
+      tool: 'gnubok_connect_skatteverket',
     },
   },
   // A live connection whose skattekonto has not been fetched yet, so the

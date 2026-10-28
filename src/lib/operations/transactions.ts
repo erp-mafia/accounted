@@ -859,6 +859,18 @@ export const transactionsBulkBook = defineOperation({
       // samlingsverifikat next (feedback seq 378710 / 382660).
       refusal: (failure) => {
         switch (failure.code) {
+          // The ids, not "one or more": 13 sessions in 30 days got only that.
+          case 'BULK_BOOK_TXS_NOT_FOUND': {
+            const missing = (failure.details as { missing_tx_ids?: string[] } | undefined)?.missing_tx_ids
+            if (!missing) return undefined
+            return codedRefusal(
+              failure.code,
+              missing.length > 0
+                ? `Not among this company's bank transactions: ${missing.join(', ')}. Drop or correct those tx_ids ` +
+                    '(gnubok_list_uncategorized_transactions lists the unbooked ones), then stage again.'
+                : 'tx_ids names the same transaction more than once: send each id once.',
+            )
+          }
           case 'BULK_BOOK_DATE_MISMATCH':
             return codedRefusal(
               failure.code,

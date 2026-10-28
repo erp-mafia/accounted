@@ -74,11 +74,113 @@ describe('normalizeReportArgAliases', () => {
       const published = Object.keys((tool!.inputSchema as { properties: Record<string, unknown> }).properties)
       for (const [alias, rule] of Object.entries(table)) {
         expect(published, `${toolName}: alias ${alias} must not be published`).not.toContain(alias)
+        for (const sibling of rule.reads ?? []) {
+          expect(published, `${toolName}: ${alias} reads ${sibling}, which must not be published`).not.toContain(sibling)
+        }
         for (const target of rule.to) {
           expect(published, `${toolName}: ${alias} -> ${target}`).toContain(target)
         }
       }
     }
+  })
+})
+
+// The 2026-10 session autopsy (30 days of mcp.tool_called): the names agents
+// sent most often to tools that had no alias for them.
+describe('normalizeReportArgAliases: the names agents sent, 2026-10', () => {
+  const map = (toolName: string, args: Record<string, unknown>) => normalizeReportArgAliases(toolName, args)
+
+  it('query_journal reads voucher like voucher_number and q as text', () => {
+    expect(map('gnubok_query_journal', { voucher: 'A12' }).args).toEqual({
+      voucher_series: 'A',
+      voucher_number_from: 12,
+      voucher_number_to: 12,
+    })
+    expect(map('gnubok_query_journal', { voucher: 7 }).args).toEqual({ voucher_number_from: 7, voucher_number_to: 7 })
+    expect(map('gnubok_query_journal', { q: 'hyra' }).args).toEqual({ text: 'hyra' })
+    // An unreadable voucher stays for the guard, as on voucher_number.
+    expect(map('gnubok_query_journal', { voucher: 'A12B' }).args).toEqual({ voucher: 'A12B' })
+  })
+
+  it('list_verifikat_without_documents reads a date range as since and until', () => {
+    expect(map('gnubok_list_verifikat_without_documents', { date_from: '2026-01-01', date_to: '2026-03-31' }).args).toEqual({
+      since: '2026-01-01',
+      until: '2026-03-31',
+    })
+    expect(map('gnubok_list_verifikat_without_documents', { from_date: '2026-01-01', end_date: '2026-03-31' }).args).toEqual({
+      since: '2026-01-01',
+      until: '2026-03-31',
+    })
+    expect(map('gnubok_list_verifikat_without_documents', { date_from: '2026-01-01', since: '2026-02-01' }).conflicts).toEqual([
+      { alias: 'date_from', readsAs: ['since'], overlaps: 'since' },
+    ])
+  })
+
+  it('general ledger reads date_from/date_to as its from_date/to_date', () => {
+    expect(map('gnubok_get_general_ledger', { date_from: '2026-01-01', date_to: '2026-06-30' }).args).toEqual({
+      from_date: '2026-01-01',
+      to_date: '2026-06-30',
+    })
+  })
+
+  it('list_accounts reads query as search, text or an account number', () => {
+    expect(map('gnubok_list_accounts', { query: 'bank' }).args).toEqual({ search: 'bank' })
+    expect(map('gnubok_list_accounts', { query: 1930 }).args).toEqual({ search: 1930 })
+    for (const value of [{ text: 'bank' }, ['bank'], 19.5, null]) {
+      expect(map('gnubok_list_accounts', { query: value }).args, JSON.stringify(value)).toEqual({ query: value })
+    }
+  })
+
+  it('load_skill reads name and skill as slug', () => {
+    expect(map('gnubok_load_skill', { name: 'month-end-close' }).args).toEqual({ slug: 'month-end-close' })
+    expect(map('gnubok_load_skill', { skill: 'horizontal/swedish-vat' }).args).toEqual({ slug: 'horizontal/swedish-vat' })
+  })
+
+  it('never maps a private own/ skill, whose scope the dispatcher reads from slug before aliases apply', () => {
+    for (const value of ['own/11111111-2222-4333-8444-555555555555', '  own/x']) {
+      for (const alias of ['name', 'skill']) {
+        const { args, applied } = map('gnubok_load_skill', { [alias]: value })
+        expect(args, `${alias}=${value}`).toEqual({ [alias]: value })
+        expect(applied).toEqual([])
+      }
+    }
+  })
+
+  describe('get_record reads an id with its type as the record_ref', () => {
+    const uuid = '0b8f6a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b'
+
+    it('builds <kind>:<id> from type or record_type and consumes the type', () => {
+      expect(map('gnubok_get_record', { type: 'document', id: uuid }).args).toEqual({ record_ref: `document:${uuid}` })
+      expect(map('gnubok_get_record', { record_type: 'Journal_Entry', id: uuid, as_of: '2026-01-01' }).args).toEqual({
+        record_ref: `journal_entry:${uuid}`,
+        as_of: '2026-01-01',
+      })
+    })
+
+    it('passes an id sent alone through: a bare uuid for the tool to resolve, or a whole record_ref', () => {
+      expect(map('gnubok_get_record', { id: uuid }).args).toEqual({ record_ref: uuid })
+      expect(map('gnubok_get_record', { id: `party:${uuid}` }).args).toEqual({ record_ref: `party:${uuid}` })
+    })
+
+    it('leaves the id and its type for the guard when they do not name one record', () => {
+      for (const input of [
+        { type: 'invoice', id: uuid },
+        { type: 'document', record_type: 'document', id: uuid },
+        { type: 'document', id: 'doc-1' },
+        { id: 'invoice:' + uuid },
+        { id: 42 },
+      ]) {
+        const { args, applied } = map('gnubok_get_record', input)
+        expect(args, JSON.stringify(input)).toEqual(input)
+        expect(applied).toEqual([])
+      }
+    })
+
+    it('refuses an id next to a record_ref instead of picking one', () => {
+      expect(map('gnubok_get_record', { id: uuid, record_ref: `document:${uuid}` }).conflicts).toEqual([
+        { alias: 'id', readsAs: ['record_ref'], overlaps: 'record_ref' },
+      ])
+    })
   })
 })
 
@@ -174,7 +276,10 @@ describe('value guards: an alias value the target would misread stays unmapped',
     const samples: Record<string, unknown[]> = {
       account_number: ['1930', 1930],
       voucher_number: [12, '12', 'A12'],
+      voucher: [12, 'A12'],
       metric: ['cash_position', ['cash_position']],
+      id: ['0b8f6a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b'],
+      query: ['x', 1930],
     }
     for (const [toolName, table] of Object.entries(REPORT_ARG_ALIASES)) {
       for (const [alias, rule] of Object.entries(table)) {
@@ -290,9 +395,9 @@ describe('suggestArgKey: the synonyms agents sent, against real schemas', () => 
     ['date_from', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
     ['from_date', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
     ['start_date', 'gnubok_list_verifikat_without_documents', 'since', 'gnubok_list_skills'],
-    ['until', 'gnubok_get_income_statement', 'to_date', 'gnubok_list_verifikat_without_documents'],
+    ['until', 'gnubok_get_income_statement', 'to_date', 'gnubok_receipt_hunt_worklist'],
     ['until', 'gnubok_list_reconciliation_items', 'date_to', 'gnubok_list_transactions_without_documents'],
-    ['date_to', 'gnubok_get_ar_ledger', 'as_of_date', 'gnubok_list_verifikat_without_documents'],
+    ['date_to', 'gnubok_get_ar_ledger', 'as_of_date', 'gnubok_receipt_hunt_worklist'],
     ['offset', 'gnubok_list_salary_runs', 'cursor', 'gnubok_search_tools'],
   ])('%s -> %s names "%s"; %s gets no hint', (unknownKey, withTarget, expected, without) => {
     expect(hintOn(withTarget, unknownKey)).toBe(expected)
@@ -301,7 +406,7 @@ describe('suggestArgKey: the synonyms agents sent, against real schemas', () => 
 
   it('never points an upper bound at the lower bound of a since-only list', () => {
     for (const key of ['until', 'date_to', 'to_date', 'end_date']) {
-      expect(hintOn('gnubok_list_verifikat_without_documents', key), key).toBeNull()
+      expect(hintOn('gnubok_receipt_hunt_worklist', key), key).toBeNull()
     }
   })
 })

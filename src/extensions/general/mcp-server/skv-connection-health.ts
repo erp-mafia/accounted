@@ -179,6 +179,43 @@ async function memberName(supabase: SupabaseClient, memberId: string): Promise<s
   }
 }
 
+/**
+ * Why a Skatteverket READ found no live session, and the next step: the
+ * refusal of gnubok_vat_declaration_status and gnubok_agi_status, which
+ * answered Skatteverket's bare "Sessionen har gått ut" (167 times in 30
+ * days) with no next step. A read runs on the caller's own BankID login
+ * when they have one, else on the newest other member's (resolveUserReadAuth
+ * picks with findCompanyTokenUser, as here); the AGI receipt read only ever
+ * on the caller's own (ownOnly). So the message says "your own" only when it
+ * was, and names the member otherwise.
+ */
+export async function skvReadSessionMessage(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  opts: { ownOnly?: boolean } = {},
+): Promise<string> {
+  const next =
+    ' Next step: give the user the connect_url from gnubok_connect_skatteverket so they sign in with BankID. Do not retry until the user confirms.'
+  if (opts.ownOnly) {
+    return `This read uses your own Skatteverket BankID login for this company, and it has expired or was never connected.${next}`
+  }
+  // A lookup failure answers null too, so that branch never claims nobody connected.
+  const token = await findCompanyTokenUser(supabase, companyId, { preferUserId: userId })
+  if (!token) {
+    return `No live Skatteverket session serves this company's reads: no member's BankID login is connected, or it could not be read.${next}`
+  }
+  const lapsed = 'and its session is no longer valid (personal logins expire by design, so this is normal)'
+  if (token.userId === userId) {
+    return `This read uses your own Skatteverket BankID login for this company, ${lapsed}.${next}`
+  }
+  const name = await memberName(supabase, token.userId)
+  return (
+    `This read uses the company's Skatteverket connection made by ${name ? `${name}, another member of the company` : 'another member of the company'}, ` +
+    `${lapsed}. Any member's own BankID login serves the company's reads.${next}`
+  )
+}
+
 function filingMessage(own: 'expired' | 'none', holder: { name: string | null } | null): string {
   const ownPart =
     own === 'expired'

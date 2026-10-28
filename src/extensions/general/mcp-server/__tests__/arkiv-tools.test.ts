@@ -287,6 +287,41 @@ describe('Arkiv tools', () => {
     await expect(tool('gnubok_get_record').execute({ record_ref: `party:${AGR}` }, CO, 'user-1', supabase)).rejects.toThrow('Record not found')
   })
 
+  // 2026-10 session autopsy: the uuid alone was sent as record_ref 93 times
+  // in 30 days, and 61 of 98 sessions never got a record.
+  describe('get_record with a bare uuid', () => {
+    const KINDS = ['document_attachments', 'agreements', 'parties', 'journal_entries', 'company_facts']
+    const holders = (...tables: string[]) => { for (const table of KINDS) enqueue({ data: tables.includes(table) ? { id: DOC } : null }) }
+
+    it('answers the one record this company holds with that id, under its qualified ref', async () => {
+      delete process.env.ARKIV_BRAIN_COMPANY_IDS
+      holders('document_attachments')
+      enqueue({ data: { id: DOC, file_name: 'kvitto.pdf', created_at: '2026-09-01', doc_type: 'receipt', admission_state: 'admitted', page_count: 1, journal_entry_id: null } })
+      const out = (await tool('gnubok_get_record').execute({ record_ref: ` ${DOC} ` }, CO, 'user-1', supabase)) as { record_ref: string; kind: string }
+      expect(out).toMatchObject({ record_ref: `document:${DOC}`, kind: 'document' })
+      // Every kind is looked up by id, in this company only.
+      for (const table of KINDS) {
+        expect(mock.findCalls(table, 'eq'), table).toEqual(expect.arrayContaining([['id', DOC], ['company_id', CO]]))
+      }
+    })
+
+    it('says no record of any kind has the id when none does', async () => {
+      holders()
+      await expect(tool('gnubok_get_record').execute({ record_ref: DOC }, CO, 'user-1', supabase)).rejects.toMatchObject({
+        code: 'NOT_FOUND',
+        message: `No document, agreement, party, journal_entry or fact with id ${DOC} in this company.`,
+      })
+    })
+
+    it('refuses an id two kinds hold, naming both refs, instead of picking one', async () => {
+      holders('document_attachments', 'journal_entries')
+      await expect(tool('gnubok_get_record').execute({ record_ref: DOC }, CO, 'user-1', supabase)).rejects.toMatchObject({
+        code: 'VALIDATION_ERROR',
+        message: expect.stringContaining(`send record_ref as document:${DOC} or journal_entry:${DOC}`),
+      })
+    })
+  })
+
   it('get_fact_history needs a subject of the active company and a known predicate', async () => {
     await expect(tool('gnubok_get_fact_history').execute({ subject_ref: `company:${DOC}` }, CO, 'user-1', supabase)).rejects.toThrow(/active company/)
     await expect(tool('gnubok_get_fact_history').execute({ subject_ref: `company:${CO}`, predicate: 'shoe_size' }, CO, 'user-1', supabase)).rejects.toThrow(/unknown predicate/)
@@ -401,6 +436,31 @@ describe('gnubok_ask_document', () => {
     })
     enqueue({ data: { name: 'Arcim' } })
     await expect(tool('gnubok_ask_document').execute({ record_ref: `document:${DOC}`, question: 'Vad?' }, CO, 'user-1', supabase)).rejects.toThrow(/No such document/)
+  })
+
+  // 2026-10 session autopsy: "The reader failed: 503 Bedrock is unable to
+  // process your request." reached agents as UNKNOWN_ERROR 49 times in 30 days.
+  it('codes what the reader answers instead of a document: a busy service is retryable, the rest is not', async () => {
+    const { askDocument } = await import('@/lib/arkiv/ask')
+    const { toToolError } = await import('../tool-result')
+    const ask = async (outcome: Record<string, unknown>) => {
+      ;(askDocument as unknown as ReturnType<typeof vi.fn>).mockResolvedValueOnce(outcome)
+      enqueue({ data: { name: 'Arcim' } })
+      const err = await tool('gnubok_ask_document')
+        .execute({ record_ref: `document:${DOC}`, question: 'Vad är hyran?' }, CO, 'user-1', supabase)
+        .then(() => null, (e: unknown) => e)
+      return toToolError(err).error
+    }
+    for (const reason of ['503 Bedrock is unable to process your request.', '429 Too many requests', 'Request timed out.']) {
+      expect(await ask({ status: 'error', reason }), reason).toMatchObject({
+        code: 'TRANSIENT_ERROR',
+        retryable: true,
+        message_en: expect.stringContaining('Ask the same question again after a short wait'),
+      })
+    }
+    expect(await ask({ status: 'error', reason: '400 prompt is too long' })).toMatchObject({ code: 'INTERNAL_ERROR', retryable: false })
+    expect(await ask({ status: 'skipped', reason: 'ai_unconfigured' })).toMatchObject({ code: 'EXTENSION_DISABLED', retryable: false })
+    expect(await ask({ status: 'skipped', reason: 'no_text' })).toMatchObject({ code: 'VALIDATION_ERROR', retryable: false })
   })
 })
 

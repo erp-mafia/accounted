@@ -14,7 +14,7 @@ import {
  * P0-2). The predecessor applied min_amount in memory after the DB page:
  * total_count ignored the filter and consecutive pages overlapped. These
  * tests pin the SQL-side behavior: filter-respecting total, disjoint and
- * complete pages, since filter, doc/draft exclusion, tenant guard.
+ * complete pages, since and until filters, doc/draft exclusion, tenant guard.
  */
 
 type RpcRow = {
@@ -35,15 +35,17 @@ async function callRpc(params: {
   minAmount?: number
   limit?: number
   offset?: number
+  until?: string | null
 }): Promise<RpcResult> {
   const { rows } = await getPool().query<{ result: RpcResult }>(
-    `SELECT public.verifikat_without_documents($1, $2, $3, $4, $5) AS result`,
+    `SELECT public.verifikat_without_documents($1, $2, $3, $4, $5, $6) AS result`,
     [
       params.companyId,
       params.since ?? null,
       params.minAmount ?? 0,
       params.limit ?? 20,
       params.offset ?? 0,
+      params.until ?? null,
     ],
   )
   return rows[0].result
@@ -170,6 +172,39 @@ describe('verifikat_without_documents RPC', () => {
     expect(res.ok).toBe(true)
     expect(res.total_count).toBe(3)
     expect((res.verifikat ?? []).map((r) => r.voucher_number)).toEqual([6, 5, 4])
+  })
+
+  // gnubok_list_verifikat_without_documents `until` (20261028103000): an
+  // inclusive upper bound, alone or as the end of a since..until window.
+  it('respects the until filter, inclusive', async () => {
+    const res = await callRpc({ companyId, until: '2026-06-03' })
+    expect(res.ok).toBe(true)
+    expect(res.total_count).toBe(3)
+    expect((res.verifikat ?? []).map((r) => r.voucher_number)).toEqual([3, 2, 1])
+  })
+
+  it('bounds a since..until window on both ends', async () => {
+    const res = await callRpc({ companyId, since: '2026-06-02', until: '2026-06-04' })
+    expect(res.ok).toBe(true)
+    expect(res.total_count).toBe(3)
+    expect((res.verifikat ?? []).map((r) => r.voucher_number)).toEqual([4, 3, 2])
+  })
+
+  it('pages an until-bounded, min_amount-filtered set with a truthful total', async () => {
+    // amounts 300, 400 and 500 are dated on or before 2026-06-05 and reach 250
+    const first = await callRpc({ companyId, until: '2026-06-05', minAmount: 250, limit: 2 })
+    const second = await callRpc({ companyId, until: '2026-06-05', minAmount: 250, limit: 2, offset: 2 })
+    expect(first.total_count).toBe(3)
+    expect(second.total_count).toBe(3)
+    expect([...(first.verifikat ?? []), ...(second.verifikat ?? [])].map((r) => r.voucher_number)).toEqual([5, 4, 3])
+  })
+
+  it('answers the five-argument call as before: until defaults to none', async () => {
+    const { rows } = await getPool().query<{ result: RpcResult }>(
+      `SELECT public.verifikat_without_documents($1, NULL, 0, 20, 0) AS result`,
+      [companyId],
+    )
+    expect(rows[0].result.total_count).toBe(6)
   })
 
   it('offset past the end returns an empty page with a truthful total', async () => {

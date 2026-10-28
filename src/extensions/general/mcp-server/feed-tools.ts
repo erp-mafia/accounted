@@ -19,7 +19,7 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
-import { capabilityBlockedError, hasCapability } from '@/lib/entitlements/has-capability'
+import { capabilityBlockedRefusal, hasCapability } from '@/lib/entitlements/has-capability'
 import { badArgument, codedRefusal } from '@/lib/errors/refusal'
 import { dbError } from '@/lib/errors/db-error'
 import { createLogger } from '@/lib/logger'
@@ -194,10 +194,7 @@ export function createFeedTools(deps: { readOnly: McpToolAnnotations; writeOpenW
       async execute(args, companyId, userId, supabase: SupabaseClient) {
         const provider = providerOf(args.provider, true)!
         const spec = FEEDS[provider]
-        if (!(await hasCapability(supabase, companyId, spec.capability))) {
-          const blocked = capabilityBlockedError(spec.capability)
-          throw Object.assign(new Error(blocked.message_en), { code: blocked.code })
-        }
+        if (!(await hasCapability(supabase, companyId, spec.capability))) throw capabilityBlockedRefusal(spec.capability)
         const rl = await checkRateLimit({ prefix: `${spec.extensionId}:backfill`, identifier: userId, ...RATE_LIMIT_BACKFILL })
         if (!rl.ok) {
           throw codedRefusal('RATE_LIMITED', `${provider} backfill: at most ${RATE_LIMIT_BACKFILL.maxRequests} a minute. Retry in a minute.`)

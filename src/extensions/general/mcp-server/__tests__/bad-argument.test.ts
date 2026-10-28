@@ -44,6 +44,8 @@ describe('hand-checked tool arguments answer VALIDATION_ERROR with the field', (
     { tool: 'gnubok_forget_fact', args: {}, field: 'id', en: 'id is required' },
     { tool: 'gnubok_remember_fact', args: { content: 'Hyran bokas på 5010', kind: 'rumour' }, field: 'kind', en: 'invalid kind: rumour' },
     { tool: 'gnubok_create_transactions', args: { transactions: [] }, field: 'transactions', en: 'transactions must be a non-empty array.' },
+    // 15 sessions in the 30 days before 2026-10-26 got this as UNKNOWN_ERROR.
+    { tool: 'gnubok_link_documents_to_vouchers', args: { links: [] }, field: 'links', en: 'links is required (non-empty)' },
     {
       tool: 'gnubok_create_transactions',
       args: { transactions: [{ date: '45/13/2026', amount: 100, description: 'Swish' }] },

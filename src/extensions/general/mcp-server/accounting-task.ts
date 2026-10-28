@@ -142,8 +142,30 @@ export type AgentTask = TaskBase & AgentBundle & { built_for_client: AiClient }
 export type AnalysisTask = TaskBase & { analysis: { slug: string; name: string; tier: SkillTier; version: number | null; body: string } }
 export type AccountingTask = TaskBase | AgentTask | AnalysisTask
 
+/**
+ * The arguments without a company_id inside scope. Handoff and routine
+ * prompts say to pass company_id on every call, and agents put it in scope
+ * as often as beside kind, where the dispatcher reads it (15 calls refused
+ * "Unrecognized key" in 30 days). In scope it may only repeat the company
+ * the call runs for: another company is refused rather than picked, since
+ * company_id beside kind is what selects the company.
+ */
+function withoutScopeCompanyId(args: Record<string, unknown>, companyId: string): Record<string, unknown> {
+  const scope = args.scope
+  if (typeof scope !== 'object' || scope === null || Array.isArray(scope) || !Object.hasOwn(scope, 'company_id')) return args
+  const { company_id: scoped, ...rest } = scope as Record<string, unknown>
+  if (typeof scoped !== 'string' || scoped.trim().toLowerCase() !== companyId.toLowerCase()) {
+    throw codedError(
+      'VALIDATION_ERROR',
+      `scope.company_id (${String(scoped)}) is not the company this call runs for (${companyId}). ` +
+        'Send company_id next to kind, not inside scope: that is what selects the company.',
+    )
+  }
+  return { ...args, scope: rest }
+}
+
 export async function getAccountingTask(args: Record<string, unknown>, companyId: string, supabase: SupabaseClient, caller: TaskCaller = {}): Promise<AccountingTask> {
-  const parsed = TaskRequestSchema.safeParse(args)
+  const parsed = TaskRequestSchema.safeParse(withoutScopeCompanyId(args, companyId))
   if (!parsed.success) throw codedError('VALIDATION_ERROR', parsed.error.issues.map((issue) => issue.message).join('; '))
   const { kind, client, unattended = false } = parsed.data
   const scope = parsed.data.scope ?? {}

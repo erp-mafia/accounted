@@ -252,6 +252,15 @@
  *      again. Read entry first (lib/bookkeeping/entry-lines.ts) or call a
  *      ledger RPC. Allowlisted file-set, may only shrink. Implementation and
  *      rationale in lines-inner-embed.mjs.
+ *   31. mcp-bare-error: a bare `throw new Error(` in the MCP server's own
+ *      source (src/extensions/general/mcp-server, tests excluded). It reaches
+ *      the agent as UNKNOWN_ERROR, "Något gick fel. Försök igen.": retry
+ *      advice for a call that fails the same way until something changes. The
+ *      2026-10 session autopsy found 303 agent sessions in 30 days refused
+ *      that way, 38 of them sending the same call three times or more. Throw
+ *      a coded refusal instead (codedRefusal, badArgument or
+ *      fieldValidationError from lib/errors/refusal, with a registry code).
+ *      Tracked as a count.
  *
  * Usage:
  *   node scripts/checks/no-new-antipatterns.mjs            # check (CI)
@@ -622,6 +631,21 @@ function countNaiveRound() {
     for (const line of fs.readFileSync(f, 'utf8').split('\n')) {
       if (NAIVE_ROUND_RE.test(line)) count++
     }
+  }
+  return count
+}
+
+// 31. mcp-bare-error. Spacing variants count too; a test file never does.
+const MCP_SERVER_DIR = path.join(SOURCE_ROOT, 'extensions', 'general', 'mcp-server')
+const BARE_ERROR_THROW_RE = /\bthrow\s+new\s+Error\s*\(/g
+
+/** Count of bare `throw new Error(` in the MCP server's non-test source. */
+function countMcpBareErrorThrows() {
+  let count = 0
+  for (const f of walk(MCP_SERVER_DIR, ['.ts', '.tsx'])) {
+    const r = rel(f)
+    if (r.includes('__tests__/') || r.endsWith('.test.ts')) continue
+    count += (fs.readFileSync(f, 'utf8').match(BARE_ERROR_THROW_RE) ?? []).length
   }
   return count
 }
@@ -1302,6 +1326,7 @@ const initReach = findInitReach(SOURCE_ROOT)
 const current = {
   rawRouteAuth: findRawRouteAuth(),
   naiveOreRound: countNaiveRound(),
+  mcpBareErrorThrows: countMcpBareErrorThrows(),
   handRolledInvariants: countHandRolledInvariants(),
   providerHosts: findProviderHostFiles(),
   ledgerScanningReports: findLedgerScanningReports(),
@@ -1387,6 +1412,7 @@ if (isUpdate) {
       'Ratchet baseline for scripts/checks/no-new-antipatterns.mjs. These counts may only decrease. Re-run with --update after a migration lowers them. Goal: both reach 0 (A1 route-auth campaign, D1 rounding codemod).',
     rawRouteAuth: { count: current.rawRouteAuth.length, files: current.rawRouteAuth },
     naiveOreRound: { count: current.naiveOreRound },
+    mcpBareErrorThrows: { count: current.mcpBareErrorThrows },
     handRolledInvariants: { count: current.handRolledInvariants },
     literalLegalForm: { count: current.literalLegalForm.length },
     handBuiltVoucherRef: { count: current.handBuiltVoucherRef.length },
@@ -2367,6 +2393,24 @@ if (current.naiveOreRound > baseline.naiveOreRound.count) {
   console.error('  → import roundOre from @/lib/money instead.')
 }
 
+// 2b. mcp-bare-error: count may not increase.
+const mcpBareErrorBaseline = baseline.mcpBareErrorThrows?.count ?? Infinity
+if (current.mcpBareErrorThrows > mcpBareErrorBaseline) {
+  failed = true
+  console.error(
+    `\n✗ mcp-bare-error: ${current.mcpBareErrorThrows} bare \`throw new Error(\` in src/extensions/general/mcp-server ` +
+      `(baseline ${mcpBareErrorBaseline}, +${current.mcpBareErrorThrows - mcpBareErrorBaseline}).`,
+  )
+  console.error(
+    '  → A plain Error reaches the agent as UNKNOWN_ERROR, "Något gick fel. Försök igen.", which invites a\n' +
+      '    retry. Throw a coded refusal from @/lib/errors/refusal instead: codedRefusal(code, message, remediation?)\n' +
+      '    with a code from lib/errors/structured-errors.ts (add one there if none fits), badArgument(field, message)\n' +
+      '    or fieldValidationError for an argument, or codedError from ./company-routing for VALIDATION_ERROR,\n' +
+      '    NOT_FOUND or FORBIDDEN. An internal invariant that only a bug can break may stay INTERNAL_ERROR:\n' +
+      "    codedRefusal('INTERNAL_ERROR', message).",
+  )
+}
+
 // Report ratchet-down progress (informational, never fails).
 if (
   fixedAuthFiles.length ||
@@ -2383,6 +2427,7 @@ if (
   duplicateRatchet.shrunk.length ||
   errorMaskingRatchet.shrunk.length ||
   current.naiveOreRound < baseline.naiveOreRound.count ||
+  current.mcpBareErrorThrows < mcpBareErrorBaseline ||
   current.literalLegalForm.length < literalLegalFormBaseline ||
   current.handBuiltVoucherRef.length < handBuiltVoucherRefBaseline
 ) {
@@ -2433,6 +2478,8 @@ if (
     console.log(`    raw-reference-fetch: -${fixedRawRefs.length} file(s)`)
   if (current.naiveOreRound < baseline.naiveOreRound.count)
     console.log(`    naive-ore-round: -${baseline.naiveOreRound.count - current.naiveOreRound} occurrence(s)`)
+  if (current.mcpBareErrorThrows < mcpBareErrorBaseline)
+    console.log(`    mcp-bare-error: -${mcpBareErrorBaseline - current.mcpBareErrorThrows} throw(s)`)
   if (fixedProviderHosts.length)
     console.log(`    provider-host: -${fixedProviderHosts.length} file(s) no longer call a provider directly`)
   if (lazyInitBaseline && current.lazyInitEntries.length < lazyInitBaseline.count)
@@ -2492,5 +2539,5 @@ if (failed) {
   process.exit(1)
 }
 console.log(
-  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, hand-built-voucher-ref: ${current.handBuiltVoucherRef.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, hand-read-api-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), decision-log: 0, script-init-condition: 0, duplicate-block: ${duplicateLineCount} shared line(s) in ${Object.keys(duplicatePairs).length} file pair(s), error-masking: ${current.errorMasking.length} in ${Object.keys(errorMaskingCounts).length} file(s)).`,
+  `\n✓ Antipattern guard passed (raw-route-auth: ${current.rawRouteAuth.length}, naive-ore-round: ${current.naiveOreRound}, mcp-bare-error: ${current.mcpBareErrorThrows}, hand-rolled-invariant: ${current.handRolledInvariants}, literal-legal-form: ${current.literalLegalForm.length}, hand-built-voucher-ref: ${current.handBuiltVoucherRef.length}, ledger-scanning-report: ${current.ledgerScanningReports.length}, direct-jel-insert: 0, direct-invoice-payment-insert: 0, hand-written-sie-extensions: 0, leaky-supabase-client: 0, pinned-dep: 0, raw-user-error: 0, hand-read-api-error: 0, sek-labelled-amount: 0, off-ladder-radius: 0, ui-uniformity: 0, folded-public-flag: 0, cross-extension-import: 0, ungated-extension-route: ${current.extensionRoutes.ungated.length}/${UNGATED_EXTENSION_ROUTES.size} allowlisted, static-init-import: 0, lazy-init-reach: ${current.lazyInitEntries.length}/${lazyInitBaseline?.count ?? 'no baseline'}, dialog-overflow-risk: ${dialogOverflowFiles.length} file(s), raw-reference-fetch: ${current.rawReferenceFetch.length} file(s), client-node-builtin: ${current.clientNodeBuiltins.length}, client-server-only: ${current.clientServerOnly.length}, consent-token-access: 0, ambiguous-embed: ${current.ambiguousEmbeds.length}, provider-host: ${current.providerHosts.length} file(s), unsigned-provider-names: ${current.unsignedProviderNames.skipped ? 'skipped' : current.unsignedProviderNames.findings.length}, table-without-grant: ${tableWithoutGrantFiles.length}/${tableWithoutGrantBaseline.size} grandfathered file(s), functiondef-patch: ${functiondefPatchFiles.length}/${functiondefPatchBaseline.size} grandfathered file(s), direct-ai-client: ${current.directAiClients.length}/${DIRECT_AI_CLIENT_ALLOWED.size} allowlisted, limit-above-page: ${limitAbovePageFilesNow.size}/${LIMIT_ABOVE_PAGE_ALLOWED.size} allowlisted file(s), utc-today: ${current.utcToday.length} in ${UTC_TODAY_ALLOWED.size} allowlisted file(s), bas-account-literal: ${current.jurisdictionWelds.basAccountLiteral.length} in ${Object.keys(basLiteralCounts).length} file(s), sek-literal: ${current.jurisdictionWelds.sekLiteral.length} in ${Object.keys(sekLiteralCounts).length} file(s), kernel-import: ${kernelImportEdgeCount} edge(s), posting-port-bypass: ${postingBypassEdgeCount}/${countEdges(postingBypassBaseline)} baselined edge(s) + ${countEdges(current.postingPort.allowlisted)} permanent, swedish-ui-literal: ${current.swedishUiLiterals.length} in ${Object.keys(swedishUiLiteralCounts).length} file(s), decision-log: 0, script-init-condition: 0, duplicate-block: ${duplicateLineCount} shared line(s) in ${Object.keys(duplicatePairs).length} file pair(s), error-masking: ${current.errorMasking.length} in ${Object.keys(errorMaskingCounts).length} file(s)).`,
 )

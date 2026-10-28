@@ -642,4 +642,37 @@ describe('gnubok_list_accounts: compact detail and paging', () => {
     ).rejects.toThrow(/offset must be a non-negative integer/)
     expect(calls).toHaveLength(0)
   })
+
+  // 2026-10 session autopsy: search (27 calls) and query (24, now an alias)
+  // were refused, with no parameter to map them to.
+  const search = async (args: Record<string, unknown>) => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: rows })
+    return (await listAccounts.execute(args, 'company-1', 'user-1', supabase as never)) as Page
+  }
+
+  it('search matches the start of an account number', async () => {
+    expect((await search({ search: '19' })).accounts.map((a) => a.account_number)).toEqual(['1930'])
+    expect((await search({ search: '4545' })).accounts.map((a) => a.account_number)).toEqual(['4545'])
+  })
+
+  it('search matches any part of the name, whatever its case, and totals the matches', async () => {
+    expect(await search({ search: 'IMPORT', detail: 'compact' })).toEqual({ accounts: [compactRows[2]], count: 1, total: 1 })
+    expect((await search({ search: 'företags' })).accounts.map((a) => a.account_number)).toEqual(['1930'])
+  })
+
+  it('reads a search sent as a number as the digits of an account number', async () => {
+    expect((await search({ search: 2617 })).accounts.map((a) => a.account_number)).toEqual(['2617'])
+  })
+
+  it('refuses an empty search or one that is not text before any query', async () => {
+    for (const value of ['  ', { text: 'bank' }, 19.5]) {
+      const { supabase, calls } = createQueuedMockSupabase()
+      await expect(
+        listAccounts.execute({ search: value }, 'company-1', 'user-1', supabase as never),
+        JSON.stringify(value),
+      ).rejects.toMatchObject({ code: 'VALIDATION_ERROR', message: expect.stringMatching(/^search must be text/) })
+      expect(calls).toHaveLength(0)
+    }
+  })
 })

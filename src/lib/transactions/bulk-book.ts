@@ -167,9 +167,17 @@ export async function bulkBookTransactions(
     .in('id', body.tx_ids)
     .eq('company_id', companyId)
 
-  if (txError || !txs || txs.length === 0) return { ok: false, code: 'BULK_BOOK_TXS_NOT_FOUND' }
+  if (txError || !txs) return { ok: false, code: 'BULK_BOOK_TXS_NOT_FOUND' }
   if (txs.length !== body.tx_ids.length) {
-    return { ok: false, code: 'BULK_BOOK_TXS_NOT_FOUND', details: { expected: body.tx_ids.length, found: txs.length } }
+    // Which ids, so the caller can drop or correct them instead of guessing
+    // ("One or more transactions not found" was all an agent was told).
+    const found = new Set(txs.map((t) => t.id.toLowerCase()))
+    const missing = [...new Set(body.tx_ids.filter((id) => !found.has(id.toLowerCase())))]
+    return {
+      ok: false,
+      code: 'BULK_BOOK_TXS_NOT_FOUND',
+      details: { expected: body.tx_ids.length, found: txs.length, missing_tx_ids: missing },
+    }
   }
   const txTyped = txs as SelectedTx[]
 

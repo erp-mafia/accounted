@@ -766,6 +766,11 @@ describe('tools/list payload size guard', () => {
     //     fiscal_period_id and notes lose their restating notes and
     //     is_opening_balance its reconciliation aside. Measured 66 076
     //     (single-company 61 586). Ceiling unchanged.
+    //   * MCP session autopsy, inputs (2026-10-26): from_date/to_date on
+    //     gnubok_get_general_ledger and search on gnubok_list_accounts, paid
+    //     for on the same two tools (see the single-company case). Measured
+    //     64 810 (single-company 60 381) on the main of 2026-10-28. Ceiling
+    //     unchanged.
     expect(approxTokens).toBeLessThan(66_100)
   })
 
@@ -892,6 +897,18 @@ describe('tools/list payload size guard', () => {
     // same tool: the web-UI sentence in confirmed's description and the risk
     // note batch_id repeated from the tool description went. Measured 61 597
     // (full catalog 66 087). Ceiling unchanged.
+    // 2026-10-26 (MCP session autopsy, inputs): gnubok_get_general_ledger
+    // gains from_date/to_date and gnubok_list_accounts gains search, all
+    // three bare (the range refusals say what a bad date is). Paid for on the
+    // same two tools: account_from and account_to lost the notes that
+    // restated their names, and the ledger's "Optional account range +
+    // dimensions filters" became "Filters: account and date range,
+    // dimensions". Every other name agents sent is an alias
+    // (report-arg-aliases.ts), which costs tools/list nothing, and the
+    // upper bound on gnubok_list_verifikat_without_documents is on a
+    // search-only tool. Measured 61 581 (full catalog 66 074; main 61 583
+    // and 66 075), then 60 381 (full 64 810) rebased on the main of
+    // 2026-10-28. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

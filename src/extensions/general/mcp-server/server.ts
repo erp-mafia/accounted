@@ -634,7 +634,7 @@ import {
 } from '@/lib/bookkeeping/payment-fee'
 import { isLedgerCurrency } from '@/lib/bookkeeping/currency-utils'
 import { getEmailService } from '@/lib/email/service'
-import { hasCapability, capabilityBlockedError } from '@/lib/entitlements/has-capability'
+import { hasCapability, capabilityBlockedError, capabilityBlockedRefusal } from '@/lib/entitlements/has-capability'
 import { CAPABILITY, MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { triggerConnectionSync } from '@/extensions/general/enable-banking/lib/trigger-sync'
 import { getBankFeedConnect } from '@/lib/bank-feed/connect'
@@ -683,7 +683,7 @@ import { buildMomsuppgift, resolveRedovisare } from '@/extensions/general/skatte
 import { fetchVatDeclarationStatus } from '@/extensions/general/skatteverket/lib/declaration-status'
 import type { SkvVatDeclarationState } from '@/lib/skatteverket/declaration-status'
 import { skvAuthCodeToStructured } from '@/extensions/general/skatteverket/lib/error-map'
-import { getSkvConnectionHealth, getSkvFilingReadiness, SKV_NEEDS_RECONSENT_MESSAGE } from './skv-connection-health'
+import { getSkvConnectionHealth, getSkvFilingReadiness, skvReadSessionMessage, SKV_NEEDS_RECONSENT_MESSAGE } from './skv-connection-health'
 import { suggestToolNames } from './tool-suggest'
 // Stage-time preview for book_skattekonto_row(s): same deterministic rule
 // matcher the skattekonto list page and the booking commit path use. The
@@ -2529,6 +2529,25 @@ async function mapFilingSkvError(
   })
 }
 
+/**
+ * The read tools' SKATTEVERKET_NOT_CONNECTED, with the filing tools' next
+ * step: gnubok_connect_skatteverket, then wait for the user. Its words name
+ * the session the read used (skvReadSessionMessage), since a read may run on
+ * another member's login or none: never "your own" unless it was.
+ */
+async function skvReadRefusal(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  opts: { ownOnly?: boolean } = {},
+): Promise<Error> {
+  return codedRefusal('SKATTEVERKET_NOT_CONNECTED', await skvReadSessionMessage(supabase, companyId, userId, opts), {
+    description:
+      'A person signs in to Skatteverket with BankID: call gnubok_connect_skatteverket for the connect_url and give it to the user. Do not retry until they confirm.',
+    tool: 'gnubok_connect_skatteverket',
+  })
+}
+
 // ── Skattekonto row booking (stage side) ─────────────────────
 //
 // Shape of the skattekonto_transactions columns the book_skattekonto_row(s)
@@ -3196,17 +3215,20 @@ function categorizeStagingRefusal(refusal: CategorizeRefusal, transactionId: str
  * perfectly balanced formats (feedback seq 318571). No host validates
  * inputSchema at runtime, so the guard lives here, and it names the keys it
  * got so the agent can fix the shape in one turn instead of guessing at the
- * amounts.
+ * amounts. A VALIDATION_ERROR: as a plain error it answered UNKNOWN_ERROR,
+ * "try again", in 22 sessions in 30 days.
  */
 function assertVoucherLineShape(line: Record<string, unknown>, label: string): void {
   const hasDebit = line.debit_amount !== undefined && line.debit_amount !== null
   const hasCredit = line.credit_amount !== undefined && line.credit_amount !== null
   if (!hasDebit && !hasCredit) {
     const got = Object.keys(line).filter((k) => k !== 'account_number')
-    throw new Error(
+    throw badArgument(
+      label,
       `${label}: expected debit_amount and/or credit_amount (numbers in SEK)` +
         (got.length ? `; got ${got.join(', ')}` : '; got neither') +
         '. Example: {"account_number":"6110","debit_amount":400}, {"account_number":"1930","credit_amount":400}.',
+      'Raden saknar debit_amount och credit_amount (belopp i kronor).',
     )
   }
   for (const key of ['debit_amount', 'credit_amount'] as const) {
@@ -4035,6 +4057,9 @@ async function describeFiscalPeriodSpan(supabase: SupabaseClient, companyId: str
  * The date fallback exists because the previous default (most recent period,
  * then a loud range check) made every question about an earlier year fail
  * unless the model had first looked up that year's UUID (#2185).
+ *
+ * Each refusal is PERIOD_NOT_FOUND: as plain errors they answered
+ * UNKNOWN_ERROR, "try again", for a period no retry will find.
  */
 async function resolveReportPeriod(
   supabase: SupabaseClient,
@@ -4049,7 +4074,8 @@ async function resolveReportPeriod(
     const containing = await findFiscalPeriodContaining(supabase, companyId, dateHint)
     if (containing) return containing
     const span = await describeFiscalPeriodSpan(supabase, companyId)
-    throw new Error(
+    throw codedRefusal(
+      'PERIOD_NOT_FOUND',
       `No fiscal period contains ${dateHint}: ${span}. ` +
       `Pass a date inside one of them, or that period's period_id (gnubok_list_fiscal_periods).`,
     )
@@ -4064,7 +4090,7 @@ async function resolveReportPeriod(
       .limit(1)
       .single()
 
-    if (!periods) throw new Error(noPeriodsMessage)
+    if (!periods) throw codedRefusal('PERIOD_NOT_FOUND', noPeriodsMessage)
     periodId = periods.id
   }
 
@@ -4075,7 +4101,9 @@ async function resolveReportPeriod(
     .eq('company_id', companyId)
     .single()
 
-  if (!period) throw new Error('Fiscal period not found.')
+  if (!period) {
+    throw codedRefusal('PERIOD_NOT_FOUND', 'Fiscal period not found in this company: gnubok_list_fiscal_periods lists its period_ids.')
+  }
   return period
 }
 
@@ -4529,8 +4557,7 @@ async function runInnerTool(params: {
   try {
     const requiredCapability = MCP_TOOL_CAPABILITY_MAP[inner.name]
     if (requiredCapability && !(await hasCapability(supabase, companyId, requiredCapability))) {
-      const blocked = capabilityBlockedError(requiredCapability)
-      throw Object.assign(new Error(blocked.message_en ?? blocked.message_sv), { code: blocked.code })
+      throw capabilityBlockedRefusal(requiredCapability)
     }
     // The package start gate, per company, as for a direct call.
     const startPackage = startPackageForTool(inner.name, OPERATION_ID_BY_TOOL.get(inner.name))
@@ -8151,6 +8178,7 @@ export const tools: McpTool[] = [
         limit: { type: 'number', description: 'Max results to return, 1-100 (default 20)' },
         offset: { type: 'number', description: 'Number of results to skip for pagination (default 0)' },
         since: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return entries on or after this date.' },
+        until: { type: 'string', description: 'Optional ISO date (YYYY-MM-DD). Only return entries on or before this date.' },
         min_amount: { type: 'number', description: 'Optional minimum gross_amount to filter low-value entries. Default 0.' },
       },
     },
@@ -8177,7 +8205,17 @@ export const tools: McpTool[] = [
     async execute(args, companyId, _userId, supabase) {
       const limit = Math.min(Math.max(1, Number(args.limit) || 20), 100)
       const offset = Math.max(0, Number(args.offset) || 0)
-      const since = typeof args.since === 'string' ? args.since : null
+      // Both bounds are checked: a date the RPC cannot read failed as a
+      // database error, and a since that was not a string was dropped unread.
+      const [since, until] = (['since', 'until'] as const).map((key) => {
+        const value = args[key]
+        if (value === undefined || value === null) return null
+        if (typeof value !== 'string' || !ISO_DATE_RE.test(value)) {
+          throw badArgument(key, `${key} must be an ISO date (YYYY-MM-DD).`)
+        }
+        return value
+      })
+      if (since && until && since > until) throw badArgument('since', 'since must not be after until.')
       const minAmount = typeof args.min_amount === 'number' && Number.isFinite(args.min_amount)
         ? Math.max(0, args.min_amount)
         : 0
@@ -8186,13 +8224,16 @@ export const tools: McpTool[] = [
       // cannot filter on: filtering it in memory after .range() made
       // total_count ignore min_amount and consecutive pages overlap. The RPC
       // filters, counts and paginates in SQL so the total respects the filter
-      // and next_offset advances by exactly the rows consumed.
+      // and next_offset advances by exactly the rows consumed. p_until goes
+      // only with an until, so a call without one reads the RPC exactly as
+      // before (20261028103000 added the parameter).
       const { data, error } = await supabase.rpc('verifikat_without_documents', {
         p_company_id: companyId,
         p_since: since,
         p_min_amount: minAmount,
         p_limit: limit,
         p_offset: offset,
+        ...(until ? { p_until: until } : {}),
       })
       if (error) throw dbError(error)
 
@@ -12079,6 +12120,7 @@ export const tools: McpTool[] = [
         account_class: { type: 'number', description: '1-8' },
         active_only: { type: 'boolean', description: 'Default true' },
         detail: { type: 'string', enum: ['full', 'compact'], description: 'compact: number, name, class, active, momskod' },
+        search: { type: 'string' },
         limit: { type: 'integer' },
         offset: { type: 'integer' },
       },
@@ -12096,6 +12138,15 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase) {
       const activeOnly = args.active_only !== false
       const accountClass = args.account_class as number | undefined
+      // search: the start of an account number ("19" is every 19xx konto) or
+      // any part of the name, case-insensitive ("bank"). Agents sent search
+      // or query 51 times in 30 days with nothing to read it. A number is
+      // read as its digits: account numbers are text, never quantities.
+      const rawSearch = typeof args.search === 'number' && Number.isInteger(args.search) ? String(args.search) : args.search
+      if (rawSearch !== undefined && (typeof rawSearch !== 'string' || rawSearch.trim() === '')) {
+        throw badArgument('search', 'search must be text: the start of an account number or part of an account name.')
+      }
+      const search = typeof rawSearch === 'string' ? rawSearch.trim().toLocaleLowerCase('sv-SE') : undefined
       // A 379-account chart is 88 kB in full detail (Easy Online Stores,
       // 2026-09-16): compact keeps what an agent needs to pick or check a
       // konto, and limit/offset page the rest. Both are opt-in so every
@@ -12138,6 +12189,11 @@ export const tools: McpTool[] = [
         })
       } catch (error) {
         throw dbError(error)
+      }
+      if (search !== undefined) {
+        accounts = accounts.filter(
+          (a) => a.account_number.startsWith(search) || (a.account_name ?? '').toLocaleLowerCase('sv-SE').includes(search),
+        )
       }
 
       const total = accounts.length
@@ -13013,14 +13069,16 @@ export const tools: McpTool[] = [
     name: 'gnubok_get_general_ledger',
     keywords: ['huvudbok', 'huvudboken'],
     title: 'General Ledger (Huvudbok)',
-    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Optional account range + dimensions filters. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
+    description: 'General ledger (huvudbok) for a fiscal period: per-account opening, entries, closing balances. Filters: account and date range, dimensions. For ad-hoc cross-account/amount/free-text queries use gnubok_query_journal.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
       properties: {
         period_id: { type: 'string', description: 'Fiscal period UUID (default: most recent)' },
-        account_from: { type: 'string', description: 'Starting account number filter' },
-        account_to: { type: 'string', description: 'Ending account number filter' },
+        account_from: { type: 'string' },
+        account_to: { type: 'string' },
+        from_date: { type: 'string' },
+        to_date: { type: 'string' },
         dimensions: REPORT_DIMENSIONS_FILTER_SCHEMA,
       },
     },
@@ -13030,20 +13088,17 @@ export const tools: McpTool[] = [
     },
     annotations: ANNOTATIONS_READ_ONLY,
     async execute(args, companyId, userId, supabase) {
-      let periodId = args.period_id as string | undefined
-
-      if (!periodId) {
-        const { data: periods } = await supabase
-          .from('fiscal_periods')
-          .select('id')
-          .eq('company_id', companyId)
-          .order('period_start', { ascending: false })
-          .limit(1)
-          .single()
-
-        if (!periods) throw new Error('No fiscal periods found.')
-        periodId = periods.id
-      }
+      // As on the income statement: a date names its fiscal year (#2185),
+      // and the range must lie inside the period. The generator rolls the
+      // lines before from_date into each account's opening balance.
+      const period = await resolveReportPeriod(
+        supabase,
+        companyId,
+        args.period_id,
+        'No fiscal periods found.',
+        args.from_date ?? args.to_date,
+      )
+      const range = parseReportRangeArgs(args, period, { from: 'from_date', to: 'to_date' })
 
       const accountFrom = args.account_from as string | undefined
       const accountTo = args.account_to as string | undefined
@@ -13054,12 +13109,14 @@ export const tools: McpTool[] = [
         generateGeneralLedger(
           supabase,
           companyId,
-          periodId!,
+          period.id,
           accountFrom,
           accountTo,
-          dimFilter.filter ? { dimensions: dimFilter.filter } : undefined,
+          dimFilter.filter || range.fromDate || range.toDate
+            ? { ...range, ...(dimFilter.filter ? { dimensions: dimFilter.filter } : {}) }
+            : undefined,
         ),
-        buildReportDataStatus(supabase, companyId, { periodId: periodId! }),
+        buildReportDataStatus(supabase, companyId, { periodId: period.id, ...range }),
       ])
       return {
         ...report,
@@ -16653,10 +16710,37 @@ export const tools: McpTool[] = [
       }
       const invoiceDate = (args.invoice_date_override as string | undefined) ?? (invoiceExt?.invoiceDate as string) ?? null
       const supplierInvoiceNumber = (invoiceExt?.invoiceNumber as string) || ''
-      if (!invoiceDate) throw new Error('Extracted invoice has no invoice date')
+      // Both refusals say where the missing field goes, like the total and
+      // the lines below: as plain errors they answered UNKNOWN_ERROR, "try
+      // again" (24 sessions in 30 days), for a call that fails the same way
+      // until the field is supplied.
+      if (!invoiceDate) {
+        throw Object.assign(
+          codedRefusal(
+            'SI_CREATE_INVALID_INPUT',
+            'No invoice date was read from the underlag: read it off the document and stage again with invoice_date_override (YYYY-MM-DD).',
+          ),
+          { reason: 'invoice_date_missing' },
+        )
+      }
       // A blank extracted number is none: the column refuses it
       // (supplier_invoices_number_not_blank) and this door still needs one.
-      if (!supplierInvoiceNumber.trim()) throw new Error('Extracted invoice has no invoice number')
+      if (!supplierInvoiceNumber.trim()) {
+        throw Object.assign(
+          codedRefusal(
+            'SI_CREATE_INVALID_INPUT',
+            'No invoice number was read from the underlag, and a supplier invoice needs the supplier\'s own fakturanummer.',
+            {
+              description:
+                'Read the number off the document, then write it with gnubok_set_inbox_extracted_data: the extracted_data ' +
+                'gnubok_get_inbox_item shows, with invoice.invoiceNumber filled in. Then stage this call again.',
+              tool: 'gnubok_set_inbox_extracted_data',
+              args: { inbox_item_id: inboxItemId },
+            },
+          ),
+          { reason: 'invoice_number_missing' },
+        )
+      }
 
       // supplier_invoices.due_date is NOT NULL. A bank fee or a kvitto has no
       // förfallodatum printed on it, and the old code staged null straight
@@ -19247,7 +19331,10 @@ export const tools: McpTool[] = [
       const result = await fetchVatDeclarationStatus(supabase, userId, companyId, {
         periodType, year, period, state: (args.state as SkvVatDeclarationState | undefined) ?? 'both',
       })
-      if (!result.ok) throw codedRefusal(result.code, result.error)
+      if (!result.ok) {
+        if (result.code === 'SKATTEVERKET_NOT_CONNECTED') throw await skvReadRefusal(supabase, companyId, userId)
+        throw codedRefusal(result.code, result.error)
+      }
       const { redovisare, redovisningsperiod, submitted, decided } = result
       return { redovisare, redovisningsperiod, submitted, decided }
     },
@@ -19425,7 +19512,12 @@ export const tools: McpTool[] = [
           kvittens_read: kvittensRead,
         }
       } catch (err) {
-        throw mapSkatteverketError(err)
+        const mapped = mapSkatteverketError(err) as Error & { code?: string }
+        // The receipts are read on the caller's own login only.
+        if (mapped.code === 'SKATTEVERKET_NOT_CONNECTED') {
+          throw await skvReadRefusal(supabase, companyId, userId, { ownOnly: true })
+        }
+        throw mapped
       }
     },
   },

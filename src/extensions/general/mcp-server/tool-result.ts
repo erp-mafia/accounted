@@ -13,6 +13,7 @@
  * consumers keep working.
  */
 import { getStructuredError, type StructuredError } from '@/lib/errors/get-structured-error'
+import type { CapabilityBlockedError } from '@/lib/entitlements/has-capability'
 
 export interface NextActionHint {
   description: string
@@ -58,6 +59,8 @@ const CODES_WITH_DETAILS = new Set([
  * surface a precise request to the user.
  */
 export function toToolError(err: unknown, opts: { toolName?: string } = {}): AgentToolError {
+  const blocked = capabilityBlockedOf(err)
+  if (blocked) return { error: blocked }
   let attemptedScope: string | undefined
   const message = err instanceof Error ? err.message : typeof err === 'string' ? err : ''
   const scopeMatch = message.match(/Insufficient scope: this API key does not have the "([^"]+)" scope/)
@@ -74,4 +77,26 @@ function ownDetails(err: unknown): Record<string, unknown> | undefined {
   return typeof details === 'object' && details !== null && !Array.isArray(details)
     ? (details as Record<string, unknown>)
     : undefined
+}
+
+/**
+ * A paywall refusal a tool threw (capabilityBlockedRefusal), as the envelope
+ * the dispatcher's capability gate answers: the legacy lowercase
+ * capability_blocked is no registry code, so getStructuredError would read it
+ * as UNKNOWN_ERROR, "Något gick fel. Försök igen.", for a call no retry fixes.
+ */
+function capabilityBlockedOf(err: unknown): CapabilityBlockedError | null {
+  if (typeof err !== 'object' || err === null) return null
+  const e = err as Partial<CapabilityBlockedError>
+  if (e.capability_blocked !== true || e.code !== 'capability_blocked' || e.capability === undefined) return null
+  if (typeof e.message_sv !== 'string' || typeof e.message_en !== 'string' || !e.remediation) return null
+  return {
+    code: 'capability_blocked',
+    capability_blocked: true,
+    capability: e.capability,
+    message_sv: e.message_sv,
+    message_en: e.message_en,
+    retryable: false,
+    remediation: e.remediation,
+  }
 }

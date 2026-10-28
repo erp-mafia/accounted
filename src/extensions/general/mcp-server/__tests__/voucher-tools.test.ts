@@ -40,6 +40,7 @@ vi.mock('@/lib/vat/voucher-vat-impact', () => ({
 }))
 
 import { tools } from '../server'
+import { toToolError } from '../tool-result'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { previewVoucherVatDeclaration } from '@/lib/vat/voucher-vat-impact'
 
@@ -117,6 +118,25 @@ describe('gnubok_create_voucher: staging gates', () => {
         ),
       ).rejects.toThrow(/lines\[0\]: expected debit_amount and\/or credit_amount.*got .*Example/)
     }
+    // A VALIDATION_ERROR, so the agent fixes the lines instead of resending
+    // them (it was UNKNOWN_ERROR, "Försök igen", in 22 sessions in 30 days).
+    const shapeError = await createVoucher
+      .execute(
+        {
+          entry_date: '2026-05-12',
+          description: 'shape',
+          lines: [{ account_number: '6110', credit: 0, debit: 500 }, { account_number: '1930', credit: 500, debit: 0 }],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+      .then(() => null, (e: unknown) => e)
+    expect(toToolError(shapeError).error).toMatchObject({
+      code: 'VALIDATION_ERROR',
+      retryable: false,
+      message_en: expect.stringContaining('lines[0]: expected debit_amount and/or credit_amount (numbers in SEK); got credit, debit'),
+    })
     await expect(
       createVoucher.execute(
         {
