@@ -174,6 +174,25 @@ describe('cash_account_ledger_evidence: bank rows against posted lines', () => {
     expect(of(await evidence(owner.companyId), account, 'transactions')).toEqual({ '1920': 1, '1921': 2, '1930': 1 })
   })
 
+  it('reads 1900 to 1999 and nothing either side (the range the line read is indexed on, 20261028042147)', async () => {
+    const owner = await seedCompany()
+    const account = await connectedAccount(owner, '1930', { balance: 500 })
+    for (const [i, ledger] of ['1899', '1900', '1999', '2000'].entries()) {
+      const day = `2026-05-0${i + 1}`
+      await bankVoucher(owner, ledger, -(10 + i), day)
+      await bankRow(owner, account, -(10 + i), day)
+    }
+    // The balance kind reads the same lines. Rolled back over the four rows
+    // (-46,00), the bank stood at 546,00 the day before the feed: 1999 holds
+    // that, and so does 2000, which is no bank account.
+    await bankVoucher(owner, '1999', 546, '2026-04-30')
+    await bankVoucher(owner, '2000', 546, '2026-04-30')
+
+    const rows = await evidence(owner.companyId)
+    expect(of(rows, account, 'transactions')).toEqual({ '1900': 1, '1999': 1 })
+    expect(of(rows, account, 'balance')).toEqual({ '1999': '2026-04-30' })
+  })
+
   it('leaves out booked and ignored rows, and verifikat the matcher never links', async () => {
     const owner = await seedCompany()
     const account = await connectedAccount(owner, '1940')
