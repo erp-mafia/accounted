@@ -94,6 +94,13 @@ vi.mock('@/lib/core/bookkeeping/correction-bank-leg', () => ({
   assertCorrectionKeepsBankAccount: (...args: unknown[]) => mockAssertBankAccount(...args),
 }))
 
+// The invoice payment rows follow the correction (correction-payment-relink.test.ts
+// covers the queries). Consumes no queued result.
+const mockRelinkPaymentRows = vi.fn(async () => undefined)
+vi.mock('@/lib/core/bookkeeping/correction-payment-relink', () => ({
+  relinkPaymentRowsToEntry: (...args: unknown[]) => mockRelinkPaymentRows(...(args as [])),
+}))
+
 import { correctEntry } from '../storno-service'
 import { CORRECTION_COLUMN_POLICY } from '../correction-column-policy'
 import {
@@ -837,6 +844,22 @@ describe('correctEntry', () => {
       expect(result.transactionRelinkError).toBeUndefined()
       // Everything moved: nothing is left on the original to release.
       expect(releaseBankRowsOfReversedEntry).not.toHaveBeenCalled()
+    })
+
+    // PH 227: the invoice payment rows follow the bank rows to the corrected
+    // verifikat instead of staying on the reversed original.
+    it('hands the original and the corrected entry to the payment row relink', async () => {
+      setupResults()
+      const supabase = makeClient()
+      await correctEntry(supabase as never, 'company-1', 'user-1', 'orig-1', correctedLines)
+
+      expect(mockRelinkPaymentRows).toHaveBeenCalledTimes(1)
+      expect(mockRelinkPaymentRows).toHaveBeenCalledWith(
+        supabase,
+        'company-1',
+        expect.objectContaining({ id: 'orig-1' }),
+        'corrected-1',
+      )
     })
 
     it('surfaces a junction relink failure on the result instead of throwing (correction chain stays traceable)', async () => {

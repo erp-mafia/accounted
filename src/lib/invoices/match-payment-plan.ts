@@ -200,6 +200,43 @@ export function planMatchPayment(
   }
 }
 
+/**
+ * How close a cross-currency payment must come to the invoice's remaining
+ * amount to settle it in full: 2 % either way, in the invoice's currency.
+ *
+ * A EUR invoice paid in full reaches a SEK account converted at the bank's
+ * rate, never at Riksbanken's mid rate: the spread and the transfer fee leave
+ * the converted figure a little short (0.5 to 1.7 % on the payments matched in
+ * production). Read at the mid rate, that payment was booked as a partial
+ * payment, the invoice stayed open for the residual and the kursdifferens
+ * landed on the wrong side (PH 227). Within the band the payment settles the
+ * whole remaining: 1510 is credited at the invoice's booking rate and the
+ * difference to the SEK received is the realised kursvinst (3960) or
+ * kursförlust (7960). Outside it the payment stays a partial payment.
+ */
+export const FX_FULL_SETTLEMENT_BAND = 0.02
+
+/**
+ * A SEK payment of a foreign-currency invoice, in the invoice's currency:
+ * `sek / rate`, to four decimals, or exactly the remaining amount when that
+ * figure lies inside FX_FULL_SETTLEMENT_BAND of it (see there). Pure. Every
+ * match door (dashboard route and its preview, the v1 route, the agent
+ * stage and commit) converts through this one function, so the preview the
+ * user approves is the booking the route makes.
+ */
+export function fxPaidInInvoiceCurrency(
+  sekAmount: number,
+  rate: number,
+  invoice: InvoicePaymentTotals,
+): number {
+  const converted = Math.round((sekAmount / rate) * 10000) / 10000
+  const remaining = roundOre(invoice.remaining_amount ?? invoice.total - (invoice.paid_amount || 0))
+  if (remaining > 0 && Math.abs(converted - remaining) <= remaining * FX_FULL_SETTLEMENT_BAND) {
+    return remaining
+  }
+  return converted
+}
+
 export async function planTransactionInvoiceMatch(
   supabase: SupabaseClient,
   transaction: MatchTransactionAmounts,
@@ -247,7 +284,7 @@ export async function planTransactionInvoiceMatch(
     fx = {
       required: true,
       rate,
-      paidInInvoiceCurrency: Math.round((txAbsSek / rate) * 10000) / 10000,
+      paidInInvoiceCurrency: fxPaidInInvoiceCurrency(txAbsSek, rate, invoice),
     }
   }
   const paidAmount = fx.required ? fx.paidInInvoiceCurrency : transaction.amount

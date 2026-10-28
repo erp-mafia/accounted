@@ -429,6 +429,36 @@ describe('GET /api/transactions/[id]/match-invoice/preview: a customer overpayme
     expect(status).toBe(400)
     expect(body.error.code).toBe('MATCH_AMOUNT_EXCEEDS_REMAINING')
   })
+
+  // PH 227: a EUR invoice paid in full arrives converted at the bank's rate,
+  // 0.6 % under Riksbanken's. It previews (and so books) as paid, 1510 cleared
+  // at the booking rate and the difference a kursförlust on 7960, not as a
+  // partial payment with a kursvinst on 3960.
+  it('a cross-currency payment within the band previews the invoice paid with the kursdifferens', async () => {
+    enqueue({ data: makeTransaction({ id: 'tx-1', amount: 97419.96, currency: 'SEK', date: '2026-10-26', invoice_id: null }), error: null })
+    enqueue({
+      data: makeInvoice({ id: VALID_UUID, status: 'sent', currency: 'EUR', exchange_rate: 11.1145, total: 8800, remaining_amount: 8800, paid_amount: 0, journal_entry_id: 'je-sent' }),
+      error: null,
+    })
+    enqueue({ data: { accounting_method: 'accrual', entity_type: 'aktiebolag' }, error: null })
+    enqueue({ data: [], error: null }) // cash accounts -> 1930
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.1385, date: '2026-10-26' })
+
+    const { status, body } = await preview()
+    expect(status).toBe(200)
+    expect(body.is_fully_paid).toBe(true)
+    const rows = (body.lines as Array<{ account_number: string; debit_amount: number; credit_amount: number }>).map(
+      (l) => [l.account_number, l.debit_amount, l.credit_amount],
+    )
+    expect(rows).toEqual(
+      expect.arrayContaining([
+        ['1930', 97419.96, 0],
+        ['1510', 0, 97807.6],
+        ['7960', 387.64, 0],
+      ]),
+    )
+    expect(rows.some(([account]) => account === '3960')).toBe(false)
+  })
 })
 
 // crm#1364: a SEK payout short of the invoice by the payment provider's fee.

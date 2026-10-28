@@ -59,6 +59,7 @@ import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { logMatchEvent } from '@/lib/invoices/match-log'
 import { planInvoicePayment } from '@/lib/invoices/apply-invoice-payment'
+import { fxPaidInInvoiceCurrency } from '@/lib/invoices/match-payment-plan'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -317,7 +318,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         required: true,
         rate,
         rate_date: rateDate,
-        paidInInvoiceCurrency: Math.round((txAbsSek / rate) * 10000) / 10000,
+        paidInInvoiceCurrency: fxPaidInInvoiceCurrency(txAbsSek, rate, invoice),
         source: manualRate != null ? 'manual' : 'riksbanken',
       }
     }
