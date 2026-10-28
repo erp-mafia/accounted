@@ -1,0 +1,1 @@
+[2026-10-28] journal_entry_followups takes pending_operation_id only from suggestion_log, not from pending_operations.result_data: result_data also names vouchers an operation only referenced (link_document_to_voucher, link_invoice_to_voucher), so it cannot tell which operation produced an entry.
