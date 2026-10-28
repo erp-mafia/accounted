@@ -44,7 +44,6 @@ import {
   creatableEntityTypes,
   fiscalYearLockedToCalendar,
   isEntityType,
-  isEntityTypeCreatable,
   plannedLegalForms,
   usesPersonnummerAsOrgNumber,
 } from '@/lib/company/entity-type'

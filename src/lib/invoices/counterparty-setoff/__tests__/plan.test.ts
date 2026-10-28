@@ -8,9 +8,9 @@ import {
   type SetoffSupplierInvoiceFacts,
 } from '../plan'
 
-const PARTY = 'party-crayfish'
+const PARTY = 'party-exempel-energi'
 
-/** Oppy's July case: a customer invoice of 1 388 kr and a self-billed supplier invoice of 4 504 kr. */
+/** The July case: a customer invoice of 1 388 kr and a self-billed supplier invoice of 4 504 kr. */
 function invoice(over: Partial<SetoffInvoiceFacts> = {}): SetoffInvoiceFacts {
   return {
     id: 'inv-1',
@@ -55,7 +55,7 @@ function supplierInvoice(over: Partial<SetoffSupplierInvoiceFacts> = {}): Setoff
 const TODAY = '2026-10-21'
 
 describe('planSetoff', () => {
-  it("sets off Oppy's July invoices: the customer invoice is paid and we pay the 3 116 kr net", () => {
+  it("sets off the July invoices: the customer invoice is paid and we pay the 3 116 kr net", () => {
     const result = planSetoff({ invoice: invoice(), supplierInvoice: supplierInvoice(), setoffDate: '2026-09-30', today: TODAY })
     expect(result).toEqual({
       ok: true,

@@ -52,3 +52,27 @@ describe('HemChecklistSection: next momsdeklaration from the Swedish day', () =>
     expect(mock.findCall('deadlines', 'gte')).toEqual(['due_date', today])
   })
 })
+
+describe('HemChecklistSection: receipts and skipped steps', () => {
+  it('counts a document a person put in toward the receipts step, and reads this user\'s skipped steps', async () => {
+    const mock = createQueuedMockSupabase()
+    auth.supabase = mock.supabase
+
+    await HemChecklistSection({
+      companyId: 'company-1',
+      userId: 'user-1',
+      now: new Date('2026-10-28T08:00:00Z'),
+      initialSetup: {} as never,
+      hasMcpKey: false,
+      vatRegistered: false,
+      momsPeriod: null,
+    })
+
+    expect(mock.findCall('document_attachments', 'eq')).toEqual(['company_id', 'company-1'])
+    const [column, sources] = mock.findCall('document_attachments', 'in') as [string, string[]]
+    expect(column).toBe('upload_source')
+    expect(sources).toContain('file_upload')
+    expect(sources).not.toContain('api')
+    expect(mock.findCall('user_preferences', 'eq')).toEqual(['user_id', 'user-1'])
+  })
+})

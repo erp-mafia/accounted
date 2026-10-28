@@ -35,8 +35,6 @@ export { paymentsPilot, type PaymentsEnv, type PaymentsPilot } from './pilot'
 /** Why a company cannot pay through the bank right now. */
 export type PaymentsUnavailableReason = 'no_provider' | 'not_in_pilot' | 'subscription' | 'sandbox'
 
-export const PAYMENTS_UNAVAILABLE_REASONS = ['no_provider', 'not_in_pilot', 'subscription', 'sandbox'] as const
-
 export type PaymentsDoor =
   | { ok: true; provider: PaymentInitiationProvider }
   | { ok: false; reason: Exclude<PaymentsUnavailableReason, 'sandbox'> }

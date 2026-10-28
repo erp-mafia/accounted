@@ -1,6 +1,5 @@
 import { z } from 'zod'
 import { isoDateSchema } from '@/lib/invariants/zod'
-import { DAILY_BATCH_EXPIRY_HOURS } from '@/lib/pending-operations/daily-batch-staging'
 
 /**
  * The daily collections batch (build spec 3.6): the shape of the one staged
@@ -14,9 +13,6 @@ import { DAILY_BATCH_EXPIRY_HOURS } from '@/lib/pending-operations/daily-batch-s
  */
 
 export const COLLECTIONS_BATCH_TYPE = 'collections_daily_batch' as const
-
-/** The cron rejects its own batch once it has waited this long (the generic expiry waits 30 days). */
-export const BATCH_EXPIRY_HOURS = DAILY_BATCH_EXPIRY_HOURS
 
 /**
  * open          a new handover of an overdue invoice

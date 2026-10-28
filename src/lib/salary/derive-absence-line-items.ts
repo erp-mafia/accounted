@@ -618,13 +618,12 @@ export function deriveAbsenceLineItems(input: DeriveInput): DeriveResult {
     // reading can over-suppress karens for an employee who hits the cap
     // repeatedly: softer error than the opposite.
     //
-    // TODO: persist per-period karens deduction state if the period-count
-    // reading produces complaints in the field. The same state would carry
-    // the karens amount already consumed by a period that continues from
-    // the previous pay period; today that is reconstructed from the prior
-    // sick hours at the CURRENT daily rate, so a salary or schedule change
-    // inside one sjuklöneperiod straddling a month boundary can shift the
-    // combined karens by the rate difference.
+    // Limitation: per-period karens deduction state is not persisted. The
+    // karens amount already consumed by a period that continues from the
+    // previous pay period is reconstructed from the prior sick hours at the
+    // CURRENT daily rate, so a salary or schedule change inside one
+    // sjuklöneperiod straddling a month boundary can shift the combined
+    // karens by the rate difference.
     const cap = payrollConfig.maxKarensavdragPerYear ?? 10
     const cutoff = addDays(periodMin, -365)
     const lookbackOnlySegments = buildSjukloneperioder(

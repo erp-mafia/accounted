@@ -28,10 +28,11 @@ export type DocumentExtractionOwner = 'invoice-inbox' | 'none'
 /**
  * Where an MCP event's `client` label came from when the request carried no
  * client marker: the provider stored on an OAuth key, the clientInfo name of
- * a stateless request, the User-Agent, or nothing at all (label 'other').
- * Absent on rows labelled by the marker.
+ * a stateless request, the User-Agent of our stdio bridge (accounted-mcp,
+ * gnubok-mcp) with the client name it carries, any other User-Agent, or
+ * nothing at all (label 'other'). Absent on rows labelled by the marker.
  */
-export type McpClientSource = 'oauth' | 'client_info' | 'user_agent' | 'none'
+export type McpClientSource = 'oauth' | 'client_info' | 'bridge' | 'user_agent' | 'none'
 
 export type CoreEvent =
   // Bookkeeping

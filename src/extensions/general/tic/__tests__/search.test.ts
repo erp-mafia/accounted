@@ -102,14 +102,14 @@ describe('searchCompaniesForLookup', () => {
   it("reduces a sole trader's 16-digit Lens number to the 10-digit personnummer form", async () => {
     mockSearch.mockResolvedValue([
       doc({
-        registrationNumber: '2002011732750001',
+        registrationNumber: '2002010112360001',
         legalEntityType: 'EF',
         names: [{ nameOrIdentifier: 'Alices Konsult', companyNamingType: 'name' }],
       }),
     ])
     const hits = await searchCompaniesForLookup('Alices Konsult')
     expect(hits).toHaveLength(1)
-    expect(hits[0].orgNumber).toBe('0201173275')
+    expect(hits[0].orgNumber).toBe('0201011236')
     expect(hits[0].result.legalEntityType).toBe('EF')
   })
 
@@ -134,7 +134,7 @@ describe('lensRegistrationToOrgNumber', () => {
   })
 
   it('strips century and serial from a 16-digit enskild firma number', () => {
-    expect(lensRegistrationToOrgNumber('2002011732750001')).toBe('0201173275')
+    expect(lensRegistrationToOrgNumber('2002010112360001')).toBe('0201011236')
     expect(lensRegistrationToOrgNumber('1980010112310001')).toBe('8001011231')
   })
 
@@ -212,7 +212,7 @@ describe('TIC search route', () => {
   describe('sole traders who share a name (crm#1456)', () => {
     // Synthetic personnummer. Three firms registered under the same owner
     // name; only the middle one is the signed-in person's own.
-    const OWN = '198209094872'
+    const OWN = '198201022343'
     const sameName = (registrationNumber: string, companyId: number) =>
       doc({
         companyId,
@@ -221,9 +221,9 @@ describe('TIC search route', () => {
         names: [{ nameOrIdentifier: 'Andersson, Anna', companyNamingType: 'name' }],
       })
     const docs = () => [
-      sameName('1982083002390001', 11),
-      sameName('1982090948720001', 12),
-      sameName('2002011732750001', 13),
+      sameName('1982010112390001', 11),
+      sameName('1982010223430001', 12),
+      sameName('2002010112360001', 13),
       doc({ companyId: 14, registrationNumber: '5560360793' }),
     ]
 
@@ -233,7 +233,7 @@ describe('TIC search route', () => {
       const res = await searchHandler(makeRequest('Anna Andersson'))
       expect(res.status).toBe(200)
       const { data } = await res.json()
-      expect(data.map((h: { orgNumber: string }) => h.orgNumber)).toEqual(['8209094872', '5560360793'])
+      expect(data.map((h: { orgNumber: string }) => h.orgNumber)).toEqual(['8201022343', '5560360793'])
       expect(from).toHaveBeenCalledWith('bankid_identities')
     })
 
@@ -246,7 +246,7 @@ describe('TIC search route', () => {
 
     it("answers not found when every hit is someone else's sole trader firm", async () => {
       signIn(OWN)
-      mockSearch.mockResolvedValue([sameName('1982083002390001', 11), sameName('2002011732750001', 13)])
+      mockSearch.mockResolvedValue([sameName('1982010112390001', 11), sameName('2002010112360001', 13)])
       const res = await searchHandler(makeRequest('Anna Andersson'))
       expect(res.status).toBe(404)
       expect(await res.json()).toEqual({ error: 'Company not found' })

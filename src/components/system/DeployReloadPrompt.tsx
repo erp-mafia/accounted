@@ -29,6 +29,11 @@ const VERSION_BACKSTOP_MS = 30 * 60 * 1000
 export function DeployReloadPrompt() {
   const t = useTranslations('common')
   const [stale, setStale] = useState(false)
+  // A full reload keeps this page on screen until the new document answers
+  // (median 0.8 s, p90 1.7 s in production), so the click looked dead and
+  // people clicked again; every extra reload() restarts that request. The
+  // button shows it is working and ignores further clicks.
+  const [reloading, setReloading] = useState(false)
 
   useEffect(() => {
     if (!BUILD_ID || stale) return
@@ -77,7 +82,15 @@ export function DeployReloadPrompt() {
         )}
       >
         <span className="text-foreground">{t('update_available')}</span>
-        <Button size="sm" onClick={() => window.location.reload()}>
+        <Button
+          size="sm"
+          loading={reloading}
+          onClick={() => {
+            if (reloading) return
+            setReloading(true)
+            window.location.reload()
+          }}
+        >
           {t('reload')}
         </Button>
       </div>

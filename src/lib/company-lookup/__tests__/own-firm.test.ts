@@ -9,10 +9,10 @@ import {
 
 // Three sole traders who share one name (crm#1456): only the first is the
 // signed-in person's own firm. Synthetic personnummer.
-const OWN = '198209094872'
+const OWN = '198201022343'
 const OWN_HASH = hashPersonalNumber(OWN)
-const OTHER_A = '8208300239'
-const OTHER_B = '0201173275'
+const OTHER_A = '8201011239'
+const OTHER_B = '0201011236'
 
 function role(registrationNumber: string, legalEntityType: string, legalName = 'Andersson, Anna') {
   return {
@@ -31,12 +31,12 @@ function role(registrationNumber: string, legalEntityType: string, legalName = '
 describe('ownCompanyRoles', () => {
   it('keeps only the sole trader firm whose registration number is the BankID personnummer', () => {
     const roles = [
-      role('1982083002390001', 'Enskild näringsidkare'),
-      role('1982090948720001', 'Enskild näringsidkare'),
-      role('2002011732750001', 'Enskild näringsidkare'),
+      role('1982010112390001', 'Enskild näringsidkare'),
+      role('1982010223430001', 'Enskild näringsidkare'),
+      role('2002010112360001', 'Enskild näringsidkare'),
     ]
     const kept = ownCompanyRoles(roles, OWN)
-    expect(kept.map((r) => r.companyRegistrationNumber)).toEqual(['1982090948720001'])
+    expect(kept.map((r) => r.companyRegistrationNumber)).toEqual(['1982010223430001'])
   })
 
   it('keeps every role in a juridisk person, whatever the name', () => {
@@ -50,7 +50,7 @@ describe('ownCompanyRoles', () => {
   })
 
   it("drops another person's sole trader firm even when the role is a prokura", () => {
-    const roles = [{ ...role('1982083002390001', 'Enskild näringsidkare'), positionTypes: ['PO'] }]
+    const roles = [{ ...role('1982010112390001', 'Enskild näringsidkare'), positionTypes: ['PO'] }]
     expect(ownCompanyRoles(roles, OWN)).toEqual([])
   })
 
@@ -59,22 +59,22 @@ describe('ownCompanyRoles', () => {
   })
 
   it('accepts the BankID personnummer in its 10-digit form too', () => {
-    const kept = ownCompanyRoles([role('1982090948720001', 'Enskild näringsidkare')], OWN.slice(2))
+    const kept = ownCompanyRoles([role('1982010223430001', 'Enskild näringsidkare')], OWN.slice(2))
     expect(kept).toHaveLength(1)
   })
 })
 
 describe('isOwnPersonalNumber', () => {
   it('matches the 10-, 12- and 16-digit forms of the own personnummer', () => {
-    expect(isOwnPersonalNumber('8209094872', OWN_HASH)).toBe(true)
-    expect(isOwnPersonalNumber('820909-4872', OWN_HASH)).toBe(true)
-    expect(isOwnPersonalNumber('198209094872', OWN_HASH)).toBe(true)
-    expect(isOwnPersonalNumber('1982090948720001', OWN_HASH)).toBe(true)
+    expect(isOwnPersonalNumber('8201022343', OWN_HASH)).toBe(true)
+    expect(isOwnPersonalNumber('820102-2343', OWN_HASH)).toBe(true)
+    expect(isOwnPersonalNumber('198201022343', OWN_HASH)).toBe(true)
+    expect(isOwnPersonalNumber('1982010223430001', OWN_HASH)).toBe(true)
   })
 
   it('is false for another number, a missing hash or a non-number', () => {
     expect(isOwnPersonalNumber(OTHER_A, OWN_HASH)).toBe(false)
-    expect(isOwnPersonalNumber('8209094872', null)).toBe(false)
+    expect(isOwnPersonalNumber('8201022343', null)).toBe(false)
     expect(isOwnPersonalNumber('', OWN_HASH)).toBe(false)
     expect(isOwnPersonalNumber(null, OWN_HASH)).toBe(false)
   })
@@ -89,14 +89,14 @@ describe('offerableSearchHits', () => {
 
   const sameNameHits = [
     hit(OTHER_A, 'EF'),
-    hit('8209094872', 'EF'),
+    hit('8201022343', 'EF'),
     hit(OTHER_B, 'EF'),
     hit('5560360793', 'AB'),
   ]
 
   it('offers only the own sole trader firm among three with the same name, plus juridiska personer', () => {
     const offered = offerableSearchHits(sameNameHits, describeHit, OWN_HASH)
-    expect(offered.map((h) => h.orgNumber)).toEqual(['8209094872', '5560360793'])
+    expect(offered.map((h) => h.orgNumber)).toEqual(['8201022343', '5560360793'])
   })
 
   it('offers no sole trader firm by name without a BankID-verified personnummer', () => {
@@ -110,7 +110,7 @@ describe('offerableSearchHits', () => {
   })
 
   it('leaves the order of the remaining hits alone', () => {
-    const hits = [hit('5566778899', 'AB'), hit('8209094872', 'EF'), hit('5560360793', 'AB')]
+    const hits = [hit('5566778899', 'AB'), hit('8201022343', 'EF'), hit('5560360793', 'AB')]
     expect(offerableSearchHits(hits, describeHit, OWN_HASH)).toEqual(hits)
   })
 })

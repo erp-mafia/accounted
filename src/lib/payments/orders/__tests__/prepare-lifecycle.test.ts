@@ -460,4 +460,51 @@ describe('approvePaymentOrders', () => {
     db.setTable('payment_orders', { data: [{ id: 'o1', status: 'submitted', payee_check: 'known' }] })
     expect(await approvePaymentOrders(ctx, { orderIds: ['o1'] })).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' })
   })
+
+  // crm#1485: one open skattekonto order per execution day. A stale draft
+  // whose new day already has one is refused with a 409, never a 500.
+  const staleSkattekonto = { id: 'o1', status: 'draft', purpose: 'skattekonto', payee_check: 'known', supplier_invoice_id: null, requested_execution_date: '2026-10-09' }
+
+  it('refuses a stale skattekonto draft whose next banking day already has an open skattekonto payment, writing nothing', async () => {
+    db.setTable('payment_orders', [
+      { data: [staleSkattekonto] },
+      { data: [{ id: 'o2', status: 'approved', requested_execution_date: '2026-10-12' }] }, // the day's open order
+    ])
+    const result = await approvePaymentOrders(ctx, { orderIds: ['o1'], today: '2026-10-11' })
+    expect(result).toEqual({
+      ok: false,
+      code: 'SKATTEKONTO_PAYMENT_DAY_TAKEN',
+      details: { payment_order_id: 'o1', requested_execution_date: '2026-10-12', existing_payment_order_id: 'o2', existing_status: 'approved' },
+    })
+    expect(db.findCalls('payment_orders', 'update')).toHaveLength(0)
+    expect(db.findCalls('payment_orders', 'in')).toContainEqual(['requested_execution_date', ['2026-10-12']])
+  })
+
+  it('refuses, not throws, when another order takes the day between the check and the move', async () => {
+    db.setTable('payment_orders', [
+      { data: [staleSkattekonto] },
+      { data: [] }, // the day is free when read
+      { data: null, error: { code: '23505', message: 'duplicate key value violates unique constraint "uq_payment_orders_open_skattekonto_per_date"' } },
+    ])
+    const result = await approvePaymentOrders(ctx, { orderIds: ['o1'], today: '2026-10-11' })
+    expect(result).toEqual({
+      ok: false,
+      code: 'SKATTEKONTO_PAYMENT_DAY_TAKEN',
+      details: { payment_order_id: 'o1', requested_execution_date: '2026-10-12' },
+    })
+    expect(db.findCalls('payment_orders', 'update')).toHaveLength(1) // the date only, never the approval
+  })
+
+  it('moves a stale skattekonto draft onto a free banking day and approves it', async () => {
+    db.setTable('payment_orders', [
+      { data: [staleSkattekonto] },
+      { data: [] }, // the day is free
+      { data: [{ id: 'o1' }] }, // the date
+      { data: [{ id: 'o1' }] }, // the approval
+    ])
+    const result = await approvePaymentOrders(ctx, { orderIds: ['o1'], today: '2026-10-11' })
+    expect(result).toMatchObject({ ok: true, data: { approved: ['o1'] } })
+    const patches = db.findCalls('payment_orders', 'update').map(([p]) => p as Record<string, unknown>)
+    expect(patches[0]).toEqual({ requested_execution_date: '2026-10-12' })
+  })
 })

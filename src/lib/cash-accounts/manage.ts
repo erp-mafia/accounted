@@ -16,7 +16,7 @@
  *     auth.uid() admin check do not apply.
  *   - payee details only on giro/bank rows (BAS 1920-1999), never a PSP
  *     clearing account or a till;
- *   - never the same IBAN on two rows (the Grönsinka 1938 case: one physical
+ *   - never the same IBAN on two rows (seen on a 1938 account: one physical
  *     account twice means a second ledger for the same money). A disabled
  *     row counts too: a bank connection is matched on its iban whether it is
  *     enabled or not. Clearing or changing the IBAN of a disabled account

@@ -2570,10 +2570,10 @@ const WISE_HEADER =
 
 const WISE_CSV = [
   WISE_HEADER,
-  'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Bluedot Impact Ltd",2500.0,USD,"Aligned Intelligence AB",2500.0,USD,1,Facilitation,,,"Money added",',
-  'TRANSFER-2214309703,COMPLETED,IN,"2026-06-26 20:53:33","2026-06-26 20:54:14",2.20,SEK,,,"Aligned Intelligence AB",200.0,SEK,"Aligned Intelligence AB",200.0,SEK,1.0,,,"Peter Alexander Reinthal","Money added",',
-  'PLAN_ORDER-28688820,COMPLETED,OUT,"2026-06-24 06:13:45","2026-06-24 06:41:51",,,,,,520.00,SEK,TransferWise,520.00,SEK,1.00000000,28688820,,"Peter Alexander Reinthal",General,',
-  'TRANSFER-2208605608,COMPLETED,IN,"2026-06-24 06:13:45","2026-06-24 06:41:50",0.00,SEK,,,"Aligned Intelligence AB",520.0,SEK,"Aligned Intelligence AB",520.0,SEK,1.0,invoice-28688820,,"Peter Alexander Reinthal","Money added",',
+  'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Example Payer Ltd",2500.0,USD,"Exempelbolaget AB",2500.0,USD,1,Facilitation,,,"Money added",',
+  'TRANSFER-2214309703,COMPLETED,IN,"2026-06-26 20:53:33","2026-06-26 20:54:14",2.20,SEK,,,"Exempelbolaget AB",200.0,SEK,"Exempelbolaget AB",200.0,SEK,1.0,,,"Erik Exempel","Money added",',
+  'PLAN_ORDER-28688820,COMPLETED,OUT,"2026-06-24 06:13:45","2026-06-24 06:41:51",,,,,,520.00,SEK,TransferWise,520.00,SEK,1.00000000,28688820,,"Erik Exempel",General,',
+  'TRANSFER-2208605608,COMPLETED,IN,"2026-06-24 06:13:45","2026-06-24 06:41:50",0.00,SEK,,,"Exempelbolaget AB",520.0,SEK,"Exempelbolaget AB",520.0,SEK,1.0,invoice-28688820,,"Erik Exempel","Money added",',
 ].join('\n')
 
 describe('Wise format', () => {
@@ -2622,7 +2622,7 @@ describe('Wise format', () => {
     const withCancelled = [
       WISE_HEADER,
       'TRANSFER-9,CANCELLED,IN,"2026-06-01 10:00:00","2026-06-01 10:00:00",,,,,"X",100.0,SEK,"Y",100.0,SEK,1,,,,General,',
-      'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Bluedot Impact Ltd",2500.0,USD,"Aligned Intelligence AB",2500.0,USD,1,Facilitation,,,"Money added",',
+      'TRANSFER-2247230173,COMPLETED,IN,"2026-07-13 13:39:01","2026-07-13 13:39:08",,,,,"Example Payer Ltd",2500.0,USD,"Exempelbolaget AB",2500.0,USD,1,Facilitation,,,"Money added",',
     ].join('\n')
     const result = parseBankFile(withCancelled, 'wise.csv')
     expect(result.transactions).toHaveLength(1)

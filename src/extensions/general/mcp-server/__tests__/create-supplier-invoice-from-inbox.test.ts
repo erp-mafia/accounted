@@ -2083,7 +2083,7 @@ describe('gnubok_create_supplier_invoice_from_inbox: line amounts that include V
   // crm#1367: SF-CE-202608 rounded line by line came to 3 864,12; the
   // document computes on the summed base and says 3 864,11.
   const selfBill = {
-    supplier: { name: 'Crayfish Energy AB' },
+    supplier: { name: 'Exempel Energi AB' },
     invoice: { invoiceNumber: 'SF-CE-202608', invoiceDate: '2026-09-30', dueDate: '2026-10-30', currency: 'SEK', paymentReference: null },
     totals: { subtotal: 15456.45, vatAmount: 3864.11, total: 19320.56 },
     lineItems: [

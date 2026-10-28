@@ -12,10 +12,10 @@ reader shows has changed for it.
 
 ## What resolves from the manifest
 
-- **Operations** (`lib/operations/registry.ts`): by the operation id prefix
+- **Operations** (`src/lib/operations/registry.ts`): by the operation id prefix
   before the first dot (`invoices.book` is `invoicing`). The module is
   derived, not a field on each operation.
-- **v1 REST and OpenAPI** (`lib/api/v1/registry.ts`): every operation in
+- **v1 REST and OpenAPI** (`src/lib/api/v1/registry.ts`): every operation in
   `/api/v1/openapi.json` carries `tags: [moduleId]` and `x-module`, and the
   document lists each module as a top-level tag marked `x-experimental`.
   `jurisdictions` is not published until a second country exists.
@@ -56,7 +56,7 @@ every package on). Each states every switchable package as on or off
 a change appends the next version, and a company resolves the version it
 stored, so a new version never takes a package from a company that has it.
 The ids are country-neutral; the country pack still decides which packages
-exist. The list is a proposal until Jakob confirms it.
+exist. The list is a proposal until a maintainer confirms it.
 
 A company stores its profile in `companies.profile_id` and
 `profile_version` (migration `20261016190000`; a CHECK holds the ids, so a
@@ -68,14 +68,14 @@ Standard on failure. How a company gets one:
   from the legal form (`deriveSignupProfile`) and records it in
   `companies.suggested_profile_id` and version, which switches nothing. It
   becomes the company's profile only while the instance sets
-  `PROFILES_APPLY_ON_SIGNUP` (`signup-profile.ts`, off by default; Jakob
-  flips it after confirming the lists). The MCP and v1 creation paths record
+  `PROFILES_APPLY_ON_SIGNUP` (`signup-profile.ts`, off by default; a
+  maintainer flips it after confirming the lists). The MCP and v1 creation paths record
   the suggestion and never apply it.
 - **Byrå invitation**: the byrå picks the client's profile in the invite
   form (Inställningar, Medlemmar) of a client company on its team; the form
   preselects the stored profile, else the recorded suggestion, else
   Standard. The invited client sees "Din byrå har förberett: <profil>" on
-  `/invite/[token]` (`lib/company/client-profile.ts`).
+  `/invite/[token]` (`src/lib/company/client-profile.ts`).
 - **Existing companies**: Standard, unless their byrå picks a profile.
 
 Nothing writes a profile through the API or MCP yet. `GET
@@ -110,13 +110,13 @@ briefing.
 - `sales-channel-connected`: `pos.connected` or a webshop connection while
   Kassa och webbshop is off: "Slå på Kassa och webbshop?".
 - `hide-unused`: daily, behind `SUGGESTIONS_HIDE_UNUSED` (off): a package
-  unused for six months with nothing open: "Dölj <paket>?". Jakob turns it
-  on.
+  unused for six months with nothing open: "Dölj <paket>?". A maintainer
+  turns it on.
 
 A package is off only where a profile or the company left it off, so the
 event detectors reach byrå-profiled companies only: a Standard company sees
 nothing new. The event detectors run on the event bus beside the event_log
-and webhook handlers (lib/init); staging logs and skips when the database
+and webhook handlers (src/lib/init); staging logs and skips when the database
 does not have the operation types yet, so an early deploy never breaks the
 write that emitted.
 
@@ -168,7 +168,7 @@ books invoices when they are registered; everything else, a new supplier
 included, waits for a person. In Att göra such a posting opens its invoice
 (corrected or credited there) instead of Ångra.
 
-`GRANT_SUGGESTIONS` (`src/lib/grants/flag.ts`) is Jakob's master switch for
+`GRANT_SUGGESTIONS` (`src/lib/grants/flag.ts`) is the master switch for
 the whole feature: off, the detector does not run, `create_grant` is refused
 (`GRANTS_SWITCHED_OFF`) and the staging door never asks the claim gate, so
 grants that exist stop applying. Revoking and pausing stay possible.
@@ -211,9 +211,9 @@ Readers:
 
 - `capabilitySurface()` is what a menu or tool list reads: `hidden` (modules
   whose package is off or not in the country, or that are not in the country
-  themselves) and `notForLegalForm`. The menu (`lib/navigation/nav-gates.ts`)
+  themselves) and `notForLegalForm`. The menu (`src/lib/navigation/nav-gates.ts`)
   hides both; MCP's tools/list hides `hidden` on a single-company connection
-  (`extensions/general/mcp-server/tool-modules.ts` places every tool in a
+  (`src/extensions/general/mcp-server/tool-modules.ts` places every tool in a
   module). A package outside the plan stays visible: the paywall answers at
   the door, as before.
 - `capabilityDigest()` is the briefing's list of modules that are not
@@ -221,7 +221,7 @@ Readers:
   `GET /api/v1/companies/{companyId}/capabilities` serves: the module report
   unchanged, plus `profile`.
 - Every main navigation item declares its module
-  (`components/dashboard/__tests__/nav-modules.test.ts`).
+  (`src/components/dashboard/__tests__/nav-modules.test.ts`).
 
 ## Winding down and the start doors
 
@@ -262,7 +262,7 @@ running (the founder's rule). Three pieces:
   open), for background work that skips a package's passes. The bank ingest
   reads it once per batch behind `INGEST_PACKAGE_GATING` (off) and skips the
   matchers, and their pools, of a fully-off package
-  (`lib/transactions/ingest-package-gate.ts`); a winding-down package keeps
+  (`src/lib/transactions/ingest-package-gate.ts`); a winding-down package keeps
   them, and a failed read skips nothing.
 
 The switch itself: Inställningar, Företag, Anpassa (`/settings/anpassa`), and
@@ -326,7 +326,7 @@ kernel reaches through it. The same test pins it by name instead
 (`compositionSeams` in the baseline): only the recorded files may import a
 composition module (today `bookkeeping/engine.ts`, for the reversal hooks),
 a composition file may import only the recorded hook leaf modules, and none
-may import `lib/init`, `lib/initialized` or the event bus.
+may import `src/lib/init`, `src/lib/initialized` or the event bus.
 
 ## Adding a module or a folder
 
@@ -522,11 +522,11 @@ route and the kontantmetod cut-off (`postKontantmetodCutoff`, one event per
 invoice carried, #3440) record `year_end.closing` too, and every storno a
 failed close or cut-off makes of its own verifikat `ledger.storno` (the
 cut-off's correction of a cash verifikat moved onto the port in step 3). The
-subject is the fiscal period. These producers are kernel code (`lib/core`), which may not read the
+subject is the fiscal period. These producers are kernel code (`src/lib/core`), which may not read the
 approval scope, so their doors (the year-end and opening-balances routes, the
 staged executors) hand their link basis down as a function the port calls
-only while it is on; `lib/posting` counts as a kernel inner module. The
-accrual schedules (`lib/bookkeeping/accruals/service.ts`) record
+only while it is on; `src/lib/posting` counts as a kernel inner module. The
+accrual schedules (`src/lib/bookkeeping/accruals/service.ts`) record
 `ledger.accrual` per dissolution, subject the schedule's invoice, and
 `ledger.storno` per storno; the year-end wizard's periodiseringar route
 records `ledger.accrual` (the semesterlöneskuld
@@ -567,7 +567,7 @@ rättelse goes through the port's `correctJournalEntry`: two events, recorded
 before the storno is drafted, `ledger.storno` linked to the storno (role
 reversal) and `ledger.correction` to the corrected verifikat (role
 correction), both of the verifikat corrected, which `correctEntry` and
-`recordateEntry` (lib/core, handed the links) write right after each draft's
+`recordateEntry` (src/lib/core, handed the links) write right after each draft's
 header; the correction doors (dashboard, v1, staged `correct_entry`,
 recordate and its v1 and staged redate, the momsdeklaration's basis fix,
 whose added rows name `se.vat-rc-basis-fix`) all use it. The storno is
@@ -580,7 +580,7 @@ closed year records `ledger.storno` of the year per storno, the sandbox seed
 (`se.reconciliation-residual`), and a compensation storno of a verifikat a
 door could not keep always goes through the port (system_derived of the
 verifikat when its door names no event). The kernel's doors take their link
-basis as a function, and lib/posting is a kernel inner module (as in step
+basis as a function, and src/lib/posting is a kernel inner module (as in step
 2g). The staged uncategorize (`commitUncategorizeTransaction`, a bank line's
 storno) records `ledger.storno` of the bank line through the port, as both
 uncategorize routes do (`uncategorize-executor.engine-input.test.ts`). Still
@@ -618,7 +618,7 @@ one `expense.paid_out` per claim; `commit_opening_balance_replacement` (the
 IB cascade) the year's `ledger.opening_balance` and `ledger.storno`, by
 position. A deploy that reaches a database without the migrations gets
 PGRST202 and retries without the two parameters
-(`lib/bookkeeping/business-event-rpc.ts`). Unchanged by design: the asset
+(`src/lib/bookkeeping/business-event-rpc.ts`). Unchanged by design: the asset
 doors draft through the port already and `commit_asset_depreciation` and
 `commit_asset_disposal` only commit; the inline rättelse
 (`correct_entry_metadata`, `correct_entry_lines_inline`) changes a verifikat
@@ -633,9 +633,9 @@ move, the requests to the six functions included) and
 Step 3 is the ratchet: only the posting port may call the engine's posting
 functions. `posting-port-bypass` in `npm run check:guards`
 (`scripts/checks/posting-port-bypass.mjs`) fails on an import of a guarded
-export of `lib/bookkeeping/engine.ts`, `lib/core/bookkeeping/storno-service.ts`
-or `lib/bookkeeping/journal-entry-batch.ts` anywhere under `src/` or
-`scripts/` outside `lib/posting`, the engine, the storno service and the
+export of `src/lib/bookkeeping/engine.ts`, `src/lib/core/bookkeeping/storno-service.ts`
+or `src/lib/bookkeeping/journal-entry-batch.ts` anywhere under `src/` or
+`scripts/` outside `src/lib/posting`, the engine, the storno service and the
 engine's set posting: named, aliased, `@/` or relative, a namespace member,
 `import()`, `require()` or a re-export. Tests and type-only imports do not
 count. Guarded is every export that creates, numbers, reverses or corrects a
@@ -646,7 +646,7 @@ and the draft upkeep that numbers nothing (`findFiscalPeriod`,
 `validateBalance`, `updateDraftEntry`, `cancelDraftEntry`,
 `cancelOrphanedEntry`, ...) stay open, and a test fails on an export in
 neither list. The SIE import job's chunk writers (`commitSIEImportChunk`,
-`reverseSIEImportChunk` in `lib/import/sie-job-worker.ts`) are allowed for
+`reverseSIEImportChunk` in `src/lib/import/sie-job-worker.ts`) are allowed for
 good, with the reason, in `PERMANENT_ALLOWLIST`: the job is one
 `recordEvent`, its verifikat are written in SQL. The baseline,
 `postingPortBypass` in `scripts/checks/antipatterns-baseline.json`, is empty
@@ -655,7 +655,7 @@ called through the port's `commitSqlPosting` (`SqlPostingDoors` names each
 function's engine wrapper; the ledger adapter hands it the producer's own
 arguments, spread, and nothing is recorded there, so each function gets the
 request it got before in every mode, pinned by
-`lib/posting/__tests__/sql-posting-doors.rpc-input.test.ts` and its fixture
+`src/lib/posting/__tests__/sql-posting-doors.rpc-input.test.ts` and its fixture
 taken before the move); the kontantmetod cut-off's correction of a cash
 verifikat goes through `correctJournalEntry` and records `ledger.storno` and
 `ledger.correction` of that verifikat as every rättelse does (its
@@ -666,8 +666,8 @@ reopen's `ledger.storno`, `scripts/sie-import/acceptance-manual-review.ts`
 with a `ledger.opening_balance`). A new edge fails, and `--update` never adds
 one. The guard reads imports, not database calls: a direct `.rpc()` of a
 posting function is outside it. The other half of step 3, the engine's
-reversal hooks as a registry, landed before it (`lib/bookkeeping/reversal-hooks.ts`
-and `lib/composition/reversal-hooks.ts`, !533); `reverseEntry` still runs
+reversal hooks as a registry, landed before it (`src/lib/bookkeeping/reversal-hooks.ts`
+and `src/lib/composition/reversal-hooks.ts`, !533); `reverseEntry` still runs
 its own mirrors beside it, by hand (for `year_end` the kontantmetod carry's
 storno guard and the asset register's release; for any storno the release
 of its bank lines and of a period's IB link), and `correctEntry` runs no
@@ -681,23 +681,23 @@ block for its rules: both kernel pairs, `ledger -> invoicing` (20 edges) and
 `ledger -> supplier-invoices` (6), are at zero and gone from
 `boundary-baseline.json`, with no behaviour change (each file moved as it was,
 with its tests, every import rewritten). The pure rules the ledger's own line
-builders and reports read moved into the kernel: in `lib/bookkeeping` the
-gross split (from `lib/vat`), an invoice line's VAT treatment
-(`invoice-line-vat-treatment.ts`, out of `lib/invoices/vat-rules.ts`), the
+builders and reports read moved into the kernel: in `src/lib/bookkeeping` the
+gross split (from `src/lib/vat`), an invoice line's VAT treatment
+(`invoice-line-vat-treatment.ts`, out of `src/lib/invoices/vat-rules.ts`), the
 ROT/RUT rules and the invoice line amounts they compute on, the customer's and
 Skatteverket's share of an invoice, öresavrundning (`invoice-rounding.ts`), the
 supplier invoice display figures, line totals and rounding item, the matchable
 statuses and `registered-from-books.ts`; the invoice payment accounts in
-`lib/cash-accounts`, the personnummer shape in `lib/invariants`, the invoice
-number series in `lib/company` (the settings save checks it) and the invoice
-register coverage in `lib/reports` (the kundreskontra reads it). The LIKE
-escape (`lib/supabase/like-pattern.ts`) and `toSingleLine` (`lib/utils.ts`)
+`src/lib/cash-accounts`, the personnummer shape in `src/lib/invariants`, the invoice
+number series in `src/lib/company` (the settings save checks it) and the invoice
+register coverage in `src/lib/reports` (the kundreskontra reads it). The LIKE
+escape (`src/lib/supabase/like-pattern.ts`) and `toSingleLine` (`src/lib/utils.ts`)
 went to infrastructure. Two files left the ledger: the supplier invoice
 retro-match, invoicing's own event handler, sits beside its scorer
-(`lib/invoices/supplier-invoice-handler.ts`, which the event consumer list
+(`src/lib/invoices/supplier-invoice-handler.ts`, which the event consumer list
 imports), and the conversion of an inbox item to a supplier invoice, which
 wires inbox, supplier invoices, payments and VAT, sits in the operations layer
-it serves (`lib/operations/inbox-convert.ts`). The payment sync stays in the
+it serves (`src/lib/operations/inbox-convert.ts`). The payment sync stays in the
 ledger (in invoicing it would import collections, which depends on invoicing)
 and reads the customer share from the kernel.
 `__tests__/phase2-exit-check.test.ts` asserts the sentence: both

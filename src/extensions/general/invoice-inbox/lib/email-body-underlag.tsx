@@ -46,6 +46,12 @@ export interface InboundAttachmentShape {
   content_disposition?: string | null
   content_id?: string | null
   size?: number | null
+  /**
+   * The HTML body shows this part: its content id is referenced as `cid:`
+   * (Resend), or it sits in the body's multipart/related (mailparser's
+   * `related`). Inline whatever the disposition says.
+   */
+  embedded?: boolean | null
 }
 
 export function isSignatureImage(att: InboundAttachmentShape): boolean {
@@ -54,10 +60,37 @@ export function isSignatureImage(att: InboundAttachmentShape): boolean {
   const disposition = (att.content_disposition ?? '').toLowerCase().trim()
   // Resend leaves the raw header value unnormalised; mailparser lowercases.
   // A missing disposition with a content id is an inline part in practice.
-  const inline = disposition.startsWith('inline') || (disposition === '' && !!att.content_id)
+  // Some senders mark the images their HTML shows as attachments (Booking.com
+  // via MIME::Lite::HTML): those are inline because the body embeds them.
+  const inline = disposition.startsWith('inline') || (disposition === '' && !!att.content_id) || att.embedded === true
   if (!inline) return false
   // Size unknown: it may be a photo; keep it as a document.
   return typeof att.size === 'number' && att.size >= 0 && att.size <= SIGNATURE_IMAGE_MAX_BYTES
+}
+
+/**
+ * A content id in the form a `cid:` reference uses: without the angle
+ * brackets of the Content-ID header, URL-decoded (RFC 2392), lowercased.
+ */
+export function normaliseContentId(id: string | null | undefined): string {
+  const bare = (id ?? '').trim().replace(/^<|>$/g, '').trim()
+  let decoded = bare
+  try {
+    decoded = decodeURIComponent(bare)
+  } catch {
+    // A stray "%" is part of the id, not an escape.
+  }
+  return decoded.toLowerCase()
+}
+
+/** The content ids an HTML body embeds (`<img src="cid:...">`, CSS `url(cid:...)`), normalised. */
+export function contentIdsReferencedByHtml(html: string | null | undefined): Set<string> {
+  const ids = new Set<string>()
+  for (const match of (html ?? '').matchAll(/\bcid:([^'"\s>)]+)/gi)) {
+    const id = normaliseContentId(match[1])
+    if (id) ids.add(id)
+  }
+  return ids
 }
 
 /**

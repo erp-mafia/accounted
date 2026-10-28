@@ -1,3 +1,4 @@
+import { formatActorAttribution, type AttributionWords } from '@/lib/attribution/format-actor'
 import type { DecisionReceipt } from './receipts'
 
 /**
@@ -96,6 +97,8 @@ export interface BookingWhyOptions {
   formatWhen: (iso: string) => string
   /** The brand name, for what the app booked by itself. */
   appName: string
+  /** The `attribution` words: an agent is named with the person it acted for (lib/attribution). */
+  words: AttributionWords
 }
 
 export type EvidenceLevel = 'exact' | 'strong' | 'likely' | 'your_choice'
@@ -118,12 +121,14 @@ export interface BookingWhyView {
 
 // ── Who, how, when ──────────────────────────────────────────────────
 
+/**
+ * An agent is a key, a connected AI, a service account or the assistant,
+ * with the person it acted for: the key's owner, the account's sponsor, who
+ * chatted (the row's user id).
+ */
 type Who =
   | { kind: 'person'; userId: string | null }
-  | { kind: 'api_key'; label: string | null }
-  | { kind: 'service_account'; label: string | null }
-  | { kind: 'connected_ai'; label: string | null }
-  | { kind: 'assistant' }
+  | { kind: 'agent'; actorType: string; label: string | null; userId: string | null }
   | { kind: 'app' }
 
 function text(v: unknown): string | null {
@@ -135,20 +140,19 @@ function whoFromActor(actorType: string | null | undefined, label: string | null
     case 'user':
       return { kind: 'person', userId: userId ?? null }
     case 'api_key':
-      return { kind: 'api_key', label: text(label) }
     case 'mcp_oauth':
-      return { kind: 'connected_ai', label: text(label) }
     case 'service_account':
-      return { kind: 'service_account', label: text(label) }
     case 'agent_chat':
-      return { kind: 'assistant' }
+      return { kind: 'agent', actorType, label: text(label), userId: userId ?? null }
     case 'cron':
     case 'system':
       return { kind: 'app' }
     default:
       // Entries committed before the actor columns existed: the same reading
       // behandlingshistoriken makes (an API-key commit method, else a person).
-      return commitMethod === 'api_key' ? { kind: 'api_key', label: text(label) } : { kind: 'person', userId: userId ?? null }
+      return commitMethod === 'api_key'
+        ? { kind: 'agent', actorType: 'api_key', label: text(label), userId: userId ?? null }
+        : { kind: 'person', userId: userId ?? null }
   }
 }
 
@@ -186,7 +190,8 @@ function personDecided(r: ReceiptLike): boolean {
 function agentProposer(r: ReceiptLike): Who | null {
   const p = r.proposed_by
   if (!p || p.actor_type === 'user') return null
-  return whoFromActor(p.actor_type, p.label, p.actor_id)
+  // The operation's user is the person the agent staged it for.
+  return whoFromActor(p.actor_type, p.label, p.user_id ?? null)
 }
 
 function decider(entry: BookingWhyEntry, r: ReceiptLike | null): Who {
@@ -194,15 +199,16 @@ function decider(entry: BookingWhyEntry, r: ReceiptLike | null): Who {
   return whoFromActor(entry.committed_actor_type, entry.committed_actor_label, entry.user_id, entry.commit_method)
 }
 
-/** The user ids a view of this entry names, for the caller to resolve to people. */
+/** The user ids a view of this entry names (people, and the people agents acted for), for the caller to resolve. */
 export function bookingWhyUserIds(entry: BookingWhyEntry, decisions: BookingWhyDecisions | null): string[] {
   const ids = new Set<string>()
-  const who = decider(entry, decisions?.latest ?? null)
-  if (who.kind === 'person' && who.userId) ids.add(who.userId)
-  for (const d of decisions?.others ?? []) {
-    const other = whoFromActor(d.decided_by.actor_type, d.decided_by.label, d.decided_by.user_id)
-    if (other.kind === 'person' && other.userId) ids.add(other.userId)
+  const add = (who: Who | null) => {
+    if (who && who.kind !== 'app' && who.userId) ids.add(who.userId)
   }
+  const latest = decisions?.latest ?? null
+  add(decider(entry, latest))
+  if (latest) add(agentProposer(latest))
+  for (const d of decisions?.others ?? []) add(whoFromActor(d.decided_by.actor_type, d.decided_by.label, d.decided_by.user_id))
   return [...ids]
 }
 
@@ -218,14 +224,10 @@ function renderWho(who: Who, data: BookingWhyData, o: BookingWhyOptions): string
       }
       return name
     }
-    case 'api_key':
-      return who.label ? o.t('who_api_key', { label: who.label }) : o.t('who_api_key_plain')
-    case 'connected_ai':
-      return who.label ? o.t('who_connected_ai', { label: who.label }) : o.t('who_connected_ai_plain')
-    case 'service_account':
-      return who.label ? o.t('who_service_account', { label: who.label }) : o.t('who_service_account_plain')
-    case 'assistant':
-      return o.t('who_assistant')
+    case 'agent': {
+      const personName = who.userId ? text(data.people[who.userId]?.name) : null
+      return formatActorAttribution({ actorType: who.actorType, actorLabel: who.label, personName }, o.words, { inline: true })
+    }
     case 'app':
       return o.appName
   }
@@ -355,7 +357,7 @@ function shortVersion(v: string): string {
 function viaText(who: Who, commitMethod: string | null | undefined, o: BookingWhyOptions): string | null {
   if (!commitMethod) return null
   // A connected AI commits under its minted key: say which door it came through.
-  if (commitMethod === 'api_key' && who.kind === 'connected_ai') return o.t('via_mcp')
+  if (commitMethod === 'api_key' && who.kind === 'agent' && who.actorType === 'mcp_oauth') return o.t('via_mcp')
   const key = VIA_KEYS[commitMethod]
   return key ? o.t(key, { appName: o.appName }) : null
 }

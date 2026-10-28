@@ -34,7 +34,7 @@ describe('resolveSelfBilledSaleDraft amounts', () => {
     expect(result.draft.total).toBe(125)
   })
 
-  // crm#1367: Deepgrid's received self-bills compute VAT on the summed base
+  // Received self-bills compute VAT on the summed base
   // per rate (netto 7 868,80 gives 1 967,20); line by line it came to 1 967,21.
   const customers = {
     data: { id: 'cust-1', name: 'Aire AB', customer_type: 'swedish_business', vat_number_validated: null, country: 'SE' },

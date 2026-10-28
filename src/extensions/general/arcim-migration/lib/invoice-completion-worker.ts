@@ -36,13 +36,15 @@ interface Receipt {
   status: string
   headerUpdated?: boolean
   eventId?: string | null
+  /** The invoice's last allowed try: it is parked for good, its status the reason (20261028042247). */
+  gaveUp?: boolean
 }
 
 export function emptyCompletionSummary() {
   return {
     companies: 0, completed: 0, alreadyCompleted: 0, headersUpdated: 0, historyAppended: 0,
     unmatched: 0, ambiguous: 0, providerEmpty: 0, totalMismatch: 0, rowsMismatch: 0, failed: 0,
-    deferred: 0, uncertain: 0, companiesFailed: 0, companiesBlocked: 0, pages: 0,
+    deferred: 0, uncertain: 0, companiesFailed: 0, companiesBlocked: 0, pages: 0, gaveUp: 0,
     budgetReachedAt: null as string | null,
     // Counts describe this invocation. Delayed retries and undiscovered work
     // are not a measured backlog, so never infer backlog completion from them.
@@ -57,6 +59,7 @@ function addReceipt(result: InvoiceCompletionSummary, receipt: Receipt) {
     rows_mismatch: 'rowsMismatch', failed: 'failed' }[receipt.status] as
     'completed' | 'alreadyCompleted' | 'unmatched' | 'ambiguous' | 'providerEmpty' | 'totalMismatch' | 'rowsMismatch' | 'failed' | undefined
   if (key) result[key]++
+  if (receipt.gaveUp) result.gaveUp++
   if (receipt.status === 'written') {
     if (receipt.headerUpdated) result.headersUpdated++
     if (receipt.eventId) result.historyAppended++

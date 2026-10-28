@@ -104,6 +104,8 @@ describe('listArchiveHistory', () => {
       ['ingested', 'service_account', 'Nattlig synk', 'faktura.pdf'],
       ['ingested', 'api_key', 'Integration', 'kvitto.pdf'],
     ])
+    // The person a key acted for travels with it, for the attribution line.
+    expect(events.filter((e) => e.id.startsWith('audit:')).map((e) => e.actor.user_id)).toEqual(['sponsor-1', 'u1'])
   })
 
   it('throws with the failing read', async () => {

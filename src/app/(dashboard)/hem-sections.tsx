@@ -25,12 +25,12 @@ import { loadGrantReview } from '@/lib/grants/review'
 import { getCompanyNotices } from '@/lib/notices'
 import type { Notice } from '@/lib/notices/types'
 import { expiringBankConnectionsFrom } from '@/lib/notices/categories'
-import { vatDeadlineLine } from '@/lib/onboarding/checklist'
+import { RECEIPT_UPLOAD_SOURCES, skippedSetupSteps, vatDeadlineLine } from '@/lib/onboarding/checklist'
 import { findUnfinishedConnect } from '@/lib/providers/unfinished-connect'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { createServiceClient } from '@/lib/supabase/server'
 import { todayIsoStockholm } from '@/lib/dates/iso'
-import type { InitialSetupState, MomsPeriod, OnboardingProgress } from '@/types'
+import type { InitialSetupState, MomsPeriod, OnboardingProgress, UserUiState } from '@/types'
 import { getDashboardAuthContext } from './request-context'
 
 /**
@@ -126,6 +126,8 @@ export async function HemChecklistSection({
     { data: latestFileSweep },
     unfinishedConnect,
     skvOmbudReadAccess,
+    { data: receiptDocuments },
+    { data: userPreferences },
   ] = await Promise.all([
     supabase.from('customers').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
     supabase.from('invoices').select('*', { count: 'exact', head: true }).eq('company_id', companyId),
@@ -175,6 +177,17 @@ export async function HemChecklistSection({
     // Accounted as ombud also counts as connected: its reads need no
     // personal BankID session (lib/skatteverket/ombud-access.ts).
     hasSkatteverketOmbudReadAccess(companyId),
+    // A document a person put in another way (photo or upload onto a
+    // transaction, mail, WhatsApp) also means receipts are flowing: the step
+    // used to stay open for them while only an inbox item counted.
+    supabase
+      .from('document_attachments')
+      .select('id')
+      .eq('company_id', companyId)
+      .in('upload_source', [...RECEIPT_UPLOAD_SOURCES])
+      .limit(1),
+    // The Kom igång steps this user skipped for this company.
+    supabase.from('user_preferences').select('ui_state').eq('user_id', userId).maybeSingle(),
   ])
 
   const connections = (bankConnections ?? []) as BankConnectionRow[]
@@ -184,7 +197,7 @@ export async function HemChecklistSection({
     hasBankConnected: connections.length > 0 || (transactionCount || 0) > 0,
     hasSIEImport: (sieImportCount || 0) > 0,
     hasSkatteverketConnected: (skatteverketTokenCount || 0) > 0 || skvOmbudReadAccess,
-    hasInboxItems: (inboxItemCount || 0) > 0,
+    hasInboxItems: (inboxItemCount || 0) > 0 || (receiptDocuments ?? []).length > 0,
   }
 
   const vatLine = vatDeadlineLine({
@@ -213,6 +226,7 @@ export async function HemChecklistSection({
       skvOmbudEnabled={await isSkatteverketOmbudEnabled()}
       hasInboxItems={onboardingProgress.hasInboxItems}
       hasMcpKey={hasMcpKey}
+      skippedSteps={skippedSetupSteps(userPreferences?.ui_state as UserUiState | null, companyId)}
       vatLine={vatLine}
       unfinishedConnect={unfinishedConnect ? { provider: unfinishedConnect.provider } : null}
       sieSweep={
@@ -278,8 +292,9 @@ export async function HemPanesSection({
   // count is the list's length.
   const openSuggestionsPromise = listOpenSuggestions(supabase, companyId)
   // And what the company's rules for automatic booking let through since the
-  // last review (one indexed probe for a company that never had a rule).
-  const grantReviewPromise = loadGrantReview(supabase, companyId)
+  // last review (one indexed probe for a company that never had a rule), with
+  // the agent that booked each posting.
+  const grantReviewPromise = loadGrantReview(supabase, companyId, { withAgents: true })
   const [
     worklist,
     expensePayouts,

@@ -1,0 +1,1 @@
+[2026-10-28] /pending gets no streaming or new loading state: the nav click commits in 8 ms p50 (197 ms p95) via loading.tsx, the list query runs 1.6 ms mean; the Hem rage clicks on Agentförslag are Att göra then Agentförslag. Only the reload card's button changed.

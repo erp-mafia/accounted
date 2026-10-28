@@ -530,7 +530,7 @@ describe('getErrorMessage: Swedish heuristic covers real route sentences', () =>
     )
   })
 
-  // The CashLeads Fortnox migration (2026-08-06): the sie-import finalizer's
+  // A Fortnox migration (2026-08-06): the sie-import finalizer's
   // guard message reached the wizard as a thrown Error, matched none of the
   // patterns, and the user saw the generic fallback instead of the reason the
   // migration stopped. Pins the added patterns: verifikation / importen.

@@ -26,7 +26,7 @@ export const FORTNOX_DOCUMENT_SCOPES = ['archive', 'connectfile'];
  * reject with invalid_scope BEFORE login (prod incident 2026-08-13, when the
  * ordinary connect carried unapproved scopes and every Fortnox connection
  * died), and claiming a scope the connect never asks for sends users into a
- * reconnect loop that cannot succeed (support case Klura AB, 2026-08-20).
+ * reconnect loop that cannot succeed (support case 2026-08-20).
  *
  * The defaults below describe the hosted deployment's registration
  * (integration 39254). A self-hosted deployment runs its OWN Fortnox app

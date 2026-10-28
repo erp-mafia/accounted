@@ -51,7 +51,7 @@ describe('planAlias', () => {
   it('keeps a salary line off a suggested party, but not off a confirmed one', () => {
     const pre = preclean('Lön Jakob Juni Överföring via internet')
     expect(planAlias({ pre, ledger: { partyId: 'p-j', name: 'Lön Jakob', confirmed: false } })).toMatchObject({ band: 'nil', partyId: null })
-    expect(planAlias({ pre, ledger: { partyId: 'p-j', name: 'Jakob Wennberg', confirmed: true } })).toMatchObject({ partyId: 'p-j', source: 'ledger' })
+    expect(planAlias({ pre, ledger: { partyId: 'p-j', name: 'Anna Exempel', confirmed: true } })).toMatchObject({ partyId: 'p-j', source: 'ledger' })
   })
 
   it('lets a document outrank the directory and the model', () => {
@@ -67,7 +67,7 @@ describe('planAlias', () => {
   it('takes the directory before the model and marks a giro hit as an anchor', () => {
     const viaDirectory = planAlias({ pre: preclean('SQSP  WORKSP'), directory: { name: 'Squarespace', kind: 'merchant', confidence: 0.95, what: 'Webbplatsbyggare, SaaS' }, model: reading({ counterpart: 'Something Else' }) })
     expect(viaDirectory).toMatchObject({ source: 'directory', displayName: 'Squarespace', band: 'link', what: 'Webbplatsbyggare, SaaS' })
-    const viaGiro = planAlias({ pre: preclean('1655958320228 DBT.5050-1055 SKATTEVERK 144 240 1655958320228 350 Polytop AB'), directory: { name: 'Skatteverket', kind: 'authority', confidence: 0.98, viaGiro: true } })
+    const viaGiro = planAlias({ pre: preclean('1655882244684 DBT.5050-1055 SKATTEVERK 144 240 1655882244684 350 Exempelbolaget AB'), directory: { name: 'Skatteverket', kind: 'authority', confidence: 0.98, viaGiro: true } })
     expect(viaGiro).toMatchObject({ source: 'anchor', displayName: 'Skatteverket', kind: 'authority', confidence: 0.98 })
   })
 

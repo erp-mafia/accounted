@@ -36,6 +36,11 @@ vi.mock('@/lib/logger', () => {
   return { createLogger: () => logger }
 })
 
+const { mockCountUnderlag } = vi.hoisted(() => ({ mockCountUnderlag: vi.fn() }))
+vi.mock('@/lib/core/documents/underlag-counts', () => ({
+  countUnderlagForJournalEntries: (...args: unknown[]) => mockCountUnderlag(...args),
+}))
+
 const mockCreateJournalEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
@@ -442,6 +447,104 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     const call = mockLogError.mock.calls.find(([msg]) => msg === 'TRANSIENT_ERROR')
     expect(call).toBeDefined()
     expect((call![1] as Error).message).toBe('Journal entries: canceling statement due to statement timeout')
+  })
+
+  describe('include_counts=true (the verifikat list asks for its underlag counts with its rows)', () => {
+    type Body = {
+      data: { id: string }[]
+      count: number
+      attachment_counts?: Record<string, number>
+      invoice_references?: Record<string, number>
+    }
+    const counted = { counts: { 'je-1': 2 }, invoice_references: { 'je-2': 1 } }
+    const noParams = { params: Promise.resolve({}) }
+
+    it('leaves the counts out unless asked, and reads none', async () => {
+      enqueue({ data: [makeJournalEntry({ id: 'je-1' })], error: null, count: 1 })
+
+      const { status, body } = await parseJsonResponse<Body>(await GET(createMockRequest('/api/bookkeeping/journal-entries'), noParams))
+
+      expect(status).toBe(200)
+      expect(body.attachment_counts).toBeUndefined()
+      expect(body.invoice_references).toBeUndefined()
+      expect(mockCountUnderlag).not.toHaveBeenCalled()
+    })
+
+    it('carries the counts for the page rows on the direct path', async () => {
+      enqueue({ data: [makeJournalEntry({ id: 'je-1' }), makeJournalEntry({ id: 'je-2' })], error: null, count: 2 })
+      mockCountUnderlag.mockResolvedValueOnce(counted)
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', { searchParams: { include_counts: 'true' } })
+      const { status, body } = await parseJsonResponse<Body>(await GET(request, noParams))
+
+      expect(status).toBe(200)
+      expect(body.data.map((e) => e.id)).toEqual(['je-1', 'je-2'])
+      expect(body.count).toBe(2)
+      expect(body.attachment_counts).toEqual({ 'je-1': 2 })
+      expect(body.invoice_references).toEqual({ 'je-2': 1 })
+      expect(mockCountUnderlag).toHaveBeenCalledWith(mockSupabase, 'company-1', ['je-1', 'je-2'])
+    })
+
+    it('carries them on the include_related RPC path too', async () => {
+      enqueue({
+        data: [
+          { entry: makeJournalEntry({ id: 'je-1' }), total_count: 2 },
+          { entry: makeJournalEntry({ id: 'je-2' }), total_count: 2 },
+        ],
+        error: null,
+      })
+      mockCountUnderlag.mockResolvedValueOnce(counted)
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { period_id: 'period-1', include_counts: 'true' },
+      })
+      const { body } = await parseJsonResponse<Body>(await GET(request, noParams))
+
+      expect(mockSupabase.rpc).toHaveBeenCalledWith('list_fiscal_period_entries_with_related', expect.anything())
+      expect(mockCountUnderlag).toHaveBeenCalledWith(mockSupabase, 'company-1', ['je-1', 'je-2'])
+      expect(body.attachment_counts).toEqual({ 'je-1': 2 })
+    })
+
+    it('carries them on the missing_underlag path, in the page order', async () => {
+      const E1 = '11111111-1111-4111-8111-111111111111'
+      const E3 = '33333333-3333-4333-8333-333333333333'
+      enqueue({ data: { ok: true, total_count: 2, ids: [E3, E1] }, error: null })
+      enqueue({ data: [makeJournalEntry({ id: E1 }), makeJournalEntry({ id: E3 })], error: null })
+      mockCountUnderlag.mockResolvedValueOnce({ counts: {}, invoice_references: {} })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', {
+        searchParams: { missing_underlag: 'true', exclude_draft: 'true', include_counts: 'true' },
+      })
+      const { body } = await parseJsonResponse<Body>(await GET(request, noParams))
+
+      expect(mockCountUnderlag).toHaveBeenCalledWith(mockSupabase, 'company-1', [E3, E1])
+      expect(body.attachment_counts).toEqual({})
+      expect(body.invoice_references).toEqual({})
+    })
+
+    it('reads no counts for an empty page', async () => {
+      enqueue({ data: [], error: null, count: 0 })
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', { searchParams: { include_counts: 'true' } })
+      const { status, body } = await parseJsonResponse<Body>(await GET(request, noParams))
+
+      expect(status).toBe(200)
+      expect(body.data).toEqual([])
+      expect(mockCountUnderlag).not.toHaveBeenCalled()
+    })
+
+    it('still answers the rows when the count reads fail, without the counts (the list falls back)', async () => {
+      enqueue({ data: [makeJournalEntry({ id: 'je-1' })], error: null, count: 1 })
+      mockCountUnderlag.mockRejectedValueOnce(new Error('statement timeout'))
+
+      const request = createMockRequest('/api/bookkeeping/journal-entries', { searchParams: { include_counts: 'true' } })
+      const { status, body } = await parseJsonResponse<Body>(await GET(request, noParams))
+
+      expect(status).toBe(200)
+      expect(body.data.map((e) => e.id)).toEqual(['je-1'])
+      expect(body.attachment_counts).toBeUndefined()
+      expect(body.invoice_references).toBeUndefined()
+    })
   })
 
   describe('missing_underlag=true (the dashboard deep-link filter)', () => {

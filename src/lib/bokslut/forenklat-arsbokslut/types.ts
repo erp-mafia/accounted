@@ -1,5 +1,3 @@
-import type { K1Post, K1Summa } from './bilaga2'
-
 /** The trial balance columns the engine reads. */
 export interface K1TrialBalanceRow {
   account_number: string
@@ -78,6 +76,3 @@ export interface K1Computation {
   blockers: K1Check[]
   warnings: K1Check[]
 }
-
-export type K1PostAmounts = Record<K1Post, number>
-export type K1SummaAmounts = Record<K1Summa, number>

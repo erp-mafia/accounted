@@ -114,13 +114,13 @@ describe('findCompanyRoleByPick', () => {
   it('resolves the opaque TIC companyId against the user\'s own roles (#58)', async () => {
     const supabase = mockSupabase([
       makeRole({ companyId: 111, companyRegistrationNumber: '5560125790', legalName: 'Acme AB' }),
-      makeRole({ companyId: 222, companyRegistrationNumber: '1982090948720001', legalName: 'Firma', legalEntityType: 'Enskild firma' }),
+      makeRole({ companyId: 222, companyRegistrationNumber: '1982010223430001', legalName: 'Firma', legalEntityType: 'Enskild firma' }),
     ])
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const result = await findCompanyRoleByPick(supabase as any, 'user-1', '222')
 
-    expect(result).toMatchObject({ companyId: 222, legalName: 'Firma', companyRegistrationNumber: '1982090948720001' })
+    expect(result).toMatchObject({ companyId: 222, legalName: 'Firma', companyRegistrationNumber: '1982010223430001' })
   })
 
   it('returns null for an id that is not one of the user\'s roles', async () => {
@@ -134,7 +134,7 @@ describe('findCompanyRoleByPick', () => {
     const supabase = mockSupabase([makeRole({ companyId: 111 })])
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(await findCompanyRoleByPick(supabase as any, 'user-1', '1982090948720001x')).toBeNull()
+    expect(await findCompanyRoleByPick(supabase as any, 'user-1', '1982010223430001x')).toBeNull()
     expect(supabase.from).not.toHaveBeenCalled()
   })
 })
@@ -157,11 +157,11 @@ function mockMemberships(
 describe('findOwnCompanyByOrgNumber', () => {
   it('finds the sole trader\'s own firm from the 16-digit picker link (crm#68)', async () => {
     const supabase = mockMemberships([
-      { id: 'ef-1', org_number: '8209094872', archived_at: null },
+      { id: 'ef-1', org_number: '8201022343', archived_at: null },
     ])
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const result = await findOwnCompanyByOrgNumber(supabase as any, 'user-1', '1982090948720001')
+    const result = await findOwnCompanyByOrgNumber(supabase as any, 'user-1', '1982010223430001')
 
     expect(result).toBe('ef-1')
   })
@@ -177,11 +177,11 @@ describe('findOwnCompanyByOrgNumber', () => {
 
   it('ignores archived companies so a restarted company can be set up again', async () => {
     const supabase = mockMemberships([
-      { id: 'old', org_number: '8209094872', archived_at: '2026-09-01T00:00:00Z' },
+      { id: 'old', org_number: '8201022343', archived_at: '2026-09-01T00:00:00Z' },
     ])
 
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    expect(await findOwnCompanyByOrgNumber(supabase as any, 'user-1', '1982090948720001')).toBeNull()
+    expect(await findOwnCompanyByOrgNumber(supabase as any, 'user-1', '1982010223430001')).toBeNull()
   })
 
   it('returns null for a company the user does not have', async () => {

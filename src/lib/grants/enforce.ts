@@ -50,6 +50,7 @@ import { commitPendingOperation, type CommitResult } from '@/lib/pending-operati
 import type { PendingOperation } from '@/types'
 import { grantsEnabled } from './flag'
 import { SILENT_GRANT_REFUSALS } from './types'
+import { toError } from '@/lib/errors/to-error'
 
 /** The credential that staged the operation, as the staging door validated it. */
 export interface GrantCredential {
@@ -216,7 +217,7 @@ export async function applyCompanyGrant(
     // A throw from the commit (a typed bookkeeping error, a dropped
     // connection) is the commit's to classify for an approval door; here the
     // staging already answered, so it is reported as a refused commit.
-    log.error('commit under a grant threw', err instanceof Error ? err : new Error(String(err)), { operationId })
+    log.error('commit under a grant threw', toError(err), { operationId })
     await release('commit_threw')
     const failed: CommitResult = { status: 'failed', error: err instanceof Error ? err.message : String(err), http_status: 500 }
     return { applied: true, committed: false, grant, result: failed }

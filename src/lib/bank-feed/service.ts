@@ -867,12 +867,15 @@ async function accountChoices(ctx: OperationContext, accounts: readonly BankFeed
   const views = new Map<string, ConsentAccountView>()
   // Selected accounts are placed first so they get the natural BAS numbers.
   const ordered = [...accounts].sort((a, b) => Number(b.enabled !== false) - Number(a.enabled !== false))
+  // The seeded row goes to the account its onboarding payment details name (crm#1498).
+  const consent = ordered.filter((a) => a.enabled !== false && !a.ledger_account)
   for (const account of ordered) {
     let suggested: string | null = account.ledger_account ?? null
     let existing: string | null = null
     if (!suggested) {
       const resolved = await resolvePsd2LedgerAccount(ctx.supabase, ctx.companyId, ctx.userId, {
-        iban: account.iban ?? null, currency: account.currency, accountName: account.name ?? null, exclude: used, prepareOnly: true,
+        iban: account.iban ?? null, bban: account.bban ?? null, currency: account.currency, accountName: account.name ?? null,
+        consent, exclude: used, prepareOnly: true,
       }).catch(() => null)
       suggested = resolved?.ledgerAccount ?? null
       if (resolved?.source === 'iban') existing = resolved.ledgerAccount
@@ -1079,12 +1082,15 @@ async function saveSelection(
   // (it yields, as in every bank feed's picker), and never gets a new one.
   const used = new Set(explicit)
   const selectionByUid = new Map<string, BankAccountSelection>()
+  // The seeded row goes to the account its onboarding payment details name (crm#1498).
+  const consent = enabled.filter((a) => !byUid.get(a.uid)?.ledgerAccount && !a.ledger_account)
   for (const account of enabled) {
     let ledger = byUid.get(account.uid)?.ledgerAccount ?? account.ledger_account ?? null
     let reuse: string | null = null
     if (!ledger || (used.has(ledger) && !explicit.includes(ledger))) {
       const resolved = await resolvePsd2LedgerAccount(ctx.supabase, ctx.companyId, ctx.userId, {
-        iban: account.iban ?? null, currency: account.currency, accountName: account.name ?? null, exclude: used, prepareOnly: true,
+        iban: account.iban ?? null, bban: account.bban ?? null, currency: account.currency, accountName: account.name ?? null,
+        consent, exclude: used, prepareOnly: true,
       })
       if (!resolved) return { ok: false, code: 'BANK_SELECTION_LEDGER_CONFLICT' }
       ledger = resolved.ledgerAccount

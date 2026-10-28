@@ -286,7 +286,6 @@ export function resolveSource(
 
 export {
   COUNTERPARTY_PREFIX,
-  extractCounterpartyId,
   formatCounterpartyName,
   isCounterpartyTemplateId,
   toCounterpartyTemplateId,

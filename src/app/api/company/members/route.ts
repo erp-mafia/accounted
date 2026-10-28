@@ -39,16 +39,18 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
     members = membersWithSource
   }
 
-  // Fetch emails from profiles
+  // Emails and names from profiles: the name is what attribution lines read
+  // ("Claude åt Jonas Ek", lib/attribution).
   const userIds = (members || []).map((m) => m.user_id)
   const { data: profiles } = userIds.length > 0
     ? await serviceClient
         .from('profiles')
-        .select('id, email')
+        .select('id, email, full_name')
         .in('id', userIds)
     : { data: [] }
 
   const emailMap = new Map((profiles || []).map((p) => [p.id, p.email]))
+  const nameMap = new Map((profiles || []).map((p) => [p.id, (p.full_name as string | null)?.trim() || null]))
 
   // Fetch pending company invitations
   const { data: invitations } = await serviceClient
@@ -81,6 +83,7 @@ export const GET = withRouteContext('company_members.list', async (_request, ctx
         id: m.id,
         user_id: m.user_id,
         email: emailMap.get(m.user_id) || '',
+        full_name: nameMap.get(m.user_id) ?? null,
         role: m.role,
         source: m.source,
         joined_at: m.joined_at,

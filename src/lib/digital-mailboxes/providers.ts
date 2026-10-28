@@ -10,7 +10,7 @@
  */
 import { createBilloProvider, readBilloConfigFromEnv, type BilloProvider } from './billo'
 import { createKivraProvider, readKivraConfigFromEnv, type KivraProvider } from './kivra'
-import type { DigitalMailboxProvider, DigitalMailboxProviderId } from './types'
+import type { DigitalMailboxProviderId } from './types'
 
 export interface DigitalMailboxProviders {
   kivra: KivraProvider | null
@@ -32,10 +32,6 @@ export function buildDigitalMailboxProviders(env: Record<string, string | undefi
 export function getDigitalMailboxProviders(): DigitalMailboxProviders {
   if (!cached) cached = buildDigitalMailboxProviders(process.env)
   return cached
-}
-
-export function getDigitalMailboxProvider(id: DigitalMailboxProviderId): DigitalMailboxProvider | null {
-  return getDigitalMailboxProviders()[id]
 }
 
 /** Tests: forget the cached providers (and their tokens). */

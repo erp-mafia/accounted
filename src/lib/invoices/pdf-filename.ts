@@ -60,7 +60,7 @@ function fitFilename(companyName: string, customerName: string, suffix: string):
 /**
  * Build a descriptive, cross-platform-safe PDF filename for an invoice document.
  *
- * Example: `Oppy x Kund AB Faktura nr 2621 20260721.pdf`.
+ * Example: `Säljare AB x Kund AB Faktura nr 2621 20260721.pdf`.
  */
 export function invoicePdfFilename({
   companyName,

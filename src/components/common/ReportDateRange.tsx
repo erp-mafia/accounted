@@ -82,8 +82,8 @@ function todayIso(): string {
  * Period picker for the resultat-/balansrapport family and the reconciliation
  * workspace: one pill that names the range in force and opens a menu with the
  * presets and a custom from/to. Nothing renders inline in the toolbar when a
- * choice is made, so the row keeps one control per axis (Jakob, 2026-09-09:
- * "dropdowns that are overlays instead of inline").
+ * choice is made, so the row keeps one control per axis (design decision
+ * 2026-09-09: "dropdowns that are overlays instead of inline").
  *
  * Default = "Hittills i år" (YTD) which matches Fortnox/Visma. A "Hela året"
  * preset clears the range entirely so the API falls back to full-period

@@ -26,7 +26,7 @@ export function CompanySettingsContent() {
   const tIntro = useTranslations('settings_intro')
   const tSwitcher = useTranslations('company_switcher')
   const { settings, isLoading, updateSettings, refetch } = useSettings()
-  const { role, isSandbox, company } = useCompany()
+  const { role, isSandbox, company, addCompanyHref = ADD_COMPANY_HREF } = useCompany()
   // The delete-company dialog lives in the danger zone at the foot of the
   // page and has two doors: its own row, and the locked org number row at the
   // top, where an owner who set up the wrong company looks for a way out.
@@ -102,7 +102,7 @@ export function CompanySettingsContent() {
         intro={tIntro('company')}
         action={isSandbox ? undefined : (
           <Button variant="outline" size="sm" asChild>
-            <Link href={ADD_COMPANY_HREF}>
+            <Link href={addCompanyHref}>
               <PlusIcon className="mr-1.5 h-3.5 w-3.5" />
               {tSwitcher('add_company')}
             </Link>

@@ -48,7 +48,7 @@ vi.mock('@/lib/branding/service', () => ({
 }))
 
 vi.mock('@/lib/skatteverket/skattekonto-ocr', () => ({
-  resolveSkattekontoOcr: vi.fn().mockResolvedValue('1655954700217'),
+  resolveSkattekontoOcr: vi.fn().mockResolvedValue('1655446688087'),
   SKATTEKONTO_BANKGIRO: '5050-1055',
 }))
 
@@ -188,7 +188,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
       payee: { type: 'bankgiro', bankgiro: '50501055' },
       payeeName: 'Skatteverket',
       amount: 1500,
-      reference: { type: 'ocr', value: '1655954700217' },
+      reference: { type: 'ocr', value: '1655446688087' },
     })
   })
 
@@ -242,7 +242,7 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     const creditorAccount = xml.match(/<CdtrAcct>[\s\S]*?<\/CdtrAcct>/)![0]
     expect(creditorAccount).toContain('<Id>50501055</Id>')
     expect(creditorAccount).toContain('<SchmeNm><Prtry>BGNR</Prtry></SchmeNm>')
-    expect(xml).toContain('<Ref>1655954700217</Ref>')
+    expect(xml).toContain('<Ref>1655446688087</Ref>')
     expect(xml).toContain('<InstdAmt Ccy="SEK">1500.00</InstdAmt>')
   })
 

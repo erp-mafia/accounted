@@ -6,7 +6,7 @@
  * Flow:
  * 1. POST /auth → { url, authorization_id }
  * 2. User redirects to URL, authenticates with bank
- * 3. Callback receives ?code=XXX&state=YYY
+ * 3. Callback receives ?code=<code>&state=<state>
  * 4. POST /sessions { code } → { session_id, accounts }
  * 5. GET /accounts/{uid}/balances
  * 6. GET /accounts/{uid}/transactions

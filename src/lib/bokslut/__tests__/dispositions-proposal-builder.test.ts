@@ -133,7 +133,7 @@ beforeEach(() => {
 })
 
 describe('buildDispositionsProposal: schablonintäkt rate resolution', () => {
-  it('builds the FY2024 proposal for an AB without periodiseringsfonder (the Väla Redovisning case)', async () => {
+  it('builds the FY2024 proposal for an AB without periodiseringsfonder (the reported case)', async () => {
     const supabase = supabaseFor({ period_start: '2024-01-01', period_end: '2024-12-31' })
 
     const result = await buildDispositionsProposal(supabase, 'company-1', 'period-1')

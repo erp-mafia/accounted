@@ -125,12 +125,6 @@ export function getTemplateScope(template: {
   return 'company'
 }
 
-export const SCOPE_LABELS: Record<ReturnType<typeof getTemplateScope>, string> = {
-  system: 'Standard',
-  team: 'Team',
-  company: 'Företag',
-}
-
 /**
  * Convert a user-created library template to the BookingTemplate shape the
  * transaction TemplatePicker consumes.

@@ -37,16 +37,6 @@ export function isDocType(value: unknown): value is DocType {
   return typeof value === 'string' && (DOC_TYPES as readonly string[]).includes(value)
 }
 
-/** Groups used by the Arkiv filters. */
-export function docTypeGroup(type: DocType | null | undefined): 'agreement' | 'authority' | 'invoice_receipt' | 'minutes' | 'other' {
-  if (!type) return 'other'
-  if (type.startsWith('agreement.')) return 'agreement'
-  if (type.startsWith('registration.') || type.startsWith('filing.') || type.startsWith('decision.')) return 'authority'
-  if (type.startsWith('minutes.') || type === 'share_subscription_list' || type === 'annual_report') return 'minutes'
-  if (['supplier_invoice', 'receipt', 'credit_note', 'customer_invoice', 'bank_statement', 'tax_account_statement'].includes(type)) return 'invoice_receipt'
-  return 'other'
-}
-
 /** One paragraph per class, written the way the classifier reads it. */
 export const DOC_TYPE_DESCRIPTIONS: Record<DocType, string> = {
   supplier_invoice: 'An invoice addressed TO the company, which the company must pay: another party is the issuer (its name, organisationsnummer and bankgiro/plusgiro are the sender\'s), the company is the recipient (Fakturamottagare, Kund, Er referens, the address block). A Swedish invoice is often headed "Faktura" or "Kundfaktura": that word names the issuer\'s customer, which is this company, so it is still a supplier_invoice. Includes payment notices and reminders for such invoices, and recurring invoices for a subscription, a lease, rent or an insurance premium.',

@@ -2340,8 +2340,8 @@ Example response `200`:
   "data": {
     "party": {
       "party_id": "7fc2…",
-      "name": "Crayfish Energy AB",
-      "org_number": "5594774076"
+      "name": "Exempel Energi AB",
+      "org_number": "5599887766"
     },
     "totals": [
       {

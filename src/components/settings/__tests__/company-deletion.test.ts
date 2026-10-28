@@ -3,8 +3,10 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import {
   ADD_COMPANY_HREF,
+  addCompanyHref,
   afterCompanyDeleteHref,
 } from '@/components/settings/company-deletion'
+import type { EnrichmentCompanyRole } from '@/lib/company-lookup/types'
 import { ACCOUNT_DELETION_HREF } from '@/lib/company/no-company-routes'
 
 const SRC = path.resolve(__dirname, '../../..')
@@ -33,23 +35,33 @@ describe('afterCompanyDeleteHref', () => {
 })
 
 /**
- * ADD_COMPANY_HREF is a copy of the link behind "Lägg till företag". Pin it to
- * the switcher and the user menu, so moving that door fails here instead of
- * sending an owner who just deleted the wrong company to a dead page.
+ * ADD_COMPANY_HREF is the picker door behind "Lägg till företag". Every place
+ * that renders the link takes this user's href from the company context
+ * (addCompanyHref, set by the dashboard layout) and falls back to the
+ * constant, so moving that door fails here instead of sending an owner who
+ * just deleted the wrong company to a dead page.
  */
 describe('ADD_COMPANY_HREF', () => {
   it('is the door "Lägg till företag" opens', () => {
-    expect(fs.readFileSync(path.join(SRC, 'components/dashboard/CompanySwitcher.tsx'), 'utf8')).toContain(`href="${ADD_COMPANY_HREF}"`)
-    // The user menu, the Företag settings page and ⌘K link the constant itself.
     for (const file of [
+      'components/dashboard/CompanySwitcher.tsx',
       'components/dashboard/UserMenu.tsx',
       'components/settings/sections/CompanySettingsContent.tsx',
-      'components/common/CommandPalette.tsx',
     ]) {
       const source = fs.readFileSync(path.join(SRC, file), 'utf8')
       expect(source, file).toMatch(/import \{[^}]*\bADD_COMPANY_HREF\b[^}]*\} from '@\/components\/settings\/company-deletion'/)
-      expect(source, file).toMatch(/href(=\{|: )ADD_COMPANY_HREF/)
+      expect(source, file).toMatch(/addCompanyHref = ADD_COMPANY_HREF \} = useCompany\(\)/)
+      expect(source, file).toMatch(/href=\{addCompanyHref\}/)
+      expect(source, file).not.toContain('/select-company?choose=1')
     }
+    // ⌘K hands the context's href to actionEntries, which falls back to the constant.
+    const palette = fs.readFileSync(path.join(SRC, 'components/common/CommandPalette.tsx'), 'utf8')
+    expect(palette).toMatch(/href: addCompany\.href \?\? ADD_COMPANY_HREF/)
+    expect(palette).toMatch(/href: addCompanyHref \}/)
+    // The layout sets the context value on every provider it renders.
+    const layout = fs.readFileSync(path.join(SRC, 'app/(dashboard)/layout.tsx'), 'utf8')
+    expect(layout.match(/addCompanyHref: companyAddHref/g)).toHaveLength(3)
+    expect(layout.match(/<CompanyProvider/g)).toHaveLength(3)
   })
 
   it('is a page the middleware keeps open for a user with no company', () => {
@@ -57,5 +69,42 @@ describe('ADD_COMPANY_HREF', () => {
     const pathname = ADD_COMPANY_HREF.split('?')[0]
     expect(middleware).toContain(`pathname.startsWith('${pathname}')`)
     expect(fs.existsSync(path.join(SRC, 'app/(onboarding)', pathname, 'page.tsx'))).toBe(true)
+  })
+})
+
+// I30: the picker door redirects to the journey when it has nothing to show,
+// a visible extra hop. The layout links the journey directly in that case.
+describe('addCompanyHref', () => {
+  const role = (overrides: Partial<EnrichmentCompanyRole> = {}): EnrichmentCompanyRole => ({
+    companyId: 1,
+    companyRegistrationNumber: '5569999990',
+    legalName: 'Exempel AB',
+    legalEntityType: 'Aktiebolag',
+    positionTypes: ['boardMember'],
+    positionDescriptions: ['Styrelseledamot'],
+    positionStart: '2015-01-01',
+    positionEnd: null,
+    ...overrides,
+  })
+
+  it('opens the journey directly for an account with no BankID engagements', () => {
+    expect(addCompanyHref(null, [])).toBe('/onboarding')
+    expect(addCompanyHref(null, ['5560125790'])).toBe('/onboarding')
+    expect(addCompanyHref([], ['5560125790'])).toBe('/onboarding')
+  })
+
+  it('keeps the picker when it has a company to offer', () => {
+    expect(addCompanyHref([role()], [])).toBe(ADD_COMPANY_HREF)
+    expect(addCompanyHref([role(), role({ companyId: 2, companyRegistrationNumber: '5569999991' })], ['5569999990'])).toBe(ADD_COMPANY_HREF)
+  })
+
+  it('opens the journey when every engagement is already added, ended or ceased', () => {
+    expect(addCompanyHref([role()], ['556999-9990'])).toBe('/onboarding')
+    expect(addCompanyHref([role({ positionEnd: '2020-01-01' })], [])).toBe('/onboarding')
+    expect(addCompanyHref([role({ companyStatus: 'CompanyStruckOff' })], [])).toBe('/onboarding')
+  })
+
+  it('keeps the picker, which decides for itself, when the read failed', () => {
+    expect(addCompanyHref(undefined, [])).toBe(ADD_COMPANY_HREF)
   })
 })

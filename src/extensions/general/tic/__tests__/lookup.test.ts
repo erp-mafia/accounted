@@ -324,7 +324,7 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
 
   // SCB's row for an ideell förening: the columns the register answers with.
   const scbRow = {
-    OrgNr: '8024811658',
+    OrgNr: '8022334455',
     Företagsnamn: 'SEGELSÄLLSKAPET GAMBIT',
     'Juridisk form': 'Ideell förening',
     'Juridisk form, kod': '61',
@@ -345,15 +345,15 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
     mockScbConfigured.mockReturnValue(true)
     lookupByOrgNumber.mockResolvedValue({
       found: true,
-      peOrgNr: '168024811658',
+      peOrgNr: '168022334455',
       row: scbRow,
       facts: factsFromScbCompany(scbRow),
       fetchedAt: '2026-09-18T08:00:00.000Z',
     })
 
-    const res = await lookupHandler(makeRequest('802481-1658'))
+    const res = await lookupHandler(makeRequest('802233-4455'))
     expect(res.status).toBe(404)
-    expect(lookupByOrgNumber).toHaveBeenCalledWith('8024811658')
+    expect(lookupByOrgNumber).toHaveBeenCalledWith('8022334455')
     await expect(res.json()).resolves.toEqual({
       error: 'Company not found',
       registry: {
@@ -368,7 +368,7 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
 
   it('stays a plain miss when SCB is not configured here', async () => {
     mockScbConfigured.mockReturnValue(false)
-    const res = await lookupHandler(makeRequest('802481-1658'))
+    const res = await lookupHandler(makeRequest('802233-4455'))
     expect(res.status).toBe(404)
     await expect(res.json()).resolves.toEqual({ error: 'Company not found' })
     expect(lookupByOrgNumber).not.toHaveBeenCalled()
@@ -383,14 +383,14 @@ describe('TIC lookup route: SCB fallback after a miss', () => {
 
   it('stays a plain miss when SCB has no row or the call fails', async () => {
     mockScbConfigured.mockReturnValue(true)
-    lookupByOrgNumber.mockResolvedValueOnce({ found: false, peOrgNr: '168024811658', row: null, facts: [], fetchedAt: '' })
-    await expect((await lookupHandler(makeRequest('802481-1658'))).json()).resolves.toEqual({
+    lookupByOrgNumber.mockResolvedValueOnce({ found: false, peOrgNr: '168022334455', row: null, facts: [], fetchedAt: '' })
+    await expect((await lookupHandler(makeRequest('802233-4455'))).json()).resolves.toEqual({
       error: 'Company not found',
     })
 
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     lookupByOrgNumber.mockRejectedValueOnce(new Error('scb down'))
-    await expect((await lookupHandler(makeRequest('802481-1658'))).json()).resolves.toEqual({
+    await expect((await lookupHandler(makeRequest('802233-4455'))).json()).resolves.toEqual({
       error: 'Company not found',
     })
     expect(warn).toHaveBeenCalled()

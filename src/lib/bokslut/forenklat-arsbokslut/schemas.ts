@@ -20,5 +20,3 @@ export const ForenklatArsbokslutInputsUpdateSchema = z
   })
   .strict()
   .refine((body) => Object.keys(body).length > 0, { message: 'Nothing to update' })
-
-export type ForenklatArsbokslutInputsUpdateBody = z.infer<typeof ForenklatArsbokslutInputsUpdateSchema>

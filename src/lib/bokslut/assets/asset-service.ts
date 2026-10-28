@@ -24,7 +24,6 @@ import type {
   AssetCategory,
   WritableDepreciationMethod,
   AssetDisposalType,
-  DepreciationMethod,
   FiscalPeriod,
   K3Component,
   CreateJournalEntryLineInput,

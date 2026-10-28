@@ -469,7 +469,7 @@ export default function TransactionInboxCard({
             <button
               type="button"
               className={cn(
-                'inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-border px-2.5 py-0.5 text-xs transition-colors duration-150',
+                'inline-flex max-w-[16rem] items-center gap-1.5 rounded-full border border-border px-3 py-0.5 text-xs transition-colors duration-150',
                 categoryLabel || proposal
                   ? 'text-foreground hover:bg-secondary/60'
                   : 'text-muted-foreground hover:text-foreground',

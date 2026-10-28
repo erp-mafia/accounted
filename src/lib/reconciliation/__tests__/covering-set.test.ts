@@ -18,7 +18,7 @@ describe('findExactCoveringSet', () => {
   })
 
   it('finds the Bankgirot aggregate: two vouchers that sum to the row', () => {
-    // gecko's case: 62 500 + 25 750 booked by hand, one 88 250 bank row.
+    // The reported case: 62 500 + 25 750 booked by hand, one 88 250 bank row.
     const set = findExactCoveringSet(88250, [c('A57', 62500), c('A58', 25750), c('A56', 150)])
     expect(set?.map((s) => s.id).sort()).toEqual(['A57', 'A58'])
   })

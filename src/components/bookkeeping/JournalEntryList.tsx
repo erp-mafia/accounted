@@ -621,13 +621,26 @@ export default function JournalEntryList({
     // most rows one response may carry: a single large request came back cut
     // at 1,000 rows while the count promised every verifikat. A failed chunk
     // fails the load, so a partial list never renders as all of them.
+    // The rows' underlag counts ride along (include_counts) instead of a
+    // second request to /api/documents/counts; a chunk that came back without
+    // them sends the load to that route as before.
+    const carriedCounts: Record<string, number> = {}
+    const carriedReferenced: string[] = []
+    let countsCarried = true
     const fetchChunk = async (offset: number, limit: number) => {
       const chunkParams = new URLSearchParams(params)
       chunkParams.set('limit', String(limit))
       chunkParams.set('offset', String(offset))
+      chunkParams.set('include_counts', 'true')
       const res = await fetch(`/api/bookkeeping/journal-entries?${chunkParams}`)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      const { data, count } = await res.json()
+      const { data, count, attachment_counts, invoice_references } = await res.json()
+      if (attachment_counts && invoice_references) {
+        Object.assign(carriedCounts, attachment_counts as Record<string, number>)
+        carriedReferenced.push(...Object.keys(invoice_references as Record<string, number>))
+      } else {
+        countsCarried = false
+      }
       return { data: (data || []) as JournalEntry[], count: typeof count === 'number' ? count : 0 }
     }
 
@@ -670,7 +683,13 @@ export default function JournalEntryList({
       // carrying the generation guard so their late completions can't
       // overwrite metadata a newer request just rendered.
       const ids = loadedEntries.map((e: JournalEntry) => e.id)
-      fetchAttachmentCounts(ids, isCurrent)
+      if (countsCarried && ids.length > 0) {
+        setAttachmentCounts(carriedCounts)
+        setInvoiceReferenced(new Set(carriedReferenced))
+        setAttachmentCountsLoaded(true)
+      } else {
+        fetchAttachmentCounts(ids, isCurrent)
+      }
       fetchRattelseFlags(ids, isCurrent)
     } catch {
       // A non-OK response or a network-level rejection (offline, aborted

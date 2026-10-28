@@ -13,9 +13,10 @@
  *     says what the engine does instead and why the scenario believes the
  *     source. Fixing the engine turns the it.fails red, which is the signal
  *     to flip the status to runnable.
- *   - todo: the engine lacks a capability the scenario needs (it.todo); the
- *     expected data is complete, and todoReason names the missing capability
- *     in one line, so the feature that adds it can turn it runnable.
+ *   - todo: the engine lacks a capability the scenario needs, so the area
+ *     tests skip it and only catalogue.test.ts checks its data; the expected
+ *     data is complete, and todoReason names the missing capability in one
+ *     line, so the feature that adds it can turn it runnable.
  *
  * Source extracts: agreement and statute citations give the document, the
  * section and the printed page, plus the line in the plain-text extract the
@@ -53,7 +54,7 @@ export interface Scenario<Kind extends string = string, Inputs = unknown, Expect
   sources: SourceRef[]
   /** Required for engine-bug: what the engine does instead. Optional otherwise. */
   note?: string
-  /** Required for todo: the capability the engine lacks, in one line (shown in the test name). */
+  /** Required for todo: the capability the engine lacks, in one line. */
   todoReason?: string
   /**
    * Published worked examples the cited formula must reproduce: the
@@ -140,8 +141,7 @@ export const SRC = {
 /** Shorthand used by the data files. */
 export const at = (source: SourceRef, extra: Partial<SourceRef>): SourceRef => ({ ...source, ...extra })
 
-/** The test name: id and title, plus the missing capability on a todo. */
-export function scenarioTestName(s: Pick<Scenario, 'id' | 'title' | 'status' | 'todoReason'>): string {
-  const base = `${s.id} ${s.title}`
-  return s.status === 'todo' && s.todoReason ? `${base} [todo: ${s.todoReason}]` : base
+/** The test name: id and title. */
+export function scenarioTestName(s: Pick<Scenario, 'id' | 'title'>): string {
+  return `${s.id} ${s.title}`
 }

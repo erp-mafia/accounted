@@ -24,7 +24,7 @@ Use the existing authenticated, company-scoped POST action:
 
 Omitting `dryRun` on this path also previews. No invoice, source mapping, enrollment or progress receipt is written by preview. It reports the proposed payment-state refresh separately. If an open local invoice first needs that refresh, settlement validation reports `PAYMENT_REFRESH_REQUIRED`; that attachment has not yet passed the settled-invoice RPC checks.
 
-After reviewing a company's preview, the same request with `dryRun:false` explicitly enrolls that company. The existing invoice-completion cron continues enrolled work. Deploying the code or migration enrolls no company. Production repair requires Emil's approval for the specific company/write.
+After reviewing a company's preview, the same request with `dryRun:false` explicitly enrolls that company. The existing invoice-completion cron continues enrolled work. Deploying the code or migration enrolls no company. Production repair requires a maintainer's approval for the specific company and write.
 
 Each run shares one paginated supplier list between matching and payment refresh, prioritizes due open rows, and caps hydration and writes within a deadline. Leases prevent overlapping writers. Per-invoice receipts survive a lost response; refused and unresolved rows receive a retry time so they cannot monopolize every batch. Runtime depends on actual provider pagination, throttling and eligible rows, so no fixed run-count estimate is promised.
 

@@ -38,10 +38,6 @@ const MUTATING_METHODS = new Set(['POST', 'PUT', 'PATCH', 'DELETE'])
  */
 export const NEXT_ACTION_HEADER = 'next-action'
 
-export interface TabSyncMessage {
-  companyId: string | null
-}
-
 /**
  * Shared guard state: one writer (CompanyTabSync, the single dashboard-shell
  * mount) and two readers (the patched fetch and guardBrowserWrite below).

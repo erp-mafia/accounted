@@ -11,7 +11,7 @@
  * detector's answer into a decision, so every door that books a bank row (the
  * dashboard routes, MCP staging, the pending-operation commit) refuses,
  * overrides and records in exactly the same way. A guard that lived in one
- * door only is how the MCP path booked gecko's Bankgirot aggregate a second
+ * door only is how the MCP path booked a company's Bankgirot aggregate a second
  * time (issue #2294, dashboard fix in PR #2300).
  *
  * Override binding: force=true is honoured only when the caller echoes the

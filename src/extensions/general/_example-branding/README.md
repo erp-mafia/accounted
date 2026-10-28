@@ -3,7 +3,7 @@
 Copy this folder to start a whitelabel fork:
 
 ```bash
-cp -r extensions/general/_example-branding extensions/general/your-brand
+cp -r src/extensions/general/_example-branding src/extensions/general/your-brand
 ```
 
 Then:

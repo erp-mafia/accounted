@@ -350,12 +350,27 @@ export function migrationRefusalMessageKey(resource: MigrationResource, reason: 
 }
 
 /**
+ * A subscription that shuts the provider's API out stops the whole job: every
+ * register answers the same. Under the 'access' kind both read "check the
+ * provider's API subscription and your permission to import", which named
+ * neither the module nor the licence, while the registry sentences the
+ * retired /migrate steps answered with did (crm#1081). Each says what to
+ * activate at the provider.
+ */
+const SUBSCRIPTION_STOP_MESSAGE_KEYS: Readonly<Record<string, string>> = {
+  PROVIDER_API_MODULE_INACTIVE: 'ext_arcim_job_error_api_module',
+  PROVIDER_LICENSE_MISSING: 'ext_arcim_job_error_api_license',
+}
+
+/**
  * Translation key (extensions namespace) for the code a job stopped on
  * (job.error_code), with `{provider}`. A refusal on a working connection
  * names the token or the user who connected, as migrationRefusalMessageKey;
  * the user's one also takes `{what}`, which the stopped job cannot name.
  */
 export function migrationJobErrorMessageKey(job: Pick<ProviderMigrationJob, 'error_code'> & { provider?: string | null }): string {
+  const own = job.error_code ? SUBSCRIPTION_STOP_MESSAGE_KEYS[job.error_code] : undefined
+  if (own) return own
   const kind = migrationIssueKind(job.error_code)
   if (kind !== 'refused') return `ext_arcim_job_error_${kind}`
   return TOKEN_PERMISSION_PROVIDERS.has(job.provider ?? '') ? 'ext_arcim_job_error_refused_token' : USER_RIGHT_REFUSAL_MESSAGE_KEY

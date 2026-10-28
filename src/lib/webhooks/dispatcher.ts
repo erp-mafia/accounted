@@ -29,7 +29,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { signPayload } from './signing'
-import { pinnedHttpsFetch, type PinnedFetchResult } from './pinned-fetch'
+import { pinnedHttpsFetch } from './pinned-fetch'
 import { verificationAllowsDelivery } from './verification'
 import { createLogger } from '@/lib/logger'
 

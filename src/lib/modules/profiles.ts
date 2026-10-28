@@ -19,7 +19,7 @@
  * Ids are English, kebab-case and country-neutral like the package ids: a
  * country pack decides which packages exist (the resolver's country gate
  * runs before the profile), so no profile is copied per country. The list is
- * the design's proposal and Jakob's to confirm; companies.profile_id has a
+ * the design's proposal, pending confirmation; companies.profile_id has a
  * CHECK on these ids, so adding a profile is a migration that widens it.
  * Pure data with no server imports: client code may read it.
  */

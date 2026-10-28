@@ -22,13 +22,6 @@ import { roundOre } from '@/lib/money'
 export const STATUTORY_VACATION_PAY_RATE = 0.12
 export const STATUTORY_VACATION_PAY_RATE_30_DAYS = 0.144
 
-/** Bounds enforced by the DB CHECK and the Zod schemas. Below 12 % is
- * illegal for every entitlement; above 30 % is a typo (13.5 entered as
- * 0.135 is fine, 13.5 entered raw is not). The entitlement-dependent floor
- * (14.4 % at 30 days) is enforced by resolveVacationPayRate, not here. */
-export const VACATION_PAY_RATE_MIN = STATUTORY_VACATION_PAY_RATE
-export const VACATION_PAY_RATE_MAX = 0.3
-
 /** The statutory rate for an entitlement: 12 %, or 14.4 % at 30 days. */
 export function statutoryVacationPayRate(vacationDaysPerYear: number): number {
   return vacationDaysPerYear >= 30

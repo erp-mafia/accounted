@@ -112,6 +112,7 @@ vi.mock('@/lib/auth/api-keys', async (importOriginal) => {
 })
 
 import { handleMcpRequest } from '../server'
+import { readCompletionLog } from '@/lib/extensions/completion-log'
 
 function mcpRequest(
   method: string,
@@ -619,6 +620,36 @@ describe('client label fallback without a marker', () => {
     expect(event.clientSource).toBe('user_agent')
   })
 
+  it('labels a stdio bridge User-Agent by the client name it carries', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'User-Agent': 'accounted-mcp/1.1.0 (claude-ai/0.14.10)' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('claude-desktop')
+    expect(event.clientSource).toBe('bridge')
+    expect(event).not.toHaveProperty('clientName')
+  })
+
+  it('labels a stdio bridge User-Agent without a client name other, with the bridge name', async () => {
+    const eventPromise = captureNextToolCalledEvent()
+
+    await handleMcpRequest(
+      mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} }, 1, {
+        headers: { 'User-Agent': 'gnubok-mcp/1.2.0' },
+      })
+    )
+
+    const event = await eventPromise
+    expect(event.client).toBe('other')
+    expect(event.clientName).toBe('gnubok-mcp')
+    expect(event.clientSource).toBe('bridge')
+  })
+
   it('prefers the stateless clientInfo name over the User-Agent', async () => {
     const eventPromise = captureNextToolCalledEvent()
 
@@ -1024,5 +1055,47 @@ describe('event_log persistence registration', () => {
     expect(text).toMatch(/'mcp\.skill_loaded'/)
     expect(text).toMatch(/'mcp\.skill_not_found'/)
     expect(text).toMatch(/'mcp\.tool_searched'/)
+  })
+})
+
+describe('the dispatcher completion line (one per tools/call, none for chatter)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('names the method, tool, key, company and outcome of a successful tools/call', async () => {
+    const request = mcpRequest('tools/call', { name: 'gnubok_list_skills', arguments: {} })
+    await handleMcpRequest(request)
+    const note = readCompletionLog(request)
+    expect(note?.quiet).toBe(false)
+    expect(note?.fields).toEqual({
+      mcpMethod: 'tools/call',
+      tool: 'gnubok_list_skills',
+      apiKeyId: 'key-1',
+      companyId: '11111111-1111-4111-8111-111111111111',
+      outcome: 'ok',
+      errorCode: null,
+    })
+  })
+
+  it('carries the error code of a failed tools/call', async () => {
+    const request = mcpRequest('tools/call', { name: 'gnubok_does_not_exist', arguments: {} })
+    await handleMcpRequest(request)
+    expect(readCompletionLog(request)?.fields).toMatchObject({
+      tool: 'gnubok_does_not_exist',
+      outcome: 'error',
+      errorCode: 'UNKNOWN_TOOL',
+    })
+  })
+
+  it('marks tools/list and notifications/initialized quiet', async () => {
+    const list = mcpRequest('tools/list')
+    await handleMcpRequest(list)
+    expect(readCompletionLog(list)).toMatchObject({ quiet: true, fields: { mcpMethod: 'tools/list', tool: null } })
+
+    const initialized = mcpRequest('notifications/initialized')
+    await handleMcpRequest(initialized)
+    expect(readCompletionLog(initialized)?.quiet).toBe(true)
   })
 })

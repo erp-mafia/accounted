@@ -109,10 +109,6 @@ export function signingLinkBase(token: string): string {
   return `/api/betala/${encodeURIComponent(token)}`
 }
 
-export function fetchSigningLinkBasket(token: string): Promise<SigningLinkPageData> {
-  return send<SigningLinkPageData>(signingLinkBase(token))
-}
-
 /**
  * Where the typed personnummer waits while the firmatecknare signs on the
  * bank's own page: this tab's session storage, keyed by the link, read on the

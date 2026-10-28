@@ -259,6 +259,7 @@ import { generateMonthlyBreakdown } from '@/lib/reports/monthly-breakdown'
 import { uiWidgets, findUiWidget, WIDGET_MIME_TYPE } from './widgets'
 import { dataResources, findResource, parseResourceQuery } from './resources'
 import { buildLedgerContext } from '@/lib/agent-context/ledger-context'
+import { lastSessionSync, loadRememberedFacts } from '@/lib/agent-context/remembered-facts'
 import {
   capabilityDigest,
   capabilitySurface,
@@ -275,6 +276,8 @@ import { moduleForTool } from './tool-modules'
 import { prompts, findPrompt } from './prompts'
 import { findSkill, loadAllSkills, toSummary, SKILL_MIME_TYPE, SKILL_URI_PREFIX, skillUri, skillSlugFromUri } from './skills'
 import { loadSkillProvenance, skillBodyHash, oauthActorLabel } from '@/lib/agent-skills/provenance'
+import { formatActorAttribution } from '@/lib/attribution/format-actor'
+import { resolvePersonNames } from '@/lib/attribution/person-names'
 import { loadCompanySkillRows, ownSkill } from '@/lib/agent-skills/company-skills'
 import { skillAppliesToCompany } from '@/lib/agent-skills/applicability'
 import { buildOwnSkill, buildOwnText, OWN_SKILL_COPY } from '@/lib/agent-skills/own-skill-body'
@@ -569,7 +572,7 @@ import {
 } from '@/lib/invoices/supplier-voucher-matching'
 import { resolveSupplierSettlementSide } from '@/lib/invoices/supplier-settlement-side'
 import { findFiscalPeriod, getSwedishLocalDate, validateBalance } from '@/lib/bookkeeping/engine'
-import { countUnbookedInPeriod, lockPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
+import { countUnbookedInPeriod, resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-service'
 import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { assertNoUnfinishedSieImport } from '@/lib/core/bookkeeping/sie-import-hold'
 import { validateYearEndReadiness, previewYearEndClosing } from '@/lib/core/bookkeeping/year-end-service'
@@ -579,12 +582,10 @@ import {
   KontantmetodManualCarryError,
   legacyKontantmetodVandningWarning,
   manualCarryInputOf,
-  nextDay,
   previewPaidBeforePostingCorrections,
   resolveKontantmetodManualCarries,
   undatedSettlementsNote,
 } from '@/lib/core/bookkeeping/kontantmetod-cutoff'
-import { fetchKontantmetodCutoffVatFacts } from '@/lib/vat/kontantmetod-cutoff-vat-facts'
 import { allocateDocumentVat, statedVatFromExtraction, type DocumentRateVat } from '@/lib/vat/document-vat'
 import {
   describeFiledVatPeriodsSv,
@@ -606,6 +607,12 @@ import { voucherOwnerOrNull } from '@/lib/core/bookkeeping/voucher-owner'
 import { negatesOriginal } from '@/lib/core/bookkeeping/correction-shape'
 import { getSuggestedCategories, buildMerchantHistory, merchantHistoryFor } from '@/lib/transactions/category-suggestions'
 import { proposeForTransactions } from '@/lib/transactions/propose'
+import {
+  findSalaryRunPayouts,
+  salaryPayoutLinkProposal,
+  SALARY_RUN_MISSING_HINT,
+  type SalaryRunPayout,
+} from '@/lib/transactions/salary-run-payouts'
 import { businessAccount, categorizeArgsFor, reverseChargeBoxDispute, reverseChargeBoxNumber, whyTextSv } from '@/lib/bookkeeping/proposal'
 import { booksWithoutReview } from '@/lib/transactions/direct-booking'
 import type { BookedDuplicateCandidate } from '@/lib/transactions/booking-duplicate-detection'
@@ -673,6 +680,7 @@ import {
 } from '@/lib/core/documents/document-service'
 import { toSameOriginStorageUrl } from '@/lib/core/documents/storage-proxy'
 import { documentUploadLimits } from './document-upload-limits'
+import { SIE_LIMITS } from '@/lib/import/sie-job-contract'
 import { apiKeyArrivalActor, readInboxItemArrivals, recordDocumentArrival, type ArrivalActor } from '@/lib/intake/arrivals'
 import { DOCUMENT_DETAIL_PARTS, parseDocumentDetailParts, readDocumentDetail } from '@/lib/documents/read/document-detail'
 import { readTransactionWithVouchers } from '@/lib/transactions/read-with-vouchers'
@@ -684,7 +692,7 @@ import { ALL_OPERATIONS, OPERATIONS } from '@/lib/operations/registry'
 import { startPackageForTool } from '@/lib/modules/package-doors'
 import { packageOffToolError, packageStartRefusal } from '@/lib/modules/package-gate'
 import { createHash, randomUUID } from 'node:crypto'
-import { ExtractionSchema as InvoiceExtractionSchema, AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
+import { AgentExtractionSchema, fetchOwnCompanyIdentity } from '@/lib/documents/inbox-extraction/extract-invoice-fields'
 import { extractAndMirror } from '@/lib/documents/inbox-extraction/extract-and-mirror'
 import { mirrorExtractionToDocument } from '@/lib/documents/inbox-extraction/mirror-extraction'
 import { mirrorCorrectedReadingToDocument } from '@/lib/documents/reading-correction'
@@ -737,10 +745,11 @@ import { buildStagedInvoice, describeInvoiceBuildRefusal } from '@/lib/pending-o
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { getUserCompanies } from '@/lib/company/context'
 import { CURRENCIES, INVOICE_QR_MODES, SUPPLIER_INVOICE_REVERSE_CHARGE_KINDS } from '@/types'
-import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, CompanySettings, Customer, InvoiceItem, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
+import type { Transaction, TransactionCategory, EntityType, VatTreatment, Invoice, InvoiceQrMode, Currency, Customer, PendingOperation, YearEndBlockerCode, SalesOrder, SalesOrderItem, SalesOrderStatus } from '@/types'
 import type { InvoiceExtractionResult, SupplierInvoiceReverseChargeKind } from '@/types'
 import { isMatchableInvoiceStatus, isMatchableSupplierInvoiceStatus } from '@/lib/bookkeeping/matchable-statuses'
 import { creditNoteRefusal } from '@/lib/invoices/credit-invoice'
+import { noteCompletionLog } from '@/lib/extensions/completion-log'
 
 // ── Actor context ────────────────────────────────────────────
 
@@ -4055,6 +4064,26 @@ function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
   return union === 0 ? 0 : intersection / union
 }
 
+/** How a fact reached gnubok_remember_fact (agent_memory.origin, migration 20261029122000). */
+const REMEMBER_ORIGINS = ['conversation', 'session_sync', 'onboarding_import'] as const
+
+/**
+ * The briefing's directions to everything an agent may need about the
+ * company, so it reads the right place instead of guessing. Plain lines:
+ * undeclared in outputSchema like the other briefing guidance (tools/list budget).
+ */
+const WHERE_TO_FIND = [
+  'memory: every fact agents were told about this company, newest first; a later fact settles an earlier one. Save a new one with gnubok_remember_fact; pass replaces with the old fact_id when it updates one.',
+  'profile_summary: what the company does, written at onboarding; may be outdated.',
+  'ledger_context (all of it: Accounted://ledger/context): how this company has booked each counterparty and supplier.',
+  'Documents: gnubok_search_records and gnubok_read_document (arkiv explains, when present).',
+  'Workflows: gnubok_list_skills, then gnubok_load_skill; a curated workflow arrives with the company facts inline.',
+]
+
+/** The briefing's invitation to offer what the AI already knows (origin session_sync). */
+const MEMORY_SYNC_NOTE =
+  'If you know facts about this business from your own memory or earlier chats that are not in memory, offer once in this conversation to save them with gnubok_remember_fact (origin: session_sync). Skip it when you have nothing new or the user said no before.'
+
 /**
  * The company's fiscal period that contains an ISO date, or null. A date in a
  * report call names the year the caller wants: "resultatrapporten för 2023"
@@ -6888,7 +6917,7 @@ export const tools: McpTool[] = [
   {
     name: 'gnubok_remember_fact',
     title: 'Remember Company Fact',
-    description: 'Capture a durable fact, preference, or correction about the company. Use mid-conversation when the user says something to remember next time. Writes immediately: does not stage. Use sparingly.',
+    description: 'Save a durable fact about the company that affects money, bookings or tax: a new employee, customer abroad, lease, loan, car, how the owner is paid, the accountant\'s advice. Works from any chat. Pass replaces when it updates an older fact. Saves at once, no approval.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -6910,6 +6939,15 @@ export const tools: McpTool[] = [
           type: 'number',
           description: 'How important this memory is for future prompts. 0.0-1.0. Default 0.8 for agent-captured facts.',
         },
+        origin: {
+          type: 'string',
+          enum: [...REMEMBER_ORIGINS],
+          description: 'session_sync = offered from your own memory at session start; onboarding_import = the onboarding import. Default conversation.',
+        },
+        replaces: {
+          type: 'string',
+          description: 'fact_id of the older fact this one updates; that fact is retired.',
+        },
       },
       required: ['content'],
     },
@@ -6921,11 +6959,12 @@ export const tools: McpTool[] = [
         kind: { type: 'string' },
         content: { type: 'string' },
         created_at: { type: 'string' },
+        replaced_fact_id: { type: 'string' },
       },
       required: ['id', 'fact_id', 'kind', 'content', 'created_at'],
     },
     annotations: ANNOTATIONS_STAGED_WRITE,
-    async execute(args, companyId, userId, supabase) {
+    async execute(args, companyId, userId, supabase, actor) {
       const content = (args.content as string | undefined)?.trim()
       if (!content || content.length < 2) throw badArgument('content', 'content is required (min 2 chars)')
       const kind = (args.kind as string | undefined) ?? 'fact'
@@ -6935,6 +6974,27 @@ export const tools: McpTool[] = [
       const rawScore = args.relevance_score
       const score =
         typeof rawScore === 'number' && rawScore >= 0 && rawScore <= 1 ? rawScore : 0.8
+      const origin = (args.origin as string | undefined) ?? 'conversation'
+      if (!(REMEMBER_ORIGINS as readonly string[]).includes(origin)) {
+        throw badArgument('origin', `invalid origin: ${origin}`)
+      }
+      const replaces = typeof args.replaces === 'string' && args.replaces.trim() ? args.replaces.trim() : null
+
+      // The fact being updated must be an active fact of this company: the
+      // agent read its fact_id from the briefing. A foreign or retired id is
+      // refused before anything is written.
+      if (replaces) {
+        const { data: target, error: targetErr } = await supabase
+          .from('agent_memory')
+          .select('id')
+          .eq('id', replaces)
+          .eq('company_id', companyId)
+          .eq('is_active', true)
+          .maybeSingle()
+        if (targetErr || !target) {
+          throw badArgument('replaces', 'No active fact with that fact_id in this company. Read the fact_ids in memory from gnubok_get_agent_briefing.')
+        }
+      }
 
       // Dedup guard: the agent re-remembers the same fact constantly (e.g.
       // "Vercel = omvänd skattskyldighet" on every Vercel categorization).
@@ -6943,14 +7003,17 @@ export const tools: McpTool[] = [
       // already-known: we touch its updated_at + nudge relevance instead of
       // writing a new row, so agent_memory doesn't fill with paraphrases.
       // Bounded to the 300 most-recent active rows: dedup-on-write keeps
-      // the working set small enough that this stays cheap.
-      const { data: existing } = await supabase
-        .from('agent_memory')
-        .select('id, kind, content, created_at, relevance_score')
-        .eq('company_id', companyId)
-        .eq('is_active', true)
-        .order('created_at', { ascending: false })
-        .limit(300)
+      // the working set small enough that this stays cheap. An update
+      // (replaces) skips it: a reworded rent is the point, not a duplicate.
+      const { data: existing } = replaces
+        ? { data: [] }
+        : await supabase
+            .from('agent_memory')
+            .select('id, kind, content, created_at, relevance_score')
+            .eq('company_id', companyId)
+            .eq('is_active', true)
+            .order('created_at', { ascending: false })
+            .limit(300)
 
       const incomingTokens = tokenizeForDedup(content)
       const dupe = (existing ?? []).find(
@@ -6977,21 +7040,53 @@ export const tools: McpTool[] = [
         }
       }
 
-      const { data, error } = await supabase
+      const sourceRef = (args.source_ref as string | undefined) ?? null
+      // Literal payloads, twice, so the schema guard (tests/schema) can check them.
+      let { data, error } = await supabase
         .from('agent_memory')
         .insert({
           company_id: companyId,
           kind,
           content,
           source: 'agent_learned',
-          source_ref: (args.source_ref as string | undefined) ?? null,
+          source_ref: sourceRef,
           relevance_score: score,
           is_active: true,
           created_by_user_id: userId,
+          origin,
+          client: actor?.client ?? null,
         })
         .select('id, kind, content, created_at')
         .single()
-      if (error) throw new Error(`Failed to remember fact: ${error.message}`)
+      // origin and client arrive with migration 20261029122000, which applies
+      // after the merge deploys: until then the fact is saved without them.
+      if (isMissingColumnError(error)) {
+        ({ data, error } = await supabase
+          .from('agent_memory')
+          .insert({
+            company_id: companyId,
+            kind,
+            content,
+            source: 'agent_learned',
+            source_ref: sourceRef,
+            relevance_score: score,
+            is_active: true,
+            created_by_user_id: userId,
+          })
+          .select('id, kind, content, created_at')
+          .single())
+      }
+      if (error || !data) throw new Error(`Failed to remember fact: ${error?.message ?? 'no row returned'}`)
+
+      if (replaces) {
+        const { error: retireErr } = await supabase
+          .from('agent_memory')
+          .update({ is_active: false, superseded_by: data.id, updated_at: new Date().toISOString() })
+          .eq('id', replaces)
+          .eq('company_id', companyId)
+        if (retireErr) throw new Error(`Saved fact ${data.id} but could not retire ${replaces}: ${retireErr.message}`)
+        return { ...data, fact_id: data.id, replaced_fact_id: replaces }
+      }
       return { ...data, fact_id: data.id }
     },
   },
@@ -7213,7 +7308,7 @@ export const tools: McpTool[] = [
         },
         memory: {
           type: 'array',
-          description: 'Top-30 active memories (facts, preferences, patterns, corrections) ranked by relevance and recency.',
+          description: 'Every active memory (facts, preferences, patterns, corrections), newest first: a later one settles an earlier one.',
           items: {
             type: 'object',
             properties: {
@@ -7433,20 +7528,16 @@ export const tools: McpTool[] = [
       // like the blocks above: a failed read reports no address.
       const inboxAddressRead = resolveInboxAddress(supabase, companyId)
 
-      const [profileRes, memoryRes, userRes, companyRes, settingsRes, dimensionsRes, bankSyncRes] = await Promise.all([
+      const [profileRes, remembered, userRes, companyRes, settingsRes, dimensionsRes, bankSyncRes] = await Promise.all([
         supabase
           .from('agent_profiles')
           .select('profile_summary, horizontal_atoms, vertical_atoms, modifier_atoms')
           .eq('company_id', companyId)
           .maybeSingle(),
-        supabase
-          .from('agent_memory')
-          .select('id, kind, content, relevance_score')
-          .eq('company_id', companyId)
-          .eq('is_active', true)
-          .order('relevance_score', { ascending: false, nullsFirst: false })
-          .order('last_accessed_at', { ascending: false, nullsFirst: false })
-          .limit(30),
+        // Every active fact, newest first (lib/agent-context/remembered-facts):
+        // a company holds a handful, so a ranked top 30 only hid some. Throws
+        // when the read fails, like the profile read.
+        loadRememberedFacts(supabase, companyId),
         // The user's own preferred name (profiles.full_name) so the agent can
         // address them correctly. Distinct from owner/signatory names that may
         // appear in profile_summary: those come from Bolagsverket via TIC and
@@ -7486,7 +7577,6 @@ export const tools: McpTool[] = [
       ])
 
       if (profileRes.error) throw new Error(`Failed to load agent profile: ${profileRes.error.message}`)
-      if (memoryRes.error) throw new Error(`Failed to load agent memory: ${memoryRes.error.message}`)
 
       const profile = profileRes.data as
         | {
@@ -7496,12 +7586,7 @@ export const tools: McpTool[] = [
             modifier_atoms: string[] | null
           }
         | null
-      const memoryRows = (memoryRes.data ?? []) as Array<{
-        id: string
-        kind: string
-        content: string
-        relevance_score: number | null
-      }>
+      const lastSyncedAt = lastSessionSync(remembered.facts)
 
       // profiles read is best-effort: ignore userRes.error so a missing name
       // never blocks the briefing. Data minimisation (GDPR Art.5(1)(c)): the
@@ -7696,13 +7781,22 @@ export const tools: McpTool[] = [
         user_name: userName,
         profile_summary: profile?.profile_summary ?? null,
         atoms,
-        memory: memoryRows.map((m) => ({
-          id: m.id,
-          fact_id: m.id,
+        memory: remembered.facts.map((m) => ({
+          id: m.fact_id,
+          fact_id: m.fact_id,
           kind: m.kind,
           content: m.content,
           relevance_score: m.relevance_score,
+          saved_at: m.saved_at,
+          // Who taught it, when recorded: the reading agent weighs "from
+          // ChatGPT's memory" differently from "the user said it".
+          ...(m.origin ? { origin: m.origin } : {}),
+          ...(m.client ? { client: m.client } : {}),
         })),
+        // Undeclared in outputSchema (catalog ceiling), like data_status.
+        ...(remembered.truncated ? { memory_truncated: true } : {}),
+        memory_sync: { last_synced_at: lastSyncedAt, note: MEMORY_SYNC_NOTE },
+        where_to_find: WHERE_TO_FIND,
         // Declared in no outputSchema (catalog ceiling): the key says what it holds.
         data_status: {
           bank_last_synced_at: bankSyncRes?.error ? null : (bankSyncRes?.data as { last_synced_at?: string | null } | null)?.last_synced_at ?? null,
@@ -12339,6 +12433,29 @@ export const tools: McpTool[] = [
           })
       }
 
+      // A row a booked salary run already pays out leads with the link to the
+      // run's verifikat; a net-salary proposal with no run paid nearby says to
+      // create the run first (crm#1462). Best effort: suggestions never wait
+      // on it.
+      const netSalaryRows = new Set(
+        Object.entries(proposals).flatMap(([txId, list]) =>
+          list.some((p) => (p as { id?: string }).id === 'personnel_salary') ? [txId] : [],
+        ),
+      )
+      const payouts = await findSalaryRunPayouts(supabase, companyId, transactions as Transaction[], netSalaryRows).catch(
+        () => ({ links: new Map<string, SalaryRunPayout>(), without_run: new Set<string>() }),
+      )
+      for (const tx of transactions as Transaction[]) {
+        const payout = payouts.links.get(tx.id)
+        const link = payout ? salaryPayoutLinkProposal(tx, payout) : null
+        if (link) proposals[tx.id] = [link, ...(proposals[tx.id] ?? [])]
+        if (payouts.without_run.has(tx.id)) {
+          proposals[tx.id] = (proposals[tx.id] ?? []).map((p) =>
+            (p as { id?: string }).id === 'personnel_salary' ? { ...(p as object), hint: SALARY_RUN_MISSING_HINT } : p,
+          )
+        }
+      }
+
       // Honest absence beats fabricated confidence: mark transactions where
       // NO source produced a suggestion so agents investigate instead of
       // pattern-matching on unrelated rows (P2-1). A row the till's record
@@ -12349,7 +12466,8 @@ export const tools: McpTool[] = [
           (tx) =>
             (suggestions[tx.id]?.length ?? 0) === 0 &&
             !counterpartyResult[tx.id] &&
-            !(proposed[tx.id] ?? []).some((p) => p.source === 'clearing'),
+            !(proposed[tx.id] ?? []).some((p) => p.source === 'clearing') &&
+            !payouts.links.has(tx.id),
         )
         .map((tx) => tx.id)
 
@@ -24186,7 +24304,7 @@ export const tools: McpTool[] = [
     keywords: ['sie', 'sie-fil', 'importera bokföring'],
     title: 'Create SIE Upload',
     description:
-      'SIE-file intake: on claude.ai/Desktop a DRAG-AND-DROP card reads exact bytes, preflights and imports into the company it names: call it first. Elsewhere: PUT raw bytes (max 50 MB) to upload_url, pass upload_id + sha256 to preflight/import. reports:read suffices.',
+      'SIE-file intake: on claude.ai/Desktop a DRAG-AND-DROP card reads exact bytes, preflights and imports into the company it names: call it first. Else: PUT raw bytes to upload_url (see max_bytes), pass upload_id + sha256 to preflight/import. reports:read suffices.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,
@@ -24240,10 +24358,16 @@ export const tools: McpTool[] = [
       ])
       // Served from the app origin: agent sandboxes only reach the MCP host,
       // not <project>.supabase.co. See storage-proxy.ts.
+      const uploadUrl = toSameOriginStorageUrl(reservation.signedUrl)
       return {
         upload_id: reservation.uploadId,
-        upload_url: toSameOriginStorageUrl(reservation.signedUrl),
+        upload_url: uploadUrl,
         expires_at: reservation.expiresAt,
+        // What upload_url carries on hosted (4 MB) and, beside it, the raw
+        // Storage URL for a multi-year SIE file up to the import's limit:
+        // the documents' answer (crm#1455). Undeclared in outputSchema, as
+        // target_company below.
+        ...documentUploadLimits(reservation.signedUrl, uploadUrl, SIE_LIMITS.fileBytes),
         // The company this card imports into (crm#1201). The card shows it
         // and passes its company_id on the preflight and the import, so a
         // card opened for one company never lands a file in the default one.
@@ -26466,7 +26590,7 @@ export const tools: McpTool[] = [
         supabase
           .from('pending_operations')
           .select(
-            'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, created_at, resolved_at, result_data, rejection_category',
+            'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, user_id, agent_reason, created_at, resolved_at, result_data, rejection_category',
             { count: 'exact' }
           )
       const listQuery = (withAgentReason: boolean) => {
@@ -26475,7 +26599,7 @@ export const tools: McpTool[] = [
           : (supabase
               .from('pending_operations')
               .select(
-                'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data, rejection_category',
+                'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, user_id, created_at, resolved_at, result_data, rejection_category',
                 { count: 'exact' }
               ) as unknown as ReturnType<typeof selectWithReason>)
         query = query.eq('status', status)
@@ -26492,10 +26616,19 @@ export const tools: McpTool[] = [
 
       // task_state: the status in the MCP Tasks / A2A vocabulary, as the v1
       // pending-operations endpoints answer it (lib/pending-operations/
-      // task-state.ts). Data only: the item schema is an open object, so
-      // tools/list does not grow.
-      const rows = ((data ?? []) as Array<Record<string, unknown>>).map((row): Record<string, unknown> => ({
+      // task-state.ts). proposed_by: who staged it, named with the person it
+      // acted for ("Claude åt Jonas Ek", lib/attribution), which the approval
+      // widget prints; the person's user id itself stays out. Data only: the
+      // item schema is an open object, so tools/list does not grow.
+      const listedRows = (data ?? []) as Array<Record<string, unknown>>
+      const personNames = await resolvePersonNames(supabase, listedRows.map((row) => row.user_id as string | null))
+      const rows = listedRows.map(({ user_id: personId, ...row }): Record<string, unknown> => ({
         ...row,
+        proposed_by: formatActorAttribution({
+          actorType: row.actor_type as string | null,
+          actorLabel: row.actor_label as string | null,
+          personName: typeof personId === 'string' ? personNames.get(personId) : null,
+        }),
         task_state: pendingOperationTaskState(row as unknown as TaskStateSource),
       }))
       const operations = acrossCompanies
@@ -28497,6 +28630,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   // Fire-and-forget notification: no id, no response expected. Answering
   // 401 here confuses clients, so it is accepted before any auth check.
   if (body.method === 'notifications/initialized') {
+    noteCompletionLog(request, { quiet: true })
     return new Response(null, { status: 202 })
   }
 
@@ -28521,6 +28655,25 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       : null
   const anonymousAllowed =
     ANONYMOUS_METHODS.has(body.method) || (requestedTool !== null && isPublicTool(requestedTool))
+  // The dispatcher's one log line per call names it (lib/extensions/
+  // completion-log.ts): method and tool here, key and outcome below. Client
+  // strings, so capped; never an argument or a result.
+  noteCompletionLog(request, {
+    fields: { mcpMethod: String(body.method).slice(0, 64), tool: requestedTool?.slice(0, 64) ?? null },
+  })
+  // Each tools/call outcome lands on that line too (the event_log row
+  // keeps the full error detail).
+  const emitToolCall = (payload: Parameters<typeof emitToolCallTelemetry>[0]) => {
+    noteCompletionLog(request, {
+      fields: {
+        tool: payload.tool.slice(0, 64),
+        companyId: payload.companyId,
+        outcome: payload.isError ? 'error' : 'ok',
+        errorCode: payload.errorCode,
+      },
+    })
+    emitToolCallTelemetry(payload)
+  }
   if (!token && !anonymousAllowed) return unauthorized()
 
   const isAnonymous = !token
@@ -28587,6 +28740,14 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
     })
     if (!rl.ok) return rl.response!
   }
+  // Authenticated (or anonymous and allowed): everything but a tools/call is
+  // protocol chatter from here on (initialize, tools/list, ping, ...), already
+  // counted in event_log, so it writes no completion line unless it fails
+  // with a 5xx. A refused token above still logs its 401/403/429.
+  noteCompletionLog(request, {
+    fields: { apiKeyId: apiKeyId ?? null, companyId },
+    quiet: body.method !== 'tools/call',
+  })
   const supabase = createServiceClientNoCookies()
   // Classify the key BEFORE its label is replaced below: the reserved name is
   // the OAuth key's only marker, and the commit stamp reads this flag rather
@@ -29085,7 +29246,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         const bridgeError = toToolError(codedError('VALIDATION_ERROR', refusal), {
           toolName: outerCanonicalName,
         })
-        emitToolCallTelemetry({
+        emitToolCall({
           tool: outerCanonicalName,
           requiredScope: null,
           actor,
@@ -29113,7 +29274,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         )
       }
       if (!tool) {
-        emitToolCallTelemetry({
+        emitToolCall({
           tool: toolName ?? '<unknown>',
           requiredScope: null,
           actor,
@@ -29181,7 +29342,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             : codedError('FORBIDDEN', `${toolName} has no scope assigned, so no key may call it until it gets one.`),
           { toolName }
         )
-        emitToolCallTelemetry({
+        emitToolCall({
           tool: toolName,
           requiredScope: missingScope ?? null,
           actor,
@@ -29358,7 +29519,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           candidates.length > 0 ? { ...structured, candidates } : structured,
           toolNamespace
         )
-        emitToolCallTelemetry({
+        emitToolCall({
           tool: toolName,
           requiredScope: requiredScope ?? null,
           actor,
@@ -29407,7 +29568,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       if (requiredCapability && !(await hasCapability(supabase, tenantId, requiredCapability))) {
         const capError = { error: capabilityBlockedError(requiredCapability) }
         const publicCapError = projectMcpPayload(capError, toolNamespace)
-        emitToolCallTelemetry({
+        emitToolCall({
           tool: toolName,
           requiredScope,
           actor,
@@ -29442,7 +29603,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         const refusal = await packageStartRefusal(supabase, effectiveCompanyId, startPackage)
         if (refusal) {
           const offError = packageOffToolError(refusal)
-          emitToolCallTelemetry({
+          emitToolCall({
             tool: toolName,
             requiredScope: requiredScope ?? null,
             actor,
@@ -29485,7 +29646,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             { toolName }
           )
           const publicBlocked = projectMcpPayload(blocked, toolNamespace)
-          emitToolCallTelemetry({
+          emitToolCall({
             tool: toolName,
             requiredScope: requiredScope ?? null,
             actor,
@@ -29545,7 +29706,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           codedError('FORBIDDEN', 'Godkännanden och direkta ändringar görs inte härifrån just nu, eftersom en schemalagd körning utan någon närvarande kan pågå. Förslagen väntar: godkänn dem i Accounted. (Approvals and direct writes are held on this connection while an unattended run may be active; staged proposals wait for a person in Accounted.)'),
           { toolName }
         )
-        emitToolCallTelemetry({
+        emitToolCall({
           tool: toolName,
           requiredScope: requiredScope ?? null,
           actor,
@@ -29615,7 +29776,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             }
             if (echoedCompany) stored._meta = { company: echoedCompany }
             await resolveMcpTask(supabase, task.id, { status: 'completed', result: stored })
-            emitToolCallTelemetry({
+            emitToolCall({
               tool: toolName,
               requiredScope: requiredScope ?? null,
               actor,
@@ -29647,7 +29808,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             }).catch((updateErr) => {
               log.error('Failed to store MCP task failure result', { taskId: task.id, updateErr })
             })
-            emitToolCallTelemetry({
+            emitToolCall({
               tool: toolName,
               requiredScope: requiredScope ?? null,
               actor,
@@ -29770,7 +29931,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             }
           }
         }
-        emitToolCallTelemetry({
+        emitToolCall({
           tool: toolName,
           requiredScope: requiredScope ?? null,
           actor,
@@ -29790,7 +29951,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         const latencyMs = Date.now() - callStartedAt
         const structured = toToolError(err, { toolName })
         const publicStructured = projectMcpPayload(structured, toolNamespace)
-        emitToolCallTelemetry({
+        emitToolCall({
           tool: toolName,
           requiredScope: requiredScope ?? null,
           actor,

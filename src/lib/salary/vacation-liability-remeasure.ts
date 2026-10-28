@@ -57,8 +57,6 @@ import { SALARY_ACCOUNTS } from './account-mapping'
 import { computeVacationLiability } from './vacation-liability-valuation'
 import { buildRemeasurePlan, type RemeasurePlan } from './vacation-liability-plan'
 
-export type RemeasurementKind = 'salary_run' | 'standalone' | 'method_switch'
-
 /**
  * 2920/2940 as booked on `asOfDate`, without the posted vouchers of
  * `excludeRunId` (a run whose booking is being resumed: its own vacation

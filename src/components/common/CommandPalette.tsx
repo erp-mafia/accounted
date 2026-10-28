@@ -59,9 +59,9 @@ const ACTION_ENTRIES: Entry[] = [
  * PH 202: company_switcher.add_company_keywords) unless it is null: a sandbox
  * has no such door.
  */
-export function actionEntries(addCompany: { label: string; keywords: string } | null): Entry[] {
+export function actionEntries(addCompany: { label: string; keywords: string; href?: string } | null): Entry[] {
   if (!addCompany) return ACTION_ENTRIES
-  return [...ACTION_ENTRIES, { id: 'add-company', icon: PlusIcon, href: ADD_COMPANY_HREF, ...addCompany }]
+  return [...ACTION_ENTRIES, { id: 'add-company', icon: PlusIcon, ...addCompany, href: addCompany.href ?? ADD_COMPANY_HREF }]
 }
 
 const PAGE_ENTRIES: Entry[] = [
@@ -137,7 +137,7 @@ export default function CommandPalette({
   const [query, setQuery] = useState('')
   const [activeIndex, setActiveIndex] = useState(0)
   const inputRef = useRef<HTMLInputElement>(null)
-  const { capabilities, isSandbox } = useCompany()
+  const { capabilities, isSandbox, addCompanyHref } = useCompany()
   const { identity } = useAgentSheet()
   const tSwitcher = useTranslations('company_switcher')
   const addCompanyLabel = isSandbox ? null : tSwitcher('add_company')
@@ -185,10 +185,10 @@ export default function CommandPalette({
   const q = query.trim().toLowerCase()
 
   const filteredActions = useMemo(() => {
-    const addCompany = addCompanyLabel ? { label: addCompanyLabel, keywords: addCompanyKeywords } : null
+    const addCompany = addCompanyLabel ? { label: addCompanyLabel, keywords: addCompanyKeywords, href: addCompanyHref } : null
     const visible = actionEntries(addCompany).filter(allowedByCapability)
     return q ? visible.filter(e => matches(e, q)) : visible
-  }, [q, allowedByCapability, addCompanyLabel, addCompanyKeywords])
+  }, [q, allowedByCapability, addCompanyLabel, addCompanyKeywords, addCompanyHref])
   const filteredPages = useMemo(() => {
     const visible = withInbox(PAGE_ENTRIES, inkorgV2Enabled).filter(allowedByCapability)
     return q ? visible.filter(e => matches(e, q)) : visible.slice(0, 6)

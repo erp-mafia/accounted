@@ -3,7 +3,7 @@ import { mapVismaToSalesInvoice, mapVismaToSupplierInvoice } from '../mapper'
 
 /**
  * Guards the paid/credit-note derivation against the fields eAccounting
- * actually populates (ElvaSmultron support case, 2026-08-08):
+ * actually populates (support case 2026-08-08):
  *
  *  - The /supplierinvoices LIST payload omits RemainingAmount. Reading the
  *    absence as 0 imported all 290 supplier invoices as fully paid, including

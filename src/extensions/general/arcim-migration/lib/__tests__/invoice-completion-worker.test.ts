@@ -48,7 +48,7 @@ function untilAborted<T>(): Promise<T> {
 }
 function database(rows: ReturnType<typeof fixture>['rows'], work: InvoiceCompletionWork) {
   const receipts = new Map<string, { status: string; headerUpdated: boolean; eventId: string | null }>()
-  const state = { blockWins: true, loseReply: false, concurrent: false, discoveryMs: 0, slowCandidates: false }
+  const state = { blockWins: true, loseReply: false, concurrent: false, discoveryMs: 0, slowCandidates: false, gaveUp: false }
   const rpc = vi.fn((name: string, args: Record<string, unknown>) => {
     let signal: AbortSignal | undefined
     const builder = {
@@ -69,7 +69,8 @@ function database(rows: ReturnType<typeof fixture>['rows'], work: InvoiceComplet
           } else if (name === 'finish_invoice_completion') {
             const id = args.p_invoice_id as string
             const receipt = { status: state.concurrent ? 'already_filled' : args.p_outcome as string,
-              headerUpdated: !!args.p_header, eventId: args.p_rows && !state.concurrent ? randomUUID() : null }
+              headerUpdated: !!args.p_header, eventId: args.p_rows && !state.concurrent ? randomUUID() : null,
+              ...(state.gaveUp && !args.p_rows ? { gaveUp: true } : {}) }
             receipts.set(id, receipt)
             if (state.loseReply) {
               state.loseReply = false
@@ -153,6 +154,12 @@ describe('resumable invoice completion', () => {
     expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000))
       .toMatchObject({ providerEmpty: 1, completed: 1, failed: 0 })
     expect(db.receipts.get(rows[0].id)?.status).toBe('provider_empty')
+  })
+  it('counts an invoice the database parked for good after its last try (20261028042247)', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work); db.state.gaveUp = true
+    detail.mockResolvedValueOnce({ ...invoice('1'), lines: [] })
+    expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000))
+      .toMatchObject({ providerEmpty: 1, gaveUp: 1, completed: 1 })
   })
   it('reports a concurrent winner without counting it as this run\'s completion', async () => {
     const { work, rows } = fixture(); const db = database(rows.slice(0, 1), work); db.state.concurrent = true

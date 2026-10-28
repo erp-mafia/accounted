@@ -207,13 +207,6 @@ export const ACCOUNT_TO_BOX: Readonly<Record<string, MomsBox>> = Object.fromEntr
 const BASIS_ACCOUNTS: ReadonlyArray<{ account: string; kind: VatBasisKind; rate: VatBasisRate }> =
   Object.entries(VAT_ACCOUNT_TABLE).flatMap(([account, row]) => (row.basis ? [{ account, ...row.basis }] : []))
 
-/** The basis accounts of one purchase type and/or sats, in account-number order. */
-export function vatBasisAccounts(filter: { kind?: VatBasisKind; rate?: VatBasisRate }): string[] {
-  return BASIS_ACCOUNTS
-    .filter((b) => (filter.kind === undefined || b.kind === filter.kind) && (filter.rate === undefined || b.rate === filter.rate))
-    .map((b) => b.account)
-}
-
 /**
  * The reverse-charge basis accounts (rutor 20-24), optionally at one sats:
  * every basis account except import (4545-4547, ruta 50), which is import

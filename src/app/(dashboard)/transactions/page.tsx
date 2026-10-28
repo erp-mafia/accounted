@@ -4457,8 +4457,8 @@ export default function TransactionsPage() {
         </AttnLine>
       ) : null}
 
-      {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök] [Välj flera]
-          ... [source ContextPicker far right] */}
+      {/* Toolbar (concept order): [Att bokföra/Alla-seg] [sök]
+          ... [period chip] [source ContextPicker far right] */}
       <div className="flex flex-wrap items-center gap-2">
         <SegmentedControl
           value={mode}
@@ -4488,35 +4488,9 @@ export default function TransactionsPage() {
             and on a brutet rakenskapsar they were not momsdeklaration
             quarters, so they misled more than they scoped. */}
         <div className="ml-auto flex flex-wrap items-center justify-end gap-2">
-          {/* Column visibility, persisted per user. */}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="text-muted-foreground hover:text-foreground"
-                aria-label={t('columns_button')}
-                title={t('columns_button')}
-              >
-                <AdjustmentsHorizontalIcon className="h-4 w-4" />
-              </Button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[12rem]">
-              {TX_COLUMNS.filter((c) => c.optional).map((c) => (
-                <DropdownMenuItem
-                  key={c.id}
-                  onSelect={(e) => e.preventDefault()}
-                  onClick={() => toggleColumn(c.id)}
-                >
-                  <CheckIcon className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
-                  {t(c.labelKey)}
-                </DropdownMenuItem>
-              ))}
-              <DropdownMenuItem onClick={() => setColumnsHidden([])}>{t('columns_reset')}</DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
           {/* Quiet cue that a scope change is reconciling behind the rendered
-              list (the list itself never swaps to a skeleton for it). */}
+              list (the list itself never swaps to a skeleton for it). First in
+              the group, so appearing shifts none of the controls. */}
           {isScopeRefreshing && (
             <SpinnerIcon
               className="h-3.5 w-3.5 animate-spin text-muted-foreground"
@@ -4700,7 +4674,39 @@ export default function TransactionsPage() {
                     {txColumns.has('amount') && (
                       <th className={cn(TH_CLASS, 'text-right')}>{t('th_amount')}</th>
                     )}
-                    <th className={cn(TH_CLASS, 'text-right !pr-0')}>{t('th_status')}</th>
+                    <th className={cn(TH_CLASS, 'text-right !pr-0')}>
+                      {t('th_status')}
+                      {/* Column visibility, persisted per user. It lives on the
+                          table it changes, above the rows' own menus, not in the
+                          page toolbar: 2 of 945 page users touched it in 14 days,
+                          and Alla and Granska förslag have no optional columns. */}
+                      <DropdownMenu>
+                        <DropdownMenuTrigger asChild>
+                          <Button
+                            variant="ghost"
+                            size="icon-sm"
+                            className="-my-2 ml-2 mr-2 align-middle text-muted-foreground hover:text-foreground"
+                            aria-label={t('columns_button')}
+                            title={t('columns_button')}
+                          >
+                            <AdjustmentsHorizontalIcon className="h-4 w-4" />
+                          </Button>
+                        </DropdownMenuTrigger>
+                        <DropdownMenuContent align="end" className="min-w-[12rem]">
+                          {TX_COLUMNS.filter((c) => c.optional).map((c) => (
+                            <DropdownMenuItem
+                              key={c.id}
+                              onSelect={(e) => e.preventDefault()}
+                              onClick={() => toggleColumn(c.id)}
+                            >
+                              <CheckIcon className={cn('h-4 w-4', txColumns.has(c.id) ? 'opacity-100' : 'opacity-0')} />
+                              {t(c.labelKey)}
+                            </DropdownMenuItem>
+                          ))}
+                          <DropdownMenuItem onClick={() => setColumnsHidden([])}>{t('columns_reset')}</DropdownMenuItem>
+                        </DropdownMenuContent>
+                      </DropdownMenu>
+                    </th>
                   </tr>
                 </thead>
                 {/* data-ph-mask: session replay masks every text node under it in one

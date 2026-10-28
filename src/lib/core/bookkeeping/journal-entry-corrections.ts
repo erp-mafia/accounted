@@ -53,6 +53,7 @@ import type { JournalEntry } from '@/types'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { z } from 'zod'
 import type { StrikeLinesSchema } from '@/lib/api/schemas'
+import { toError } from '@/lib/errors/to-error'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -284,14 +285,6 @@ async function previewMetadataCorrection(
 // ---------------------------------------------------------------------------
 // Line rättelse: strike lines and add replacements inside the same verifikat
 // ---------------------------------------------------------------------------
-
-export interface InlineRattelseLine {
-  account_number: string
-  debit_amount: number
-  credit_amount: number
-  line_description?: string
-  dimensions?: Record<string, string>
-}
 
 /** The request every door validates (StrikeLinesSchema). */
 export type StrikeLinesInput = z.output<typeof StrikeLinesSchema>
@@ -679,7 +672,7 @@ export async function redateJournalEntry(
     return { ok: true, data: result }
   } catch (err) {
     if (!isBookkeepingError(err)) {
-      ctx.log.error('recordate failed', err instanceof Error ? err : new Error(String(err)), { entryId })
+      ctx.log.error('recordate failed', toError(err), { entryId })
     }
     return bookkeepingFailure(err)
   }

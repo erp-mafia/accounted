@@ -6,10 +6,10 @@
  * the detail form inside a fixed budget (see lib/providers/provider-data-
  * fetcher.ts). Fortnox, Briox and Björn Lundén ship no rows in a list
  * response, so every invoice the budget did not reach lands as a header with
- * a total and no invoice_items behind it: Profilio (384 of 384, migrated
- * before hydration existed), Loftux (311 of 672), Damac (182 of 542),
- * Clearstoq (1 125 of 1 125). Nothing ever came back for them, and the wizard
- * had not said so.
+ * a total and no invoice_items behind it: 384 of 384 in one register
+ * (migrated before hydration existed), 311 of 672, 182 of 542 and 1 125 of
+ * 1 125 in others. Nothing ever came back for them, and the wizard had not
+ * said so.
  *
  * The follow-up is the hourly cron (invoice-completion-worker.ts): it pages
  * the provider's register, joins each page to OUR row-less invoices on

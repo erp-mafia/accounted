@@ -840,6 +840,7 @@ Moves draft orders to approved: the attestation that these invoices are to be pa
 **Pitfalls:**
 - PAYMENT_ORDERS_PAYEE_CONFIRMATION_REQUIRED: details.invoices lists the invoices whose account must be confirmed; resend with them in confirmed_payee_invoice_ids after checking the account.
 - PAYMENT_ORDERS_WRONG_STATUS: an order is no longer a draft (details.orders); reload and select again.
+- SKATTEKONTO_PAYMENT_DAY_TAKEN: a skattekonto draft whose day passed would move onto a day that already has an open skattekonto payment; cancel it and prepare it again (the amount is added to that day's payment).
 - Not offered over MCP: attestation is a person's act. An agent prepares and hands out the Betalningar link.
 
 | Parameter | In | Type | Required | Notes |

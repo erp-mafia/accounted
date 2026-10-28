@@ -127,15 +127,15 @@ from Skatteverket in Accounted. Visma's detail payload carries the deduction
 (`RotReducedInvoicingType`, `RotReducedInvoicingAmount`, `Persons`, the property
 fields, `TaxDeductionStatus`, per row `IsWorkCost`, `WorkCostType`, `WorkHours`,
 `GreenTechnologyType`); the mapper reads it into `SalesInvoiceDto.householdDeduction`
-and `SalesInvoiceLineDto.householdWork`, and `lib/providers/visma/housework.ts`
+and `SalesInvoiceLineDto.householdWork`, and `src/lib/providers/visma/housework.ts`
 maps `WorkCostType` to Skatteverket's arbetstypskod. The importer itself still
 writes no deduction: moving it onto 1513 needs a voucher.
 
 That is the post-migration step on `/import` (card "ROT- och RUT-avdrag från
 Visma", `POST /api/extensions/ext/arcim-migration/deduction-backfill` with
-`mode` `preview` or `apply`, runner `lib/deduction-backfill.ts`). It finds the
+`mode` `preview` or `apply`, runner `src/extensions/general/arcim-migration/lib/deduction-backfill.ts`). It finds the
 imported invoices through `migration_source_records`, fetches each open one's
-detail from Visma, and plans it (`lib/invoices/migrated-deduction-plan.ts`):
+detail from Visma, and plans it (`src/lib/invoices/migrated-deduction-plan.ts`):
 
 | Visma `TaxDeductionStatus` | Buyer has paid | Result |
 |---|---|---|

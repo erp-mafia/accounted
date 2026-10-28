@@ -142,19 +142,19 @@ describe('POST /connect credential prefill', () => {
         { name: 'companyId', required: true, template: '^\\d{10}$' },
       ],
     })
-    const ctx = ctxWithCompany('556809-8239')
+    const ctx = ctxWithCompany('554455-6672')
     const response = await connectRoute().handler(makeConnectRequest(), ctx)
     expect(response.status).toBe(200)
     expect(mockStartAuthorization).toHaveBeenCalledTimes(1)
     const args = mockStartAuthorization.mock.calls[0]
     expect(args[5]).toBe('BANKID')
-    expect(args[7]).toEqual({ companyId: '5568098239' })
+    expect(args[7]).toEqual({ companyId: '5544556672' })
     // The value never reaches the log line; only which keys were sent.
     const started = (ctx.log.info as ReturnType<typeof vi.fn>).mock.calls.find(
       (c) => String(c[0]).includes('Starting bank connection'),
     )
     expect(started?.[1]).toMatchObject({ credentials_prefilled: ['companyId'] })
-    expect(JSON.stringify(started?.[1])).not.toContain('5568098239')
+    expect(JSON.stringify(started?.[1])).not.toContain('5544556672')
   })
 
   it('sends no companyId for a sole trader: the person types it on the bank page (Nordea business)', async () => {
@@ -172,7 +172,7 @@ describe('POST /connect credential prefill', () => {
 
   it('sends no credentials, and never reads the company, when the method declares none', async () => {
     mockGetPreferredAuthMethod.mockResolvedValue({ name: 'BANKID', approach: 'DECOUPLED', hidden_method: true })
-    const ctx = ctxWithCompany('556809-8239')
+    const ctx = ctxWithCompany('554455-6672')
     const response = await connectRoute().handler(makeConnectRequest(), ctx)
     expect(response.status).toBe(200)
     expect(mockStartAuthorization.mock.calls[0][7]).toBeUndefined()

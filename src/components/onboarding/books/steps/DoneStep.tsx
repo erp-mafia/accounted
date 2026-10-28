@@ -16,6 +16,7 @@ import { AiTaskAction } from '@/components/dashboard/AiTaskAction'
 import { InkText } from '@/components/onboarding/journey/ink'
 import { Confetti } from '../ui/Confetti'
 import { AgentChips } from '../ui/AgentChips'
+import { FactsImport } from '../ui/FactsImport'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
 
@@ -136,6 +137,8 @@ export function DoneStep({ ctx, onLeave, leaving }: {
       <h2 className="agent-title">{t('ai_title')}</h2>
       <p className="agent-lead">{t('ai_lead')}</p>
       <AgentChips connection={connection} onConnect={onConnect} />
+      {/* Once an AI is connected: let it tell Accounted what it already remembers (skill company-facts-import). */}
+      <FactsImport clients={connected} preferredClient={preferredClient} disabled={leaving} />
 
       {error ? (
         <p className="found-note" role="alert">

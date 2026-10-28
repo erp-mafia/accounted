@@ -66,9 +66,6 @@ const CLAIM_ID_READ_CHUNK = 100
 /** Result (P&L) accounts, classes 3-8: the lines a claim-level bag tags. */
 const RESULT_ACCOUNT_RE = /^[3-8]/
 
-export const EXPENSE_LIABILITY_ACCOUNTS = ['2893', '2820', '2018', '2890'] as const
-export type ExpenseLiabilityAccount = (typeof EXPENSE_LIABILITY_ACCOUNTS)[number]
-
 export interface ExpenseClaimRow {
   id: string
   company_id: string

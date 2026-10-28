@@ -188,6 +188,44 @@ describe('POST /api/user/ui-state', () => {
     })
   })
 
+  it('merges setup_skipped per company and replaces that company list whole', async () => {
+    enqueue({
+      data: {
+        ui_state: {
+          setup_skipped: {
+            '11111111-1111-4111-8111-111111111111': ['claude'],
+            '22222222-2222-4222-8222-222222222222': ['receipts'],
+          },
+        },
+      },
+    })
+    enqueue({ data: null })
+
+    const { status, body } = await parseJsonResponse<{
+      data: { ui_state: { setup_skipped: Record<string, string[]> } }
+    }>(
+      await POST(
+        request({ setup_skipped: { '22222222-2222-4222-8222-222222222222': ['receipts', 'skatteverket'] } }),
+      ),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.ui_state.setup_skipped).toEqual({
+      '11111111-1111-4111-8111-111111111111': ['claude'],
+      '22222222-2222-4222-8222-222222222222': ['receipts', 'skatteverket'],
+    })
+  })
+
+  it('returns 400 when setup_skipped names a step that cannot be skipped', async () => {
+    const res = await POST(request({ setup_skipped: { '11111111-1111-4111-8111-111111111111': ['bank'] } }))
+    expect(res.status).toBe(400)
+  })
+
+  it('returns 400 when a setup_skipped key is not a company UUID', async () => {
+    const res = await POST(request({ setup_skipped: { 'not-a-uuid': ['receipts'] } }))
+    expect(res.status).toBe(400)
+  })
+
   it('returns 500 when the upsert fails', async () => {
     enqueue({ data: null })
     enqueue({ data: null, error: { message: 'boom' } })

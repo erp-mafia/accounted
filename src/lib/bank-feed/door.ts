@@ -38,8 +38,6 @@ export type BankFeedEnv = Readonly<Record<string, string | undefined>>
 /** Why a company cannot read its bank through Open Payments right now. */
 export type BankFeedUnavailableReason = 'no_connector' | 'not_in_pilot' | 'subscription'
 
-export const BANK_FEED_UNAVAILABLE_REASONS = ['no_connector', 'not_in_pilot', 'subscription'] as const
-
 export type BankFeedDoor =
   | { ok: true; connect: BankFeedConnect }
   | { ok: false; reason: BankFeedUnavailableReason }

@@ -89,7 +89,7 @@ export default function UserMenu({
   cockpitMode = false,
   onLogout,
 }: UserMenuProps) {
-  const { company, companies, isSandbox: companyCtxSandbox, foreignCompanies = [], byraTeam } = useCompany()
+  const { company, companies, isSandbox: companyCtxSandbox, foreignCompanies = [], byraTeam, addCompanyHref = ADD_COMPANY_HREF } = useCompany()
   const tNav = useTranslations('nav')
   const tCommon = useTranslations('common')
   const tSwitcher = useTranslations('company_switcher')
@@ -385,7 +385,7 @@ export default function UserMenu({
                   company row: behind the flyout, new users never found it
                   (PH 216, PH 202). */}
               {!sandbox && (
-                <Link href={ADD_COMPANY_HREF} onClick={close} className={menuRow}>
+                <Link href={addCompanyHref} onClick={close} className={menuRow}>
                   <PlusIcon className="h-4 w-4 flex-shrink-0" />
                   {tSwitcher('add_company')}
                 </Link>

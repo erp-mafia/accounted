@@ -126,7 +126,7 @@ describe('message reads are not repeated', () => {
     respond({ id: 'shared', payload: { headers: HEADERS } })
 
     await getMessageSummary('token', 'shared', 'conn-1', 'invoice@arcim.io')
-    await getMessageSummary('token', 'shared', 'conn-2', 'jakob@arcim.io')
+    await getMessageSummary('token', 'shared', 'conn-2', 'owner@example.com')
 
     expect(mockFetch).toHaveBeenCalledTimes(2)
   })

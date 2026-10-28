@@ -47,7 +47,7 @@ vi.mock('@/lib/dates/iso', () => ({ todayIsoStockholm: () => '2026-10-21' }))
 import { bookCounterpartySetoff } from '../book'
 import { setoffId } from '../ids'
 
-const PARTY = 'party-crayfish'
+const PARTY = 'party-exempel-energi'
 
 function pair(): SetoffPairState {
   return {
@@ -84,8 +84,8 @@ function pair(): SetoffPairState {
       partyId: PARTY,
       paymentInFlight: false,
     },
-    customerName: 'Crayfish Energy AB',
-    supplierName: 'Crayfish Energy AB',
+    customerName: 'Exempel Energi AB',
+    supplierName: 'Exempel Energi AB',
   }
 }
 

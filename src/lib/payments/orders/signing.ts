@@ -64,6 +64,7 @@ import { getCanonicalAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { normalizeSignerPersonalNumber, rememberSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { rememberBatchPsu } from '@/lib/auth/resource-psu'
 import { bankDayFor } from './lifecycle'
+import { dayTakenRefusal, isDayTakenError, skattekontoDayRefusal } from './skattekonto-day'
 import type { PaymentOrderEvent } from './types'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -688,9 +689,16 @@ async function createBasket(
  */
 async function reattestWithBankDay(ctx: OperationContext, orders: PaymentOrderRow[], today: string): Promise<OperationOutcome<null>> {
   const writer = createServiceClient()
+  const moves: Array<{ order: PaymentOrderRow; to: string }> = []
   for (const order of orders) {
     const to = bankDayFor(order.requested_execution_date, today)
-    if (!to || to === order.requested_execution_date) continue
+    if (to && to !== order.requested_execution_date) moves.push({ order, to })
+  }
+  // A skattekonto order whose new day already has an open skattekonto order
+  // stays approved and untouched: refused before the re-attest (crm#1485).
+  const dayTaken = await skattekontoDayRefusal(writer, ctx.companyId, moves)
+  if (dayTaken) return dayTaken
+  for (const { order, to } of moves) {
     const from = order.requested_execution_date
     const now = new Date().toISOString()
     const { data: back, error: backError } = await writer
@@ -703,7 +711,15 @@ async function reattestWithBankDay(ctx: OperationContext, orders: PaymentOrderRo
     if (backError) throw backError
     if ((back ?? []).length !== 1) return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS', details: { payment_order_id: order.id } }
     const { error: dateError } = await writer.from('payment_orders').update({ requested_execution_date: to }).eq('company_id', ctx.companyId).eq('id', order.id).eq('status', 'draft')
-    if (dateError) throw dateError
+    if (dateError) {
+      if (order.purpose !== 'skattekonto' || !isDayTakenError(dateError)) throw dateError
+      // Another order took the day after the check above: this one stays a
+      // draft on its old date, to be approved again, and the trail says why.
+      await logPaymentOrderEvents(writer, [
+        { company_id: ctx.companyId, payment_order_id: order.id, event_type: 'unapproved', from_status: 'approved', to_status: 'draft', actor_user_id: ctx.userId, detail: { reason: 'date_taken', from, to } },
+      ], ctx.log)
+      return dayTakenRefusal(order.id, to, null)
+    }
     const { data: again, error: againError } = await writer
       .from('payment_orders')
       .update({ status: 'approved', approved_by: ctx.userId, approved_at: now })

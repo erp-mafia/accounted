@@ -201,12 +201,6 @@ export interface CheckBreakdown {
   next_action?: CheckNextAction
 }
 
-/** Paging of the item list. */
-export interface CheckPage {
-  limit: number
-  offset: number
-}
-
 /** Who asks, for which company, and on which day. Every door builds one. */
 export interface CheckContext {
   supabase: SupabaseClient

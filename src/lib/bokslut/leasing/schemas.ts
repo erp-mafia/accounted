@@ -50,6 +50,4 @@ export const CreateFinanceLeaseSchema = z
     path: ['direct_cost_account'],
   })
 
-export type CreateFinanceLeaseBody = z.input<typeof CreateFinanceLeaseSchema>
-
 export const BookFinanceLeaseYearSchema = z.object({ fiscal_period_id: z.uuid() })

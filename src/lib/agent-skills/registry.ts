@@ -23,7 +23,6 @@ export const REGISTRY_SKILLS = [
 ] as const
 
 export type RegistrySkillId = (typeof REGISTRY_SKILLS)[number]['id']
-export type RegistrySkillGroup = (typeof REGISTRY_SKILLS)[number]['group']
 
 /**
  * The slug the agent loads. Kvittojakten has one body per client (the

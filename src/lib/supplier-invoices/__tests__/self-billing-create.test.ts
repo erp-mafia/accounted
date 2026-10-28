@@ -37,9 +37,9 @@ const log: Logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: () =>
 const SETTINGS = {
   accounting_method: 'accrual',
   vat_registered: true,
-  company_name: 'Oppy Balancing Services AB',
-  org_number: '5594105693',
-  vat_number: 'SE559410569301',
+  company_name: 'Exempelbolaget AB',
+  org_number: '5566778899',
+  vat_number: 'SE556677889901',
   address_line1: 'Storgatan 1',
   address_line2: null,
   postal_code: '111 22',
@@ -67,8 +67,8 @@ function setUp(card: Record<string, unknown> = {}, settings: Record<string, unkn
     suppliers: {
       data: makeSupplier({
         id: SUPPLIER_ID,
-        name: 'Crayfish Energy AB',
-        vat_number: 'SE559477407601',
+        name: 'Exempel Energi AB',
+        vat_number: 'SE559988776601',
         self_billing_agreement_ref: 'Flexavtal 2026',
         default_payment_terms: 30,
         ...card,
@@ -133,8 +133,8 @@ describe('createSupplierInvoice: självfaktura', () => {
     })
     expect(inserted.self_billing_snapshot).toMatchObject({
       v: 1,
-      seller: { name: 'Crayfish Energy AB', vat_number: 'SE559477407601' },
-      buyer: { name: 'Oppy Balancing Services AB', org_number: '5594105693' },
+      seller: { name: 'Exempel Energi AB', vat_number: 'SE559988776601' },
+      buyer: { name: 'Exempelbolaget AB', org_number: '5566778899' },
       agreement_ref: 'Avtal 2026-03',
       pay_to: { bankgiro: '123-4567' },
       credits: null,

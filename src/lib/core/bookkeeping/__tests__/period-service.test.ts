@@ -730,7 +730,7 @@ describe('markPeriodClosedExternally', () => {
   })
 
   it('allows a migrated first year whose only native voucher is balance-sheet only and the next year has IB', async () => {
-    // The EHAL shape (2026-09-07): SIE import into the historical year failed,
+    // The reported shape (2026-09-07): SIE import into the historical year failed,
     // so the owner re-keyed the opening voucher by hand (1930 D / 2081 K
     // aktiekapital). Nothing on 3xxx-8xxx, so there is no result for a
     // bokslutsverifikat to transfer; the next year's IB is already imported,

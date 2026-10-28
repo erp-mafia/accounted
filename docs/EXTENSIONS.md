@@ -215,7 +215,7 @@ The dispatcher processes a request in this order:
 7. The company is resolved, then the paid-capability gate runs from `EXTENSION_REQUIRED_CAPABILITY` in `src/lib/entitlements/keys.ts`.
 8. `ctx` is built and the handler is called.
 
-Every response gets an `X-Request-Id` header. JSON error bodies shaped `{ error: { code } }` also get `error.requestId` injected. The route sets `maxDuration = 300`.
+Every response gets an `X-Request-Id` header. JSON error bodies shaped `{ error: { code } }` also get `error.requestId` injected. The route sets `maxDuration = 800`.
 
 **Physical route files.** Vercel cron targets (`vercel.json`) and some OAuth callbacks are concrete files under `src/app/api/extensions/<id>/`. That directory may import only its own extension. Its files compile into every build, even when the extension is disabled, so a new route must check `await extensionRegistry.get('<id>')` and refuse when the extension is absent. `npm run check:guards` enforces both rules through `scripts/checks/extension-route-guards.mjs`.
 

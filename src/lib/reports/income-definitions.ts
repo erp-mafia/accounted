@@ -93,5 +93,3 @@ export const INCOME_STATEMENT_DEFINITIONS = {
     definition: 'Resultat före bokslutstransaktioner: rorelseresultat + total_financial. Not årets resultat once bokslut entries are booked; see basis.',
   },
 } as const satisfies Record<string, IncomeFigureDefinition>
-
-export type IncomeStatementDefinitions = typeof INCOME_STATEMENT_DEFINITIONS

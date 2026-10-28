@@ -27,7 +27,7 @@ import {
   providerPreview, providerSieData, providerSubmitToken, takeReturnedConsentId, useProviderMessage, type MigrateResults,
   type ProviderPreview, type ProviderSieData,
 } from '../lib/provider'
-import type { MigrationResource } from '@/lib/providers/migration-contract'
+import { migrationRefusalMessageValues, type MigrationResource } from '@/lib/providers/migration-contract'
 import type { BooksCtx } from '../context'
 import { trackMigrationConnectClicked, trackMigrationConnectFinished, type MigrationConnectOutcome } from '@/components/extensions/general/arcim-connect-track'
 import { watchArcimOAuthPopup } from '@/components/extensions/general/arcim-document-import-flow'
@@ -437,7 +437,16 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
           api.registerStage({ source: provName, ms: Math.min(6000, Math.max(2200, invoices * 25)), invoices: [['1510', results.salesInvoices?.imported ?? 0], ['2440', results.supplierInvoices?.imported ?? 0]], onProgress: (r) => { if (r.done) resolve() } })
           at(8000, () => resolve())
         })
-        if (results.stepErrors?.length) setRegText(results.stepErrors.map((e) => getErrorMessage(e, { locale })).join(' '))
+        // A refused register imports nothing: say which one and what unblocks
+        // it, in the Import page's words, beside any failed step.
+        const register = (resource: MigrationResource) => tx(`ext_arcim_job_resource_${resource}`)
+        const notes = [
+          ...(results.refused ?? []).map((group) => `${tx('ext_arcim_job_refused', {
+            resources: group.resources.map(register).join(', '),
+          })}. ${tx(group.messageKey, migrationRefusalMessageValues(group.resources, provName, register))}`),
+          ...(results.stepErrors ?? []).map((e) => getErrorMessage(e, { locale })),
+        ]
+        if (notes.length > 0) setRegText(notes.join(' '))
       } else {
         setRegText(t('reg_skipped'))
       }

@@ -233,7 +233,7 @@ describe('POST /import-documents', () => {
     expect(body.error.message_en).toContain('Reconnect Fortnox')
   })
 
-  // Klura AB, 2026-08-20: the connect request does not ask Fortnox for Arkiv
+  // Support case 2026-08-20: the connect request does not ask Fortnox for Arkiv
   // and Koppla fil at all, so the reconnect advice sent the user around a loop
   // four times (and to buy the Fortnox Arkiv module) for nothing.
   it('says the permission is missing on our side while the scopes are unapproved', async () => {
@@ -487,6 +487,25 @@ describe('POST /submit-token Bokio error mapping', () => {
     expect(body.error.code).toBe('BOKIO_COMPANY_NOT_FOUND')
     expect(body.error.message).toContain('företags-ID')
     expect(body.error.message_en).toContain('company ID')
+  })
+
+  // 2026-10-27: a company id without a GUID drew a Bokio 400 that read
+  // "Kunde inte kontrollera ... Försök igen", five times for one user.
+  it('reports a company ID without a GUID as a format problem that says where the GUID is', async () => {
+    ;(submitProviderToken as Mock).mockRejectedValue(
+      new ProviderTokenInvalidError('Bokio company id holds no GUID', 'company-id-invalid'),
+    )
+
+    const response = await submitTokenHandler(submitTokenRequest(), buildContext())
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; message_en?: string }
+    }>(response)
+
+    expect(status).toBe(422)
+    expect(body.error.code).toBe('BOKIO_COMPANY_ID_INVALID')
+    expect(body.error.message).toContain('webbadressen')
+    expect(body.error.message).not.toContain('Försök igen')
+    expect(body.error.message_en).toContain('address bar')
   })
 
   it('reports a Bokio plan without API access as a plan problem, not rejected credentials', async () => {

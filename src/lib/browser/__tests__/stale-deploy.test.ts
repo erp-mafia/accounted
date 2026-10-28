@@ -85,4 +85,13 @@ describe('stale deploy wiring', () => {
     const src = readFileSync(path.join(SRC, 'components/system/DeployReloadPrompt.tsx'), 'utf8')
     expect(src).toMatch(/onStaleDeploy\(window, \(\) => setStale\(true\)\)/)
   })
+
+  it('Ladda om shows that it is working and reloads once, however often it is clicked', () => {
+    const src = readFileSync(path.join(SRC, 'components/system/DeployReloadPrompt.tsx'), 'utf8')
+    // The old page stays on screen until the new document answers: without
+    // the loading state the click looked dead, and each repeat restarted it.
+    expect(src).toMatch(/loading=\{reloading\}/)
+    expect(src).toMatch(/if \(reloading\) return\s+setReloading\(true\)\s+window\.location\.reload\(\)/)
+    expect(src.match(/window\.location\.reload\(\)/g)).toHaveLength(1)
+  })
 })

@@ -10,10 +10,14 @@
  *     validated redirect URI (api_keys.client), server-side.
  *  3. client_info: the MCP clientInfo name a 2026-07-28 client carries in
  *     `_meta` on every request.
- *  4. user_agent: the User-Agent header.
- * Sources 3 and 4 are mapped into the same vocabulary the markers use. A name
+ *  4. bridge: a User-Agent from our stdio bridges, `accounted-mcp/<version>`
+ *     or `gnubok-mcp/<version>`, followed from the initialize request on by
+ *     `(<name>/<version>)` from the clientInfo of the MCP client behind it.
+ *  5. user_agent: any other User-Agent header.
+ * Sources 3 to 5 are mapped into the same vocabulary the markers use. A name
  * that maps to nothing is labelled `other` with the sanitized raw name in
- * `clientName`; a request with no source at all is `other` with source `none`.
+ * `clientName` (the bridge's own name for source 4); a request with no source
+ * at all is `other` with source `none`.
  */
 
 import type { McpClientSource } from '@/lib/events/types'
@@ -75,7 +79,8 @@ const CLIENT_NAME_LABELS: ReadonlyArray<readonly [RegExp, string]> = [
   [/^openclaw/, 'openclaw'],
   [/^opencode/, 'opencode'],
   [/^accounted-cli/, 'accounted-cli'],
-  [/^(vscode|visual studio code)/, 'vscode'],
+  // The bridges send `Visual-Studio-Code`: their tokens carry no spaces.
+  [/^(vscode|visual[-_ ]?studio[-_ ]?code)/, 'vscode'],
   [/^zed/, 'zed'],
 ]
 
@@ -137,6 +142,30 @@ export function clientInfoNameFromMeta(meta: unknown): string | null {
   return typeof name === 'string' && name.trim() ? name : null
 }
 
+// `accounted-mcp/1.1.0 (claude-ai/0.14.10)`: the bridge, then the optional
+// parenthesized `<name>/<version>`.
+const BRIDGE_USER_AGENT_RE = /^(accounted-mcp|gnubok-mcp)\/[^\s(]*(?:\s*\(([^)]*)\))?/
+
+/**
+ * The label for a User-Agent sent by one of our stdio bridges, or null when
+ * the User-Agent is not one. Over stdio the clientInfo name `claude-ai` is
+ * Claude Desktop, so it maps to `claude-desktop` rather than the remote
+ * connector; any other name maps as in clientLabelForName. No name, or one
+ * that maps to nothing, is `other` with the bridge's own name.
+ */
+export function bridgeClientLabel(userAgent: string | null | undefined): ClientLabel | null {
+  if (typeof userAgent !== 'string') return null
+  const match = BRIDGE_USER_AGENT_RE.exec(userAgent.trim().slice(0, RAW_NAME_SCAN_MAX))
+  if (!match) return null
+  const bridge = match[1]
+  const name = (match[2] ?? '').split('/')[0].trim()
+  let label: string | null = null
+  if (name) label = name.toLowerCase() === 'claude-ai' ? 'claude-desktop' : clientLabelForName(name)
+  return label
+    ? { client: label, clientName: null, clientSource: 'bridge' }
+    : { client: 'other', clientName: bridge, clientSource: 'bridge' }
+}
+
 export function resolveClientLabel(input: {
   marker: string | null | undefined
   oauthProvider?: string | null
@@ -153,6 +182,8 @@ export function resolveClientLabel(input: {
   ]
   for (const [source, raw] of fallbacks) {
     if (typeof raw !== 'string' || !raw.trim()) continue
+    const bridged = source === 'user_agent' ? bridgeClientLabel(raw) : null
+    if (bridged) return bridged
     // Mapped on the raw value: the 64-character cut of a long browser-style
     // User-Agent could drop the product token that names the client.
     const label = clientLabelForName(raw.slice(0, RAW_NAME_SCAN_MAX))

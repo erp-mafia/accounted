@@ -608,6 +608,9 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'ai',
   'analytics',
   'api',
+  // Who did something, in words ("Claude åt Jonas Ek"): the ledger, the
+  // reports, staged operations, Arkiv and the MCP server all name actors.
+  'attribution',
   'branding',
   'browser',
   'calendar',

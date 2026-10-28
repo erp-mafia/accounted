@@ -2,12 +2,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { createVisiblePoller } from '@/lib/browser/visible-poller'
 import {
   announceSIEHoldsChanged,
+  createSIEHoldClock,
   fetchSIEHolds,
   onSIEHoldsChanged,
   sieHoldPollInterval,
   sieHoldStaleAfter,
+  SIE_HOLD_FAST_WINDOW_MS,
   SIE_HOLD_IDLE_STALE_MS,
   SIE_HOLD_POLL_MS,
+  SIE_HOLD_WAITING_POLL_MS,
   SIE_HOLD_RETRY_MS,
   SIE_HOLD_REVIEW_STALE_MS,
   type HeldPeriod,
@@ -27,6 +30,13 @@ describe('SIE hold schedule', () => {
     const held = [period({ import_hold: 'import-1' })]
     expect(sieHoldPollInterval(held)).toBe(SIE_HOLD_POLL_MS)
     expect(sieHoldStaleAfter(held)).toBe(SIE_HOLD_POLL_MS)
+  })
+
+  it('follows a hold seen for longer than the fast window once a minute', () => {
+    const held = [period({ import_hold: 'import-1' })]
+    expect(sieHoldPollInterval(held, SIE_HOLD_FAST_WINDOW_MS - 1)).toBe(SIE_HOLD_POLL_MS)
+    expect(sieHoldPollInterval(held, SIE_HOLD_FAST_WINDOW_MS)).toBe(SIE_HOLD_WAITING_POLL_MS)
+    expect(sieHoldPollInterval([], SIE_HOLD_FAST_WINDOW_MS)).toBeNull()
   })
 
   it('keeps no timer for a review alone and refetches on a nudge after a minute', () => {
@@ -102,6 +112,62 @@ describe('the banner schedule over a working day', () => {
     expect(load).toHaveBeenCalledTimes(4)
     await vi.advanceTimersByTimeAsync(60 * 60_000)
     expect(load).toHaveBeenCalledTimes(4)
+    unsubscribe()
+    poller.stop()
+  })
+})
+
+describe('createSIEHoldClock', () => {
+  it('counts how long the same hold is seen, and starts over on a new hold or a restart', () => {
+    let time = 0
+    const clock = createSIEHoldClock(() => time)
+    const held = [period({ import_hold: 'import-1' })]
+    expect(clock.heldFor(held)).toBe(0)
+    time = 90_000
+    expect(clock.heldFor(held)).toBe(90_000)
+    time = 100_000
+    expect(clock.heldFor([period({ import_hold: 'import-2' })])).toBe(0)
+    time = 130_000
+    clock.restart()
+    expect(clock.heldFor([period({ import_hold: 'import-2' })])).toBe(0)
+  })
+})
+
+describe('a hold left open in a tab', () => {
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-10-27T08:00:00Z'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('costs about 80 requests an hour instead of 720, and an announcement follows closely again', async () => {
+    const held = [period({ import_hold: 'import-1' })]
+    const load = vi.fn(async () => held)
+    const clock = createSIEHoldClock()
+    const poller = createVisiblePoller({
+      load,
+      onResult: () => {},
+      intervalMs: (last) => sieHoldPollInterval(last, clock.heldFor(last)),
+      staleAfterMs: sieHoldStaleAfter,
+      retryMs: SIE_HOLD_RETRY_MS,
+      isVisible: () => true,
+    })
+    const unsubscribe = onSIEHoldsChanged(() => {
+      clock.restart()
+      poller.refresh()
+    })
+    poller.refresh()
+    await vi.advanceTimersByTimeAsync(60 * 60_000)
+    const hour = load.mock.calls.length
+    expect(hour).toBeGreaterThanOrEqual(80)
+    expect(hour).toBeLessThanOrEqual(85)
+
+    announceSIEHoldsChanged()
+    await vi.waitFor(() => expect(load).toHaveBeenCalledTimes(hour + 1))
+    await vi.advanceTimersByTimeAsync(SIE_HOLD_POLL_MS)
+    expect(load).toHaveBeenCalledTimes(hour + 2)
     unsubscribe()
     poller.stop()
   })

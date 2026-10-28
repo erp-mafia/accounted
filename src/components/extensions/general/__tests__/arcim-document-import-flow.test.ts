@@ -241,7 +241,7 @@ describe('document follow-up state', () => {
   })
 
   // The scopes are missing from the connect request itself, so offering a
-  // reconnect would loop the user forever (Klura AB, 2026-08-20).
+  // reconnect would loop the user forever (support case 2026-08-20).
   it('never offers a reconnect when the scopes are unavailable to the integration', async () => {
     const fetcher = vi.fn().mockResolvedValue(
       new Response(

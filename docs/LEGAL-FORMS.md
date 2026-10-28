@@ -1,6 +1,6 @@
 # Legal Forms: Capability Profiles
 
-A legal form (`EntityType`: `enskild_firma`, `aktiebolag`, `ideell_forening`, next `ekonomisk_forening` and `bostadsrattsforening`) changes what the ledger must do: which equity account a year closes to, whether an owner exists, which tax return is filed, which report exists. This document is the contract for how that variation is expressed in code so that the fourth and fifth form cost one file each, not another sweep of the codebase.
+A legal form (`EntityType`: `enskild_firma`, `aktiebolag`, `ideell_forening`, `ekonomisk_forening`, `bostadsrattsforening`) changes what the ledger must do: which equity account a year closes to, whether an owner exists, which tax return is filed, which report exists. This document is the contract for how that variation is expressed in code so that the fourth and fifth form cost one file each, not another sweep of the codebase.
 
 Status: proposed 2026-09-17. Merging this document adopts the contract. It applies to every change under `src/lib/company/**` and to every site that today compares `entity_type` to a string.
 
@@ -58,7 +58,7 @@ export interface LegalFormProfile {
     memberCapital: boolean
   }
   filings: {
-    /** The return the product prepares for the form; null when none is modelled (ideell: INK3 as an underlag, lib/reports/ink3). */
+    /** The return the product prepares for the form; null when none is modelled (ideell: INK3 as an underlag, src/lib/reports/ink3). */
     incomeReturn: 'INK2' | 'NE' | 'INK3' | null
     booksCurrentTax: boolean
     corporateTaxDispositions: boolean
@@ -141,6 +141,6 @@ No big-bang refactor. The contract is adopted by the next changes that would oth
 
 ## Open founder decisions
 
-1. Adopt this contract (merge), so that Emil, the ekonomisk förening contributor and agents build against the same shape.
+1. Adopt this contract (merge), so that maintainers, the ekonomisk förening contributor and agents build against the same shape.
 2. Rebase order: the contributor rebases #2652 onto the profile, rather than the profile adapting to #2652.
 3. Timing of the chart-seed table: with `ekonomisk_forening`, or later.

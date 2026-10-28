@@ -37,8 +37,8 @@ const INVOICE_ID = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'
 
 const SNAPSHOT = {
   v: 1,
-  seller: { name: 'Crayfish Energy AB', org_number: null, vat_number: 'SE559477407601', address_line1: 'Bruksvägen 2', address_line2: null, postal_code: '662 30', city: 'Åmål', country: 'SE' },
-  buyer: { name: 'Oppy Balancing Services AB', org_number: '5594105693', vat_number: null, address_line1: 'Storgatan 1', address_line2: null, postal_code: '111 22', city: 'Stockholm', country: 'SE' },
+  seller: { name: 'Exempel Energi AB', org_number: null, vat_number: 'SE559988776601', address_line1: 'Bruksvägen 2', address_line2: null, postal_code: '662 30', city: 'Åmål', country: 'SE' },
+  buyer: { name: 'Exempelbolaget AB', org_number: '5566778899', vat_number: null, address_line1: 'Storgatan 1', address_line2: null, postal_code: '111 22', city: 'Stockholm', country: 'SE' },
   pay_to: { bankgiro: null, plusgiro: null, iban: null, bic: null, clearing_number: null, account_number: null },
   agreement_ref: 'Flexavtal 2026',
   acceptance_text: 'Godkänd enligt avtalet.',

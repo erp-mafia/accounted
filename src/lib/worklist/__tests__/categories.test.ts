@@ -1034,7 +1034,7 @@ describe('listExpensePayoutSuggestions', () => {
 
 describe('listSkattekontoPaymentDue', () => {
   const TODAY = '2026-09-08'
-  const company = { org_number: '559547-0021', entity_type: 'aktiebolag' }
+  const company = { org_number: '554466-8808', entity_type: 'aktiebolag' }
   // Queue order follows the function's `from` calls: upcoming rows and the
   // balance snapshot (one parallel wave), then the company's bank payments to
   // the skattekonto, then the company, then the OCR resolver's own snapshot
@@ -1088,7 +1088,7 @@ describe('listSkattekontoPaymentDue', () => {
       balance: 4000.25,
       amount: 11000.25,
       count: 2,
-      ocr: '1655954700217',
+      ocr: '1655446688087',
       bankgiro: '5050-1055',
     })
   })

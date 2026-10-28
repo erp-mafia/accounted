@@ -4,7 +4,7 @@ import { createTableMockSupabase } from '@/tests/helpers'
 import { unpayableOrders } from '../release'
 import { COMPANY, order } from './fixtures'
 
-const TAX = { purpose: 'skattekonto', supplier_invoice_id: null, payee_name: 'Skatteverket', payee_source: 'skatteverket', reference: '1655954700217' } as const
+const TAX = { purpose: 'skattekonto', supplier_invoice_id: null, payee_name: 'Skatteverket', payee_source: 'skatteverket', reference: '1655446688087' } as const
 const SALARY = {
   purpose: 'salary',
   supplier_invoice_id: null,

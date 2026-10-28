@@ -16,6 +16,7 @@ import { createLogger } from '@/lib/logger'
 import { EVENT_DETECTORS } from './detectors'
 import { createDetectorContext, runDetector } from './run'
 import type { Detector } from './types'
+import { toError } from '@/lib/errors/to-error'
 
 const log = createLogger('suggestions')
 
@@ -59,7 +60,7 @@ export async function runEventDetectors(
       await runDetector(detector, ctx, event)
     }
   } catch (err) {
-    log.error('suggestion detectors failed for an event', err instanceof Error ? err : new Error(String(err)), {
+    log.error('suggestion detectors failed for an event', toError(err), {
       eventType: event.type,
       companyId,
     })

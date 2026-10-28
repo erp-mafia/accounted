@@ -32,7 +32,7 @@ import OnboardingPage from '../page'
 // TIC's shape for an enskild firma: century-prefixed personnummer + serial.
 const SOLE_TRADER: EnrichmentCompanyRole = {
   companyId: 222,
-  companyRegistrationNumber: '1982090948720001',
+  companyRegistrationNumber: '1982010223430001',
   legalName: 'Exempel Firma',
   legalEntityType: 'Enskild firma',
   positionTypes: ['owner'],
@@ -83,7 +83,7 @@ describe('/onboarding: the BankID pick', () => {
 
     const element = await OnboardingPage({ searchParams: Promise.resolve({ pick: '222' }) })
 
-    expect(element.props.initialOrgNumber).toBe('8209094872')
+    expect(element.props.initialOrgNumber).toBe('8201022343')
     expect(element.props.initialEntityType).toBe('enskild_firma')
     expect(element.props.initialLegalName).toBe('Exempel Firma')
   })
@@ -107,7 +107,7 @@ describe('/onboarding: the BankID pick', () => {
   })
 
   it('opens the company the user already has instead of a duplicate', async () => {
-    setup({ roles: [SOLE_TRADER], memberships: [{ id: 'ef-1', org_number: '8209094872' }] })
+    setup({ roles: [SOLE_TRADER], memberships: [{ id: 'ef-1', org_number: '8201022343' }] })
 
     await expect(OnboardingPage({ searchParams: Promise.resolve({ pick: '222' }) })).rejects.toThrow(/^NEXT_REDIRECT:\/$/)
     expect(setActiveCompany).toHaveBeenCalledWith(expect.anything(), 'user-1', 'ef-1')
@@ -117,7 +117,7 @@ describe('/onboarding: the BankID pick', () => {
     setup({ roles: [SOLE_TRADER] })
 
     await expect(
-      OnboardingPage({ searchParams: Promise.resolve({ org_number: '1982090948720001' }) }),
+      OnboardingPage({ searchParams: Promise.resolve({ org_number: '1982010223430001' }) }),
     ).rejects.toThrow('NEXT_REDIRECT:/onboarding?pick=222')
   })
 

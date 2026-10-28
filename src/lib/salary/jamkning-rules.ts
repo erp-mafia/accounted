@@ -17,8 +17,6 @@
 
 export const JAMKNING_FIELDS = ['jamkning_percentage', 'jamkning_valid_from', 'jamkning_valid_to'] as const
 
-export type JamkningField = (typeof JAMKNING_FIELDS)[number]
-
 export interface JamkningFields {
   jamkning_percentage?: number | null
   jamkning_valid_from?: string | null

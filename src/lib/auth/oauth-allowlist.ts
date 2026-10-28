@@ -79,8 +79,6 @@ const BUILT_IN_PATTERNS: readonly { pattern: RegExp; provider: BuiltInProvider }
   { pattern: /^http:\/\/127\.0\.0\.1(:\d+)?(\/|$)/, provider: 'local' },
 ]
 
-export const BUILT_IN_REDIRECT_PATTERNS: readonly RegExp[] = BUILT_IN_PATTERNS.map((p) => p.pattern)
-
 /** Which built-in client a redirect URI belongs to, or null when none matches. */
 export function builtInRedirectProvider(uri: string): BuiltInProvider | null {
   if (typeof uri !== 'string') return null

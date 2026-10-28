@@ -69,6 +69,85 @@ export function holderAdoptableBy(
   return held === null || held === normalizeIban(want.iban)
 }
 
+/** One account of a bank consent, as the allocator sees it. */
+export interface ConsentAccountRef {
+  iban?: string | null
+  bban?: string | null
+  currency: string
+}
+
+/** The payment details onboarding writes on the seeded row: the company's own bank account. */
+export interface PaymentDetails {
+  clearing_number?: string | null
+  account_number?: string | null
+}
+
+const digitsOf = (value: string | null | undefined): string => (value ?? '').replace(/\D/g, '')
+
+/**
+ * The digit runs payment details name: clearing plus account number, and the
+ * account number alone (Handelsbanken's IBAN carries no clearing number). A
+ * clearing number typed into the account field as well is taken out once.
+ * Short runs are dropped: they would match some other account by chance.
+ */
+function paymentDetailRuns(details: PaymentDetails): string[] {
+  const clearing = digitsOf(details.clearing_number)
+  let account = digitsOf(details.account_number)
+  if (clearing && account.length > clearing.length && account.startsWith(clearing)) {
+    account = account.slice(clearing.length)
+  }
+  const runs: string[] = []
+  if (clearing && account && clearing.length + account.length >= 8) runs.push(clearing + account)
+  if (account.length >= 7) runs.push(account)
+  return runs
+}
+
+/**
+ * Whether payment details point at this bank account: one of their digit runs
+ * appears in the account's IBAN (after country and check digits) or BBAN. A
+ * run is matched anywhere, not only at the end, so details typed with a digit
+ * or two missing still find their account; the caller only acts on a match
+ * that is unique within the consent.
+ */
+export function paymentDetailsPointAt(details: PaymentDetails, account: ConsentAccountRef): boolean {
+  const runs = paymentDetailRuns(details)
+  if (runs.length === 0) return false
+  const iban = normalizeIban(account.iban)
+  const haystacks = [iban ? digitsOf(iban.slice(4)) : '', digitsOf(account.bban)].filter(Boolean)
+  return runs.some((run) => haystacks.some((digits) => digits.includes(run)))
+}
+
+function sameConsentAccount(a: ConsentAccountRef, b: ConsentAccountRef): boolean {
+  if (a.currency.toUpperCase() !== b.currency.toUpperCase()) return false
+  const ibanA = normalizeIban(a.iban)
+  const ibanB = normalizeIban(b.iban)
+  if (ibanA && ibanB) return ibanA === ibanB
+  const bbanA = digitsOf(a.bban)
+  return bbanA !== '' && bbanA === digitsOf(b.bban)
+}
+
+/**
+ * Whether the seeded row (no IBAN of its own) belongs to ANOTHER account of
+ * the same consent than `want`: its onboarding payment details point at
+ * exactly one same-currency account in `consent`, and that is not `want`.
+ * Then `want` leaves the row, and its ledger, to that account. With no match,
+ * or more than one, the first account to ask takes the row as before
+ * (crm#1498: the empty second account took 1930 and the company's own
+ * account, the one the details named, overflowed).
+ */
+export function seededRowBelongsToAnother(
+  holder: PaymentDetails & { iban: string | null; currency: string },
+  want: ConsentAccountRef,
+  consent: readonly ConsentAccountRef[],
+): boolean {
+  if (normalizeIban(holder.iban) !== null) return false
+  const matches = consent.filter(
+    (account) => account.currency.toUpperCase() === holder.currency && paymentDetailsPointAt(holder, account),
+  )
+  if (matches.length !== 1) return false
+  return !sameConsentAccount(matches[0], want)
+}
+
 /**
  * The overflow slots in the order they are handed out: the free-use 1931 to
  * 1959 sub-accounts, never a currency default (each is reserved for its own

@@ -25,7 +25,7 @@ export interface ExpenseClaimRowForGrouping {
 /**
  * The person behind a claim: the employee id, or for the owner the trimmed,
  * lower-cased name. Same rule as create_expense_payout_batch's claimant check
- * (lower(btrim(claimant_name))), so "Jakob" and "jakob " are one person here
+ * (lower(btrim(claimant_name))), so "Anna" and "anna " are one person here
  * exactly when the RPC would accept their claims in one payout.
  */
 export function expenseClaimantKey(row: { employee_id: string | null; claimant_name: string }): string {

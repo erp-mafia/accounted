@@ -65,6 +65,26 @@ describe('providerImportRegisters', () => {
     expect(results.customers).toEqual({ imported: 1248, total: 1249, skipped: 0 })
   })
 
+  // A refused register has no counts, so without its refusal the books act
+  // showed "0 kunder" with no reason (crm#1081).
+  it('carries the registers the provider refused, grouped by remedy', async () => {
+    provider([status('needs_attention', 0, {
+      phase: 'completed', provider: 'fortnox',
+      refused_resources: { customers: 'license', salesInvoices: 'license', suppliers: 'permission' },
+    }, true)])
+    const results = await run(providerImportRegisters('consent-1', ['customers', 'suppliers', 'salesInvoices'], () => {}), 1)
+    expect(results.refused).toEqual([
+      { messageKey: 'ext_arcim_job_refused_license_sales', resources: ['customers', 'salesInvoices'] },
+      { messageKey: 'ext_arcim_refused_user_right', resources: ['suppliers'] },
+    ])
+  })
+
+  it('names a Bokio token without read permission as the token', async () => {
+    provider([status('completed', 0, { provider: 'bokio', refused_resources: { supplierInvoices: 'permission' } })])
+    const results = await run(providerImportRegisters('consent-1', ['supplierInvoices'], () => {}), 1)
+    expect(results.refused).toEqual([{ messageKey: 'ext_arcim_job_refused_token', resources: ['supplierInvoices'] }])
+  })
+
   it('stops with the job\'s own reason when it cannot go on', async () => {
     provider([status('needs_attention', 300, { error_code: 'PROVIDER_AUTH_EXPIRED' })])
     const stopped = expect(providerImportRegisters('consent-1', ['customers'], () => {})).rejects.toThrow(/.+/)

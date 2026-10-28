@@ -161,7 +161,7 @@ export async function searchCompaniesForLookup(query: string): Promise<CompanySe
  * typed), so this is the first place a Lens identifier enters settings. Lens
  * shapes: an AB is 10 digits or 16-prefixed 12; an enskild firma is 16
  * digits, the century-prefixed personnummer plus a 4-digit serial
- * (`2002011732750001` for personnummer `0201173275`, see
+ * (`2002010112360001` for personnummer `0201011236`, see
  * searchCompanyByOrgNumber). createCompany refuses anything normalizeOrgNumber
  * rejects, so a hit that does not reduce to a valid number is dropped here
  * rather than dead-ending the journey at submit.

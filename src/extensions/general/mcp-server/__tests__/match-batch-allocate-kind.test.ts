@@ -77,7 +77,7 @@ describe('gnubok_match_batch_allocate: kind guard', () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: [{ id: INV_ID, document_type: 'invoice' }], error: null }) // document-type check
     enqueue({
-      data: { id: TX_ID, description: 'OPPY', merchant_name: null, amount: -100, currency: 'SEK', date: '2026-08-31', journal_entry_id: null, cash_account_id: null },
+      data: { id: TX_ID, description: 'EXEMPEL', merchant_name: null, amount: -100, currency: 'SEK', date: '2026-08-31', journal_entry_id: null, cash_account_id: null },
       error: null,
     })
     await expect(run(supabase, [{ kind: 'customer_invoice', invoice_id: INV_ID, amount: 100 }])).rejects.toMatchObject({

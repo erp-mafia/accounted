@@ -40,8 +40,8 @@ const ORIGINAL_ID = '11111111-1111-4111-8111-111111111111'
 
 const SNAPSHOT = {
   v: 1,
-  seller: { name: 'Crayfish Energy AB', org_number: '5594774076', vat_number: 'SE559477407601', address_line1: 'Bruksvägen 2', address_line2: null, postal_code: '662 30', city: 'Åmål', country: 'SE' },
-  buyer: { name: 'Oppy Balancing Services AB', org_number: '5594105693', vat_number: null, address_line1: 'Storgatan 1', address_line2: null, postal_code: '111 22', city: 'Stockholm', country: 'SE' },
+  seller: { name: 'Exempel Energi AB', org_number: '5599887766', vat_number: 'SE559988776601', address_line1: 'Bruksvägen 2', address_line2: null, postal_code: '662 30', city: 'Åmål', country: 'SE' },
+  buyer: { name: 'Exempelbolaget AB', org_number: '5566778899', vat_number: null, address_line1: 'Storgatan 1', address_line2: null, postal_code: '111 22', city: 'Stockholm', country: 'SE' },
   pay_to: { bankgiro: '5050-1055', plusgiro: null, iban: null, bic: null, clearing_number: null, account_number: null },
   agreement_ref: 'Flexavtal 2026',
   acceptance_text: 'Godkänd enligt avtalet.',
@@ -63,7 +63,7 @@ const original = {
   self_billing_number: 7,
   self_billing_agreement_ref: 'Flexavtal 2026',
   self_billing_snapshot: SNAPSHOT,
-  supplier: { id: 'supplier-1', name: 'Crayfish Energy AB', supplier_type: 'swedish_business' },
+  supplier: { id: 'supplier-1', name: 'Exempel Energi AB', supplier_type: 'swedish_business' },
   items: [
     {
       id: 'item-1', supplier_invoice_id: ORIGINAL_ID, sort_order: 0, description: 'Flex', quantity: 1, unit: 'st',

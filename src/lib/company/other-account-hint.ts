@@ -36,7 +36,7 @@ async function hasAnyJournalEntry(
 
 /**
  * Should the Hem page hint that the user may be signed in to the wrong
- * account? (#1231, the "Chillen" support case: BankID resolved to a stale
+ * account? (#1231, a support case: BankID resolved to a stale
  * signup account while all real bookkeeping lived in a second
  * email+password account with the same org number.)
  *

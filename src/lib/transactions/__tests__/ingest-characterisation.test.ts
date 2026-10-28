@@ -583,7 +583,7 @@ function openPaymentsScenario(): { scenario: Scenario; tables: Record<string, Ro
     cash_accounts: [cashAccount],
     supplier_invoices: [
       supplierInvoice('si-e2e', 1000, { payment_reference: '5550001' }, 'Elektro Grossisten AB'),
-      supplierInvoice(ARCIM.invoiceId, 10, {}, 'Mattsson Systems AB'),
+      supplierInvoice(ARCIM.invoiceId, 10, {}, 'Exempel Systems AB'),
       supplierInvoice('si-refused', 250, { payment_reference: '5550250' }, 'Byggvaror Norr AB'),
       supplierInvoice('si-po2', 420, {}, 'Lagerhuset AB'),
       supplierInvoice('si-kontor', 418, {}, 'Kontorsgiganten AB'),
@@ -624,7 +624,7 @@ function openPaymentsScenario(): { scenario: Scenario; tables: Record<string, Ro
       date: '2026-10-13',
       value_date: '2026-10-13',
       amount: -10,
-      description: 'MATTSSON SYSTEMS BG 0000052386828',
+      description: 'EXEMPEL SYSTEMS BG 0000055778815',
       reference: 'Bg-bet. via internet',
     }),
     raw('op-refused', { date: '2026-10-14', amount: -250, description: 'BETALNING 250' }),

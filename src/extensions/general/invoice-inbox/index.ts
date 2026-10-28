@@ -41,7 +41,14 @@ import {
   EMAIL_ALLOWED_MIME_TYPES,
   ensureHtmlDocument,
 } from './lib/upload-and-extract'
-import { emailBodyToText, isSignatureImage, isSubstantiveBody, renderEmailBodyUnderlag } from './lib/email-body-underlag'
+import {
+  contentIdsReferencedByHtml,
+  emailBodyToText,
+  isSignatureImage,
+  isSubstantiveBody,
+  normaliseContentId,
+  renderEmailBodyUnderlag,
+} from './lib/email-body-underlag'
 import { fileInboxDelivery } from './lib/inbox-delivery'
 import type { RenderedEmailBodyUnderlag } from './lib/email-body-underlag'
 import { recordInboundMailArrivals } from './lib/inbound-arrival'
@@ -139,13 +146,6 @@ const MAX_INBOUND_TARGETS_PER_EMAIL = 5
 function operationContext(ctx: ExtensionContext): OperationContext {
   return { supabase: ctx.supabase, companyId: ctx.companyId, userId: ctx.userId, log: extensionLog }
 }
-
-// Claim body for POST /inbox/domain. Length-capped only: real validation
-// (punycode, hostname shape, blocklist) lives in normalizeInboundDomain /
-// validateClaimableDomain so the same rules apply to every caller.
-const ClaimDomainSchema = z.object({
-  domain: z.string().trim().min(1).max(255),
-})
 
 // Direct-to-storage upload (signed URL, see the /upload/create route).
 // size_bytes is the browser's own report: the server re-measures the object
@@ -284,7 +284,7 @@ export const invoiceInboxExtension: Extension = {
             admission: payload.admission,
             decidedBy: payload.decidedBy,
           })
-          if (outcome === 'queued' || outcome === 'requeued' || outcome === 'retyped' || outcome === 'routed_to_arkiv') {
+          if (outcome === 'queued' || outcome === 'requeued' || outcome === 'retyped' || outcome === 'routed_to_arkiv' || outcome === 'duplicate_of_queued_or_booked') {
             extensionLog.info('routed classified document', { doc: payload.document.id, docType: payload.docType, outcome })
           }
         } catch (err) {
@@ -1450,8 +1450,28 @@ export const invoiceInboxExtension: Extension = {
         // filed and extracted, the body was never looked at. They are ignored
         // next to real documents, and the mail is filed by its body when they
         // are all it carries.
-        const signatureImages = attachments.filter((att) => isSignatureImage(att))
-        const documentAttachments = attachments.filter((att) => !isSignatureImage(att))
+        //
+        // Inline means the body shows the image, not what its disposition
+        // says: Booking.com marks its logos `attachment` and embeds them by
+        // content id, which filed each logo and lost the receipt text. The
+        // HTML above has those references rewritten to data: URIs (the form
+        // the body document embeds), so the references are read from the cid
+        // form, fetched only when a small image with a content id is not
+        // already inline.
+        let embeddedIds = new Set<string>()
+        if (attachments.some((att) => !!att.content_id && !isSignatureImage(att) && isSignatureImage({ ...att, embedded: true }))) {
+          try {
+            embeddedIds = contentIdsReferencedByHtml((await fetchReceivingEmail(email_id, { htmlFormat: 'cid' })).html)
+          } catch (err) {
+            // The images are then classified by disposition alone: filed as
+            // documents the user can discard, never lost.
+            console.warn('[invoice-inbox/inbound] cid-form fetch failed:', err)
+          }
+        }
+        const isSignature = (att: (typeof attachments)[number]) =>
+          isSignatureImage({ ...att, embedded: embeddedIds.has(normaliseContentId(att.content_id)) })
+        const signatureImages = attachments.filter(isSignature)
+        const documentAttachments = attachments.filter((att) => !isSignature(att))
 
         // The body rendering does not depend on the receiving inbox: one mail
         // addressed to several inboxes renders once.
@@ -1776,6 +1796,9 @@ export const invoiceInboxExtension: Extension = {
                 const innerSubject = parsed.subject || subject
                 // Same signature-image rule as the outer mail: mailparser
                 // lists the forwarded mail's inline logos as attachments too.
+                // `related` is mailparser's "embedded in the body" (a part
+                // with a content id inside multipart/related), the signal
+                // the outer mail reads from the cid references.
                 // Ids keep their position in the full list so a redelivery
                 // dedupes against the same keys.
                 const innerIsSignature = innerAttachments.map((inner) =>
@@ -1784,6 +1807,7 @@ export const invoiceInboxExtension: Extension = {
                     content_disposition: inner.contentDisposition,
                     content_id: inner.contentId,
                     size: inner.size,
+                    embedded: inner.related,
                   }),
                 )
                 const innerSignatureCount = innerIsSignature.filter(Boolean).length

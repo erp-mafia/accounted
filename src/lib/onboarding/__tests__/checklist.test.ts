@@ -8,6 +8,9 @@ import {
   SIDE_DOORS,
   completionPatchBody,
   vatDeadlineLine,
+  RECEIPT_UPLOAD_SOURCES,
+  SKIPPABLE_SETUP_STEPS,
+  skippedSetupSteps,
 } from '../checklist'
 
 describe('vatDeadlineLine', () => {
@@ -192,5 +195,36 @@ describe('canRecordInitialSetup', () => {
 
   it('does not trust an unknown role string', () => {
     expect(canRecordInitialSetup('superuser')).toBe(false)
+  })
+})
+
+describe('skippedSetupSteps', () => {
+  const companyA = '11111111-1111-4111-8111-111111111111'
+  const companyB = '22222222-2222-4222-8222-222222222222'
+
+  it('is empty without ui_state or without an entry for the company', () => {
+    expect(skippedSetupSteps(null, companyA)).toEqual([])
+    expect(skippedSetupSteps({}, companyA)).toEqual([])
+    expect(skippedSetupSteps({ setup_skipped: { [companyB]: ['receipts'] } }, companyA)).toEqual([])
+  })
+
+  it('returns the company entry in step order and drops unknown ids', () => {
+    expect(
+      skippedSetupSteps({ setup_skipped: { [companyA]: ['claude', 'books', 'receipts', 'nope'] } }, companyA),
+    ).toEqual(['receipts', 'claude'])
+  })
+
+  it('never lets books or bank be skipped', () => {
+    expect(SKIPPABLE_SETUP_STEPS).not.toContain('books')
+    expect(SKIPPABLE_SETUP_STEPS).not.toContain('bank')
+  })
+})
+
+describe('RECEIPT_UPLOAD_SOURCES', () => {
+  it('counts what a person put in, never migrated (api) or generated (system) documents', () => {
+    expect(RECEIPT_UPLOAD_SOURCES).toContain('file_upload')
+    expect(RECEIPT_UPLOAD_SOURCES).toContain('camera')
+    expect(RECEIPT_UPLOAD_SOURCES).not.toContain('api')
+    expect(RECEIPT_UPLOAD_SOURCES).not.toContain('system')
   })
 })

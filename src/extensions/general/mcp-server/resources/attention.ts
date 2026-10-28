@@ -18,6 +18,8 @@ import { createLogger } from '@/lib/logger'
 import { effectiveInvoiceStatus } from '@/lib/invoices/overdue'
 import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
 import { addDaysIso, todayIsoStockholm } from '@/lib/dates/iso'
+import { formatActorAttribution } from '@/lib/attribution/format-actor'
+import { resolvePersonNames } from '@/lib/attribution/person-names'
 
 type Severity = 'critical' | 'warning' | 'info'
 
@@ -120,7 +122,7 @@ export const attentionResource: McpResource = {
       countPendingOperations(supabase, companyId),
       supabase
         .from('pending_operations')
-        .select('id, operation_type, title, risk_level, actor_label, created_at')
+        .select('id, operation_type, title, risk_level, actor_type, actor_label, user_id, created_at')
         .eq('company_id', companyId)
         .eq('status', 'pending')
         .order('created_at', { ascending: false })
@@ -274,12 +276,18 @@ export const attentionResource: McpResource = {
     if (pendingOpsCount > 0) {
       const ops = pendingOpsSamples.data ?? []
       const hasHighRisk = ops.some((o) => o.risk_level === 'high')
+      // Who staged each one, named with the person it acted for ("Claude åt
+      // Jonas Ek", lib/attribution) rather than the credential's label.
+      const personNames = await resolvePersonNames(supabase, ops.map((o) => o.user_id))
       categories.push({
         key: 'pending_operations',
         label_sv: 'Operationer som väntar på godkännande',
         severity: hasHighRisk ? 'critical' : 'warning',
         count: pendingOpsCount,
-        samples: ops,
+        samples: ops.map(({ actor_type: actorType, actor_label: actorLabel, user_id: personId, ...op }) => ({
+          ...op,
+          proposed_by: formatActorAttribution({ actorType, actorLabel, personName: personId ? personNames.get(personId) : null }),
+        })),
         next: {
           description:
             'Visa kön för användaren. När användaren godkänner en specifik operation_id i chatten, anropa gnubok_approve_pending_operation direkt: /pending är ett alternativ, inte ett krav.',

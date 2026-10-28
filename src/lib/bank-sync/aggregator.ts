@@ -31,10 +31,6 @@ export const OPEN_PAYMENTS_PROVIDER_SLUG = 'open_payments'
  */
 export const LIVE_CONNECTION_STATUSES = ['active', 'pending_selection', 'expired', 'error'] as const
 
-export function isBankAggregator(value: unknown): value is BankAggregator {
-  return value === 'enable_banking' || value === 'open_payments'
-}
-
 /**
  * A row's aggregator, defaulting to Enable Banking: the column is NOT NULL
  * with that default, so an absent value only comes from a select that did not

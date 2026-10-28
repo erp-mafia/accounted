@@ -15,7 +15,7 @@ git remote add upstream https://github.com/erp-mafia/accounted
 cp -r src/extensions/general/_example-branding src/extensions/general/your-brand
 # Edit src/extensions/general/your-brand/index.ts with your brand values
 # Keep "branding": true in its manifest.json: setup:extensions then lists it in
-# src/lib/extensions/_generated/branding-list.ts, which lib/server-baseline.ts
+# src/lib/extensions/_generated/branding-list.ts, which src/lib/server-baseline.ts
 # (root layout, route wrappers) and the web manifest import, so your values
 # apply on every page and API route.
 
@@ -39,17 +39,17 @@ All branding can be set via env vars. Public ones use `NEXT_PUBLIC_BRANDING_*` (
 |---|---|---|
 | `NEXT_PUBLIC_BRANDING_APP_NAME` | `appName` | `Accounted` |
 | `NEXT_PUBLIC_BRANDING_APP_DESCRIPTION` | `appDescription` | `Ekonomihantering` |
-| `BRANDING_LEGAL_ENTITY` | `legalEntity` | `Arcim` |
+| `BRANDING_LEGAL_ENTITY` | `legalEntity` | `Arcim Technology AB` |
 | `BRANDING_SUPPORT_EMAIL` | `supportEmail` | `support@gnubok.se` |
 | `BRANDING_PRIVACY_EMAIL` | `privacyEmail` | `privacy@gnubok.se` |
 | `BRANDING_SECURITY_EMAIL` | `securityEmail` | `support@accounted.se` |
 | `NEXT_PUBLIC_BRANDING_AUTH_EMAIL_FROM` | `authEmailFrom`: From address Supabase Auth sends verification / reset emails from. Used to pre-populate the `from:` query on the "open in Gmail" button after signup. Set to whatever you configured in your Supabase Auth SMTP. | `noreply@gnubok.se` |
 | `NEXT_PUBLIC_APP_URL` | `appUrl` | `https://app.gnubok.se` |
-| `NEXT_PUBLIC_BRANDING_LOGO_PATH` | `logoPath` | `/gnubokiceon-removebg-preview.png` |
+| `NEXT_PUBLIC_BRANDING_LOGO_PATH` | `logoPath` | `/accounted-icon.png` |
 | `NEXT_PUBLIC_BRANDING_FAVICON_PATH` | `faviconPath` | `/favicon.ico` |
 | `NEXT_PUBLIC_BRANDING_APPLE_ICON_PATH` | `appleTouchIconPath` | `/icons/icon-192.png` |
 | `NEXT_PUBLIC_BRANDING_PWA_ICON_BASE` | `pwaIconBasePath` | `/icons` |
-| `NEXT_PUBLIC_BRANDING_THEME_COLOR` | `themeColor` | `#304D83` |
+| `NEXT_PUBLIC_BRANDING_THEME_COLOR` | `themeColor` | `#ffffff` |
 | `NEXT_PUBLIC_BRANDING_MANIFEST_THEME_COLOR` | `manifestThemeColor` | `#1a1a1a` |
 | `NEXT_PUBLIC_BRANDING_MANIFEST_BG_COLOR` | `manifestBackgroundColor` | `#ffffff` |
 | `NEXT_PUBLIC_BRANDING_HIDDEN_NAV` | `hiddenNavHrefs` (comma-separated, e.g. `/salary,/customers`) | `` (none hidden) |
@@ -57,8 +57,6 @@ All branding can be set via env vars. Public ones use `NEXT_PUBLIC_BRANDING_*` (
 Resolution order (last wins): **defaults → env vars → extension override**.
 
 `NEXT_PUBLIC_*` env vars are inlined at build time. Changing them requires a fresh `npm run build` to propagate.
-
-`NEXT_PUBLIC_BRANDING_APP_NAME` also stamps the service worker push-notification fallback title in `public/sw.js`. This happens at build time for Vercel/local builds (via `scripts/inject-public-branding.mjs`, run from `prebuild`) and at container start for Docker (via `docker-entrypoint.sh`).
 
 ### Email / Resend (when `email` or `invoice-inbox` extensions are enabled)
 
@@ -104,7 +102,7 @@ A few things that look brand-related but are configured elsewhere:
 - **Resend sending domain**: verify `noreply@your-brand.se` (or wherever) in Resend, set `RESEND_FROM_EMAIL`.
 - **DNS / domain**: point `app.your-brand.se` at your Vercel deployment.
 - **OAuth redirect allowlist for MCP**: `src/lib/auth/oauth-allowlist.ts` has built-in entries for Claude (`claude.ai/api/*`, `claude.com/api/*`), ChatGPT, Grok, Gemini, Cursor and localhost; anything else is registered per user under Settings > API & MCP > OAuth clients. Your domain is the OAuth issuer, not a redirect target: no change needed unless you're integrating with new MCP clients.
-- **iCal feed PRODID** (`src/lib/calendar/ics-generator.ts`): defaults to `erp-base.se`, callers may pass their domain.
+- **iCal event UIDs** (`src/lib/calendar/ics-generator.ts`): end in `@accounted.se`; the branding service does not set them.
 - **`NEXT_PUBLIC_APP_URL`**: used as the OAuth issuer and safe auth-link fallback. For a dedicated one-brand deployment, set this to your domain (e.g. `https://app.your-brand.se`). For a shared hosted deployment, keep the canonical main app URL here; additional hosts are the `brands.domain` rows (see below), and MCP OAuth discovery on such a host names that host as issuer, so a connector added with the URL from Settings > API & MCP signs in on the brand domain.
 - **Skatteverket submission identity**: `src/extensions/general/skatteverket/lib/api-client.ts` does not set a custom `User-Agent`; submissions go out with the Node/Vercel runtime default. If your deployment needs to identify itself to Skatteverket under a different brand, that's a future enhancement (env var + header), not something the current branding service covers.
 
@@ -112,9 +110,9 @@ A few things that look brand-related but are configured elsewhere:
 
 Use this checklist when several white-label domains point at one hosted Accounted deployment:
 
-Accounted's hosted product serves its customers from the `accounted.se` zone: `app.accounted.se` plus one `<brand>.accounted.se` host per white-label byra. Every one of those hosts must be served by the production Supabase project `pwxtzglxptnnvjrpixpg`. The request proxy asserts that pairing instead of enumerating the hosts to protect: when the build answering a customer-facing production host is wired to any other backend (the staging project, a third project, or a URL it cannot parse), it emits an alerting structured error and returns an empty, non-cacheable `503` before session handling. The event records only the hostname and the `non_production` classification, never the configured backend URL or credentials.
+Accounted's hosted product serves its customers from the `accounted.se` zone: `app.accounted.se` plus one `<brand>.accounted.se` host per white-label byra. Every one of those hosts must be served by the production Supabase project. The request proxy asserts that pairing instead of enumerating the hosts to protect: when the build answering a customer-facing production host is wired to any other backend (the staging project, a third project, or a URL it cannot parse), it emits an alerting structured error and returns an empty, non-cacheable `503` before session handling. The event records only the hostname and the `non_production` classification, never the configured backend URL or credentials.
 
-Because the rule is stated as "this namespace belongs to the production project", a newly launched `<brand>.accounted.se` host is protected as soon as it resolves. There is no list to remember to update. The first version of the guard did the opposite: it enumerated seven approved hostnames, and on 2026-08-26 it failed open on a customer host under the namespace that nobody had added, which a feature-branch preview served from the staging project for hours. Vercel preview domains (`*.vercel.app`) and local development names stay out of scope. A host inside the namespace that is deliberately not production has to be excluded explicitly in `src/lib/domains/production-white-label-backend.ts`, in the same change that creates it.
+Because the rule is stated as "this namespace belongs to the production project", a newly launched `<brand>.accounted.se` host is protected as soon as it resolves. There is no list to remember to update. Do not replace the rule with a list of approved hostnames: a list fails open for any host under the namespace that nobody added, and a preview build wired to a non-production backend could then answer it. Vercel preview domains (`*.vercel.app`) and local development names stay out of scope. A host inside the namespace that is deliberately not production has to be excluded explicitly in `src/lib/domains/production-white-label-backend.ts`, in the same change that creates it.
 
 Two kinds of host are not derivable from the namespace, so they are classified by hand. Accounted's legacy canonical host `app.gnubok.se` is checked in (`src/lib/domains/production-white-label-backend.ts`). A customer that brings its own domain (step 1 below) goes in the `PRODUCTION_CUSTOM_DOMAIN_HOSTS` env var, a comma-separated list of hostnames, as part of the same reviewed rollout. It is an env var because this repository is public and a customer hostname identifies the customer: never write a real customer host into code, tests, docs or commit messages. Set the var in every hosting environment, preview included. A missing, empty or malformed value fails closed on the hosted Vercel project (matched on the `VERCEL_PROJECT_ID` system variable): with no inventory, every host that is not a preview or local name requires the production backend, so a preview build cannot answer a custom domain it has never heard of. Forks and self-hosted deployments run under another project id or none, and are unaffected. Hosts under `accounted.se` are never listed anywhere, the namespace rule covers them. Do not derive this classification from the `brands` table: that is the auth-link registry, not an authoritative production inventory, and it can also hold demo, pilot, or staging-only brands.
 
@@ -219,4 +217,4 @@ After deploying:
 - [ ] Trigger an invite email: From line says `<your-brand> <noreply@...>`, body uses your name.
 - [ ] Visit `/dpa` and `/privacy`: legal entity and contact email are yours.
 - [ ] Open OAuth flow (`/api/mcp-oauth/authorize?...`) from a test MCP client: consent page references your brand.
-- [ ] Submit support form (Settings → Support): internal subject prefix is `[<your-brand> support]`.
+- [ ] Submit support form (Support in the user menu): internal subject prefix is `[<your-brand> support]`.

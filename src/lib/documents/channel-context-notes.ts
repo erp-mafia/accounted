@@ -30,7 +30,7 @@ import type { InboxChannelContext } from '@/types'
  */
 export const CHANNEL_CONTEXT_NOTES_MAX = 220
 
-/** "Anna Berg (Volvo)" with a company, bare "Jakob W" without (the sender
+/** "Anna Berg (Volvo)" with a company, bare "Kim L" without (the sender
  *  themselves usually answers without naming their own company). */
 export function renderChannelParticipant(p: {
   name: string

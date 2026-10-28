@@ -686,6 +686,9 @@ async function persistBankSession(
     if (row && compatible(row, account)) ownRows.set(account.uid, row)
   }
   const assignedLedgers = new Set([...ownRows.values()].map(row => row.ledger_account))
+  // The accounts placed below: the seeded row goes to the one its onboarding
+  // payment details name, not to whichever the bank lists first (crm#1498).
+  const placed = accountsMetadata.filter(account => !ownRows.has(account.uid) && !guardDisabledUids.has(account.uid))
   const mirrors: BankMirrorPlan[] = []
   for (const account of accountsMetadata) {
     const own = ownRows.get(account.uid)
@@ -694,8 +697,8 @@ async function persistBankSession(
     if (guardDisabledUids.has(account.uid) && !own) continue
     const resolved = own ? { ledgerAccount: own.ledger_account, reuseCashAccountId: own.id }
       : await resolvePsd2LedgerAccount(supabase, pendingConnection.company_id, userId, {
-        iban: account.iban, currency: account.currency, accountName: account.name,
-        exclude: assignedLedgers, prepareOnly: true,
+        iban: account.iban, bban: account.bban, currency: account.currency, accountName: account.name,
+        consent: placed, exclude: assignedLedgers, prepareOnly: true,
       })
     if (!resolved) throw new Error('Bank callback ledger allocation failed')
     account.ledger_account = resolved.ledgerAccount

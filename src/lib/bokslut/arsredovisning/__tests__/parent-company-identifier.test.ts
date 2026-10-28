@@ -6,7 +6,7 @@ describe('isValidParentCompanyIdentifier', () => {
     expect(isValidParentCompanyIdentifier('556677-8899')).toBe(true)
     expect(isValidParentCompanyIdentifier('5566778899')).toBe(true)
     expect(isValidParentCompanyIdentifier('16556677-8899')).toBe(true)
-    expect(isValidParentCompanyIdentifier(' 559460-5627 ')).toBe(true)
+    expect(isValidParentCompanyIdentifier(' 552244-6680 ')).toBe(true)
   })
 
   it('rejects personnummer-shaped values in both 10- and 12-digit form', () => {

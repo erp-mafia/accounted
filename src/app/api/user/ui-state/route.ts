@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 import { z } from 'zod'
 import { requireAuth } from '@/lib/auth/require-auth'
 import type { UserUiState } from '@/types'
+import { SKIPPABLE_SETUP_STEPS } from '@/lib/onboarding/checklist'
 
 // Partial update: the client sends only the keys it changed. Strict schemas
 // so typos fail loudly instead of accumulating junk in the jsonb bag.
@@ -46,6 +47,12 @@ const BodySchema = z
     // company never clears another's.
     trial_expired_ack: z
       .record(z.string().uuid(), z.string().datetime())
+      .optional(),
+    // Kom igång steps skipped, per company: companyId -> step ids. Merged
+    // per key like trial_expired_ack; the list per company is replaced
+    // whole (skipping or un-skipping sends that company's full list).
+    setup_skipped: z
+      .record(z.string().uuid(), z.array(z.enum(SKIPPABLE_SETUP_STEPS)).max(SKIPPABLE_SETUP_STEPS.length))
       .optional(),
     // Transaktioner column visibility. Replaced whole, never merged:
     // the list IS the preference.
@@ -97,6 +104,9 @@ export async function POST(request: Request) {
       : {}),
     ...(patch.trial_expired_ack
       ? { trial_expired_ack: { ...current.trial_expired_ack, ...patch.trial_expired_ack } }
+      : {}),
+    ...(patch.setup_skipped
+      ? { setup_skipped: { ...current.setup_skipped, ...patch.setup_skipped } }
       : {}),
   }
 

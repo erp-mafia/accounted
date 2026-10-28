@@ -25,7 +25,7 @@ Extracted from the Redoc pages on 2026-10-19. Everything below is written in our
 ---
 
 
-> **Corrections from Billo (Yaojia Wang, 2026-10-22), verified in the sandbox the same day.**
+> **Corrections from Billo (2026-10-22), verified in the sandbox the same day.**
 > - Accounted is **one partner customer** at Billo and our partner API key is bound to it (JWT claim `partner_customer_id`). Each Accounted company is an **end customer enrolled under it**; the key cannot create clients, so section 5.2 does not apply to us.
 > - The webhook is registered on that partner customer (`POST /v1/clients/{partnerCustomerId}/webhook`): the partner-wide endpoints answer `403` to a customer-bound key.
 > - SendEasy is `POST https://sandbox-api.billo.life/sendeasy/v1/Send`, not the spec's host. In the sandbox it still answers `400` errorCode `10020` "Sender not found" for a tenant created on the Sender API; how a sender is registered for SendEasy is an open question to Billo.
@@ -612,7 +612,7 @@ FAR is the Swedish forwarding-address register; registering routes the end custo
 
 ```json
 {
-  "callbackUrl": "https://<our host>/api/extensions/billo/webhook",
+  "callbackUrl": "https://<our host>/api/webhooks/billo",
   "secret": "whsec_<base64 random bytes>",
   "eventTypes": ["PartnerDocumentReceived", "InvoicePaid", "InvoiceRead", "ReceiptRead", "LetterRead"]
 }

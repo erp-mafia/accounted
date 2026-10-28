@@ -6,7 +6,7 @@ import type { AuthMethod, AuthMethodCredential } from './api-client'
  *
  * Handelsbanken (business) asks for "Företags-ID" on that page: the
  * organisationsnummer as 10 digits, no hyphen, and the page shows no format
- * hint and rejects "556809-8239". The company's org number is already in
+ * hint and rejects "554455-6672". The company's org number is already in
  * the ledger, so it is sent prefilled (the page still shows it, autosubmit
  * is off). The signer's personnummer is never known here and is left to the
  * person.

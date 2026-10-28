@@ -19,7 +19,4 @@ export const PERSON_REJECTION_CATEGORIES = [
   'other',
 ] as const
 
-export const SYSTEM_REJECTION_CATEGORIES = ['expired', 'superseded', 'failed'] as const
-
 export type PersonRejectionCategory = (typeof PERSON_REJECTION_CATEGORIES)[number]
-export type SystemRejectionCategory = (typeof SYSTEM_REJECTION_CATEGORIES)[number]

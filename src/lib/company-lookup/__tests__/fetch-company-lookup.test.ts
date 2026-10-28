@@ -75,7 +75,7 @@ describe('fetchCompanyLookup', () => {
         },
       }),
     )
-    const outcome = await fetchCompanyLookup('802481-1658', { ticEnabled: true })
+    const outcome = await fetchCompanyLookup('802233-4455', { ticEnabled: true })
     expect(outcome).toEqual({
       status: 'not_found',
       registry: {
@@ -92,7 +92,7 @@ describe('fetchCompanyLookup', () => {
     fetchMock.mockResolvedValue(
       jsonResponse(404, { error: 'Company not found', registry: { source: 'tic', companyName: 42 } }),
     )
-    const outcome = await fetchCompanyLookup('802481-1658', { ticEnabled: true })
+    const outcome = await fetchCompanyLookup('802233-4455', { ticEnabled: true })
     expect(outcome).toEqual({ status: 'not_found' })
   })
 

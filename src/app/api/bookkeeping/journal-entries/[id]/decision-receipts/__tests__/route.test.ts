@@ -220,12 +220,27 @@ describe('GET /api/bookkeeping/journal-entries/[id]/decision-receipts', () => {
   })
 
   it('skips the people lookup when no person is named', async () => {
-    enqueue({ data: { ...entryRow, committed_actor_type: 'api_key', committed_actor_label: 'Zapier', commit_method: 'api_key' }, error: null })
+    enqueue({ data: { ...entryRow, committed_actor_type: 'system', committed_actor_label: null, commit_method: null }, error: null })
     enqueue({ data: [], error: null })
 
     const response = await GET(makeGet(), params())
     expect(response.status).toBe(200)
     expect(createServiceClientMock).not.toHaveBeenCalled()
+  })
+
+  it('looks up the person an API key booked for: the line names them beside the key', async () => {
+    createServiceClientMock.mockReturnValue(service.supabase)
+    enqueue({ data: { ...entryRow, committed_actor_type: 'api_key', committed_actor_label: 'Zapier', commit_method: 'api_key' }, error: null })
+    enqueue({ data: [], error: null })
+    service.enqueue({ data: [{ id: ANNA, email: 'anna@example.se', full_name: 'Anna Svensson' }], error: null })
+    service.enqueue({ data: [], error: null })
+    service.enqueue({ data: null, error: null })
+
+    const response = await GET(makeGet(), params())
+    const { body } = await parseJsonResponse<{ data: BookingWhyData }>(response)
+    expect(response.status).toBe(200)
+    expect(createServiceClientMock).toHaveBeenCalled()
+    expect(body.data.people[ANNA]?.name).toBe('Anna Svensson')
   })
 
   it('returns 500 when the entry read fails', async () => {

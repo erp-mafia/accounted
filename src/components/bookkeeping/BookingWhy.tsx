@@ -9,6 +9,7 @@ import { useBranding } from '@/lib/branding/brand-context'
 import { useFormat } from '@/lib/hooks/use-format'
 import { cn } from '@/lib/utils'
 import { bookingWhy, type BookingWhyData, type BookingWhyView } from '@/lib/suggestion-log/receipt-display'
+import { attributionWordsFrom } from '@/lib/attribution/format-actor'
 
 /**
  * The decision behind one verifikat, from its decision receipts and commit
@@ -43,10 +44,12 @@ function useBookingWhyData(journalEntryId: string): { data: BookingWhyData | nul
 function useBookingWhy(journalEntryId: string): { view: BookingWhyView | null; loading: boolean } {
   const { data, loading } = useBookingWhyData(journalEntryId)
   const t = useTranslations('booking_why')
+  const tAttribution = useTranslations('attribution')
   const { formatDateLong } = useFormat()
   const { appName } = useBranding()
   if (!data) return { view: null, loading }
-  return { view: bookingWhy(data, { t: (key, values) => t(key, values), formatWhen: formatDateLong, appName }), loading }
+  const words = attributionWordsFrom((key, values) => tAttribution(key, values))
+  return { view: bookingWhy(data, { t: (key, values) => t(key, values), formatWhen: formatDateLong, appName, words }), loading }
 }
 
 function SummaryLine({ summary, className }: { summary: NonNullable<BookingWhyView['summary']>; className?: string }) {

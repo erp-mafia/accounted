@@ -161,7 +161,7 @@ export function TransactionDrawer({
       aria-label={transaction.description}
       className="fixed bottom-[calc(var(--bottom-nav-h)+0.625rem)] right-2.5 top-2.5 z-40 flex w-[min(400px,calc(100vw-20px))] flex-col overflow-hidden rounded-lg border border-border bg-background shadow-[var(--shadow-lg)] animate-fade-in"
     >
-      <div className="flex items-start gap-3 border-b border-border px-5 pb-3 pt-4">
+      <div className="flex items-start gap-3 border-b border-border px-6 pb-3 pt-4">
         <div className="min-w-0 flex-1">
           <p className="truncate text-[13px] font-medium" data-ph-mask title={transaction.description}>
             {transaction.description}
@@ -184,7 +184,7 @@ export function TransactionDrawer({
 
       <div className="min-h-0 flex-1 overflow-y-auto">
         {!booked && (
-          <div className="border-b border-border px-5 py-3">
+          <div className="border-b border-border px-6 py-3">
             <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_category')}</p>
             <button
               type="button"
@@ -206,7 +206,7 @@ export function TransactionDrawer({
           </div>
         )}
 
-        <div className="border-b border-border px-5 py-3">
+        <div className="border-b border-border px-6 py-3">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_actions')}</p>
           <div className="flex flex-col items-start gap-1.5">
             <Button size="sm" onClick={(e) => onPrimary(e.currentTarget)} disabled={processing}>
@@ -229,7 +229,7 @@ export function TransactionDrawer({
           </div>
         </div>
 
-        <div className="border-b border-border px-5 py-3">
+        <div className="border-b border-border px-6 py-3">
           <p className="mb-1.5 flex items-center justify-between text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
             <span>{t('underlag_heading')}</span>
             {underlag?.source && (
@@ -307,7 +307,7 @@ export function TransactionDrawer({
         {/* Only when there is a fact to show: a heading over nothing reads as
             something missing. */}
         {(accountLabel || originalName || transaction.original_description || giroCounterparty || counterpartyIban || methodLabel || booked || skvCounterpartDate || isPreMigration || extra || orgNumber || instructed || balanceAfter || (transaction.currency !== 'SEK' && transaction.amount_sek != null)) && (
-        <div className="px-5 py-3">
+        <div className="px-6 py-3">
           <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">{t('drawer_details')}</p>
           <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-1.5 text-[12.5px]">
             {fact(

@@ -1,4 +1,5 @@
 import { ACCOUNT_DELETION_HREF } from '@/lib/company/no-company-routes'
+import { addableEngagements } from '@/lib/company-lookup/engagements'
 
 /**
  * Which door opened the delete-company dialog (CompanyDangerZone.tsx).
@@ -21,6 +22,26 @@ export type CompanyDeleteDoor = 'danger_zone' | 'wrong_company'
  * journey. Open to a user with or without a company.
  */
 export const ADD_COMPANY_HREF = '/select-company?choose=1'
+
+/**
+ * The link behind "Lägg till företag" for this user. /select-company renders
+ * the picker only when it has BankID engagements to offer and otherwise
+ * redirects to the journey, a visible extra hop of about half a second. The
+ * dashboard layout can tell which case applies, so with nothing to pick the
+ * link opens the journey directly: same destination, one hop less.
+ *
+ * `bankIdRoles` is the account's stored CompanyRoles (`bankid_enrichment`),
+ * null when it has none, undefined when the read failed: then the picker
+ * page decides for itself, as before. `memberOrgNumbers` are the org numbers
+ * of the user's non-archived companies, the same exclusion the picker uses.
+ */
+export function addCompanyHref(
+  bankIdRoles: unknown,
+  memberOrgNumbers: ReadonlyArray<string | null | undefined>,
+): string {
+  if (bankIdRoles === undefined) return ADD_COMPANY_HREF
+  return addableEngagements(bankIdRoles, memberOrgNumbers).length > 0 ? ADD_COMPANY_HREF : '/onboarding'
+}
 
 /**
  * Where a successful company delete leads.

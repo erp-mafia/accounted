@@ -200,20 +200,20 @@ describe('chat answers from another channel', () => {
     channel: 'whatsapp',
     representation: {
       participants: [
-        { name: 'Elias Karlsson', company: 'Canguro Media' },
-        { name: 'Jakob Wennberg', company: 'Arcim Technology AB' },
+        { name: 'Erik Exempel', company: 'Exempel Media' },
+        { name: 'Anna Exempel', company: 'Arcim Technology AB' },
       ],
       purpose: 'Lunch med samarbetspartner',
       event_date: null,
-      raw_answer: 'Elias Karlsson från Canguro Media, Jakob Wennberg från Arcim',
+      raw_answer: 'Erik Exempel från Exempel Media, Anna Exempel från Arcim',
       answered_at: '2026-08-05T14:29:00.000Z',
     },
   }
 
   it('puts the participants the user already gave into the prompt', () => {
     const out = renderPrompt({ hasUnderlag: true, chatAnswers })
-    expect(out).toContain('Elias Karlsson (Canguro Media)')
-    expect(out).toContain('Jakob Wennberg (Arcim Technology AB)')
+    expect(out).toContain('Erik Exempel (Exempel Media)')
+    expect(out).toContain('Anna Exempel (Arcim Technology AB)')
     expect(out).toContain('Lunch med samarbetspartner')
   })
 
@@ -232,7 +232,7 @@ describe('chat answers from another channel', () => {
       },
     })
     expect(out).toMatch(/syfte SAKNAS/)
-    expect(out).toContain('Elias Karlsson (Canguro Media)')
+    expect(out).toContain('Erik Exempel (Exempel Media)')
   })
 
   it('says nothing about chat answers when there are none', () => {

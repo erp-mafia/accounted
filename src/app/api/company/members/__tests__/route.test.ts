@@ -85,4 +85,25 @@ describe('GET /api/company/members', () => {
     expect(body.data.profileChoice).toBeNull()
     expect(readClientProfileChoiceMock).not.toHaveBeenCalled()
   })
+
+  it("returns each member's name for the attribution lines, null without one", async () => {
+    enqueue({
+      data: [
+        { id: 'm-1', user_id: 'user-1', role: 'owner', source: 'direct', joined_at: '2026-10-01T00:00:00Z' },
+        { id: 'm-2', user_id: 'user-2', role: 'member', source: 'direct', joined_at: '2026-10-02T00:00:00Z' },
+      ],
+    })
+    enqueue({
+      data: [
+        { id: 'user-1', email: 'jonas@example.com', full_name: ' Jonas Ek ' },
+        { id: 'user-2', email: 'anna@example.com', full_name: null },
+      ],
+    })
+    enqueue({ data: [] })
+    const { body } = await parseJsonResponse<{ data: { members: { user_id: string; email: string; full_name: string | null }[] } }>(await get())
+    expect(body.data.members.map((m) => [m.user_id, m.email, m.full_name])).toEqual([
+      ['user-1', 'jonas@example.com', 'Jonas Ek'],
+      ['user-2', 'anna@example.com', null],
+    ])
+  })
 })

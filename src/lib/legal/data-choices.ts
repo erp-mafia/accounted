@@ -38,7 +38,3 @@ export const DATA_CHOICE_DEFAULTS: Record<DataChoice, boolean> = {
 }
 
 export type CompanyDataChoices = Record<DataChoice, boolean>
-
-export function isDataChoice(value: unknown): value is DataChoice {
-  return typeof value === 'string' && (DATA_CHOICES as readonly string[]).includes(value)
-}

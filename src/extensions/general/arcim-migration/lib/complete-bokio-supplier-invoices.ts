@@ -29,7 +29,7 @@ export interface BokioSupplierRow {
 }
 interface SourceMapping { resource: string; source_id: string; target_id: string }
 interface Supplier { id: string; name: string }
-interface Progress { invoice_id: string; next_attempt_at: string }
+interface Progress { invoice_id: string; next_attempt_at: string; outcome: string; created_at: string }
 interface Receipt { outcome: string; changed: boolean; rows?: number; header_updated?: boolean; settlement?: { code?: string }; event_id?: string }
 
 export function bokioAccountKey(connection: ResolvedConsent, consentId: string): string {
@@ -105,12 +105,25 @@ export function matchBokioSupplierInvoices(rows: BokioSupplierRow[], invoices: S
 export interface CompleteBokioOptions {
   supabase: SupabaseClient; companyId: string; consentId: string; dryRun?: boolean; start?: boolean
   deadline?: number; snapshot?: BokioSupplierSnapshot
+  /**
+   * The unattended pass's end condition: an invoice first tried this many
+   * days ago whose last outcome was not a short deferral is no longer a
+   * candidate. Unset (the reconcile route, a person asking) retries them all.
+   */
+  retireAfterDays?: number
 }
+
+/** Outcomes complete_bokio_supplier_invoice retries after 15 minutes: the provider or a write was in the way. */
+const DEFERRED_OUTCOMES: ReadonlySet<string> = new Set(['provider_evidence_deferred', 'write_rejected'])
+/** A week of daily tries: what the unattended pass gives an invoice before it stops asking the provider. */
+export const BOKIO_RETIRE_AFTER_DAYS = 7
 export async function completeBokioSupplierInvoices(options: CompleteBokioOptions) {
   const { supabase, companyId, consentId, dryRun = true } = options
   const deadline = options.deadline ?? Date.now() + 180_000
   const runId = randomUUID()
-  const summary = { dryRun, attempted: 0, changed: 0, rows: 0, unresolved: 0, failed: 0, deferred: 0,
+  const summary = { dryRun, attempted: 0, changed: 0, rows: 0, unresolved: 0, failed: 0, deferred: 0, retired: 0,
+    /** Set when nothing was due: when the company has work again ('infinity' when it has none left). */
+    nextAttemptAt: null as string | null,
     paymentRefresh: undefined as Awaited<ReturnType<typeof refreshMigratedSupplierPaymentState>> | undefined, pending: 0, partial: false, busy: false, reports: [] as { invoiceId: string; outcome: string; changed: boolean; settlementCode?: string }[] }
   const rpc = async <T>(name: string, args: Record<string, unknown>): Promise<T> => {
     const { data, error } = await queryInExecutionBudget(supabase.rpc(name, args))
@@ -135,7 +148,7 @@ export async function completeBokioSupplierInvoices(options: CompleteBokioOption
         fetchAllRows<Supplier>(({ from, to }) => queryInExecutionBudget(supabase.from('suppliers').select('id,name').eq('company_id', companyId).order('id').range(from, to))),
         fetchAllRows<SourceMapping>(({ from, to }) => queryInExecutionBudget(supabase.from('migration_source_records').select('resource,source_id,target_id')
           .eq('company_id', companyId).eq('provider', 'bokio').eq('account_key', accountKey).order('id').range(from, to))),
-        fetchAllRows<Progress>(({ from, to }) => queryInExecutionBudget(supabase.from('bokio_supplier_completion_entries').select('invoice_id,next_attempt_at')
+        fetchAllRows<Progress>(({ from, to }) => queryInExecutionBudget(supabase.from('bokio_supplier_completion_entries').select('invoice_id,next_attempt_at,outcome,created_at')
           .eq('company_id', companyId).order('id').range(from, to))),
       ])
       const matched = matchBokioSupplierInvoices(rows, snapshot.invoices, suppliers, mappings)
@@ -156,12 +169,25 @@ export async function completeBokioSupplierInvoices(options: CompleteBokioOption
       }
       summary.paymentRefresh = paymentRefresh
       const due = new Map(progress.map(p => [p.invoice_id, Date.parse(p.next_attempt_at)]))
-      const candidates = rows.filter(row => !row.supplier_invoice_items.length || !row.document_id ||
+      const retireBefore = options.retireAfterDays === undefined ? null : Date.now() - options.retireAfterDays * 86_400_000
+      const retired = new Set(retireBefore === null ? [] : progress
+        .filter(p => !DEFERRED_OUTCOMES.has(p.outcome) && Date.parse(p.created_at) < retireBefore).map(p => p.invoice_id))
+      const unfinished = rows.filter(row => !row.supplier_invoice_items.length || !row.document_id ||
         (row.subtotal === row.total && row.vat_amount === 0) || !row.registration_journal_entry_id || !row.paid_at ||
         row.paid_at === `${row.invoice_date}T00:00:00+00:00`)
+      const open = unfinished.filter(row => !retired.has(row.id))
+      summary.retired = unfinished.length - open.length
+      const candidates = open
         .filter(row => dryRun || (due.get(row.id) ?? 0) <= Date.now())
         .sort((a, b) => (due.get(a.id) ?? 0) - (due.get(b.id) ?? 0) || Number(a.status === 'paid') - Number(b.status === 'paid') || a.id.localeCompare(b.id))
       summary.pending = candidates.length
+      // Nothing due: every open invoice waits for its retry time, or none is
+      // left. The cron parks the company until then instead of reading the
+      // provider again within minutes (runBokioSupplierCompletion).
+      if (!dryRun && !candidates.length) {
+        summary.nextAttemptAt = open.length
+          ? new Date(open.reduce((first, row) => Math.min(first, due.get(row.id) ?? Date.now()), Infinity)).toISOString() : 'infinity'
+      }
       // Reserve time for writes and receipts. Rejected invoices get a saved
       // retry time, so open unsupported rows cannot monopolize the next run.
       const batch = candidates.slice(0, 100)
@@ -257,8 +283,19 @@ export async function runBokioSupplierCompletion(supabase: SupabaseClient, deadl
   for (const work of data ?? []) {
     if (Date.now() >= deadline - 15_000) break
     try {
-      results.push(await completeBokioSupplierInvoices({ supabase, companyId: work.company_id, consentId: work.consent_id,
-        dryRun: false, deadline: Math.min(deadline, Date.now() + 120_000) }))
+      const result = await completeBokioSupplierInvoices({ supabase, companyId: work.company_id, consentId: work.consent_id,
+        dryRun: false, deadline: Math.min(deadline, Date.now() + 120_000), retireAfterDays: BOKIO_RETIRE_AFTER_DAYS })
+      results.push(result)
+      // The release just made the company due again in a minute. With nothing
+      // due, park it until its next retry, or for good ('infinity') when no
+      // invoice is left to ask about; the reconcile route's release re-arms
+      // it. A run that took the lease since is left alone.
+      if (result.nextAttemptAt && !result.partial && !result.busy) {
+        const parked = await withinMigrationDeadline(supabase.from('bokio_supplier_completion_work')
+          .update({ next_attempt_at: result.nextAttemptAt }).eq('company_id', work.company_id).is('run_id', null), deadline)
+          .then(({ error }) => !error, () => false)
+        if (!parked) createLogger('bokio-supplier-completion').warn('enrolled company stays due', { companyId: work.company_id })
+      }
     } catch {
       createLogger('bokio-supplier-completion').warn('enrolled company completion deferred', { companyId: work.company_id })
       results.push({ failed: 1, partial: true })

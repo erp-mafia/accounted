@@ -127,20 +127,31 @@ describe('loadAgentBundle: remembered facts', () => {
     enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
     enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
     enqueue({ data: null })
-    // Ranked by relevance, so an older memory can come first from the query.
+    // Out of date order on purpose: the bundle sorts newest first itself.
     enqueue({ data: [
-      { content: 'K2 vs K3-valet är ej beslutat.', created_at: '2026-06-02T08:00:00Z' },
-      { content: 'Bolaget tillämpar K3.', created_at: '2026-09-10T08:00:00Z' },
-      { content: 'Okänt datum.', created_at: null },
+      { id: 'm-1', kind: 'fact', content: 'K2 vs K3-valet är ej beslutat.', relevance_score: 0.8, created_at: '2026-06-02T08:00:00Z' },
+      { id: 'm-2', kind: 'fact', content: 'Bolaget tillämpar K3.', relevance_score: 0.8, created_at: '2026-09-10T08:00:00Z' },
+      { id: 'm-3', kind: 'fact', content: 'Okänt datum.', relevance_score: 0.8, created_at: null },
     ] })
     const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'year-end-close'))!
     expect(bundle.company_knowledge.remembered).toEqual([
-      { text: 'Bolaget tillämpar K3.', saved_at: '2026-09-10T08:00:00Z' },
-      { text: 'K2 vs K3-valet är ej beslutat.', saved_at: '2026-06-02T08:00:00Z' },
-      { text: 'Okänt datum.', saved_at: null },
+      { fact_id: 'm-2', text: 'Bolaget tillämpar K3.', saved_at: '2026-09-10T08:00:00Z' },
+      { fact_id: 'm-1', text: 'K2 vs K3-valet är ej beslutat.', saved_at: '2026-06-02T08:00:00Z' },
+      { fact_id: 'm-3', text: 'Okänt datum.', saved_at: null },
     ])
-    expect(findCalls('agent_memory', 'select')).toContainEqual(['content, created_at'])
     expect(findCalls('agent_memory', 'is')).toContainEqual(['superseded_by', null])
+    // All of them: no top-N cap, only the loader's row bound.
+    expect(findCalls('agent_memory', 'limit')).toContainEqual([500])
+  })
+
+  it('still starts the workflow, with nothing remembered, when the memory read fails', async () => {
+    vi.mocked(buildArkivMap).mockResolvedValue(null as never)
+    enqueue({ data: null }); enqueue({ data: [] }); enqueue({ data: [] }); enqueue({ data: [] })
+    enqueue({ count: 0 }); enqueue({ data: [] }); enqueue({ data: null })
+    enqueue({ data: null })
+    enqueue({ data: null, error: { message: 'rls-denied' } })
+    const bundle = (await loadAgentBundle(supabase as never, 'company-a', 'year-end-close'))!
+    expect(bundle.company_knowledge.remembered).toEqual([])
   })
 })
 

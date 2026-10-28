@@ -15,6 +15,7 @@ import {
   type BookingWhyTranslate,
   type ReceiptLike,
 } from '../receipt-display'
+import { attributionWordsFrom } from '@/lib/attribution/format-actor'
 
 const JE = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 const TX = '11111111-1111-4111-8111-111111111111'
@@ -28,10 +29,16 @@ function translator(locale: 'sv' | 'en'): BookingWhyTranslate {
   return t as unknown as BookingWhyTranslate
 }
 
+function attributionWords(locale: 'sv' | 'en') {
+  const t = createTranslator({ locale, messages: locale === 'sv' ? sv : en, namespace: 'attribution', onError: (error) => { throw error } })
+  return attributionWordsFrom(t as unknown as (key: string, values?: Record<string, string>) => string)
+}
+
 const opts = (locale: 'sv' | 'en' = 'sv'): BookingWhyOptions => ({
   t: translator(locale),
   formatWhen: (iso) => `@${iso.slice(0, 10)}`,
   appName: 'Accounted',
+  words: attributionWords(locale),
 })
 
 const rule = {
@@ -163,8 +170,19 @@ describe('bookingWhy summary', () => {
   it('names the agent whose staged proposal a person approved', () => {
     const r = buildDecisionReceipt(bankRow(), ctx(userEntryRow, zapierOp))
     const view = bookingWhy(data({ receipts: [r] }), opts())
-    expect(view.summary?.text).toBe('Anna Svensson godkände ett förslag från Claude (API-nyckel)')
-    expect(rowMap(view).proposal).toBe('Regel · konto 5410 · från Claude (API-nyckel)')
+    expect(view.summary?.text).toBe('Anna Svensson godkände ett förslag från Claude')
+    expect(rowMap(view).proposal).toBe('Regel · konto 5410 · från Claude')
+  })
+
+  it('names the person the agent staged the proposal for', () => {
+    const op = { ...zapierOp, actor_label: 'Claude (Anthropic)', user_id: BERTIL }
+    const r = buildDecisionReceipt(bankRow(), ctx(userEntryRow, op))
+    const d = data({ receipts: [r] })
+    expect(bookingWhyUserIds(d.entry, d.decisions)).toEqual([ANNA, BERTIL])
+    const view = bookingWhy(d, opts())
+    expect(view.summary?.text).toBe('Anna Svensson godkände ett förslag från Claude åt Bertil Ek')
+    expect(rowMap(view).proposal).toBe('Regel · konto 5410 · från Claude åt Bertil Ek')
+    expect(bookingWhy(d, opts('en')).summary?.text).toBe('Anna Svensson approved a proposal from Claude for Bertil Ek')
   })
 
   it("shows the agent's reason as recorded, under its label, right after the proposal", () => {
@@ -184,31 +202,46 @@ describe('bookingWhy summary', () => {
     expect(bookingWhy(data({ receipts: [blank] }), opts()).rows.some((x) => x.id === 'reason')).toBe(false)
   })
 
-  it('labels an API key and a connected AI by their label', () => {
+  it('names an API key and a connected AI by their own name, without the credential wording', () => {
     const apiEntry = { ...userEntryRow, committed_actor_type: 'api_key', committed_actor_label: 'Zapier', commit_method: 'api_key' }
     const r = buildDecisionReceipt(bankRow({ actor_type: 'api_key', resolved_by: null }), ctx(apiEntry))
     const view = bookingWhy(data({ receipts: [r], entry: entry({ committed_actor_type: 'api_key', committed_actor_label: 'Zapier', commit_method: 'api_key' }) }), opts())
-    expect(view.summary?.text).toBe('Zapier (API-nyckel) bokförde enligt förslaget')
-    expect(rowMap(view).decision).toBe('Zapier (API-nyckel) · via API · @2026-10-12')
+    expect(view.summary?.text).toBe('Zapier bokförde enligt förslaget')
+    expect(rowMap(view).decision).toBe('Zapier · via API · @2026-10-12')
 
-    const mcpEntry = { ...apiEntry, committed_actor_type: 'mcp_oauth', committed_actor_label: 'Claude' }
+    const mcpEntry = { ...apiEntry, committed_actor_type: 'mcp_oauth', committed_actor_label: 'Claude (Anthropic)' }
     const m = buildDecisionReceipt(bankRow({ actor_type: 'mcp_oauth', resolved_by: null }), ctx(mcpEntry))
     const mView = bookingWhy(data({ receipts: [m] }), opts())
-    expect(mView.summary?.text).toBe('Claude (ansluten AI) bokförde enligt förslaget')
-    expect(rowMap(mView).decision).toBe('Claude (ansluten AI) · via MCP-anslutning · @2026-10-12')
+    expect(mView.summary?.text).toBe('Claude bokförde enligt förslaget')
+    expect(rowMap(mView).decision).toBe('Claude · via MCP-anslutning · @2026-10-12')
   })
 
-  it("names a service account's booking as the account, never as its sponsor", () => {
+  it('names the person a key or a connected AI booked for', () => {
+    const mcpEntry = { ...userEntryRow, committed_actor_type: 'mcp_oauth', committed_actor_label: 'Claude (Anthropic)', commit_method: 'api_key' }
+    const m = buildDecisionReceipt(bankRow({ actor_type: 'mcp_oauth', resolved_by: ANNA }), ctx(mcpEntry))
+    const d = data({ receipts: [m] })
+    expect(bookingWhyUserIds(d.entry, d.decisions)).toEqual([ANNA])
+    const view = bookingWhy(d, opts())
+    expect(view.summary?.text).toBe('Claude åt Anna Svensson bokförde enligt förslaget')
+    expect(rowMap(view).decision).toBe('Claude åt Anna Svensson · via MCP-anslutning · @2026-10-12')
+    // The entry alone (no receipt): the entry's user is the key's owner.
+    const alone = bookingWhy(data({ entry: entry({ committed_actor_type: 'api_key', committed_actor_label: 'MCP-klient (OAuth)', commit_method: 'api_key' }) }), opts())
+    expect(alone.summary?.text).toBe('Bokförd av AI-anslutning åt Anna Svensson')
+  })
+
+  it("names a service account's booking as the account, and the sponsor it answers to", () => {
     const saEntry = { ...userEntryRow, committed_actor_type: 'service_account', committed_actor_label: 'Billo', commit_method: 'api_key' }
     const r = buildDecisionReceipt(bankRow({ actor_type: 'service_account', resolved_by: null }), ctx(saEntry))
     const view = bookingWhy(data({ receipts: [r], entry: entry({ committed_actor_type: 'service_account', committed_actor_label: 'Billo', commit_method: 'api_key' }) }), opts())
-    expect(view.summary?.text).toBe('Billo (tjänstekonto) bokförde enligt förslaget')
+    expect(view.summary?.text).toBe('Tjänstekontot Billo bokförde enligt förslaget')
+    const sponsored = buildDecisionReceipt(bankRow({ actor_type: 'service_account', resolved_by: BERTIL }), ctx(saEntry))
+    expect(bookingWhy(data({ receipts: [sponsored] }), opts()).summary?.text).toBe('Tjänstekontot Billo åt Bertil Ek bokförde enligt förslaget')
   })
 
   it('does not call an API key booking without a suggestion "by hand"', () => {
     const r = buildDecisionReceipt(bankRow({ actor_type: 'api_key', resolved_by: null, outcome: 'manual', acted_on: null }), ctx({ ...userEntryRow, committed_actor_type: 'api_key', committed_actor_label: 'Zapier' }))
     const view = bookingWhy(data({ receipts: [r] }), opts())
-    expect(view.summary?.text).toBe('Bokförd av Zapier (API-nyckel)')
+    expect(view.summary?.text).toBe('Bokförd av Zapier')
     // Neither a person's choice nor recorded grounds: no grounds row.
     expect(rowMap(view).grounds).toBeUndefined()
   })
@@ -252,7 +285,7 @@ describe('bookingWhy summary', () => {
 
   it('reads an entry from before the actor columns the way behandlingshistoriken does', () => {
     const view = bookingWhy(data({ entry: entry({ committed_actor_type: null, commit_method: 'api_key', committed_actor_label: 'Gammal nyckel' }) }), opts())
-    expect(view.summary?.text).toBe('Bokförd av Gammal nyckel (API-nyckel)')
+    expect(view.summary?.text).toBe('Bokförd av Gammal nyckel åt Anna Svensson')
   })
 
   it('shows nothing for an entry that is not booked', () => {
@@ -290,7 +323,7 @@ describe('bookingWhy detail rows', () => {
     expect(rowItems(view, 'more')).toEqual([
       '@2026-10-12 · Bertil Ek på Siffror AB · regel',
       // No suggestion acted on: no source.
-      '@2026-10-11 · Zapier (API-nyckel)',
+      '@2026-10-11 · Zapier',
     ])
   })
 
@@ -352,10 +385,10 @@ describe('bookingWhy detail rows', () => {
   it('renders every row in English too', () => {
     const r = buildDecisionReceipt(bankRow({ outcome: 'manual', acted_on: null }), ctx(userEntryRow, zapierOp))
     const view = bookingWhy(data({ receipts: [r] }), opts('en'))
-    expect(view.summary?.text).toBe('Anna Svensson approved a proposal from Claude (API key)')
+    expect(view.summary?.text).toBe('Anna Svensson approved a proposal from Claude')
     expect(rowMap(view)).toMatchObject({
       decision: 'Anna Svensson · in Accounted · @2026-10-12',
-      proposal: 'None of the 2 proposals was used · from Claude (API key)',
+      proposal: 'None of the 2 proposals was used · from Claude',
     })
   })
 })
@@ -428,14 +461,14 @@ describe('bookingWhyUserIds', () => {
     expect(bookingWhyUserIds(entry(), null)).toEqual([ANNA])
   })
 
-  it('also asks for the people behind the other decisions, once each', () => {
+  it('also asks for the people behind the other decisions, once each, the person a key acted for included', () => {
     const newest = buildDecisionReceipt(bankRow({ resolved_by: ANNA }), ctx())
     const others = [BERTIL, ANNA, BERTIL].map((id) => buildDecisionReceipt(bankRow({ resolved_by: id }), ctx()))
     const byKey = buildDecisionReceipt(bankRow({ actor_type: 'api_key', resolved_by: 'key-user' }), ctx())
-    expect(bookingWhyUserIds(entry(), compactDecisions([newest, ...others, byKey]))).toEqual([ANNA, BERTIL])
+    expect(bookingWhyUserIds(entry(), compactDecisions([newest, ...others, byKey]))).toEqual([ANNA, BERTIL, 'key-user'])
   })
 
-  it('asks for no one when an API key or the app decided', () => {
+  it('asks for no one when an API key with no recorded person or the app decided', () => {
     const r = buildDecisionReceipt(bankRow({ actor_type: 'api_key', resolved_by: null }), ctx())
     expect(bookingWhyUserIds(entry(), compactDecisions([r]))).toEqual([])
     expect(bookingWhyUserIds(entry({ committed_actor_type: 'system' }), compactDecisions([]))).toEqual([])

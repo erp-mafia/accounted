@@ -34,7 +34,7 @@ Open-source Swedish accounting software for sole traders (enskild firma) and lim
 - **SIE import/export** -- Standard Swedish accounting interchange format
 - **Agent access (MCP)** -- 150+ bookkeeping tools over the Model Context Protocol, with scoped API keys and staged approvals; connects to Claude, ChatGPT, Grok and Gemini over OAuth 2.1
 - **Claude connector and plugin** -- Connect Claude.ai or Claude Code over OAuth 2.1 and install approval-gated workflow skills (`/accounted:bookkeep`, `/accounted:vat`, `/accounted:year-end`, ...) from [the Accounted plugin](packages/claude-plugin/README.md)
-- **Extension system** -- Opt-in plugins for AI categorization, receipt OCR, email, calendar, and more
+- **Extension system** -- Opt-in plugins for AI document extraction, bank sync, email, calendar, and more
 
 ## Self-Hosting
 
@@ -45,7 +45,7 @@ cd accounted
 docker compose up -d
 ```
 
-You need a Supabase project and must apply the database migrations before first use. See [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) for the full step-by-step guide, including Supabase setup, auth configuration, optional features (AI, email, push notifications), and troubleshooting. To run everything on Swedish infrastructure (your own Supabase stack, Swedish hosting, AI on Swedish GPUs), see [docs/SOVEREIGN.md](docs/SOVEREIGN.md).
+You need a Supabase project and must apply the database migrations before first use. See [docs/SELF-HOSTING.md](docs/SELF-HOSTING.md) for the full step-by-step guide, including Supabase setup, auth configuration, optional features (AI, email), and troubleshooting. To run everything on Swedish infrastructure (your own Supabase stack, Swedish hosting, AI on Swedish GPUs), see [docs/SOVEREIGN.md](docs/SOVEREIGN.md).
 
 ## Development Setup
 

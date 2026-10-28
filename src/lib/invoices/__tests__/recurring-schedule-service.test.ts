@@ -348,7 +348,7 @@ describe('executeRecurringSchedule auto-send', () => {
     email: 'kund@test.se',
   })
   const company = makeCompanySettings({
-    company_name: 'Oppy Sverige',
+    company_name: 'Exempelbolaget Sverige',
     accounting_method: 'accrual',
     bankgiro: '123-4567',
     invoice_email_cc_addresses: ['fixed-copy@test.se'],
@@ -574,7 +574,7 @@ describe('executeRecurringSchedule auto-send', () => {
     )
     expect(mockSendEmail).toHaveBeenCalledWith(expect.objectContaining({
       attachments: [expect.objectContaining({
-        filename: 'Oppy Sverige x Kund ÅÄÖ AB Faktura nr F-1 20260706.pdf',
+        filename: 'Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr F-1 20260706.pdf',
       })],
     }))
   })

@@ -105,7 +105,7 @@ describe('orgNumberIsPersonalIdentifier', () => {
     expect(orgNumberIsPersonalIdentifier('556677-8899')).toBe(false)
     expect(orgNumberIsPersonalIdentifier('5566778899')).toBe(false)
     // Ideell förening, handelsbolag, and the 16-prefixed 12-digit form.
-    expect(orgNumberIsPersonalIdentifier('802481-1658')).toBe(false)
+    expect(orgNumberIsPersonalIdentifier('802233-4455')).toBe(false)
     expect(orgNumberIsPersonalIdentifier('969712-3456')).toBe(false)
     expect(orgNumberIsPersonalIdentifier('165566778899')).toBe(false)
   })

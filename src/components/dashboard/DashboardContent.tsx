@@ -63,7 +63,7 @@ export default function DashboardContent({
   const t = useTranslations('dashboard')
   const { company } = useCompany()
 
-  // Time-of-day greeting (concept: "God morgon, Jakob."): the user's local
+  // Time-of-day greeting (concept: "God morgon, <förnamn>."): the user's local
   // morning, not the server's, without the server and hydration renders
   // disagreeing about it (lib/hooks/use-clock-value).
   const hour = useClockValue(hourIn)

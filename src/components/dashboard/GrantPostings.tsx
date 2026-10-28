@@ -12,6 +12,7 @@ import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import type { GrantPosting, GrantReview } from '@/lib/grants/types'
+import { useAttribution } from '@/lib/attribution/use-attribution'
 
 /**
  * "Bokfört enligt regel" in Att göra: what the company's rules for automatic
@@ -79,6 +80,7 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
   const t = useTranslations('dashboard')
   const router = useRouter()
   const { toast } = useToast()
+  const { format: attribute } = useAttribution()
   const [postings, setPostings] = useState(review.postings)
   const [paused, setPaused] = useState(review.paused)
   const [undoing, setUndoing] = useState<GrantPosting | null>(null)
@@ -163,6 +165,12 @@ export function GrantPostings({ review, onChanged }: { review: GrantReview; onCh
                       {p.voucher}
                     </Link>
                   </>
+                )}
+                {/* Which agent booked under the rule, and for whom. */}
+                {p.agent && (
+                  <span className="text-muted-foreground">
+                    {` · ${attribute({ actorType: p.agent.actor_type, actorLabel: p.agent.actor_label, userId: p.agent.user_id })}`}
+                  </span>
                 )}
               </span>
               {undone && <Badge variant="secondary">{t('grant_undone_chip')}</Badge>}

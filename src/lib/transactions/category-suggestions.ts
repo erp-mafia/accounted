@@ -5,15 +5,13 @@ import {
   formatCounterpartyName,
   toCounterpartyTemplateId,
 } from '@/lib/bookkeeping/counterparty-templates'
-import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate, type TemplateMatch } from '@/lib/bookkeeping/booking-templates'
-import { proposalFromTemplate, type BookingProposal, type ProposalSource } from '@/lib/bookkeeping/proposal'
+import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
+import { proposalFromTemplate, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import type {
   Transaction,
   TransactionCategory,
   EntityType,
   MappingRule,
-  LinePatternEntry,
-  VatTreatment,
   CategorizationTemplate,
 } from '@/types'
 
@@ -268,7 +266,6 @@ function accountToCategory(account: string, amount: number): string | null {
  * matched; 'counterparty' is the learned per-counterpart rule
  * (categorization_templates); 'assistant' is the model's read.
  */
-export type SuggestionSource = ProposalSource
 export type SuggestedTemplate = BookingProposal
 
 /**

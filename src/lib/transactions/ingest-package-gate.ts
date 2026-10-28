@@ -1,6 +1,6 @@
 /**
  * Which bank ingest matchers run for a company: behind INGEST_PACKAGE_GATING
- * (off unless `true` or `1`; Jakob's switch), a batch skips the matchers of a
+ * (off unless `true` or `1`; an operator switch), a batch skips the matchers of a
  * package that is fully off, and the pools only those matchers read stay
  * empty and unread (INGEST_POOL_OWNERS in ./ingest-matcher.ts).
  *

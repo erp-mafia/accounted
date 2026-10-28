@@ -15,7 +15,7 @@ interface PgError {
   message?: string
 }
 
-const SNAPSHOT = JSON.stringify({ v: 1, seller: { name: 'Crayfish Energy AB' }, buyer: { name: 'Oppy AB' } })
+const SNAPSHOT = JSON.stringify({ v: 1, seller: { name: 'Exempel Energi AB' }, buyer: { name: 'Exempelbolaget AB' } })
 
 async function seed(settings: { prefix?: string; next?: number } = {}) {
   const { userId, companyId } = await seedCompany()
@@ -30,7 +30,7 @@ async function seed(settings: { prefix?: string; next?: number } = {}) {
   const supplierId = randomUUID()
   await getPool().query(
     `INSERT INTO public.suppliers (id, user_id, company_id, name, self_billing_agreement_ref)
-     VALUES ($1, $2, $3, 'Crayfish Energy AB', 'Flexavtal 2026')`,
+     VALUES ($1, $2, $3, 'Exempel Energi AB', 'Flexavtal 2026')`,
     [supplierId, userId, companyId],
   )
   return { userId, companyId, supplierId }
@@ -111,8 +111,8 @@ describe('assign_self_billing_number', () => {
   })
 
   it('uses the prefix and keeps every digit past 999', async () => {
-    const s = await seed({ prefix: 'OPPY-SF-', next: 1234 })
-    expect(await insert(s)).toMatchObject({ supplier_invoice_number: 'OPPY-SF-1234', self_billing_number: 1234 })
+    const s = await seed({ prefix: 'EX-SF-', next: 1234 })
+    expect(await insert(s)).toMatchObject({ supplier_invoice_number: 'EX-SF-1234', self_billing_number: 1234 })
   })
 
   it('never reuses a number: a counter set below the highest issued is floored at MAX+1', async () => {

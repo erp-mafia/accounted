@@ -8,10 +8,6 @@ import { aliasPatterns, postgrestFilterValue, type RuleMode, type RuleRow } from
  * route, the detail route and the MCP surface read the same thing.
  */
 
-/** Column list, repeated literally in every query so the schema guard can read it. */
-export const RULE_COLUMNS =
-  'id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at'
-
 export interface RuleMatch {
   id: string
   date: string

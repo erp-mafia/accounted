@@ -3,7 +3,7 @@
 import Link, { type LinkProps } from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { useCallback, type ComponentProps } from 'react'
-import { shouldWarmNavRoute } from './nav-prefetch'
+import { isCurrentPageHref, shouldWarmNavRoute } from './nav-prefetch'
 
 type Props = Omit<ComponentProps<typeof Link>, 'prefetch'> & { href: LinkProps['href'] }
 
@@ -23,8 +23,13 @@ type Props = Omit<ComponentProps<typeof Link>, 'prefetch'> & { href: LinkProps['
  * hover-prefetches when viewport prefetch is enabled), so the warm-up is an
  * explicit router.prefetch. onFocus covers keyboard users; onTouchStart
  * gives the mobile bottom nav a ~100 ms head start before the tap lands.
+ *
+ * A plain click on the link to the page already showing refreshes that page
+ * from the server (isCurrentPageHref): the router would otherwise serve it
+ * from its cache and nothing would change. Modified clicks (new tab, etc.)
+ * and string-less hrefs keep the browser's and Link's own behaviour.
  */
-export function NavLink({ href, onMouseEnter, onFocus, onTouchStart, children, ...rest }: Props) {
+export function NavLink({ href, onMouseEnter, onFocus, onTouchStart, onClick, children, ...rest }: Props) {
   const router = useRouter()
   const pathname = usePathname()
   const hrefString = typeof href === 'string' ? href : (href.pathname ?? '')
@@ -48,6 +53,14 @@ export function NavLink({ href, onMouseEnter, onFocus, onTouchStart, children, .
       onTouchStart={(e) => {
         warm()
         onTouchStart?.(e)
+      }}
+      onClick={(e) => {
+        onClick?.(e)
+        if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return
+        if (typeof href !== 'string' || (rest.target && rest.target !== '_self')) return
+        if (!isCurrentPageHref(href, window.location.pathname, window.location.search)) return
+        e.preventDefault()
+        router.refresh()
       }}
       {...rest}
     >

@@ -57,6 +57,9 @@ function mockSupabase(opts: {
     kind: string
     content: string
     relevance_score: number | null
+    created_at?: string | null
+    origin?: string | null
+    client?: string | null
   }>
   atomRows?: Array<{
     id: string
@@ -138,7 +141,7 @@ function mockSupabase(opts: {
           select: vi.fn(() => ({
             eq: vi.fn(() => ({
               eq: vi.fn(() => ({
-                order: vi.fn(() => ({
+                is: vi.fn(() => ({
                   order: vi.fn(() => ({
                     limit: vi.fn().mockResolvedValue({
                       data: memoryRows,
@@ -412,8 +415,44 @@ describe('gnubok_get_agent_briefing tool', () => {
       'vertical/konsult-it',
     ])
     expect(result.memory).toHaveLength(2)
-    expect(result.memory[0].id).toBe('mem-1') // top-ranked
+    expect(result.memory[0].id).toBe('mem-1') // query order: newest first
     expect(result.memory[0].relevance_score).toBe(0.9)
+  })
+
+  it('sends every fact with who taught it, the last sync from the AI\'s own memory, and where to find things', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const supabase = mockSupabase({
+      profile: null,
+      memoryRows: [
+        { id: 'mem-3', kind: 'fact', content: 'Hyran höjs till 14 000 kr från januari.', relevance_score: 0.8, created_at: '2026-10-20T09:00:00Z', origin: 'conversation', client: 'claude' },
+        { id: 'mem-2', kind: 'fact', content: 'Två anställda sedan september.', relevance_score: 0.8, created_at: '2026-10-02T09:00:00Z', origin: 'session_sync', client: 'chatgpt' },
+        { id: 'mem-1', kind: 'fact', content: 'Gammal fakta utan ursprung.', relevance_score: 0.8, created_at: '2026-06-01T09:00:00Z', origin: null, client: null },
+      ],
+    })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      memory: Array<Record<string, unknown>>
+      memory_sync: { last_synced_at: string | null; note: string }
+      where_to_find: string[]
+      memory_truncated?: boolean
+    }
+    expect(result.memory).toHaveLength(3)
+    expect(result.memory[0]).toMatchObject({ fact_id: 'mem-3', saved_at: '2026-10-20T09:00:00Z', origin: 'conversation', client: 'claude' })
+    // No origin recorded: the keys are left out, not sent as null.
+    expect(result.memory[2]).not.toHaveProperty('origin')
+    expect(result.memory[2]).not.toHaveProperty('client')
+    expect(result.memory_sync.last_synced_at).toBe('2026-10-02T09:00:00Z')
+    expect(result.memory_sync.note).toContain('origin: session_sync')
+    expect(result.where_to_find.join(' ')).toContain('gnubok_remember_fact')
+    expect(result.memory_truncated).toBeUndefined()
+  })
+
+  it('states no sync yet when no fact came from the AI\'s own memory', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_get_agent_briefing')!
+    const supabase = mockSupabase({ profile: null })
+    const result = (await tool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      memory_sync: { last_synced_at: string | null }
+    }
+    expect(result.memory_sync.last_synced_at).toBeNull()
   })
 
   it('handles profile present but no atoms loaded yet', async () => {

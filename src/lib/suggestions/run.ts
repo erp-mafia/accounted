@@ -10,6 +10,7 @@ import type { Logger } from '@/lib/logger'
 import { loadCompanyCapabilities, type CompanyCapabilities } from '@/lib/modules/capabilities'
 import { stageSuggestion, type StageOutcome } from './stage'
 import type { Detector, DetectorContext } from './types'
+import { toError } from '@/lib/errors/to-error'
 
 export function createDetectorContext(input: {
   supabase: SupabaseClient
@@ -73,7 +74,7 @@ export async function runDetector<TSubject>(
   try {
     subjects = await detector.subjects(ctx, event)
   } catch (err) {
-    ctx.log.error('suggestion detector failed to read its subjects', err instanceof Error ? err : new Error(String(err)), {
+    ctx.log.error('suggestion detector failed to read its subjects', toError(err), {
       detector: detector.id,
       companyId: ctx.companyId,
     })
@@ -85,7 +86,7 @@ export async function runDetector<TSubject>(
     try {
       holds = await detector.condition(ctx, subject)
     } catch (err) {
-      ctx.log.error('suggestion detector condition failed', err instanceof Error ? err : new Error(String(err)), {
+      ctx.log.error('suggestion detector condition failed', toError(err), {
         detector: detector.id,
         companyId: ctx.companyId,
       })

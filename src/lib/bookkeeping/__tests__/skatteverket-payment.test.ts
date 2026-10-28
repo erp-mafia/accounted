@@ -15,7 +15,7 @@ describe('isSkatteverketPayment', () => {
   })
 
   it('recognises the bankgiro alone, written either way', () => {
-    expect(isSkatteverketPayment(out('BG 5050-1055 OCR 1655952499460'))).toBe(true)
+    expect(isSkatteverketPayment(out('BG 5050-1055 OCR 1655771133592'))).toBe(true)
     expect(isSkatteverketPayment(out('Bankgiro 50501055'))).toBe(true)
   })
 

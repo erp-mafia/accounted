@@ -218,7 +218,7 @@ describe('POST /api/v1/companies/:companyId/cash-accounts', () => {
     })
   })
 
-  it('409 CASH_ACCOUNT_IBAN_DUPLICATE when another row already carries the IBAN (Grönsinka), writing nothing', async () => {
+  it('409 CASH_ACCOUNT_IBAN_DUPLICATE when another row already carries the IBAN, writing nothing', async () => {
     const client = makeClient({
       company_members: OWNER,
       cash_accounts: { data: [{ id: OTHER_ID, ledger_account: '1930', iban: IBAN, payee_iban: null }], error: null },

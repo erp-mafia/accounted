@@ -510,14 +510,14 @@ describe('ensureFiscalPeriod validation', () => {
       ensureFiscalPeriod(
         supabase as unknown as Supabase,
         'company-id',
-        '2025-03-01', // Capelix-style broken FY March-Feb
+        '2025-03-01', // a broken FY March-Feb
         '2026-02-28',
       ),
     ).rejects.toThrow(/Inställningar → Företag/)
   })
 
   it('replaces an overlapping period when it is empty (onboarding-seeded)', async () => {
-    // Real-world Zerify AB case: onboarding seeded Räkenskapsår 2026 =
+    // Real-world case: onboarding seeded Räkenskapsår 2026 =
     // 2026-01-01 to 2026-12-31; the user has a förlängt första räkenskapsår
     // 2025-10-20 to 2026-12-31 (BFL 3 kap.) and imports an SIE for it.
     // The seeded period carries no data, so we replace it.

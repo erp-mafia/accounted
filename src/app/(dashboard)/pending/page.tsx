@@ -78,6 +78,8 @@ import {
   rejectionCategoryLabel,
 } from '@/components/pending-operations/vocabulary'
 import { describeRetrievedSkills } from '@/lib/agent-skills/retrieved-skills'
+import { useAttribution, type ActorRef } from '@/lib/attribution/use-attribution'
+import type { AttributionOptions } from '@/lib/attribution/format-actor'
 import {
   chunkIds,
   sharedAcknowledgmentGroup,
@@ -209,28 +211,25 @@ const PENDING_API_MAX_LIMIT = 100
 /**
  * Human origin line for a staged operation. Many reviewers never used the AI
  * chat themselves (a colleague or consultant did), so the raw actor_label is
- * not enough context: spell out where the proposal came from.
+ * not enough context: name the agent and the person it worked for ("Claude
+ * åt Jonas Ek", lib/attribution), never the credential it came through.
+ * The claude.ai MCP connector mints a gnubok_sk_ key, so MCP traffic arrives
+ * as actor_type='api_key' with the connector's label; op.user_id is the
+ * person (a service account's sponsor, whoever chatted).
  */
 function originLabel(
   op: PendingOperation,
   t: (key: string, values?: Record<string, string>) => string,
+  attribute: (actor: ActorRef, options?: AttributionOptions) => string,
 ): string | null {
   switch (op.actor_type) {
     case 'agent_chat':
-      return t('origin_agent_chat')
-    // The claude.ai MCP connector mints a gnubok_sk_ key, so MCP traffic
-    // arrives as actor_type='api_key' with the key name as actor_label:
-    // keep the label so users with several integrations can tell which one
-    // staged the op. 'mcp_oauth' is declared but currently unreachable.
     case 'mcp_oauth':
     case 'api_key':
-      return op.actor_label
-        ? t('origin_mcp', { label: op.actor_label })
-        : t('origin_api')
     case 'service_account':
-      return op.actor_label
-        ? t('origin_service_account', { label: op.actor_label })
-        : t('origin_service_account_plain')
+      return t('origin_agent', {
+        who: attribute({ actorType: op.actor_type, actorLabel: op.actor_label, userId: op.user_id }, { inline: true }),
+      })
     case 'cron':
       return t('origin_cron')
     // A suggestion a detector staged on its own (lib/suggestions).
@@ -341,6 +340,7 @@ export default function PendingOperationsPage() {
   const tSkills = useTranslations('skills_registry')
   const tCommon = useTranslations('common')
   const tSigning = useTranslations('skv_signing')
+  const { format: attribute } = useAttribution()
   const complianceWarningText = useComplianceWarningText()
   const router = useRouter()
   const accountNames = useAccountNamesSource()
@@ -636,6 +636,16 @@ export default function PendingOperationsPage() {
     fetchOperations()
   }
 
+  // An approved row leaves the list now, not when the refetch lands (seconds
+  // on a long queue). Until then it stayed clickable: approving rows one by
+  // one, the next click hit the row just approved again and got a 409 toast
+  // for an approval that went through. The refetch reconciles.
+  function dropFromList(id: string) {
+    if (!operations.some((o) => o.id === id)) return
+    setOperations((prev) => prev.filter((o) => o.id !== id))
+    setPendingCount((n) => (n === null ? n : Math.max(0, n - 1)))
+  }
+
   // Shared by the direct-commit pill (low/medium risk) and the high-risk
   // confirmation dialog. The Granskning row already states source, title and
   // risk and offers Detaljer, so for low/medium the pill IS the deliberate
@@ -646,6 +656,18 @@ export default function PendingOperationsPage() {
     try {
       const res = await fetch(`/api/pending-operations/${op.id}/commit`, { method: 'POST' })
       const json = await res.json().catch(() => ({}))
+      // Already approved (another tab, or a second click), rejected, or being
+      // approved right now: nothing ran and nothing failed. Say that, not
+      // "Misslyckades", and let the row go.
+      if (res.status === 409 && json?.error?.code === 'PENDING_OPERATION_NOT_PENDING') {
+        toast({ title: t('already_resolved'), description: getErrorMessage(json, { statusCode: res.status }) })
+        setShowCommitDialog(false)
+        setSelectedOp(null)
+        selection.deselect([op.id])
+        dropFromList(op.id)
+        afterResolve()
+        return
+      }
       // getErrorMessage handles both `{ error: string }` and the structured
       // `{ error: { code, message } }` envelope (the latter would otherwise
       // toast "[object Object]") and never surfaces raw English.
@@ -655,9 +677,8 @@ export default function PendingOperationsPage() {
       else toast({ title: 'Godkänd', description: op.title })
       setShowCommitDialog(false)
       setSelectedOp(null)
-      // Drop the committed op from the bulk selection now: the row leaves
-      // the list (and so the selection) only when the refetch lands.
       selection.deselect([op.id])
+      dropFromList(op.id)
       afterResolve()
     } catch (err) {
       toast({
@@ -665,8 +686,9 @@ export default function PendingOperationsPage() {
         description: err instanceof Error ? getErrorMessage(err) : 'Okänt fel',
         variant: 'destructive',
       })
+    } finally {
+      setIsCommitting(false)
     }
-    setIsCommitting(false)
   }
 
   async function handleCommit() {
@@ -942,7 +964,7 @@ export default function PendingOperationsPage() {
     const isAgent = op.actor_type && op.actor_type !== 'user'
     return [
       operationLabel(op.operation_type, t, op.params),
-      isAgent ? (originLabel(op, t) ?? op.actor_label ?? op.actor_type) : null,
+      isAgent ? (originLabel(op, t, attribute) ?? op.actor_label ?? op.actor_type) : null,
       op.agent_metadata?.skills_loaded?.length ? t('skills_retrieved', { skills: retrievedNames(op.agent_metadata.skills_loaded) }) : null,
       formatRelativeTime(op.created_at),
     ]
@@ -1153,7 +1175,7 @@ export default function PendingOperationsPage() {
                 const sub = [
                   formatRelativeTime(resolvedAt),
                   operationLabel(op.operation_type, t, op.params),
-                  originLabel(op, t),
+                  originLabel(op, t, attribute),
                 ]
                   .filter(Boolean)
                   .join(' · ')
@@ -1239,8 +1261,9 @@ export default function PendingOperationsPage() {
 
               // One line per operation (convention 4): who staged it, the
               // title, its age, a risk chip only when it deviates, and the
-              // two decisions as hover-revealed icon buttons. The kicker
-              // (type, origin, retrieved instructions) and the consent
+              // two decisions as hover-revealed icon buttons; under the title,
+              // the agent's reason as one muted line when it gave one. The
+              // kicker (type, origin, retrieved instructions) and the consent
               // sentence live in the slide-over the row opens.
               const approveLabel = batchType ? t(DAILY_BATCH_REVIEW_LABEL_KEY[batchType]) : t('approve')
               const BatchIcon = batchType ? DAILY_BATCH_ICON[batchType] : null
@@ -1294,23 +1317,34 @@ export default function PendingOperationsPage() {
                       <ClipboardDocumentCheckIcon className="h-3.5 w-3.5" />
                     )}
                   </span>
-                  <span className="flex min-w-0 flex-1 items-center gap-2 text-[13px]">
-                    {/* A daily batch reads in its own words, with what it
-                        does as the hover text. */}
-                    <span className="min-w-0 truncate" title={runRow?.detail}>
-                      {runRow?.title ?? op.title}
+                  <span className="flex min-w-0 flex-1 flex-col">
+                    <span className="flex min-w-0 items-center gap-2 text-[13px]">
+                      {/* A daily batch reads in its own words, with what it
+                          does as the hover text. */}
+                      <span className="min-w-0 truncate" title={runRow?.detail}>
+                        {runRow?.title ?? op.title}
+                      </span>
+                      {/* The staged compliance warning stays on the row, as a
+                          truncated suffix: approving from the row or with
+                          "Godkänn alla" must not pass it unseen (crm#1003).
+                          The slide-over has it in full. */}
+                      {complianceWarning && !isRun && (
+                        <span
+                          className="flex min-w-[35%] flex-1 items-center gap-1 text-[12.5px] text-attn"
+                          title={complianceWarningText(complianceWarning)}
+                        >
+                          <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
+                          <span className="min-w-0 truncate">{complianceWarningText(complianceWarning)}</span>
+                        </span>
+                      )}
                     </span>
-                    {/* The staged compliance warning stays on the row, as a
-                        truncated suffix: approving from the row or with
-                        "Godkänn alla" must not pass it unseen (crm#1003).
-                        The slide-over has it in full. */}
-                    {complianceWarning && !isRun && (
-                      <span
-                        className="flex min-w-[35%] flex-1 items-center gap-1 text-[12.5px] text-attn"
-                        title={complianceWarningText(complianceWarning)}
-                      >
-                        <ExclamationTriangleIcon className="h-3 w-3 shrink-0" aria-hidden />
-                        <span className="min-w-0 truncate">{complianceWarningText(complianceWarning)}</span>
+                    {/* Why the agent proposes it, in its own words: one muted
+                        line, so the reviewer reads it before approving from
+                        the row. The slide-over has it in full.
+                        data-ph-mask: free text, may name people. */}
+                    {op.agent_reason && !isRun && (
+                      <span className="min-w-0 truncate text-xs text-muted-foreground" title={op.agent_reason} data-ph-mask="">
+                        {op.agent_reason}
                       </span>
                     )}
                   </span>

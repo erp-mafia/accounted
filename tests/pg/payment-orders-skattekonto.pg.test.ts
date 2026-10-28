@@ -22,7 +22,7 @@ const DEBTOR = {
   bank_name: 'SEB',
 }
 
-const OCR = '1655954700217'
+const OCR = '1655446688087'
 
 type CreateResult = { ok: boolean; code?: string; details?: unknown; order?: Record<string, unknown> }
 

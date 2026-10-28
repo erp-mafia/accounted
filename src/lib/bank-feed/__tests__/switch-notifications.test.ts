@@ -60,7 +60,7 @@ function stub(tables: Record<string, TableMockResult | TableMockResult[]> = {}) 
   const mock = createTableMockSupabase({
     companies: { data: { team_id: null } },
     teams: { data: null },
-    company_settings: { data: { company_name: 'Glimworks AB' } },
+    company_settings: { data: { company_name: 'Exempelbolaget AB' } },
     bank_switch_notifications: { data: [] },
     ...tables,
   })
@@ -71,7 +71,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   mocks.configured.mockReturnValue(true)
   mocks.sendEmail.mockResolvedValue({ success: true, messageId: 'm-1' })
-  mocks.recipients.mockResolvedValue(['anna@glimworks.se', 'bo@glimworks.se'])
+  mocks.recipients.mockResolvedValue(['anna@example.se', 'bo@example.se'])
   mocks.sender.mockResolvedValue({ fromName: null, fromAddress: null, replyTo: null, brand: null })
   mocks.states.mockResolvedValue(new Map())
   mocks.totals.mockResolvedValue({ companies: { pending: 0, uncovered: 0, done: 0 }, connections: { pending: 0, uncovered: 0, switched: 0 }, banks: [] })
@@ -143,12 +143,12 @@ describe('sendBankSwitchMail', () => {
     expect(result).toEqual({ outcome: 'sent', recipients: 2 })
     expect(mocks.sendEmail).toHaveBeenCalledTimes(1)
     const mail = mocks.sendEmail.mock.calls[0][0] as { to: string[]; subject: string; html: string; text: string; fromName: string; fromAddress: string; replyTo: string }
-    expect(mail.to).toEqual(['anna@glimworks.se', 'bo@glimworks.se'])
+    expect(mail.to).toEqual(['anna@example.se', 'bo@example.se'])
     expect(mail.fromName).toBe('Siffra')
     expect(mail.fromAddress).toBe('noreply@post.siffra.se')
     expect(mail.replyTo).toBe('support@siffra.se')
     expect(mail.subject).toContain('Swedbank')
-    expect(mail.subject).toContain('Glimworks AB')
+    expect(mail.subject).toContain('Exempelbolaget AB')
     // The deep link in the brand's domain, and the byrå note since the company is a client.
     expect(mail.html).toContain('https://app.siffra.se/settings/connections?bank_connect_switch=11111111-1111-4111-8111-111111111111')
     expect(mail.text).toContain('inte av byrån')

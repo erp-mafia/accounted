@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto'
 import { userFacing } from '@/lib/errors/user-facing'
 import { isSelfHosted } from '@/lib/env/public-flags'
 import type { SupabaseClient } from '@supabase/supabase-js'
-import type { AccountMapping, ImportResult, ParsedSIEFile, SIEVoucher } from './types'
+import type { AccountMapping, ParsedSIEFile, SIEVoucher } from './types'
 import { calculateFileHash, getEffectiveOpeningBalances, hasOpeningBalanceVoucherCandidate, isBalanceSheetAccount, parseSIEFile } from './sie-parser'
 import { ensureFiscalPeriod } from './sie-import'
 import { NO_MATCHING_FISCAL_YEAR } from './sie-admission'
@@ -521,8 +521,4 @@ export async function readSIEJobSource(supabase: SupabaseClient, job: SIEJob): P
   const content = await data.text()
   if (createHash('sha256').update(content).digest('hex') !== job.file_hash) throw new SIEJobValidationError('Importens arkivfil har ändrats.')
   return content
-}
-
-export function completedSIEJobResult(job: SIEJob): ImportResult | null {
-  return job.job_state === 'completed' ? job.job_result as unknown as ImportResult : null
 }

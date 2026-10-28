@@ -92,7 +92,7 @@ so the Next.js app and RLS always agree on which company is active.
 ## Extension system
 
 Core is a complete accounting product on its own. Optional functionality
-(AI categorization, receipt OCR, email, calendar, the MCP server, and more)
+(AI document extraction, email, calendar, the MCP server, and more)
 ships as extensions under `src/extensions/`, toggled by `extensions.config.json`.
 
 The boundary is strict and CI-enforced:

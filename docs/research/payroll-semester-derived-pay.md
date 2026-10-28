@@ -38,7 +38,7 @@ Rule (16 a § första och andra stycket): "Semesterlön enligt sammalöneregeln 
 - Månadslön: the run's monthly salary × employment_degree / 100, i.e. the salary the employee actually has at the semestertillfälle. A part-timer's tillägg is on the part-time salary (the statute names the employee's månadslön; part time changes nothing else). Not prorated for a partial month: the statute names the månadslön, not the month's pay.
 - Fasta lönetillägg would raise the base (16 a § andra stycket, last sentence). Accounted refuses recurring additions (`recurring-lines.ts`), so none exist; nothing to add.
 - Paid days: days off × the payslip's paid-days-per-day-off factor (12 a §, nettometoden: 1,25 at four days a week). The tillägg is "för varje betald semesterdag", so it follows paid days, not days off.
-- Rate: `employees.semestertillagg_rate` (DB default 0,0043; a kollektivavtal raises it, 0,8 % is common). It is the field the monthly accrual already reads, so the payout and the provision cannot disagree. All active employees in production are at 0,0043 (read-only 2026-10-23). A stored rate below 0,43 % is used as stored: 2 a § andra stycket allows a central kollektivavtal to deviate from 16 a §, so it is not invalid on its face (open question for Jakob below).
+- Rate: `employees.semestertillagg_rate` (DB default 0,0043; a kollektivavtal raises it, 0,8 % is common). It is the field the monthly accrual already reads, so the payout and the provision cannot disagree. All active employees in production are at 0,0043 (read-only 2026-10-23). A stored rate below 0,43 % is used as stored: 2 a § andra stycket allows a central kollektivavtal to deviate from 16 a §, so it is not invalid on its face (see the open questions below).
 - Which days carry it: `paid`, `extra_paid` and `saved` (Decision 6). `advance` carries none and `unpaid` is a deduction (Decisions 5 and 7).
 - Hourly pay on sammalöneregeln stops the line: 16 § andra stycket 1 puts "lön som inte är bestämd per vecka eller månad" on procentregeln, and there is no månadslön to take 0,43 % of. None exist in production.
 
@@ -60,7 +60,7 @@ Hourly pay: only the "Semesterlön" row. Timlön is paid for hours worked, so th
 Inputs:
 
 - rate: `resolveVacationPayRate` (12 %, 14,4 % at 30 days, a higher kollektivavtal rate), the codebase's one semesterlön percentage. 14,4 % over 30 days and 12 % over 25 days give the same day value.
-- base year: the vacation year before the one the run's payment date falls in. Under the statutory basis (1 April to 31 March) that is exactly the intjänandeår (3 §). Under the calendar basis (sammanfallande intjänande- och semesterår, a kollektivavtal arrangement) it is the previous calendar year: the year being earned cannot be valued before it ends, and 22 § values saved days at "det närmast föregående intjänandeåret" (open question for Jakob below).
+- base year: the vacation year before the one the run's payment date falls in. Under the statutory basis (1 April to 31 March) that is exactly the intjänandeår (3 §). Under the calendar basis (sammanfallande intjänande- och semesterår, a kollektivavtal arrangement) it is the previous calendar year: the year being earned cannot be valued before it ends, and 22 § values saved days at "det närmast föregående intjänandeåret" (see the open questions below).
 - base: the sum of `vacation_basis` from the procentregeln step of the employee's payslips with status approved, paid or booked whose payment date falls in the base year ("förfallen" read as the payment date, the reading `variable-vacation-pay.ts` already uses). That figure already leaves out semesterlön and qualifying absence and adds hourly pay's lost hours (16 b § andra och tredje stycket, #60 C).
 - earned paid days: `computeEntitledDays` (7 §, rounded up) under the statutory basis; under the calendar basis `vacation_days_per_year` and the employee must have been employed the whole base year.
 
@@ -135,7 +135,7 @@ Rejected: relieving 2920/2940 on every payout (debit 2920 per derived row). It i
 - `isCalculatedLine` treats the provenance as engine-owned, so the line commands refuse to edit or delete the rows from every door (dashboard, v1, MCP).
 - Rejected: new item types (`semestertillagg`, `semesterlon`). They need a CHECK, an account, an AGI, a Fora and a role entry each, and every reader of vacation rows would have to learn them, for no difference in what is paid.
 
-## Open for Jakob (not settled by the law)
+## Open questions (not settled by the law)
 
 1. Calendar basis (sammanfallande semesterår) under procentregeln: the day value comes from the previous calendar year, and a partial previous year stops. The law has no sammanfallande year; the employer's kollektivavtal decides. Confirm the reading or name the agreement rule to follow.
 2. The avdrag per vacation day and per obetald day is the engine's dagslön (månadslön / 21 at five days a week, 4,76 %). Tjänstemannaavtal use 4,6 %. Add it as a company calculation convention (`salary_calculation_policy`, a migration and a settings option) if customers ask; until then the amount override covers it.

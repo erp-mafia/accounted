@@ -47,11 +47,6 @@ export type ParityEntry =
   | { status: 'ui-only'; reason: string }
   | { status: 'machine'; reason: string }
 
-export type ParityStatus = ParityEntry['status']
-
-/** '<METHOD> <path>', e.g. 'POST /api/supplier-invoices/:id/approve'. */
-export type SessionRouteKey = `${'POST' | 'PUT' | 'PATCH' | 'DELETE'} /api/${string}`
-
 const covered = (by: readonly string[], note?: string): ParityEntry =>
   note ? { status: 'covered', by, note } : { status: 'covered', by }
 const gap = (priority: ParityPriority, note?: string): ParityEntry =>

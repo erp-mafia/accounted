@@ -841,10 +841,10 @@ describe('rattelseEvent', () => {
 
     const byKey = rattelseEvent({ ...row, actor_type: 'api_key', actor_label: 'Bokföringsagent' }, new Map([['entry-1', baseEntry]]))
     expect(byKey.actor).toEqual({ type: 'api_key', user_id: 'user-2', actor_label: 'Bokföringsagent' })
-    expect(formatActorLabel(byKey.actor, labels)).toBe('API-nyckel: Bokföringsagent')
+    expect(formatActorLabel(byKey.actor, labels)).toBe('Bokföringsagent åt anna@example.se')
 
-    const byConnector = rattelseEvent({ ...row, actor_type: 'mcp_oauth', actor_label: 'Claude' }, new Map())
-    expect(formatActorLabel(byConnector.actor, labels)).toBe('MCP-anslutning: Claude')
+    const byConnector = rattelseEvent({ ...row, actor_type: 'mcp_oauth', actor_label: 'Claude (Anthropic)' }, new Map())
+    expect(formatActorLabel(byConnector.actor, labels)).toBe('Claude åt anna@example.se')
 
     const byPerson = rattelseEvent({ ...row, actor_type: 'user', actor_label: null }, new Map())
     expect(formatActorLabel(byPerson.actor, labels)).toBe('anna@example.se')
@@ -929,16 +929,20 @@ describe('formatActorLabel', () => {
     expect(formatActorLabel({ type: 'user', user_id: 'user-1', actor_label: null }, labels)).toBe('anna@example.se')
     expect(formatActorLabel({ type: 'user', user_id: 'deadbeef-0000', actor_label: null }, labels)).toBe('Användare deadbeef')
     expect(formatActorLabel({ type: 'user', user_id: null, actor_label: null }, labels)).toBe('Okänd användare')
-    expect(formatActorLabel({ type: 'api_key', user_id: 'user-1', actor_label: 'Zapier' }, labels)).toBe('API-nyckel: Zapier')
-    expect(formatActorLabel({ type: 'mcp_oauth', user_id: null, actor_label: null }, labels)).toBe('MCP-anslutning')
-    expect(formatActorLabel({ type: 'agent_chat', user_id: 'user-1', actor_label: null }, labels)).toBe('Assistenten, på uppdrag av anna@example.se')
+    // An agent is named with the person it acted for, never by its credential.
+    expect(formatActorLabel({ type: 'api_key', user_id: 'user-1', actor_label: 'Zapier' }, labels)).toBe('Zapier åt anna@example.se')
+    expect(formatActorLabel({ type: 'api_key', user_id: 'user-1', actor_label: 'Claude (Anthropic)' }, labels)).toBe('Claude åt anna@example.se')
+    expect(formatActorLabel({ type: 'api_key', user_id: 'user-1', actor_label: 'MCP-klient (OAuth)' }, labels)).toBe('AI-anslutning åt anna@example.se')
+    expect(formatActorLabel({ type: 'api_key', user_id: 'deadbeef-0000', actor_label: 'Zapier' }, labels)).toBe('Zapier åt Användare deadbeef')
+    expect(formatActorLabel({ type: 'mcp_oauth', user_id: null, actor_label: null }, labels)).toBe('AI-anslutning')
+    expect(formatActorLabel({ type: 'agent_chat', user_id: 'user-1', actor_label: null }, labels)).toBe('Assistenten åt anna@example.se')
     expect(formatActorLabel({ type: 'cron', user_id: null, actor_label: null }, labels)).toBe('Schemalagd körning')
     expect(formatActorLabel({ type: 'system', user_id: null, actor_label: 'seed' }, labels)).toBe('Systemet: seed')
     // A service account acts for its sponsor, the user the row carries.
     expect(formatActorLabel({ type: 'service_account', user_id: 'user-1', actor_label: 'Nattlig synk' }, labels)).toBe(
-      'Tjänstekonto: Nattlig synk, på uppdrag av anna@example.se',
+      'Tjänstekontot Nattlig synk åt anna@example.se',
     )
-    expect(formatActorLabel({ type: 'service_account', user_id: null, actor_label: null }, labels)).toBe('Tjänstekonto')
+    expect(formatActorLabel({ type: 'service_account', user_id: null, actor_label: null }, labels)).toBe('Ett tjänstekonto')
   })
 })
 
@@ -1087,12 +1091,12 @@ describe('generateBehandlingshistorik', () => {
     ])
     expect(report!.total_events).toBe(7)
     expect(report!.by_category).toMatchObject({ verifikation: 3, kontoplan: 1, installningar: 1, import: 2 })
-    // Labels resolved through the injected resolver, machine actors kept.
+    // Labels resolved through the injected resolver; a key named with the person it acted for.
     expect(resolve).toHaveBeenCalledWith(expect.arrayContaining(['user-1', 'user-3']))
     const byCode = Object.fromEntries(report!.events.map((e) => [e.id, e]))
     expect(byCode['entry:entry-1'].actor.label).toBe('anna@example.se')
     expect(byCode['sie:s1'].actor.label).toBe('kim@example.se')
-    expect(byCode['audit:a3'].actor.label).toBe('API-nyckel: Revisorn')
+    expect(byCode['audit:a3'].actor.label).toBe('Revisorn åt anna@example.se')
     // The sie import outside the window is not included.
     expect(byCode['sie:s0']).toBeUndefined()
   })
@@ -1797,14 +1801,14 @@ describe('decisionEvents', () => {
       'Valt förslag: regel, konto 5410',
       'Säkerhet: 92 %',
       'Bokfört konto: 5410',
-      'Föreslaget av: MCP-anslutning: Claude',
+      'Föreslaget av: Claude',
     ])
   })
 
   it("quotes the agent's reason, as the approver saw it, after who proposed it; nothing when none was given", () => {
     const reason = 'Clas Ohlson every month on 5410; the receipt is attached.'
     const [ev] = decisionEvents(buildDecisionReceipts([row({ actor_type: 'mcp_oauth', agent_reason: reason })], ctx))
-    expect(ev.details.slice(-2)).toEqual(['Föreslaget av: MCP-anslutning: Claude', `Agentens motivering: ${reason}`])
+    expect(ev.details.slice(-2)).toEqual(['Föreslaget av: Claude', `Agentens motivering: ${reason}`])
     const [plain] = decisionEvents(buildDecisionReceipts([row({ actor_type: 'mcp_oauth', agent_reason: null })], ctx))
     expect(plain.details.some((d) => d.startsWith('Agentens motivering'))).toBe(false)
   })
@@ -1887,7 +1891,7 @@ describe('decisionEvents', () => {
       event: 'Samlingsbeslut',
       object: 'A12',
       count: 3,
-      details: ['3 banktransaktioner i en verifikation', 'Förslag följt: 2', 'Bokfört utan förslag: 1', 'Föreslaget av: MCP-anslutning: Claude'],
+      details: ['3 banktransaktioner i en verifikation', 'Förslag följt: 2', 'Bokfört utan förslag: 1', 'Föreslaget av: Claude'],
     })
   })
 
@@ -1917,7 +1921,7 @@ describe('decisionEvents', () => {
       'Förslag: 1 (agentförslag)',
       'Valt förslag: agentförslag',
       'Modell: claude-x',
-      'Föreslaget av: Tjänstekonto: Attestharness',
+      'Föreslaget av: Tjänstekontot Attestharness',
       'Policy: staged-approval.1;approver=person, bedömning: krävde granskning',
     ])
   })
@@ -1992,6 +1996,50 @@ describe('generateBehandlingshistorik: Beslut och förslag', () => {
     for (const table of ['journal_entries', 'suggestion_log', 'pending_operations']) {
       expect(client.from).not.toHaveBeenCalledWith(table)
     }
+  })
+
+  it('names the person an agent proposal was staged for, read by operation id for agent proposals only', async () => {
+    const approved = {
+      id: 'sl-op', kind: 'operation', transaction_id: null, inbox_item_id: null, document_id: null, pending_operation_id: 'op-7',
+      suggestions: [{ source: 'pending_operation', source_id: 'op-7', rank: 0, proposal: { operation_type: 'create_voucher', risk_level: 'low' }, confidence: null, model: null, prompt_sha256: null, matches_final: true }],
+      acted_on: 0, final: { journal_entry_id: 'entry-1', operation_type: 'create_voucher', journal_entry_ids: ['entry-1'] },
+      outcome: 'accepted', actor_type: 'user', resolved_by: 'user-1', created_at: '2026-03-10T09:30:01.000Z',
+    }
+    const staged = {
+      id: 'op-7', operation_type: 'create_voucher', actor_type: 'api_key', actor_id: 'key-1', actor_label: 'Claude (Anthropic)', risk_level: 'low',
+      agent_metadata: null, created_at: '2026-03-10T09:29:00.000Z', resolved_at: '2026-03-10T09:30:02.000Z', journal_entry_id: 'entry-1', registration_journal_entry_id: null,
+    }
+    mockResults = {
+      fiscal_periods: [{ data: period }],
+      company_settings: [{ data: { company_name: 'T', org_number: null } }],
+      // The decisions statement does not return the operation's user: one read by id.
+      pending_operations: [{ data: [{ id: 'op-7', user_id: 'user-3' }] }],
+    }
+    rpcResults = {
+      behandlingshistorik_sources: ledger({ entries: [baseEntry] }),
+      behandlingshistorik_decisions: {
+        data: [{
+          rows: [approved],
+          entries: [{ id: 'entry-1', voucher_series: 'A', voucher_number: 12, status: 'posted', committed_actor_type: 'user', committed_actor_label: null, commit_method: 'user_accept' }],
+          operations: [staged],
+          legacy_by_entry: [],
+          legacy_by_registration: [],
+        }],
+        error: null,
+      },
+    }
+    const resolve = vi.fn().mockResolvedValue(new Map([['user-1', 'anna@example.se'], ['user-3', 'kim@example.se']]))
+    const client = makeClient()
+    const report = await generateBehandlingshistorik(client, 'company-1', { periodId: 'period-1' }, { resolveUserLabels: resolve })
+    const [decision] = report!.events.filter((e) => e.category === 'beslut')
+    expect(decision.actor.label).toBe('anna@example.se')
+    expect(decision.details).toContain('Föreslaget av: Claude åt kim@example.se')
+    expect(client.from).toHaveBeenCalledWith('pending_operations')
+    const read = client.from.mock.results[client.from.mock.calls.findIndex((c: unknown[]) => c[0] === 'pending_operations')].value
+    expect(read.select).toHaveBeenCalledWith('id, user_id')
+    expect(read.in).toHaveBeenCalledWith('id', ['op-7'])
+    // The sponsors' names are not asked for twice.
+    expect(resolve.mock.calls.flatMap((c: unknown[]) => c[0] as string[]).filter((id: string) => id === 'user-3')).toHaveLength(1)
   })
 
   it('lists no decision when the year has none', async () => {

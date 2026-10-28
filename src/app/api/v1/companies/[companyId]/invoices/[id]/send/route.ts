@@ -107,7 +107,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import { INVOICE_FULL_COLUMNS, INVOICE_ITEM_FULL_COLUMNS } from '@/lib/api/v1/invoice-columns'
 import { InvoiceEmailOverrideShape } from '@/lib/api/schemas'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
-import type { CompanySettings, Customer, EntityType, Invoice, InvoiceItem } from '@/types'
+import type { CompanySettings, Customer, Invoice, InvoiceItem } from '@/types'
 import { linkBasisColumns } from '@/lib/links/stamp'
 
 const InvoiceSendBody = z.object({

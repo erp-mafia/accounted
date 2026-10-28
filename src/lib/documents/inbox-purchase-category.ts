@@ -57,8 +57,6 @@ export const SetInboxPurchaseCategorySchema = z.object({
     ),
 })
 
-export type SetInboxPurchaseCategoryInput = z.infer<typeof SetInboxPurchaseCategorySchema>
-
 export interface SetInboxPurchaseCategoryResult {
   id: string
   /** What the item reads after the write: the person's choice, or the proposal once cleared. */

@@ -20,7 +20,7 @@ describe('matchSeedText', () => {
 
 describe('matchSeed', () => {
   it('settles a giro number outright', () => {
-    const hit = matchSeed(preclean('1655958320228 DBT.5050-1055 SKATTEVERK 144 240 1655958320228 350 Polytop AB'))
+    const hit = matchSeed(preclean('1655882244684 DBT.5050-1055 SKATTEVERK 144 240 1655882244684 350 Exempelbolaget AB'))
     expect(hit).toMatchObject({ name: 'Skatteverket', kind: 'authority', confidence: 0.98, key: 'bg:5050-1055' })
   })
 

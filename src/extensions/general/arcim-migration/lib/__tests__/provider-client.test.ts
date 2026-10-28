@@ -95,6 +95,10 @@ import {
   ConsentNotFoundError,
 } from '../provider-client'
 
+// Bokio company ids are GUIDs.
+const BOKIO_ID = '9b408943-7a1e-47ac-85a7-ac52b2c210d3'
+const UNKNOWN_BOKIO_ID = '00000000-0000-4000-8000-000000000000'
+
 describe('submitProviderToken', () => {
   let mock: ReturnType<typeof createQueuedMockSupabase>
 
@@ -116,7 +120,7 @@ describe('submitProviderToken', () => {
     mock.enqueue({ data: [] })
 
     await expect(
-      submitProviderToken('consent-other-tenant', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+      submitProviderToken('consent-other-tenant', 'bokio', 'tok', BOKIO_ID, 'company-A'),
     ).rejects.toBeInstanceOf(ConsentNotFoundError)
 
     // Only the ownership read happened: no token upsert, no consent update.
@@ -133,7 +137,7 @@ describe('submitProviderToken', () => {
       organizationNumber: '5560125790',
     })
 
-    const result = await submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A')
+    const result = await submitProviderToken('consent-1', 'bokio', 'tok', BOKIO_ID, 'company-A')
 
     expect(result).toEqual({ success: true, consentId: 'consent-1' })
     expect(tablesTouched()).toEqual([
@@ -162,7 +166,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -191,7 +195,7 @@ describe('submitProviderToken', () => {
     })
 
     await expect(
-      submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+      submitProviderToken('consent-1', 'bokio', 'tok', BOKIO_ID, 'company-A'),
     ).resolves.toEqual({ success: true, consentId: 'consent-1' })
 
     expect(tablesTouched()).toContain('provider_consent_tokens')
@@ -208,7 +212,7 @@ describe('submitProviderToken', () => {
     })
 
     await expect(
-      submitProviderToken('consent-1', 'bokio', 'tok', 'bokio-guid', 'company-A'),
+      submitProviderToken('consent-1', 'bokio', 'tok', BOKIO_ID, 'company-A'),
     ).resolves.toEqual({ success: true, consentId: 'consent-1' })
 
     // Labelled anyway: the wizard showing WHICH company was linked is what
@@ -225,7 +229,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bad-guid',
+      UNKNOWN_BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -233,6 +237,39 @@ describe('submitProviderToken', () => {
     expect(err).toMatchObject({ kind: 'company-not-found' })
 
     expect(tablesTouched()).not.toContain('provider_consent_tokens')
+  })
+
+  // 2026-10-27: a value without a GUID drew a Bokio 400 that the route
+  // answered with "try again", five times for one user.
+  it.each([
+    ['an org number', '556012-5790'],
+    ['the integration token in the wrong field', 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJ4In0.c2lnbmF0dXJl'],
+    ['two GUIDs to choose between', `${BOKIO_ID} ${UNKNOWN_BOKIO_ID}`],
+  ])('refuses %s as the company id before asking Bokio, storing nothing', async (_case, pasted) => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+
+    const err: unknown = await submitProviderToken('consent-1', 'bokio', 'tok', pasted, 'company-A')
+      .catch((e: unknown) => e)
+
+    expect(err).toBeInstanceOf(ProviderTokenInvalidError)
+    expect(err).toMatchObject({ kind: 'company-id-invalid' })
+    expect(mockBokioGetCompany).not.toHaveBeenCalled()
+    expect(tablesTouched()).toEqual(['provider_consents'])
+  })
+
+  it('takes the GUID out of a pasted Bokio address and asks Bokio with it alone', async () => {
+    mock.enqueue({ data: [{ id: 'consent-1' }] })
+    mock.enqueue({ data: { org_number: '5560125790' } })
+    mock.enqueue({ data: null })
+    mock.enqueue({ data: null })
+    mockBokioGetCompany.mockResolvedValueOnce({ name: 'Testbolaget AB', organizationNumber: '5560125790' })
+
+    await expect(submitProviderToken('consent-1', 'bokio', 'tok',
+      ` https://app.bokio.se/${BOKIO_ID}/overview `, 'company-A')).resolves.toEqual({ success: true, consentId: 'consent-1' })
+
+    expect(mockBokioGetCompany).toHaveBeenCalledWith('tok', BOKIO_ID)
+    const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as { provider_company_id?: string } | undefined
+    expect(upsert?.provider_company_id).toBe(BOKIO_ID)
   })
 
   it.each([401, 403])('maps a %s from the Bokio probe to invalid credentials', async (status) => {
@@ -245,7 +282,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -275,7 +312,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'secret-integration-token',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -306,7 +343,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -328,7 +365,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -349,13 +386,13 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       '  Bearer copied-token==\r\n',
-      '  bokio-guid  ',
+      `  ${BOKIO_ID}  `,
       'company-A',
     )
 
-    expect(mockBokioGetCompany).toHaveBeenCalledWith('copied-token==', 'bokio-guid')
+    expect(mockBokioGetCompany).toHaveBeenCalledWith('copied-token==', BOKIO_ID)
     const upsert = mock.findCall('provider_consent_tokens', 'upsert')?.[0] as Record<string, string>
-    expect(upsert).toMatchObject({ provider_company_id: 'bokio-guid' })
+    expect(upsert).toMatchObject({ provider_company_id: BOKIO_ID })
     expect(openConsentToken(upsert.access_token!)).toBe('copied-token==')
   })
 
@@ -367,7 +404,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 
@@ -383,7 +420,7 @@ describe('submitProviderToken', () => {
       'consent-1',
       'bokio',
       'tok',
-      'bokio-guid',
+      BOKIO_ID,
       'company-A',
     ).catch((e: unknown) => e)
 

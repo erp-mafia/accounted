@@ -14,17 +14,17 @@ describe('repairCharset', () => {
 
 describe('parseLbLine', () => {
   it('reads the payee, not the payer block, out of a Bankgiro payment-file line', () => {
-    const lb = parseLbLine('2617264 DBT.VIEWLEDGER AB 144 240 2617264 350 Brorsan Brorsan AB c/o Johan Crona')
-    expect(lb).toEqual({ payee: 'VIEWLEDGER AB', giro: null })
+    const lb = parseLbLine('2617264 DBT.LEVERANTOREN AB 144 240 2617264 350 Exempel Exempel AB c/o Kim Exempel')
+    expect(lb).toEqual({ payee: 'LEVERANTOREN AB', giro: null })
   })
 
   it('keeps the giro number when the payee is written with one', () => {
-    const lb = parseLbLine('1655958320228 DBT.5050-1055 SKATTEVERK 144 240 1655958320228 350 Polytop AB')
+    const lb = parseLbLine('1655882244684 DBT.5050-1055 SKATTEVERK 144 240 1655882244684 350 Exempelbolaget AB')
     expect(lb).toEqual({ payee: 'SKATTEVERK', giro: { scheme: 'bg', value: '5050-1055' } })
   })
 
   it('stops at the Fnr field', () => {
-    expect(parseLbLine('240 DBT.126-5974 LINDA WALLI Fnr 1180 144 Fnr 1180 350 Polytop AB')?.payee).toBe('LINDA WALLI')
+    expect(parseLbLine('240 DBT.126-5974 ANNA EXEMPEL Fnr 1180 144 Fnr 1180 350 Exempelbolaget AB')?.payee).toBe('ANNA EXEMPEL')
   })
 
   it('is null for ordinary memos', () => {
@@ -98,7 +98,7 @@ describe('preclean', () => {
   })
 
   it('uses the payment-file payee as the text and keeps the giro', () => {
-    const p = preclean('1655958320228 DBT.5050-1055 SKATTEVERK 144 240 1655958320228 350 Polytop AB Lucas Wickström')
+    const p = preclean('1655882244684 DBT.5050-1055 SKATTEVERK 144 240 1655882244684 350 Exempelbolaget AB Kim Exempel')
     expect(p.lbPayee).toBe('SKATTEVERK')
     expect(p.text).toBe('SKATTEVERK')
     expect(p.giro).toEqual({ scheme: 'bg', value: '5050-1055' })

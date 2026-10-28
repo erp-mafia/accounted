@@ -156,7 +156,6 @@ export const SalaryCalculationPolicySchema = z
 export const SalaryCalculationPolicyPatchSchema = z.object(conventions).partial().strict()
 
 export type SalaryCalculationPolicy = z.infer<typeof SalaryCalculationPolicySchema>
-export type SalaryCalculationPolicyPatch = z.infer<typeof SalaryCalculationPolicyPatchSchema>
 
 /** The historical engine behaviour, spelled out. */
 export const DEFAULT_SALARY_CALCULATION_POLICY: SalaryCalculationPolicy = SalaryCalculationPolicySchema.parse({})

@@ -78,6 +78,12 @@ interface CompanyContextValue {
    * greyed with a lock instead of hiding them. Optional; absent = none.
    */
   lockedCompanyIds?: string[]
+  /**
+   * Where "Lägg till företag" leads for this user (addCompanyHref): the
+   * journey when the BankID picker would be empty. Optional; absent = the
+   * picker door, which redirects on its own.
+   */
+  addCompanyHref?: string
 }
 
 const CompanyContext = createContext<CompanyContextValue | null>(null)

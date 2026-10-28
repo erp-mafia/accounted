@@ -30,12 +30,6 @@ function load(companyId: string, force = false): Promise<BankSwitchProgressView 
   return promise
 }
 
-/** Tests and a finished switch: forget the cached answer so the next mount asks again. */
-export function invalidateBankSwitchCampaign(companyId?: string): void {
-  if (companyId) cache.delete(companyId)
-  else cache.clear()
-}
-
 /**
  * The switch campaign as it applies to the active company (GET
  * /api/bank/open-payments/switch-progress): whether it is on, the deadline,
