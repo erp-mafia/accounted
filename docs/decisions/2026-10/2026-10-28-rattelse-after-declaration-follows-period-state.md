@@ -1,0 +1,1 @@
+[2026-10-28] A filed VAT or AGI declaration does not restrict rättelse: storno and inline rättelse follow only close, lock and lock date, as the RPCs always did; the docs said storno-only past a declaration. Changes after filing are shown instead (!980).

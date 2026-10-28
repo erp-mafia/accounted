@@ -40,7 +40,10 @@ Two invariants hold for every entry:
     strike-and-replace inside the same voucher, keeping the original
     readable and writing an immutable who/when record to
     `journal_entry_rattelse_log`. Only while the period is open and
-    unlocked; past a lock, close, or declared state, storno is the only path.
+    unlocked; past a lock, close, or lock date, storno is the only path.
+    A filed VAT or AGI declaration does not freeze the period: both paths
+    stay open, and the VAT page shows every change made after filing
+    (`src/lib/vat/filed-period-changes.ts`) so the declaration is corrected.
 
 If a gap still occurs in a voucher series (for example around imported
 history), it must be documented, and the explanation is stored
