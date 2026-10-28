@@ -483,7 +483,7 @@ GET /companies/{companyId}/bank-feed/banks/{bic} : One bank's details: how a per
 POST /companies/{companyId}/bank-feed/invites : Send the company's firmatecknare a link to connect the bank with BankID, without an Accounted login [scope:transactions:write risk:medium idempotent dry-run]
 GET /companies/{companyId}/bank-feed/switch-progress : Where the company stands in the switch from Enable Banking to Open Payments [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/cash-accounts : List bank/cash accounts with the bank-reported balance [scope:transactions:read risk:low idempotent]
-POST /companies/{companyId}/cash-accounts : Create a bank account by hand (no bank connection), with the payee details invoices print [scope:companies:write risk:low idempotent dry-run]
+POST /companies/{companyId}/cash-accounts : Create a bank account by hand (no bank connection), with the payee details invoices print, or a company card [scope:companies:write risk:low idempotent dry-run]
 PATCH /companies/{companyId}/cash-accounts/{id} : Edit a bank account: verifikationsserie, payee details, name, or turn it on/off [scope:companies:write risk:medium idempotent dry-run reversible]
 POST /companies/{companyId}/cash-accounts/{id}/set-primary : Make a bank account the company's primary [scope:companies:write risk:medium idempotent dry-run reversible]
 PUT /companies/{companyId}/cash-accounts/payee-defaults : Choose which bank account invoices in a currency tell the customer to pay to [scope:companies:write risk:medium idempotent dry-run reversible]

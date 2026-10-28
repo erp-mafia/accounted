@@ -17,6 +17,7 @@ import {
 import { coerceDimensionsBag, dimensionsBagKey } from './dimension-resolver'
 import { detectOwnAccountTransfer } from './own-account-detector'
 import { bankSideOf, settleBankLeg } from './bank-leg'
+import { loadCardLedgers, needsCardLedgers } from '@/lib/cash-accounts/load-card-ledgers'
 import type {
   MappingRule,
   MappingResult,
@@ -129,6 +130,16 @@ async function evaluateMappingRulesUnsettled(
   vatRegistered?: VatRegistration
 ): Promise<MappingResult> {
   const bankAccount = settlementAccount || '1930'
+  // A proposal whose bank leg is one of the company's card ledgers (a rule or
+  // template that still carries the 2890 it was booked on) settles on this
+  // row's ledger like a stale 19xx leg. The card ledgers are read only then.
+  const settle = async (result: MappingResult): Promise<MappingResult> =>
+    applySettlementAccount(
+      result,
+      bankAccount,
+      transaction.amount,
+      needsCardLedgers(result, transaction.amount, bankAccount) ? await loadCardLedgers(supabase, companyId) : [],
+    )
 
   // Pre-step: detect intra-company transfers. When the counterparty IBAN
   // matches another cash_accounts row for the same company, book both legs
@@ -175,10 +186,10 @@ async function evaluateMappingRulesUnsettled(
     const counterpartyResult = await evaluateCounterpartyTemplates(
       supabase, companyId, transaction, entityType, vatRegistered,
     )
-    if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount, transaction.amount)
+    if (counterpartyResult) return settle(counterpartyResult)
 
     const templateResult = await evaluateTemplateRules(supabase, companyId, transaction, entityType, vatRegistered)
-    if (templateResult) return applySettlementAccount(templateResult, bankAccount, transaction.amount)
+    if (templateResult) return settle(templateResult)
     return getDefaultResult(transaction, bankAccount)
   }
 
@@ -186,11 +197,7 @@ async function evaluateMappingRulesUnsettled(
   for (const rule of rules as MappingRule[]) {
     if (matchesRule(rule, transaction)) {
       const ruleResult = buildResult(rule, transaction, entityType, vatRegistered)
-      return applySettlementAccount(
-        await withLearnedDimensions(supabase, companyId, transaction, entityType, ruleResult, vatRegistered),
-        bankAccount,
-        transaction.amount,
-      )
+      return settle(await withLearnedDimensions(supabase, companyId, transaction, entityType, ruleResult, vatRegistered))
     }
   }
 
@@ -198,11 +205,11 @@ async function evaluateMappingRulesUnsettled(
   const counterpartyResult = await evaluateCounterpartyTemplates(
     supabase, companyId, transaction, entityType, vatRegistered,
   )
-  if (counterpartyResult) return applySettlementAccount(counterpartyResult, bankAccount, transaction.amount)
+  if (counterpartyResult) return settle(counterpartyResult)
 
   // Try template-based matching before default fallback
   const templateResult = await evaluateTemplateRules(supabase, companyId, transaction, entityType, vatRegistered)
-  if (templateResult) return applySettlementAccount(templateResult, bankAccount, transaction.amount)
+  if (templateResult) return settle(templateResult)
 
   return getDefaultResult(transaction, bankAccount)
 }
@@ -604,8 +611,10 @@ export function applySettlementAccount(
   result: MappingResult,
   bankAccount: string,
   transactionAmount: number,
+  /** The company's card ledgers (load-card-ledgers.ts): a bank leg on one moves too. */
+  moneyLedgers: readonly string[] = [],
 ): MappingResult {
-  return settleBankLeg(result, bankSideOf(transactionAmount), bankAccount)
+  return settleBankLeg(result, bankSideOf(transactionAmount), bankAccount, moneyLedgers)
 }
 
 /**

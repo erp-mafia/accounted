@@ -237,19 +237,18 @@ export async function planManualBankAccount(
 }
 
 /**
- * The writing half: make sure the planned number exists in the chart so
- * bookings and pickers can see it, then insert the manual row.
+ * Make sure a cash account's ledger exists in the company's chart, named by
+ * BAS (or the fallback name for a number BAS does not name), so bookings and
+ * pickers can see it. Shared by the bank and the company-card create paths.
  */
-export async function insertManualBankAccount(
+export async function ensureChartAccount(
   supabase: SupabaseClient,
   companyId: string,
   userId: string,
-  input: CreateManualBankAccountInput,
-  plan: ManualBankAccountPlan,
-): Promise<CashAccount> {
-  const ledger = plan.ledger_account
-  const currency = plan.currency
-  const chartName = getBASReference(ledger)?.account_name ?? `Bankkonto ${currency}`
+  ledger: string,
+  fallbackName: string,
+): Promise<void> {
+  const chartName = getBASReference(ledger)?.account_name ?? fallbackName
   const sync = await syncMappedAccounts(
     supabase,
     companyId,
@@ -268,6 +267,22 @@ export async function insertManualBankAccount(
   if (sync.error) {
     throw new Error(`chart sync failed for ${ledger}: ${sync.error}`)
   }
+}
+
+/**
+ * The writing half: make sure the planned number exists in the chart so
+ * bookings and pickers can see it, then insert the manual row.
+ */
+export async function insertManualBankAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  userId: string,
+  input: CreateManualBankAccountInput,
+  plan: ManualBankAccountPlan,
+): Promise<CashAccount> {
+  const ledger = plan.ledger_account
+  const currency = plan.currency
+  await ensureChartAccount(supabase, companyId, userId, ledger, `Bankkonto ${currency}`)
 
   const payee = input.payee ?? {}
   const { data, error } = await supabase

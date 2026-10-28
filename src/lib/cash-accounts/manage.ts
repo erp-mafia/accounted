@@ -34,11 +34,12 @@
 import type { z } from 'zod'
 import type { CashAccount, Currency } from '@/types'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
-import type { CreateCashAccountSchema, UpdateCashAccountFieldsSchema } from '@/lib/api/schemas'
+import type { CreateCardAccountSchema, CreateCashAccountSchema, UpdateCashAccountFieldsSchema } from '@/lib/api/schemas'
 import { UUID_RE } from '@/lib/invariants/uuid'
 import { hasOpenTransactions, setEnabled, setVoucherSeries } from '@/lib/cash-accounts/service'
 import { isBankCashAccount, isUsableInvoicePayee } from '@/lib/cash-accounts/invoice-payee-rules'
 import {
+  ensureChartAccount,
   insertManualBankAccount,
   loadInvoicePayeeState,
   planManualBankAccount,
@@ -49,13 +50,16 @@ import {
   type PayeeUpdate,
 } from '@/lib/cash-accounts/invoice-payee'
 import { makePrimary, primaryIneligibleReason } from '@/lib/cash-accounts/primary'
+import { isCardLedgerAccount, suggestCardLedger, type CardLedgerUsage } from '@/lib/cash-accounts/card-ledger'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 
 const BANK_ADMIN_MESSAGE = 'Bara företagets ägare eller en administratör kan ändra bankkonton och betaluppgifter.'
+const CARD_ADMIN_MESSAGE = 'Bara företagets ägare eller en administratör kan lägga till företagskort.'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
 export type CreateCashAccountInput = z.infer<typeof CreateCashAccountSchema>
+export type CreateCardAccountInput = z.infer<typeof CreateCardAccountSchema>
 export type UpdateCashAccountInput = z.infer<typeof UpdateCashAccountFieldsSchema>
 
 /** The keys of UpdateCashAccountSchema that are payee concerns (owner/admin). */
@@ -166,6 +170,131 @@ export async function createCashAccount(
     log.error('cash_accounts create failed', err as Error)
     return failed(err)
   }
+}
+
+/**
+ * A company card (företagskort): a cash account of kind 'card' whose
+ * statement rows book against a liability account (lib/cash-accounts/
+ * card-ledger.ts). Owner/admin, like a bank account: it decides where card
+ * purchases settle. The ledger is the one asked for, or the suggestion: the
+ * first card ledger no cash account holds and no verifikat uses, so the card
+ * stays reconcilable against its statement (2890 only when unused). Adds the
+ * chart row the ledger needs, as the bank path does. No verifikat is
+ * created, so nothing here touches the books.
+ */
+export async function createCardAccount(
+  ctx: OperationContext,
+  input: CreateCardAccountInput,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<CashAccount>> {
+  const { supabase, companyId, userId, log } = ctx
+  const denied = await requireCompanyAdmin(ctx, CARD_ADMIN_MESSAGE)
+  if (denied) return denied
+
+  const requested = input.ledger_account?.trim() || null
+  // The schema holds the allowlist; checked again here because the database
+  // CHECK would otherwise be the first to say so, as a 500.
+  if (requested !== null && !isCardLedgerAccount(requested)) {
+    return { ok: false, code: 'CARD_ACCOUNT_LEDGER_INVALID', details: { ledger_account: requested } }
+  }
+
+  const { data: existing, error: existingError } = await supabase
+    .from('cash_accounts')
+    .select('id, ledger_account')
+    .eq('company_id', companyId)
+  if (existingError) return failed(existingError)
+  const taken = new Set(((existing ?? []) as { ledger_account: string }[]).map((row) => row.ledger_account))
+
+  let ledger = requested
+  let autoPicked = false
+  if (ledger !== null) {
+    if (taken.has(ledger)) {
+      return { ok: false, code: 'CASH_ACCOUNT_LEDGER_TAKEN', details: { ledger_account: ledger } }
+    }
+  } else {
+    let usage: Record<string, CardLedgerUsage>
+    try {
+      usage = await loadCardLedgerUsage(ctx)
+    } catch (err) {
+      log.error('card ledger usage lookup failed', err as Error)
+      return failed(err)
+    }
+    ledger = suggestCardLedger({ taken, usage }).ledger
+    if (ledger === null) return { ok: false, code: 'CARD_ACCOUNT_NO_FREE_LEDGER' }
+    autoPicked = true
+  }
+
+  const name = input.name.trim()
+  const currency = input.currency.toUpperCase()
+  const cardLast4 = input.card_last4 && input.card_last4.length > 0 ? input.card_last4 : null
+  const voucherSeries = input.voucher_series ?? null
+
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      preview: {
+        name,
+        kind: 'card',
+        currency,
+        ledger_account: ledger,
+        ledger_auto_picked: autoPicked,
+        card_issuer: input.card_issuer,
+        card_last4: cardLast4,
+        voucher_series: voucherSeries,
+        source: 'manual',
+      },
+    }
+  }
+
+  try {
+    await ensureChartAccount(supabase, companyId, userId, ledger, name)
+
+    const { data, error } = await supabase
+      .from('cash_accounts')
+      .insert({
+        company_id: companyId,
+        ledger_account: ledger,
+        currency,
+        name,
+        kind: 'card',
+        card_issuer: input.card_issuer,
+        card_last4: cardLast4,
+        voucher_series: voucherSeries,
+        enabled: true,
+        is_primary: false,
+        invoice_payee: false,
+        source: 'manual',
+      })
+      .select('*')
+      .single()
+    if (error) {
+      // Another card or account took the ledger between the read and the write.
+      if ((error as { code?: string }).code === '23505') {
+        return { ok: false, code: 'CASH_ACCOUNT_LEDGER_TAKEN', details: { ledger_account: ledger } }
+      }
+      throw new Error(`cash_accounts insert failed: ${error.message}`)
+    }
+    return { ok: true, data: data as CashAccount, created: true }
+  } catch (err) {
+    log.error('card account create failed', err as Error)
+    return failed(err)
+  }
+}
+
+/**
+ * How many journal lines each card ledger candidate already carries in this
+ * company (any status, the kontoplan's own usage aggregate). A ledger absent
+ * from the answer is unused.
+ */
+async function loadCardLedgerUsage(ctx: OperationContext): Promise<Record<string, CardLedgerUsage>> {
+  const { data, error } = await ctx.supabase.rpc('get_account_usage_counts', { p_company_id: ctx.companyId })
+  if (error) throw new Error(`get_account_usage_counts failed: ${error.message}`)
+  const usage: Record<string, CardLedgerUsage> = {}
+  for (const row of (data ?? []) as { account_number: string; usage_count: number }[]) {
+    if (isCardLedgerAccount(row.account_number)) usage[row.account_number] = { lines: Number(row.usage_count) || 0 }
+  }
+  return usage
 }
 
 // ---------------------------------------------------------------------------

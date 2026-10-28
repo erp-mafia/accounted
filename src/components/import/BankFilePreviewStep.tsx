@@ -16,13 +16,24 @@ import {
   TableRow,
 } from '@/components/ui/table'
 import { ArrowLeftIcon, ArrowRightIcon, ExclamationTriangleIcon } from '@/components/icons'
+import { Switch } from '@/components/ui/switch'
 import { formatCurrency } from '@/lib/utils'
 import { summarizeByCurrency } from '@/lib/import/bank-file/currency-summary'
+import { cardStatementStats } from '@/lib/import/bank-file/card-statement'
 import type { BankFileParseResult, BankFileDuplicateInfo } from '@/lib/import/bank-file/types'
+import type { ImportStat } from '@/components/import/ImportStatRow'
 
 interface BankFilePreviewStepProps {
   parseResult: BankFileParseResult
   duplicateInfo?: BankFileDuplicateInfo | null
+  /**
+   * The company card the statement is imported to. The rows arrive in the
+   * stored sign (a purchase negative); the switch says whether the file
+   * printed purchases as plus, which flips every row.
+   */
+  card?: { name: string; ledger_account: string } | null
+  cardSignsFlipped?: boolean
+  onCardSignsFlippedChange?: (flipped: boolean) => void
   onContinue: () => void
   onBack: () => void
 }
@@ -30,6 +41,9 @@ interface BankFilePreviewStepProps {
 export default function BankFilePreviewStep({
   parseResult,
   duplicateInfo,
+  card,
+  cardSignsFlipped = false,
+  onCardSignsFlippedChange,
   onContinue,
   onBack,
 }: BankFilePreviewStepProps) {
@@ -49,11 +63,56 @@ export default function BankFilePreviewStep({
   // original array index the server flagged.
   const duplicateRowSet = new Set(duplicateInfo?.duplicate_row_indexes ?? [])
 
+  // A card statement reads as what it is: purchases, fees, the payment and
+  // refunds, each with its count (one currency: the card's).
+  const cardStats = card ? cardStatementStats(transactions) : null
+  const cardCurrency = cardStats?.currencies.length === 1 ? cardStats.currencies[0] : 'SEK'
+  const cardStatRow: ImportStat[] | null = cardStats
+    ? [
+        {
+          key: 'period',
+          label: t('import_card_period'),
+          value: t('import_card_period_value', { from: date_from || '-', to: date_to || '-' }),
+          plain: true,
+        },
+        ...([
+          ['purchases', cardStats.purchases],
+          ['fees', cardStats.fees],
+          ['payments', cardStats.payments],
+          ['refunds', cardStats.refunds],
+        ] as const)
+          .filter(([key, group]) => key === 'purchases' || group.count > 0)
+          .map(([key, group]) => ({
+            key,
+            label: t(`import_card_${key}`, { count: group.count }),
+            value: formatCurrency(group.total, cardCurrency),
+          })),
+      ]
+    : null
+
   return (
     <div className="space-y-6">
+      {card && (
+        <div className="flex items-start justify-between gap-4 border-b border-border pb-4">
+          <div className="min-w-0">
+            <label htmlFor="card-sign-switch" className="block text-[13px] font-medium">
+              {t('import_card_sign_label')}
+            </label>
+            <div className="text-[12.5px] text-muted-foreground">
+              {t('import_card_sign_hint', { card: card.name, ledger: card.ledger_account })}
+            </div>
+          </div>
+          <Switch
+            id="card-sign-switch"
+            checked={cardSignsFlipped}
+            onCheckedChange={(checked) => onCardSignsFlippedChange?.(checked)}
+          />
+        </div>
+      )}
+
       {/* Summary: flat label/number pairs, no boxed tiles */}
       <ImportStatRow
-        stats={[
+        stats={cardStatRow ?? [
           {
             key: 'rows',
             label: 'Transaktioner',
@@ -115,7 +174,7 @@ export default function BankFilePreviewStep({
             <Table>
               <TableHeader>
                 <TableRow>
-                  <TableHead className="w-28">Datum</TableHead>
+                  <TableHead className="w-28">{card ? t('import_card_purchase_date') : 'Datum'}</TableHead>
                   <TableHead>Beskrivning</TableHead>
                   <TableHead className="text-right w-32">Belopp</TableHead>
                   {transactions.some((t) => t.balance != null) && (
@@ -129,7 +188,7 @@ export default function BankFilePreviewStep({
               <TableBody>
                 {transactions.slice(0, 50).map((tx, i) => (
                   <TableRow key={i}>
-                    <TableCell className="font-mono text-sm">{tx.date}</TableCell>
+                    <TableCell className="whitespace-nowrap font-mono text-sm">{tx.date}</TableCell>
                     <TableCell className="text-sm">
                       {tx.description}
                       {duplicateRowSet.has(i) && (

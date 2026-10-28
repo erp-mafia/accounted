@@ -40,10 +40,16 @@ export function cashAccountBankName(account: CashAccountWithBank): string | null
 /**
  * Konto cell text: the bank plus the account's last digits (from its bank
  * IBAN, the identity every sync writes), or its ledger account when the
- * account has no IBAN.
+ * account has no IBAN. A company card shows its card's last four digits.
  */
 export function cashAccountKontoLabel(account: CashAccountWithBank): string {
   const bank = cashAccountBankName(account) ?? ''
+  // A company card has no IBAN: its last four digits name it ("Eurocard
+  // ••3667"), its ledger account when none was given.
+  if (account.kind === 'card') {
+    const last4 = account.card_last4?.[0]
+    return `${bank} ${last4 ? `••${last4}` : account.ledger_account}`.trim()
+  }
   const iban = account.iban?.replace(/\s/g, '') ?? ''
   const tail = iban ? `••${iban.slice(-4)}` : account.ledger_account
   return `${bank} ${tail}`.trim()

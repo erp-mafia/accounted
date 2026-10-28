@@ -324,6 +324,8 @@ describe('POST /api/transactions', () => {
     expect(findCalls('cash_accounts', 'eq')).toEqual([
       ['company_id', 'company-1'],
       ['enabled', true],
+      // A company card never takes a row created without an account.
+      ['kind', 'bank'],
       ['currency', 'SEK'],
     ])
     expect(findCall('transactions', 'insert')?.[0]).toMatchObject({

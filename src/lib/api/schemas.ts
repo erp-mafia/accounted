@@ -30,6 +30,8 @@ import { ISO_DATE_RE, ISO_DATE_MESSAGE_SV } from '@/lib/invariants/iso-date'
 import { orgNumberKey } from '@/lib/invariants/org-number'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { DIMENSION_RULE_POLICY } from '@/lib/bookkeeping/dimension-rule-policy'
+import { CARD_LEDGER_PATTERN, CARD_LEDGER_RANGE_TEXT, CASH_OR_CARD_LEDGER_PATTERN } from '@/lib/cash-accounts/card-ledger'
+import { CARD_ISSUERS } from '@/types'
 import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CUSTOMER_ADVANCE_ACCOUNT } from '@/lib/bookkeeping/overpayment'
@@ -2885,14 +2887,16 @@ export const UpdateTransactionTitleSchema = z.object({
 
 /**
  * Move an unbooked bank transaction to another of the company's cash accounts,
- * addressed by the target's BAS 19xx ledger account. Deliberately no null
- * variant: unassigning a row would just re-strand it under the primary
- * account's report (the exact symptom the move action exists to fix).
+ * addressed by the target's ledger account: a BAS 19xx bank account, or a
+ * company card's liability account for a row already on a card (the service
+ * refuses a move between a bank and a card). Deliberately no null variant:
+ * unassigning a row would just re-strand it under the primary account's
+ * report (the exact symptom the move action exists to fix).
  */
 export const MoveTransactionCashAccountSchema = z.object({
   account_number: z
     .string()
-    .regex(/^19\d{2}$/, 'Expected a BAS 19xx bank account number'),
+    .regex(CASH_OR_CARD_LEDGER_PATTERN, 'Expected a BAS 19xx bank account or a company card account number'),
 })
 
 /**
@@ -3470,6 +3474,102 @@ export const CreateCashAccountSchema = z.object({
   invoice_payee: z.boolean().optional(),
   payee: InvoicePaymentAccountSchema.optional(),
 }).strict()
+
+const CARD_LEDGER_MESSAGE = `Ett företagskort bokförs på ${CARD_LEDGER_RANGE_TEXT}`
+
+/** The card's liability account: the allowlist of the cash_accounts_card_shape CHECK. */
+const CardLedgerAccountSchema = z.string().regex(CARD_LEDGER_PATTERN, CARD_LEDGER_MESSAGE)
+
+/** The last four digits of each card billed on the statement, deduplicated. */
+const CardLast4Schema = z
+  .array(z.string().trim().length(4, 'Ange kortets fyra sista siffror').regex(/^\d+$/, 'Ange kortets fyra sista siffror'))
+  .min(1)
+  .max(20)
+  .transform((values) => [...new Set(values)])
+
+/**
+ * POST /api/cash-accounts with kind 'card': a company card (företagskort).
+ * Its statement rows book against a liability account (lib/cash-accounts/
+ * card-ledger.ts); it is never a payee, the primary or bank-connected, so it
+ * takes no payee fields. ledger_account omitted gets the suggested one.
+ */
+export const CreateCardAccountSchema = z.object({
+  kind: z.literal('card'),
+  name: z.string().trim().min(1, 'Ange ett namn').max(100),
+  currency: CurrencySchema,
+  card_issuer: z.enum(CARD_ISSUERS),
+  ledger_account: CardLedgerAccountSchema.optional(),
+  card_last4: CardLast4Schema.optional(),
+  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').nullable().optional(),
+}).strict()
+
+/**
+ * The one request shape of every create door (dashboard route, v1, MCP): a
+ * bank account (kind omitted or 'bank', CreateCashAccountSchema's rules) or
+ * a company card (kind 'card', CreateCardAccountSchema's rules). Flat, so the
+ * MCP tool keeps a plain object schema; the kind-specific rules run in the
+ * refinement and splitCreateCashAccountRequest() hands each service its own
+ * input.
+ */
+export const CreateCashAccountRequestSchema = CreateCashAccountSchema.extend({
+  kind: z.enum(['bank', 'card']).optional(),
+  ledger_account: accountNumberSchema.optional(),
+  card_issuer: z.enum(CARD_ISSUERS).optional(),
+  card_last4: CardLast4Schema.optional(),
+  voucher_series: z.string().regex(/^[A-Z]$/, 'Verifikationsserie måste vara en bokstav A-Z').nullable().optional(),
+}).superRefine((value, ctx) => {
+  const issue = (path: string, message: string) => ctx.addIssue({ code: 'custom', path: [path], message })
+  if (value.kind === 'card') {
+    if (value.ledger_account !== undefined && !CARD_LEDGER_PATTERN.test(value.ledger_account)) {
+      issue('ledger_account', CARD_LEDGER_MESSAGE)
+    }
+    if (value.card_issuer === undefined) issue('card_issuer', 'Välj kortutgivare')
+    if (value.payee !== undefined) issue('payee', 'Ett företagskort har inga betaluppgifter')
+    if (value.invoice_payee === true) issue('invoice_payee', 'Ett företagskort visas aldrig som betalningsmottagare')
+    return
+  }
+  if (value.ledger_account !== undefined && !/^19[2-9]\d$/.test(value.ledger_account)) {
+    issue('ledger_account', 'Bankkonton bokförs på 1920-1999')
+  }
+  if (value.card_issuer !== undefined) issue('card_issuer', 'Bara ett företagskort har kortutgivare')
+  if (value.card_last4 !== undefined) issue('card_last4', 'Bara ett företagskort har kortsiffror')
+  if (value.voucher_series !== undefined) issue('voucher_series', 'Sätt verifikationsserien på kontot efteråt')
+})
+
+export type CreateCashAccountRequest = z.infer<typeof CreateCashAccountRequestSchema>
+
+/** A validated create request, split into the input of the service it names. */
+export function splitCreateCashAccountRequest(
+  request: CreateCashAccountRequest,
+):
+  | { kind: 'bank'; input: z.infer<typeof CreateCashAccountSchema> }
+  | { kind: 'card'; input: z.infer<typeof CreateCardAccountSchema> } {
+  if (request.kind === 'card') {
+    return {
+      kind: 'card',
+      input: {
+        kind: 'card',
+        name: request.name,
+        currency: request.currency,
+        // The refinement refused a card without an issuer.
+        card_issuer: request.card_issuer ?? 'other',
+        ...(request.ledger_account !== undefined ? { ledger_account: request.ledger_account } : {}),
+        ...(request.card_last4 !== undefined ? { card_last4: request.card_last4 } : {}),
+        ...(request.voucher_series !== undefined ? { voucher_series: request.voucher_series } : {}),
+      },
+    }
+  }
+  return {
+    kind: 'bank',
+    input: {
+      name: request.name,
+      currency: request.currency,
+      ...(request.ledger_account !== undefined ? { ledger_account: request.ledger_account } : {}),
+      ...(request.invoice_payee !== undefined ? { invoice_payee: request.invoice_payee } : {}),
+      ...(request.payee !== undefined ? { payee: request.payee } : {}),
+    },
+  }
+}
 
 /**
  * DELETE /api/cash-accounts/[id]: dry_run=true answers the same checks and
@@ -5985,7 +6085,8 @@ export const BankFileCheckDuplicatesSchema = z.object({
    * file's own account is a cash account here, crm#1204). With it the preview
    * applies execute's account guard; without it the guard never rejects.
    */
-  settlement_account: z.string().regex(/^19\d{2}$/).optional(),
+  // A 19xx bank ledger or a company card's liability ledger (execute's rule).
+  settlement_account: z.string().regex(CASH_OR_CARD_LEDGER_PATTERN).optional(),
 })
 
 /**

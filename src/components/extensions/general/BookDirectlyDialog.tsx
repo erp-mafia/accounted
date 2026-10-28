@@ -46,6 +46,7 @@ import DocumentViewerPane from '@/components/bookkeeping/DocumentViewerPane'
 import TemplateApplyButton from '@/components/bookkeeping/TemplateApplyButton'
 import { TemplateForm } from '@/components/settings/TemplateForm'
 import { deriveTemplateLinesFromBooking } from '@/lib/bookkeeping/template-library'
+import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { ActivateAccountsDialog } from '@/components/bookkeeping/ActivateAccountsDialog'
 import VoucherWarningsDialog from '@/components/bookkeeping/VoucherWarningsDialog'
 import type { VoucherWarning } from '@/lib/bookkeeping/voucher-plausibility'
@@ -259,9 +260,10 @@ export default function BookDirectlyDialog({ open, onOpenChange, item, docUrl = 
         const debit: string | undefined = match?.template?.debit_account
         const credit: string | undefined = match?.template?.credit_account
         if (!match || (match.confidence ?? 0) < 0.5) return
-        // P&L cost on debit (4xxx-8xxx), settlement on credit: keeps private
-        // and balance-sheet templates (2013, 1630, 12xx) out of a cost field.
-        if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
+        // P&L cost on debit (4xxx-8xxx), settlement on credit (a bank, or a
+        // company card's liability account): keeps private and balance-sheet
+        // templates (2013, 1630, 12xx) out of a cost field.
+        if (!debit || !/^[4-8]/.test(debit) || !credit || !(credit.startsWith('19') || isCardLedgerAccount(credit))) return
         setLines((current) => applyCostAccountSuggestion(current, debit))
         setAccountSuggestion({ account: debit, counterparty: match.template.counterparty_name })
       } catch {

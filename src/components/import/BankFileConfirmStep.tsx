@@ -14,6 +14,7 @@ import {
   ArrowLeftIcon,
   BuildingLibraryIcon,
   CalendarIcon,
+  CreditCardIcon,
   DocumentTextIcon,
   ExclamationCircleIcon,
   LinkIcon,
@@ -38,6 +39,11 @@ interface BankFileConfirmStepProps {
    * only ledgers offered, since execute refuses any other.
    */
   accountMatch?: FileAccountMatch | null
+  /**
+   * The company card the statement goes to (chosen before the preview, which
+   * set the sign): the only account, so no bank account is offered.
+   */
+  card?: { name: string; ledger_account: string } | null
   /** Why the last import attempt failed, if it did. */
   error?: string | null
   onExecute: (options: { skip_duplicates: boolean; auto_categorize: boolean; settlement_account?: string }) => void
@@ -49,6 +55,7 @@ export default function BankFileConfirmStep({
   parseResult,
   duplicateInfo,
   accountMatch,
+  card,
   error,
   onExecute,
   onBack,
@@ -66,7 +73,7 @@ export default function BankFileConfirmStep({
   // automatically rather than promising an exact final number.
   const duplicateCount = Math.min(Math.max(duplicateInfo?.duplicate_count ?? 0, 0), stats.parsed_rows)
 
-  const [selectedAccount, setSelectedAccount] = useState(accountMatch?.ledger_account ?? '1930')
+  const [selectedAccount, setSelectedAccount] = useState(card?.ledger_account ?? accountMatch?.ledger_account ?? '1930')
   // Active 19xx accounts from the session-cached chart (lib/reference-data):
   // the account select is populated on the first paint. A file whose bank
   // account is already a cash account offers only that account's ledger(s).
@@ -87,7 +94,7 @@ export default function BankFileConfirmStep({
     : null
   // Default to 1930 if available, otherwise the first account (once). A
   // matched file starts on its own account instead.
-  const defaultedRef = useRef(Boolean(accountMatch))
+  const defaultedRef = useRef(Boolean(accountMatch) || Boolean(card))
   useEffect(() => {
     if (defaultedRef.current || bankAccounts.length === 0) return
     defaultedRef.current = true
@@ -150,7 +157,7 @@ export default function BankFileConfirmStep({
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-xs">Inkomster</span>
+                <span className="text-xs">{card ? t('import_card_credits') : 'Inkomster'}</span>
               </div>
               {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
                 <p key={row.currency} className="text-xl font-display tabular-nums">
@@ -161,7 +168,7 @@ export default function BankFileConfirmStep({
 
             <div className="p-4 bg-muted/50 rounded-lg">
               <div className="flex items-center gap-2 text-muted-foreground mb-1">
-                <span className="text-xs">Utgifter</span>
+                <span className="text-xs">{card ? t('import_card_charges') : 'Utgifter'}</span>
               </div>
               {(currencyTotals.length ? currencyTotals : [{ currency: 'SEK', total_income: 0, total_expenses: 0 }]).map((row) => (
                 <p key={row.currency} className="text-xl font-display tabular-nums">
@@ -171,8 +178,16 @@ export default function BankFileConfirmStep({
             </div>
           </div>
 
+          {/* A card statement goes to its card, chosen before the preview. */}
+          {card && (
+            <div className="flex items-center gap-2 text-sm font-medium">
+              <CreditCardIcon className="h-4 w-4 text-muted-foreground" />
+              {t('import_card_target', { card: card.name, ledger: card.ledger_account })}
+            </div>
+          )}
+
           {/* Bank account selector */}
-          {bankAccounts.length > 1 && (
+          {!card && bankAccounts.length > 1 && (
             <div className="space-y-2">
               <Label className="flex items-center gap-2">
                 <BuildingLibraryIcon className="h-4 w-4 text-muted-foreground" />
@@ -199,7 +214,7 @@ export default function BankFileConfirmStep({
           )}
 
           {/* The file's own bank account is already a cash account here */}
-          {accountMatch && parseResult.account && matchedAccount && (
+          {!card && accountMatch && parseResult.account && matchedAccount && (
             <div className="space-y-1">
               {bankAccounts.length <= 1 && (
                 <div className="flex items-center gap-2 text-sm font-medium">
@@ -259,7 +274,7 @@ export default function BankFileConfirmStep({
             auto_categorize: false,
             // Always sent, 1930 included: ingest binds the rows to the account
             // named here, and an omitted default imported every row unbound.
-            settlement_account: selectedAccount,
+            settlement_account: card ? card.ledger_account : selectedAccount,
           })}
           loading={isLoading}
         >
@@ -268,7 +283,9 @@ export default function BankFileConfirmStep({
           ) : (
             <>
               <PlayIcon className="mr-2 h-4 w-4" />
-              Importera {stats.parsed_rows - duplicateCount} transaktioner
+              {card
+                ? t('import_card_submit', { count: stats.parsed_rows - duplicateCount, card: card.name, ledger: card.ledger_account })
+                : <>Importera {stats.parsed_rows - duplicateCount} transaktioner</>}
             </>
           )}
         </Button>

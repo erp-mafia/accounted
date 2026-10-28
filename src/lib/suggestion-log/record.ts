@@ -253,12 +253,20 @@ export function finalFromCategorize(input: {
   }
 }
 
-/** What a door that posts explicit lines booked (book route, bulk-book). */
-export function finalFromLines(journalEntryId: string, lines: BankLineFinal['lines']): BankLineFinal {
+/**
+ * What a door that posts explicit lines booked (book route, bulk-book). The
+ * row's settlement ledger, when given, is left out of the business account
+ * like 19xx is: a card row's 2890 is its bank leg.
+ */
+export function finalFromLines(
+  journalEntryId: string,
+  lines: BankLineFinal['lines'],
+  settlementLedgers: readonly string[] = [],
+): BankLineFinal {
   return {
     journal_entry_id: journalEntryId,
     booking: null,
-    account: businessAccountOfLines(lines),
+    account: businessAccountOfLines(lines, settlementLedgers),
     vat_treatment: null,
     lines,
   }

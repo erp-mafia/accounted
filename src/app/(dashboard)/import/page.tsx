@@ -54,6 +54,11 @@ import { applyMappingOverride, getMappingStats, isValidBASRange } from '@/lib/im
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
 import type { FileAccountMatch } from '@/lib/cash-accounts/file-account'
+import { isCardCashAccount } from '@/lib/cash-accounts/card-ledger'
+import { cardStatementPrintsPurchasesAsPlus, flipCardStatementSigns } from '@/lib/import/bank-file/card-statement'
+import { useCashAccounts } from '@/lib/reference-data/hooks'
+import { Label } from '@/components/ui/label'
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import type { SkattekontoFileParseResult } from '@/lib/import/skattekonto-file/types'
 import type { SkattekontoFileImportResult } from '@/components/import/SkattekontoFileResultStep'
 import type { IngestResult } from '@/types'
@@ -139,6 +144,9 @@ type BankFileStep = 'upload' | 'preview' | 'column_mapping' | 'confirm' | 'resul
 
 const BANK_STEPS: BankFileStep[] = ['upload', 'preview', 'confirm', 'result']
 const BANK_STEPS_WITH_MAPPING: BankFileStep[] = ['upload', 'column_mapping', 'confirm', 'result']
+// A card statement always shows the preview, after the mapping too: its sign
+// switch decides how every row lands.
+const CARD_STEPS_WITH_MAPPING: BankFileStep[] = ['upload', 'column_mapping', 'preview', 'confirm', 'result']
 
 const BANK_STEP_LABELS: Record<BankFileStep, string> = {
   upload: 'Ladda upp',
@@ -152,6 +160,20 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
   const { toast } = useToast()
   const tTx = useTranslations('transactions')
   const { company } = useCompany()
+  const wizardSearch = useSearchParams()
+
+  // The import's target: the bank (the file names its own account, or the
+  // confirm step picks one) or one of the company's cards, chosen up front
+  // because a card statement's sign is flipped before the preview
+  // (lib/import/bank-file/card-statement.ts). ?account=<card id> preselects
+  // it (the add-card dialog lands here).
+  const { cashAccounts } = useCashAccounts({ enabledOnly: true })
+  const cards = useMemo(() => cashAccounts.filter(isCardCashAccount), [cashAccounts])
+  const [cardTargetId, setCardTargetId] = useState<string | null>(() => wizardSearch.get('account'))
+  const cardTarget = useMemo(() => cards.find((card) => card.id === cardTargetId) ?? null, [cards, cardTargetId])
+  // Whether the file prints purchases as plus: preset by detection, the
+  // preview's switch overrides it. Only read with a card target.
+  const [flipCardSigns, setFlipCardSigns] = useState(false)
 
   const [bankStep, setBankStep] = useState<BankFileStep>('upload')
   const [bankIsLoading, setBankIsLoading] = useState(false)
@@ -165,8 +187,14 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
   // bank rows that already exist.
   const [depositSpecFile, setDepositSpecFile] = useState<File | null>(null)
 
-  // Parse results
-  const [parseResult, setParseResult] = useState<BankFileParseResult | null>(null)
+  // Parse results: as the file reads, and as the rows will be stored (a
+  // card statement flipped to the company's side when it prints purchases
+  // as plus). Preview, duplicate check and execute all read the stored form.
+  const [parsedResult, setParsedResult] = useState<BankFileParseResult | null>(null)
+  const parseResult = useMemo(
+    () => (parsedResult && cardTarget && flipCardSigns ? flipCardStatementSigns(parsedResult) : parsedResult),
+    [parsedResult, cardTarget, flipCardSigns],
+  )
   const [detectedFormat, setDetectedFormat] = useState<string | null>(null)
   const [detectedFormatName, setDetectedFormatName] = useState<string | null>(null)
   const [fileHash, setFileHash] = useState<string>('')
@@ -240,7 +268,26 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
     }
   }, [company?.id])
 
-  const steps = parseResult?.format === 'generic_csv' ? BANK_STEPS_WITH_MAPPING : BANK_STEPS
+  const steps = parseResult?.format === 'generic_csv'
+    ? (cardTarget ? CARD_STEPS_WITH_MAPPING : BANK_STEPS_WITH_MAPPING)
+    : BANK_STEPS
+
+  // A card statement: preset the sign switch from the rows and check for
+  // duplicates on the card's own ledger with the sign they will be stored with.
+  const checkCardStatement = useCallback((result: BankFileParseResult) => {
+    if (!cardTarget) return
+    const flip = cardStatementPrintsPurchasesAsPlus(result.transactions)
+    setFlipCardSigns(flip)
+    const stored = flip ? flipCardStatementSigns(result) : result
+    void checkDuplicates(stored.transactions, stored.format, cardTarget.ledger_account)
+  }, [cardTarget, checkDuplicates])
+
+  const handleFlipCardSigns = useCallback((flip: boolean) => {
+    setFlipCardSigns(flip)
+    if (!parsedResult || !cardTarget) return
+    const stored = flip ? flipCardStatementSigns(parsedResult) : parsedResult
+    void checkDuplicates(stored.transactions, stored.format, cardTarget.ledger_account)
+  }, [parsedResult, cardTarget, checkDuplicates])
 
   const handleFileSelect = useCallback(async (file: File, formatOverride?: BankFileFormatId) => {
     setBankError(null)
@@ -290,7 +337,7 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
         return
       }
 
-      setParseResult(data.data.parse_result)
+      setParsedResult(data.data.parse_result)
       const match: FileAccountMatch | null = data.data.account_match ?? null
       setAccountMatch(match)
       setDetectedFormat(data.data.detected_format)
@@ -317,11 +364,15 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
       } else if (txCount > 0) {
         // Fire-and-forget: the warning card/badges appear when the answer
         // lands; the wizard never waits for it.
-        void checkDuplicates(
-          data.data.parse_result.transactions,
-          data.data.parse_result.format,
-          match?.ledger_account,
-        )
+        if (cardTarget) {
+          checkCardStatement(data.data.parse_result)
+        } else {
+          void checkDuplicates(
+            data.data.parse_result.transactions,
+            data.data.parse_result.format,
+            match?.ledger_account,
+          )
+        }
         setBankStep('preview')
         toast({
           title: 'Fil analyserad',
@@ -348,19 +399,26 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
     } finally {
       setBankIsLoading(false)
     }
-  }, [toast, checkDuplicates])
+  }, [toast, checkDuplicates, cardTarget, checkCardStatement])
 
   const handleColumnMappingConfirm = useCallback(async (mapping: GenericCSVColumnMapping) => {
     // Re-parse with mapping via the generic CSV parser
     const { parseGenericCSV } = await import('@/lib/import/bank-file/formats/generic-csv')
     const result = parseGenericCSV(rawFileContent, mapping)
-    setParseResult(result)
+    setParsedResult(result)
+    // A card statement goes to the preview: its sign switch decides how
+    // every row lands.
+    if (cardTarget) {
+      checkCardStatement(result)
+      setBankStep('preview')
+      return
+    }
     // The generic path never re-hits the parse route, so this is its only
     // duplicate check. Fire-and-forget: the confirm step renders immediately
     // and the warning card appears when the answer lands.
     void checkDuplicates(result.transactions, 'generic_csv')
     setBankStep('confirm')
-  }, [rawFileContent, checkDuplicates])
+  }, [rawFileContent, checkDuplicates, cardTarget, checkCardStatement])
 
   const handleExecuteImport = useCallback(async (options: { skip_duplicates: boolean; auto_categorize: boolean; settlement_account?: string }) => {
     if (!parseResult) return
@@ -409,7 +467,8 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
 
   const handleNewImport = () => {
     setBankStep('upload')
-    setParseResult(null)
+    setParsedResult(null)
+    setFlipCardSigns(false)
     setDetectedFormat(null)
     setDetectedFormatName(null)
     setFileHash('')
@@ -447,6 +506,28 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
       {depositSpecFile && <BankDepositSpecStep file={depositSpecFile} onNewImport={handleNewImport} />}
 
       {/* Step content */}
+      {bankStep === 'upload' && !depositSpecFile && cards.length > 0 && (
+        <div className="space-y-2">
+          <Label htmlFor="bank-file-target">{tTx('import_target_label')}</Label>
+          <Select
+            value={cardTarget ? cardTarget.id : 'bank'}
+            onValueChange={(value) => setCardTargetId(value === 'bank' ? null : value)}
+          >
+            <SelectTrigger id="bank-file-target" className="w-full sm:w-80">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="bank">{tTx('import_target_bank')}</SelectItem>
+              {cards.map((card) => (
+                <SelectItem key={card.id} value={card.id}>
+                  {tTx('import_target_card', { name: card.name ?? card.ledger_account, ledger: card.ledger_account })}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       {bankStep === 'upload' && !depositSpecFile && (
         <BankFileUploadStep
           onFileSelect={handleFileSelect}
@@ -463,14 +544,18 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
         <BankFilePreviewStep
           parseResult={parseResult}
           duplicateInfo={duplicateInfo}
+          card={cardTarget ? { name: cardTarget.name ?? cardTarget.ledger_account, ledger_account: cardTarget.ledger_account } : null}
+          cardSignsFlipped={flipCardSigns}
+          onCardSignsFlippedChange={handleFlipCardSigns}
           onContinue={() => {
-            if (parseResult.format === 'generic_csv') {
+            // A card statement came through the mapping already.
+            if (parseResult.format === 'generic_csv' && !cardTarget) {
               setBankStep('column_mapping')
             } else {
               setBankStep('confirm')
             }
           }}
-          onBack={() => setBankStep('upload')}
+          onBack={() => setBankStep(parseResult.format === 'generic_csv' && cardTarget ? 'column_mapping' : 'upload')}
         />
       )}
 
@@ -487,10 +572,11 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
           parseResult={parseResult}
           duplicateInfo={duplicateInfo}
           accountMatch={accountMatch}
+          card={cardTarget ? { name: cardTarget.name ?? cardTarget.ledger_account, ledger_account: cardTarget.ledger_account } : null}
           error={bankError}
           onExecute={handleExecuteImport}
           onBack={() => {
-            if (parseResult.format === 'generic_csv') {
+            if (parseResult.format === 'generic_csv' && !cardTarget) {
               setBankStep('column_mapping')
             } else {
               setBankStep('preview')
@@ -504,6 +590,8 @@ function BankFileImportWizard({ onBack }: { onBack: () => void }) {
         <BankFileResultStep
           result={ingestResult}
           onNewImport={handleNewImport}
+          transactionsHref={cardTarget ? `/transactions?source=acct:${cardTarget.id}` : undefined}
+          card={cardTarget ? { name: cardTarget.name ?? cardTarget.ledger_account } : null}
         />
       )}
     </div>

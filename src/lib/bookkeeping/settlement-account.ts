@@ -19,8 +19,9 @@ const FALLBACK_ACCOUNT = '1930'
  *
  * When the transaction has NO cash_account_id (legacy/unresolved rows),
  * mirror the client-side resolveAccount (lib/cash-accounts/resolve-account.ts):
- * if the company has EXACTLY ONE enabled cash account in the transaction's
- * currency, that account is unambiguous and the bank leg belongs there.
+ * if the company has EXACTLY ONE enabled bank account (kind 'bank', never a
+ * company card) in the transaction's currency, that account is unambiguous
+ * and the bank leg belongs there.
  * Without this, a company whose only bank account is e.g. 1920 got its
  * booking dialogs previewing 1920 while the posted verifikat silently hit
  * the hardcoded 1930 template leg (issue #1722). Zero or several candidate
@@ -42,11 +43,17 @@ export async function resolveSettlementAccount(
 ): Promise<string> {
   const transactionCurrency = currency ?? 'SEK'
   if (!cashAccountId) {
+    // Banks only: a company card (kind 'card') is never where an unbound row's
+    // money moved, and counting one would flip the company's only bank
+    // account to 1930 for every NULL row. bank_anchor_settlement_account,
+    // capture_bank_booking_context and guard_bank_booking_context count the
+    // same set (20261028090000).
     const { data: candidates, error: listError } = await supabase
       .from('cash_accounts')
       .select('ledger_account')
       .eq('company_id', companyId)
       .eq('enabled', true)
+      .eq('kind', 'bank')
       .eq('currency', transactionCurrency)
       .limit(2)
 

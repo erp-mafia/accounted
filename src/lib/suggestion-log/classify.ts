@@ -126,11 +126,18 @@ export function matchesFinal(p: BookingProposal, final: BankLineFinal, entityTyp
 
 /**
  * The business account of posted lines: the one account that is neither a
- * cash ledger (19xx) nor VAT (26xx). Null when the lines carry none or several.
+ * cash ledger (19xx), VAT (26xx) nor the row's own settlement ledger (a
+ * company card's 2890, settlementLedgers). Null when the lines carry none or
+ * several.
  */
-export function businessAccountOfLines(lines: BankLineFinal['lines']): string | null {
+export function businessAccountOfLines(
+  lines: BankLineFinal['lines'],
+  settlementLedgers: readonly string[] = [],
+): string | null {
   const accounts = new Set(
-    lines.map((l) => l.account).filter((a) => !a.startsWith('19') && !a.startsWith('26')),
+    lines
+      .map((l) => l.account)
+      .filter((a) => !a.startsWith('19') && !a.startsWith('26') && !settlementLedgers.includes(a)),
   )
   return accounts.size === 1 ? [...accounts][0] : null
 }

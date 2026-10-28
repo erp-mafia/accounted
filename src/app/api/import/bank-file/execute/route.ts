@@ -5,6 +5,8 @@ import { toRawTransaction } from '@/lib/import/bank-file/parser'
 import type { IngestOptions } from '@/types'
 import { getCompanyRole } from '@/lib/auth/require-write'
 import { ensureManualCashAccount } from '@/lib/cash-accounts/service'
+import { findCardCashAccount } from '@/lib/cash-accounts/load-card-ledgers'
+import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { loadFileAccountMatch, type FileAccountMatch } from '@/lib/cash-accounts/file-account'
 import { BankFileAccountIdentitySchema } from '@/lib/api/schemas'
 import { accountIdentity } from '@/lib/import/bank-file/account-identity'
@@ -129,7 +131,38 @@ export const POST = withRouteContext(
     // silently dropped: every row stayed unbound and the booking dialog fell
     // back to 1930. Find or create the manual row first, before any import
     // record exists, so a refused account leaves nothing behind.
-    if (settlementAccount !== undefined) {
+    // A company card (cash_accounts kind 'card') is imported to its own
+    // liability ledger: the card already exists (the import never creates
+    // one), so it is checked here and skips the bank path below. The rows
+    // arrive with the stored sign: the wizard flips a statement that prints
+    // purchases as plus before the preview, so what was shown is what lands.
+    if (typeof settlementAccount === 'string' && isCardLedgerAccount(settlementAccount)) {
+      let card: Awaited<ReturnType<typeof findCardCashAccount>>
+      try {
+        card = await findCardCashAccount(supabase, companyId, settlementAccount)
+      } catch (err) {
+        opLog.error('card settlement account lookup failed', err as Error, { settlementAccount })
+        return errorResponseFromCode('BANK_FILE_EXECUTE_FAILED', opLog, {
+          requestId,
+          details: { reason: getUserErrorMessage(err) },
+        })
+      }
+      // A card-shaped ledger that is no card of the company (2890 as a
+      // catch-all debt) is never a place to import a statement to.
+      if (!card) {
+        return errorResponseFromCode('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT', opLog, {
+          requestId,
+          details: { account: settlementAccount },
+        })
+      }
+      const batchCurrency = dominantCurrency(transactions)
+      if (!card.enabled || card.currency.toUpperCase() !== batchCurrency.toUpperCase()) {
+        return errorResponseFromCode('BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE', opLog, {
+          requestId,
+          details: { account: settlementAccount, reason: card.enabled ? 'currency_mismatch' : 'disabled' },
+        })
+      }
+    } else if (settlementAccount !== undefined) {
       if (typeof settlementAccount !== 'string' || !/^19\d{2}$/.test(settlementAccount)) {
         return errorResponseFromCode('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT', opLog, { requestId })
       }

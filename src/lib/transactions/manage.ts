@@ -169,7 +169,7 @@ export async function updateTransaction(
 
   const { data: fetched, error: fetchError } = await supabase
     .from('transactions')
-    .select('id, description, original_description, currency, cash_account_id, journal_entry_id, invoice_id, supplier_invoice_id')
+    .select('id, description, original_description, currency, cash_account_id, journal_entry_id, invoice_id, supplier_invoice_id, cash_accounts(kind)')
     .eq('id', transactionId)
     .eq('company_id', companyId)
     .single()
@@ -184,6 +184,7 @@ export async function updateTransaction(
     journal_entry_id: string | null
     invoice_id: string | null
     supplier_invoice_id: string | null
+    cash_accounts?: { kind?: string | null } | null
   }
 
   // Gate: editable only when neither booked nor confirmed-matched. (A
@@ -212,13 +213,24 @@ export async function updateTransaction(
 
     const { data: account, error: accountError } = await supabase
       .from('cash_accounts')
-      .select('id, ledger_account, currency, enabled, bank_connection_id, invoice_payee')
+      .select('id, ledger_account, currency, enabled, bank_connection_id, invoice_payee, kind')
       .eq('company_id', companyId)
       .eq('ledger_account', input.account_number!)
       .maybeSingle()
     if (accountError) return failed(accountError)
     if (!account) return { ok: false, code: 'TRANSACTION_MOVE_UNKNOWN_ACCOUNT' }
     target = account as TargetAccount
+
+    // A company card stores a purchase as money out, the opposite of how the
+    // card's own statement prints it (the import flips it). A row moved
+    // between a bank account and a card would keep the sign of the account
+    // it was imported for, so a purchase would land as a refund. Undoing the
+    // import and importing the file to the right account is the way.
+    const sourceKind = transaction.cash_accounts?.kind ?? 'bank'
+    const targetKind = (account as { kind?: string | null }).kind ?? 'bank'
+    if (transaction.cash_account_id && sourceKind !== targetKind) {
+      return { ok: false, code: 'TRANSACTION_MOVE_KIND_MISMATCH' }
+    }
 
     // A cross-currency move would strand the row: every report scope pins
     // the account currency, so the row would vanish from BOTH accounts'

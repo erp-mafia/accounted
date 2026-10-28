@@ -26,6 +26,18 @@ describe('resolveSettlementAccount', () => {
       expect(eqArgs).toContainEqual(['currency', 'SEK'])
     })
 
+    it('counts bank accounts only, so a company card never makes the only bank ambiguous', async () => {
+      // A company with one 1940 account and a SEK card on 2890: the query asks
+      // for kind 'bank', so the card is not a second candidate (20261028090000).
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: [{ ledger_account: '1940' }], error: null })
+
+      const result = await resolveSettlementAccount(supabase as never, 'company-1', null, noopLog, 'SEK')
+
+      expect(result).toBe('1940')
+      expect(findCalls('cash_accounts', 'eq')).toContainEqual(['kind', 'bank'])
+    })
+
     it('filters candidates by the currency argument', async () => {
       const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
       enqueue({ data: [{ ledger_account: '1939' }], error: null })

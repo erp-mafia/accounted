@@ -506,10 +506,10 @@ Example response `200`:
 
 ### `POST /api/v1/companies/{companyId}/cash-accounts`
 
-**Create a bank account by hand (no bank connection), with the payee details invoices print.**
+**Create a bank account by hand (no bank connection), with the payee details invoices print, or a company card.**
 `scope:companies:write · risk:low · idempotent · dry-run`
 
-Adds a manual bank account (cash_accounts, source manual) in a currency, on the next free BAS 19xx ledger account for that currency unless ledger_account (1920-1999) is given, and adds that account to the chart if missing. payee holds what customer invoices print (bankgiro, IBAN, ...); invoice_payee defaults to true. A later bank connection with the same IBAN takes this row over in place. Owner/admin only. Idempotent. Dry-runnable.
+Adds a manual bank account (cash_accounts, source manual) in a currency, on the next free BAS 19xx ledger account for that currency unless ledger_account (1920-1999) is given, and adds that account to the chart if missing. payee holds what customer invoices print (bankgiro, IBAN, ...); invoice_payee defaults to true. A later bank connection with the same IBAN takes this row over in place. With kind card it adds a company card (företagskort) instead: its statement rows book against a liability account (2480-2489, 2890, 2894, 2896, 2899; the first one no account holds and no verifikat uses unless ledger_account is given), card_issuer is required and payee fields are refused. Owner/admin only. Idempotent. Dry-runnable.
 
 **Use when:** The company has a bank account that is not connected through the bank integration (a savings account, a currency account, a bank without PSD2) and it should appear in Konton, the booking flows or on invoices.
 **Do not use for:** Connecting a bank (the bank connection flow creates its own accounts), changing an existing account (PATCH /cash-accounts/{id}) or choosing which account invoices print by default (PUT /cash-accounts/payee-defaults).
@@ -518,6 +518,8 @@ Adds a manual bank account (cash_accounts, source manual) in a currency, on the 
 - An IBAN another account of the company already carries returns 409 CASH_ACCOUNT_IBAN_DUPLICATE: one physical account must exist once.
 - A ledger_account another cash account holds returns 409 CASH_ACCOUNT_LEDGER_TAKEN; omit it to get the next free one.
 - ledger_account is a STRING in 1920-1999 ("1931"), never a number, and never a till (1910-1919) or a PSP clearing account.
+- A company card (kind card) takes ledger_account in 2480-2489, 2890, 2894, 2896 or 2899 (never 2893), and no payee or invoice_payee: a card is never printed on invoices.
+- A card purchase is stored with a negative amount (money owed grows), the payment from the bank with a positive one: the company perspective of every cash account.
 - Owner or admin only: a member key gets 403 FORBIDDEN.
 - Creating an account does not make it the default payee: set that with PUT /cash-accounts/payee-defaults.
 
@@ -545,7 +547,11 @@ Request body:
     bic?: string | null | "",
     bank_code?: string | null | "",
     foreign_account_number?: string | null | ""
-  }
+  },
+  kind?: "bank" | "card",
+  card_issuer?: "eurocard" | "seb_kort" | "amex" | "handelsbanken" | "first_card" | "danske" | "swedbank" | "qred" | "mynt" | "pleo" | "other",
+  card_last4?: string[],
+  voucher_series?: string | null
 }
 ```
 
@@ -567,7 +573,10 @@ Response `200`:
   data: {
     cash_account_id: string,
     handle?: string,
+    kind: "bank" | "card",
     ledger_account: string,
+    card_issuer: string | null,
+    card_last4: string[] | null,
     name: string | null,
     currency: string,
     iban: string | null,
@@ -596,7 +605,10 @@ Example response `200`:
 {
   "data": {
     "cash_account_id": "7f3a…",
+    "kind": "bank",
     "ledger_account": "1931",
+    "card_issuer": null,
+    "card_last4": null,
     "name": "Sparkonto",
     "currency": "SEK",
     "iban": "SE4550000000058398257466",
@@ -686,7 +698,10 @@ Response `200`:
   data: {
     cash_account_id: string,
     handle?: string,
+    kind: "bank" | "card",
     ledger_account: string,
+    card_issuer: string | null,
+    card_last4: string[] | null,
     name: string | null,
     currency: string,
     iban: string | null,
@@ -715,7 +730,10 @@ Example response `200`:
 {
   "data": {
     "cash_account_id": "7f3a…",
+    "kind": "bank",
     "ledger_account": "1931",
+    "card_issuer": null,
+    "card_last4": null,
     "name": "Sparkonto",
     "currency": "SEK",
     "iban": "SE4550000000058398257466",
@@ -775,7 +793,10 @@ Response `200`:
   data: {
     cash_account_id: string,
     handle?: string,
+    kind: "bank" | "card",
     ledger_account: string,
+    card_issuer: string | null,
+    card_last4: string[] | null,
     name: string | null,
     currency: string,
     iban: string | null,
@@ -804,7 +825,10 @@ Example response `200`:
 {
   "data": {
     "cash_account_id": "7f3a…",
+    "kind": "bank",
     "ledger_account": "1931",
+    "card_issuer": null,
+    "card_last4": null,
     "name": "Sparkonto",
     "currency": "SEK",
     "iban": "SE4550000000058398257466",
@@ -3470,6 +3494,7 @@ description replaces the working title (the bank's original stays in original_de
 - Send at least one of description or account_number.
 - A booked or matched row returns 409 TRANSACTION_TITLE_LOCKED (title) or TRANSACTION_MOVE_BOOKED (move); a row bulk-booked into a samlingsverifikat also returns TRANSACTION_MOVE_BOOKED for a move.
 - account_number is a STRING like "1931", never a number; an account that is not one of the company's cash accounts returns 404 TRANSACTION_MOVE_UNKNOWN_ACCOUNT, one in another currency 400 TRANSACTION_MOVE_CURRENCY_MISMATCH.
+- A row never moves between a bank account and a company card (400 TRANSACTION_MOVE_KIND_MISMATCH): a card stores purchases with the opposite sign of its statement; undo the import and import the file to the right account.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

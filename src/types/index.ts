@@ -917,9 +917,37 @@ export interface CashAccount extends CashAccountPayeeFields {
   // account. null = follow company_settings.default_voucher_series_per_source_type.
   // See 20260902121420_cash_accounts_voucher_series.sql.
   voucher_series: string | null
+  // 'card' for a company card on a liability ledger (20261028090000). Every
+  // row the database returns carries it (NOT NULL DEFAULT 'bank'); optional
+  // here so rows built in code before the column existed still type, and read
+  // as 'bank' when absent (isCardCashAccount).
+  kind?: CashAccountKind
+  // Card rows only: who issued the card and the last four digits of the
+  // cards billed on the statement.
+  card_issuer?: CardIssuer | null
+  card_last4?: string[] | null
   created_at: string
   updated_at: string
 }
+
+/** A bank, till or PSP clearing account, or a company card (liability side). */
+export type CashAccountKind = 'bank' | 'card'
+
+/** The card issuers the add-card dialog offers ('other' for the rest). */
+export const CARD_ISSUERS = [
+  'eurocard',
+  'seb_kort',
+  'amex',
+  'handelsbanken',
+  'first_card',
+  'danske',
+  'swedbank',
+  'qred',
+  'mynt',
+  'pleo',
+  'other',
+] as const
+export type CardIssuer = (typeof CARD_ISSUERS)[number]
 
 /**
  * Which cash account an invoice in `currency` prints as payee when the

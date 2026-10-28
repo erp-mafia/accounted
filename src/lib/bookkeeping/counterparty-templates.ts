@@ -30,7 +30,8 @@ import { DimensionValidationError, type DimensionValidationIssue } from './dimen
 import { resolveSekAmount } from './currency-utils'
 import { grossVat, treatmentForRate } from '@/lib/bookkeeping/gross-split'
 import { stripBankNoise as stripBankMethodPhrases } from './booking-templates'
-import { bankSideOf, isCashLedger, settleBankLeg, type BankSide } from './bank-leg'
+import { bankSideOf, isMoneyLedger, learnableBankPair, settleBankLeg, type BankSide } from './bank-leg'
+import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { isSkatteverketPayment } from './skatteverket-payment'
 import { createLogger } from '@/lib/logger'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -688,10 +689,15 @@ export type TemplateDirection = 'expense' | 'income' | 'unknown'
  * settle on the credit side (credit bank, debit cost), income settles on the
  * debit side. 'unknown' when neither or both accounts look like settlement.
  */
-export function legacyTemplateDirection(debitAccount: string, creditAccount: string): TemplateDirection {
+export function legacyTemplateDirection(
+  debitAccount: string,
+  creditAccount: string,
+  /** The company's card ledgers, which settle like 2890 does. */
+  moneyLedgers: readonly string[] = [],
+): TemplateDirection {
 
-  const debitSettles = isSettlementAccount(debitAccount)
-  const creditSettles = isSettlementAccount(creditAccount)
+  const debitSettles = isSettlementAccount(debitAccount, moneyLedgers)
+  const creditSettles = isSettlementAccount(creditAccount, moneyLedgers)
   if (creditSettles && !debitSettles) return 'expense'
   if (debitSettles && !creditSettles) return 'income'
   return 'unknown'
@@ -798,10 +804,14 @@ export function patternDirection(pattern: LinePatternEntry[]): TemplateDirection
  * template of unknown direction (a transfer between two cash ledgers) is not
  * mirrored, so its bank leg follows the transaction's sign.
  */
-function templateBankSide(tmpl: CategorizationTemplate, transactionAmount: number): BankSide {
+function templateBankSide(
+  tmpl: CategorizationTemplate,
+  transactionAmount: number,
+  moneyLedgers: readonly string[] = [],
+): BankSide {
   const learned = tmpl.line_pattern && tmpl.line_pattern.length > 0
     ? patternDirection(tmpl.line_pattern)
-    : legacyTemplateDirection(tmpl.debit_account, tmpl.credit_account)
+    : legacyTemplateDirection(tmpl.debit_account, tmpl.credit_account, moneyLedgers)
   if (learned === 'expense') return 'credit'
   if (learned === 'income') return 'debit'
   return bankSideOf(transactionAmount)
@@ -818,8 +828,10 @@ export function bindTemplateToSettlementAccount(
   tmpl: CategorizationTemplate,
   transactionAmount: number,
   settlementAccount: string,
+  /** The company's card ledgers (bank-leg.ts): a bank leg on one moves too. */
+  moneyLedgers: readonly string[] = [],
 ): CategorizationTemplate {
-  return settleBankLeg(tmpl, templateBankSide(tmpl, transactionAmount), settlementAccount)
+  return settleBankLeg(tmpl, templateBankSide(tmpl, transactionAmount, moneyLedgers), settlementAccount, moneyLedgers)
 }
 
 /**
@@ -1207,22 +1219,25 @@ async function findTemplateByKey(
  * correction, every booking on another of the company's accounts reset the
  * template's occurrence count and flipped its stored ledger back and forth
  * (crm#1046). A pair of unknown direction (a transfer between two cash
- * ledgers) is compared as stored: both legs are what it learned.
+ * ledgers) is compared as stored: both legs are what it learned. A company
+ * card's ledger (moneyLedgers) is a bank leg like a 19xx one, so a pair
+ * stored with the card's 2890 and one learned with the 1930 placeholder are
+ * the same counterparty habit.
  */
-function samePairButBankLedger(
+export function samePairButBankLedger(
   existing: Pick<CategorizationTemplate, 'debit_account' | 'credit_account'>,
   debitAccount: string,
   creditAccount: string,
+  moneyLedgers: readonly string[] = [],
 ): boolean {
   if (existing.debit_account === debitAccount && existing.credit_account === creditAccount) return true
-  const direction = legacyTemplateDirection(debitAccount, creditAccount)
+  const money = (account: string) => isMoneyLedger(account, moneyLedgers)
+  const direction = legacyTemplateDirection(debitAccount, creditAccount, moneyLedgers)
   if (direction === 'expense') {
-    return existing.debit_account === debitAccount &&
-      isCashLedger(existing.credit_account) && isCashLedger(creditAccount)
+    return existing.debit_account === debitAccount && money(existing.credit_account) && money(creditAccount)
   }
   if (direction === 'income') {
-    return existing.credit_account === creditAccount &&
-      isCashLedger(existing.debit_account) && isCashLedger(debitAccount)
+    return existing.credit_account === creditAccount && money(existing.debit_account) && money(debitAccount)
   }
   return false
 }
@@ -1251,7 +1266,9 @@ export async function insertOrUpdateTemplate(
   supabase: SupabaseClient,
   companyId: string,
   params: TemplateUpsertParams,
-  existingTemplate?: CategorizationTemplate | null
+  existingTemplate?: CategorizationTemplate | null,
+  /** The booked row's card ledger, when it was a card row (bank-leg.ts). */
+  moneyLedgers: readonly string[] = [],
 ): Promise<boolean> {
   // Resolve existing template
   let existing: CategorizationTemplate | null = null
@@ -1268,7 +1285,7 @@ export async function insertOrUpdateTemplate(
   }
 
   if (existing) {
-    const isCorrection = !samePairButBankLedger(existing, params.debitAccount, params.creditAccount)
+    const isCorrection = !samePairButBankLedger(existing, params.debitAccount, params.creditAccount, moneyLedgers)
 
     // Merge aliases (deduplicated)
     const mergedAliases = [...(existing.counterparty_aliases || [])]
@@ -1472,11 +1489,18 @@ export async function upsertCounterpartyTemplate(
 
   const category = transaction.category !== 'uncategorized' ? transaction.category : null
 
+  // A card row's booking is learned with the bank placeholder on its bank
+  // leg (learnableBankPair), so it replays as K 1930 on a bank row and as the
+  // card's ledger on the card's next row (settleBankLeg).
+  const learned = learnableBankPair(mappingResult, transaction.amount)
+  const bookedBankLeg = transaction.amount < 0 ? mappingResult.credit_account : mappingResult.debit_account
+  const moneyLedgers = learned === mappingResult || !isCardLedgerAccount(bookedBankLeg) ? [] : [bookedBankLeg]
+
   let existing = await findTemplateByKey(supabase, companyId, normalized)
   const aliases = [rawName.toLowerCase()]
   if (!existing && options.bookedOnTemplateId) {
     const chosen = await bookedOnTemplate(supabase, companyId, options.bookedOnTemplateId)
-    if (chosen && samePairButBankLedger(chosen, mappingResult.debit_account, mappingResult.credit_account)) {
+    if (chosen && samePairButBankLedger(chosen, learned.debit_account, learned.credit_account, moneyLedgers)) {
       existing = chosen
       aliases.unshift(normalized)
     }
@@ -1485,8 +1509,8 @@ export async function upsertCounterpartyTemplate(
   await insertOrUpdateTemplate(supabase, companyId, {
     counterpartyName: normalized,
     aliases,
-    debitAccount: mappingResult.debit_account,
-    creditAccount: mappingResult.credit_account,
+    debitAccount: learned.debit_account,
+    creditAccount: learned.credit_account,
     vatTreatment: mappingResult.vat_lines.length > 0
       ? detectVatTreatment(mappingResult)
       : null,
@@ -1500,7 +1524,7 @@ export async function upsertCounterpartyTemplate(
     // Latest-explicit-wins inside insertOrUpdateTemplate: empty bags never
     // erase a learned one.
     defaultDimensions: mappingResult.dimensions ?? null,
-  }, existing)
+  }, existing, moneyLedgers)
 }
 
 export type UnlearnOutcome = 'decremented' | 'deactivated'
@@ -1620,10 +1644,15 @@ function toDateString(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
 }
 
-/** Settlement accounts: bank/cash (19xx), receivables (1510), payables (2440), credit card (2890) */
-export function isSettlementAccount(account: string): boolean {
+/**
+ * Settlement accounts: bank/cash (19xx), receivables (1510), payables (2440),
+ * credit card (2890), and the company's own card ledgers when the caller
+ * knows them (moneyLedgers: a card on 2899 or 2480 settles like 2890).
+ */
+export function isSettlementAccount(account: string, moneyLedgers: readonly string[] = []): boolean {
 
-  return account.startsWith('19') || account === '1510' || account === '2440' || account === '2890'
+  return account.startsWith('19') || account === '1510' || account === '2440' || account === '2890' ||
+    moneyLedgers.includes(account)
 }
 
 /** Rounding account: excluded from pattern extraction */
