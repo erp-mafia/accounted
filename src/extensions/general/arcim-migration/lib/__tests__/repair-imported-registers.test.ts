@@ -142,24 +142,47 @@ describe('planRegisterRepair', () => {
     migration_source_records: { data: [{ resource: 'customers', source_id: '1', target_id: 'c1' }] },
   })
 
-  it('reads Fortnox\'s own record for every matched card and plans the repair from it', async () => {
-    const { supabase } = tables()
-    const listed = fortnoxCustomer()
-    const hydrateCustomers = vi.fn(async (_p: unknown, _t: unknown, _c: unknown, dtos: CustomerDto[]) => ({
-      customers: dtos.map(() => fortnoxCustomer({ Type: 'PRIVATE' })), unhydratedIds: new Set<string>(),
-      hydration: { needed: dtos.length, hydrated: dtos.length, failed: 0, skippedForBudget: 0 },
-    }))
-    const plan = await planRegisterRepair(supabase as unknown as SupabaseClient, 'company-1', 'fortnox',
+  // Fortnox's detail form for every customer, except on a token it refuses.
+  const hydrated = (refused: (token: string) => boolean) =>
+    vi.fn(async (_p: unknown, token: string, _c: unknown, dtos: CustomerDto[]) => refused(token)
+      ? { customers: dtos, unhydratedIds: new Set(dtos.map((d) => d.id)), authError: { statusCode: 401 },
+          hydration: { needed: dtos.length, hydrated: 0, failed: 1, skippedForBudget: dtos.length - 1, abortedBy: 'auth' as const } }
+      : { customers: dtos.map(() => fortnoxCustomer({ Type: 'PRIVATE' })), unhydratedIds: new Set<string>(),
+          hydration: { needed: dtos.length, hydrated: dtos.length, failed: 0, skippedForBudget: 0 } })
+  // A stored token that aged out; a refresh after its 401 hands out a fresh one.
+  const resolved = () => vi.fn(async (_company: string, _consent: string, options?: { rejectedAccessToken?: string }) =>
+    ({ accessToken: options?.rejectedAccessToken === 'aged' ? 'fresh' : 'aged', consent: {} }))
+  const planFortnox = (hydrateCustomers: unknown, resolveConsent: unknown) =>
+    planRegisterRepair(tables().supabase as unknown as SupabaseClient, 'company-1', 'fortnox',
       { from: null, deadline: Date.now() + 60_000, now: NOW }, {
-        resolveConsent: vi.fn().mockResolvedValue({ accessToken: 'token', consent: {} }),
+        resolveConsent: resolveConsent as never,
         fetchMigrationPage: vi.fn(async (_p: unknown, _t: unknown, _c: unknown, resource: string) =>
-          ({ items: resource === 'customers' ? [listed] : [], nextPage: null, total: 1 })) as never,
+          ({ items: resource === 'customers' ? [fortnoxCustomer()] : [], nextPage: null, total: 1 })) as never,
         hydrateCustomers: hydrateCustomers as never,
         hydrateSuppliers: vi.fn() as never,
       })
+
+  it('reads Fortnox\'s own record for every matched card and plans the repair from it', async () => {
+    const hydrateCustomers = hydrated(() => false)
+    const plan = await planFortnox(hydrateCustomers, vi.fn().mockResolvedValue({ accessToken: 'token', consent: {} }))
     expect(hydrateCustomers).toHaveBeenCalledOnce()
     expect(plan.state).toBe('fetched')
     expect(plan.repairs.map((r) => [r.id, r.kinds.includes('private')])).toEqual([['c1', true]])
+  })
+
+  it('refreshes a token Fortnox retired partway through once, and reads on with the fresh one', async () => {
+    const resolveConsent = resolved()
+    const plan = await planFortnox(hydrated((token) => token === 'aged'), resolveConsent)
+    expect(resolveConsent).toHaveBeenLastCalledWith('company-1', 'consent-1', { rejectedAccessToken: 'aged' })
+    expect(plan.state).toBe('fetched')
+    expect(plan.repairs.map((r) => [r.id, r.kinds.includes('private')])).toEqual([['c1', true]])
+  })
+
+  it('calls the connection expired when Fortnox refuses the fresh token too', async () => {
+    const resolveConsent = resolved()
+    const plan = await planFortnox(hydrated(() => true), resolveConsent)
+    expect(resolveConsent).toHaveBeenCalledTimes(2)
+    expect(plan).toMatchObject({ state: 'consent_expired', repairs: [], next: null })
   })
 
   it('plans nothing for a company whose connection is gone', async () => {

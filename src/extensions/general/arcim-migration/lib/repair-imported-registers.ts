@@ -307,7 +307,18 @@ export interface RegisterRepairDeps {
   hydrateSuppliers?: typeof hydrateSuppliers
 }
 
+/** The provider refused the token partway through the detail reads; `cause` is its own error. */
 class ConsentRefused extends Error {}
+
+/**
+ * A Fortnox 401: the token aged out or the grant is gone, and one refresh
+ * tells which. Fortnox retires a token a moment before the expiry we stamp,
+ * so a company read across the hour meets a 401 on a live connection (B11).
+ */
+function fortnoxTokenRefused(provider: RepairProvider, error: unknown): boolean {
+  const cause = error instanceof ConsentRefused ? error.cause : error
+  return provider === 'fortnox' && (cause as { statusCode?: unknown } | null)?.statusCode === 401
+}
 
 async function listRecords(provider: RepairProvider, connection: Connection, fetchPage: typeof fetchMigrationPage): Promise<SourceRecord[]> {
   const records: SourceRecord[] = []
@@ -392,7 +403,7 @@ async function readRecords(provider: RepairProvider, matches: RecordMatch[], con
       const result = resource === 'customers'
         ? await deps.hydrateCustomers('fortnox', connection.accessToken, connection.providerCompanyId, dtos as CustomerDto[], deadline - Date.now())
         : await deps.hydrateSuppliers('fortnox', connection.accessToken, connection.providerCompanyId, dtos as SupplierDto[], deadline - Date.now())
-      if (result.hydration.abortedBy === 'auth') throw new ConsentRefused(messageOf(result.authError))
+      if (result.hydration.abortedBy === 'auth') throw new ConsentRefused(messageOf(result.authError), { cause: result.authError })
       if (result.hydration.abortedBy === 'budget') return { read, next: batch[0].key }
       const items = 'customers' in result ? result.customers : result.suppliers
       // A record whose detail could not be read is left out: its list form is what went wrong.
@@ -428,36 +439,51 @@ export async function planRegisterRepair(
   const consents = (data ?? []) as { id: string }[]
   if (consents.length === 0) return emptyPlan('no_consent')
 
+  const plan = async (connection: Connection): Promise<RegisterRepairPlan> => {
+    const records = await listRecords(provider, connection, deps.fetchMigrationPage ?? fetchMigrationPage)
+    const { rows, cards } = await loadCards(supabase, companyId)
+    const matches = matchRecords(records, cards, await loadSourceMap(supabase, companyId, provider), options.from)
+    const { read, next } = await readRecords(provider, matches, connection, options.deadline, {
+      hydrateCustomers: deps.hydrateCustomers ?? hydrateCustomers,
+      hydrateSuppliers: deps.hydrateSuppliers ?? hydrateSuppliers,
+    })
+    const now = options.now ?? new Date().toISOString()
+    const repairs: CardRepair[] = []
+    // Two records naming one card: the first decides, as the import's own match does.
+    const decided = new Set<string>()
+    for (const match of matches) {
+      const dto = read.get(match.key)
+      const cardKey = recordKey(match.record.resource, match.cardId)
+      if (!dto || decided.has(cardKey)) continue
+      decided.add(cardKey)
+      const repair = match.record.resource === 'customers'
+        ? customerRepair(rows.customers.get(match.cardId)!, dto as CustomerDto, match.sourceMapped, now)
+        : supplierRepair(rows.suppliers.get(match.cardId)!, dto as SupplierDto, match.sourceMapped, now)
+      if (repair) repairs.push(repair)
+    }
+    return { state: 'fetched', repairs, next }
+  }
+
+  const resolve = deps.resolveConsent ?? resolveConsent
   let lastError: string | undefined
   for (const consent of consents) {
+    let connection: Connection | undefined
     try {
       // May refresh the access token and store the rotated pair, exactly as a sync does.
-      const connection = await (deps.resolveConsent ?? resolveConsent)(companyId, consent.id)
-      const records = await listRecords(provider, connection, deps.fetchMigrationPage ?? fetchMigrationPage)
-      const { rows, cards } = await loadCards(supabase, companyId)
-      const matches = matchRecords(records, cards, await loadSourceMap(supabase, companyId, provider), options.from)
-      const { read, next } = await readRecords(provider, matches, connection, options.deadline, {
-        hydrateCustomers: deps.hydrateCustomers ?? hydrateCustomers,
-        hydrateSuppliers: deps.hydrateSuppliers ?? hydrateSuppliers,
-      })
-      const now = options.now ?? new Date().toISOString()
-      const repairs: CardRepair[] = []
-      // Two records naming one card: the first decides, as the import's own match does.
-      const decided = new Set<string>()
-      for (const match of matches) {
-        const dto = read.get(match.key)
-        const cardKey = recordKey(match.record.resource, match.cardId)
-        if (!dto || decided.has(cardKey)) continue
-        decided.add(cardKey)
-        const repair = match.record.resource === 'customers'
-          ? customerRepair(rows.customers.get(match.cardId)!, dto as CustomerDto, match.sourceMapped, now)
-          : supplierRepair(rows.suppliers.get(match.cardId)!, dto as SupplierDto, match.sourceMapped, now)
-        if (repair) repairs.push(repair)
-      }
-      return { state: 'fetched', repairs, next }
+      connection = await resolve(companyId, consent.id)
+      return await plan(connection)
     } catch (err) {
-      lastError = messageOf(err)
-      if (!(err instanceof ConsentRefused) && !consentUnusable(err)) return emptyPlan('failed', lastError)
+      let failure = err
+      // A 401 a fresh token cannot outlive is a refused connection.
+      if (connection && fortnoxTokenRefused(provider, err)) {
+        try {
+          return await plan(await resolve(companyId, consent.id, { rejectedAccessToken: connection.accessToken }))
+        } catch (retryError) {
+          failure = retryError
+        }
+      }
+      lastError = messageOf(failure)
+      if (!(failure instanceof ConsentRefused) && !consentUnusable(failure)) return emptyPlan('failed', lastError)
     }
   }
   return emptyPlan('consent_expired', lastError)
