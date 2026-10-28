@@ -12,7 +12,8 @@ import {
   SpinnerIcon,
   XMarkIcon,
 } from '@/components/icons'
-import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
+import { prepareDocumentUpload } from '@/lib/documents/shrink-image'
 import { DOCUMENT_UPLOAD_ACCEPT, isAllowedDocumentFile } from '@/lib/documents/upload-types'
 import { addUploads, finishUpload, removeUpload, type UploadedFilesUpdate } from './upload-list'
 
@@ -155,22 +156,18 @@ export default function DocumentUploadZone({
   const [surfaceRect, setSurfaceRect] = useState<DOMRect | null>(null)
 
   const uploadFile = useCallback(async (file: UploadedFile): Promise<UploadedFile> => {
-    const prepared = await prepareForMultipartUpload(file.file)
+    const prepared = await prepareDocumentUpload(file.file)
     if (!prepared.ok) {
       return { ...file, status: 'error', error: prepared.message }
     }
     const formData = new FormData()
-    formData.append('file', prepared.file)
     formData.append('upload_source', 'file_upload')
     if (journalEntryId) {
       formData.append('journal_entry_id', journalEntryId)
     }
 
     try {
-      const res = await fetch('/api/documents', {
-        method: 'POST',
-        body: formData,
-      })
+      const res = await postDocumentForm('/api/documents', formData, prepared.file)
 
       // Try to parse JSON, but tolerate non-JSON responses (auth redirect HTML, 502 etc.)
       let result: { data?: { id?: string }; error?: unknown } = {}

@@ -67,13 +67,29 @@ export function formatMegabytes(bytes: number): string {
  * user back to support rather than to a solution.
  *
  * Still the right message for the surfaces that post a multipart body
- * (ReconciliationUnderlag, support attachments). The document inbox no
- * longer refuses at this ceiling: see inboxTooLargeMessage.
+ * (ReconciliationUnderlag, support attachments). The document inbox and the
+ * archive's own upload routes no longer refuse at this ceiling: see
+ * inboxTooLargeMessage and documentTooLargeMessage.
  */
 export function tooLargeMessage(size: number): string {
   return (
     `Filen är ${formatMegabytes(size)} och gränsen är ${formatMegabytes(HOSTED_MAX_UPLOAD_BYTES)}. ` +
     'Fotografera om kvittot, eller komprimera PDF:en, och försök igen.'
+  )
+}
+
+/**
+ * The archive's own ceiling, MAX_DOCUMENT_SIZE in the document service,
+ * mirrored for the browser. Below it, a document too large for a hosted
+ * request body goes straight to Storage (postDocumentForm in direct-upload.ts).
+ */
+export const DOCUMENT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
+
+/** The sentence for a document over the archive's ceiling: its size, then the limit. */
+export function documentTooLargeMessage(size: number): string {
+  return (
+    `Filen är ${formatMegabytes(size)} och gränsen är ${formatMegabytes(DOCUMENT_MAX_UPLOAD_BYTES)}. ` +
+    'Komprimera PDF:en, eller dela upp den, och försök igen.'
   )
 }
 

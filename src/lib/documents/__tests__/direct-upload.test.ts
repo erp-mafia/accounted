@@ -1,7 +1,9 @@
-import { describe, it, expect, vi } from 'vitest'
+import { afterEach, describe, it, expect, vi } from 'vitest'
 import {
+  DOCUMENT_UPLOAD_CREATE_URL,
   INBOX_UPLOAD_COMPLETE_URL,
   INBOX_UPLOAD_CREATE_URL,
+  postDocumentForm,
   uploadViaSignedUrl,
 } from '../direct-upload'
 
@@ -108,5 +110,91 @@ describe('uploadViaSignedUrl', () => {
 
     await expect(uploadViaSignedUrl(fakeFile(), { fetchImpl })).rejects.toThrow(/upload_url/)
     expect(calls).toHaveLength(1)
+  })
+})
+
+// The archive's own upload routes (POST /api/documents, versions, the import
+// attach) read their file through readUploadedFile: inline below the hosted
+// body cap, staged in Storage above it.
+describe('postDocumentForm', () => {
+  afterEach(() => vi.unstubAllEnvs())
+
+  const ROUTE = '/api/documents'
+  const bigPdf = () => new File([new Uint8Array(5 * 1024 * 1024)], 'årsredovisning.pdf', { type: 'application/pdf' })
+
+  it('sends a file that fits inline as `file`, in one request', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const routeRes = jsonResponse({ data: { id: 'doc-1' } })
+    const { fetchImpl, calls } = fetchSequence([routeRes])
+    const form = new FormData()
+    form.append('upload_source', 'file_upload')
+    const file = fakeFile()
+
+    const res = await postDocumentForm(ROUTE, form, file, { fetchImpl })
+
+    expect(res).toBe(routeRes)
+    expect(calls.map((c) => c.url)).toEqual([ROUTE])
+    const sent = calls[0].init?.body as FormData
+    expect(sent.get('file')).toBeInstanceOf(File)
+    expect(sent.get('upload_source')).toBe('file_upload')
+    expect(sent.get('upload_id')).toBeNull()
+  })
+
+  it('stages a file over the hosted cap in Storage and posts the reference instead of the bytes', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const routeRes = jsonResponse({ data: { id: 'doc-1' } })
+    const { fetchImpl, calls } = fetchSequence([reservationResponse(), new Response(null, { status: 200 }), routeRes])
+    const form = new FormData()
+    form.append('journal_entry_id', 'je-1')
+    const file = bigPdf()
+
+    const res = await postDocumentForm(ROUTE, form, file, { fetchImpl })
+
+    expect(res).toBe(routeRes)
+    expect(calls.map((c) => c.url)).toEqual([DOCUMENT_UPLOAD_CREATE_URL, SIGNED_URL, ROUTE])
+    expect(JSON.parse(String(calls[0].init?.body))).toEqual({
+      file_name: 'årsredovisning.pdf',
+      mime_type: 'application/pdf',
+      size_bytes: file.size,
+    })
+    expect(calls[1].init?.method).toBe('PUT')
+    expect(calls[1].init?.body).toBe(file)
+    const sent = calls[2].init?.body as FormData
+    expect(sent.get('file')).toBeNull()
+    expect(sent.get('upload_id')).toBe(UPLOAD_ID)
+    expect(sent.get('file_name')).toBe('årsredovisning.pdf')
+    expect(sent.get('mime_type')).toBe('application/pdf')
+    expect(sent.get('journal_entry_id')).toBe('je-1')
+  })
+
+  it('returns a refused reservation as it is and never calls the route', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const refused = jsonResponse({ error: { code: 'DOC_UPLOAD_TOO_LARGE', message: 'Filen är för stor.' } }, 400)
+    const { fetchImpl, calls } = fetchSequence([refused])
+
+    const res = await postDocumentForm(ROUTE, new FormData(), bigPdf(), { fetchImpl })
+
+    expect(res).toBe(refused)
+    expect(calls).toHaveLength(1)
+  })
+
+  it('surfaces a Storage rejection and never calls the route', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const { fetchImpl, calls } = fetchSequence([reservationResponse(), new Response('nope', { status: 413 })])
+
+    const res = await postDocumentForm(ROUTE, new FormData(), bigPdf(), { fetchImpl })
+
+    expect(res.status).toBe(413)
+    expect(calls).toHaveLength(2)
+  })
+
+  it('sends a large file inline on self-hosted, where no proxy caps the body', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    const { fetchImpl, calls } = fetchSequence([jsonResponse({ data: { id: 'doc-1' } })])
+
+    await postDocumentForm(ROUTE, new FormData(), bigPdf(), { fetchImpl })
+
+    expect(calls.map((c) => c.url)).toEqual([ROUTE])
+    expect((calls[0].init?.body as FormData).get('file')).toBeInstanceOf(File)
   })
 })

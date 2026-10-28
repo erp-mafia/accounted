@@ -27,7 +27,7 @@ import { useBasReference } from '@/lib/bookkeeping/use-bas-reference'
 import { formatCounterpartyName } from '@/lib/bookkeeping/counterparty-template-format'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
-import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { postDocumentForm, uploadViaSignedUrl } from '@/lib/documents/direct-upload'
 import { INBOX_UPLOAD_ACCEPT, isAllowedInboxFile } from '@/lib/documents/upload-types'
 import { cn, formatAmount, formatCurrency, formatDate } from '@/lib/utils'
 import { supplierInvoiceEditorAmounts } from '@/lib/supplier-invoices/editor-amounts'
@@ -1454,10 +1454,9 @@ export default function NewSupplierInvoiceForm({
 
   async function uploadPlainDocument(entry: UploadedFile) {
     const formData = new FormData()
-    formData.append('file', entry.file)
     formData.append('upload_source', 'file_upload')
     try {
-      const res = await fetch('/api/documents', { method: 'POST', body: formData })
+      const res = await postDocumentForm('/api/documents', formData, entry.file)
       let result: { data?: { id?: string }; error?: unknown } = {}
       try {
         result = await res.json()

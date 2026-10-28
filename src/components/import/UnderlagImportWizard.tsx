@@ -18,6 +18,7 @@ import { FyPicker } from '@/components/common/FyPicker'
 import { CloseImportedYearsOffer } from '@/components/import/CloseImportedYearsOffer'
 import { ImportWizardRail } from '@/components/import/ImportWizardRail'
 import { mapWithConcurrency } from '@/lib/concurrency'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { cn, formatDate } from '@/lib/utils'
 import { DocumentArrowUpIcon, FolderOpenIcon, SpinnerIcon } from '@/components/icons'
@@ -373,7 +374,6 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
       // counter still ticks, and mapWithConcurrency preserves plan order.
       results = await mapWithConcurrency(selectedRows, ATTACH_CONCURRENCY, async (row) => {
         const formData = new FormData()
-        formData.append('file', row.file)
         formData.append('journal_entry_id', row.targetId as string)
         // The year the plan was built against, echoed from the server. The
         // route refuses any target outside it, overrides included.
@@ -382,10 +382,9 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
 
         let outcome: AttachOutcome
         try {
-          const res = await fetch('/api/import/documents/attach', {
-            method: 'POST',
-            body: formData,
-          })
+          // Over the hosted body cap the file goes straight to Storage first
+          // and the route reads it from there (postDocumentForm).
+          const res = await postDocumentForm('/api/import/documents/attach', formData, row.file)
           if (!res.ok) {
             const data = await res.json().catch(() => null)
             outcome = {

@@ -1,5 +1,7 @@
 /**
- * Direct-to-storage upload for the document inbox (issue #1551).
+ * Direct-to-storage upload for documents too large for a hosted request body:
+ * the document inbox (issue #1551, uploadViaSignedUrl) and every route that
+ * reads its file through readUploadedFile (postDocumentForm, at the bottom).
  *
  * The platform rejects a request body over 4.5 MB before the route runs
  * (see upload-size.ts), and a PDF cannot be shrunk the way a photo can. This
@@ -25,6 +27,8 @@
  * attempted after it: an abandoned reservation leaves no document row (the
  * pending object is swept on a later create).
  */
+
+import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 
 const INBOX_ROUTE_BASE = '/api/extensions/ext/invoice-inbox'
 export const INBOX_UPLOAD_CREATE_URL = `${INBOX_ROUTE_BASE}/upload/create`
@@ -60,14 +64,16 @@ function storageRejectedResponse(status: number): Response {
   )
 }
 
-export async function uploadViaSignedUrl(
+/**
+ * Steps 1 and 2: reserve at `createUrl` and PUT the bytes to the signed URL.
+ * Resolves to the upload id, or to the Response that ended the sequence.
+ */
+async function stageInStorage(
+  createUrl: string,
   file: File,
-  options: DirectUploadOptions = {},
-): Promise<Response> {
-  // Wrapped rather than referenced: a detached `fetch` loses its receiver.
-  const fetchImpl: typeof fetch = options.fetchImpl ?? ((input, init) => fetch(input, init))
-
-  const createRes = await fetchImpl(INBOX_UPLOAD_CREATE_URL, {
+  fetchImpl: typeof fetch,
+): Promise<{ ok: true; uploadId: string } | { ok: false; response: Response }> {
+  const createRes = await fetchImpl(createUrl, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
@@ -76,7 +82,7 @@ export async function uploadViaSignedUrl(
       size_bytes: file.size,
     }),
   })
-  if (!createRes.ok) return createRes
+  if (!createRes.ok) return { ok: false, response: createRes }
 
   const created = (await createRes.json()) as { data?: Partial<SignedUploadReservation> }
   const reservation = created.data
@@ -86,18 +92,69 @@ export async function uploadViaSignedUrl(
 
   const put = await fetchImpl(reservation.upload_url, {
     method: 'PUT',
-    headers: { 'content-type': file.type, 'x-upsert': 'false' },
+    headers: { 'content-type': file.type || 'application/octet-stream', 'x-upsert': 'false' },
     body: file,
   })
-  if (!put.ok) return storageRejectedResponse(put.status)
+  if (!put.ok) return { ok: false, response: storageRejectedResponse(put.status) }
+  return { ok: true, uploadId: reservation.upload_id }
+}
+
+/** Wrapped rather than referenced: a detached `fetch` loses its receiver. */
+function resolveFetch(options: DirectUploadOptions): typeof fetch {
+  return options.fetchImpl ?? ((input, init) => fetch(input, init))
+}
+
+export async function uploadViaSignedUrl(
+  file: File,
+  options: DirectUploadOptions = {},
+): Promise<Response> {
+  const fetchImpl = resolveFetch(options)
+  const staged = await stageInStorage(INBOX_UPLOAD_CREATE_URL, file, fetchImpl)
+  if (!staged.ok) return staged.response
 
   return fetchImpl(INBOX_UPLOAD_COMPLETE_URL, {
     method: 'POST',
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({
-      upload_id: reservation.upload_id,
+      upload_id: staged.uploadId,
       file_name: file.name,
       mime_type: file.type,
     }),
   })
+}
+
+export const DOCUMENT_UPLOAD_CREATE_URL = '/api/documents/uploads'
+
+/**
+ * POST a multipart form that carries one document file to a route that reads
+ * it through readUploadedFile (POST /api/documents, POST
+ * /api/documents/:id/versions, POST /api/import/documents/attach).
+ *
+ * A file that fits a hosted request body goes inline as `file`, as before. A
+ * larger one goes straight to Storage first (POST /api/documents/uploads and a
+ * PUT to the signed URL), and the form carries `upload_id`, `file_name` and
+ * `mime_type` instead, so the route still gets the whole file and runs every
+ * check it always ran. `form` holds the route's other fields.
+ *
+ * Same contract as uploadViaSignedUrl: resolves to the route's Response, or
+ * to the first failing step's, so callers keep their `if (!res.ok)` handling.
+ */
+export async function postDocumentForm(
+  url: string,
+  form: FormData,
+  file: File,
+  options: DirectUploadOptions = {},
+): Promise<Response> {
+  const fetchImpl = resolveFetch(options)
+  if (!exceedsHostedUploadLimit(file.size)) {
+    form.append('file', file)
+    return fetchImpl(url, { method: 'POST', body: form })
+  }
+
+  const staged = await stageInStorage(DOCUMENT_UPLOAD_CREATE_URL, file, fetchImpl)
+  if (!staged.ok) return staged.response
+  form.append('upload_id', staged.uploadId)
+  form.append('file_name', file.name)
+  form.append('mime_type', file.type)
+  return fetchImpl(url, { method: 'POST', body: form })
 }
