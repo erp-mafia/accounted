@@ -6,7 +6,7 @@
  * file hashing, stats calculation, date range extraction, and edge cases.
  */
 
-import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, getFormat, getAllFormats } from '../parser'
+import { detectFileFormat, parseBankFile, generateExternalId, generateFileHash, getFormat, getAllFormats, toRawTransaction } from '../parser'
 import type { ParsedBankTransaction, BankFileFormatId } from '../types'
 import { parseGenericCSV, normalizeMinusSign } from '../formats/generic-csv'
 import { parseCSVLine } from '../formats/nordea'
@@ -60,6 +60,15 @@ const SEB_TRANSAKTIONER_CSV =
   '\uFEFFBokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\r\n' +
   '2026-07-21;2026-07-21;SAN FRANCISC/26-07-20;Kortköp;;-89.44;433217.91\r\n' +
   '2026-07-18;2026-07-18;KUNDINBETALNING;Insättning;12500.00;;433307.35\r\n'
+
+// SEB "Transaktioner" export with ONE signed amount column (crm#1491):
+// "Transaktioner i tabellen" -> Csv. The header is the one the report quoted;
+// the rows are synthetic.
+const SEB_TRANSAKTIONER_COMBINED_CSV =
+  '\uFEFFBokförd;Valutadatum;Text;Typ;Insättningar/uttag;Bokfört saldo\r\n' +
+  '2026-10-20;2026-10-20;BRIDGEKLUBBEN AVGIFT;Annan;-450.00;12000.00\r\n' +
+  '2026-10-19;2026-10-18;BUTIKEN KORTKOP;Kortköp;-89.44;12450.00\r\n' +
+  '2026-10-18;2026-10-18;KUNDINBETALNING;Insättning;1500.00;12539.44\r\n'
 
 const SWEDBANK_CSV = [
   'Kontouppgifter',
@@ -921,6 +930,50 @@ describe('parseBankFile: SEB format', () => {
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].amount).toBe(-50)
     expect(result.stats.skipped_rows).toBe(1)
+  })
+})
+
+describe('SEB Transaktioner with one Insättningar/uttag column (crm#1491)', () => {
+  it('detects as SEB, not Länsförsäkringar', () => {
+    expect(detectFileFormat(SEB_TRANSAKTIONER_COMBINED_CSV, 'transaktioner.csv')?.id).toBe('seb')
+  })
+
+  it('reads Text as the description, the signed column as the amount and Bokfört saldo as the balance', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_COMBINED_CSV, 'transaktioner.csv')
+
+    expect(result.format).toBe('seb')
+    expect(result.issues).toHaveLength(0)
+    expect(result.transactions.map((t) => [t.date, t.description, t.amount, t.balance])).toEqual([
+      ['2026-10-20', 'BRIDGEKLUBBEN AVGIFT', -450, 12000],
+      ['2026-10-19', 'BUTIKEN KORTKOP', -89.44, 12450],
+      ['2026-10-18', 'KUNDINBETALNING', 1500, 12539.44],
+    ])
+    expect(result.stats.total_income).toBe(1500)
+    expect(result.stats.total_expenses).toBe(-539.44)
+  })
+
+  it('stores the balance and the SEB external id on the ingest row', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_COMBINED_CSV, 'transaktioner.csv')
+    const raw = toRawTransaction(result.transactions[0], 'seb', 0)
+
+    expect(raw.balance_after).toBe(12000)
+    expect(raw.description).toBe('BRIDGEKLUBBEN AVGIFT')
+    expect(raw.import_source).toBe('csv_seb')
+    expect(raw.external_id).toMatch(/^seb_[0-9a-f]{16}$/)
+  })
+
+  it('leaves balance_after null when the file has no balance column', () => {
+    const raw = toRawTransaction(
+      { date: '2026-10-20', description: 'X', amount: -1, currency: 'SEK', balance: null, reference: null, counterparty: null, raw_line: '' },
+      'seb',
+      0,
+    )
+    expect(raw.balance_after).toBeNull()
+  })
+
+  it('still detects Länsförsäkringar files as Länsförsäkringar', () => {
+    expect(detectFileFormat(LANSFORSAKRINGAR_CSV, 'lf.csv')?.id).toBe('lansforsakringar')
+    expect(detectFileFormat(LANSFORSAKRINGAR_CSV_NO_HEADER, 'lf.csv')?.id).toBe('lansforsakringar')
   })
 })
 

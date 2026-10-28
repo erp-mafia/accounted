@@ -8,7 +8,9 @@
  *     Text/mottagare, Belopp, Saldo
  *   - Transaktioner: Bokförd, Valutadatum, Text, Typ, Insättningar, Uttag,
  *     Bokfört saldo (dot decimal separator, amount split across two columns
- *     where Uttag rows carry their own minus sign)
+ *     where Uttag rows carry their own minus sign). The same page also
+ *     exports one signed column, "Insättningar/uttag", in place of the pair
+ *     (crm#1491).
  * Date format: YYYY-MM-DD
  * Encoding: UTF-8 (optionally with BOM) or Windows-1252
  */
@@ -20,24 +22,27 @@ import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
 
 
+/** One signed amount column of the Transaktioner export: "Insättningar/uttag". */
+const COMBINED_AMOUNT_COLUMN_RE = /^ins(ä|a)ttningar?\s*\/\s*uttag$/
 const DEPOSIT_COLUMN_RE = /^ins(ä|a)ttning/
 const WITHDRAWAL_COLUMN_RE = /^uttag/
 
 /**
  * The Transaktioner web export: a "Bokförd" (or Valutadatum) date column plus
- * the amount split across Insättningar/Uttag. The split amount pair is unique
- * to this layout among the supported semicolon formats, so requiring both
- * columns cannot steal files from other bank profiles.
+ * the amount, either split across Insättningar/Uttag or in the one signed
+ * column "Insättningar/uttag". Both shapes are unique to this layout among
+ * the supported semicolon formats, so requiring one of them cannot steal
+ * files from other bank profiles. The one-column shape used to miss here and
+ * fall through to Länsförsäkringar's header-less row test, which reads Text
+ * and Typ the other way round and drops the balance (crm#1491).
  */
 function isTransaktionerHeader(headers: string[]): boolean {
   const hasDate =
     headers.some((h) => h === 'bokförd' || h === 'bokford') ||
     headers.some((h) => /valuta(dag|datum)/.test(h))
-  return (
-    hasDate &&
-    headers.some((h) => DEPOSIT_COLUMN_RE.test(h)) &&
-    headers.some((h) => WITHDRAWAL_COLUMN_RE.test(h))
-  )
+  const hasSplitAmount =
+    headers.some((h) => DEPOSIT_COLUMN_RE.test(h)) && headers.some((h) => WITHDRAWAL_COLUMN_RE.test(h))
+  return hasDate && (hasSplitAmount || headers.some((h) => COMBINED_AMOUNT_COLUMN_RE.test(h)))
 }
 
 export const sebFormat: BankFileFormat = {
@@ -96,7 +101,10 @@ export const sebFormat: BankFileFormat = {
     const descIdx = headers.findIndex(
       (h) => h.includes('text') || h.includes('mottagare') || h.includes('beskrivning')
     )
-    const amountIdx = headers.findIndex((h) => h.includes('belopp'))
+    // Belopp (Kontoutdrag), else the Transaktioner export's one signed
+    // column "Insättningar/uttag": both are a plain signed amount.
+    let amountIdx = headers.findIndex((h) => h.includes('belopp'))
+    if (amountIdx === -1) amountIdx = headers.findIndex((h) => COMBINED_AMOUNT_COLUMN_RE.test(h))
     // Transaktioner layout: no Belopp column; the amount is split across
     // Insättningar (positive) and Uttag (exported with its own minus sign).
     const depositIdx = amountIdx === -1 ? headers.findIndex((h) => DEPOSIT_COLUMN_RE.test(h)) : -1

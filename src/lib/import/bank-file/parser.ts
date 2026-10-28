@@ -169,6 +169,9 @@ export function toRawTransaction(
     provider_transaction_id: tx.provider_transaction_id || null,
     counterparty_iban: tx.counterparty_iban || null,
     bank_transaction_code: tx.bank_transaction_code || null,
+    // The file's running balance (Saldo / Bokfört saldo). Every parser reads
+    // it; without this line no bank-file row ever stored it (crm#1491).
+    balance_after: tx.balance ?? null,
   }
 }
 

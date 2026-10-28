@@ -526,6 +526,7 @@ describe('POST /api/import/bank-file/execute (row fields)', () => {
       reference: '1001000000017', counterparty: 'Kund AB', raw_line: 'ACSR-1',
       value_date: '2025-03-11', end_to_end_id: 'E2E-1', provider_transaction_id: 'ACSR-1',
       counterparty_iban: 'SE4550000000058398257466', bank_transaction_code: 'PMNT-RCDT-DMCT',
+      balance: 98765.43,
     }
     const request = createMockRequest('/api/import/bank-file/execute', {
       method: 'POST',
@@ -539,6 +540,7 @@ describe('POST /api/import/bank-file/execute (row fields)', () => {
       currency: 'SEK', reference: '1001000000017', merchant_name: 'Kund AB', import_source: 'camt053',
       value_date: '2025-03-11', end_to_end_id: 'E2E-1', provider_transaction_id: 'ACSR-1',
       counterparty_iban: 'SE4550000000058398257466', bank_transaction_code: 'PMNT-RCDT-DMCT',
+      balance_after: 98765.43,
     }])
   })
 })
