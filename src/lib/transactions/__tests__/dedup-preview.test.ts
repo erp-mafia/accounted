@@ -194,6 +194,35 @@ describe('previewDuplicates', () => {
     expect(result.by_reason).toEqual({ external_id: 0, content_bridge: 1 })
   })
 
+  // crm#1491: a SEB file read as Länsförsäkringar stored its rows with the Typ
+  // word as description and a lansforsakringar_ id. Read correctly, the same
+  // file carries seb_ ids and the Text column, so neither Layer 1 nor the text
+  // bridge matches; the cross-channel mirror (csv_seb vs csv_lansforsakringar,
+  // one row each in the bucket) still keeps the re-import from duplicating it.
+  it('flags a re-import of a SEB file whose rows were stored under the Länsförsäkringar id', async () => {
+    const raw = makePreviewRow({
+      description: 'BRIDGEKLUBBEN AVGIFT',
+      import_source: 'csv_seb',
+      external_id: 'seb_0123456789abcdef',
+    })
+
+    enqueue({
+      data: [{
+        id: 'tx-lf', date: '2024-06-15', amount: -250.0,
+        original_description: 'Annan', description: 'Annan',
+        import_source: 'csv_lansforsakringar', currency: 'SEK',
+        external_id: 'lansforsakringar_fedcba9876543210',
+      }],
+    }) // booked map: the earlier import, booked
+    enqueue({ data: [] }) // unbooked map
+    enqueue({ data: [] }) // external_id chunk: the id changed with the format
+
+    const result = await previewDuplicates(supabase as never, COMPANY_ID, [raw])
+
+    expect(result.duplicate_row_indexes).toEqual([0])
+    expect(result.by_reason).toEqual({ external_id: 0, content_bridge: 1 })
+  })
+
   // The mirror is gated on the batch being an import feed, exactly as in
   // execute: without a channel the description requirement stays.
   it('does not mirror when the rows carry no import_source', async () => {
