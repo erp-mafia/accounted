@@ -415,16 +415,33 @@ describe('GET /api/bookkeeping/journal-entries', () => {
     )
   })
 
-  it('returns 500 on database error', async () => {
+  it('returns 500 INTERNAL_ERROR on database error', async () => {
     enqueue({ data: null, error: { message: 'DB error' } })
 
     const request = createMockRequest('/api/bookkeeping/journal-entries')
     const response = await GET(request)
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(500)
+    expect(body.error.code).toBe('INTERNAL_ERROR')
     // Raw Supabase messages never reach the response field (issue #337).
-    expect(body.error).toBe('Verifikationerna kunde inte hämtas. Försök igen.')
+    expect(body.error.message).not.toContain('DB error')
+  })
+
+  it('answers a statement timeout as a retryable 503 TRANSIENT_ERROR and logs the database message', async () => {
+    enqueue({ data: null, error: { message: 'canceling statement due to statement timeout', code: '57014', details: null, hint: null } })
+
+    const request = createMockRequest('/api/bookkeeping/journal-entries', {
+      searchParams: { exclude_draft: 'true', sort_date: 'desc' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await GET(request))
+
+    expect(status).toBe(503)
+    expect(body.error.code).toBe('TRANSIENT_ERROR')
+    expect(body.error.message).not.toContain('statement timeout')
+    const call = mockLogError.mock.calls.find(([msg]) => msg === 'TRANSIENT_ERROR')
+    expect(call).toBeDefined()
+    expect((call![1] as Error).message).toBe('Journal entries: canceling statement due to statement timeout')
   })
 
   describe('missing_underlag=true (the dashboard deep-link filter)', () => {

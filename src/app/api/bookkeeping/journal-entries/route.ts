@@ -9,7 +9,8 @@ import { CreateDashboardJournalEntrySchema } from '@/lib/api/schemas'
 import { escapeLikePattern } from '@/lib/supabase/like-pattern'
 import { parseVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structured-error'
+import { dbError } from '@/lib/errors/db-error'
 import { recordVoucherWarningsAcknowledged, runVoucherWarningsGuard } from '@/lib/bookkeeping/voucher-warnings-guard'
 import {
   MissingUnderlagQueryError,
@@ -150,13 +151,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
         .select('*, lines:journal_entry_lines(*)')
         .eq('company_id', companyId)
         .in('id', chunk)
-      if (error) {
-        log.error('failed to fetch missing-underlag page rows', error)
-        return NextResponse.json(
-          { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
-          { status: 500 }
-        )
-      }
+      if (error) return errorResponse(dbError(error, 'Missing-underlag page rows'), log, { requestId: ctx.requestId })
       for (const row of (chunkRows ?? []) as { id: string }[]) {
         rowsById.set(row.id, row)
       }
@@ -194,13 +189,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
       p_series: seriesFilter,
     })
 
-    if (error) {
-      log.error('failed to list fiscal period entries via RPC', error)
-      return NextResponse.json(
-        { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
-        { status: 500 }
-      )
-    }
+    if (error) return errorResponse(dbError(error, 'Fiscal period entries'), log, { requestId: ctx.requestId })
 
     const rows = data ?? []
     const entries = rows.map((r: { entry: unknown }) => r.entry)
@@ -342,13 +331,10 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
 
   const { data, error, count } = await query
 
-  if (error) {
-    log.error('failed to list journal entries', error)
-    return NextResponse.json(
-      { error: 'Verifikationerna kunde inte hämtas. Försök igen.' },
-      { status: 500 }
-    )
-  }
+  // A statement timeout answers 503 TRANSIENT_ERROR (retryable) and any
+  // other database failure 500, each with its code and the database's own
+  // message in the log line.
+  if (error) return errorResponse(dbError(error, 'Journal entries'), log, { requestId: ctx.requestId })
 
   return NextResponse.json({ data, count })
 })

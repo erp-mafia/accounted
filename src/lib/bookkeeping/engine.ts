@@ -3,6 +3,7 @@ import type { SIEChunkResult, SIEJob } from '@/lib/import/sie-job-contract'
 
 import { eventBus } from '@/lib/events'
 import { createLogger } from '@/lib/logger'
+import { isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import {
   AccountsNotInChartError,
   AssetDepreciationRefusedError,
@@ -99,6 +100,20 @@ export async function reverseSIEImportChunk(supabase: SupabaseClient, job: SIEJo
 }
 
 const log = createLogger('bookkeeping.engine')
+
+/**
+ * Log a failed journal write. A refusal the database raises on purpose is a
+ * warning: a PT409 conflict (a busy bank account, a bank row that changed
+ * under the booking), which the doors answer as a 409 to retry or refresh,
+ * and a write behind a period lock or the lock date, answered as a 4xx.
+ * Logged at error they filled Vercel's runtime errors with expected
+ * answers. Anything else stays an error.
+ */
+function logWriteFailure(message: string, error: unknown, context: Record<string, unknown>): void {
+  const expected = (error as { code?: unknown } | null)?.code === 'PT409' || isPeriodLockRefusal(error)
+  if (expected) log.warn(message, error, context)
+  else log.error(message, error, context)
+}
 
 /**
  * Validate that a set of journal entry lines is balanced (debits = credits)
@@ -529,7 +544,7 @@ export async function createDraftEntry(
     .single()
 
   if (entryError || !entry) {
-    log.error('insert journal_entries draft failed', entryError ?? new Error('no row returned'), {
+    logWriteFailure('insert journal_entries draft failed', entryError ?? new Error('no row returned'), {
       operation: 'create_draft_entry',
       companyId,
       userId,
@@ -557,7 +572,7 @@ export async function createDraftEntry(
     .insert(lineInserts)
 
   if (linesError) {
-    log.error('insert journal_entry_lines failed', linesError, {
+    logWriteFailure('insert journal_entry_lines failed', linesError, {
       operation: 'create_entry_lines',
       companyId,
       userId,
@@ -731,7 +746,7 @@ export async function updateDraftEntry(
     .insert(lineInserts)
 
   if (linesError) {
-    log.error('update draft: insert journal_entry_lines failed', linesError, {
+    logWriteFailure('update draft: insert journal_entry_lines failed', linesError, {
       operation: 'create_entry_lines',
       companyId,
       userId,
@@ -973,7 +988,7 @@ export async function commitEntry(
   })
 
   if (commitError) {
-    log.error('commit_journal_entry RPC failed', commitError, {
+    logWriteFailure('commit_journal_entry RPC failed', commitError, {
       operation: 'commit_entry',
       companyId,
       userId,
@@ -1037,7 +1052,7 @@ export async function commitStornoOrCorrectionDraft(
     p_actor_label: actor?.label ?? null,
   })
   if (error) {
-    log.error('commit_journal_entry RPC failed for a storno or rättelse draft', error, {
+    logWriteFailure('commit_journal_entry RPC failed for a storno or rättelse draft', error, {
       operation: 'commit_storno_or_correction',
       companyId,
       entityType: 'journal_entry',
