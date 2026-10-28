@@ -1,8 +1,9 @@
 'use client'
 
 import { useTranslations, useLocale } from 'next-intl'
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import { Button } from '@/components/ui/button'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -33,11 +34,11 @@ import {
   SCOPE_GROUPS,
   STAGING_SCOPES,
   TOOL_COUNT_BY_SCOPE,
-  scopeKind,
   type ApiKeyScope,
   type ScopeGroup,
 } from '@/lib/auth/scope-catalog'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
+import { presetScopes, readLockedBy, readScopeOf, toggleScope, type ScopePreset } from '@/components/settings/scope-selection'
 
 type Scope = ApiKeyScope
 
@@ -50,26 +51,44 @@ const isRestOnlyGroup = (group: ScopeGroup) =>
   group.scopes.every((scope) => TOOL_COUNT_BY_SCOPE[scope] === 0)
 
 
-function ScopeCard({
+/** Verb of a scope card label ("Skriv: skapa ..." -> "Skriv"). */
+function scopeVerb(label: string): string {
+  const sepIdx = label.indexOf(': ')
+  return sepIdx > 0 ? label.slice(0, sepIdx) : label
+}
+
+/** One scope in the picker; exported for its render test. */
+export function ScopeCard({
   scope,
   checked,
   onCheckedChange,
+  groupLabelId,
+  lockedNote,
 }: {
   scope: Scope
   checked: boolean
   onCheckedChange: (checked: boolean) => void
+  /** The group heading's id: the checkbox is named "<group> <verb>". */
+  groupLabelId: string
+  /** Set while an elevated scope in the group keeps this read scope ticked. */
+  lockedNote?: string
 }) {
   const t = useTranslations('settings_api_keys')
+  const id = useId()
   const label = t(scopeLabelKey(scope))
   const tools = TOOL_COUNT_BY_SCOPE[scope]
-  const sepIdx = label.indexOf(': ')
-  const verb = sepIdx > 0 ? label.slice(0, sepIdx) : label
-  const description = sepIdx > 0 ? label.slice(sepIdx + 2) : ''
+  const verb = scopeVerb(label)
+  const description = label.length > verb.length ? label.slice(verb.length + 2) : ''
+  const locked = lockedNote !== undefined
 
   return (
+    // The whole card is the checkbox's label, so a click on the verb or the
+    // description toggles it. A locked card says why on the verb line (no
+    // new line, so the cards below never move under the pointer).
     <label
       className={cn(
-        'flex min-h-[68px] cursor-pointer flex-col gap-1 rounded-lg border p-2 transition-colors',
+        'flex min-h-[68px] flex-col gap-1 rounded-lg border p-2 transition-colors',
+        locked ? 'cursor-default' : 'cursor-pointer',
         checked
           ? 'border-border bg-secondary'
           : 'border-border hover:bg-secondary/60'
@@ -78,16 +97,26 @@ function ScopeCard({
       <div className="flex items-center gap-2">
         <Checkbox
           checked={checked}
+          disabled={locked}
           onCheckedChange={onCheckedChange}
+          aria-labelledby={`${groupLabelId} ${id}-verb`}
+          aria-describedby={[description && `${id}-desc`, locked && `${id}-note`].filter(Boolean).join(' ') || undefined}
           className="shrink-0"
         />
-        <span className="flex-1 text-xs font-medium text-foreground">{verb}</span>
+        <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+          <span id={`${id}-verb`} className="text-xs font-medium text-foreground">{verb}</span>
+          {locked && (
+            <span id={`${id}-note`} className="truncate text-[11px] text-muted-foreground">
+              {lockedNote}
+            </span>
+          )}
+        </span>
         <span className="shrink-0 text-[11px] tabular-nums text-muted-foreground">
           {tools > 0 ? t('tools_count', { count: tools }) : t('rest_badge')}
         </span>
       </div>
       {description && (
-        <p className="ml-6 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
+        <p id={`${id}-desc`} className="ml-6 line-clamp-2 text-[11px] leading-snug text-muted-foreground">
           {description}
         </p>
       )}
@@ -131,6 +160,7 @@ export function ApiKeysPanel({
   const [newKeyMode, setNewKeyMode] = useState<'live' | 'test'>('live')
   const [newKeyScopes, setNewKeyScopes] = useState<Set<Scope>>(new Set(ALL_SCOPES))
   const [newKeyValue, setNewKeyValue] = useState('')
+  const scopeGroupIdPrefix = useId()
 
   // Company allowlist and per-company access. The picker only appears for a
   // user with two or more companies; every company starts ticked at read and
@@ -157,22 +187,22 @@ export function ApiKeysPanel({
     newKeyScopes.has('pending_operations:approve') && sodConflictScope !== null
 
   // Elevated scopes (write/approve/signoff) imply the group's read scope:
-  // ticking one ticks read, and unticking read clears the whole group.
-  function toggleScope(group: ScopeGroup, scope: Scope, checked: boolean) {
-    setNewKeyScopes((prev) => {
-      const next = new Set(prev)
-      const readScope = group.scopes.find((s) => scopeKind(s) === 'read')
-      if (checked) {
-        next.add(scope)
-        if (readScope) next.add(readScope)
-      } else if (scope === readScope) {
-        for (const s of group.scopes) next.delete(s)
-      } else {
-        next.delete(scope)
-      }
-      return next
-    })
+  // ticking one ticks read, which stays locked until they are unticked
+  // (scope-selection.ts).
+  function onScopeChange(group: ScopeGroup, scope: Scope, checked: boolean) {
+    setNewKeyScopes((prev) => toggleScope(prev, group, scope, checked))
   }
+
+  // "krävs för Skriv och Godkänn": the ticked elevated verbs holding read.
+  const verbList = new Intl.ListFormat(errorLocale, { type: 'conjunction' })
+  function lockedNoteFor(group: ScopeGroup, scope: Scope): string | undefined {
+    if (scope !== readScopeOf(group)) return undefined
+    const holders = readLockedBy(newKeyScopes, group)
+    if (holders.length === 0) return undefined
+    return t('scope_read_locked', { verbs: verbList.format(holders.map((s) => scopeVerb(t(scopeLabelKey(s))))) })
+  }
+
+  const PRESETS: ScopePreset[] = ['all', 'read_only', 'none']
 
   async function handleCreate() {
     // SoD: require an explicit, auditable acknowledgement before minting a key
@@ -327,6 +357,19 @@ export function ApiKeysPanel({
                   <p className="text-xs text-muted-foreground">
                     {t('permissions_help')}
                   </p>
+                  {/* Starting points: a narrow key took one click per group. */}
+                  <div className="flex flex-wrap gap-x-3 pt-0.5" role="group" aria-label={t('scope_presets_aria')}>
+                    {PRESETS.map((preset) => (
+                      <button
+                        key={preset}
+                        type="button"
+                        className={QUIET_LINK_CLASS}
+                        onClick={() => setNewKeyScopes(presetScopes(preset))}
+                      >
+                        {t(`scope_preset_${preset}`)}
+                      </button>
+                    ))}
+                  </div>
                 </div>
                 <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                   {t('selected_count', { selected: newKeyScopes.size, total: ALL_SCOPES.length })}
@@ -335,7 +378,7 @@ export function ApiKeysPanel({
               <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
                 {SCOPE_GROUPS.map((group) => (
                   <div key={group.domain} className="space-y-2">
-                    <h4 className="text-sm font-medium">
+                    <h4 id={`${scopeGroupIdPrefix}-${group.domain}`} className="text-sm font-medium">
                       {isRestOnlyGroup(group)
                         ? t('group_rest_only', { name: t(groupLabelKey(group)) })
                         : t(groupLabelKey(group))}
@@ -346,7 +389,9 @@ export function ApiKeysPanel({
                           key={scope}
                           scope={scope}
                           checked={newKeyScopes.has(scope)}
-                          onCheckedChange={(checked) => toggleScope(group, scope, checked)}
+                          onCheckedChange={(checked) => onScopeChange(group, scope, checked)}
+                          groupLabelId={`${scopeGroupIdPrefix}-${group.domain}`}
+                          lockedNote={lockedNoteFor(group, scope)}
                         />
                       ))}
                     </div>
