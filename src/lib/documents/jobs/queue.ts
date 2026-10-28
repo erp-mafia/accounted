@@ -7,6 +7,7 @@ import { deriveDocument } from '@/lib/arkiv/agreements/store'
 import { hasFactPredicates } from '@/lib/arkiv/facts/predicates'
 import { recordFactsForDocument } from '@/lib/arkiv/facts/store'
 import { readDocumentByPlan, type ReadableDocumentRow } from '@/lib/documents/read/store'
+import { PROVIDER_UNAVAILABLE, READER_UNAVAILABLE } from '@/lib/documents/read/types'
 import { isActingType, isBooked } from '@/lib/documents/read/lanes'
 import { HEIC_MIME_TYPES } from '@/lib/documents/read/image'
 import { ensurePreview } from '@/lib/documents/preview'
@@ -98,8 +99,12 @@ async function runClaimed(
       await settleJob(supabase, job, { status: 'done', result: 'skipped: period_locked', last_error: reason })
       return { kind: job.kind, result: 'skipped: period_locked' }
     }
-    await settleJob(supabase, job, { status: 'failed', last_error: reason, run_after: new Date(now() + backoffMs(job.attempts)).toISOString() })
-    log.warn('document job failed', { job: job.id, kind: job.kind, doc: job.document_id, attempt: job.attempts, reason })
+    const waitOut = isProviderOutage(reason)
+    await settleJob(supabase, job, { status: 'failed', last_error: reason, run_after: new Date(now() + backoffMs(job.attempts, waitOut)).toISOString() })
+    const fields = { job: job.id, kind: job.kind, doc: job.document_id, company: job.company_id, attempt: job.attempts, reason }
+    // The last attempt leaves the document unread or untyped for good: that reaches error tracking, a retry does not.
+    if (job.attempts >= MAX_ATTEMPTS) log.error('document job gave up', fields)
+    else log.warn('document job failed', fields)
     return { kind: job.kind, error: reason }
   }
 }
@@ -121,8 +126,20 @@ export async function runDocumentJobFor(
   return runClaimed(supabase, job, new Map(), Date.now)
 }
 
-/** 2, 4, 8, 16, 32 minutes, capped at an hour. */
-const backoffMs = (attempts: number) => Math.min(60, 2 ** attempts) * 60_000
+/** document_jobs.max_attempts (the column default; nothing sets another). */
+const MAX_ATTEMPTS = 5
+
+/**
+ * 2, 4, 8, 16 minutes, capped at an hour. A provider outage waits 30, 60, 120
+ * and 240 minutes instead, so the five attempts span about 7.5 hours: Bedrock
+ * 503 bursts outlasted the 30 minutes the short schedule covers and killed 139
+ * read and classify jobs in a week (prod 2026-10-19..26).
+ */
+const backoffMs = (attempts: number, providerOutage = false) =>
+  providerOutage ? Math.min(240, 30 * 2 ** Math.max(0, attempts - 1)) * 60_000 : Math.min(60, 2 ** attempts) * 60_000
+
+/** The step failed on the reader or the model provider, not on the document. */
+const isProviderOutage = (reason: string) => reason.startsWith(READER_UNAVAILABLE) || reason.startsWith(PROVIDER_UNAVAILABLE)
 
 /**
  * The period-lock trigger on document_attachments (migration 017) refuses

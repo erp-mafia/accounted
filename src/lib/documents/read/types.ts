@@ -106,3 +106,10 @@ export class ReaderUnavailableError extends Error {
 
 export const READER_UNAVAILABLE = 'reader_unavailable'
 
+/**
+ * Prefix of a stored step failure the AI provider caused (classifyExtractionError
+ * says 'provider_unavailable'), so the job queue can tell "wait for the
+ * provider" from "this document is broken" once the error object is gone.
+ */
+export const PROVIDER_UNAVAILABLE = 'provider_unavailable'
+

@@ -2,6 +2,8 @@ import { createHash } from 'node:crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
 import { getAiService, getAiStatus, isAiSwitchedOffError } from '@/lib/ai'
+import { classifyExtractionError } from '@/lib/documents/inbox-extraction/extraction-failure'
+import { PROVIDER_UNAVAILABLE } from '@/lib/documents/read/types'
 import { eventBus } from '@/lib/events/bus'
 import { createLogger } from '@/lib/logger'
 import { DOC_TYPES, DOC_TYPE_DESCRIPTIONS, type DocType } from './taxonomy'
@@ -218,6 +220,8 @@ export async function classifyDocument(supabase: SupabaseClient, documentId: str
     if (isAiSwitchedOffError(err)) return { status: 'skipped', reason: 'ai_switched_off' }
     const reason = err instanceof Error ? err.message : String(err)
     log.warn('classify failed', { doc: documentId, reason })
+    // The queue waits out a provider outage instead of spending the job's attempts on it.
+    if (classifyExtractionError(err) === 'provider_unavailable') return { status: 'error', reason: `${PROVIDER_UNAVAILABLE}: ${reason.slice(0, 300)}` }
     return { status: 'error', reason: reason.slice(0, 300) }
   }
 

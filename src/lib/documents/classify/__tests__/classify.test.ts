@@ -5,6 +5,7 @@ vi.mock('@/lib/arkiv/graph/snapshot', () => ({ markCompanyGraphStale: vi.fn() })
 vi.mock('@/lib/ai', () => ({
   getAiService: () => ({ generateStructured }),
   getAiStatus: vi.fn(() => ({ configured: true })),
+  isAiSwitchedOffError: () => false,
 }))
 
 import { classifyDocument, recordHumanClassification, buildClassifySystem, contentHash, kindFromInbox, kindFromVerifikat } from '../classify'
@@ -195,6 +196,16 @@ describe('classifyDocument', () => {
     const out = await classifyDocument(supabase, 'doc-1', company)
     expect(out.status).toBe('error')
     expect(writes).toEqual([])
+  })
+
+  it('marks a provider outage so the queue waits it out, and keeps any other failure as it is', async () => {
+    generateStructured.mockRejectedValueOnce(Object.assign(new Error('503 Bedrock is unable to process your request.'), { status: 503 }))
+    const outage = makeSupabase({ document: doc, pages: [{ page_no: 1, text: 'x' }] })
+    expect(await classifyDocument(outage.supabase, 'doc-1', company)).toEqual({ status: 'error', reason: 'provider_unavailable: 503 Bedrock is unable to process your request.' })
+    expect(outage.writes).toEqual([])
+    generateStructured.mockRejectedValueOnce(Object.assign(new Error('400 prompt is too long'), { status: 400 }))
+    const broken = makeSupabase({ document: doc, pages: [{ page_no: 1, text: 'x' }] })
+    expect(await classifyDocument(broken.supabase, 'doc-1', company)).toEqual({ status: 'error', reason: '400 prompt is too long' })
   })
 
   it('puts the company identity and every taxonomy entry in the system prompt', () => {

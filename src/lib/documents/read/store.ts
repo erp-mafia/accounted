@@ -10,6 +10,7 @@ import { readDocumentBytes } from './router'
 import { keptPreview } from '@/lib/documents/preview'
 import { historyReaderTier, readLaneFor, readPlanFor, isActingType, isBooked, type ReadPlan } from './lanes'
 import { READER_UNAVAILABLE, ReaderUnavailableError, readerForMime, type ReadOutcome } from './types'
+import { classifyExtractionError } from '@/lib/documents/inbox-extraction/extraction-failure'
 
 const log = createLogger('documents/read')
 
@@ -82,8 +83,9 @@ export async function readAndStoreDocument(
     )
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err)
-    if (err instanceof ReaderUnavailableError) {
-      // Not stamped: the document is fine, the reader is missing. It stays unread for the next run.
+    if (err instanceof ReaderUnavailableError || classifyExtractionError(err) === 'provider_unavailable') {
+      // Not stamped: the document is fine, the reader is missing or its model provider is down (a Bedrock 503
+      // stamped read_failed left 75 documents unread for good, prod 2026-10-19..26). It stays unread for the next run.
       log.warn('reader unavailable, document left unread', { doc: doc.id, mime: doc.mime_type, reason })
       return { status: 'error', reason: `${READER_UNAVAILABLE}: ${reason.slice(0, 300)}` }
     }
