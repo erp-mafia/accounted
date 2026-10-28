@@ -200,6 +200,8 @@ describe('MCP lazy authentication', () => {
   it.each([
     ['gnubok_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
     ['accounted_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    // A literal \u escape is decoded before the tool runs, so it is checked decoded.
+    ['gnubok_load_skill', { slug: '\\u006fwn/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
     ['gnubok_get_task', { kind: 'bookkeep' }],
     ['accounted_get_task', { kind: 'bookkeep' }],
   ])('requires a tenant before calling %s', async (name, args) => {
@@ -210,6 +212,8 @@ describe('MCP lazy authentication', () => {
 
   it.each([
     ['gnubok_load_skill', { slug: 'own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', _keyScopes: ['agent:read'] }],
+    ['gnubok_load_skill', { slug: '\\u006fwn/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
+    ['gnubok_load_skill', { slug: ' \\u006F\\u0077n/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa' }],
     ['gnubok_get_task', { kind: 'bookkeep' }],
   ])('requires agent:read for %s even from a valid key', async (name, args) => {
     const response = await handleMcpRequest(rpc('tools/call', { name, arguments: args }, { token: 'test-token' }))
