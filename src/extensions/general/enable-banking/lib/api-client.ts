@@ -1013,11 +1013,15 @@ function pickBalanceByType(balances: Balance[], preference: string[]): Balance |
  * money is in the bank", covering decisions before payment runs) a fabricated
  * zero with a fresh timestamp is dangerous, so the caller keeps its previous
  * stored value instead.
+ *
+ * `referenceDate` and `type` are the bank's own day and type for the booked
+ * amount (null when the bank gave no day): a closingBooked balance is the
+ * close of that day, often yesterday, not of the day it was fetched.
  */
 export async function getAccountBalance(
   accountUid: string,
   psu?: PsuHeaders
-): Promise<{ amount: number; date: string; available: number | null } | null> {
+): Promise<{ amount: number; referenceDate: string | null; type: string; available: number | null } | null> {
   const balances = await getAccountBalances(accountUid, psu)
 
   // Prefer closingBooked, then expected, then first available
@@ -1034,7 +1038,8 @@ export async function getAccountBalance(
 
   return {
     amount: parseFloat(balance.balance_amount.amount),
-    date: balance.reference_date || todayIsoStockholm(),
+    referenceDate: balance.reference_date || null,
+    type: balance.balance_type,
     available: available != null && Number.isFinite(available) ? available : null,
   }
 }

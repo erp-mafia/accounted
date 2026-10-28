@@ -636,6 +636,11 @@ export async function syncAccountTransactions(
         // fresh booked figure would misstate what can be spent.
         account.available_balance = balance.available ?? undefined
         account.balance_updated_at = new Date().toISOString()
+        // Replaced with the balance, never kept: an old day next to a new
+        // balance would date it wrong.
+        account.balance_reference = balance.referenceDate
+          ? { date: balance.referenceDate, type: balance.type }
+          : null
       }
     } catch {
       // Keep previous balance, don't update timestamp

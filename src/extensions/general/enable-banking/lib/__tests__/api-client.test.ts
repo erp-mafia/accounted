@@ -75,7 +75,7 @@ describe('api-client', () => {
       )
 
       const result = await getAccountBalance('acc-1')
-      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: 900.5 })
+      expect(result).toEqual({ amount: 1000, referenceDate: '2026-09-01', type: 'closingBooked', available: 900.5 })
       expect(fetchSpy).toHaveBeenCalledTimes(1)
     })
 
@@ -100,7 +100,7 @@ describe('api-client', () => {
       )
 
       const result = await getAccountBalance('acc-1')
-      expect(result).toEqual({ amount: 1000, date: '2026-09-01', available: null })
+      expect(result).toEqual({ amount: 1000, referenceDate: '2026-09-01', type: 'closingBooked', available: null })
     })
 
     it('falls back to the first balance for booked, never to an available type by preference', async () => {
@@ -112,7 +112,7 @@ describe('api-client', () => {
       )
 
       const result = await getAccountBalance('acc-1')
-      expect(result).toEqual({ amount: 42, date: '2026-08-31', available: null })
+      expect(result).toEqual({ amount: 42, referenceDate: '2026-08-31', type: 'somethingElse', available: null })
     })
 
     it('prefers interimBooked (ITBD) over the generic first-entry fallback', async () => {
@@ -125,6 +125,15 @@ describe('api-client', () => {
 
       const result = await getAccountBalance('acc-1')
       expect(result?.amount).toBe(3)
+    })
+
+    it('dates the balance only with the bank\'s own day, never with today', async () => {
+      fetchSpy.mockResolvedValueOnce(
+        balancesResponse([{ balance_type: 'ITBD', balance_amount: { amount: '3.00', currency: 'SEK' } }])
+      )
+
+      const result = await getAccountBalance('acc-1')
+      expect(result).toEqual({ amount: 3, referenceDate: null, type: 'ITBD', available: null })
     })
 
     it('returns null (never a fabricated 0) when the bank reports no balances at all', async () => {

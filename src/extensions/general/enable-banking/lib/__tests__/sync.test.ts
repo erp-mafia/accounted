@@ -946,7 +946,7 @@ describe('syncAccountTransactions', () => {
 
   it('refreshes the balance when the stored balance is older than 12 hours', async () => {
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
-    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01', available: 1100.5 })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, referenceDate: '2026-05-31', type: 'closingBooked', available: 1100.5 })
 
     const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
     const account = makeAccount({ balance: 500, balance_updated_at: staleAt })
@@ -960,6 +960,7 @@ describe('syncAccountTransactions', () => {
     expect(account.balance).toBe(1234.56)
     expect(account.available_balance).toBe(1100.5)
     expect(account.balance_updated_at).not.toBe(staleAt)
+    expect(account.balance_reference).toEqual({ date: '2026-05-31', type: 'closingBooked' })
   })
 
   it('keeps the previous balance and timestamp when the bank reports no balances (null result)', async () => {
@@ -969,7 +970,8 @@ describe('syncAccountTransactions', () => {
     mockGetAccountBalance.mockResolvedValue(null)
 
     const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
-    const account = makeAccount({ balance: 500, available_balance: 480, balance_updated_at: staleAt })
+    const reference = { date: '2026-05-01', type: 'closingBooked', fetched_at: staleAt }
+    const account = makeAccount({ balance: 500, available_balance: 480, balance_updated_at: staleAt, balance_reference: reference })
 
     await syncAccountTransactions(
       {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
@@ -980,16 +982,20 @@ describe('syncAccountTransactions', () => {
     expect(account.balance).toBe(500)
     expect(account.available_balance).toBe(480)
     expect(account.balance_updated_at).toBe(staleAt)
+    expect(account.balance_reference).toEqual(reference)
   })
 
   it('clears a stored available balance when the refresh reports none', async () => {
     // A stale available figure next to a fresh booked figure would misstate
     // what can be spent: null from the bank overwrites, never keeps.
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
-    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01', available: null })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, referenceDate: null, type: 'ITBD', available: null })
 
     const staleAt = new Date(Date.now() - 13 * 60 * 60 * 1000).toISOString()
-    const account = makeAccount({ balance: 500, available_balance: 480, balance_updated_at: staleAt })
+    const account = makeAccount({
+      balance: 500, available_balance: 480, balance_updated_at: staleAt,
+      balance_reference: { date: '2026-05-01', type: 'closingBooked', fetched_at: staleAt },
+    })
 
     await syncAccountTransactions(
       {} as never, COMPANY_ID, USER_ID, CONNECTION_ID, account,
@@ -998,13 +1004,15 @@ describe('syncAccountTransactions', () => {
 
     expect(account.balance).toBe(1234.56)
     expect(account.available_balance).toBeUndefined()
+    // No day from the bank: the old day must not date the new balance.
+    expect(account.balance_reference).toBeNull()
   })
 
   it('treats a future balance_updated_at as stale and refreshes', async () => {
     // Clock skew or bad data can store a future timestamp; its negative age
     // must not count as fresh, or refreshes would be suppressed indefinitely.
     mockGetAllTransactionsWithRaw.mockResolvedValue({ transactions: [], rawPages: [] })
-    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, date: '2026-06-01' })
+    mockGetAccountBalance.mockResolvedValue({ amount: 1234.56, referenceDate: '2026-06-01', type: 'closingBooked', available: null })
 
     const futureAt = new Date(Date.now() + 60 * 60 * 1000).toISOString()
     const account = makeAccount({ balance: 500, balance_updated_at: futureAt })
