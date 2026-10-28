@@ -7,13 +7,14 @@ import { Button } from '@/components/ui/button'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { Skeleton } from '@/components/ui/skeleton'
 import { getErrorMessage, getResponseErrorMessage } from '@/lib/errors/get-error-message'
-import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
+import { prepareDocumentUpload } from '@/lib/documents/shrink-image'
 import { isHostedDeployment } from '@/lib/documents/upload-size'
 import { DOCUMENT_UPLOAD_ACCEPT, isAllowedDocumentFile } from '@/lib/documents/upload-types'
 import {
   MAX_INVOICE_ATTACHMENTS,
   MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES,
-  invoiceAttachmentFileLimitBytes,
+  MAX_INVOICE_ATTACHMENT_FILE_BYTES,
   invoiceAttachmentSizeVerdict,
 } from '@/lib/invoices/invoice-attachment-limits'
 
@@ -121,10 +122,10 @@ export function InvoiceAttachmentsSection({
 
   const usedBytes = attached.reduce((sum, a) => sum + (a.file_size_bytes ?? 0), 0)
   const full = attached.length + pending.length >= MAX_INVOICE_ATTACHMENTS
-  // The per-file limit that applies here (#79): the platform's body cap on
-  // hosted, the archive's ceiling self-hosted.
+  // The per-file limit that applies here (#79): the archive's ceiling. Only
+  // the photo shrink depends on the deployment.
   const hosted = isHostedDeployment()
-  const fileLimitBytes = invoiceAttachmentFileLimitBytes(hosted)
+  const fileLimitBytes = MAX_INVOICE_ATTACHMENT_FILE_BYTES
   const tooLarge = useCallback(
     (file: File) =>
       t('file_too_large', {
@@ -139,12 +140,11 @@ export function InvoiceAttachmentsSection({
     async (file: File, key: string): Promise<string | null> => {
       // A photo over the hosted cap is shrunk here; one that still does not
       // fit gets this dialog's own sentence, with the limit that applies.
-      const prepared = await prepareForMultipartUpload(file)
+      const prepared = await prepareDocumentUpload(file)
       if (!prepared.ok) return tooLarge(file)
       const form = new FormData()
-      form.append('file', prepared.file)
       form.append('upload_source', 'file_upload')
-      const upload = await fetch('/api/documents', { method: 'POST', body: form })
+      const upload = await postDocumentForm('/api/documents', form, prepared.file)
       if (!upload.ok) return getResponseErrorMessage(upload, undefined, locale)
       const uploaded = (await upload.json()) as {
         data?: { id?: string; file_name?: string; file_size_bytes?: number | null }

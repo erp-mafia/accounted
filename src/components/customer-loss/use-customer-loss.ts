@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import type { CustomerLossView } from '@/lib/customer-loss/view'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
 
 /** GET the invoice's kundförlust view; null when it cannot be read (supplementary on the page). */
 async function fetchCustomerLossView(invoiceId: string): Promise<CustomerLossView | null> {
@@ -68,10 +69,9 @@ export async function postCustomerLoss(
 /** Upload the evidence document; answers its id. */
 export async function uploadEvidence(file: File): Promise<string | null> {
   const formData = new FormData()
-  formData.append('file', file)
   formData.append('upload_source', 'file_upload')
   try {
-    const res = await fetch('/api/documents', { method: 'POST', body: formData })
+    const res = await postDocumentForm('/api/documents', formData, file)
     const json = (await res.json().catch(() => null)) as { data?: { id?: string } } | null
     return res.ok && json?.data?.id ? json.data.id : null
   } catch {

@@ -60,6 +60,7 @@ import {
   orderEvidenceCandidates,
 } from '@/lib/bokslut/arsredovisning/signature-evidence'
 import type { ArkivDocumentRow } from '@/app/api/arkiv/documents/route'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { todayIsoStockholm } from '@/lib/dates/iso'
@@ -580,10 +581,9 @@ export default function ArsredovisningPage() {
       setUploadingEvidence(true)
       try {
         const form = new FormData()
-        form.append('file', file)
         form.append('upload_source', 'file_upload')
         form.append('dedupe_by_content', 'true')
-        const response = await fetch('/api/documents', { method: 'POST', body: form })
+        const response = await postDocumentForm('/api/documents', form, file)
         const body = await response.json().catch(() => null)
         const documentId: string | undefined = body?.data?.id
         if (!response.ok || !documentId) {

@@ -17,7 +17,8 @@ import { cn } from '@/lib/utils'
 import { openDeferredTab } from '@/lib/browser/deferred-tab'
 import { DocumentPreview } from '@/components/bookkeeping/DocumentPreview'
 import { documentPreviewKind } from '@/lib/documents/preview-kind'
-import { prepareForMultipartUpload } from '@/lib/documents/shrink-image'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
+import { prepareDocumentUpload } from '@/lib/documents/shrink-image'
 import {
   ArrowDownTrayIcon,
   ArrowPathIcon,
@@ -250,17 +251,12 @@ export default function JournalEntryAttachments({
 
     setReplacingDocId(docId)
     try {
-      const prepared = await prepareForMultipartUpload(file)
+      const prepared = await prepareDocumentUpload(file)
       if (!prepared.ok) {
         toast({ title: t('replace_failed'), description: prepared.message, variant: 'destructive' })
         return
       }
-      const fd = new FormData()
-      fd.append('file', prepared.file)
-      const res = await fetch(`/api/documents/${docId}/versions`, {
-        method: 'POST',
-        body: fd,
-      })
+      const res = await postDocumentForm(`/api/documents/${docId}/versions`, new FormData(), prepared.file)
       if (!res.ok) {
         const { error } = await res.json().catch(() => ({ error: undefined }))
         toast({

@@ -26,9 +26,23 @@ vi.mock('@/lib/init', () => ({ ensureInitialized: vi.fn() }))
 
 const mockCreateNewVersion = vi.fn()
 const mockValidateDocumentFile = vi.fn()
-vi.mock('@/lib/core/documents/document-service', () => ({
-  createNewVersion: (...args: unknown[]) => mockCreateNewVersion(...args),
-  validateDocumentFile: (...args: unknown[]) => mockValidateDocumentFile(...args),
+vi.mock('@/lib/core/documents/document-service', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/core/documents/document-service')>()
+  return {
+    DOCUMENTS_BUCKET: actual.DOCUMENTS_BUCKET,
+    buildPendingDocumentStoragePath: actual.buildPendingDocumentStoragePath,
+    createNewVersion: (...args: unknown[]) => mockCreateNewVersion(...args),
+    validateDocumentFile: (...args: unknown[]) => mockValidateDocumentFile(...args),
+  }
+})
+
+// The service-role Storage client readUploadedFile reads a staged upload with.
+const stagedDownload = vi.fn()
+const stagedRemove = vi.fn()
+vi.mock('@/lib/auth/api-keys', () => ({
+  createServiceClientNoCookies: () => ({
+    storage: { from: () => ({ download: stagedDownload, remove: stagedRemove }) },
+  }),
 }))
 
 import { POST } from '../route'
@@ -56,6 +70,47 @@ beforeEach(() => {
 })
 
 describe('POST /api/documents/[id]/versions', () => {
+  // A phone photo or scan over the hosted body cap arrives staged in Storage.
+  it('versions a file staged in Storage like an inline one', async () => {
+    const uploadId = '33333333-3333-4333-8333-333333333333'
+    stagedDownload.mockResolvedValue({ data: new Blob([new TextEncoder().encode('%PDF-1.4 v2')]), error: null })
+    stagedRemove.mockResolvedValue({ data: [], error: null })
+    mockCreateNewVersion.mockResolvedValue({ id: 'doc-2', version: 2 })
+    const form = new FormData()
+    form.append('upload_id', uploadId)
+    form.append('file_name', 'kvitto.pdf')
+    form.append('mime_type', 'application/pdf')
+
+    const res = await POST(
+      new Request('http://localhost/api/documents/doc-1/versions', { method: 'POST', body: form }),
+      createMockRouteParams({ id: 'doc-1' }),
+    )
+
+    expect(res.status).toBe(200)
+    expect(stagedDownload).toHaveBeenCalledWith(`documents/company-1/user-1/pending/${uploadId}_kvitto.pdf`)
+    const [, , docId, file] = mockCreateNewVersion.mock.calls[0]
+    expect(docId).toBe('doc-1')
+    expect(file).toEqual(expect.objectContaining({ name: 'kvitto.pdf', type: 'application/pdf' }))
+  })
+
+  it('returns 404 when the staged file is not in Storage', async () => {
+    stagedDownload.mockResolvedValue({ data: null, error: { message: 'Object not found' } })
+    const form = new FormData()
+    form.append('upload_id', '33333333-3333-4333-8333-333333333333')
+    form.append('file_name', 'kvitto.pdf')
+    form.append('mime_type', 'application/pdf')
+
+    const res = await POST(
+      new Request('http://localhost/api/documents/doc-1/versions', { method: 'POST', body: form }),
+      createMockRouteParams({ id: 'doc-1' }),
+    )
+    const { status, body } = await parseJsonResponse<{ error: string }>(res)
+
+    expect(status).toBe(404)
+    expect(body.error).toContain('Ladda upp filen igen')
+    expect(mockCreateNewVersion).not.toHaveBeenCalled()
+  })
+
   it('returns 401 when not authenticated', async () => {
     requireAuthMock.mockResolvedValue({
       user: null,

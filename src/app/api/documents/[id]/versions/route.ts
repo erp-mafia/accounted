@@ -1,27 +1,32 @@
 import { NextResponse } from 'next/server'
 import { withRouteContext } from '@/lib/api/with-route-context'
 import { createNewVersion, validateDocumentFile } from '@/lib/core/documents/document-service'
+import { readUploadedFile } from '@/lib/core/documents/staged-upload'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { getErrorEntry } from '@/lib/errors/structured-errors'
 
 /**
  * POST /api/documents/:id/versions
  * Create a new version of an existing document (atomic via RPC)
  *
  * Accepts multipart/form-data with:
- * - file: The new version file
+ * - file: The new version file, or upload_id + file_name + mime_type for one
+ *   sent straight to Storage first (staged-upload.ts)
  */
 export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
   'document.versions.create',
-  async (request, { supabase, user }, { params }) => {
+  async (request, { supabase, user, companyId }, { params }) => {
     const { id } = await params
 
     try {
       const formData = await request.formData()
-      const file = formData.get('file') as File | null
-
-      if (!file) {
-        return NextResponse.json({ error: 'No file provided' }, { status: 400 })
+      const uploaded = await readUploadedFile(formData, companyId, user.id)
+      if (!uploaded.ok) {
+        return uploaded.code === 'DOC_UPLOAD_NO_FILE'
+          ? NextResponse.json({ error: 'No file provided' }, { status: 400 })
+          : NextResponse.json({ error: getErrorEntry(uploaded.code)?.message_sv }, { status: 404 })
       }
+      const file = uploaded.file
 
       const validationError = validateDocumentFile({ size: file.size, type: file.type })
       if (validationError) {

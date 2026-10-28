@@ -64,6 +64,8 @@ import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { formatCurrency, formatDate, formatAmount } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { uploadViaSignedUrl } from '@/lib/documents/direct-upload'
+import { exceedsHostedUploadLimit } from '@/lib/documents/upload-size'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { CURRENCIES, type BookingTemplateLibrary } from '@/types'
 
@@ -743,12 +745,19 @@ export default function ExpenseClaimsPage() {
       pollAbort.current = { cancelled: false }
       setUpload({ phase: 'uploading', fileName: file.name })
       try {
-        const form = new FormData()
-        form.append('file', file)
-        const res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
-          method: 'POST',
-          body: form,
-        })
+        // Over the hosted body cap the receipt goes straight to Storage
+        // (same response shape as the multipart route).
+        let res: Response
+        if (exceedsHostedUploadLimit(file.size)) {
+          res = await uploadViaSignedUrl(file)
+        } else {
+          const form = new FormData()
+          form.append('file', file)
+          res = await fetch('/api/extensions/ext/invoice-inbox/upload', {
+            method: 'POST',
+            body: form,
+          })
+        }
         if (!res.ok) {
           const err = await res.json().catch(() => null)
           setUpload({

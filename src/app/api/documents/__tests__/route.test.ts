@@ -42,6 +42,19 @@ vi.mock('@/lib/core/documents/document-service', async () => {
   return { ...actual, uploadDocument: (...args: unknown[]) => uploadDocumentMock(...args) }
 })
 
+// The service-role Storage client readUploadedFile reads a staged upload with.
+const stagedDownload = vi.fn()
+const stagedRemove = vi.fn()
+vi.mock('@/lib/auth/api-keys', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/auth/api-keys')>('@/lib/auth/api-keys')
+  return {
+    ...actual,
+    createServiceClientNoCookies: () => ({
+      storage: { from: () => ({ download: stagedDownload, remove: stagedRemove }) },
+    }),
+  }
+})
+
 import { POST } from '../route'
 
 const JE_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
@@ -244,5 +257,40 @@ describe('POST /api/documents', () => {
     expect(uploadDocumentMock.mock.calls[0][4]).toEqual(
       expect.objectContaining({ upload_source: 'file_upload' }),
     )
+  })
+  // Over the hosted body cap the browser stages the file in Storage first
+  // (POST /api/documents/uploads) and sends a reference instead of the bytes.
+  it('archives a file staged in Storage exactly like an inline one', async () => {
+    const UPLOAD_ID = '33333333-3333-4333-8333-333333333333'
+    const bytes = new TextEncoder().encode('%PDF-1.4\nbig scan\n%%EOF\n')
+    stagedDownload.mockResolvedValue({ data: new Blob([bytes]), error: null })
+    stagedRemove.mockResolvedValue({ data: [], error: null })
+    uploadDocumentMock.mockResolvedValue(makeDocumentAttachment({ id: 'doc-big', journal_entry_id: JE_ID }))
+
+    const res = await POST(
+      makeRequest({ upload_id: UPLOAD_ID, file_name: 'skanning.pdf', mime_type: 'application/pdf', journal_entry_id: JE_ID }) as never,
+      createMockRouteParams({}),
+    )
+
+    expect(res.status).toBe(200)
+    expect(stagedDownload).toHaveBeenCalledWith(`documents/company-1/user-1/pending/${UPLOAD_ID}_skanning.pdf`)
+    const [, , , file, metadata] = uploadDocumentMock.mock.calls[0]
+    expect(file).toEqual(expect.objectContaining({ name: 'skanning.pdf', type: 'application/pdf' }))
+    expect(new Uint8Array(file.buffer)).toEqual(bytes)
+    expect(metadata).toEqual(expect.objectContaining({ journal_entry_id: JE_ID }))
+  })
+
+  it('returns 404 when the staged file is not in Storage', async () => {
+    stagedDownload.mockResolvedValue({ data: null, error: { message: 'Object not found' } })
+
+    const res = await POST(
+      makeRequest({ upload_id: '33333333-3333-4333-8333-333333333333', file_name: 'skanning.pdf', mime_type: 'application/pdf' }) as never,
+      createMockRouteParams({}),
+    )
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('DOCUMENT_UPLOAD_NOT_FOUND')
+    expect(uploadDocumentMock).not.toHaveBeenCalled()
   })
 })

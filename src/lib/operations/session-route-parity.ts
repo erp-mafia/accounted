@@ -341,6 +341,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
 
   // ── Documents and archive ──────────────────────────────────────────
   'POST /api/documents': covered([`POST ${V}/documents`, 'gnubok_upload_document']),
+  'POST /api/documents/uploads': covered(['gnubok_create_document_upload']),
   'DELETE /api/documents/:id': covered([`DELETE ${V}/documents/:id`, 'gnubok_delete_document']),
   'POST /api/documents/:id/link': covered([`POST ${V}/documents/:id/link`, 'gnubok_link_document_to_voucher']),
   'POST /api/documents/:id/detach': gap('P3', 'detach a duplicate underlag from a posted verifikat'),

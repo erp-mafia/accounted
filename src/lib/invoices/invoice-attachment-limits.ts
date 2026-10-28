@@ -1,4 +1,4 @@
-import { HOSTED_MAX_UPLOAD_BYTES, isShrinkableImage } from '@/lib/documents/upload-size'
+import { isShrinkableImage } from '@/lib/documents/upload-size'
 import type { EditorChannel } from '@/lib/invoices/editor/channel'
 
 /**
@@ -20,25 +20,19 @@ export const MAX_INVOICE_ATTACHMENTS = 10
  */
 export const MAX_INVOICE_ATTACHMENTS_TOTAL_BYTES = 25 * 1024 * 1024
 
-/** The archive's own per-file ceiling (MAX_DOCUMENT_SIZE in the document service). */
-export const MAX_INVOICE_ATTACHMENT_FILE_BYTES = 10 * 1024 * 1024
-
 /**
- * The largest single file that can be attached on this deployment (#79). An
- * attachment goes up as a multipart body to POST /api/documents, so on hosted
- * the platform's request-body cap decides (HOSTED_MAX_UPLOAD_BYTES, 4 MB) and
- * the archive's 10 MB is never reached; self-hosted has no such proxy and the
- * archive's ceiling applies.
+ * The largest single file that can be attached (#79): the archive's own
+ * ceiling (MAX_DOCUMENT_SIZE in the document service) on every deployment. On
+ * hosted a file over the platform's request-body cap goes straight to Storage
+ * (postDocumentForm), so that cap no longer decides.
  */
-export function invoiceAttachmentFileLimitBytes(hosted: boolean): number {
-  return hosted ? HOSTED_MAX_UPLOAD_BYTES : MAX_INVOICE_ATTACHMENT_FILE_BYTES
-}
+export const MAX_INVOICE_ATTACHMENT_FILE_BYTES = 10 * 1024 * 1024
 
 /**
  * What happens to a picked file before it is uploaded:
  *  - 'ok':        it fits as it is.
- *  - 'shrink':    a photo over the hosted cap; the browser re-encodes it
- *                 (prepareForMultipartUpload) and the limit applies to the result.
+ *  - 'shrink':    a photo over the limit; the browser re-encodes it
+ *                 (prepareDocumentUpload) and the limit applies to the result.
  *  - 'too_large': refused up front, naming the limit that applies.
  */
 export type InvoiceAttachmentSizeVerdict = 'ok' | 'shrink' | 'too_large'
@@ -47,7 +41,7 @@ export function invoiceAttachmentSizeVerdict(
   file: { size: number; type: string },
   hosted: boolean,
 ): InvoiceAttachmentSizeVerdict {
-  if (file.size <= invoiceAttachmentFileLimitBytes(hosted)) return 'ok'
+  if (file.size <= MAX_INVOICE_ATTACHMENT_FILE_BYTES) return 'ok'
   return hosted && isShrinkableImage(file.type) ? 'shrink' : 'too_large'
 }
 

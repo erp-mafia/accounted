@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { declaredDocumentType, uploadDocument, validateDocumentFile } from '@/lib/core/documents/document-service'
 import { withRouteContext } from '@/lib/api/with-route-context'
+import { readUploadedFile } from '@/lib/core/documents/staged-upload'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { errorResponse, errorResponseFromCode, isPeriodLockRefusal } from '@/lib/errors/get-structured-error'
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -11,7 +12,8 @@ import { linkBasisColumns } from '@/lib/links/stamp'
  * POST /api/documents: upload a document to the WORM archive.
  *
  * multipart/form-data:
- *   file: the document file
+ *   file: the document file, or, for a file sent straight to Storage first
+ *     (POST /api/documents/uploads), upload_id + file_name + mime_type
  *   upload_source (optional): 'camera' | 'file_upload' | 'email' | …
  *   journal_entry_id (optional)
  *   journal_entry_line_id (optional)
@@ -32,11 +34,11 @@ export const POST = withRouteContext(
     const { user, supabase, companyId, log, requestId } = ctx
 
     const formData = await request.formData()
-    const file = formData.get('file') as File | null
-
-    if (!file) {
-      return errorResponseFromCode('DOC_UPLOAD_NO_FILE', log, { requestId })
+    const uploaded = await readUploadedFile(formData, companyId, user.id)
+    if (!uploaded.ok) {
+      return errorResponseFromCode(uploaded.code, log, { requestId })
     }
+    const file = uploaded.file
 
     // A HEIC dropped from a Mac arrives with no declared type: the extension says what it is, the bytes are verified below.
     const declaredType = declaredDocumentType({ name: file.name, type: file.type })

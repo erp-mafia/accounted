@@ -7,6 +7,7 @@ import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import type { PipelineView } from '@/app/api/documents/[id]/pipeline/route'
 import { DOC_TYPES } from '@/lib/documents/classify/taxonomy'
+import { postDocumentForm } from '@/lib/documents/direct-upload'
 import { DOCUMENT_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { cn } from '@/lib/utils'
 import { ARKIV } from './palette'
@@ -88,12 +89,11 @@ export function UploadDrop({ onLanded, className }: { onLanded?: (view: Pipeline
         setRows((rs) => [...rs, { key, fileName: file.name, documentId: null, view: null, failed: null, done: false, leaving: false }])
         try {
           const fd = new FormData()
-          fd.append('file', file)
           fd.append('upload_source', 'file_upload')
           // Free-floating: the same file dropped again is the document already archived, not a second copy (and a second
           // receipt in Underlag). Uploads aimed at a verifikat keep their own copy (POST /api/documents).
           fd.append('dedupe_by_content', 'true')
-          const res = await fetch('/api/documents', { method: 'POST', body: fd })
+          const res = await postDocumentForm('/api/documents', fd, file)
           if (!res.ok) throw new Error(String(res.status))
           const { data } = (await res.json()) as { data: { id: string; deduplicated?: boolean } }
           patch(key, { documentId: data.id, duplicate: data.deduplicated === true })
