@@ -1,0 +1,1 @@
+[2026-10-28] Without a client marker, the MCP client label falls back to the OAuth provider stored on the key, then the stateless clientInfo name, then the User-Agent, mapped into the marker vocabulary; unmapped is other plus a sanitized clientName, and clientSource says which fallback set it.
