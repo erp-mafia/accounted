@@ -47,7 +47,9 @@ export function BrandWordmark({
           alt={name}
           width={size === 'hero' ? 214 : 88}
           height={size === 'hero' ? 64 : 22}
-          className={cn('w-auto', size === 'hero' ? 'h-16' : 'h-[22px]')}
+          // max-w-full + object-contain: a logo wider than the column scales
+          // down instead of being squeezed sideways.
+          className={cn('w-auto max-w-full object-contain', size === 'hero' ? 'h-16' : 'h-[22px]')}
           priority={size === 'hero'}
           // Bypass the image optimizer: its remote-host allowlist is fixed at
           // build time, which the runtime-configured Docker image cannot

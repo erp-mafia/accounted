@@ -1,0 +1,1 @@
+[2026-10-27] The sidebar shows an uploaded byrå logo at its own width (26px tall, capped at the sidebar) instead of swapping in the square favicon plus the app name: most byrå logos are wide wordmarks, and the 2026-08-05 call says the logo carries the brand alone.
