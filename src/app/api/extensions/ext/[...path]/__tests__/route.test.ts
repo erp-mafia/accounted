@@ -63,6 +63,7 @@ import { mfaStepUpApplies, shouldEnforceMfa } from '@/lib/auth/mfa'
 import { requireCapability } from '@/lib/entitlements/has-capability'
 import { requiredCapabilityForExtensionId } from '@/lib/extensions/sectors'
 import { extensionRegistry } from '@/lib/extensions/registry'
+import { requireCompanyId } from '@/lib/company/context'
 import { GET, POST } from '../route'
 
 const mockCreateClient = vi.mocked(createClient)
@@ -361,6 +362,22 @@ describe('Extension Catch-All Route', () => {
         createMockRequest('/api/extensions/ext/test-ext/write', { method: 'POST', body: {} }),
         createPathParams(['test-ext', 'write']),
       )
+
+    it('refuses the invoicing-only role on any route before the handler runs', async () => {
+      const handler = vi.fn()
+      register({ handler })
+      signIn()
+      vi.mocked(requireCompanyId).mockImplementationOnce(async (_s, _u, facts) => {
+        if (facts) facts.role = 'invoicer'
+        return 'company-1'
+      })
+
+      const response = await call()
+
+      expect(response.status).toBe(403)
+      expect(JSON.stringify(await response.json())).toContain('INVOICER_ROUTE_NOT_ALLOWED')
+      expect(handler).not.toHaveBeenCalled()
+    })
 
     it('refuses a viewer on a requireWrite route before the handler runs', async () => {
       const handler = vi.fn()

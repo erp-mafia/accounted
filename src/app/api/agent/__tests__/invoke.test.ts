@@ -82,8 +82,8 @@ function body(overrides: Record<string, unknown> = {}) {
  * reads, so a rejected request costs exactly one membership read plus the
  * conversation lookup.
  */
-function enqueuePreamble() {
-  enqueue({ data: { role: 'owner' } }) // company_members
+function enqueuePreamble(role = 'owner') {
+  enqueue({ data: { role } }) // company_members
 }
 
 /** The company + profile reads that only happen once a request is accepted. */
@@ -242,6 +242,22 @@ describe('POST /api/agent/invoke', () => {
     // The route streams NDJSON; draining it is enough to know the turn ran.
     await res.text()
     expect(runChatTurnMock).toHaveBeenCalledTimes(1)
+  })
+
+  it('gives a viewer a read-only turn and a writer a full one', async () => {
+    for (const [role, readOnly] of [['viewer', true], ['member', false]] as const) {
+      runChatTurnMock.mockClear()
+      enqueuePreamble(role)
+      enqueue({
+        data: { id: CONVERSATION_ID, user_id: 'user-1', company_id: 'company-1', intent_id: 'general.help' },
+      })
+      enqueueAcceptedTail()
+      const res = await POST(
+        createMockRequest('/api/agent/invoke', { method: 'POST', body: body({ conversation_id: CONVERSATION_ID }) }),
+      )
+      await res.text()
+      expect((runChatTurnMock.mock.calls[0]![0] as { readOnly?: boolean }).readOnly).toBe(readOnly)
+    }
   })
 
   it('hands the first-turn profile summary to the turn instead of re-reading it', async () => {

@@ -14,6 +14,7 @@ import { runWithAgentReason, splitAgentReason } from '@/lib/pending-operations/a
 import { buildSystemPrompt } from './system-prompt'
 import { loadFiscalYearInventory } from '@/lib/agent/fiscal-years'
 import { createLogger } from '@/lib/logger'
+import { isReadOnlyTool } from './read-only-tools'
 import { swedishToday } from '@/lib/utils'
 import type { Locale } from '@/i18n/config'
 
@@ -225,6 +226,10 @@ interface RunTurnArgs {
   preloadedProfileSummary?: string | null
   // The user's UI locale: the agent answers in it. Default 'sv'.
   locale?: Locale
+  // True for a member who may only read (the viewer role): the turn gets the
+  // intent's read tools only, so the assistant cannot stage or write on
+  // their behalf. Tools here run without the MCP dispatcher's role gate.
+  readOnly?: boolean
   // Emit events back to the caller. Returns false if the stream was cancelled
   // and the loop should stop emitting (best-effort).
   emit: (event: StreamEvent) => boolean
@@ -325,7 +330,7 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
     supabase,
   })
 
-  const tools = await collectIntentTools(intent)
+  const tools = await collectIntentTools(intent, args.readOnly === true)
 
   // 3: assemble Anthropic messages: prior history + new user turn.
   const history = await loadConversationMessages(supabase, conversationId)
@@ -1004,9 +1009,11 @@ async function stampAgentMetadata(
 
 // ── Tool conversion ────────────────────────────────────────────────────────
 
-async function collectIntentTools(intent: AgentIntent): Promise<AgentTool[]> {
-  return agentToolRegistry.getMany(intent.tools)
+async function collectIntentTools(intent: AgentIntent, readOnly: boolean): Promise<AgentTool[]> {
+  const names = readOnly ? intent.tools.filter(isReadOnlyTool) : intent.tools
+  return agentToolRegistry.getMany(names)
 }
+
 
 // Thinking blocks stay in the in-memory `messages` array: Anthropic requires
 // the preceding assistant turn's thinking block to be present when you return
