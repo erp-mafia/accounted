@@ -8,6 +8,12 @@
 # setting "Pipelines must succeed").
 
 workflow:
+  # A new commit cancels only the interruptible jobs of the ref's older
+  # pipelines. The default (conservative) also cancelled a migrations-production
+  # still waiting for the runner, so on a busy day each merge cancelled the last
+  # one and prod's schema lagged live code by hours (2026-10-28).
+  auto_cancel:
+    on_new_commit: interruptible
   rules:
     - if: $CI_PIPELINE_SOURCE == "merge_request_event"
     # The report benchmark (perf-reports below): its schedule, and a run by
@@ -391,6 +397,14 @@ migrations-production:
     - test -n "$SUPABASE_DB_PASSWORD" || { echo "SUPABASE_DB_PASSWORD is not set for main"; exit 1; }
     - |
       set -euo pipefail
+      # An older merge's job hands over to the job of main's head, which is no
+      # longer cancelled and pushes every migration main has; pushing an older
+      # tree after a newer one fails on the versions it does not have.
+      head=$(git ls-remote origin refs/heads/main | cut -f1) || head=""
+      if [ -n "$head" ] && [ "$head" != "$CI_COMMIT_SHA" ]; then
+        echo "main is at $head; its pipeline applies the migrations"
+        exit 0
+      fi
       curl -fsS -H "Authorization: Bearer $SUPABASE_ACCESS_TOKEN" \
         "https://api.supabase.com/v1/projects/$SUPABASE_PROJECT_REF/config/database/pooler" > /tmp/pooler.json
       node -e '
