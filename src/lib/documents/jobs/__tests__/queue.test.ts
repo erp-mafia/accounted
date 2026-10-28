@@ -2,6 +2,9 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => log }))
+
 vi.mock('@/lib/documents/read/store', () => ({ readDocumentByPlan: vi.fn() }))
 vi.mock('@/lib/documents/classify/classify', () => ({
   classifyDocument: vi.fn(),
@@ -160,6 +163,39 @@ describe('runDocumentJobs', () => {
     expect(rpc).toHaveBeenCalledWith('enqueue_document_job', { p_company_id: 'co-1', p_document_id: 'doc-1', p_kind: 'read' })
     expect(rpc).not.toHaveBeenCalledWith('enqueue_document_job', expect.objectContaining({ p_kind: 'extract' }))
     expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'classified agreement.loan (admitted), reading the rest' })
+  })
+
+  it('waits out a provider outage with a long backoff instead of spending the attempts in half an hour', async () => {
+    const t0 = Date.parse('2026-10-26T08:00:00Z')
+    for (const [attempts, minutes] of [[1, 30], [2, 60], [3, 120], [4, 240]] as const) {
+      reset()
+      enqueue({ data: [job({ kind: 'classify', attempts })] })
+      mocked(classifyDocument).mockResolvedValue({ status: 'error', reason: 'provider_unavailable: 503 Bedrock is unable to process your request.' })
+      enqueue({})
+      await expect(run({ now: () => t0 })).resolves.toMatchObject({ failed: 1 })
+      expect(lastJobUpdate()).toMatchObject({ status: 'failed', run_after: new Date(t0 + minutes * 60_000).toISOString() })
+    }
+  })
+
+  it('treats a missing reader like a provider outage', async () => {
+    enqueue({ data: [job({ kind: 'read', attempts: 2 })] })
+    enqueue({ data: DOCUMENT })
+    mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'error', reason: 'reader_unavailable: 503 Bedrock is unable to process your request.' } })
+    enqueue({})
+    const t0 = Date.parse('2026-10-26T08:00:00Z')
+    await expect(run({ now: () => t0 })).resolves.toMatchObject({ failed: 1 })
+    expect(lastJobUpdate()).toMatchObject({ status: 'failed', run_after: new Date(t0 + 60 * 60_000).toISOString() })
+  })
+
+  it('reports the attempt that gives up as an error and a retry as a warning', async () => {
+    enqueue({ data: [job({ kind: 'extract', attempts: 4 }), job({ id: 'job-2', kind: 'extract', attempts: 5 })] })
+    mocked(extractDocument).mockResolvedValue({ status: 'error', reason: 'model timeout' })
+    enqueue({})
+    enqueue({})
+    await expect(run()).resolves.toMatchObject({ failed: 2 })
+    expect(log.warn).toHaveBeenCalledWith('document job failed', expect.objectContaining({ job: 'job-1', attempt: 4 }))
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith('document job gave up', expect.objectContaining({ job: 'job-2', attempt: 5, company: 'co-1', reason: 'model timeout' }))
   })
 
   it('keeps retrying while no model is configured instead of finishing the job', async () => {

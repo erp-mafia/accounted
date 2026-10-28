@@ -131,6 +131,16 @@ describe('readAndStoreDocument', () => {
     expect(calls).toEqual([])
   })
 
+  it('never stamps a document because the model provider is down', async () => {
+    asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
+    // The Bedrock SDK error as it reaches the store: the message and a numeric status.
+    asMock(readDocumentBytes).mockRejectedValue(Object.assign(new Error('503 Bedrock is unable to process your request.'), { status: 503 }))
+    const { supabase, calls } = makeSupabase()
+    const out = await readAndStoreDocument(supabase, doc)
+    expect(out).toEqual({ status: 'error', reason: 'reader_unavailable: 503 Bedrock is unable to process your request.' })
+    expect(calls).toEqual([])
+  })
+
   it('still stamps a failure that is about the document', async () => {
     asMock(downloadDocumentObject).mockResolvedValue({ blob: new Blob([Buffer.from('x')]), error: null, resolvedPath: 'p' })
     asMock(readDocumentBytes).mockRejectedValue(new Error('invalid PDF structure'))
