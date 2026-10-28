@@ -106,7 +106,7 @@ function makeSupabaseStub(
       const resolved = { data: result.data, error: result.error ?? null }
       const chain: any = {}
       let isUpdate = false
-      for (const method of ['select', 'eq', 'in', 'like', 'order', 'limit', 'delete', 'insert']) {
+      for (const method of ['select', 'eq', 'in', 'like', 'order', 'limit', 'range', 'delete', 'insert']) {
         chain[method] = vi.fn(() => chain)
       }
       chain.update = vi.fn(() => {
@@ -170,6 +170,32 @@ describe('VAT kvittenser cron', () => {
     const body = await res.json()
     expect(body.processed).toBe(0)
     expect(mockCreateClient).not.toHaveBeenCalled()
+  })
+
+  it('finds a locked draft behind more than 200 signed and saved states', async () => {
+    // Signed and saved states are kept for good and sort first by updated_at:
+    // a window over the oldest 200 rows never reached the locked one.
+    const settled = Array.from({ length: 250 }, (_, i) => ({
+      company_id: `comp-${i}`,
+      key: 'submission_202605',
+      value: JSON.stringify({ ...LOCKED_STATE, status: i % 2 ? 'signed' : 'draft_saved' }),
+    }))
+    mockCreateClient.mockReturnValueOnce(makeSupabaseStub({
+      extension_data: {
+        data: [...settled, { company_id: 'comp-late', key: 'submission_202609', value: JSON.stringify({ ...LOCKED_STATE, redovisningsperiod: '202609', period: 9 }) }],
+      },
+      skatteverket_tokens: { data: [{ user_id: 'user-1', status: 'active' }] },
+    }))
+    mockSkvRequest.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => ({ kvittensnummer: 'KV-9', tidpunkt: '2026-10-12T10:00:00Z' }),
+    } as any)
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(mockSkvRequest).toHaveBeenCalledTimes(1)
+    expect(body.results).toEqual([expect.objectContaining({ companyId: 'comp-late', period: '202609', status: 'signed' })])
   })
 
   it('marks the filing signed, records it on the moms deadline, and notifies', async () => {
