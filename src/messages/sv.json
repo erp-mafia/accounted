@@ -5815,6 +5815,7 @@
     "confirm_voucher_foreign": "Bokförs i kronor med kursen för fakturadatumet.",
     "confirm_voucher_paid": "Bokförs som en inbetalning på fakturadatumet, utan kundfordran.",
     "confirm_voucher_paid_foreign": "Bokförs i kronor med kursen för fakturadatumet, som en inbetalning utan kundfordran.",
+    "confirm_voucher_accruals": "{count, plural, =1 {Dessutom bokförs en periodisering {first}.} other {Dessutom bokförs # periodiseringar, den första {first}.}}",
     "confirm_paid_no_account": "Inget kassa- eller bankkonto (19xx) är aktivt i kontoplanen. Aktivera det först.",
     "toast_sent_title": "Skickad",
     "toast_sent_book_title": "Skickad och bokförd",

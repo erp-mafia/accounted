@@ -40,7 +40,6 @@ import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
 import type { UploadedFile } from '@/components/bookkeeping/DocumentUploadZone'
 import {
   DEFAULT_PREPAID_EXPENSE_ACCOUNT,
-  expenseBalanceAccountAfterEdit,
   suggestBalanceAccount,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import {
@@ -1188,17 +1187,11 @@ export default function NewSupplierInvoiceForm({
         fiscalYearEnd={fiscalYearOf(watchedInvoiceDate)?.period_end ?? null}
         idPrefix={idPrefix}
         value={accrualValue}
+        targetAccount={item.account_number}
         onChange={(next) => {
           setValue(`items.${index}.accrual_period_start`, next.start, { shouldDirty: true })
           setValue(`items.${index}.accrual_period_end`, next.end, { shouldDirty: true })
-          // A period wholly before the invoice month is an upplupen kostnad
-          // (29xx), otherwise a förutbetald (17xx): moving the dates across
-          // that line re-suggests the account, a picked account stands.
-          setValue(
-            `items.${index}.accrual_balance_account`,
-            expenseBalanceAccountAfterEdit(accrualValue, next, item.account_number || '', watchedInvoiceDate),
-            { shouldDirty: true },
-          )
+          setValue(`items.${index}.accrual_balance_account`, next.balanceAccount, { shouldDirty: true })
         }}
         onRemove={() => toggleAccrual(index)}
       />

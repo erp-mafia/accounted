@@ -5815,6 +5815,7 @@
     "confirm_voucher_foreign": "Booked in SEK at the rate of the invoice date.",
     "confirm_voucher_paid": "Booked as a receipt on the invoice date, with no customer receivable.",
     "confirm_voucher_paid_foreign": "Booked in SEK at the rate of the invoice date, as a receipt with no customer receivable.",
+    "confirm_voucher_accruals": "{count, plural, =1 {Plus one accrual entry on {first}.} other {Plus # accrual entries, the first on {first}.}}",
     "confirm_paid_no_account": "No cash or bank account (19xx) is active in the chart of accounts. Activate it first.",
     "toast_sent_title": "Sent",
     "toast_sent_book_title": "Sent and booked",
