@@ -20,7 +20,8 @@
  *   - valid_to, when set, is on or after valid_from, checked against the
  *     MERGED state on update (the partial schema only sees the body);
  *   - account_number is a four-digit BAS number or null (null lets the
- *     engine fall back to its item-type mapping);
+ *     engine fall back to its item-type mapping), and never one in 2710-2739,
+ *     which the run books itself (line-account-override.ts);
  *   - money is rounded with roundOre();
  *   - benefit_type names the benefit a net_deduction_benefit_payment pays
  *     for (crm#1492). It must be one the employee has registered, and an
@@ -47,6 +48,7 @@ import {
   type UpdateEmployeeRecurringLineSchema,
 } from '@/lib/api/schemas'
 import { ACCOUNT_NUMBER_MESSAGE, ACCOUNT_NUMBER_RE } from '@/lib/invariants/account-number'
+import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE, isRunComputedTaxAccount } from '@/lib/salary/line-account-override'
 import { roundOre } from '@/lib/money'
 import {
   validateRecurringLineAmount,
@@ -181,6 +183,12 @@ function accountFailure(accountNumber: string | null | undefined): RecurringLine
   return null
 }
 
+/** An account the run books itself (2710-2739); pass a text row's as null, it stores none. */
+function taxAccountFailure(accountNumber: string | null | undefined): RecurringLineFailure | null {
+  if (!accountNumber || !isRunComputedTaxAccount(accountNumber)) return null
+  return validationFailure('account_number', RUN_COMPUTED_TAX_ACCOUNT_MESSAGE)
+}
+
 function amountFailure(itemType: RecurringLineItemType, amount: number | undefined): RecurringLineFailure | null {
   const message = validateRecurringLineAmount(itemType, amount)
   return message ? validationFailure('amount', message) : null
@@ -301,7 +309,8 @@ export async function createEmployeeRecurringLine(
     amountFailure(input.item_type, input.amount) ??
     (text ? textFailure(input.description) : null) ??
     periodFailure(input.valid_from, input.valid_to ?? null) ??
-    accountFailure(input.account_number)
+    accountFailure(input.account_number) ??
+    taxAccountFailure(text ? null : input.account_number)
   if (invalid) return invalid
 
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
@@ -410,7 +419,8 @@ export async function updateEmployeeRecurringLine(
   const invalidPeriod = periodFailure(mergedValidFrom, mergedValidTo)
   if (invalidPeriod) return invalidPeriod
 
-  const invalidAccount = accountFailure(patch.account_number)
+  const invalidAccount =
+    accountFailure(patch.account_number) ?? taxAccountFailure(text ? null : patch.account_number)
   if (invalidAccount) return invalidAccount
 
   if (patch.benefit_type !== undefined) {

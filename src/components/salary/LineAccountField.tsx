@@ -7,7 +7,7 @@ import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { useAccounts } from '@/lib/reference-data/hooks'
 import { useBasCatalog } from '@/lib/hooks/use-bas-catalog'
 import { lineItemAccount, type MoneyLineItemType } from '@/lib/salary/account-mapping'
-import { lineAccountOverride } from '@/lib/salary/line-account-override'
+import { isRunComputedTaxAccount, lineAccountOverride } from '@/lib/salary/line-account-override'
 
 /**
  * The account override on a payslip or recurring row. Empty means the
@@ -54,6 +54,12 @@ export function LineAccountField({
   if (rule === 'none') return null
   const defaultAccount =
     rowDefaultAccount ?? lineItemAccount(itemType as MoneyLineItemType, { employmentType, personnelCategory })
+  // The run books its own tax and avgifter there: say where extra tax goes.
+  const invalidKey = isRunComputedTaxAccount(value.trim())
+    ? 'line_account_invalid_tax_account'
+    : classSeven
+      ? 'line_account_invalid_class_7'
+      : 'line_account_invalid'
 
   return (
     <div className="space-y-2">
@@ -70,9 +76,7 @@ export function LineAccountField({
         />
       </div>
       <p className={invalid ? 'text-xs text-destructive' : 'text-xs text-muted-foreground'} aria-live="polite">
-        {invalid
-          ? t(classSeven ? 'line_account_invalid_class_7' : 'line_account_invalid')
-          : t(classSeven ? 'line_account_hint_class_7' : 'line_account_hint_any')}
+        {invalid ? t(invalidKey) : t(classSeven ? 'line_account_hint_class_7' : 'line_account_hint_any')}
       </p>
     </div>
   )

@@ -13,6 +13,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import { RECURRING_LINE_PERIOD_ORDER_MESSAGE } from '@/lib/api/schemas'
 import { RECURRING_LINE_AMOUNT_SIGN_MESSAGE } from '@/lib/salary/recurring-lines'
 import { TEXT_ROW_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
+import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE } from '@/lib/salary/line-account-override'
 import {
   createEmployeeRecurringLine,
   deleteEmployeeRecurringLine,
@@ -664,5 +665,76 @@ describe('a benefit payment names its benefit (crm#1492)', () => {
     })
     expect(result.ok).toBe(true)
     expect(mock.findCall('employee_benefits', 'select')).toBeUndefined()
+  })
+})
+
+// Every run would derive the row and credit 2710-2739, which the run books
+// itself from the numbers the AGI declares (line-account-override.ts).
+describe('accounts the run books itself (2710-2739)', () => {
+  const base = { companyId: COMPANY_ID, employeeId: EMPLOYEE_ID, lineId: LINE_ID }
+  const NET_INPUT = {
+    item_type: 'net_deduction_other' as const,
+    description: 'Frivilligt extra skatteavdrag',
+    amount: -500,
+    valid_from: '2026-01-01',
+  }
+  const NET_STORED: EmployeeRecurringLineRow = { ...STORED, ...NET_INPUT, account_number: '2794' }
+  const REFUSAL = {
+    ok: false,
+    code: 'VALIDATION_ERROR',
+    details: { issues: [{ field: 'account_number', message: RUN_COMPUTED_TAX_ACCOUNT_MESSAGE }] },
+  }
+  const create = (input: Record<string, unknown>, dryRun?: boolean) =>
+    createEmployeeRecurringLine(supabase, {
+      companyId: COMPANY_ID,
+      employeeId: EMPLOYEE_ID,
+      userId: USER_ID,
+      input: input as never,
+      dryRun,
+    })
+
+  it.each(['2710', '2731', '2739'])('refuses a net deduction on %s before touching the database', async (account) => {
+    expect(await create({ ...NET_INPUT, account_number: account })).toEqual(REFUSAL)
+    expect(await create({ ...NET_INPUT, account_number: account }, true)).toEqual(REFUSAL)
+    expect(mock.supabase.from).not.toHaveBeenCalled()
+  })
+
+  it.each(['2794', '2750', '2799'])('still stores a net deduction on %s (happy path)', async (account) => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: { ...NET_STORED, account_number: account } })
+    const result = await create({ ...NET_INPUT, account_number: account })
+    expect(result).toEqual({ ok: true, data: { ...NET_STORED, account_number: account } })
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({ account_number: account })
+  })
+
+  it('ignores the account on a text row, which stores none', async () => {
+    mock.enqueue({ data: { id: EMPLOYEE_ID } })
+    mock.enqueue({ data: { ...STORED, item_type: 'text', amount: 0 } })
+    const result = await create({ item_type: 'text', description: 'Extra skatt enligt begäran', account_number: '2710', valid_from: '2026-01-01' })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('employee_recurring_lines', 'insert')?.[0]).toMatchObject({ account_number: null })
+  })
+
+  it('refuses a patch that moves a line onto 2710, before writing', async () => {
+    mock.enqueue({ data: NET_STORED })
+    expect(await updateEmployeeRecurringLine(supabase, { ...base, patch: { account_number: '2710' } })).toEqual(REFUSAL)
+    expect(mock.findCall('employee_recurring_lines', 'update')).toBeUndefined()
+  })
+
+  it('accepts a patch onto 2750 and one that clears the account', async () => {
+    for (const account_number of ['2750', null]) {
+      mock.reset()
+      mock.enqueue({ data: NET_STORED })
+      mock.enqueue({ data: { ...NET_STORED, account_number } })
+      const result = await updateEmployeeRecurringLine(supabase, { ...base, patch: { account_number } })
+      expect(result).toEqual({ ok: true, data: { ...NET_STORED, account_number } })
+      expect(mock.findCall('employee_recurring_lines', 'update')?.[0]).toEqual({ account_number })
+    }
+  })
+
+  it('lets an unrelated patch through on a line stored on 2710 before the refusal', async () => {
+    mock.enqueue({ data: { ...NET_STORED, account_number: '2710' } })
+    const result = await updateEmployeeRecurringLine(supabase, { ...base, patch: { amount: -400 }, dryRun: true })
+    expect(result.ok).toBe(true)
   })
 })

@@ -11233,6 +11233,7 @@
     "line_account_hint_any": "Leave empty for the default account.",
     "line_account_invalid_class_7": "Pick a four-digit class 7 account, or leave the field empty.",
     "line_account_invalid": "Pick a four-digit account, or leave the field empty.",
+    "line_account_invalid_tax_account": "Accounts 2710-2739 are booked by the salary run itself. Extra tax withholding goes on the employee (extra tax), so that it is included in the employer declaration.",
     "line_account_short": "account {account}",
     "form_employment_start": "Employment start date",
     "form_employment_end": "End date",

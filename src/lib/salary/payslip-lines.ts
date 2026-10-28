@@ -27,6 +27,9 @@
  *     it from the pay type): no row of that type is added or typed by hand.
  *     The other base type is pay on top, such as extra hours at timlön on a
  *     monthly payslip (line-item-roles.ts, crm#1331).
+ *   - No row names an account in 2710-2739: the run books its tax and
+ *     avgifter there itself, from the numbers the AGI declares
+ *     (line-account-override.ts isRunComputedTaxAccount).
  *
  * Result-object convention mirrors lib/salary/run-calculation.ts:
  * `{ ok: true, data } | { ok: false, code, details? }` where `code` is a key
@@ -43,6 +46,7 @@ import { isCalculatedLine, isCalculatedLineType } from '@/lib/salary/calculated-
 import { ADDITION_ITEM_TYPES } from '@/lib/salary/calculation-engine'
 import { isBenefitItemType } from '@/lib/salary/benefit-payments'
 import { isBaseSalaryDisplayLine, isBaseSalaryLineType } from '@/lib/salary/line-item-roles'
+import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE, isRunComputedTaxAccount } from '@/lib/salary/line-account-override'
 import {
   TEXT_ROW_FLAGS,
   TEXT_ROW_RETYPE_MESSAGE,
@@ -244,6 +248,16 @@ function calculatedLineRefusal(details: Record<string, unknown>): PayslipLineRes
   return { ok: false, code: 'SALARY_LINE_CALCULATED', details }
 }
 
+/** The refusal for an account the run books itself (2710-2739), judged on the account the row would store. */
+function taxAccountRefusal(accountNumber: unknown): PayslipLineResult<never> | null {
+  if (typeof accountNumber !== 'string' || !isRunComputedTaxAccount(accountNumber)) return null
+  return {
+    ok: false,
+    code: 'VALIDATION_ERROR',
+    details: { field: 'account_number', message: RUN_COMPUTED_TAX_ACCOUNT_MESSAGE },
+  }
+}
+
 export const OWN_MONTHLY_SALARY_LINE_MESSAGE =
   'Grundlönen för en månadsavlönad räknas fram av lönekörningen från månadslönen och visas på raden Grundlön. ' +
   'Ändra lönen för den här lönekörningen i stället. Extra timmar läggs som Timlön, ett annat tillägg som Övrigt.'
@@ -345,6 +359,8 @@ export async function createPayslipLine(
   // account is an override only; without one the booking resolves the
   // default.
   const accountNumber = text ? null : input.account_number || null
+  const taxAccount = taxAccountRefusal(accountNumber)
+  if (taxAccount) return taxAccount
   const flags = text
     ? TEXT_ROW_FLAGS
     : {
@@ -485,6 +501,11 @@ export async function updatePayslipLine(
   if (avgiftBasisError) {
     return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'is_avgift_basis', message: avgiftBasisError } }
   }
+  // Only an account the patch names (a text row's is already forced null),
+  // so an unrelated edit of a row stored before the refusal still goes
+  // through.
+  const taxAccount = taxAccountRefusal(updates.account_number)
+  if (taxAccount) return taxAccount
 
   if (args.dryRun) {
     return { ok: true, data: { ...existing.data, ...updates } as SalaryLineItemRow }

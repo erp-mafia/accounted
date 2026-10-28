@@ -11233,6 +11233,7 @@
     "line_account_hint_any": "Lämna tomt för standardkontot.",
     "line_account_invalid_class_7": "Välj ett fyrsiffrigt konto i klass 7, eller lämna fältet tomt.",
     "line_account_invalid": "Välj ett fyrsiffrigt konto, eller lämna fältet tomt.",
+    "line_account_invalid_tax_account": "Konto 2710-2739 bokförs av lönekörningen själv. Extra skatteavdrag läggs på den anställda (extra skatt), så att det kommer med i arbetsgivardeklarationen.",
     "line_account_short": "konto {account}",
     "form_employment_start": "Anställningsdatum",
     "form_employment_end": "Slutdatum",
