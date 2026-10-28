@@ -4484,6 +4484,23 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
       resource: '/import?mode=sie',
     },
   },
+  // request_sie_import_undo's guard 'SIE undo requires review: an imported
+  // voucher has a live correction' (55000), mapped by jobDatabaseError. It
+  // also stops a replacement, which undoes the previous import first (PH
+  // 223). nameLiveCorrections (sie-jobs.ts) writes the sentence naming the
+  // imported verifikat and their corrections; this one is its fallback.
+  SIE_IMPORT_HAS_LIVE_CORRECTION: {
+    httpStatus: 409,
+    message_sv: 'Verifikat från importen har rättats efter importen, och rättelserna skulle ligga kvar om importen ångrades eller ersattes. Återför rättelserna först (Bokföring > Verifikationer, Återför (storno)) och försök sedan igen, eller behåll importen.',
+    message_en: 'Vouchers of the import were corrected after it, and the corrections would stay in the ledger if the import were undone or replaced. Reverse the corrections first (storno), then retry, or keep the import.',
+    retryable: false,
+    remediation: {
+      description: 'Nothing was queued. The Swedish message names each imported voucher and its live correction. Reversing a correction is the user\'s decision: only on their word, reverse each named correction (gnubok_reverse_journal_entry), then retry the same request. Otherwise keep the existing import.',
+      tool: 'gnubok_reverse_journal_entry',
+      resource: '/bookkeeping',
+    },
+    thrown_message_sv: true,
+  },
   // sie_import_admission_refusal (crm#1272): the year already has an IB
   // verifikat that no import owns (booked by hand, by the year-end close or
   // carried forward) and the import would book the file's IB on top of it.

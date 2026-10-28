@@ -16,6 +16,7 @@ import { checkSIEOrgNumber } from './sie-org-number'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { appSIEArrivalDoor, recordSIEImportArrival, type SIEArchivedOriginal, type SIEArrivalDoor } from './sie-arrival'
+import { findLiveCorrections, liveCorrectionSentence } from './sie-live-corrections'
 
 export interface SIEJobOptions {
   filename: string
@@ -173,6 +174,8 @@ export class SIEJobDatabaseError extends Error {
 const JOB_REFUSALS: Record<string,string> = {
   'Existing SIE import requires reviewed replacement or reconciliation':'SIE_IMPORT_PERIOD_ALREADY_IMPORTED',
   'Legacy SIE import requires reviewed reconciliation before replacement':'SIE_IMPORT_LEGACY_REVIEW_REQUIRED',
+  // request_sie_import_undo, also run by replace_sie_import_job (PH 223).
+  'SIE undo requires review: an imported voucher has a live correction':'SIE_IMPORT_HAS_LIVE_CORRECTION',
 }
 
 /**
@@ -201,6 +204,23 @@ export function jobDatabaseError(error:{code?:string;message:string}):SIEJobData
     '22023':'VALIDATION_ERROR','23505':'CONFLICT','55000':'CONFLICT','55P03':'TRANSIENT_ERROR'}
   const refusal = error.code === '55000' && Object.hasOwn(JOB_REFUSALS,error.message) ? JOB_REFUSALS[error.message] : undefined
   return new SIEJobDatabaseError(error.message,refusal ?? codes[error.code ?? ''] ?? error.code,error.code)
+}
+
+/**
+ * The live-correction refusal of an undo or a replacement, worded for the
+ * reader: which imported verifikat were corrected, by which correction, and
+ * what to do (sie-live-corrections.ts, PH 223). Any other error is returned
+ * as it came. Without the import id, or when the read fails or finds
+ * nothing, the code stays and the registry's static sentence answers: a
+ * lookup error never masks the refusal.
+ */
+export async function nameLiveCorrections(error: SIEJobDatabaseError, supabase: SupabaseClient, companyId: string,
+  importId: string | undefined, action: 'undo' | 'replace',
+): Promise<SIEJobDatabaseError> {
+  if (error.code !== 'SIE_IMPORT_HAS_LIVE_CORRECTION' || !importId) return error
+  const corrections = await findLiveCorrections(supabase, companyId, importId).catch(() => [])
+  if (corrections.length === 0) return error
+  return userFacing(new SIEJobDatabaseError(liveCorrectionSentence(corrections, action), error.code, error.pgCode), error.code)
 }
 
 /**
@@ -441,7 +461,8 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
       ...(commitActor ? { commit_actor: commitActor } : {}) },
     p_supersedes_import_id: replacing ? options.supersedesImportId : predecessor?.id ?? null,
   })
-  if (error) throw jobDatabaseError(error)
+  if (error) throw await nameLiveCorrections(jobDatabaseError(error), supabase, companyId,
+    replacing ? options.supersedesImportId : undefined, 'replace')
   const job = data as SIEJob
   // How the file came in. An identical retry gets this job back and finds
   // its arrival; nothing here can fail the submission.
@@ -470,7 +491,7 @@ export async function requestSIEJobAction(supabase: SupabaseClient, companyId: s
   const { data, error } = action === 'undo'
     ? await rpcWithActor(supabase, 'request_sie_import_undo', params, sieUndoCommitActor(getActor()))
     : await supabase.rpc('resume_sie_import_job', params)
-  if (error) throw jobDatabaseError(error)
+  if (error) throw await nameLiveCorrections(jobDatabaseError(error), supabase, companyId, importId, 'undo')
   return data as SIEJob
 }
 
