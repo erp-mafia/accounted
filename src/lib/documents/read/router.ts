@@ -82,7 +82,7 @@ export async function readDocumentBytes(bytes: Buffer, mimeType: string | null |
   }
 
   if (reader === 'office') {
-    const pages = await readOfficeDocument(bytes)
+    const pages = await readOfficeDocument(bytes, mimeType)
     if (pages.length === 0) return { ok: false, skipped: 'empty' }
     return { ok: true, pages, reader: 'office', pageCount: pages.length }
   }
