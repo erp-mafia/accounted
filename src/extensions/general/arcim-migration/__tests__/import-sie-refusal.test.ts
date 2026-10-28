@@ -22,7 +22,9 @@ vi.mock('next/server', async (load) => ({ ...await load<typeof import('next/serv
 vi.mock('@/lib/import/sie-job-worker', () => ({ runSIEWorker: vi.fn() }))
 
 import { arcimMigrationExtension } from '../index'
-import { submitSIEJob, jobDatabaseError } from '@/lib/import/sie-jobs'
+import { submitSIEJob, jobDatabaseError, SIEJobDatabaseError } from '@/lib/import/sie-jobs'
+import { liveCorrectionSentence } from '@/lib/import/sie-live-corrections'
+import { userFacing } from '@/lib/errors/user-facing'
 import { memoryIntakeStorage, intakePath } from './intake-storage'
 
 type RouteHandler = (request: Request, ctx?: ExtensionContext) => Promise<Response>
@@ -84,6 +86,18 @@ describe('POST /import-sie: job refusals', () => {
     const { status, body } = await parseJsonResponse<Envelope>(await post({ ...BODY, options: { ...BODY.options, supersedesImportId: 'import-0' } }))
     expect(status).toBe(409)
     expect(body.error.code).toBe('SIE_IMPORT_LEGACY_REVIEW_REQUIRED')
+  })
+
+  // PH 223: the year to replace had verifikat corrected after its import. The
+  // migration showed "En konflikt uppstod. Ladda om sidan och försök igen."
+  // with code CONFLICT; a retry never helps.
+  it('409 SIE_IMPORT_HAS_LIVE_CORRECTION with the sentence that names the verifikat', async () => {
+    const sentence = liveCorrectionSentence([{ original: 'D980', correction: 'D1471' }], 'replace')
+    ;(submitSIEJob as Mock).mockRejectedValueOnce(userFacing(
+      new SIEJobDatabaseError(sentence, 'SIE_IMPORT_HAS_LIVE_CORRECTION', '55000'), 'SIE_IMPORT_HAS_LIVE_CORRECTION'))
+    const { status, body } = await parseJsonResponse<Envelope>(await post({ ...BODY, options: { ...BODY.options, supersedesImportId: 'import-0' } }))
+    expect(status).toBe(409)
+    expect(body.error).toMatchObject({ code: 'SIE_IMPORT_HAS_LIVE_CORRECTION', message: sentence, requestId: 'req-9' })
   })
 
   it('409 CONFLICT for any other guard, never the existing-import sentence', async () => {

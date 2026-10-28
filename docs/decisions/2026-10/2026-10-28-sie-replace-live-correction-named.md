@@ -1,0 +1,1 @@
+[2026-10-28] An SIE replace or undo blocked by a live correction of an imported verifikat keeps its guard and now names each verifikat and correction in Swedish; it does not storno the corrections itself, since they are the user's own bookkeeping (PH 223).

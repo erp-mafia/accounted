@@ -28,6 +28,7 @@
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { requireCompanyAdmin } from '@/lib/operations/access'
 import { requestSIEJobAction } from './sie-jobs'
+import { userFacingCode } from '@/lib/errors/user-facing'
 import { readSIEUndoLockRefusal } from './sie-period-read'
 import type { SIEJob } from './sie-job-contract'
 
@@ -105,6 +106,13 @@ export async function requestSIEImportAction(
     if (code === 'SIE_IMPORT_PERIOD_LOCKED') return { ok: false, code, messageSv: (err as Error).message }
     if (code === 'CONFLICT') {
       return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT', details: { reason: (err as Error).message } }
+    }
+    // A live correction of an imported verifikat (PH 223): the same code as
+    // before, with the sentence that names the verifikat and what to do.
+    if (code === 'SIE_IMPORT_HAS_LIVE_CORRECTION') {
+      return { ok: false, code: 'SIE_IMPORT_ACTION_CONFLICT',
+        ...(userFacingCode(err) ? { messageSv: (err as Error).message } : {}),
+        details: { reason: 'SIE undo requires review: an imported voucher has a live correction' } }
     }
     // A lock held by another writer (55P03): the same request succeeds on retry.
     if (code === 'TRANSIENT_ERROR') return { ok: false, code }
