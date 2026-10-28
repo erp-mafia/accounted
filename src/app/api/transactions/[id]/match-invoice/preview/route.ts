@@ -59,7 +59,7 @@ import {
   paymentFeeShortfall,
 } from '@/lib/bookkeeping/payment-fee'
 import { ORE_ROUNDING_ACCOUNT, roundOre } from '@/lib/money'
-import { planMatchPayment } from '@/lib/invoices/match-payment-plan'
+import { fxPaidInInvoiceCurrency, planMatchPayment } from '@/lib/invoices/match-payment-plan'
 import { coerceDimensionsBag } from '@/lib/bookkeeping/dimension-resolver'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { fetchExchangeRate } from '@/lib/currency/riksbanken'
@@ -238,10 +238,9 @@ export const GET = withRouteContext(
       )
       if (rateInfo && rateInfo.rate > 0) {
         // bankSek / rate = how many units of invoice.currency this payment
-        // satisfies. Round to 4 decimal places to preserve precision through
-        // subsequent partial-payment accumulations.
-        const paidInInvoiceCurrency =
-          Math.round((txAbsSek / rateInfo.rate) * 10000) / 10000
+        // satisfies, or the whole remaining inside FX_FULL_SETTLEMENT_BAND:
+        // the same conversion the commit route makes.
+        const paidInInvoiceCurrency = fxPaidInInvoiceCurrency(txAbsSek, rateInfo.rate, invoice)
         fxConversion = {
           required: true,
           tx_currency: transaction.currency,

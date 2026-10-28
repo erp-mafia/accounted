@@ -9,7 +9,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 const { mockFetchExchangeRate } = vi.hoisted(() => ({ mockFetchExchangeRate: vi.fn() }))
 vi.mock('@/lib/currency/riksbanken', () => ({ fetchExchangeRate: mockFetchExchangeRate }))
 
-import { planMatchPayment, planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
+import { fxPaidInInvoiceCurrency, planMatchPayment, planTransactionInvoiceMatch } from '@/lib/invoices/match-payment-plan'
 
 const supabase = {} as never
 
@@ -113,14 +113,66 @@ describe('planTransactionInvoiceMatch: cross-currency', () => {
     }
     expect(mockFetchExchangeRate).toHaveBeenCalledWith('EUR', new Date('2026-09-30'), supabase)
 
-    // 1105 SEK = 100.4545 EUR: a sub-unit overshoot, still refused cross-currency.
-    const over = await planTransactionInvoiceMatch(supabase, sekTx(1105), {
+    // 1150 SEK = 104.5455 EUR: an overshoot outside the full-settlement band,
+    // still refused cross-currency (no öre band).
+    const over = await planTransactionInvoiceMatch(supabase, sekTx(1150), {
       currency: 'EUR',
       total: 100,
       paid_amount: 0,
       remaining_amount: 100,
     })
     expect(over).toMatchObject({ ok: false, code: 'MATCH_AMOUNT_EXCEEDS_REMAINING', currency: 'EUR', absorbsOre: false })
+  })
+
+  // PH 227: a 8 800 EUR invoice booked at 11.1145 (97 807,60 kr) paid in full
+  // reached the bank as 97 419,96 kr. At Riksbanken's 11.1385 that read as
+  // 8 746,24 EUR, a partial payment with a phantom kursvinst. The bank's rate
+  // is never the mid rate: within the band the payment settles the invoice.
+  it('settles in full when the converted payment lies within the band of the remaining amount', async () => {
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11.1385, date: '2026-10-26' })
+    const r = await planTransactionInvoiceMatch(supabase, sekTx(97419.96), {
+      currency: 'EUR',
+      total: 8800,
+      paid_amount: 0,
+      remaining_amount: 8800,
+    })
+    expect(r.ok).toBe(true)
+    if (r.ok) {
+      expect(r.fx).toEqual({ required: true, rate: 11.1385, paidInInvoiceCurrency: 8800 })
+      expect(r.paidAmount).toBe(8800)
+      expect(r.plan).toMatchObject({ newStatus: 'paid', newRemaining: 0 })
+    }
+
+    // A little over the remaining (the bank's rate beat the mid rate) settles too.
+    const over = await planTransactionInvoiceMatch(supabase, sekTx(1115), {
+      currency: 'EUR',
+      total: 100,
+      paid_amount: 0,
+      remaining_amount: 100,
+    })
+    expect(over).toMatchObject({ ok: true, paidAmount: 100, plan: { newStatus: 'paid' } })
+  })
+
+  it('keeps a payment outside the band a partial payment, measured against the remaining amount', async () => {
+    mockFetchExchangeRate.mockResolvedValue({ currency: 'EUR', rate: 11, date: '2026-09-30' })
+    // 1000 SEK = 90.9091 EUR of 100: 9 % short, a real partial payment.
+    const partial = await planTransactionInvoiceMatch(supabase, sekTx(1000), {
+      currency: 'EUR',
+      total: 100,
+      paid_amount: 0,
+      remaining_amount: 100,
+    })
+    expect(partial).toMatchObject({ ok: true, paidAmount: 90.9091, plan: { newStatus: 'partially_paid' } })
+
+    // The second half of an invoice already half paid: 545 SEK = 49.5455 EUR
+    // of the 50 still owed settles it.
+    const rest = await planTransactionInvoiceMatch(supabase, sekTx(545), {
+      currency: 'EUR',
+      total: 100,
+      paid_amount: 50,
+      remaining_amount: 50,
+    })
+    expect(rest).toMatchObject({ ok: true, paidAmount: 50, plan: { newStatus: 'paid', newRemaining: 0 } })
   })
 
   it('reports an unavailable rate instead of guessing one', async () => {
@@ -285,9 +337,10 @@ describe('planTransactionInvoiceMatch: feeAccount (crm#1364)', () => {
 
   it('refuses a fee on a cross-currency match and ignores an unknown account', async () => {
     mockFetchExchangeRate.mockResolvedValueOnce({ rate: 11.5, date: '2026-09-30' })
+    // 1100 SEK = 95.65 EUR: outside the full-settlement band, so a shortfall.
     const fx = await planTransactionInvoiceMatch(
       supabase,
-      sekTx(1127),
+      sekTx(1100),
       { currency: 'EUR', total: 100, paid_amount: 0, remaining_amount: 100 },
       { feeAccount: '6570' },
     )
@@ -304,5 +357,27 @@ describe('planTransactionInvoiceMatch: feeAccount (crm#1364)', () => {
     const step = planMatchPayment(invoice, 9809.5, { pureSek: true, feeAccount: '6570' })
     const plan = await planTransactionInvoiceMatch(supabase, sekTx(9809.5), invoice, { feeAccount: '6570' })
     expect(plan).toEqual({ ...step, fx: { required: false } })
+  })
+})
+
+describe('fxPaidInInvoiceCurrency', () => {
+  const invoice = { total: 8800, paid_amount: 0, remaining_amount: 8800 }
+
+  it('snaps to the remaining amount inside the band, either side', () => {
+    expect(fxPaidInInvoiceCurrency(97419.96, 11.1385, invoice)).toBe(8800)
+    expect(fxPaidInInvoiceCurrency(8800 * 11.1385 * 1.019, 11.1385, invoice)).toBe(8800)
+  })
+
+  it('converts at the rate to four decimals outside the band', () => {
+    expect(fxPaidInInvoiceCurrency(8800 * 11 * 0.97, 11, invoice)).toBe(8536)
+    expect(fxPaidInInvoiceCurrency(1000, 11, invoice)).toBe(90.9091)
+  })
+
+  it('falls back to total minus paid when remaining_amount is not on the row', () => {
+    expect(fxPaidInInvoiceCurrency(545, 11, { total: 100, paid_amount: 50 })).toBe(50)
+  })
+
+  it('never snaps an invoice with nothing left', () => {
+    expect(fxPaidInInvoiceCurrency(11, 11, { total: 100, paid_amount: 100, remaining_amount: 0 })).toBe(1)
   })
 })

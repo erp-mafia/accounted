@@ -29,6 +29,7 @@ import { postedLineAsInput } from '@/lib/core/bookkeeping/posted-line-input'
 import { findKontantmetodCarry } from '@/lib/bookkeeping/kontantmetod-carry-guard'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
 import { assertCorrectionKeepsBankAccount } from '@/lib/core/bookkeeping/correction-bank-leg'
+import { relinkPaymentRowsToEntry } from '@/lib/core/bookkeeping/correction-payment-relink'
 import {
   correctionChainDepth,
   CORRECTION_CHAIN_GUARD_DEPTH,
@@ -674,6 +675,9 @@ export async function correctEntry(
   if (transactionRelinkError) {
     await releaseBankRowsOfReversedEntry(supabase, companyId, originalEntryId)
   }
+  // The invoice payment rows follow too, so the invoice reads as paid by the
+  // verifikat that stands, not by the reversed original (PH 227).
+  await relinkPaymentRowsToEntry(supabase, companyId, original, correctedEntry!.id)
   const documentRelinkError = await relinkDocumentsToEntry(
     supabase,
     userId,

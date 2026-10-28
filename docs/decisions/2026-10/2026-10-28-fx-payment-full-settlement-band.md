@@ -1,0 +1,1 @@
+[2026-10-28] A SEK payment of a foreign-currency invoice within 2 % of the remaining (at the payment-day mid rate) settles it in full, the difference booked as kursdifferens on 3960/7960; and a corrected payment verifikat takes its invoice payment rows along (PH 227).

@@ -28,7 +28,7 @@ import { errorResponse, errorResponseFromCode } from '@/lib/errors/get-structure
 import { validateBody } from '@/lib/api/validate'
 import { DashboardMatchInvoiceSchema } from '@/lib/api/schemas'
 import { logMatchEvent } from '@/lib/invoices/match-log'
-import { planMatchPayment } from '@/lib/invoices/match-payment-plan'
+import { fxPaidInInvoiceCurrency, planMatchPayment } from '@/lib/invoices/match-payment-plan'
 import { recordInvoicePaymentRow } from '@/lib/invoices/invoice-payment-row'
 import { detectDuplicatePaymentVoucher } from '@/lib/invoices/duplicate-payment-detection'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -267,7 +267,9 @@ export const POST = withRouteContext(
           },
         })
       }
-      const paidInInvoiceCurrency = Math.round((txAbsSek / rate) * 10000) / 10000
+      // Within FX_FULL_SETTLEMENT_BAND of the remaining amount the payment
+      // settles it in full (the bank's rate is not Riksbanken's, PH 227).
+      const paidInInvoiceCurrency = fxPaidInInvoiceCurrency(txAbsSek, rate, invoice)
       fx = {
         required: true,
         rate,
