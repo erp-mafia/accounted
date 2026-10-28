@@ -805,6 +805,57 @@ describe('gnubok_create_supplier_invoice_from_inbox: execute', () => {
     expect(result.preview.invoice_date).toBe('2025-07-15')
   })
 
+  // 2026-10 session autopsy: "Extracted invoice has no invoice number"
+  // answered UNKNOWN_ERROR ("Försök igen") in 24 sessions, for a call that
+  // fails the same way until the number is supplied.
+  it('refuses a reading without an invoice number with SI_CREATE_INVALID_INPUT and the tool that supplies it', async () => {
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-12',
+        status: 'received',
+        extracted_data: { ...baseExtracted, invoice: { ...baseExtracted.invoice, invoiceNumber: '  ' } },
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-12',
+      },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const err = await tool
+      .execute({ inbox_item_id: 'inbox-12', dry_run: true }, 'company-1', 'user-1', supabase)
+      .then(() => null, (e: unknown) => e)
+
+    const { error } = toToolError(err)
+    expect(error).toMatchObject({
+      code: 'SI_CREATE_INVALID_INPUT',
+      retryable: false,
+      remediation: { tool: 'gnubok_set_inbox_extracted_data', args: { inbox_item_id: 'inbox-12' } },
+    })
+    expect(error.message_sv).toBe('Underlaget saknar fakturanummer. Ange leverantörens fakturanummer från underlaget och försök igen.')
+    expect(error.message_en).toMatch(/^No invoice number was read from the underlag/)
+  })
+
+  it('refuses a reading without an invoice date and names invoice_date_override', async () => {
+    const supabase = makeMock({
+      inbox: {
+        id: 'inbox-13',
+        status: 'received',
+        extracted_data: { ...baseExtracted, invoice: { ...baseExtracted.invoice, invoiceDate: null } },
+        matched_supplier_id: 'supplier-1',
+        created_supplier_invoice_id: null,
+        document_id: 'doc-13',
+      },
+    })
+    const tool = tools.find((t) => t.name === 'gnubok_create_supplier_invoice_from_inbox')!
+    const err = await tool
+      .execute({ inbox_item_id: 'inbox-13', dry_run: true }, 'company-1', 'user-1', supabase)
+      .then(() => null, (e: unknown) => e)
+
+    const { error } = toToolError(err)
+    expect(error.code).toBe('SI_CREATE_INVALID_INPUT')
+    expect(error.message_sv).toMatch(/saknar fakturadatum/)
+    expect(error.message_en).toContain('invoice_date_override')
+  })
+
   it('rejects a non-ISO invoice_date_override before staging', async () => {
     const supabase = makeMock({
       inbox: {

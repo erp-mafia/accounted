@@ -60,6 +60,61 @@ const coded = (code: string, message: string): Error => Object.assign(new Error(
 const invalid = (message: string) => coded('VALIDATION_ERROR', message)
 const notFound = (message: string) => coded('NOT_FOUND', message)
 
+// A timeout or a dropped connection; the status a reason opens with is read apart.
+const TRANSIENT_READER_FAILURE = /timed? ?out|timeout|overloaded|ECONNRESET|ETIMEDOUT|socket hang up|fetch failed|connection error/i
+
+/**
+ * A failed reader call in gnubok_ask_document. 49 of them reached agents as
+ * UNKNOWN_ERROR in 30 days, with no code to tell a busy model service from a
+ * fault. An upstream status that passes (408, 429, 5xx: the service answers
+ * a busy moment with "503 ... unable to process your request"), a timeout or
+ * a dropped connection is TRANSIENT_ERROR, retryable: the same question may
+ * succeed after a short wait. Anything else is INTERNAL_ERROR, a fault the
+ * agent reports instead of retrying.
+ */
+function readerFailure(reason: string): Error {
+  const status = Number.parseInt(reason, 10)
+  const transient = status === 408 || status === 429 || (status >= 500 && status <= 599) || TRANSIENT_READER_FAILURE.test(reason)
+  return transient
+    ? coded('TRANSIENT_ERROR', `The document reader is unavailable right now (${reason}). Ask the same question again after a short wait.`)
+    : coded('INTERNAL_ERROR', `The document reader failed: ${reason}`)
+}
+
+/**
+ * gnubok_get_record's record_ref, which may also be the bare uuid: agents sent
+ * the id alone 93 times in 30 days, and 61 of 98 sessions never got a record.
+ * The kind is the one this company holds a record of with that id; none, or
+ * more than one, is refused with the kinds named, never guessed.
+ */
+async function resolveRecordRef(
+  supabase: SupabaseClient,
+  companyId: string,
+  ref: unknown,
+): Promise<{ kind: RecordKind; id: string }> {
+  const id = typeof ref === 'string' ? ref.trim() : ''
+  if (!UUID.test(id)) return parseRecordRef(ref)
+  const found = await Promise.all([
+    supabase.from('document_attachments').select('id').eq('id', id).eq('company_id', companyId).maybeSingle(),
+    supabase.from('agreements').select('id').eq('id', id).eq('company_id', companyId).maybeSingle(),
+    supabase.from('parties').select('id').eq('id', id).eq('company_id', companyId).maybeSingle(),
+    supabase.from('journal_entries').select('id').eq('id', id).eq('company_id', companyId).maybeSingle(),
+    supabase.from('company_facts').select('id').eq('id', id).eq('company_id', companyId).maybeSingle(),
+  ])
+  const kinds: RecordKind[] = []
+  for (const [i, kind] of (['document', 'agreement', 'party', 'journal_entry', 'fact'] as const).entries()) {
+    if (found[i].error) throw dbError(found[i].error)
+    if (found[i].data) kinds.push(kind)
+  }
+  if (kinds.length === 1) return { kind: kinds[0], id }
+  if (kinds.length === 0) {
+    throw notFound(`No document, agreement, party, journal_entry or fact with id ${id} in this company.`)
+  }
+  throw invalid(
+    `${id} is the id of more than one kind of record (${kinds.join(', ')}): send record_ref as ` +
+      `${kinds.map((kind) => recordRef(kind, id)).join(' or ')}.`,
+  )
+}
+
 /** The brain (facts, agreements, findings, the graph) rolls out per company; the shelf tools (search, get_record, get_source) work for everyone. */
 function assertBrain(companyId: string): void {
   if (!isArkivBrainEnabled(companyId)) throw coded('ARKIV_NOT_ENABLED', 'The company brain is not switched on for this company yet. The archive tools work as usual: gnubok_list_records and gnubok_search_records find documents, gnubok_read_document and gnubok_get_source read their pages, and gnubok_ask_document answers one question with page and quote.')
@@ -493,7 +548,7 @@ export function createArkivTools(deps: Deps): McpTool[] {
       },
       annotations: deps.readOnly,
       async execute(args, companyId, _userId, supabase) {
-        const ref = parseRecordRef(args.record_ref)
+        const ref = await resolveRecordRef(supabase, companyId, args.record_ref)
         const asOf = typeof args.as_of === 'string' ? args.as_of : null
         const base = { record_ref: recordRef(ref.kind, ref.id), kind: ref.kind }
         if (ref.kind === 'agreement' || ref.kind === 'party' || ref.kind === 'fact') assertBrain(companyId)
@@ -682,9 +737,10 @@ export function createArkivTools(deps: Deps): McpTool[] {
         })
         if (out.status === 'skipped') {
           if (out.reason === 'not_found') throw notFound('No such document in this company')
-          throw new Error(out.reason === 'ai_unconfigured' ? 'The reader is not configured on this installation' : 'The document has no readable text')
+          if (out.reason === 'ai_unconfigured') throw coded('EXTENSION_DISABLED', 'The reader is not configured on this installation')
+          throw invalid('The document has no readable text')
         }
-        if (out.status === 'error') throw new Error(`The reader failed: ${out.reason}`)
+        if (out.status === 'error') throw readerFailure(out.reason)
         return {
           record_ref: recordRef('document', ref.id),
           question,

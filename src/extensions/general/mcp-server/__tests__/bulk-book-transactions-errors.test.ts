@@ -86,6 +86,33 @@ describe('gnubok_bulk_book_transactions: BFL 5 kap 6 § refusals', () => {
   })
 })
 
+// 2026-10 session autopsy: "One or more transactions not found" in 13
+// sessions in 30 days, with nothing saying which.
+describe('gnubok_bulk_book_transactions: transactions not found', () => {
+  const ROW = { id: TX_1, amount: -100, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }
+
+  async function refused(txIds: string[]) {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [ROW], error: null }) // the company has TX_1 only
+    return bulkBook
+      .execute({ tx_ids: txIds, existing_journal_entry_id: JE_1 }, 'company-1', 'user-1', supabase as never)
+      .catch((e: unknown) => e as Error & { code?: string })
+  }
+
+  it('names the tx_ids this company has no bank transaction for', async () => {
+    const err = await refused([TX_1, TX_2])
+    expect((err as Error & { code?: string }).code).toBe('BULK_BOOK_TXS_NOT_FOUND')
+    expect((err as Error).message).toContain(`Not among this company's bank transactions: ${TX_2}.`)
+    expect(getStructuredError(err)).toMatchObject({ code: 'BULK_BOOK_TXS_NOT_FOUND', retryable: false })
+  })
+
+  it('says an id sent twice is a repeat, not a missing transaction', async () => {
+    const err = await refused([TX_1, TX_1])
+    expect((err as Error & { code?: string }).code).toBe('BULK_BOOK_TXS_NOT_FOUND')
+    expect((err as Error).message).toBe('tx_ids names the same transaction more than once: send each id once.')
+  })
+})
+
 /**
  * The booking-time duplicate guard the dashboard and v1 bulk-book doors run
  * (runBulkBookDuplicateGuard): a bank line the ledger already books, e.g. a

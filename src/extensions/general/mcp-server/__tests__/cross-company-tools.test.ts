@@ -355,6 +355,8 @@ describe('gnubok_run_across_companies', () => {
       supabase as never
     )) as { results: Array<{ ok: boolean; error?: { code: string } }> }
     expect(result.results[0].ok).toBe(false)
+    // The paywall's own code, as on a direct call: it read as UNKNOWN_ERROR.
+    expect(result.results[0].error?.code).toBe('capability_blocked')
     expect(mocks.hasCapability).toHaveBeenCalledWith(supabase, DEFAULT_COMPANY_ID, MCP_TOOL_CAPABILITY_MAP[gated.name])
   })
 })

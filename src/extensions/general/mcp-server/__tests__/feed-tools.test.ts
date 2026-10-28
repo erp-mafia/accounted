@@ -13,7 +13,8 @@ vi.mock('@/lib/feed-sync/connector-routes', async (importOriginal) => {
 })
 
 import { createQueuedMockSupabase } from '@/tests/helpers'
-import { hasCapability } from '@/lib/entitlements/has-capability'
+import { CAPABILITY_BLOCKED_MESSAGE_SV, hasCapability } from '@/lib/entitlements/has-capability'
+import { toToolError } from '../tool-result'
 import { checkRateLimit } from '@/lib/auth/rate-limit-http'
 import { runFeedBackfill } from '@/lib/feed-sync/connector-routes'
 import { stripeFeed } from '@/extensions/general/stripe/index'
@@ -118,10 +119,20 @@ describe('gnubok_backfill_feed (crm#1385)', () => {
   it("refuses without the provider's paid capability", async () => {
     vi.mocked(hasCapability).mockResolvedValueOnce(false)
     const { supabase } = createQueuedMockSupabase()
-    await expect(
-      backfill.execute({ provider: 'shopify', from: '2026-10-01' }, 'company-1', 'user-1', supabase as never),
-    ).rejects.toMatchObject({ code: 'capability_blocked' })
+    const err = await backfill
+      .execute({ provider: 'shopify', from: '2026-10-01' }, 'company-1', 'user-1', supabase as never)
+      .then(() => null, (e: unknown) => e)
+    expect(err).toMatchObject({ code: 'capability_blocked' })
     expect(runFeedBackfill).not.toHaveBeenCalled()
+    // The envelope the dispatcher's own gate answers: it read as
+    // UNKNOWN_ERROR, "Något gick fel. Försök igen.", when thrown.
+    expect(toToolError(err).error).toMatchObject({
+      code: 'capability_blocked',
+      capability_blocked: true,
+      retryable: false,
+      message_sv: CAPABILITY_BLOCKED_MESSAGE_SV,
+      remediation: { description: expect.stringContaining('/settings/billing') },
+    })
   })
 
   it("shares the panel's rate limit", async () => {

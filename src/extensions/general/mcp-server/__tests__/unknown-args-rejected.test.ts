@@ -201,13 +201,27 @@ describe('MCP tools/call unknown-parameter guard', () => {
     expect(error.message_en).toContain('Unknown keys are rejected, not ignored.')
   })
 
+  // 2026-10 session autopsy: {type, id} (25 calls) and {record_type, id} (4)
+  // on gnubok_get_record. The pair is read as the record_ref and the call
+  // runs: here it reaches the document lookup, which this client answers
+  // with no row.
+  it('reads type and id on gnubok_get_record as the record_ref and runs the lookup', async () => {
+    const uuid = '0b8f6a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b'
+    const { isError, payload } = await parsedToolResult(
+      await handleMcpRequest(mcpToolCall('gnubok_get_record', { type: 'document', id: uuid })),
+    )
+    expect(isError).toBe(true)
+    expect(payload.error).toMatchObject({ code: 'NOT_FOUND', message_en: 'Record not found' })
+    expect(calls('eq')).toContainEqual(['id', uuid])
+  })
+
   it('points an id-shaped key at the one required identifier (structural fallback)', async () => {
     const error = await expectValidationError('gnubok_get_inbox_item', { id: '0b8f6a1e-2c3d-4e5f-8a9b-0c1d2e3f4a5b' })
     expect(error.message_en).toContain('Did you mean: "id" -> "inbox_item_id"?')
   })
 
   it('names since for a lower bound and nothing for an upper bound on a since-only list', async () => {
-    const error = await expectValidationError('gnubok_list_verifikat_without_documents', {
+    const error = await expectValidationError('gnubok_receipt_hunt_worklist', {
       date_from: '2026-01-01',
       until: '2026-06-30',
     })
@@ -216,8 +230,16 @@ describe('MCP tools/call unknown-parameter guard', () => {
     expect(error.message_en).not.toContain('"until" ->')
   })
 
-  it('names slug for a skill name on gnubok_load_skill', async () => {
-    const error = await expectValidationError('gnubok_load_skill', { name: 'vat-declaration' })
+  // 2026-10 session autopsy: name (10 calls) and skill (6) for slug.
+  it('reads a skill name as slug on gnubok_load_skill and loads that skill', async () => {
+    const response = await handleMcpRequest(mcpToolCall('gnubok_load_skill', { name: 'month-end-close' }))
+    const { isError, payload } = await parsedToolResult(response)
+    expect(isError).toBe(false)
+    expect(payload.slug).toBe('month-end-close')
+  })
+
+  it('never reads a private own/ skill through the alias: the agent:read check is made on slug', async () => {
+    const error = await expectValidationError('gnubok_load_skill', { name: 'own/11111111-2222-4333-8444-555555555555' })
     expect(error.message_en).toContain('Did you mean: "name" -> "slug"?')
   })
 

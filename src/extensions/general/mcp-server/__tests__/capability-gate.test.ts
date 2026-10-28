@@ -132,6 +132,15 @@ describe('MCP capability gate', () => {
     expect((payload.error as Record<string, unknown>).capability_blocked).toBe(true)
     expect((payload.error as Record<string, unknown>).capability).toBe('email_send')
     expect(mockHasCapability).toHaveBeenCalledWith(expect.anything(), '11111111-1111-4111-8111-111111111111', 'email_send')
+    // Swedish for the person, and a next step that is not a retry: 57
+    // sessions in 30 days met the bare upsell, 19 of them ended there.
+    expect(payload.error).toMatchObject({
+      code: 'capability_blocked',
+      retryable: false,
+      message_sv: expect.stringContaining('betald prenumeration'),
+      remediation: { description: expect.stringContaining('Inställningar → Abonnemang (/settings/billing)') },
+    })
+    expect((payload.error as { remediation: { description: string } }).remediation.description).toContain('Do not retry')
 
     const event = await eventPromise
     expect(event.errorKind).toBe('capability_denied')

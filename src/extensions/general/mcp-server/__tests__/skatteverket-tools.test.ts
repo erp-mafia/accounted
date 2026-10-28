@@ -625,7 +625,6 @@ describe('gnubok_vat_declaration_status: the company-scoped read the v1 route an
   })
 
   it.each([
-    ['SKATTEVERKET_NOT_CONNECTED', 401, 'Inte ansluten till Skatteverket.'],
     ['SKATTEVERKET_API_ERROR', 502, 'Skatteverket svarade med 500.'],
     ['VALIDATION_ERROR', 400, 'Organisationsnummer saknas i företagsinställningar'],
   ])('throws the service failure under its structured code: %s', async (code, httpStatus, error) => {
@@ -635,6 +634,68 @@ describe('gnubok_vat_declaration_status: the company-scoped read the v1 route an
     await expect(
       vatStatus.execute({ period_type: 'quarterly', year: 2026, period: 1 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' }),
     ).rejects.toMatchObject({ code, message: error })
+  })
+})
+
+// 2026-10 session autopsy: Skatteverket's bare "Sessionen har gått ut. Logga
+// in med BankID igen." answered the status reads 167 times in 30 days, with
+// no next step. The read may run on another member's login, so the refusal
+// says whose session it was, and never "your own" unless it was.
+describe('Skatteverket read tools: a session that is gone', () => {
+  const NOT_CONNECTED = {
+    ok: false,
+    code: 'SKATTEVERKET_NOT_CONNECTED',
+    http_status: 401,
+    error: 'Sessionen har gått ut. Logga in med BankID igen.',
+  }
+  const statusRefusal = async (tokens: unknown[]) => {
+    mockFetchVatDeclarationStatus.mockResolvedValue(NOT_CONNECTED)
+    const { supabase } = createTableMockSupabase({
+      skatteverket_tokens: { data: tokens },
+      profiles: { data: { full_name: 'Anna Admin' } },
+    })
+    const thrown = await vatStatus
+      .execute({ period_type: 'quarterly', year: 2026, period: 3 }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err)
+    return toToolError(thrown, { toolName: 'gnubok_vat_declaration_status' }).error
+  }
+  const row = (userId: string) => ({ user_id: userId, status: 'active', created_at: '2026-10-26T08:00:00Z' })
+
+  it('names the member whose connection the read ran on, never the caller', async () => {
+    const error = await statusRefusal([row('user-2')])
+    expect(error).toMatchObject({
+      code: 'SKATTEVERKET_NOT_CONNECTED',
+      retryable: false,
+      remediation: { tool: 'gnubok_connect_skatteverket' },
+    })
+    expect(error.message_en).toContain('made by Anna Admin, another member of the company')
+    expect(error.message_en).not.toMatch(/your own/i)
+    expect(error.message_en).toContain('gnubok_connect_skatteverket')
+  })
+
+  it('says "your own" when the read ran on the caller\'s own login', async () => {
+    const error = await statusRefusal([row('user-2'), row('user-1')])
+    expect(error.message_en).toMatch(/^This read uses your own Skatteverket BankID login/)
+  })
+
+  it('says no session serves the reads when no member has connected', async () => {
+    const error = await statusRefusal([])
+    expect(error.message_en).toMatch(/^No live Skatteverket session serves this company's reads/)
+    expect(error.remediation?.tool).toBe('gnubok_connect_skatteverket')
+  })
+
+  it('gnubok_agi_status reads on the caller\'s own login, and says so', async () => {
+    mockResolveRedovisare.mockResolvedValue('165560000000')
+    mockKvittenser.mockRejectedValue(new SkatteverketAuthError('Sessionen har gått ut. Logga in med BankID igen.', 'SESSION_EXPIRED'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'sr-1', period_year: 2026, period_month: 9, agi_generated_at: null, agi_submitted_at: null } })
+    enqueue({ data: null }) // extension_data
+    const thrown = await agiStatus
+      .execute({ salary_run_id: 'sr-1' }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+      .then(() => null, (err: unknown) => err)
+    const error = toToolError(thrown, { toolName: 'gnubok_agi_status' }).error
+    expect(error).toMatchObject({ code: 'SKATTEVERKET_NOT_CONNECTED', retryable: false, remediation: { tool: 'gnubok_connect_skatteverket' } })
+    expect(error.message_en).toMatch(/^This read uses your own Skatteverket BankID login/)
   })
 })
 
