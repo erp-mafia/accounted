@@ -732,6 +732,8 @@
     "read_more_skv": "Läs mer på Skatteverket"
   },
   "pending": {
+    "attach_adds_to_existing": "Läggs till bredvid {file}: båda blir underlag när transaktionen bokförs.",
+    "attach_adds_to_existing_unnamed": "Läggs till bredvid dokumentet som redan finns: båda blir underlag när transaktionen bokförs.",
     "type_confirm_supplier_payee": "Godkänn leverantörs nya bankuppgifter",
     "type_connect_pos_venue": "Koppla kassasystem",
     "type_disconnect_pos_connection": "Koppla från kassasystem",
@@ -17162,6 +17164,8 @@
     "missing_hint_photo_whatsapp": "Fota kvittot eller skicka det i WhatsApp",
     "missing_hint_intake": "Kan mejlas till inkorgsadressen",
     "missing_row_drop": "Släpp för att koppla till köpet",
+    "missing_row_attached": "{count, plural, =1 {Underlag kopplat: {file}} other {# underlag kopplade}}",
+    "missing_row_drop_more": "Släpp för att lägga till ett underlag till på köpet",
     "missing_drop_on_row": "Släpp filen på köpet den hör till",
     "missing_group_need": "Behöver dig",
     "missing_group_way": "På väg",

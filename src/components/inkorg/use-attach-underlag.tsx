@@ -20,17 +20,18 @@ export interface AttachUnderlag {
 /**
  * Getting a purchase its underlag from a file: the first file is uploaded to
  * the inbox and matched to the purchase (the Underlag workspace's two
- * calls), any further ones are filed in the inbox. The purchase then leaves
- * Saknar underlag, and Ångra releases the match again: the one step here an
- * endpoint truly undoes. The upload itself stays, so the file is never lost.
+ * calls), any further ones are filed in the inbox. The purchase then has its
+ * underlag (the page keeps its row in place, marked, crm#1479), and Ångra
+ * releases the match again: the one step here an endpoint truly undoes. The
+ * upload itself stays, so the file is never lost.
  */
 export function useAttachUnderlag({
   onAttached,
   onReleased,
   onFiled,
 }: {
-  /** The purchase has its underlag: read the list again (it leaves the view). */
-  onAttached: (purchaseId: string) => Promise<void>
+  /** The purchase has its underlag (the file's name): read the list again. */
+  onAttached: (purchaseId: string, fileName: string) => Promise<void>
   /** Ångra released it: read the list again (it is back). */
   onReleased: (purchaseId: string) => Promise<void>
   /** Files landed in the inbox without reaching the purchase: read the inbox again. */
@@ -62,8 +63,8 @@ export function useAttachUnderlag({
 
   /** The match made: read the list again and offer Ångra. */
   const attached = useCallback(
-    async (itemId: string, purchaseId: string, extras: number) => {
-      await onAttached(purchaseId)
+    async (itemId: string, purchaseId: string, extras: number, fileName: string) => {
+      await onAttached(purchaseId, fileName)
       toast({
         title: t('attached'),
         description: extras > 0 ? t('attached_extras', { count: extras }) : undefined,
@@ -79,7 +80,7 @@ export function useAttachUnderlag({
 
   /** "Attach anyway" after the server said the document looks like another purchase's. */
   const confirmMismatch = useCallback(
-    async (itemId: string, purchaseId: string, extras: number) => {
+    async (itemId: string, purchaseId: string, extras: number, fileName: string) => {
       const res = await matchToPurchase(itemId, purchaseId, true)
       if (!res.ok) {
         notifySessionExpired(res)
@@ -87,7 +88,7 @@ export function useAttachUnderlag({
         await onFiled()
         return
       }
-      await attached(itemId, purchaseId, extras)
+      await attached(itemId, purchaseId, extras, fileName)
     },
     [t, toast, onFiled, attached],
   )
@@ -128,7 +129,7 @@ export function useAttachUnderlag({
             action: (
               <ToastAction
                 altText={t('attach_anyway')}
-                onClick={() => void confirmMismatch(itemId, purchaseId, extras.length)}
+                onClick={() => void confirmMismatch(itemId, purchaseId, extras.length, underlag.name)}
               >
                 {t('attach_anyway')}
               </ToastAction>
@@ -145,7 +146,7 @@ export function useAttachUnderlag({
           return
         }
 
-        await attached(itemId, purchaseId, extras.length)
+        await attached(itemId, purchaseId, extras.length, underlag.name)
       } finally {
         busy.current = false
         setBusyId(null)

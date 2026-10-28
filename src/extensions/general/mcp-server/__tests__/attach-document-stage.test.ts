@@ -102,6 +102,7 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
       document_currency: 'SEK',
       document_invoice_date: '2026-04-12',
       will_overwrite_existing: false,
+      adds_to_existing: false,
       existing_document_id: null,
       existing_document_file_name: null,
       existing_document_is_rakenskapsinformation: false,
@@ -138,10 +139,39 @@ describe('gnubok_attach_document_to_transaction: staging', () => {
 
     expect(result.preview).toMatchObject({
       will_overwrite_existing: true,
+      adds_to_existing: false,
       existing_document_id: 'a0a0a0a0-0000-4000-8000-000000000001',
       existing_document_file_name: 'gammalt.pdf',
       existing_document_is_rakenskapsinformation: false,
     })
+  })
+
+  // crm#1479 follow-up: the pinned document came from the inbox and its item
+  // is matched to the row, so the booking links it too. The preview said
+  // "Ersätter" while both stayed; it now says the new one is added.
+  it('says the document is added, not overwriting, when the pinned one stays underlag through its inbox item', async () => {
+    const PREVIOUS = 'a0a0a0a0-0000-4000-8000-000000000001'
+    const { supabase, findCalls } = db({
+      transactions: [{ data: { ...TX_ROW, document_id: PREVIOUS } }, { data: [] }],
+      document_attachments: [{ data: { journal_entry_id: null, file_name: 'faktura-1.pdf' } }, { data: DOC_ROW }],
+      invoice_inbox_items: (chain: Array<{ method: string; args: unknown[] }>) =>
+        chain.some((c) => c.method === 'eq' && c.args[0] === 'matched_transaction_id')
+          ? { data: [{ id: 'item-previous' }] }
+          : { data: { extracted_data: { supplier: { name: 'Clas Ohlson AB' }, totals: { total: 499 } } } },
+    })
+    const result = (await tool.execute(
+      { transaction_id: TX, document_id: DOC, dry_run: true },
+      'company-1', 'user-1', supabase as never,
+    )) as Staged
+
+    expect(result.preview).toMatchObject({
+      will_overwrite_existing: false,
+      adds_to_existing: true,
+      existing_document_id: PREVIOUS,
+      existing_document_file_name: 'faktura-1.pdf',
+    })
+    expect(findCalls('invoice_inbox_items', 'eq')).toContainEqual(['document_id', PREVIOUS])
+    expect(findCalls('invoice_inbox_items', 'eq')).toContainEqual(['matched_transaction_id', TX])
   })
 
   it('refuses at staging a document that is already underlag of another verifikat (the hand-written tool staged it)', async () => {

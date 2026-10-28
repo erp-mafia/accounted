@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState, type DragEvent } from 'react'
 import { useLocale, useTranslations } from 'next-intl'
-import { DocumentMagnifyingGlassIcon } from '@/components/icons'
+import { CheckCircleIcon, DocumentMagnifyingGlassIcon } from '@/components/icons'
 import { AttnLine } from '@/components/ui/attn-line'
 import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -30,6 +30,11 @@ import type { LoadState } from './use-inkorg-data'
  */
 const GROUP_HEADING_CLASS = 'mb-2 flex items-baseline gap-2 px-2 font-sans text-[13px] font-medium'
 const GROUP_COUNT_CLASS = 'text-[12.5px] tabular-nums text-muted-foreground'
+
+const NONE_ATTACHED: ReadonlyMap<string, readonly string[]> = new Map()
+
+/** A purchase row's columns: mark, who, where the underlag comes from, amount, chevron. */
+const GRID = 'grid-cols-[28px_minmax(0,1fr)_auto] sm:grid-cols-[28px_minmax(8rem,15rem)_minmax(0,1fr)_7.5rem_1rem]'
 
 /** "oktober 2026" / "October 2026" for a YYYY-MM band. */
 function monthLabel(month: string, locale: string): string {
@@ -68,9 +73,16 @@ export function MissingUnderlagList({
   onFiles,
   onRetry,
   portal,
+  attached = NONE_ATTACHED,
 }: {
-  /** In queue order (orderMissing). */
+  /** In queue order (orderMissing), with the ones attached on this page back in place. */
   purchases: MissingPurchase[]
+  /**
+   * The purchases that got their underlag on this page, with the files dropped on them: their
+   * rows stay, marked and still taking a drop (another document for the same purchase), so
+   * nothing slides under the pointer mid-flow (crm#1479). Not counted as missing.
+   */
+  attached?: ReadonlyMap<string, readonly string[]>
   state: LoadState
   routes: RouteContext | null
   /** The purchases whose document is on its way, by id. */
@@ -112,18 +124,23 @@ export function MissingUnderlagList({
   }
   const later = expectations && expectations.length > 0 ? <ExpectedLaterList expectations={expectations} /> : null
 
+  const empty = (
+    <EmptyState
+      icon={DocumentMagnifyingGlassIcon}
+      title={portal ? t('portal_empty_title', { vendor: portal }) : t('missing_empty_title')}
+      description={portal ? t('portal_empty_body', { vendor: portal }) : t('missing_empty_body')}
+    />
+  )
   if (purchases.length === 0) {
     return (
       <div className="space-y-8">
-        <EmptyState
-          icon={DocumentMagnifyingGlassIcon}
-          title={portal ? t('portal_empty_title', { vendor: portal }) : t('missing_empty_title')}
-          description={portal ? t('portal_empty_body', { vendor: portal }) : t('missing_empty_body')}
-        />
+        {empty}
         {later}
       </div>
     )
   }
+  // What still lacks underlag: the counts leave out the rows kept after their attach.
+  const open = (list: readonly MissingPurchase[]) => list.filter((p) => !attached.has(p.id)).length
 
   const row = (purchase: MissingPurchase) => (
     <PurchaseRow
@@ -132,6 +149,7 @@ export function MissingUnderlagList({
       route={underlagRoute(purchase, routes)}
       onTheWay={onTheWay.get(purchase.id) ?? null}
       busy={busyId === purchase.id}
+      attachedFiles={attached.get(purchase.id) ?? null}
       dropping={dropTarget === purchase.id}
       marked={purchase.id === lastOpenedId}
       onOpen={onOpen}
@@ -147,12 +165,13 @@ export function MissingUnderlagList({
 
   return (
     <div className="space-y-8">
+      {open(purchases) === 0 && empty}
       {parts.needsYou.length > 0 && (
         <section aria-labelledby={split ? 'inkorg-missing-need' : undefined}>
           {split && (
             <h3 id="inkorg-missing-need" className={GROUP_HEADING_CLASS}>
               <span>{t('missing_group_need')}</span>
-              <span className={GROUP_COUNT_CLASS}>{parts.needsYou.length}</span>
+              <span className={GROUP_COUNT_CLASS}>{open(parts.needsYou)}</span>
             </h3>
           )}
           <div className="stagger-enter space-y-6">
@@ -163,7 +182,7 @@ export function MissingUnderlagList({
                   className="mb-1 flex items-baseline gap-2 px-2 font-sans text-[11px] font-medium uppercase tracking-wider text-muted-foreground"
                 >
                   <span>{monthLabel(band.month, locale)}</span>
-                  <span className="tabular-nums">{band.purchases.length}</span>
+                  <span className="tabular-nums">{open(band.purchases)}</span>
                 </h3>
                 <ul className="border-t border-border">{band.purchases.map(row)}</ul>
               </section>
@@ -176,7 +195,7 @@ export function MissingUnderlagList({
         <section aria-labelledby="inkorg-missing-way" className="animate-fade-in">
           <h3 id="inkorg-missing-way" className={GROUP_HEADING_CLASS}>
             <span>{t('missing_group_way')}</span>
-            <span className={GROUP_COUNT_CLASS}>{parts.onTheWay.length}</span>
+            <span className={GROUP_COUNT_CLASS}>{open(parts.onTheWay)}</span>
           </h3>
           <p className="mb-2 px-2 text-[12.5px] text-muted-foreground">{t('missing_way_body')}</p>
           <ul className="border-t border-border">{parts.onTheWay.map(row)}</ul>
@@ -193,6 +212,7 @@ function PurchaseRow({
   route,
   onTheWay,
   busy,
+  attachedFiles,
   dropping,
   marked,
   onOpen,
@@ -204,6 +224,8 @@ function PurchaseRow({
   /** Set when its document is on its way: the row is quiet and says why. */
   onTheWay: PurchaseOnTheWay | null
   busy: boolean
+  /** The files attached on this page: the row is done, stays in place and takes another one. */
+  attachedFiles: readonly string[] | null
   dropping: boolean
   marked: boolean
   onOpen: (id: string) => void
@@ -230,8 +252,39 @@ function PurchaseRow({
         : route.kind === 'intake'
           ? t('missing_hint_intake')
           : '')
-  const hint = busy ? t('uploading') : dropping ? t('missing_row_drop') : routeHint
+  const done = attachedFiles !== null && attachedFiles.length > 0
+  const doneHint = done
+    ? t('missing_row_attached', { count: attachedFiles.length, file: attachedFiles[attachedFiles.length - 1] ?? '' })
+    : null
+  const hint = busy
+    ? t('uploading')
+    : dropping
+      ? t(done ? 'missing_row_drop_more' : 'missing_row_drop')
+      : (doneHint ?? routeHint)
   const { name, vendor, bankText } = purchaseDisplay(purchase)
+  const cells = (
+    <>
+      <BrandMark
+        name={name ?? '?'}
+        vendor={vendor}
+        variant="mark"
+        size={28}
+        logoUrl={purchase.logo_url}
+        className={cn(onTheWay && 'opacity-60')}
+      />
+      <RowTitle
+        name={name ?? t('missing_unknown')}
+        meta={[shortDate(purchase.date, locale), bankText].filter(Boolean).join(' · ')}
+        muted={!!onTheWay}
+      />
+      <span data-ph-mask="" className="hidden truncate text-muted-foreground sm:block">
+        {hint}
+      </span>
+      <span data-ph-mask="" className={cn('text-right font-medium tabular-nums', onTheWay && 'font-normal text-muted-foreground')}>
+        {formatCurrency(Math.abs(purchase.amount), purchase.currency)}
+      </span>
+    </>
+  )
 
   return (
     <li
@@ -254,38 +307,33 @@ function PurchaseRow({
         else onDrag(false)
       }}
     >
-      <button
-        type="button"
-        onClick={() => onOpen(purchase.id)}
-        aria-busy={busy || undefined}
-        className={cn(
-          ROW_CLASS,
-          'grid-cols-[28px_minmax(0,1fr)_auto] sm:grid-cols-[28px_minmax(8rem,15rem)_minmax(0,1fr)_7.5rem_1rem]',
-          (marked || busy) && 'bg-secondary/35',
-          dropping && 'bg-secondary/60',
-        )}
-      >
-        <BrandMark
-          name={name ?? '?'}
-          vendor={vendor}
-          variant="mark"
-          size={28}
-          logoUrl={purchase.logo_url}
-          className={cn(onTheWay && 'opacity-60')}
-        />
-        <RowTitle
-          name={name ?? t('missing_unknown')}
-          meta={[shortDate(purchase.date, locale), bankText].filter(Boolean).join(' · ')}
-          muted={!!onTheWay}
-        />
-        <span data-ph-mask="" className="hidden truncate text-muted-foreground sm:block">
-          {hint}
-        </span>
-        <span data-ph-mask="" className={cn('text-right font-medium tabular-nums', onTheWay && 'font-normal text-muted-foreground')}>
-          {formatCurrency(Math.abs(purchase.amount), purchase.currency)}
-        </span>
-        <RowChevron />
-      </button>
+      {done ? (
+        // Attached on this page: nothing to open, the row only keeps its place and takes another file.
+        <div
+          aria-busy={busy || undefined}
+          className={cn(
+            ROW_CLASS,
+            GRID,
+            'hover:bg-transparent active:bg-transparent',
+            busy && 'bg-secondary/35',
+            dropping && 'bg-secondary/60 hover:bg-secondary/60',
+          )}
+        >
+          {cells}
+          <span className="sr-only">{doneHint}</span>
+          <CheckCircleIcon aria-hidden="true" className="hidden h-4 w-4 text-success sm:block" />
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={() => onOpen(purchase.id)}
+          aria-busy={busy || undefined}
+          className={cn(ROW_CLASS, GRID, (marked || busy) && 'bg-secondary/35', dropping && 'bg-secondary/60')}
+        >
+          {cells}
+          <RowChevron />
+        </button>
+      )}
     </li>
   )
 }
