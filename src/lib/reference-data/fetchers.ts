@@ -99,6 +99,15 @@ export function fetchAccounts(activeOnly = true): Promise<BASAccount[]> {
   return getJson<BASAccount[]>(url, (b) => b.data)
 }
 
+/**
+ * The active subset of a full chart (fetchAccounts(false)), in the same
+ * account-number order the route returns. useAccounts keeps one cache entry
+ * for the full chart and derives the active list from it.
+ */
+export function selectAccounts(accounts: BASAccount[], activeOnly: boolean): BASAccount[] {
+  return activeOnly ? accounts.filter((account) => account.is_active) : accounts
+}
+
 export function fetchDimensions(): Promise<DimensionDto[]> {
   return getJson<DimensionDto[]>('/api/dimensions', (b) => b.dimensions)
 }

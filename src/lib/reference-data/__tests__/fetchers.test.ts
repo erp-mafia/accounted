@@ -35,6 +35,7 @@ import {
   fetchDimensions,
   fetchFiscalPeriods,
   fetchSuppliers,
+  selectAccounts,
 } from '../fetchers'
 
 function jsonResponse(body: unknown, status = 200) {
@@ -158,5 +159,21 @@ describe('API fetchers', () => {
     expect(err).toBeInstanceOf(ReferenceFetchError)
     expect(err.status).toBe(502)
     expect(err.body).toBeNull()
+  })
+})
+
+describe('selectAccounts', () => {
+  const chart = [
+    { account_number: '1930', is_active: true },
+    { account_number: '1940', is_active: false },
+    { account_number: '3001', is_active: true },
+  ] as unknown as Parameters<typeof selectAccounts>[0]
+
+  it('keeps only active accounts, in route order, for the active variant', () => {
+    expect(selectAccounts(chart, true).map((a) => a.account_number)).toEqual(['1930', '3001'])
+  })
+
+  it('returns the full chart unchanged for the all-accounts variant', () => {
+    expect(selectAccounts(chart, false)).toBe(chart)
   })
 })

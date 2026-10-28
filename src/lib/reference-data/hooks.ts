@@ -48,6 +48,7 @@ import {
   fetchEmployees,
   fetchFiscalPeriods,
   fetchSuppliers,
+  selectAccounts,
   type BookingTemplateWithUsage,
 } from './fetchers'
 
@@ -120,10 +121,14 @@ export function useCashAccounts(
 
 export function useAccounts(activeOnly = true): ReferenceListState & { accounts: BASAccount[] } {
   const companyId = useActiveCompanyId()
-  const { items, ...state } = useReferenceList(refKeys.accounts(companyId, activeOnly), ([, , active]) =>
-    fetchAccounts(active),
+  // One cache entry serves both variants, as for cash accounts: a page with
+  // an account picker (active) and account labels (all) paid two requests to
+  // the same route per load. Inactive rows are under 1% of prod charts.
+  const { items, ...state } = useReferenceList(refKeys.accounts(companyId, false), () =>
+    fetchAccounts(false),
   )
-  return { accounts: items, ...state }
+  const accounts = useMemo(() => selectAccounts(items, activeOnly), [items, activeOnly])
+  return { accounts, ...state }
 }
 
 export function useDimensions(): ReferenceListState & { dimensions: DimensionDto[] } {
