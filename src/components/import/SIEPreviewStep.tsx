@@ -232,18 +232,26 @@ export default function SIEPreviewStep({
         </AttnLine>
       )}
 
-      {/* #63: a provider's export carries its whole chart in #KONTO. */}
+      {/* #63: a provider's export carries its whole chart in #KONTO. The
+          line under the label says what the switch does in its current
+          position: its only other effect is the Kontoplan count above, out
+          of view, and users flipped it up to 20 times in 30 s looking for
+          one. */}
       {onlyUsedAccounts && onlyUsedAccounts.unused > 0 && (
         <div className="flex items-start justify-between gap-4">
           <div className="space-y-0.5">
             <Label htmlFor="sie-only-used-accounts" className="font-medium">
               {t('only_used_accounts_label')}
             </Label>
+            <p id="sie-only-used-accounts-state" aria-live="polite" className="text-[13px]">
+              {t(onlyUsedAccounts.on ? 'only_used_accounts_state_on' : 'only_used_accounts_state_off', {
+                unused: onlyUsedAccounts.unused,
+              })}
+            </p>
             <p className="text-[13px] text-muted-foreground">
               {t('only_used_accounts_hint', {
                 used: onlyUsedAccounts.total - onlyUsedAccounts.unused - onlyUsedAccounts.own,
                 total: onlyUsedAccounts.total,
-                unused: onlyUsedAccounts.unused,
               })}
             </p>
           </div>
@@ -251,6 +259,7 @@ export default function SIEPreviewStep({
             id="sie-only-used-accounts"
             checked={onlyUsedAccounts.on}
             onCheckedChange={onlyUsedAccounts.onChange}
+            aria-describedby="sie-only-used-accounts-state"
           />
         </div>
       )}

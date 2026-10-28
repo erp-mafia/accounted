@@ -96,6 +96,30 @@ function isPreselected(status: UnderlagPlanStatus): boolean {
   return status === 'matched'
 }
 
+type SelectableRow = Pick<ReviewRow, 'selected' | 'targetId'>
+
+/**
+ * The header box over "Ta med": all, some or none of the rows that have a
+ * verifikat are ticked. Rows without one (no match, locked year, ambiguous
+ * before a pick) cannot be ticked, so they do not count.
+ */
+export function includeAllState(rows: readonly SelectableRow[]): 'all' | 'some' | 'none' {
+  const selectable = rows.filter((row) => row.targetId)
+  const ticked = selectable.filter((row) => row.selected).length
+  if (selectable.length === 0 || ticked === 0) return 'none'
+  return ticked === selectable.length ? 'all' : 'some'
+}
+
+/**
+ * Tick or clear every row that has a verifikat in one click. A folder whose
+ * filenames carry no series lands every row on "Bekräfta", and users ticked
+ * them one at a time: up to ~450 clicks in one session. The verifikat stays
+ * in view on each row, and the run still asks before attaching.
+ */
+export function setIncludeAll<T extends SelectableRow>(rows: readonly T[], selected: boolean): T[] {
+  return rows.map((row) => (row.targetId && row.selected !== selected ? { ...row, selected } : row))
+}
+
 /**
  * The source label, when it differs from our own. The SIE import renumbers
  * per series and skips empty or voided vouchers, so source A46 routinely lands
@@ -257,6 +281,16 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
   const updateRow = useCallback((id: string, patch: Partial<ReviewRow>) => {
     setRows((prev) => prev.map((row) => (row.id === id ? { ...row, ...patch } : row)))
   }, [])
+
+  const includeAll = useMemo(() => includeAllState(rows), [rows])
+  const anySelectable = useMemo(() => rows.some((row) => row.targetId), [rows])
+  // `indeterminate` is a DOM property, not an attribute.
+  const includeAllRef = useCallback(
+    (node: HTMLInputElement | null) => {
+      if (node) node.indeterminate = includeAll === 'some'
+    },
+    [includeAll],
+  )
 
   /**
    * Resolve a reference the user typed for a row whose filename said nothing.
@@ -530,7 +564,16 @@ export default function UnderlagImportWizard({ onBack }: { onBack?: () => void }
               <thead>
                 <tr>
                   <th className={cn(TH_CLASS, 'w-10')}>
-                    <span className="sr-only">{t('underlag_col_include')}</span>
+                    <input
+                      ref={includeAllRef}
+                      type="checkbox"
+                      className="h-4 w-4 rounded-sm border-border"
+                      checked={includeAll === 'all'}
+                      disabled={!anySelectable || isLoading}
+                      aria-label={t('underlag_include_all')}
+                      title={t('underlag_include_all')}
+                      onChange={() => setRows((prev) => setIncludeAll(prev, includeAllState(prev) !== 'all'))}
+                    />
                   </th>
                   <th className={TH_CLASS}>{t('underlag_col_file')}</th>
                   <th className={TH_CLASS}>{t('underlag_col_ref')}</th>
