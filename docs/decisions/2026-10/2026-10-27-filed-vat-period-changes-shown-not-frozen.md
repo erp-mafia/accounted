@@ -1,0 +1,1 @@
+[2026-10-27] A filed momsperiod is not frozen; the VAT page and the filings doors say when verifikat posted, corrected or re-dated after the filing moved its rutor (lib/vat/filed-period-changes). A lock on filing would refuse the year-end verifikat dated in the period.

@@ -24,12 +24,12 @@ import { z } from 'zod'
 import { MarkVatFilingSchema, VatFilingPeriodSchema } from '@/lib/api/schemas'
 import { formatPeriodLabel } from '@/lib/reports/period-dates'
 import {
-  listVatFilings,
   markVatPeriodFiled,
   previewMarkVatPeriodFiled,
   previewUnmarkVatPeriodFiled,
   unmarkVatPeriodFiled,
 } from '@/lib/vat/filing-record-store'
+import { listVatFilingsWithChanges, VatFilingChangeSchema } from '@/lib/vat/filed-period-changes'
 import type { VatFilingPeriodType } from '@/lib/vat/filing-record'
 import { defineOperation } from './types'
 
@@ -92,11 +92,20 @@ export const vatFilingsList = defineOperation({
     pitfalls: [
       'An empty list means nothing is recorded, not that nothing was filed: a declaration filed by hand on skatteverket.se is only on record once it is marked (gnubok_mark_vat_period_filed).',
       'A yearly period is the räkenskapsår: year is the year it ends in, tax_period is 2025/2026 for a broken fiscal year.',
+      'changed_after_filing is not null when verifikat posted, corrected or re-dated after the filing moved the declared period: that change does not reach Skatteverket by itself.',
     ],
-    example: { response: { data: { filings: [EXAMPLE_RECORD] }, meta: META } },
+    example: { response: { data: { filings: [{ ...EXAMPLE_RECORD, changed_after_filing: null }] }, meta: META } },
   },
   input: z.object({}),
-  output: z.object({ filings: z.array(VatFilingRecordSchema) }),
+  output: z.object({
+    filings: z.array(
+      VatFilingRecordSchema.extend({
+        changed_after_filing: VatFilingChangeSchema.nullable().describe(
+          'What moved in the declared period since it was filed, per ruta and verifikat; null when the books still read as filed.',
+        ),
+      }),
+    ),
+  }),
   mcp: {
     name: 'gnubok_list_vat_filings',
     title: 'List Filed VAT Periods',
@@ -104,7 +113,7 @@ export const vatFilingsList = defineOperation({
       'Which momsdeklaration periods (monthly, quarterly, helårsmoms) are on record as filed, via a Skatteverket kvittens or marked by hand, with the dates each covers. Local record, not a Skatteverket read.',
     keywords: ['inlämnad', 'inlämnade momsdeklarationer', 'momsperiod', 'helårsmoms', 'deklarerad', 'kvittens'],
   },
-  run: async (ctx) => ({ ok: true, data: { filings: await listVatFilings(ctx.supabase, ctx.companyId) } }),
+  run: async (ctx) => ({ ok: true, data: { filings: await listVatFilingsWithChanges(ctx.supabase, ctx.companyId) } }),
 })
 
 export const vatFilingsMark = defineOperation({
