@@ -49,6 +49,11 @@ const nextConfig: NextConfig = {
   // No `X-Powered-By: Next.js`: it only tells a scanner which framework (and
   // which set of known issues) to try.
   poweredByHeader: false,
+  // `next dev` otherwise writes its own agent-rules block into the tracked
+  // AGENTS.md whenever an AI agent starts it (npm run local:up does), a diff
+  // every agent then had to revert by hand. AGENTS.md is curated and points
+  // agents at CLAUDE.md.
+  agentRules: false,
   // Standalone output feeds the Docker image (Dockerfile copies
   // .next/standalone). Vercel never reads it: its build adapter
   // (onBuildComplete) traces and packages functions itself, and as of Next

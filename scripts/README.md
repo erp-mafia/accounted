@@ -12,6 +12,7 @@ Run scripts from the repository root. Prefer the named commands in [package.json
 | Self-hosted cron schedule | `npm run crontabs:generate` |
 | Bookkeeping packs and community registry | `npm run validate:packs`, `npm run validate:registry` |
 | Existing lint, type, and code guards | `npm run check:lint`, `npm run check:types`, `npm run check:guards` |
+| The app on a throwaway local Supabase, checked in a real browser (`local/`) | `npm run local:up`, `npm run local:check -- <path>...`, `npm run local:down` |
 
 ## Operational tools
 

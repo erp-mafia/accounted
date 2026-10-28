@@ -48,6 +48,10 @@ next-env.d.ts
 # supabase temp files
 supabase/.temp/
 
+# npm run local:up's throwaway stack: Supabase config, state with the seeded
+# login, dev server log and local:check screenshots (scripts/local/)
+/.local/
+
 # claude local settings and agent worktrees
 .claude/settings.local.json
 .claude/worktrees/
