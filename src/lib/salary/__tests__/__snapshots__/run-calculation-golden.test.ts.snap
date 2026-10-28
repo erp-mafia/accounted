@@ -263,7 +263,7 @@ exports[`runSalaryCalculation golden payroll fixture > C: a benefit payment that
   "details": {
     "issues": [
       {
-        "message": "Maja Testsson: Nettolöneavdraget för förmån kan inte kopplas till en bestämd förmån: lönebeskedet har flera förmånstyper (bilförmån, bostadsförmån). En betalning sänker bara värdet på den förmån den avser, och förmånerna redovisas i olika fält i arbetsgivardeklarationen. Behåll en förmånstyp, eller ta bort avdraget och ange förmånens värde efter betalning på förmånsraden.",
+        "message": "Maja Testsson: Nettolöneavdraget för förmån kan inte kopplas till en bestämd förmån: lönebeskedet har flera förmånstyper (bilförmån, bostadsförmån). En betalning sänker bara värdet på den förmån den avser, och förmånerna redovisas i olika fält i arbetsgivardeklarationen. Ange på avdragsraden vilken förmån den betalar, eller ta bort avdraget och ange förmånens värde efter betalning på förmånsraden.",
       },
     ],
     "reason": "benefit_payment_ambiguous",

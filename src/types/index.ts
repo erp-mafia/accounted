@@ -5057,6 +5057,9 @@ export interface SalaryLineItem {
   vacation_category?: 'paid' | 'extra_paid' | 'saved' | 'unpaid' | 'advance' | null
   /** Origin year (YYYY) of the sparade dagar a 'saved' line consumes; null = oldest first. */
   vacation_saved_year?: string | null
+  /** The benefit a net_deduction_benefit_payment row pays for (employee_benefits
+   *  benefit_type, migration 20261028030447); null = the payslip's only benefit type. */
+  benefit_type?: 'bike' | 'car' | 'meals' | 'housing' | 'wellness' | 'other' | null
   created_at: string
   updated_at: string
 }

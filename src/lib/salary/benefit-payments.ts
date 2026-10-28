@@ -15,15 +15,16 @@ import type { SalaryLineItemType } from '@/types'
  * the tax base. references/benefits.md: "If the employee pays >= schablonvärde
  * via nettolöneavdrag, no taxable benefit arises."
  *
- * "For a specific benefit" is the load-bearing phrase. The payment line type
- * carries no link to a benefit, and the AGI reports each benefit type in its
- * own field, so:
- *   - one benefit type on the payslip: the payment can only be for that
- *     benefit. Reduce it, never below zero.
- *   - two or more benefit types: which one the payment is for is unknowable
- *     from the payslip. Refuse rather than guess: a guess is a silently wrong
- *     AGI. Linking a payment to a benefit type needs a schema change
- *     (DECISIONS.md 2026-08-03) and lifts this refusal when it lands.
+ * "For a specific benefit" is the load-bearing phrase, and the AGI reports
+ * each benefit type in its own field, so a payment reduces one type:
+ *   - a payment row that names its benefit (benefit_type, crm#1492) reduces
+ *     that type, never below zero. A named type that is not on the payslip
+ *     lowers nothing: the payment is not for a benefit this payslip taxes.
+ *   - an unnamed payment with one benefit type on the payslip can only be for
+ *     that benefit. Reduce it, never below zero.
+ *   - an unnamed payment with two or more benefit types: which one it is for
+ *     is unknowable from the payslip. Refuse rather than guess: a guess is a
+ *     silently wrong AGI.
  *
  * Pure: a function of the line set only. Nothing is persisted, so "Räkna om"
  * cannot apply the reduction twice.
@@ -54,6 +55,28 @@ export function isBenefitItemType(itemType: string): itemType is BenefitItemType
   return (BENEFIT_ITEM_TYPES as readonly string[]).includes(itemType)
 }
 
+/**
+ * The benefit a payment row names, as employee_benefits.benefit_type spells
+ * it ('car'); the payslip row of that benefit is `benefit_<type>`. Mirrors the
+ * benefit_type CHECK on salary_line_items and employee_recurring_lines
+ * (migration 20261028030447).
+ */
+export const PAYMENT_BENEFIT_TYPES = ['bike', 'car', 'meals', 'housing', 'wellness', 'other'] as const
+export type PaymentBenefitType = (typeof PAYMENT_BENEFIT_TYPES)[number]
+
+export function benefitItemTypeOf(benefitType: PaymentBenefitType): BenefitItemType {
+  return `benefit_${benefitType}`
+}
+
+export function isPaymentBenefitType(value: unknown): value is PaymentBenefitType {
+  return typeof value === 'string' && (PAYMENT_BENEFIT_TYPES as readonly string[]).includes(value)
+}
+
+/** The Swedish name of a benefit, for refusals: 'car' is "bilförmån". */
+export function paymentBenefitLabel(benefitType: PaymentBenefitType): string {
+  return BENEFIT_LABELS[benefitItemTypeOf(benefitType)]
+}
+
 const BENEFIT_LABELS: Record<BenefitItemType, string> = {
   benefit_car: 'bilförmån',
   benefit_housing: 'bostadsförmån',
@@ -66,6 +89,8 @@ const BENEFIT_LABELS: Record<BenefitItemType, string> = {
 export interface BenefitLine {
   itemType: string
   amount: number
+  /** On a payment row: the benefit it pays for (employee_benefits.benefit_type). */
+  benefitType?: string | null
 }
 
 export interface TaxableBenefits {
@@ -78,8 +103,8 @@ export interface TaxableBenefits {
   paid: number
   /** How much of `paid` actually lowered a förmånsvärde (capped at the benefit). */
   reduction: number
-  /** The benefit type the reduction was taken from; null when nothing was reduced. */
-  reducedType: BenefitItemType | null
+  /** The benefit types a reduction was taken from; empty when nothing was reduced. */
+  reducedTypes: BenefitItemType[]
   taxableTotal: number
 }
 
@@ -250,51 +275,66 @@ export function resolveTaxableBenefits(lines: readonly BenefitLine[]): TaxableBe
   }
 
   // Payslip deductions are negative. A positive row is a repayment TO the
-  // employee and must never lower a förmånsvärde, hence no Math.abs.
-  const paymentSum = lines
-    .filter((li) => li.itemType === BENEFIT_PAYMENT_ITEM_TYPE)
-    .reduce((sum, li) => sum + li.amount, 0)
-  const paid = Math.max(0, r(-paymentSum))
-
-  const unreduced: TaxableBenefits = {
-    grossByType,
-    taxableByType: { ...grossByType },
-    grossTotal,
-    paid,
-    reduction: 0,
-    reducedType: null,
-    taxableTotal: grossTotal,
+  // employee and must never lower a förmånsvärde, hence no Math.abs. Rows
+  // are summed per benefit they name (null: unnamed), so a payslip without a
+  // named payment sums exactly as before.
+  const paymentSumByTarget = new Map<BenefitItemType | null, number>()
+  for (const li of lines) {
+    if (li.itemType !== BENEFIT_PAYMENT_ITEM_TYPE) continue
+    const target = isPaymentBenefitType(li.benefitType) ? benefitItemTypeOf(li.benefitType) : null
+    paymentSumByTarget.set(target, (paymentSumByTarget.get(target) ?? 0) + li.amount)
   }
-  if (paid === 0) return { ok: true, benefits: unreduced }
 
   const payableTypes = BENEFIT_ITEM_TYPES.filter((type) => (grossByType[type] ?? 0) > 0)
-  // A payment with no benefit on the payslip lowers nothing: plain net deduction.
-  if (payableTypes.length === 0) return { ok: true, benefits: unreduced }
-
-  if (payableTypes.length > 1) {
-    const names = payableTypes.map((type) => BENEFIT_LABELS[type]).join(', ')
-    return {
-      ok: false,
-      error:
-        `Nettolöneavdraget för förmån kan inte kopplas till en bestämd förmån: lönebeskedet har flera förmånstyper (${names}). ` +
-        'En betalning sänker bara värdet på den förmån den avser, och förmånerna redovisas i olika fält i arbetsgivardeklarationen. ' +
-        'Behåll en förmånstyp, eller ta bort avdraget och ange förmånens värde efter betalning på förmånsraden.',
+  const paidFor: Partial<Record<BenefitItemType, number>> = {}
+  let paid = 0
+  for (const [named, sum] of paymentSumByTarget) {
+    const groupPaid = Math.max(0, r(-sum))
+    if (groupPaid === 0) continue
+    paid = r(paid + groupPaid)
+    let target = named
+    if (target === null) {
+      // An unnamed payment with no benefit on the payslip lowers nothing:
+      // plain net deduction.
+      if (payableTypes.length === 0) continue
+      if (payableTypes.length > 1) {
+        const names = payableTypes.map((type) => BENEFIT_LABELS[type]).join(', ')
+        return {
+          ok: false,
+          error:
+            `Nettolöneavdraget för förmån kan inte kopplas till en bestämd förmån: lönebeskedet har flera förmånstyper (${names}). ` +
+            'En betalning sänker bara värdet på den förmån den avser, och förmånerna redovisas i olika fält i arbetsgivardeklarationen. ' +
+            'Ange på avdragsraden vilken förmån den betalar, eller ta bort avdraget och ange förmånens värde efter betalning på förmånsraden.',
+        }
+      }
+      target = payableTypes[0]
     }
+    paidFor[target] = r((paidFor[target] ?? 0) + groupPaid)
   }
 
-  const type = payableTypes[0]
-  const gross = grossByType[type] ?? 0
-  const reduction = r(Math.min(paid, gross))
+  const taxableByType: Partial<Record<BenefitItemType, number>> = { ...grossByType }
+  const reducedTypes: BenefitItemType[] = []
+  let reduction = 0
+  for (const type of BENEFIT_ITEM_TYPES) {
+    const gross = grossByType[type] ?? 0
+    // A named benefit that is not on the payslip (gross 0) lowers nothing.
+    const cut = gross > 0 ? r(Math.min(paidFor[type] ?? 0, gross)) : 0
+    if (cut <= 0) continue
+    taxableByType[type] = r(gross - cut)
+    reduction = r(reduction + cut)
+    reducedTypes.push(type)
+  }
+
   return {
     ok: true,
     benefits: {
       grossByType,
-      taxableByType: { ...grossByType, [type]: r(gross - reduction) },
+      taxableByType,
       grossTotal,
       paid,
       reduction,
-      reducedType: reduction > 0 ? type : null,
-      taxableTotal: r(grossTotal - reduction),
+      reducedTypes,
+      taxableTotal: reduction > 0 ? r(grossTotal - reduction) : grossTotal,
     },
   }
 }

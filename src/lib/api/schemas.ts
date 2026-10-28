@@ -5346,18 +5346,28 @@ const recurringLineAmountIssue = (
   }
 }
 
+/** benefit_type names the benefit a nettolöneavdrag för förmån pays for (crm#1492). */
+export const RECURRING_LINE_BENEFIT_TYPE_MESSAGE =
+  'Förmånen anges bara på ett nettolöneavdrag för förmån (net_deduction_benefit_payment).'
+
 export const CreateEmployeeRecurringLineSchema = z.object({
   item_type: RecurringLineItemTypeSchema,
   description: z.string().min(1).max(200),
   // A text row has no amount: omitted means 0 (lib/salary/text-rows.ts).
   amount: z.number().optional(),
   account_number: accountNumberSchema.optional(),
+  benefit_type: EmployeeBenefitTypeSchema.optional().describe(
+    'net_deduction_benefit_payment only: the benefit this payment is for. Required when the employee has several benefit types.',
+  ),
   valid_from: isoDate,
   valid_to: isoDate.optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
   is_active: z.boolean().optional(),
 }).superRefine((data, ctx) => {
   recurringLineAmountIssue(data, ctx)
+  if (data.benefit_type !== undefined && data.item_type !== 'net_deduction_benefit_payment') {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, message: RECURRING_LINE_BENEFIT_TYPE_MESSAGE, path: ['benefit_type'] })
+  }
   if (data.valid_to !== undefined && data.valid_to < data.valid_from) {
     ctx.addIssue({
       code: z.ZodIssueCode.custom,
@@ -5374,6 +5384,7 @@ export const UpdateEmployeeRecurringLineSchema = z.object({
   description: z.string().min(1).max(200).optional(),
   amount: z.number().optional(),
   account_number: accountNumberSchema.nullable().optional(),
+  benefit_type: EmployeeBenefitTypeSchema.nullable().optional(),
   valid_from: isoDate.optional(),
   valid_to: isoDate.nullable().optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),

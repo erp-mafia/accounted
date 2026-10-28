@@ -30,6 +30,10 @@ import {
 import { TEXT_ROW_MAX_LENGTH, isTextRow, normalizeTextRow } from '@/lib/salary/text-rows'
 import { isAllowedOverrideAccount, lineAccountOverride } from '@/lib/salary/line-account-override'
 import { LineAccountField } from '@/components/salary/LineAccountField'
+import { BENEFIT_PAYMENT_ITEM_TYPE, PAYMENT_BENEFIT_TYPES } from '@/lib/salary/benefit-payments'
+
+/** The benefit picker's "not named" choice: the payslip's only benefit type. */
+const NO_BENEFIT = 'none'
 
 interface EmployeeRecurringLine {
   id: string
@@ -37,6 +41,8 @@ interface EmployeeRecurringLine {
   description: string
   amount: number
   account_number: string | null
+  /** On a benefit payment: the benefit it pays for (crm#1492). */
+  benefit_type?: string | null
   valid_from: string
   valid_to: string | null
   metadata: Record<string, unknown>
@@ -79,6 +85,7 @@ export function EmployeeRecurringLinesPanel({
   // A Textrad is words only: no amount, and no Swedish default text.
   const isText = isTextRow({ item_type: type })
   const [account, setAccount] = useState('')
+  const [benefitType, setBenefitType] = useState<string>(NO_BENEFIT)
   const [accountInvalid, setAccountInvalid] = useState(false)
 
   async function load() {
@@ -112,6 +119,7 @@ export function EmployeeRecurringLinesPanel({
     setTextMissing(false)
     setAccount('')
     setAccountInvalid(false)
+    setBenefitType(NO_BENEFIT)
     setAdding(false)
   }
 
@@ -144,6 +152,7 @@ export function EmployeeRecurringLinesPanel({
       }
       if (validTo) body.valid_to = validTo
       if (accountNumber) body.account_number = accountNumber
+      if (type === BENEFIT_PAYMENT_ITEM_TYPE && benefitType !== NO_BENEFIT) body.benefit_type = benefitType
 
       const res = await fetch(`/api/salary/employees/${employeeId}/recurring-lines`, {
         method: 'POST',
@@ -222,6 +231,7 @@ export function EmployeeRecurringLinesPanel({
               <li key={l.id} className="flex min-h-10 flex-wrap items-center gap-x-3 gap-y-1 py-2">
                 <span className="min-w-0 truncate">
                   {typeLabel}
+                  {l.benefit_type && <>{' · '}{t(`benefits_type_${l.benefit_type}`)}</>}
                   {showDescription && (
                     <span className="text-muted-foreground">{' · '}{l.description}</span>
                   )}
@@ -279,6 +289,7 @@ export function EmployeeRecurringLinesPanel({
                     // An override picked for the old type need not fit the new one.
                     setAccount('')
                     setAccountInvalid(false)
+                    setBenefitType(NO_BENEFIT)
                   }}
                 >
                   <SelectTrigger id="recurring_type">
@@ -342,6 +353,24 @@ export function EmployeeRecurringLinesPanel({
                   className="max-w-xs"
                 />
                 <p className="text-xs text-muted-foreground">{t('recurring_deduction_hint')}</p>
+              </div>
+            )}
+
+            {type === BENEFIT_PAYMENT_ITEM_TYPE && (
+              <div className="space-y-2">
+                <Label htmlFor="recurring_benefit">{t('recurring_benefit')}</Label>
+                <Select value={benefitType} onValueChange={setBenefitType}>
+                  <SelectTrigger id="recurring_benefit" className="max-w-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NO_BENEFIT}>{t('recurring_benefit_unnamed')}</SelectItem>
+                    {PAYMENT_BENEFIT_TYPES.map((k) => (
+                      <SelectItem key={k} value={k}>{t(`benefits_type_${k}`)}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">{t('recurring_benefit_hint')}</p>
               </div>
             )}
 

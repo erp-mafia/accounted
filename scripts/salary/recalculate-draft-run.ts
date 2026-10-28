@@ -142,7 +142,7 @@ async function loadPayslips(): Promise<PayslipRow[]> {
     .from('salary_run_employees')
     .select(
       `id, employee_id, ${TOTAL_COLUMNS.join(', ')}, employee:employees(first_name, last_name), ` +
-        'line_items:salary_line_items(item_type, description, amount, is_gross_deduction, source_benefit_id, source_recurring_line_id, sort_order)',
+        'line_items:salary_line_items(item_type, description, amount, is_gross_deduction, source_benefit_id, source_recurring_line_id, benefit_type, sort_order)',
     )
     .eq('salary_run_id', RUN_ID)
     .eq('company_id', COMPANY_ID)
