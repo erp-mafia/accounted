@@ -13,6 +13,7 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { SkatteverketInlamnatResponse } from '@/extensions/general/skatteverket/types'
 import type { VatPeriodType } from '@/types'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { isSkatteverketEnabled } from '@/lib/skatteverket/enabled'
 
 export const maxDuration = 60
@@ -50,19 +51,25 @@ export async function GET(request: Request) {
   const supabase = createServiceRoleClient(supabaseUrl, supabaseServiceKey)
 
   // AGI submission state uses the distinct `agi_submission_` prefix, so the
-  // `submission_` filter below cannot match AGI rows.
-  const { data: rows, error: rowsError } = await supabase
-    .from('extension_data')
-    .select('company_id, key, value')
-    .eq('extension_id', 'skatteverket')
-    .like('key', 'submission\\_%')
-    .order('updated_at', { ascending: true })
-    .limit(200)
-
-  if (rowsError) {
+  // `submission_` filter below cannot match AGI rows. Every row is read: the
+  // status lives inside the stored JSON, so a window over all of them (it was
+  // the oldest 200) fills up with signed and saved states, which are kept for
+  // good, and a newly locked draft would never be looked at.
+  let rows: Array<{ company_id: string; key: string; value: unknown }>
+  try {
+    rows = await fetchAllRows(({ from, to }) =>
+      supabase
+        .from('extension_data')
+        .select('id, company_id, key, value')
+        .eq('extension_id', 'skatteverket')
+        .like('key', 'submission\\_%')
+        .order('updated_at', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+  } catch (rowsError) {
     console.error('[vat-kvittenser-cron] Failed to fetch submission states', {
-      message: rowsError.message,
-      code: rowsError.code,
+      message: rowsError instanceof Error ? rowsError.message : String(rowsError),
     })
     return NextResponse.json({ error: 'Failed to fetch submission states' }, { status: 500 })
   }
@@ -78,7 +85,7 @@ export async function GET(request: Request) {
     updatedAt?: string
   }
 
-  const locked = (rows ?? []).flatMap((row) => {
+  const locked = rows.flatMap((row) => {
     try {
       const state: SubmissionState =
         typeof row.value === 'string' ? JSON.parse(row.value) : (row.value as SubmissionState)
