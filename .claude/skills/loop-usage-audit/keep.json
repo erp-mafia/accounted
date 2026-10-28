@@ -26,5 +26,6 @@
   {"kind": "page", "match": "/login", "reason": "public, token or legal page: no company context, use comes in bursts"},
   {"kind": "page", "match": "/register", "reason": "public, token or legal page: no company context, use comes in bursts"},
   {"kind": "page", "match": "/sandbox", "reason": "public sandbox demo: anonymous visitors have no company"},
-  {"kind": "page", "match": "/sandbox/agenter*", "reason": "public sandbox demo: anonymous visitors have no company"}
+  {"kind": "page", "match": "/sandbox/agenter*", "reason": "public sandbox demo: anonymous visitors have no company"},
+  {"kind": "mcp", "match": "gnubok_delete_absence", "reason": "rare by design: removes a mistaken absence range, and the payroll skill names it"}
 ]
