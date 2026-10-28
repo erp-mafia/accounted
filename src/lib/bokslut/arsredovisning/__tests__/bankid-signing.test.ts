@@ -8,7 +8,7 @@ import { createQueuedMockSupabase } from '@/tests/helpers'
 import type { OperationContext } from '@/lib/operations/types'
 
 const signing = vi.hoisted(() => ({
-  signingAvailable: vi.fn(),
+  signingStartRefusal: vi.fn(),
   checkSigners: vi.fn(),
   createSigningRequest: vi.fn(),
 }))
@@ -42,7 +42,7 @@ const input = {
 
 beforeEach(() => {
   vi.clearAllMocks()
-  signing.signingAvailable.mockResolvedValue(true)
+  signing.signingStartRefusal.mockResolvedValue(null)
   signing.checkSigners.mockResolvedValue({ ok: true, signers: [] })
   signing.createSigningRequest.mockResolvedValue({ ok: true, data: { signing_request_id: 'request-1' } })
   pdf.mockResolvedValue({ ok: true, data: { filename: 'ar.pdf', bytes: new Uint8Array([37, 80, 68, 70]), contentType: 'application/pdf', versionId: 'version-1' } })
@@ -50,10 +50,14 @@ beforeEach(() => {
 })
 
 describe('requestArsredovisningSignatures', () => {
-  it('refuses when signing is not open here', async () => {
-    signing.signingAvailable.mockResolvedValue(false)
+  it('refuses when signing is not open for the company, or not in its plan, asking for the årsredovisning rollout', async () => {
     const { ctx: c } = ctx()
+    signing.signingStartRefusal.mockResolvedValue('SIGNING_UNAVAILABLE')
     expect(await requestArsredovisningSignatures(c, input, { dryRun: false })).toEqual({ ok: false, code: 'SIGNING_UNAVAILABLE' })
+    expect(signing.signingStartRefusal).toHaveBeenCalledWith(c.supabase, 'company-1', { arsredovisning: true })
+    signing.signingStartRefusal.mockResolvedValue('SIGNING_CAPABILITY_BLOCKED')
+    expect(await requestArsredovisningSignatures(c, input, { dryRun: true })).toEqual({ ok: false, code: 'SIGNING_CAPABILITY_BLOCKED' })
+    expect(signing.createSigningRequest).not.toHaveBeenCalled()
   })
 
   it('refuses a version that is not waiting for signatures', async () => {

@@ -1448,7 +1448,7 @@ Example response `200`:
 **Send an archived PDF for BankID signing: one link per signer, mailed when they have an address.**
 `scope:documents:write · risk:medium · idempotent · dry-run`
 
-Freezes the document by its SHA-256 and creates one link per signer to a page at /signera/<token> where they read the PDF and sign it with BankID (an advanced electronic signature under eIDAS). Links are valid expires_in_days (default 14, at most 90). Signers with an email get a mail; the answer carries the url only for a signer no mail reached. A member of the company (user_id) can also sign in the app. When everyone has signed, the archive gets the signed PDF (with a Signeringsbevis page) and Bevispaket.zip; read them from GET /signing-requests/{id} or the signing.completed webhook. Dry-runnable: ?dry_run=true answers what would be sent and mints nothing.
+Freezes the document by its SHA-256 and creates one link per signer to a page at /signera/<token> where they read the PDF and sign it with BankID (an advanced electronic signature under eIDAS). Links are valid expires_in_days (default 14, at most 90). Signers with an email get a mail; the answer carries the url only for a signer no mail reached. A member of the company (user_id) can also sign in the app. When everyone has signed, the archive gets the signed PDF (with a Signeringsbevis page) and Bevispaket.zip, and every signer with an email gets the signed PDF; read them from GET /signing-requests/{id} or the signing.completed webhook. Dry-runnable: ?dry_run=true answers what would be sent and mints nothing.
 
 **Use when:** An agreement, minutes, a policy or any other PDF in the archive needs signatures from people inside or outside the company.
 **Do not use for:** Signing bank payments (POST /payments/signing-links), the fastställelseintyg (signed at Bolagsverket), or documents that are not PDFs.
@@ -1458,7 +1458,8 @@ Freezes the document by its SHA-256 and creates one link per signer to a page at
 - SIGNING_DOCUMENT_UNSUPPORTED: only the current version of a PDF of at most 10 MB without a password can be signed.
 - SIGNING_SIGNERS_INVALID: a name is required, an email or member appears once, and user_id must be a member of the company (details.reason says which).
 - A personnummer cannot be sent here; locking a signer to one person is done in the app.
-- SIGNING_UNAVAILABLE: BankID signing is not switched on for this deployment.
+- SIGNING_UNAVAILABLE: BankID signing is not switched on for this company.
+- SIGNING_CAPABILITY_BLOCKED: signing is part of the paid plan and the trial; the company has neither.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

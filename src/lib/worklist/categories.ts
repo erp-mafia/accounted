@@ -1552,7 +1552,7 @@ export async function listDocumentsToSign(
   now: Date = new Date(),
 ): Promise<DocumentToSignDue[]> {
   try {
-    if (!signingSwitchedOn()) return []
+    if (!signingSwitchedOn(companyId)) return []
     const { data: signers, error } = await supabase
       .from('signing_request_signers')
       .select('id, signing_request_id, role_label')

@@ -15,7 +15,7 @@ vi.mock('@/lib/auth/bankid-flags', () => ({
 }))
 
 import { resolveBankIdSigning } from '../bankid-provider'
-import { signingEnabled } from '@/lib/env/signing-switch'
+import { arsredovisningSigningEnabledFor, signingEnabledFor, signingRollout } from '@/lib/env/signing-switch'
 
 const services = {
   startBankIdSignature: vi.fn(),
@@ -53,12 +53,37 @@ describe('resolveBankIdSigning', () => {
   })
 })
 
-describe('signingEnabled', () => {
-  it('is off unless SIGNING_ENABLED is 1 or true', () => {
-    expect(signingEnabled({})).toBe(false)
-    expect(signingEnabled({ SIGNING_ENABLED: '0' })).toBe(false)
-    expect(signingEnabled({ SIGNING_ENABLED: 'yes' })).toBe(false)
-    expect(signingEnabled({ SIGNING_ENABLED: '1' })).toBe(true)
-    expect(signingEnabled({ SIGNING_ENABLED: ' TRUE ' })).toBe(true)
+const ARCIM = 'ED461BC1-DBB5-4568-AE20-9337515878E2'
+const OTHER = '00000000-0000-4000-8000-0000000000aa'
+
+describe('signingEnabledFor', () => {
+  it('is off for everyone unless SIGNING_ENABLED opens it', () => {
+    expect(signingEnabledFor(ARCIM, {})).toBe(false)
+    expect(signingEnabledFor(ARCIM, { SIGNING_ENABLED: '0' })).toBe(false)
+    expect(signingEnabledFor(ARCIM, { SIGNING_ENABLED: 'yes' })).toBe(false)
+    expect(signingEnabledFor(null, { SIGNING_ENABLED: OTHER })).toBe(false)
+  })
+
+  it('opens for every company on 1, true or *', () => {
+    for (const value of ['1', ' TRUE ', '*']) {
+      expect(signingRollout({ SIGNING_ENABLED: value })).toBe('all')
+      expect(signingEnabledFor(OTHER, { SIGNING_ENABLED: value })).toBe(true)
+    }
+  })
+
+  it('opens only for the listed companies, whatever their case and spaces', () => {
+    const env = { SIGNING_ENABLED: ` ${ARCIM} ,${ARCIM}` }
+    expect(signingRollout(env)).toEqual([ARCIM.toLowerCase()])
+    expect(signingEnabledFor(ARCIM.toLowerCase(), env)).toBe(true)
+    expect(signingEnabledFor(OTHER, env)).toBe(false)
+  })
+})
+
+describe('arsredovisningSigningEnabledFor', () => {
+  it('needs both rollouts', () => {
+    expect(arsredovisningSigningEnabledFor(ARCIM, { SIGNING_ENABLED: '1' })).toBe(false)
+    expect(arsredovisningSigningEnabledFor(ARCIM, { SIGNING_ARSREDOVISNING_ENABLED: '1' })).toBe(false)
+    expect(arsredovisningSigningEnabledFor(ARCIM, { SIGNING_ENABLED: '1', SIGNING_ARSREDOVISNING_ENABLED: ARCIM })).toBe(true)
+    expect(arsredovisningSigningEnabledFor(OTHER, { SIGNING_ENABLED: '1', SIGNING_ARSREDOVISNING_ENABLED: ARCIM })).toBe(false)
   })
 })

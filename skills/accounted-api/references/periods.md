@@ -2745,6 +2745,7 @@ For a ready_for_signature version. Renders the copy the board signs (no dates or
 - SIGNING_REQUEST_ALREADY_OPEN: the version already waits in another request (details.signing_request_id).
 - A name in the roster that differs from the signer's BankID name is refused at signing (SIGNING_NAME_MISMATCH): fix the name and lock a new version.
 - Locking a new version cancels this request; signatures already made stay on the old version.
+- SIGNING_CAPABILITY_BLOCKED: signing is part of the paid plan and the trial; the company has neither.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

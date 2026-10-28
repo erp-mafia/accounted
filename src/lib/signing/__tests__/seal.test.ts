@@ -15,8 +15,11 @@ import { COMPANY, DOC, HOUR, PN, REQ, SENDER, attachStorage, onePagePdf, request
 
 const upload = vi.hoisted(() => ({ uploadDocument: vi.fn() }))
 vi.mock('@/lib/core/documents/document-service', () => upload)
+vi.mock('@/lib/email/brand-sender', () => ({ getBaseUrlForCompany: vi.fn().mockResolvedValue('https://app.accounted.se') }))
+const completedMail = vi.hoisted(() => ({ sendSigningCompletedMail: vi.fn() }))
+vi.mock('@/lib/email/send-signing-completed', () => completedMail)
 
-import { ensureSealed, sealSigningRequest } from '../seal'
+import { ensureSealed, sealSigningRequest, signedCopyRecipients } from '../seal'
 
 const STORAGE_PATH = `documents/${COMPANY}/${DOC}.pdf`
 const COMPLETED_AT = '2026-10-24T12:30:00.000Z'
@@ -34,9 +37,10 @@ let request: SigningRequestRow | null
 let sealedRows: Array<{ id: string }>
 
 const signers = [
-  { id: 'signer-1', position: 1, name: 'Anna Andersson', role_label: 'VD', signed_at: '2026-10-24T12:00:00.000Z', bankid_given_name: 'Anna', bankid_surname: 'Andersson' },
-  { id: 'signer-2', position: 2, name: 'Erik E', role_label: null, signed_at: '2026-10-24T12:30:00.000Z', bankid_given_name: 'Erik', bankid_surname: 'Eriksson' },
+  { id: 'signer-1', position: 1, name: 'Anna Andersson', email: 'anna@example.se', role_label: 'VD', signed_at: '2026-10-24T12:00:00.000Z', bankid_given_name: 'Anna', bankid_surname: 'Andersson' },
+  { id: 'signer-2', position: 2, name: 'Erik E', email: null, role_label: null, signed_at: '2026-10-24T12:30:00.000Z', bankid_given_name: 'Erik', bankid_surname: 'Eriksson' },
 ]
+const getUserById = vi.fn()
 let privates: Array<Record<string, unknown>>
 
 beforeAll(async () => {
@@ -63,6 +67,9 @@ beforeEach(() => {
   })
   files = new Map([[STORAGE_PATH, original]])
   attachStorage(db.supabase, files)
+  getUserById.mockResolvedValue({ data: { user: { email: 'Karin@Byran.se' } } })
+  ;(db.supabase as unknown as { auth: unknown }).auth = { admin: { getUserById } }
+  completedMail.sendSigningCompletedMail.mockResolvedValue({ sent: 2 })
   log = testLogger()
   upload.uploadDocument.mockImplementation(async (_service: unknown, _user: string, _company: string, file: { name: string }) => ({
     id: file.name.endsWith('.pdf') ? 'signed-doc' : 'evidence-doc',
@@ -213,11 +220,56 @@ describe('sealSigningRequest', () => {
     expect(upload.uploadDocument).not.toHaveBeenCalled()
   })
 
-  it('answers null and leaves its copies unreferenced when another seal won the race', async () => {
+  it('answers null and leaves its copies unreferenced when another seal won the race, and mails nothing', async () => {
     sealedRows = []
     expect(await sealSigningRequest(db.supabase as never, REQ, log)).toBeNull()
     expect(upload.uploadDocument).toHaveBeenCalledTimes(2)
     expect(log.warn).toHaveBeenCalledWith(expect.stringContaining('sealed by another call'), { signingRequestId: REQ })
+    expect(completedMail.sendSigningCompletedMail).not.toHaveBeenCalled()
+  })
+
+  it('mails the signed PDF, never the evidence package, to each signer with an address and the sender', async () => {
+    await sealSigningRequest(db.supabase as never, REQ, log)
+    expect(getUserById).toHaveBeenCalledWith(SENDER)
+    expect(completedMail.sendSigningCompletedMail).toHaveBeenCalledTimes(1)
+    const sent = completedMail.sendSigningCompletedMail.mock.calls[0]![0] as {
+      companyId: string
+      title: string
+      completedAt: string
+      signers: string[]
+      verifyUrl: string
+      recipients: string[]
+      pdf: { filename: string; bytes: Uint8Array }
+    }
+    expect(sent).toMatchObject({
+      companyId: COMPANY,
+      title: 'Hyresavtal 2026',
+      completedAt: COMPLETED_AT,
+      signers: ['Anna Andersson, VD', 'Erik Eriksson'],
+      verifyUrl: 'https://app.accounted.se/verifiera',
+      recipients: ['anna@example.se', 'Karin@Byran.se'],
+    })
+    expect(sent.pdf.filename).toBe('hyresavtal-2026-signerad.pdf')
+    expect(Buffer.from(sent.pdf.bytes).equals(Buffer.from(uploaded(0)[3].buffer))).toBe(true)
+  })
+
+  it('prints where a copy is checked on the evidence page', async () => {
+    await sealSigningRequest(db.supabase as never, REQ, log)
+    const signed = await PDFDocument.load(new Uint8Array(uploaded(0)[3].buffer))
+    expect(pageText(signed, signed.getPageCount() - 1).join(' ')).toContain('https://app.accounted.se/verifiera')
+  })
+
+  it('keeps the seal when the mail fails, and only logs it', async () => {
+    completedMail.sendSigningCompletedMail.mockRejectedValue(new Error('resend down'))
+    expect(await sealSigningRequest(db.supabase as never, REQ, log)).toEqual({ signedDocumentId: 'signed-doc', evidenceDocumentId: 'evidence-doc' })
+    expect(log.error).toHaveBeenCalledWith('signed copy mail failed', expect.any(Error), { signingRequestId: REQ })
+  })
+})
+
+describe('signedCopyRecipients', () => {
+  it('names each address once, whatever its case, skipping signers without one', () => {
+    expect(signedCopyRecipients(['anna@example.se', null, ' ANNA@example.se ', 'erik@example.se'], 'erik@EXAMPLE.se')).toEqual(['anna@example.se', 'erik@example.se'])
+    expect(signedCopyRecipients([null], null)).toEqual([])
   })
 })
 

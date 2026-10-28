@@ -10,7 +10,7 @@ vi.mock('@/lib/company/context', () => ({
 }))
 vi.mock('@/lib/auth/require-auth', () => ({ requireAuth: vi.fn() }))
 const availableMock = vi.hoisted(() => vi.fn())
-vi.mock('@/lib/signing/requests', () => ({ signingAvailable: () => availableMock() }))
+vi.mock('@/lib/signing/requests', () => ({ signingAvailability: (...args: unknown[]) => availableMock(...args) }))
 
 import { requireAuth } from '@/lib/auth/require-auth'
 import { GET } from '../route'
@@ -30,15 +30,16 @@ describe('GET /api/signing/availability', () => {
     expect(availableMock).not.toHaveBeenCalled()
   })
 
-  it('answers true when signing is open here', async () => {
-    availableMock.mockResolvedValue(true)
+  it('answers what the active company may do, asked for that company', async () => {
+    availableMock.mockResolvedValue({ offered: true, available: true, arsredovisning: false })
     const response = await GET(createMockRequest('/api/signing/availability'), createMockRouteParams({}))
-    expect(await parseJsonResponse(response)).toEqual({ status: 200, body: { data: { available: true } } })
+    expect(await parseJsonResponse(response)).toEqual({ status: 200, body: { data: { offered: true, available: true, arsredovisning: false } } })
+    expect(availableMock).toHaveBeenCalledWith(mockSupabase, 'company-1')
   })
 
-  it('answers false when the switch is off or no provider is wired', async () => {
-    availableMock.mockResolvedValue(false)
+  it('answers all false when signing is not offered to the company', async () => {
+    availableMock.mockResolvedValue({ offered: false, available: false, arsredovisning: false })
     const response = await GET(createMockRequest('/api/signing/availability'), createMockRouteParams({}))
-    expect(await parseJsonResponse(response)).toEqual({ status: 200, body: { data: { available: false } } })
+    expect(await parseJsonResponse(response)).toEqual({ status: 200, body: { data: { offered: false, available: false, arsredovisning: false } } })
   })
 })

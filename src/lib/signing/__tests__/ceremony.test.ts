@@ -15,6 +15,7 @@ import { buildUserNonVisibleData } from '../visible-data'
 import {
   BANKID_TEST_KEY,
   DAY,
+  HOUR,
   MEMBER,
   PN,
   REQ,
@@ -185,6 +186,7 @@ describe('describeForSigner', () => {
         sha256: SHA,
         state: 'open',
         expires_at: request.expires_at,
+        signed_copy: false,
       },
       signer: { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending', signed_at: null, bankid_name: null, locked: true, last_error_code: null },
       signers: [
@@ -206,6 +208,14 @@ describe('describeForSigner', () => {
     )
     expect(page.request.state).toBe('expired')
     expect(page.signer).toMatchObject({ status: 'signed', bankid_name: 'Anna Andersson', locked: false })
+  })
+
+  it('offers the signed copy only once the request is completed and sealed', async () => {
+    const completed = requestRow({ ...request, status: 'completed', completed_at: iso(NOW - HOUR) })
+    expect((await describeForSigner(scope({ request: completed }), NOW)).request.signed_copy).toBe(false)
+    const sealed = requestRow({ ...completed, signed_document_id: 'doc-signed', evidence_document_id: 'doc-evidence' })
+    const page = await describeForSigner(scope({ request: sealed }), NOW)
+    expect(page.request).toMatchObject({ state: 'completed', signed_copy: true })
   })
 })
 

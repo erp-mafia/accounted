@@ -40,6 +40,9 @@ describe('MCP_TOOL_CAPABILITY_MAP', () => {
       gnubok_connect_bank: CAPABILITY.bank_sync,
       gnubok_sync_bank: CAPABILITY.bank_sync,
       gnubok_connect_skatteverket: CAPABILITY.skatteverket,
+      // Sending a document (or a locked årsredovisning) for BankID signing.
+      gnubok_request_signature: CAPABILITY.signing,
+      gnubok_request_arsredovisning_signatures: CAPABILITY.signing,
     })
   })
 
@@ -58,6 +61,8 @@ describe('PAID_OPERATION_CAPABILITY_MAP', () => {
       reminder_daily_batch: CAPABILITY.email_send,
       submit_vat_declaration: CAPABILITY.skatteverket,
       submit_agi: CAPABILITY.skatteverket,
+      request_signature: CAPABILITY.signing,
+      request_arsredovisning_signatures: CAPABILITY.signing,
     })
   })
 

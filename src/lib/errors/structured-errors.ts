@@ -10992,6 +10992,11 @@ const SIGNING: Record<string, StructuredErrorEntry> = {
     message_sv: 'Signering med BankID är inte tillgänglig här.',
     message_en: 'Signing with BankID is not available here.',
   },
+  SIGNING_CAPABILITY_BLOCKED: {
+    httpStatus: 403,
+    message_sv: 'Signering med BankID ingår i betalplanen. Uppgradera för att skicka dokument för signering.',
+    message_en: 'Signing with BankID is part of the paid plan. Upgrade to send documents for signing.',
+  },
   SIGNING_DOCUMENT_NOT_FOUND: {
     httpStatus: 404,
     message_sv: 'Dokumentet finns inte i arkivet.',

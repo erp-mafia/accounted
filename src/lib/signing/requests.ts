@@ -22,7 +22,9 @@ import { getCompanyRole } from '@/lib/auth/require-write'
 import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { sendSigningRequestMail } from '@/lib/email/send-signing-request'
 import { eventBus } from '@/lib/events/bus'
-import { signingEnabled } from '@/lib/env/signing-switch'
+import { CAPABILITY } from '@/lib/entitlements/keys'
+import { hasCapability } from '@/lib/entitlements/has-capability'
+import { arsredovisningSigningEnabledFor, signingEnabledFor } from '@/lib/env/signing-switch'
 import { COMPANY_ADMIN_ROLES } from '@/lib/operations/access'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { createServiceClient } from '@/lib/supabase/server'
@@ -47,10 +49,40 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 /** A BankID start in the last few minutes means the signer may be signing right now. */
 const SESSION_ACTIVE_MS = 5 * 60 * 1000
 
-/** Signing is open here: the switch is on and a BankID provider is wired. */
-export async function signingAvailable(): Promise<boolean> {
-  if (!signingEnabled()) return false
-  return (await resolveBankIdSigning()) !== null
+export interface SigningAvailability {
+  /** Signing is offered to this company: the rollout includes it and a BankID provider is wired. */
+  offered: boolean
+  /** It may send a document for signing: offered, and its plan (or trial) holds the signing capability. */
+  available: boolean
+  /** It may send a locked årsredovisning to its board: available, and the årsredovisning rollout includes it. */
+  arsredovisning: boolean
+}
+
+/**
+ * Whether this company may start a signing, the one answer every door asks
+ * (the app, v1, MCP, the årsredovisning request): the SIGNING_ENABLED
+ * rollout, a wired BankID provider and the paid capability. Signing a
+ * request already sent and reading what was signed never ask it.
+ */
+export async function signingAvailability(supabase: SupabaseClient, companyId: string): Promise<SigningAvailability> {
+  const off = { offered: false, available: false, arsredovisning: false }
+  if (!signingEnabledFor(companyId)) return off
+  if ((await resolveBankIdSigning()) === null) return off
+  if (!(await hasCapability(supabase, companyId, CAPABILITY.signing))) return { ...off, offered: true }
+  return { offered: true, available: true, arsredovisning: arsredovisningSigningEnabledFor(companyId) }
+}
+
+/** Why this company may not start a signing, or null when it may. */
+export async function signingStartRefusal(
+  supabase: SupabaseClient,
+  companyId: string,
+  { arsredovisning = false }: { arsredovisning?: boolean } = {},
+): Promise<'SIGNING_UNAVAILABLE' | 'SIGNING_CAPABILITY_BLOCKED' | null> {
+  const state = await signingAvailability(supabase, companyId)
+  if (!state.offered) return 'SIGNING_UNAVAILABLE'
+  if (!state.available) return 'SIGNING_CAPABILITY_BLOCKED'
+  if (arsredovisning && !state.arsredovisning) return 'SIGNING_UNAVAILABLE'
+  return null
 }
 
 export interface SignerInput {
@@ -220,7 +252,8 @@ export async function describeRequester(service: SupabaseClient, companyId: stri
  * not a signable PDF, or a signer is wrong.
  */
 export async function createSigningRequest(ctx: OperationContext, input: CreateSigningRequestInput): Promise<OperationOutcome<CreatedSigningRequest>> {
-  if (!(await signingAvailable())) return { ok: false, code: 'SIGNING_UNAVAILABLE' }
+  const refusal = await signingStartRefusal(ctx.supabase, ctx.companyId, { arsredovisning: Boolean(input.annualReportVersionId) })
+  if (refusal) return { ok: false, code: refusal }
   const title = clean(input.title)
   if (!title) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'title' } }
   const service = createServiceClient()
@@ -364,7 +397,8 @@ export async function createSigningRequest(ctx: OperationContext, input: CreateS
  * the validity in days instead), so a pinned preview stays valid.
  */
 export async function previewSigningRequest(ctx: OperationContext, input: CreateSigningRequestInput): Promise<OperationOutcome<never>> {
-  if (!(await signingAvailable())) return { ok: false, code: 'SIGNING_UNAVAILABLE' }
+  const refusal = await signingStartRefusal(ctx.supabase, ctx.companyId, { arsredovisning: Boolean(input.annualReportVersionId) })
+  if (refusal) return { ok: false, code: refusal }
   const title = clean(input.title)
   if (!title) return { ok: false, code: 'VALIDATION_ERROR', details: { field: 'title' } }
   // Reads only, on the caller's client: the file's bytes are checked when the

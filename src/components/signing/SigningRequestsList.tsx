@@ -29,7 +29,8 @@ const FILTERS: Filter[] = ['all', 'open', 'completed', 'declined', 'cancelled']
  */
 export function SigningRequestsList() {
   const t = useTranslations('signing')
-  const available = useSigningAvailability()
+  // Chasing a request already sent needs the feature, not the plan (only sending a new one does).
+  const available = useSigningAvailability().offered
   const [filter, setFilter] = useState<Filter>('all')
   const [requests, setRequests] = useState<SigningRequestView[] | null>(null)
   const [failed, setFailed] = useState(false)

@@ -1,0 +1,1 @@
+[2026-10-26] SIGNING_ENABLED takes company ids or * (like AUTOGIRO_COMPANY_IDS), so signing opens for Arcim first and a real BankID signing is tested in prod without a TIC test tenant. The årsredovisning has its own SIGNING_ARSREDOVISNING_ENABLED until Bolagsverket answers.

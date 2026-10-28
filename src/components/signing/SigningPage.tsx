@@ -453,6 +453,11 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
             request.state === 'completed' ? t('signed_all', { requester }) : t('signed_waiting_others', { requester }),
           ]}
         />
+        {request.state === 'completed' && request.signed_copy && (
+          <a href={client.signedCopyUrl} className={QUIET_LINK_CLASS}>
+            {t('download_signed_copy')}
+          </a>
+        )}
         {nextStep && (
           <div className="space-y-3 border-t border-border pt-4">
             <p className="text-[13px]">{nextStep.body}</p>
@@ -467,7 +472,16 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
     action = <EndState title={t('declined_title')} body={t('declined_body', { requester })} />
   } else if (!open) {
     const key = request.state === 'expired' ? 'expired' : request.state === 'cancelled' ? 'cancelled' : request.state === 'declined' ? 'declined_by_other' : 'completed'
-    action = <EndState title={t(`closed_${key}_title`)} body={t(`closed_${key}_body`, { requester, date: day(request.expires_at) })} />
+    action = (
+      <div className="space-y-4">
+        <EndState title={t(`closed_${key}_title`)} body={t(`closed_${key}_body`, { requester, date: day(request.expires_at) })} />
+        {key === 'completed' && request.signed_copy && (
+          <a href={client.signedCopyUrl} className={QUIET_LINK_CLASS}>
+            {t('download_signed_copy')}
+          </a>
+        )}
+      </div>
+    )
   } else if (stage.kind === 'declining') {
     action = (
       <div className="space-y-4">

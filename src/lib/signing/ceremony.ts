@@ -89,6 +89,8 @@ export interface SignerPageData {
     sha256: string
     state: SigningRequestState
     expires_at: string
+    /** Everyone has signed and the signed copy is sealed: the page offers it for download. */
+    signed_copy: boolean
   }
   signer: {
     /** The signer's place in `signers`, so the page can mark their own row. */
@@ -124,6 +126,7 @@ export async function describeForSigner(scope: SignerScope, now: number = Date.n
       sha256: request.document_sha256,
       state: requestState(request, now),
       expires_at: request.expires_at,
+      signed_copy: request.status === 'completed' && Boolean(request.signed_document_id),
     },
     signer: {
       position: signer.position,

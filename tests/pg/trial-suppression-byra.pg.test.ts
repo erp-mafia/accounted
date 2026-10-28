@@ -62,12 +62,12 @@ async function trialGrantKeys(companyId: string): Promise<string[]> {
 }
 
 describe('trial suppression for byrå-team companies', () => {
-  it('the trial seed covers the full ten-key trial set', () => {
+  it('the trial seed covers the full eleven-key trial set', () => {
     // Guard against the seed list drifting from lib/entitlements/keys.ts:
     // if TRIAL_CAPABILITIES grows, the migration VALUES list (and this test)
     // must grow with it. multi_user joined at 20260901081417; zettle_sync
     // at 20260909100300; collections at 20261022120000 (paid-plan only from
-    // 20261012030000 until then).
+    // 20261012030000 until then); signing at 20261028130000.
     expect(TRIAL_KEYS).toEqual(
       [
         'ai',
@@ -76,6 +76,7 @@ describe('trial suppression for byrå-team companies', () => {
         'email_send',
         'multi_user',
         'shopify_sync',
+        'signing',
         'skatteverket',
         'stripe_payments',
         'woocommerce_sync',

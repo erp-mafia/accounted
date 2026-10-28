@@ -8,7 +8,7 @@ import type { NavGateContext } from '@/lib/navigation/nav-gates'
 /**
  * The per-company page rollouts the menu reads, resolved in one place: the
  * Dokument section, the Agenter page, the new Inkorg page and Autogiro, plus
- * the Signeringar page, which follows the signing switch. The dashboard
+ * the Signeringar page, which follows the signing rollout. The dashboard
  * layout hands them to the sidebar and the assistant's UI map reads them for
  * its prompt, so the two cannot disagree about where a page is. Each flag
  * stays in the block that owns its page; this composition layer only
@@ -22,9 +22,9 @@ export function navRollouts(companyId: string | null | undefined): NavRollouts {
     agentsEnabled: isAgentsPageEnabled(companyId),
     inkorgV2Enabled: isInkorgV2Enabled(companyId),
     autogiroEnabled: isAutogiroEnabled(companyId),
-    // Synchronous (the switch and the BankID flag); the provider itself is
-    // resolved per request by GET /api/signing/availability, which the
+    // Synchronous (the rollout and the BankID flag); the provider and the
+    // plan are resolved per request by GET /api/signing/availability, which the
     // page's actions follow.
-    signingEnabled: signingSwitchedOn(),
+    signingEnabled: signingSwitchedOn(companyId),
   }
 }

@@ -15,9 +15,16 @@
  * migration 20261025200000). The original is re-hashed against
  * document_sha256 first, so a changed file is never sealed. A failed seal is
  * retried on a later read (ensureSealed).
+ *
+ * The seal that wins mails the signed PDF to every signer with an address
+ * and to the sender (never the evidence package: it carries every signer's
+ * full personnummer). The signed copy's own SHA-256 is what /verifiera
+ * looks up (./verify.ts), and its evidence page says so.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
+import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
+import { sendSigningCompletedMail } from '@/lib/email/send-signing-completed'
 import type { Logger } from '@/lib/logger'
 import { downloadDocumentBytes, sha256Hex } from './document'
 import { formatSigningMoment, stockholmDay } from './format'
@@ -31,6 +38,7 @@ interface SealSigner {
   id: string
   position: number
   name: string
+  email: string | null
   role_label: string | null
   signed_at: string
   bankid_given_name: string
@@ -128,6 +136,7 @@ function evidenceLines(input: {
   fileName: string
   signers: SealSigner[]
   privates: Map<string, SealPrivate>
+  verifyUrl: string
 }): EvidenceLine[] {
   const { request, signers, privates } = input
   const lines: EvidenceLine[] = [
@@ -158,7 +167,9 @@ function evidenceLines(input: {
       'Varje underskrift är en BankID-signatur, en avancerad elektronisk underskrift enligt eIDAS, som innehåller dokumentets kontrollsumma ovan. ' +
       'Signaturerna, bevisen på att certifikaten var giltiga när de användes och originalfilen finns i bevispaketet (Bevispaket.zip) i företagets arkiv.',
     size: 9,
+    gapAfter: 6,
   })
+  lines.push({ text: `Kontrollera att en kopia av den här filen är äkta: ladda upp den på ${input.verifyUrl}`, size: 9 })
   return lines
 }
 
@@ -170,7 +181,7 @@ async function loadSealInput(service: SupabaseClient, requestId: string) {
   const [{ data: signerData, error: signerError }, { data: doc, error: docError }] = await Promise.all([
     service
       .from('signing_request_signers')
-      .select('id, position, name, role_label, signed_at, bankid_given_name, bankid_surname')
+      .select('id, position, name, email, role_label, signed_at, bankid_given_name, bankid_surname')
       .eq('signing_request_id', request.id)
       .eq('status', 'signed')
       .order('position'),
@@ -205,9 +216,10 @@ export async function sealSigningRequest(service: SupabaseClient, requestId: str
   if (sha256Hex(original) !== request.document_sha256) throw new Error('Original document no longer matches the signed hash')
 
   const sender = await describeRequester(service, request.company_id, request.created_by)
+  const verifyUrl = `${await getBaseUrlForCompany(request.company_id)}/verifiera`
   const signed = await buildSignedPdf(
     original,
-    evidenceLines({ request, companyName: sender.companyName, requester: sender.requester, fileName: document.file_name, signers, privates }),
+    evidenceLines({ request, companyName: sender.companyName, requester: sender.requester, fileName: document.file_name, signers, privates, verifyUrl }),
     request.title,
   )
 
@@ -283,7 +295,43 @@ export async function sealSigningRequest(service: SupabaseClient, requestId: str
     return null
   }
   log.info('signing request sealed', { signingRequestId: request.id, signedDocumentId: signedDoc.id, evidenceDocumentId: evidenceDoc.id })
+  await mailSignedCopy(service, { request, companyName: sender.companyName, signers, verifyUrl, pdf: { filename: `${base}-signerad.pdf`, bytes: signed }, log }).catch((err) =>
+    log.error('signed copy mail failed', err instanceof Error ? err : new Error(String(err)), { signingRequestId: request.id }),
+  )
   return { signedDocumentId: signedDoc.id, evidenceDocumentId: evidenceDoc.id }
+}
+
+/** The signers' addresses and the sender's, each once, case-insensitively. */
+export function signedCopyRecipients(signerEmails: Array<string | null>, senderEmail: string | null): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of [...signerEmails, senderEmail]) {
+    const email = raw?.trim()
+    if (!email || seen.has(email.toLowerCase())) continue
+    seen.add(email.toLowerCase())
+    out.push(email)
+  }
+  return out
+}
+
+async function mailSignedCopy(
+  service: SupabaseClient,
+  input: { request: SigningRequestRow; companyName: string; signers: SealSigner[]; verifyUrl: string; pdf: { filename: string; bytes: Uint8Array }; log: Logger },
+): Promise<void> {
+  const { request, signers } = input
+  const { data } = await service.auth.admin.getUserById(request.created_by)
+  const recipients = signedCopyRecipients(signers.map((s) => s.email), data?.user?.email ?? null)
+  await sendSigningCompletedMail({
+    companyId: request.company_id,
+    companyName: input.companyName,
+    title: request.title,
+    completedAt: request.completed_at ?? new Date().toISOString(),
+    signers: signers.map((s) => `${s.bankid_given_name} ${s.bankid_surname}`.trim() + (s.role_label ? `, ${s.role_label}` : '')),
+    verifyUrl: input.verifyUrl,
+    recipients,
+    pdf: input.pdf,
+    log: input.log,
+  })
 }
 
 /** Seal again a completed request whose seal never landed (a failed upload, a timed-out function). */
