@@ -3023,6 +3023,9 @@ export interface PendingOperation {
   // Set by accounted_stage_across_companies: every operation staged in one
   // cross-company call shares the id. NULL for every other staging path.
   batch_id?: string | null
+  // Why the stager proposes it, as given when staging (migration
+  // 20261028210000). Optional: absent on a row read before the column exists.
+  agent_reason?: string | null
   created_at: string
   resolved_at: string | null
   updated_at: string

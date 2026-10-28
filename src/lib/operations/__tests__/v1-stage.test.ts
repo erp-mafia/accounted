@@ -171,6 +171,39 @@ const widgetsCaseAction = defineOperation({
   mcp: { name: 'gnubok_widget_case_action', title: 'Widget Case Action', stage: { pendingType: 'collection_case_action', title: () => 'Åtgärd' } },
   run: (...args) => caseActionRun(...args),
 })
+// A strict input that also has its own reason, as some operations do
+// (a customer loss is booked with its reason on the voucher).
+const lossRun = vi.fn<(...args: unknown[]) => Promise<OperationOutcome<{ widget_id: string }>>>()
+const widgetsWriteOff = defineOperation({
+  id: 'widgets.write-off',
+  kind: 'write',
+  scope: 'suppliers:write',
+  risk: 'low',
+  reversible: false,
+  docs: DOCS,
+  input: z.object({ widget_id: z.string(), reason: z.string().min(1) }).strict(),
+  output: z.object({ widget_id: z.string() }),
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/widgets/write-off' },
+  mcp: { name: 'gnubok_write_off_widget', title: 'Write Off Widget', stage: { pendingType: 'create_supplier', title: () => 'Skriv av' } },
+  run: (...args) => lossRun(...args),
+})
+const strictRun = vi.fn<(...args: unknown[]) => Promise<OperationOutcome<{ widget_id: string }>>>()
+const widgetsStrict = defineOperation({
+  id: 'widgets.strict',
+  kind: 'write',
+  scope: 'suppliers:write',
+  risk: 'low',
+  reversible: false,
+  docs: DOCS,
+  input: z.object({ name: z.string().min(1) }).strict(),
+  output: z.object({ widget_id: z.string() }),
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/widgets/strict' },
+  mcp: { name: 'gnubok_create_strict_widget', title: 'Create Strict Widget', stage: { pendingType: 'create_supplier', title: () => 'Skapa' } },
+  run: (...args) => strictRun(...args),
+})
+const POST_WRITE_OFF = v1OperationHandler(widgetsWriteOff)
+const POST_STRICT = v1OperationHandler(widgetsStrict)
+
 const POST_HAND_OVER = v1OperationHandler(widgetsHandOver)
 const POST_CASE_ACTION = v1OperationHandler(widgetsCaseAction)
 
@@ -255,6 +288,13 @@ beforeEach(() => {
       : { ok: true, data: { widget_id: 'w-1' }, created: true },
   )
   directRun.mockResolvedValue({ ok: true, data: { widget_id: 'w-2' } })
+  for (const run of [lossRun, strictRun]) {
+    run.mockImplementation(async (_ctx, input, options) =>
+      (options as { dryRun: boolean }).dryRun
+        ? { ok: true, dryRun: true, preview: { ...(input as Record<string, unknown>) } }
+        : { ok: true, data: { widget_id: 'w-3' } },
+    )
+  }
   for (const run of [handoverRun, caseActionRun]) {
     run.mockImplementation(async (_ctx, input, options) =>
       (options as { dryRun: boolean }).dryRun
@@ -262,6 +302,89 @@ beforeEach(() => {
         : { ok: true, data: { case_id: 'case-1' } },
     )
   }
+})
+
+describe("v1 stage mode: the stager's reason", () => {
+  const REASON = 'Acme AB is on three supplier invoices in the inbox and not in the register yet.'
+
+  it('stores a `reason` from the body on the pending operation, answers it as agent_reason, and never passes it to the operation', async () => {
+    const mock = client()
+
+    const res = await POST_STRICT(post('widgets/strict', { name: 'Acme', reason: `  ${REASON}  ` }, { query: '?stage=true' }), params)
+
+    // The strict input would have refused an unknown key: it never saw it.
+    expect(res.status).toBe(202)
+    expect(strictRun.mock.calls[0][1]).toEqual({ name: 'Acme' })
+    const inserts = mock.payloads('pending_operations', 'insert')
+    expect(inserts).toHaveLength(1)
+    expect(inserts[0]).toMatchObject({ params: { name: 'Acme' }, agent_reason: REASON })
+    const { data } = await res.json()
+    expect(data.agent_reason).toBe(REASON)
+  })
+
+  it('names no agent_reason column without a reason, and answers agent_reason null', async () => {
+    const mock = client()
+    const res = await POST_STRICT(post('widgets/strict', { name: 'Acme' }, { query: '?stage=true' }), params)
+    expect(res.status).toBe(202)
+    expect(mock.payloads('pending_operations', 'insert')[0]).not.toHaveProperty('agent_reason')
+    expect((await res.json()).data.agent_reason).toBeNull()
+  })
+
+  it('cuts a reason longer than 500 characters at a word boundary instead of refusing the write', async () => {
+    const mock = client()
+    const long = Array.from({ length: 150 }, (_, i) => `evidence${i}`).join(' ')
+    const res = await POST_STRICT(post('widgets/strict', { name: 'Acme', reason: long }, { query: '?stage=true' }), params)
+    expect(res.status).toBe(202)
+    const stored = (mock.payloads('pending_operations', 'insert')[0] as Record<string, unknown>).agent_reason as string
+    expect(Array.from(stored).length).toBeLessThanOrEqual(500)
+    expect(long.startsWith(stored.slice(0, -1))).toBe(true)
+  })
+
+  it("keeps an operation's own reason as its input and stores it as the agent's reason too", async () => {
+    const mock = client()
+    const res = await POST_WRITE_OFF(
+      post('widgets/write-off', { widget_id: 'w-9', reason: ' Konkurs ' }, { query: '?stage=true' }),
+      params,
+    )
+    expect(res.status).toBe(202)
+    expect(lossRun.mock.calls[0][1]).toEqual({ widget_id: 'w-9', reason: ' Konkurs ' })
+    expect(mock.payloads('pending_operations', 'insert')[0]).toMatchObject({ agent_reason: 'Konkurs' })
+  })
+
+  it('leaves a direct commit alone: the strict input still refuses a stray reason', async () => {
+    client()
+    const res = await POST_STRICT(post('widgets/strict', { name: 'Acme', reason: REASON }), params)
+    expect(res.status).toBe(400)
+    expect(strictRun).not.toHaveBeenCalled()
+  })
+
+  it('still stages, without the reason, while the agent_reason column is not there yet', async () => {
+    const mock = createTableMockSupabase({
+      company_members: OWNER,
+      pending_operations: (calls) => {
+        const insert = calls.find((c) => c.method === 'insert')
+        if (!insert) return { data: null }
+        const row = insert.args[0] as Record<string, unknown>
+        if ('agent_reason' in row) return { data: null, error: { code: 'PGRST204', message: "Could not find the 'agent_reason' column" } }
+        return { data: { id: STAGED_ID, status: 'pending', created_at: '2026-10-28T10:00:00.000Z', resolved_at: null, ...row } }
+      },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await POST_STRICT(post('widgets/strict', { name: 'Acme', reason: REASON }, { query: '?stage=true' }), params)
+
+    expect(res.status).toBe(202)
+    const inserts = mock.payloads('pending_operations', 'insert')
+    expect(inserts).toHaveLength(2)
+    expect(inserts[1]).not.toHaveProperty('agent_reason')
+    expect((await res.json()).data.agent_reason).toBeNull()
+  })
+
+  it('documents the reason on the stage parameter', () => {
+    const spec = generateOpenApiSpec('https://x.test')
+    const op = spec.paths['/api/v1/companies/{companyId}/widgets/strict']?.post as { parameters?: Array<{ name: string; description?: string }> }
+    expect(op.parameters?.find((p) => p.name === 'stage')?.description).toContain('`reason`')
+  })
 })
 
 describe('v1 stage mode', () => {

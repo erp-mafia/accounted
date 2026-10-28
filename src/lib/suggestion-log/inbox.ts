@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getActor } from '@/lib/bookkeeping/actor-context'
-import { committingOperationId } from '@/lib/pending-operations/commit-scope'
+import { agentReasonColumn, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
+import { committingAgentReason, committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { createLogger } from '@/lib/logger'
 import { modelReadingOf, type DocumentReadingRow } from '@/lib/documents/model-reading'
 import {
@@ -185,22 +186,26 @@ export async function recordInboxDecision(
       sourceId: snapshot.documentId ?? snapshot.inboxItemId,
       booked,
     })
-    const { error } = await supabase.from('suggestion_log').insert({
-      company_id: snapshot.companyId,
-      kind: 'inbox_item',
-      inbox_item_id: booking ? snapshot.inboxItemId : null,
-      document_id: snapshot.documentId,
-      suggestions: classified.suggestions,
-      acted_on: classified.acted_on,
-      final: classified.final,
-      outcome: classified.outcome,
-      actor_type: getActor()?.type ?? 'user',
-      resolved_by: userId,
-      rule_version: snapshot.ruleVersion ?? null,
-      input_hash: snapshot.inputHash ?? null,
-      checks: checks ?? null,
-      pending_operation_id: committingOperationId(),
-    })
+    // The approved operation's reason, when an agent staged it with one.
+    const { error } = await writeWithAgentReason(committingAgentReason(), (agentReason) =>
+      supabase.from('suggestion_log').insert({
+        company_id: snapshot.companyId,
+        kind: 'inbox_item',
+        inbox_item_id: booking ? snapshot.inboxItemId : null,
+        document_id: snapshot.documentId,
+        suggestions: classified.suggestions,
+        acted_on: classified.acted_on,
+        final: classified.final,
+        outcome: classified.outcome,
+        actor_type: getActor()?.type ?? 'user',
+        resolved_by: userId,
+        rule_version: snapshot.ruleVersion ?? null,
+        input_hash: snapshot.inputHash ?? null,
+        checks: checks ?? null,
+        pending_operation_id: committingOperationId(),
+        ...agentReasonColumn(agentReason),
+      }),
+    )
     if (error) throw new Error(error.message)
   } catch (err) {
     log.error('failed to record inbox decision (booking unaffected)', {

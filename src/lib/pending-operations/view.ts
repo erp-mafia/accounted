@@ -13,26 +13,56 @@
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { z } from 'zod'
+import { isMissingColumnError } from './agent-reason'
 import { pendingOperationTaskState, PENDING_OPERATION_TASK_STATES } from './task-state'
 
 export const PENDING_OPERATION_STATUSES = ['pending', 'committing', 'committed', 'rejected', 'failed_partial'] as const
 
 /** The columns the view reads; never `params`. */
 export const PENDING_OPERATION_VIEW_COLUMNS =
+  'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, rejection_category, rejection_reason, result_data, created_at, resolved_at'
+
+/** The same, without agent_reason: the read while that column is not there yet. */
+export const PENDING_OPERATION_VIEW_COLUMNS_WITHOUT_AGENT_REASON =
   'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, rejection_category, rejection_reason, result_data, created_at, resolved_at'
+
+function selectViewColumns(supabase: SupabaseClient) {
+  return supabase
+    .from('pending_operations')
+    .select(
+      'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, rejection_category, rejection_reason, result_data, created_at, resolved_at',
+    )
+}
 
 /**
  * The pending_operations read every v1 door starts from, with the column
  * list spelled as a literal so the schema guard (tests/schema) can check each
  * column: a select built from a constant counts as unresolvable. Must stay
- * equal to PENDING_OPERATION_VIEW_COLUMNS (pinned by view.test.ts).
+ * equal to PENDING_OPERATION_VIEW_COLUMNS (pinned by view.test.ts), or to
+ * the list without agent_reason for `{ withAgentReason: false }`.
  */
-export function selectPendingOperationView(supabase: SupabaseClient) {
+export function selectPendingOperationView(
+  supabase: SupabaseClient,
+  options: { withAgentReason?: boolean } = {},
+): ReturnType<typeof selectViewColumns> {
+  if (options.withAgentReason !== false) return selectViewColumns(supabase)
   return supabase
     .from('pending_operations')
     .select(
       'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, rejection_category, rejection_reason, result_data, created_at, resolved_at',
-    )
+    ) as unknown as ReturnType<typeof selectViewColumns>
+}
+
+/**
+ * Run a view read, and once more without agent_reason when the column is
+ * not there yet: the code is live a few minutes before the migration that
+ * adds it (20261028210000) runs. `run` builds the whole query.
+ */
+export async function readPendingOperationView<T extends { error: { code?: string } | null }>(
+  run: (options: { withAgentReason: boolean }) => PromiseLike<T>,
+): Promise<T> {
+  const first = await run({ withAgentReason: true })
+  return isMissingColumnError(first.error) ? run({ withAgentReason: false }) : first
 }
 
 export interface PendingOperationViewRow {
@@ -47,6 +77,8 @@ export interface PendingOperationViewRow {
   actor_type: string
   actor_id: string | null
   actor_label: string | null
+  /** Absent on a row read before the column exists. */
+  agent_reason?: string | null
   rejection_category: string | null
   rejection_reason: string | null
   result_data: Record<string, unknown> | null
@@ -75,6 +107,12 @@ export const PendingOperationView = z.object({
     .record(z.string(), z.unknown())
     .nullable()
     .describe('The outcome once resolved: the committed ids, or why it was not done. null while pending.'),
+  agent_reason: z
+    .string()
+    .nullable()
+    .describe(
+      'Why the stager proposes it, as given when staging (`reason`, at most 500 characters): shown to the approver and kept with the decision. null when none was given.',
+    ),
   rejection_category: z.string().nullable(),
   rejection_reason: z.string().nullable(),
   actor_type: z.string().describe('Who staged it: api_key, mcp_oauth, service_account, user, agent_chat, cron, or system (a suggestion).'),
@@ -108,6 +146,7 @@ export function toPendingOperationView(row: PendingOperationViewRow): PendingOpe
     risk_level: row.risk_level as PendingOperationViewOut['risk_level'],
     preview: row.preview_data ?? {},
     result: row.result_data ?? null,
+    agent_reason: row.agent_reason ?? null,
     rejection_category: row.rejection_category ?? null,
     rejection_reason: row.rejection_reason ?? null,
     actor_type: row.actor_type,
@@ -135,6 +174,7 @@ export const PENDING_OPERATION_VIEW_EXAMPLE: PendingOperationViewOut = {
   risk_level: 'medium',
   preview: { name: 'Clas Ohlson AB', supplier_type: 'swedish_business' },
   result: null,
+  agent_reason: 'Clas Ohlson AB is on three supplier invoices in the inbox and is not in the supplier register yet.',
   rejection_category: null,
   rejection_reason: null,
   actor_type: 'api_key',

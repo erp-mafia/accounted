@@ -1,0 +1,1 @@
+[2026-10-28] The agent's reason on a staged write is a column on pending_operations and suggestion_log, not a key in the receipt's suggestions jsonb: a bank-line or underlag receipt lists the engine's suggestions, not the staged proposal. A tool's own `reason` input stays and doubles as it.

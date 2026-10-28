@@ -18,6 +18,7 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { PERSON_REJECTION_CATEGORIES } from '@/lib/pending-operations/rejection-categories'
 import { rejectPendingOperations } from '@/lib/pending-operations/reject'
 import {
+  readPendingOperationView,
   selectPendingOperationView,
   PENDING_OPERATION_VIEW_EXAMPLE,
   PendingOperationView,
@@ -135,10 +136,9 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     // The row as it stands now, for the answer either way.
-    const { data, error } = await selectPendingOperationView(ctx.supabase)
-      .eq('id', id)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
+    const { data, error } = await readPendingOperationView((options) =>
+      selectPendingOperationView(ctx.supabase, options).eq('id', id).eq('company_id', ctx.companyId!).maybeSingle(),
+    )
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     const view = data ? toPendingOperationView(data as unknown as PendingOperationViewRow) : null
 

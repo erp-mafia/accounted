@@ -969,6 +969,8 @@ const SPREAD_COLUMN_HELPERS: Record<string, readonly string[]> = {
   linkBasisColumns: ['link_basis', 'link_evidence'],
   linkBasisColumnsFor: ['link_basis', 'link_evidence'],
   scopeFreeLinkBasisColumns: ['link_basis', 'link_evidence'],
+  // src/lib/pending-operations/agent-reason.ts: the agent's reason on a staged write.
+  agentReasonColumn: ['agent_reason'],
 }
 
 function spreadHelperColumns(expr: ts.Expression): readonly string[] | null {

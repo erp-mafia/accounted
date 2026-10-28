@@ -360,7 +360,7 @@ describe('behandlingshistorik_decisions', () => {
     const result = await withUserContext(userId, (client) => decisions(client, FROM, TO, true))
     expect(ids(result.rows)).toEqual([decision.may, decision.late, decision.named, decision.noFinal, decision.malformed].sort())
     expect(Object.keys(result.rows[0]).sort()).toEqual([
-      'acted_on', 'actor_type', 'checks', 'confidence_band', 'created_at', 'document_id', 'final', 'id', 'inbox_item_id',
+      'acted_on', 'actor_type', 'agent_reason', 'checks', 'confidence_band', 'created_at', 'document_id', 'final', 'id', 'inbox_item_id',
       'input_hash', 'kind', 'outcome', 'pending_operation_id', 'policy_version', 'resolved_by', 'rule_version', 'suggestions',
       'transaction_id',
     ])

@@ -1801,6 +1801,25 @@ describe('decisionEvents', () => {
     ])
   })
 
+  it("quotes the agent's reason, as the approver saw it, after who proposed it; nothing when none was given", () => {
+    const reason = 'Clas Ohlson every month on 5410; the receipt is attached.'
+    const [ev] = decisionEvents(buildDecisionReceipts([row({ actor_type: 'mcp_oauth', agent_reason: reason })], ctx))
+    expect(ev.details.slice(-2)).toEqual(['Föreslaget av: MCP-anslutning: Claude', `Agentens motivering: ${reason}`])
+    const [plain] = decisionEvents(buildDecisionReceipts([row({ actor_type: 'mcp_oauth', agent_reason: null })], ctx))
+    expect(plain.details.some((d) => d.startsWith('Agentens motivering'))).toBe(false)
+  })
+
+  it('keeps the reason on a samlingsbeslut: one approval, one staged operation', () => {
+    const reason = 'Twelve card lines from the same Stripe payout.'
+    const events = decisionEvents(buildDecisionReceipts([
+      row({ id: 'sl-a', actor_type: 'mcp_oauth', agent_reason: reason }),
+      row({ id: 'sl-b', transaction_id: 'tx-2', actor_type: 'mcp_oauth', agent_reason: reason }),
+    ], ctx))
+    expect(events).toHaveLength(1)
+    expect(events[0].code).toBe('decision.batch')
+    expect(events[0].details).toContain(`Agentens motivering: ${reason}`)
+  })
+
   it("says so when an underlag's score is the model's own and names the changed fields", () => {
     const [ev] = decisionEvents(buildDecisionReceipts([row({
       kind: 'inbox_item',

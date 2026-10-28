@@ -3,7 +3,7 @@ import { tools, deriveToolMeta, isDefaultCatalogTool } from '../server'
 import { isMultiCompanyOnlyTool, projectToolInputSchema } from '../company-routing'
 
 // Ceiling for the catalog a single-company key is served (see the second case).
-const SIMPLE_CATALOG_CEILING = 61_600
+const SIMPLE_CATALOG_CEILING = 63_100
 import { projectToolReferences } from '../tool-namespace'
 
 // Mirror the real tools/list serializer, including the derived staging _meta
@@ -771,7 +771,16 @@ describe('tools/list payload size guard', () => {
     //     for on the same two tools (see the single-company case). Measured
     //     64 810 (single-company 60 381) on the main of 2026-10-28. Ceiling
     //     unchanged.
-    expect(approxTokens).toBeLessThan(66_100)
+    //   * 66 100 → 67 600 with the agent's reason on staged writes
+    //     (2026-10-28): every listed staging tool (53) gains the optional
+    //     `reason` (lib/pending-operations/agent-reason.ts), one shared
+    //     property whose one-line description is the instruction the agent
+    //     needs to write it, so it is wire data, not trimmable prose; a bare
+    //     type would cost about 600 and say nothing. +1 431, measured 66 241
+    //     (single-company 61 812). The ceiling moves by that cost, rounded
+    //     up, so the headroom other branches count on stays where it was.
+    //     A founder call, as the 61 600 bump was.
+    expect(approxTokens).toBeLessThan(67_600)
   })
 
   it('serves a single-company key a smaller catalog than the multi-company one', () => {
@@ -909,6 +918,8 @@ describe('tools/list payload size guard', () => {
     // search-only tool. Measured 61 581 (full catalog 66 074; main 61 583
     // and 66 075), then 60 381 (full 64 810) rebased on the main of
     // 2026-10-28. Ceiling unchanged.
+    // 2026-10-28, the agent's reason on staged writes: 61 600 → 63 100, the
+    // same +1 431 as the full catalog (see the case above). Measured 61 812.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

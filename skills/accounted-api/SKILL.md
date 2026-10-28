@@ -154,6 +154,11 @@ or a person in the app; `POST /pending-operations/{id}/reject` discards it.
 Poll `GET /pending-operations/{id}` until `task_state` is terminal:
 `completed` (committed, `result` holds the outcome), `failed` (the approved
 commit did not go through) or `cancelled` (rejected, expired or superseded).
+Say why you propose it: a `reason` field in the staged body (one or two
+sentences, the evidence and the pattern you followed) is never passed to the
+write; the approver sees it, the pending operation answers it as
+`agent_reason`, and the decision receipt keeps it. Longer than 500 characters
+is cut at a word boundary, never refused.
 `stage=true` on any other endpoint is `400 STAGE_NOT_SUPPORTED`; values other
 than `true`/`false` are `400`. A write only a person may approve in the app
 (handing an invoice to collection, an escalating collection case action) is

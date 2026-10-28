@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { TOOL_SCOPE_MAP } from '@/lib/auth/api-keys'
 import { MCP_TOOL_CAPABILITY_MAP } from '@/lib/entitlements/keys'
 import { currentStagingBatchId } from '@/lib/pending-operations/batch-context'
+import { currentAgentReason } from '@/lib/pending-operations/agent-reason'
 import { eventBus } from '@/lib/events/bus'
 
 const DEFAULT_COMPANY_ID = '11111111-1111-4111-8111-111111111111'
@@ -45,7 +46,7 @@ vi.mock('@/lib/entitlements/multi-user', async (importOriginal) => {
   return { ...actual, getMultiUserState: vi.fn().mockResolvedValue({ state: 'entitled', graceEndsAt: null }) }
 })
 
-import { tools } from '../server'
+import { tools, withAgentReasonArg } from '../server'
 
 const scoped = (companyId: string, name: string, role = 'owner') => ({
   companyId,
@@ -149,6 +150,9 @@ const fakeStaged = {
   execute: vi.fn(),
 }
 tools.push(fakeRead as never, fakeStaged as never)
+// A staging tool as the tool list assembles it: with the agent's reason.
+const fakeReasoned = withAgentReasonArg({ ...fakeStaged, name: 'gnubok_fake_reasoned', execute: vi.fn() } as never)
+tools.push(fakeReasoned)
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -362,6 +366,39 @@ describe('gnubok_run_across_companies', () => {
 })
 
 describe('gnubok_stage_across_companies', () => {
+  it("hands each company's staging the agent's reason from arguments, split off the tool's own arguments", async () => {
+    mocks.resolveCompanyScope.mockResolvedValue(
+      scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB'), scoped(OTHER_COMPANY_ID, 'Other AB', 'admin'))
+    )
+    const { supabase } = supabaseDouble()
+    vi.mocked(fakeReasoned.execute).mockImplementation(async (args: Record<string, unknown>, companyId: string) => ({
+      staged: true,
+      operation_id: `op-${companyId.slice(0, 2)}`,
+      risk_level: 'low',
+      message: 'staged',
+      preview: { args, reason: currentAgentReason() },
+    }))
+
+    const result = (await stageTool.execute(
+      {
+        tool: 'gnubok_fake_reasoned',
+        arguments: { note: 'shared', reason: '  The same year-end rule for every client.  ' },
+        per_company_arguments: { [OTHER_COMPANY_ID]: { reason: 'This client books it on 2990 instead.' } },
+        scope: { companies: 'all' },
+        __keyScopes: ['companies:read'],
+      },
+      '',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' }
+    )) as { results: Array<{ preview?: { args: Record<string, unknown>; reason: string | null } }> }
+
+    expect(result.results.map((r) => r.preview)).toEqual([
+      { args: { note: 'shared' }, reason: 'The same year-end rule for every client.' },
+      { args: { note: 'shared' }, reason: 'This client books it on 2990 instead.' },
+    ])
+  })
+
   it('stages once per company under one batch id, sequentially, with per-company overrides', async () => {
     mocks.resolveCompanyScope.mockResolvedValue(
       scopeOf(scoped(DEFAULT_COMPANY_ID, 'Default AB'), scoped(OTHER_COMPANY_ID, 'Other AB', 'admin'))

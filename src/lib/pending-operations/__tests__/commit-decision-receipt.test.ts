@@ -36,6 +36,7 @@ vi.mock('@/lib/operations/registry', async (importOriginal) => {
 })
 
 import { commitPendingOperation } from '../commit'
+import { committingAgentReason } from '../commit-scope'
 
 function pendingOperation(): PendingOperation {
   return {
@@ -159,6 +160,29 @@ describe('commitPendingOperation: the decision receipt', () => {
       policy_version: 'staged-approval.1;approver=credential;unattended_limit=none',
       confidence_band: 'direct',
     })
+  })
+
+  it("keeps the stager's agent_reason in the receipt, and visible to every door the executor reaches", async () => {
+    const reason = 'Opening balance from the 2025 SIE file the user uploaded; 1930 matches the bank statement.'
+    const seen: Array<string | null> = []
+    executor.run.mockImplementation(async () => {
+      seen.push(committingAgentReason())
+      return { ok: true, dryRun: false, data: { journal_entry_id: ENTRY } }
+    })
+    const db = tableDouble()
+    await commitPendingOperation(db.client, 'user-1', 'company-1', { ...pendingOperation(), agent_reason: reason }, {
+      commitMethod: 'user_accept',
+      actor: { type: 'user', label: 'anna@example.se' },
+    })
+    expect(seen).toEqual([reason])
+    expect(db.receipts).toHaveLength(1)
+    expect(db.receipts[0]).toMatchObject({ kind: 'operation', pending_operation_id: OPERATION_ID, agent_reason: reason })
+  })
+
+  it('writes no agent_reason into the receipt of an operation staged without one', async () => {
+    const db = tableDouble()
+    await commitPendingOperation(db.client, 'user-1', 'company-1', pendingOperation(), { actor: approver })
+    expect(db.receipts[0]).not.toHaveProperty('agent_reason')
   })
 
   it('records a person approving in the app as review', async () => {

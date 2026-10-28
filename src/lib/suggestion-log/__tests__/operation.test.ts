@@ -19,7 +19,7 @@ import {
   type OperationDecision,
 } from '../operation'
 import { operationInputHash } from '../provenance'
-import { buildDecisionReceipt, DecisionReceiptSchema, type SuggestionLogRow } from '../receipts'
+import { buildDecisionReceipt, DecisionReceiptSchema, toCompactDecision, type SuggestionLogRow } from '../receipts'
 
 const COMPANY = 'company-1'
 const USER = 'user-1'
@@ -38,7 +38,7 @@ const operation: OperationDecision['operation'] = {
   preview_data: { journal_entry: { total_debit: 10000 } },
   risk_level: 'high',
   agent_metadata: { model: 'claude-test' },
-} as Pick<PendingOperation, 'id' | 'operation_type' | 'params' | 'preview_data' | 'risk_level' | 'agent_metadata'>
+} as Pick<PendingOperation, 'id' | 'operation_type' | 'params' | 'preview_data' | 'risk_level' | 'agent_metadata' | 'agent_reason'>
 
 const person: CommitActor = { type: 'user', label: 'anna@example.se' }
 const serviceAccount: CommitActor = { type: 'service_account', label: 'Attestharness', unattendedCommitLimit: 5000 }
@@ -368,5 +368,71 @@ describe('an operation row read back as a receipt', () => {
       checks: null,
     })
     expect(receipt.input_hash).toMatch(/^[0-9a-f]{64}$/)
+  })
+})
+
+describe("the agent's reason on the receipt", () => {
+  const REASON = 'Same supplier and account as the last eleven bookings; the invoice is attached.'
+  const withReason = { ...operation, agent_reason: REASON }
+
+  /** fakeDb whose insert refuses agent_reason as PostgREST does before the migration ran. */
+  function columnMissingDb() {
+    const db = fakeDb()
+    const from = (db.client as unknown as { from: (table: string) => Record<string, unknown> }).from
+    const client = {
+      from(table: string) {
+        const builder = from(table)
+        const insert = builder.insert as (rows: Array<Record<string, unknown>>) => Promise<unknown>
+        builder.insert = async (rows: Array<Record<string, unknown>>) =>
+          rows.some((row) => 'agent_reason' in row)
+            ? { error: { code: 'PGRST204', message: "Could not find the 'agent_reason' column of 'suggestion_log' in the schema cache" } }
+            : insert(rows)
+        return builder
+      },
+    }
+    return { ...db, client: client as never }
+  }
+
+  it("copies the approved operation's agent_reason into the receipt row", async () => {
+    const db = fakeDb()
+    await expect(recordOperationDecision(db.client, decision({ operation: withReason }))).resolves.toBe(1)
+    expect(db.rows[0]).toMatchObject({ kind: 'operation', pending_operation_id: OPERATION_ID, agent_reason: REASON })
+  })
+
+  it('names no agent_reason column when the operation has none', async () => {
+    const db = fakeDb()
+    await recordOperationDecision(db.client, decision())
+    expect(db.rows).toHaveLength(1)
+    expect(db.rows[0]).not.toHaveProperty('agent_reason')
+  })
+
+  it('still writes the receipt, without the reason, while the column is not there yet', async () => {
+    const db = columnMissingDb()
+    await expect(recordOperationDecision(db.client, decision({ operation: withReason }))).resolves.toBe(1)
+    expect(db.rows).toHaveLength(1)
+    expect(db.rows[0]).not.toHaveProperty('agent_reason')
+    expect(logSpy.error).not.toHaveBeenCalled()
+  })
+
+  it('reads the reason back on the receipt and in its compact form; null without one', () => {
+    const [row] = buildOperationDecisionRows(decision({ operation: withReason }), [ENTRY], [ENTRY])
+    const logged: SuggestionLogRow = {
+      ...row!,
+      id: 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee',
+      transaction_id: null,
+      inbox_item_id: null,
+      document_id: null,
+      created_at: '2026-10-28T10:00:01Z',
+    }
+    const ctx = { entries: new Map(), operations: new Map(), operationsById: new Map() }
+    const receipt = buildDecisionReceipt(logged, ctx)
+    expect(DecisionReceiptSchema.safeParse(receipt).success).toBe(true)
+    expect(receipt.agent_reason).toBe(REASON)
+    expect(toCompactDecision([receipt])?.agent_reason).toBe(REASON)
+
+    const [plain] = buildOperationDecisionRows(decision(), [ENTRY], [ENTRY])
+    const none = buildDecisionReceipt({ ...logged, ...plain!, agent_reason: undefined }, ctx)
+    expect(none.agent_reason).toBeNull()
+    expect(toCompactDecision([none])).not.toHaveProperty('agent_reason')
   })
 })

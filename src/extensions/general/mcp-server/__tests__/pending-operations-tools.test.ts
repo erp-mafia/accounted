@@ -106,6 +106,41 @@ describe('gnubok_list_pending_operations', () => {
     expect(result.next_offset).toBe(1)
   })
 
+  it("returns each operation's agent_reason, why its stager proposes it", async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'op-1', status: 'pending', agent_reason: 'Telia every month on 6212.' },
+        { id: 'op-2', status: 'pending', agent_reason: null },
+      ],
+      error: null,
+      count: 2,
+    })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<{ id: string; agent_reason: string | null }>
+    }
+
+    expect(result.operations.map((op) => op.agent_reason)).toEqual(['Telia every month on 6212.', null])
+    expect(String(findCalls('pending_operations', 'select')[0]?.[0])).toContain('agent_reason')
+    expect(String(findCalls('pending_operations', 'select')[0]?.[0])).not.toContain('params')
+  })
+
+  it('lists without agent_reason while that column is not there yet', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: null, error: { code: '42703', message: 'column pending_operations.agent_reason does not exist' }, count: null })
+    enqueue({ data: [{ id: 'op-1', status: 'pending' }], error: null, count: 1 })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<{ id: string }>
+    }
+
+    expect(result.operations.map((op) => op.id)).toEqual(['op-1'])
+    const selects = findCalls('pending_operations', 'select').map((args) => String(args[0]))
+    expect(selects).toHaveLength(2)
+    expect(selects[1]).not.toContain('agent_reason')
+  })
+
   // Issue #3408: approve is never pre-ticked on consent, so the default
   // connection lacks it; the widget reads can_approve to hide its buttons.
   it('says whether the calling key can approve or reject', async () => {

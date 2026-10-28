@@ -42,8 +42,8 @@ const EMPLOYEE_ID = 'eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee'
 // Synthetic personnummer, never a real one.
 const PERSONAL_NUMBER = '19900101-1234'
 
-/** Arguments that steer a write tool rather than name a field. */
-const CONTROL_ARGS = new Set(['dry_run', 'idempotency_key'])
+/** Arguments that steer a write tool rather than name a field (`reason`: the agent's note to the approver). */
+const CONTROL_ARGS = new Set(['dry_run', 'idempotency_key', 'reason'])
 
 /** The keys of an object schema, through any transform wrapped around it. */
 function schemaKeys(schema: unknown): string[] {

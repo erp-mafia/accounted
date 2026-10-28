@@ -354,8 +354,8 @@ const NOT_ON_THE_AGENT_TOOLS: Record<string, string> = {
 /** gnubok_create_customer names two fields its own way. */
 const CREATE_WIRE_NAMES: Record<string, string> = { address: 'address_line1', payment_terms: 'default_payment_terms' }
 
-/** Arguments that steer the tool rather than name a field. */
-const CONTROL_ARGS = new Set(['customer_id', 'dry_run', 'idempotency_key'])
+/** Arguments that steer the tool rather than name a field (`reason`: the agent's note to the approver). */
+const CONTROL_ARGS = new Set(['customer_id', 'dry_run', 'idempotency_key', 'reason'])
 
 /** The keys of an object schema, through any transform wrapped around it. */
 function schemaKeys(schema: unknown): string[] {

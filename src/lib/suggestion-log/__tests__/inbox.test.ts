@@ -188,6 +188,22 @@ describe('recordInboxDecision', () => {
     )
 
     expect(inserts[0].row).toMatchObject({ checks, pending_operation_id: 'op-7' })
+    expect(inserts[0].row).not.toHaveProperty('agent_reason')
+  })
+
+  it("copies the approved operation's agent_reason onto the underlag decision", async () => {
+    const { client, inserts } = fakeClient()
+
+    await runInOperationCommit(
+      'op-7',
+      () => recordInboxDecision(client as never, snap, { supplier_invoice_id: 'si-1', fields: {} }, 'user-1'),
+      'Telia invoice, same supplier and amount as the bank line on the 3rd.',
+    )
+
+    expect(inserts[0].row).toMatchObject({
+      pending_operation_id: 'op-7',
+      agent_reason: 'Telia invoice, same supplier and amount as the bank line on the 3rd.',
+    })
   })
 
   it('lets an auditor recompute the inputs hash from the recorded row and the document', async () => {
