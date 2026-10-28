@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { isAllowedOverrideAccount, lineAccountOverride } from '../line-account-override'
+import { isAllowedOverrideAccount, isRunComputedTaxAccount, lineAccountOverride } from '../line-account-override'
 import { MANUAL_PAYSLIP_LINE_TYPES } from '../manual-payslip-lines'
 import { RECURRING_LINE_ITEM_TYPES } from '../recurring-lines'
 
@@ -57,13 +57,37 @@ describe('isAllowedOverrideAccount', () => {
     expect(isAllowedOverrideAccount('bonus', '2799')).toBe(false)
   })
 
-  it('lets a net deduction credit any account', () => {
+  it('lets a net deduction credit any other account', () => {
     expect(isAllowedOverrideAccount('net_deduction_benefit_payment', '7381')).toBe(true)
     expect(isAllowedOverrideAccount('net_deduction_union', '2794')).toBe(true)
+    expect(isAllowedOverrideAccount('net_deduction_other', '2750')).toBe(true)
+    expect(isAllowedOverrideAccount('net_deduction_other', '2799')).toBe(true)
+  })
+
+  it('refuses the accounts the run books itself on every row, a net deduction included', () => {
+    for (const type of ['net_deduction_other', 'net_deduction_union', 'net_deduction_advance', 'net_deduction_benefit_payment', 'bonus']) {
+      for (const account of ['2710', '2731', '2739']) {
+        expect(isAllowedOverrideAccount(type, account), `${type} ${account}`).toBe(false)
+      }
+    }
   })
 
   it('refuses partial numbers and rows without an override', () => {
     expect(isAllowedOverrideAccount('bonus', '70')).toBe(false)
     expect(isAllowedOverrideAccount('benefit_car', '7385')).toBe(false)
+  })
+})
+
+describe('isRunComputedTaxAccount', () => {
+  it('covers 2710-2739: personalskatt and the avgifter and särskild löneskatt accounts', () => {
+    for (const account of ['2710', '2719', '2720', '2730', '2731', '2732', '2739']) {
+      expect(isRunComputedTaxAccount(account), account).toBe(true)
+    }
+  })
+
+  it('leaves the neighbouring settlement accounts and anything not four digits alone', () => {
+    for (const account of ['2709', '2740', '2750', '2790', '2794', '2799', '1613', '7385', '271', '27100', ' 2710', '']) {
+      expect(isRunComputedTaxAccount(account), JSON.stringify(account)).toBe(false)
+    }
   })
 })

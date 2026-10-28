@@ -15,6 +15,7 @@ import {
   deletePayslipLine,
 } from '@/lib/salary/payslip-lines'
 import { TEXT_ROW_RETYPE_MESSAGE, VACATION_ROW_MESSAGE, ZERO_AMOUNT_MESSAGE } from '@/lib/salary/text-rows'
+import { RUN_COMPUTED_TAX_ACCOUNT_MESSAGE } from '@/lib/salary/line-account-override'
 
 const COMPANY_ID = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'
 const RUN_ID = 'cccccccc-cccc-4ccc-8ccc-cccccccccccc'
@@ -932,6 +933,101 @@ describe('text rows and the zero-amount rule (crm#1076)', () => {
     mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'other', amount: 0 } })
     mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'other', amount: 0, description: 'Ny', salary_run_employee: undefined } })
     const result = await update({ description: 'Ny' })
+    expect(result.ok).toBe(true)
+  })
+})
+
+// A net deduction on 2710 credited personalskatt the AGI never declared: the
+// verifikat said 7 847 kr, the AGI 7 347 kr. The run books 2710-2739 itself.
+describe('accounts the run books itself (2710-2739)', () => {
+  const NET_DEDUCTION = {
+    ...BASE_INPUT,
+    item_type: 'net_deduction_other' as const,
+    description: 'Frivilligt extra skatteavdrag',
+    amount: -500,
+    is_taxable: false,
+    is_avgift_basis: false,
+    is_vacation_basis: false,
+    is_net_deduction: true,
+  }
+  const NET_LINE = { ...EXISTING_LINE, ...NET_DEDUCTION, account_number: '2794' }
+  const REFUSAL = {
+    ok: false,
+    code: 'VALIDATION_ERROR',
+    details: { field: 'account_number', message: RUN_COMPUTED_TAX_ACCOUNT_MESSAGE },
+  }
+  const gates = () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { id: SRE_ID, employee_id: EMPLOYEE_ID } })
+  }
+  const create = (input: Record<string, unknown>, dryRun?: boolean) =>
+    createPayslipLine(supabase, {
+      companyId: COMPANY_ID,
+      salaryRunId: RUN_ID,
+      target: { employeeId: EMPLOYEE_ID },
+      input: input as never,
+      dryRun,
+    })
+  const update = (patch: Record<string, unknown>, dryRun?: boolean) =>
+    updatePayslipLine(supabase, { companyId: COMPANY_ID, salaryRunId: RUN_ID, lineId: LINE_ID, patch: patch as never, dryRun })
+
+  it.each(['2710', '2731', '2739'])('refuses a net deduction on %s, before writing', async (account) => {
+    gates()
+    const result = await create({ ...NET_DEDUCTION, account_number: account })
+    expect(result).toEqual(REFUSAL)
+    expect(mock.findCall('salary_line_items', 'insert')).toBeUndefined()
+  })
+
+  it('refuses it on a pay row and in a dry run (the staging preview) too', async () => {
+    gates()
+    expect(await create({ ...BASE_INPUT, account_number: '2710' }, true)).toEqual(REFUSAL)
+  })
+
+  it.each(['2794', '2750', '2799'])('still books a net deduction on %s (happy path)', async (account) => {
+    gates()
+    mock.enqueue({ data: { ...NET_LINE, account_number: account, salary_run_employee: undefined } })
+    const result = await create({ ...NET_DEDUCTION, account_number: account })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ account_number: account })
+  })
+
+  it('ignores the account on a text row, which stores none', async () => {
+    gates()
+    mock.enqueue({ data: { ...EXISTING_LINE, item_type: 'text', amount: 0, account_number: null } })
+    const result = await create({ ...BASE_INPUT, item_type: 'text', description: 'Extra skatt enligt begäran', amount: undefined, account_number: '2710' })
+    expect(result.ok).toBe(true)
+    expect(mock.findCall('salary_line_items', 'insert')?.[0]).toMatchObject({ account_number: null })
+  })
+
+  it('refuses a patch that moves a line onto 2710, before writing', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: NET_LINE })
+    expect(await update({ account_number: '2710' })).toEqual(REFUSAL)
+    expect(mock.findCall('salary_line_items', 'update')).toBeUndefined()
+  })
+
+  it('refuses a type change that names 2731 for the new type', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: EXISTING_LINE })
+    expect(await update({ ...NET_DEDUCTION, account_number: '2731' }, true)).toEqual(REFUSAL)
+  })
+
+  it('accepts a patch onto 2794 and one that clears the account', async () => {
+    for (const account_number of ['2794', null]) {
+      mock.reset()
+      mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+      mock.enqueue({ data: { ...NET_LINE, account_number: '2799' } })
+      mock.enqueue({ data: { ...NET_LINE, account_number, salary_run_employee: undefined } })
+      const result = await update({ account_number })
+      expect(result.ok).toBe(true)
+      expect(mock.findCall('salary_line_items', 'update')?.[0]).toEqual({ account_number })
+    }
+  })
+
+  it('lets an unrelated patch through on a row stored on 2710 before the refusal', async () => {
+    mock.enqueue({ data: { id: RUN_ID, status: 'draft' } })
+    mock.enqueue({ data: { ...NET_LINE, account_number: '2710' } })
+    const result = await update({ description: 'Nettolöneavdrag' }, true)
     expect(result.ok).toBe(true)
   })
 })

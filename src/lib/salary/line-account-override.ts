@@ -18,12 +18,24 @@
  *
  * Pay rows (wages, kostnadsersättning) book a personnel cost, so their
  * override is limited to class 7. Net deductions credit a settlement account
- * (2794 fackavgift, 1613 förskott, 7385/7381 for a benefit co-payment) and may
- * name any account.
+ * (2794 fackavgift, 1613 förskott, 2750 utmätning, 7385/7381 for a benefit
+ * co-payment) and may name any account but the run's own tax accounts
+ * (isRunComputedTaxAccount).
  */
 import { isCalculatedLineType } from '@/lib/salary/calculated-line-items'
+import { isRunComputedTaxAccount } from '@/lib/salary/agi/run-tax-accounts'
+
+// 2710-2739, where the run books its own tax and avgifter: no payslip or
+// recurring row may name one, whatever its type. Re-exported so the line
+// commands and the forms share this module.
+export { isRunComputedTaxAccount }
 
 export type LineAccountOverride = 'none' | 'class_7' | 'any'
+
+/** The refusal every door that writes a row account answers (VALIDATION_ERROR on account_number). */
+export const RUN_COMPUTED_TAX_ACCOUNT_MESSAGE =
+  'Konto 2710-2739 bokförs av lönekörningen själv. Extra skatteavdrag läggs på den anställda ' +
+  '(extra skatt: extra_tax_amount eller extra_tax_percentage), så att det kommer med i arbetsgivardeklarationen.'
 
 // Utlägg, the rounding row and the text row. A vacation row is a pay row:
 // no register writes it, and the amount it carries (a semestertillägg, a
@@ -44,6 +56,7 @@ export function lineAccountOverride(itemType: string): LineAccountOverride {
 /** Whether `account` is a number the row's override may name. */
 export function isAllowedOverrideAccount(itemType: string, account: string): boolean {
   if (!/^\d{4}$/.test(account)) return false
+  if (isRunComputedTaxAccount(account)) return false
   const rule = lineAccountOverride(itemType)
   if (rule === 'none') return false
   return rule === 'any' || account.startsWith('7')

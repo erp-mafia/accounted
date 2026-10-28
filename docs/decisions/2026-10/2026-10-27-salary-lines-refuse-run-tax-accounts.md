@@ -1,0 +1,1 @@
+[2026-10-27] No payslip or recurring line may name an account in 2710-2739, for any item type and at every write door: the run books tax and avgifter there from the numbers the AGI declares, so a line there splits the books from the AGI; extra withholding is the employee's extra skatt.
