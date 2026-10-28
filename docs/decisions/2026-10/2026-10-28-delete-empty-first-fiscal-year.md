@@ -1,0 +1,1 @@
+[2026-10-28] An empty first räkenskapsår can be removed (delete_empty_fiscal_period, crm#1450): first year only, no verifikat/draft/voucher number/linked row, not locked/closed/filed. Merging two years that hold verifikat is left out: it renumbers series.

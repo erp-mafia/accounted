@@ -244,6 +244,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Fiscal periods, year-end, årsredovisning ───────────────────────
   'POST /api/bookkeeping/fiscal-periods': covered([`POST ${V}/fiscal-periods`, 'gnubok_create_fiscal_period']),
   'PATCH /api/bookkeeping/fiscal-periods/:id': covered([`PATCH ${V}/fiscal-periods/:id`, 'gnubok_update_fiscal_period']),
+  'DELETE /api/bookkeeping/fiscal-periods/:id': covered([`DELETE ${V}/fiscal-periods/:id`, 'gnubok_delete_fiscal_period']),
   'POST /api/bookkeeping/fiscal-periods/:id/lock': covered([`POST ${V}/fiscal-periods/:id/lock`, 'gnubok_lock_period']),
   'POST /api/bookkeeping/fiscal-periods/:id/unlock': covered([`POST ${V}/fiscal-periods/:id/unlock`, 'gnubok_unlock_period']),
   'POST /api/bookkeeping/fiscal-periods/:id/year-end': covered([`POST ${V}/fiscal-periods/:id/year-end`, 'gnubok_run_year_end']),

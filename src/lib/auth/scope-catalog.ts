@@ -492,6 +492,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_fiscal_period: 'bookkeeping:write',
   gnubok_close_fiscal_period_external: 'bookkeeping:write',
   gnubok_reopen_fiscal_period_external: 'bookkeeping:write',
+  gnubok_delete_fiscal_period: 'bookkeeping:write',
   gnubok_delete_account: 'bookkeeping:write',
   gnubok_activate_accounts: 'bookkeeping:write',
   gnubok_deactivate_accounts: 'bookkeeping:write',

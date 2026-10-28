@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `386`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `387`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -17,6 +17,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "DELETE /api/v1/companies/:companyId/employees/:id/recurring-lines/:lineId",
   "DELETE /api/v1/companies/:companyId/employees/:id/worked-days",
   "DELETE /api/v1/companies/:companyId/expense-claims/:id",
+  "DELETE /api/v1/companies/:companyId/fiscal-periods/:id",
   "DELETE /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures/:signatureId",
   "DELETE /api/v1/companies/:companyId/inbox-items/:id",
   "DELETE /api/v1/companies/:companyId/invoices/:id",
@@ -403,7 +404,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "import": 7,
   "inbox": 11,
   "invoicing": 33,
-  "ledger": 118,
+  "ledger": 119,
   "payments": 20,
   "payroll": 58,
   "platform": 29,

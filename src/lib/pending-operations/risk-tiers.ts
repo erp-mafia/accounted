@@ -180,6 +180,7 @@ const RISK_TIERS = {
   update_fiscal_period: 'medium',
   close_fiscal_period_external: 'high',
   reopen_fiscal_period_external: 'high',
+  delete_fiscal_period: 'high',
   delete_account: 'medium',
   activate_accounts: 'low',
   deactivate_accounts: 'low',

@@ -3662,6 +3662,18 @@ const PERIOD: Record<string, StructuredErrorEntry> = {
         'details.blockers lists each reason (code, message_sv and its facts): entries_outside / drafts_outside (verifikat or drafts dated outside the new dates), other_year_entries, opening_balance (posted opening balances pin the start), period_locked, period_closed, company_lock_date, sie_import_hold, opening_balance_review, year_end_entries, kontantmetod_cutoff, depreciation_posted, tax_depreciation, annual_report, tax_assessment, annual_filing, plus the BFL 3 kap. shape and chain rules. Send only name to rename.',
     },
   },
+  // crm#1450: only the company's first räkenskapsår, and only while it holds
+  // nothing, can be removed. The Swedish sentence names every blocker.
+  FISCAL_PERIOD_DELETE_BLOCKED: {
+    httpStatus: 409,
+    thrown_message_sv: true,
+    message_sv: 'Räkenskapsåret kan inte tas bort: bara ett tomt första räkenskapsår kan tas bort.',
+    message_en: 'The fiscal year cannot be removed: only an empty first fiscal year can be removed.',
+    remediation: {
+      description:
+        'details.blockers lists each reason (code, message_sv): not_first_year, only_year, period_closed, period_locked, company_lock_date, sie_import_hold, opening_balance_review, has_entries (any verifikat or draft), voucher_numbers_issued, sie_import, linked_records (tables), annual_filing.',
+    },
+  },
   FISCAL_PERIOD_CREATE_FAILED: {
     httpStatus: 500,
     message_sv: 'Räkenskapsåret kunde inte skapas. Försök igen.',

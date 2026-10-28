@@ -1895,6 +1895,78 @@ Example response `200`:
 
 ---
 
+### `DELETE /api/v1/companies/{companyId}/fiscal-periods/{id}`
+
+**Remove an empty first fiscal year.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Removes the company's earliest räkenskapsår when it holds nothing: no verifikat or draft of any status, no issued voucher number, no SIE import or other record pointing at it, not closed, locked, behind the lock date or filed. The next year becomes the first year, so its start may then move to the registration day (PATCH, 18-month cap). The removal is written to the audit log. Dry-runnable.
+
+**Use when:** An empty year lies before the company existed (seeded by an older onboarding) and keeps the real first year from starting on the registration day.
+**Do not use for:** Removing a year that holds verifikat (correct them, or reset the year first), a year after the first, or merging two years.
+
+**Pitfalls:**
+- Any reason answers 409 FISCAL_PERIOD_DELETE_BLOCKED; details.blockers names each (has_entries, not_first_year, only_year, period_locked, linked_records, ...).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+
+Response `200`:
+```ts
+{
+  data: {
+    id: string,
+    handle?: string,
+    name: string,
+    period_start: string,
+    period_end: string,
+    is_closed: boolean,
+    closed_at: string | null,
+    closed_externally: boolean,
+    locked_at: string | null,
+    previous_period_id: string | null,
+    created_at: string
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "id": "a8f1…",
+    "name": "Räkenskapsår 2027",
+    "period_start": "2027-01-01",
+    "period_end": "2027-12-31",
+    "is_closed": false,
+    "closed_at": null,
+    "closed_externally": false,
+    "locked_at": null,
+    "previous_period_id": "5c2e…",
+    "created_at": "2026-12-01T09:00:00Z"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `PATCH /api/v1/companies/{companyId}/fiscal-periods/{id}/arsredovisning/compliance`
 
 **Answer the årsredovisning compliance questions and record the confirmations.**

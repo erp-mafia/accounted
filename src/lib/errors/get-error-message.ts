@@ -715,7 +715,10 @@ export function getErrorMessage(
       // filed declaration) in Swedish domain copy, and the blockers are what
       // the user can act on: an English UI gets the English lead with them,
       // not the lead alone (accounted#18).
-      if (locale === 'en' && structured.code === 'FISCAL_PERIOD_DATES_BLOCKED') {
+      if (
+        locale === 'en' &&
+        (structured.code === 'FISCAL_PERIOD_DATES_BLOCKED' || structured.code === 'FISCAL_PERIOD_DELETE_BLOCKED')
+      ) {
         const blockers = (structured.details as { blockers?: unknown } | undefined)?.blockers
         const named = Array.isArray(blockers)
           ? blockers.flatMap((b: unknown) => {

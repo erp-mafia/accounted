@@ -1,11 +1,13 @@
 /**
  * /api/v1/companies/{companyId}/fiscal-periods/{id}: one räkenskapsår.
  *
- * PATCH : rename or re-date an open, unlocked year (operation fiscal-periods.update).
+ * PATCH  : rename or re-date an open, unlocked year (operation fiscal-periods.update).
+ * DELETE : remove an empty first year (operation fiscal-periods.delete, crm#1450).
  *
  * Contracts, docs and rules live in src/lib/operations/fiscal-periods.ts.
  */
 import { v1OperationHandler } from '@/lib/operations/v1'
-import { fiscalPeriodsUpdate } from '@/lib/operations/fiscal-periods'
+import { fiscalPeriodsDelete, fiscalPeriodsUpdate } from '@/lib/operations/fiscal-periods'
 
 export const PATCH = v1OperationHandler(fiscalPeriodsUpdate)
+export const DELETE = v1OperationHandler(fiscalPeriodsDelete)
