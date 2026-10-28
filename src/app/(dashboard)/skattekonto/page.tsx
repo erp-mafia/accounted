@@ -7,7 +7,6 @@ import { useTranslations, useLocale } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
 import { PageHeader } from '@/components/ui/page-header'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -19,7 +18,7 @@ import {
   TD_CLASS,
   QUIET_LINK_CLASS,
   HOVER_REVEAL_CLASS,
-  CHECKBOX_REVEAL_CLASS,
+  RowSelectCheckbox,
 } from '@/components/ui/dry-table'
 import { OpenInNewTab } from '@/components/ui/open-in-new-tab'
 import {
@@ -1283,17 +1282,14 @@ function SkattekontoRow({
           date column stays where it was. Selected rows keep it visible. */}
       <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
         {selectable && (
-          <Checkbox
+          <RowSelectCheckbox
             checked={isSelected}
             onClick={(e) => {
               shiftHeld.current = e.shiftKey
             }}
             onCheckedChange={() => onToggleSelect(row.id, shiftHeld.current)}
             aria-label={t('select_row_aria', { text: row.transaktionstext })}
-            className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
-              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
-            )}
+            className="absolute -left-5 top-1/2 -translate-y-1/2 md:-left-6"
           />
         )}
       </td>

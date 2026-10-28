@@ -15,7 +15,7 @@ import {
   TH_CLASS,
   TD_CLASS,
   QUIET_LINK_CLASS,
-  CHECKBOX_REVEAL_CLASS,
+  RowSelectCheckbox,
   HOVER_REVEAL_CLASS,
 } from '@/components/ui/dry-table'
 import { HelpPopover } from '@/components/ui/help-popover'
@@ -753,15 +753,10 @@ export default function ChartOfAccountsManager() {
                               )}
                             >
                               <td className={cn(TD_CLASS, 'w-[36px] pr-0 py-[9px]')}>
-                                <Checkbox
+                                <RowSelectCheckbox
                                   checked={selectedNumbers.has(account.account_number)}
                                   onCheckedChange={() => selection.toggle(account.account_number)}
                                   aria-label={t('select_row_aria', { number: account.account_number })}
-                                  className={cn(
-                                    'border-foreground',
-                                    CHECKBOX_REVEAL_CLASS,
-                                    selectedNumbers.has(account.account_number) && 'opacity-100',
-                                  )}
                                 />
                               </td>
                               <td className={cn(TD_CLASS, 'whitespace-nowrap tabular-nums')}>

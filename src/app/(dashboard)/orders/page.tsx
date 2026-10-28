@@ -9,7 +9,6 @@ import { PageHeader } from '@/components/ui/page-header'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -20,7 +19,7 @@ import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useToast } from '@/components/ui/use-toast'
 import { ContextPicker } from '@/components/common/ContextPicker'
-import { TH_CLASS, TD_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, RowSelectCheckbox, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -532,17 +531,14 @@ function OrderRow({
           date column stays where it was. Selected rows keep it visible. */}
       <td className={cn(TD_CLASS, 'relative w-0 !p-0 select-none')}>
         {selectable && (
-          <Checkbox
+          <RowSelectCheckbox
             checked={isSelected}
             onClick={(e) => {
               shiftHeld.current = e.shiftKey
             }}
             onCheckedChange={() => onToggleSelect(order.id, shiftHeld.current)}
             aria-label={t('select_order_aria', { number: order.order_number })}
-            className={cn(
-              'absolute -left-5 top-1/2 -translate-y-1/2 border-foreground duration-150 md:-left-6',
-              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
-            )}
+            className="absolute -left-5 top-1/2 -translate-y-1/2 md:-left-6"
           />
         )}
       </td>

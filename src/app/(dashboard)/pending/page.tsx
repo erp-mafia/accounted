@@ -12,7 +12,7 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { DataListEmpty, DataListLoading } from '@/components/ui/data-list'
 import { ContextPicker } from '@/components/common/ContextPicker'
 import { SegmentedControl } from '@/components/ui/segmented-control'
-import { CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
+import { RowSelectCheckbox, HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import {
   SlideOver,
@@ -1272,17 +1272,13 @@ export default function PendingOperationsPage() {
                     onClick={(e) => e.stopPropagation()}
                   >
                     {canBulkSelect && (
-                      <Checkbox
+                      <RowSelectCheckbox
                         checked={isSelected}
                         onClick={(e) => {
                           shiftHeld.current = e.shiftKey
                         }}
                         onCheckedChange={() => selection.toggle(op.id, shiftHeld.current)}
                         aria-label={t('select_operation_aria')}
-                        className={cn(
-                          'border-foreground duration-150',
-                          isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
-                        )}
                       />
                     )}
                   </span>
