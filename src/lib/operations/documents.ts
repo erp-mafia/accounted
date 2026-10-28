@@ -467,7 +467,10 @@ export const transactionsAttachDocument = defineOperation({
         document_invoice_date: preview.document_invoice_date,
         // Why the caller says a document that looks like another purchase's belongs here.
         ...(preview.mismatch_reason ? { mismatch_reason: preview.mismatch_reason } : {}),
-        will_overwrite_existing: preview.replaces_document === true,
+        // A pinned document whose inbox item is matched to the row stays
+        // underlag: the new one is added beside it, nothing is overwritten.
+        will_overwrite_existing: preview.replaces_document === true && preview.previous_document_stays !== true,
+        adds_to_existing: preview.replaces_document === true && preview.previous_document_stays === true,
         existing_document_id: preview.replaces_document === true ? preview.previous_document_id : null,
         existing_document_file_name: preview.replaces_document === true ? preview.previous_document_file_name : null,
         existing_document_is_rakenskapsinformation: false,

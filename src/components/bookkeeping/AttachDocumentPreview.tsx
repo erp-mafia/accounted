@@ -1,5 +1,6 @@
 'use client'
 
+import { useTranslations } from 'next-intl'
 import { ArrowDownIcon, ExclamationTriangleIcon } from '@/components/icons'
 import { formatCurrency, formatDate } from '@/lib/utils'
 import { isUuid } from '@/lib/invariants/uuid'
@@ -34,7 +35,11 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
   const docCurrency = (data.document_currency as string) || txCurrency
   const docInvoiceDate = data.document_invoice_date as string | undefined
 
+  const t = useTranslations('pending')
   const willOverwrite = data.will_overwrite_existing === true
+  // The pinned document stays underlag (its inbox item is matched to the
+  // row): this one is added beside it, nothing is replaced (crm#1479).
+  const addsToExisting = !willOverwrite && data.adds_to_existing === true
   const existingDocName = data.existing_document_file_name as string | undefined
   // Fail safe: if the staging tool didn't explicitly assert the existing doc
   // is NOT räkenskapsinformation (i.e. `=== false`), treat overwrite as a
@@ -100,6 +105,13 @@ export function AttachDocumentPreview({ data, params, detail = false }: AttachDo
               du godkänner.
             </p>
           </div>
+        </div>
+      )}
+      {addsToExisting && (
+        <div className="rounded-lg border border-border bg-muted/30 p-2 text-xs text-muted-foreground">
+          {existingDocName
+            ? t('attach_adds_to_existing', { file: existingDocName })
+            : t('attach_adds_to_existing_unnamed')}
         </div>
       )}
       {willOverwrite && !existingIsAccounting && (

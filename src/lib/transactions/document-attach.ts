@@ -73,6 +73,30 @@ export interface DetachDocumentResult {
 }
 
 /**
+ * Whether a pinned document stays underlag when another one takes the pin:
+ * the inbox item it came from is matched to this transaction (an Inkorg drop,
+ * a match, an earlier attach), so the booking links it as well. Only a
+ * document with no such item leaves with the pin.
+ */
+async function previousDocumentStays(
+  supabase: OperationContext['supabase'],
+  companyId: string,
+  transactionId: string,
+  documentId: string,
+): Promise<boolean | Error> {
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id')
+    .eq('company_id', companyId)
+    .eq('document_id', documentId)
+    .eq('matched_transaction_id', transactionId)
+    .is('created_supplier_invoice_id', null)
+    .limit(1)
+  if (error) return new Error(error.message)
+  return Array.isArray(data) && data.length > 0
+}
+
+/**
  * Pin document_id to the transaction. Idempotent: attaching the document
  * already pinned is a no-op success; attaching another replaces the pin
  * (logged as a rättelse) unless the current one is räkenskapsinformation.
@@ -153,7 +177,8 @@ export async function attachDocumentToTransaction(
   if (options.dryRun) {
     // What the document says (the hints the pairing was chosen on), and who
     // else already holds it: one document normally backs one purchase.
-    const [{ data: inbox }, claims] = await Promise.all([
+    const replacesPin = previousDocumentId != null && previousDocumentId !== documentId
+    const [{ data: inbox }, claims, previousStays] = await Promise.all([
       supabase
         .from('invoice_inbox_items')
         .select('extracted_data')
@@ -162,8 +187,10 @@ export async function attachDocumentToTransaction(
         .limit(1)
         .maybeSingle(),
       loadDocumentClaims(supabase, companyId, [documentId]).catch((error: unknown) => error as Error),
+      replacesPin ? previousDocumentStays(supabase, companyId, transactionId, previousDocumentId) : Promise.resolve(false),
     ])
     if (claims instanceof Error) return failed(claims)
+    if (previousStays instanceof Error) return failed(previousStays)
     const extracted = (inbox?.extracted_data ?? {}) as {
       supplier?: { name?: string }
       invoice?: { currency?: string; invoiceDate?: string }
@@ -187,7 +214,11 @@ export async function attachDocumentToTransaction(
         document_invoice_date: extracted.invoice?.invoiceDate || null,
         previous_document_id: previousDocumentId,
         previous_document_file_name: previousFileName,
-        replaces_document: previousDocumentId != null && previousDocumentId !== documentId,
+        replaces_document: replacesPin,
+        // The replaced pin still reaches the booking through its inbox item,
+        // matched to this transaction: both documents become underlag, the
+        // new one is added (lib/transactions/inbox-underlag.ts).
+        previous_document_stays: replacesPin && previousStays === true,
         transaction_booked: tx.journal_entry_id != null,
         journal_entry_id: (tx.journal_entry_id as string | null) ?? null,
         shared_document_warning: sharedDocumentWarning(claims.get(documentId) ?? [], { transaction_id: transactionId }),

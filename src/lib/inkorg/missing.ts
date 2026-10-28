@@ -80,6 +80,54 @@ export function splitMissing<T extends Pick<MissingPurchase, 'id'>>(
   return { needsYou, onTheWay: way }
 }
 
+/**
+ * A purchase that got its underlag on this page, and the files dropped on it.
+ * Its row stays where it was, marked, until the page is left (crm#1479): the
+ * rows under the pointer never shift mid-flow, so the next file is not dropped
+ * on the neighbour that slid into its place, and a second document for the
+ * same purchase (two invoices, one payment) still has its row to land on.
+ */
+export interface AttachedHere {
+  purchase: MissingPurchase
+  files: string[]
+}
+
+/** The page's record after `fileName` became underlag of `purchase`. */
+export function noteAttached(
+  current: ReadonlyMap<string, AttachedHere>,
+  purchase: MissingPurchase,
+  fileName: string,
+): ReadonlyMap<string, AttachedHere> {
+  const next = new Map(current)
+  next.set(purchase.id, { purchase, files: [...(current.get(purchase.id)?.files ?? []), fileName] })
+  return next
+}
+
+/** Ångra released the last file dropped on the purchase: one file less, the row gone with the last. */
+export function noteReleased(current: ReadonlyMap<string, AttachedHere>, purchaseId: string): ReadonlyMap<string, AttachedHere> {
+  const entry = current.get(purchaseId)
+  if (!entry) return current
+  const next = new Map(current)
+  const files = entry.files.slice(0, -1)
+  if (files.length === 0) next.delete(purchaseId)
+  else next.set(purchaseId, { ...entry, files })
+  return next
+}
+
+/**
+ * The list with the purchases attached on this page back in it, in queue
+ * order. One the list still has (a read that has not caught up yet) is not
+ * shown twice; with none, the list is returned as it was.
+ */
+export function keepAttachedInPlace<T extends Pick<MissingPurchase, 'id' | 'date'>>(
+  missing: readonly T[],
+  attached: readonly T[],
+): T[] {
+  const listed = new Set(missing.map((p) => p.id))
+  const back = attached.filter((p) => !listed.has(p.id))
+  return back.length === 0 ? [...missing] : orderMissing([...missing, ...back])
+}
+
 /** One month of the list: `month` is YYYY-MM. */
 export interface MonthBand<T> {
   month: string

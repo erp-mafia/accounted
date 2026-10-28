@@ -4,9 +4,12 @@ import {
   bandByMonth,
   canAddPortal,
   dragCarriesFiles,
+  keepAttachedInPlace,
   looksLikeCardPurchase,
   MAX_MISSING_ACTIONS,
   missingDecision,
+  noteAttached,
+  noteReleased,
   orderMissing,
   purchaseBankText,
   purchaseName,
@@ -246,5 +249,35 @@ describe('purchaseDisplay', () => {
 
   it("sets a bank merchant name in capitals as a person reads it, and keeps the bank's text as written", () => {
     expect(purchaseDisplay({ merchant_name: 'BYGGHANDELN SOLNA', description: 'BYGGHANDELN SOLNA 0412' })).toEqual({ name: 'Bygghandeln Solna', vendor: null, bankText: 'BYGGHANDELN SOLNA 0412' })
+  })
+})
+
+// crm#1479: a purchase dropped on keeps its row, so the next file is not
+// dropped on the neighbour that slid into its place.
+describe('a purchase attached on the page keeps its row', () => {
+  const a = purchase({ id: 'a', date: '2026-10-14' })
+  const b = purchase({ id: 'b', date: '2026-10-13' })
+  const c = purchase({ id: 'c', date: '2026-10-12' })
+
+  it('puts the attached purchase back where it was once the list no longer has it', () => {
+    // b got its underlag: the read leaves it out, the page keeps it in place.
+    expect(keepAttachedInPlace([a, c], [b]).map((p) => p.id)).toEqual(['a', 'b', 'c'])
+  })
+
+  it('never shows one twice while the read has not caught up, and leaves the list alone with none', () => {
+    expect(keepAttachedInPlace([a, b, c], [b]).map((p) => p.id)).toEqual(['a', 'b', 'c'])
+    const list = [c, a]
+    expect(keepAttachedInPlace(list, [])).toEqual(list)
+  })
+
+  it('records each file dropped on the purchase, and Ångra takes back the last one', () => {
+    let attached = noteAttached(new Map(), b, 'faktura-0010.pdf')
+    attached = noteAttached(attached, b, 'faktura-0011.pdf')
+    expect(attached.get('b')).toEqual({ purchase: b, files: ['faktura-0010.pdf', 'faktura-0011.pdf'] })
+    attached = noteReleased(attached, 'b')
+    expect(attached.get('b')?.files).toEqual(['faktura-0010.pdf'])
+    attached = noteReleased(attached, 'b')
+    expect(attached.has('b')).toBe(false)
+    expect(noteReleased(attached, 'b')).toBe(attached)
   })
 })

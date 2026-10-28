@@ -16,7 +16,16 @@ import { LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { ALL_STARTABLE, type InkorgStartable } from '@/lib/inkorg/decision'
 import { focusAfterChange, focusKeyAction, neighbour } from '@/lib/inkorg/focus'
 import { companionOf, doorOf, doorsInUse, needCount, parseViewKey, queueFor, recentlyRoutedAway, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
-import { dragCarriesFiles, missingDecision, orderMissing, splitMissing } from '@/lib/inkorg/missing'
+import {
+  dragCarriesFiles,
+  keepAttachedInPlace,
+  missingDecision,
+  noteAttached,
+  noteReleased,
+  orderMissing,
+  splitMissing,
+  type AttachedHere,
+} from '@/lib/inkorg/missing'
 import { portalRows, purchasesAtPortal } from '@/lib/inkorg/portals'
 import { AddMailboxDialog } from './AddMailboxDialog'
 import { useDoorName } from './door-icon'
@@ -173,6 +182,21 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     const all = [...missingParts.needsYou, ...missingParts.onTheWay]
     return portal ? purchasesAtPortal(all, portal) : all
   }, [missingParts, portal])
+  // Purchases that got their underlag here keep their row, marked, until the page is left
+  // (crm#1479): nothing slides under the pointer, and a second file can join the same purchase.
+  const [attachedHere, setAttachedHere] = useState<ReadonlyMap<string, AttachedHere>>(() => new Map())
+  const purchasesRef = useRef(purchases)
+  useEffect(() => {
+    purchasesRef.current = purchases
+  }, [purchases])
+  const missingShown = useMemo(() => {
+    const attached = [...attachedHere.values()].map((a) => a.purchase)
+    return keepAttachedInPlace(missing, portal ? purchasesAtPortal(attached, portal) : attached)
+  }, [missing, attachedHere, portal])
+  const attachedFiles = useMemo(
+    () => new Map([...attachedHere].map(([id, a]) => [id, a.files] as const)),
+    [attachedHere],
+  )
   const missingExpectations = useMemo(
     () => (portal && expectations ? expectations.filter((e) => e.portal?.vendor === portal) : expectations),
     [expectations, portal],
@@ -411,7 +435,13 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   // A purchase got its underlag: "Klart" while it leaves, then the list is read
   // again and the next one opens by itself (the queue effect above).
   const onPurchaseAttached = useCallback(
-    async (purchaseId: string) => {
+    async (purchaseId: string, fileName: string) => {
+      // Read before the refresh takes it out of the list; a second file finds it kept already.
+      const purchase = purchasesRef.current.find((p) => p.id === purchaseId)
+      setAttachedHere((current) => {
+        const known = purchase ?? current.get(purchaseId)?.purchase
+        return known ? noteAttached(current, known, fileName) : current
+      })
       setFinishingId(purchaseId)
       await refresh()
       window.setTimeout(() => setFinishingId((f) => (f === purchaseId ? null : f)), DONE_MARK_MS)
@@ -427,6 +457,7 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
   }, [focusId, view.kind])
   const onPurchaseReleased = useCallback(
     async (purchaseId: string) => {
+      setAttachedHere((current) => noteReleased(current, purchaseId))
       await refresh()
       if (!focusedMissing.current) return
       setMotionState({ direction: -1, completed: false })
@@ -672,7 +703,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
               {view.kind === 'missing' ? (
                 <MissingUnderlagList
                   portal={portal ?? undefined}
-                  purchases={missing}
+                  purchases={missingShown}
+                  attached={attachedFiles}
                   state={purchasesState}
                   routes={missingContext.routes}
                   onTheWay={onTheWay}

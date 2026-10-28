@@ -732,6 +732,8 @@
     "read_more_skv": "Read more at Skatteverket"
   },
   "pending": {
+    "attach_adds_to_existing": "Added next to {file}: both become supporting documents when the transaction is booked.",
+    "attach_adds_to_existing_unnamed": "Added next to the document already there: both become supporting documents when the transaction is booked.",
     "type_confirm_supplier_payee": "Approve a supplier's new bank details",
     "type_connect_pos_venue": "Connect point of sale",
     "type_disconnect_pos_connection": "Disconnect point of sale",
@@ -17162,6 +17164,8 @@
     "missing_hint_photo_whatsapp": "Photograph the receipt or send it on WhatsApp",
     "missing_hint_intake": "Can be mailed to the intake address",
     "missing_row_drop": "Drop to attach it to the purchase",
+    "missing_row_attached": "{count, plural, =1 {Attached: {file}} other {# documents attached}}",
+    "missing_row_drop_more": "Drop to add another document to the purchase",
     "missing_drop_on_row": "Drop the file on the purchase it belongs to",
     "missing_group_need": "Needs you",
     "missing_group_way": "On its way",
