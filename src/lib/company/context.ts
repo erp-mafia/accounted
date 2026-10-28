@@ -2,7 +2,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { cookies } from 'next/headers'
 import type { EntityType } from '@/types'
-import { CompanyContextError, getActiveCompanyId } from '@/lib/company/active-company'
+import { CompanyContextError, getActiveCompanyId, type ActiveCompanyFacts } from '@/lib/company/active-company'
 import { isMembershipActive } from '@/lib/entitlements/multi-user'
 import { httpOnlyCookieOptions } from '@/lib/supabase/cookie-options'
 
@@ -205,13 +205,15 @@ export async function setActiveCompany(
 
 /**
  * Get the active company ID for API routes.
- * Throws if no company context can be resolved.
+ * Throws if no company context can be resolved. `facts`, when given, is
+ * filled with what the resolution reported (the caller's role).
  */
 export async function requireCompanyId(
   supabase: SupabaseClient,
-  userId: string
+  userId: string,
+  facts?: ActiveCompanyFacts
 ): Promise<string> {
-  const companyId = await getActiveCompanyId(supabase, userId)
+  const companyId = await getActiveCompanyId(supabase, userId, facts)
   if (!companyId) {
     throw new Error('No company context')
   }

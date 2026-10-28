@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server'
 import { extensionRegistry } from '@/lib/extensions/registry'
 import { createExtensionContext } from '@/lib/extensions/context-factory'
 import { requireCompanyId } from '@/lib/company/context'
+import type { ActiveCompanyFacts } from '@/lib/company/active-company'
+import { isInvoicerRole } from '@/lib/auth/invoicer-role'
 import {
   companyAdminRequiredResponse,
   isCompanyAdmin,
@@ -274,7 +276,26 @@ async function handleRequest(
     return decorateResponse(response, requestId)
   }
 
-  const companyId = await requireCompanyId(supabase, user.id)
+  // The resolver also reports the caller's role, so the gates below need no
+  // company_members read of their own.
+  const resolved: ActiveCompanyFacts = {}
+  const companyId = await requireCompanyId(supabase, user.id, resolved)
+
+  // The invoicing-only role reaches no extension route: INVOICER_ROUTES
+  // lists none, and a handler may read through a service client that RLS
+  // does not narrow (lib/auth/invoicer-role.ts).
+  if (isInvoicerRole(resolved.role)) {
+    log.warn('extension call blocked: invoicer role', { userId: user.id })
+    return decorateResponse(
+      errorResponseFromCode('FORBIDDEN', log, {
+        requestId,
+        messageSv: 'Rollen Fakturering når bara kunder, fakturor, offerter, order och artiklar.',
+        messageEn: 'The Invoicing role reaches only customers, invoices, quotes, orders and articles.',
+        details: { code: 'INVOICER_ROUTE_NOT_ALLOWED' },
+      }),
+      requestId,
+    )
+  }
 
   // Role gates the route declares, checked as withRouteContext checks them,
   // so a handler never repeats them: requireAdmin asks the database's own
@@ -284,7 +305,7 @@ async function handleRequest(
       return decorateResponse(companyAdminRequiredResponse(log, requestId), requestId)
     }
   } else if (route.requireWrite) {
-    const writeCheck = await requireWritePermission(supabase, user.id, { companyId })
+    const writeCheck = await requireWritePermission(supabase, user.id, { companyId, role: resolved.role })
     if (!writeCheck.ok) {
       log.warn('extension call blocked: write permission denied', { userId: user.id })
       return decorateResponse(writeCheck.response, requestId)

@@ -40,4 +40,4 @@ export const POST = withRouteContext('arkiv.finding', async (request, ctx, { par
     captureArkivEvent('arkiv_missing_resolved', { companyId: ctx.companyId, userId: ctx.user.id, rule: closed.detail.rule ?? null, resolution, note: note ?? null, by: 'person' })
   }
   return NextResponse.json({ data: { finding_id: id, status: resolution === 'dismissed' ? 'dismissed' : 'resolved' } })
-})
+}, { requireWrite: true })
