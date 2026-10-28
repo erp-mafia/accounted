@@ -8,7 +8,7 @@
  * and a second field in the same IU; before #82 that second field was FK131.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { generateAgiDeclaration } from '../agi/generate-declaration'
+import { decideAgiWrite, generateAgiDeclaration } from '../agi/generate-declaration'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { eventBus } from '@/lib/events'
 import { roundOre } from '@/lib/money'
@@ -265,8 +265,8 @@ describe('generateAgiDeclaration: redovisningsperiod follows the payout month (#
       { data: PROFILE },
       { data: [REGULAR_ROW] },
       { data: [] },
-      { data: { id: 'agi-0', salary_run_id: 'run-0' } }, // declared by the run this one corrects
-      { data: null }, // agi_declarations update
+      { data: { id: 'agi-0', salary_run_id: 'run-0', status: 'generated', submitted_at: null } }, // declared by the run this one corrects
+      { data: [{ id: 'agi-0' }] }, // agi_declarations update
       { data: null }, // salary_runs update
     ])
 
@@ -295,7 +295,7 @@ describe('generateAgiDeclaration: a correction run starts its declaration unfile
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
       { data: stored }, // agi_declarations for the period
-      { data: null }, // agi_declarations update
+      { data: [{ id: stored.id }] }, // agi_declarations update
       { data: null }, // salary_runs agi_generated_at stamp
     ])
   }
@@ -306,6 +306,8 @@ describe('generateAgiDeclaration: a correction run starts its declaration unfile
     enqueueOver(enqueueMany, { ...RUN, status: 'booked', is_correction: true, corrects_run_id: 'run-0' }, {
       id: 'agi-0',
       salary_run_id: 'run-0',
+      status: 'submitted',
+      submitted_at: '2026-07-09T08:30:00Z',
     })
 
     const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
@@ -333,7 +335,7 @@ describe('generateAgiDeclaration: a correction run starts its declaration unfile
 
   it("leaves the filing state alone when a run regenerates its own declaration", async () => {
     const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
-    enqueueOver(enqueueMany, RUN, { id: 'agi-1', salary_run_id: 'run-1' })
+    enqueueOver(enqueueMany, RUN, { id: 'agi-1', salary_run_id: 'run-1', status: 'generated', submitted_at: null })
 
     const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
 
@@ -1465,6 +1467,8 @@ describe('generateAgiDeclaration: writeOnlyIfChanged (submit-time regeneration, 
     return {
       id: 'agi-1',
       salary_run_id: 'run-1',
+      status: 'generated',
+      submitted_at: null,
       xml_content: first.xml.replace(
         /<gem:Skapad>[^<]*<\/gem:Skapad>/,
         '<gem:Skapad>2026-07-01T08:00:00</gem:Skapad>',
@@ -1488,7 +1492,7 @@ describe('generateAgiDeclaration: writeOnlyIfChanged (submit-time regeneration, 
       { data: [REGULAR_ROW] },
       { data: [] }, // salary_absence_days
       { data: stored }, // agi_declarations for the period
-      { data: null }, // agi_declarations update
+      { data: [{ id: 'agi-1' }] }, // agi_declarations update
       { data: null }, // salary_runs agi_generated_at stamp
     ])
     const emitted: unknown[] = []
@@ -1507,6 +1511,8 @@ describe('generateAgiDeclaration: writeOnlyIfChanged (submit-time regeneration, 
     const { result, db, emitted } = await regenerate(stored)
 
     expect(result).toMatchObject({ ok: true, unchanged: true, agiDeclarationId: 'agi-1', xml: stored.xml_content })
+    // Matching is not filed: the submit may still post it.
+    expect(result.ok && result.filed).toBeFalsy()
     expect(db.findCall('agi_declarations', 'update')).toBeUndefined()
     expect(db.findCall('agi_declarations', 'insert')).toBeUndefined()
     // agi_generated_at keeps its stamp: an open signing draft does not turn stale.
@@ -1622,5 +1628,312 @@ describe('generateAgiDeclaration: regionalt stöd (PH 208)', () => {
     expect(result.totals.totalAvgifterAmount).toBe(19793)
     expect(result.xml).not.toContain('faltkod="471"')
     expect(result.xml).not.toContain('faltkod="476"')
+  })
+})
+
+describe('generateAgiDeclaration: a filed declaration is never rewritten (#58)', () => {
+  const FILED_XML = '<?xml version="1.0" encoding="UTF-8"?><Skatteverket><gem:Skapad>2026-07-08T10:00:00</gem:Skapad>filed</Skatteverket>'
+  const FILED_RUN = {
+    ...RUN,
+    status: 'booked',
+    agi_generated_at: '2026-07-08T10:00:00Z',
+    agi_submitted_at: '2026-07-09T08:30:00Z',
+  }
+  const FILED_ROW = {
+    id: 'agi-1',
+    salary_run_id: 'run-1',
+    status: 'submitted',
+    submitted_at: '2026-07-09T08:30:00Z',
+    xml_content: FILED_XML,
+    total_gross: 40000,
+    total_tax: 11900,
+    total_avgifter_basis: 40000,
+    total_avgifter: 12568,
+    employee_count: 1,
+  }
+
+  function enqueueBefore(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    run: Record<string, unknown>,
+    afterAbsence: { data?: unknown; error?: unknown }[],
+  ) {
+    enqueueMany([
+      { data: run },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] }, // salary_absence_days
+      ...afterAbsence,
+    ])
+  }
+
+  async function generate(db: ReturnType<typeof createQueuedMockSupabase>, extra: Record<string, unknown> = {}) {
+    const emitted: unknown[] = []
+    const off = eventBus.on('agi.generated', async (event) => {
+      emitted.push(event)
+    })
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS, ...extra })
+    off()
+    return { result, emitted }
+  }
+
+  function expectNothingWritten(db: ReturnType<typeof createQueuedMockSupabase>) {
+    expect(db.findCall('agi_declarations', 'update')).toBeUndefined()
+    expect(db.findCall('agi_declarations', 'insert')).toBeUndefined()
+    expect(db.findCall('salary_runs', 'update')).toBeUndefined()
+  }
+
+  it('answers a filed run with its stored XML and writes, restamps and emits nothing', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueBefore(db.enqueueMany, FILED_RUN, [{ data: FILED_ROW }])
+
+    const { result, emitted } = await generate(db)
+
+    expect(result).toMatchObject({ ok: true, xml: FILED_XML, agiDeclarationId: 'agi-1', unchanged: true, filed: true })
+    // The figures next to the filed XML are the filed ones, not today's (12 000 withheld today).
+    expect(result).toMatchObject({ employeeCount: 1, totals: { totalTax: 11900, totalAvgifterAmount: 12568 } })
+    expectNothingWritten(db)
+    expect(emitted).toHaveLength(0)
+  })
+
+  it('treats a receipt on its own row as filed when the run stamp is missing (the kvittens stamp failed)', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueBefore(db.enqueueMany, { ...FILED_RUN, agi_submitted_at: null }, [{ data: FILED_ROW }])
+
+    const { result } = await generate(db)
+
+    expect(result).toMatchObject({ ok: true, xml: FILED_XML, unchanged: true })
+    expectNothingWritten(db)
+  })
+
+  it('a filed run stays filed with writeOnlyIfChanged too: the stored XML, not a fresh one', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueBefore(db.enqueueMany, FILED_RUN, [{ data: FILED_ROW }])
+
+    const { result } = await generate(db, { writeOnlyIfChanged: true })
+
+    expect(result).toMatchObject({ ok: true, xml: FILED_XML, unchanged: true })
+    expectNothingWritten(db)
+  })
+
+  it('a correction run still takes over the filed row of the run it corrects, compared on what it read', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueBefore(db.enqueueMany, { ...RUN, status: 'booked', is_correction: true, corrects_run_id: 'run-0' }, [
+      { data: { ...FILED_ROW, id: 'agi-0', salary_run_id: 'run-0' } },
+      { data: [{ id: 'agi-0' }] }, // agi_declarations update
+      { data: null }, // salary_runs stamp
+    ])
+
+    const { result } = await generate(db)
+
+    expect(result).toMatchObject({ ok: true, agiDeclarationId: 'agi-0' })
+    expect(result.ok && result.unchanged).toBeFalsy()
+    expect(db.findCall('agi_declarations', 'update')?.[0]).toMatchObject({ salary_run_id: 'run-1', status: 'generated' })
+    const filters = db.findCalls('agi_declarations', 'eq')
+    expect(filters).toContainEqual(['salary_run_id', 'run-0'])
+    expect(filters).toContainEqual(['status', 'submitted'])
+  })
+})
+
+describe('generateAgiDeclaration: unreadable state refuses instead of writing (#58)', () => {
+  function enqueueUntilAbsence(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    absence: { data?: unknown; error?: unknown },
+    rest: { data?: unknown; error?: unknown }[] = [],
+  ) {
+    enqueueMany([
+      { data: RUN },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      absence,
+      ...rest,
+    ])
+  }
+
+  function expectNoDeclarationWrite(db: ReturnType<typeof createQueuedMockSupabase>) {
+    expect(db.findCall('agi_declarations', 'update')).toBeUndefined()
+    expect(db.findCall('agi_declarations', 'insert')).toBeUndefined()
+    expect(db.findCall('salary_runs', 'update')).toBeUndefined()
+  }
+
+  it('refuses when the absence days cannot be read, instead of filing without frånvarouppgifter', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueUntilAbsence(db.enqueueMany, { error: { message: 'timeout' } })
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
+    expectNoDeclarationWrite(db)
+  })
+
+  it("refuses when the period's declaration cannot be read, instead of inserting a second one", async () => {
+    const db = createQueuedMockSupabase()
+    enqueueUntilAbsence(db.enqueueMany, { data: [] }, [{ error: { message: 'timeout' } }])
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
+    expectNoDeclarationWrite(db)
+  })
+
+  it("refuses when the other run holding the period cannot be read, instead of taking over its declaration", async () => {
+    const db = createQueuedMockSupabase()
+    enqueueUntilAbsence(db.enqueueMany, { data: [] }, [
+      { data: { id: 'agi-2', salary_run_id: 'run-2', status: 'submitted', submitted_at: '2026-07-09T08:30:00Z' } },
+      { error: { message: 'timeout' } }, // salary_runs read of run-2
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'DATABASE_ERROR' })
+    expectNoDeclarationWrite(db)
+  })
+
+  it('treats another run it cannot find as live: a conflict, not a takeover', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueUntilAbsence(db.enqueueMany, { data: [] }, [
+      { data: { id: 'agi-2', salary_run_id: 'run-2', status: 'submitted', submitted_at: '2026-07-09T08:30:00Z' } },
+      { data: null }, // run-2 not found
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'AGI_PERIOD_CONFLICT', status: 409 })
+    expect(result.ok ? null : result.details).toMatchObject({ other_salary_run_id: 'run-2' })
+    expectNoDeclarationWrite(db)
+  })
+})
+
+describe('generateAgiDeclaration: every write compares and sets (#58)', () => {
+  const OWN_ROW = { id: 'agi-1', salary_run_id: 'run-1', status: 'generated', submitted_at: null }
+
+  function enqueueThrough(
+    enqueueMany: (results: { data?: unknown; error?: unknown }[]) => void,
+    rest: { data?: unknown; error?: unknown }[],
+  ) {
+    enqueueMany([
+      { data: RUN },
+      { data: COMPANY },
+      { data: SETTINGS },
+      { data: PROFILE },
+      { data: [REGULAR_ROW] },
+      { data: [] }, // salary_absence_days
+      ...rest,
+    ])
+  }
+
+  it('updates its own row only while it is still its own and unchanged in status', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueThrough(db.enqueueMany, [{ data: OWN_ROW }, { data: [{ id: 'agi-1' }] }, { data: null }])
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: true, agiDeclarationId: 'agi-1' })
+    const filters = db.findCalls('agi_declarations', 'eq')
+    expect(filters).toContainEqual(['id', 'agi-1'])
+    expect(filters).toContainEqual(['salary_run_id', 'run-1'])
+    expect(filters).toContainEqual(['status', 'generated'])
+    expect(db.findCall('salary_runs', 'update')?.[0]).toHaveProperty('agi_generated_at')
+  })
+
+  it('an insert that races onto another live run answers AGI_PERIOD_CONFLICT and overwrites nothing', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueThrough(db.enqueueMany, [
+      { data: null }, // no declaration yet
+      { error: { code: '23505', message: 'duplicate key value' } }, // insert lost the race
+      { data: { id: 'agi-2', salary_run_id: 'run-2', status: 'generated', submitted_at: null } },
+      { data: { id: 'run-2', status: 'booked', period_year: 2026, period_month: 6 } },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'AGI_PERIOD_CONFLICT' })
+    expect(db.findCall('agi_declarations', 'update')).toBeUndefined()
+    expect(db.findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('an insert that races its own run updates the row that run just wrote', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueThrough(db.enqueueMany, [
+      { data: null },
+      { error: { code: '23505', message: 'duplicate key value' } },
+      { data: OWN_ROW },
+      { data: [{ id: 'agi-1' }] },
+      { data: null },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: true, agiDeclarationId: 'agi-1', isCorrection: true })
+    expect(db.findCall('agi_declarations', 'update')?.[0]).toMatchObject({ salary_run_id: 'run-1', is_correction: true })
+  })
+
+  it('a row filed while the XML was built is answered with its stored XML, not overwritten', async () => {
+    const db = createQueuedMockSupabase()
+    const filedXml = '<Skatteverket>filed meanwhile</Skatteverket>'
+    enqueueThrough(db.enqueueMany, [
+      { data: OWN_ROW },
+      { data: [] }, // compare-and-set missed: the status moved on
+      { data: { ...OWN_ROW, status: 'submitted', submitted_at: '2099-01-01T00:00:00Z', xml_content: filedXml } },
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: true, xml: filedXml, unchanged: true, filed: true })
+    expect(db.findCalls('agi_declarations', 'update')).toHaveLength(1)
+    expect(db.findCall('salary_runs', 'update')).toBeUndefined()
+  })
+
+  it('two missed compare-and-sets answer AGI_GENERATION_CONFLICT (409) instead of writing blind', async () => {
+    const db = createQueuedMockSupabase()
+    enqueueThrough(db.enqueueMany, [
+      { data: OWN_ROW },
+      { data: [] }, // first compare-and-set missed
+      { data: OWN_ROW }, // re-read
+      { data: [] }, // second compare-and-set missed
+    ])
+
+    const result = await generateAgiDeclaration({ supabase: db.supabase as never, ...ARGS })
+
+    expect(result).toMatchObject({ ok: false, code: 'AGI_GENERATION_CONFLICT', status: 409 })
+    expect(db.findCalls('agi_declarations', 'update')).toHaveLength(2)
+    expect(db.findCall('salary_runs', 'update')).toBeUndefined()
+  })
+})
+
+describe('decideAgiWrite: the one write decision (#58)', () => {
+  const run = { id: 'run-1', corrects_run_id: 'run-0', agi_generated_at: '2026-07-08T10:00:00Z', agi_submitted_at: null }
+  const row = (salary_run_id: string | null, status = 'generated', submitted_at: string | null = null) => ({
+    salary_run_id,
+    status,
+    submitted_at,
+  })
+
+  it('inserts when the period has no declaration', () => {
+    expect(decideAgiWrite(null, run, null)).toBe('insert')
+  })
+
+  it("updates the run's own unfiled row, and never its filed one", () => {
+    expect(decideAgiWrite(row('run-1'), run, null)).toBe('update_own')
+    expect(decideAgiWrite(row('run-1', 'pending_signature'), run, null)).toBe('update_own')
+    expect(decideAgiWrite(row('run-1', 'submitted', '2026-07-09T08:30:00Z'), run, null)).toBe('filed')
+    expect(decideAgiWrite(row('run-1'), { ...run, agi_submitted_at: '2026-07-09T08:30:00Z' }, null)).toBe('filed')
+    // A receipt older than this run's XML is the original's, kept by an old takeover: not this run's filing.
+    expect(decideAgiWrite(row('run-1', 'submitted', '2026-07-01T08:30:00Z'), run, null)).toBe('update_own')
+  })
+
+  it('takes over the row of the run it corrects, of a corrected run, or of no run', () => {
+    expect(decideAgiWrite(row('run-0', 'submitted', '2026-07-09T08:30:00Z'), run, null)).toBe('take_over')
+    expect(decideAgiWrite(row('run-9'), run, { status: 'corrected' })).toBe('take_over')
+    expect(decideAgiWrite(row(null), run, null)).toBe('take_over')
+  })
+
+  it("refuses another live run's row, and one whose run it cannot find", () => {
+    expect(decideAgiWrite(row('run-9'), run, { status: 'booked' })).toBe('conflict')
+    expect(decideAgiWrite(row('run-9'), run, null)).toBe('conflict')
+    expect(decideAgiWrite(row('run-9'), { ...run, corrects_run_id: null }, null)).toBe('conflict')
   })
 })

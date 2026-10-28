@@ -7252,6 +7252,17 @@ const SALARY: Record<string, StructuredErrorEntry> = {
     message_en:
       'Another salary run is already declared for the same reporting period (payout month). One employer declaration per month must cover every payment made that month: merge the runs or correct the existing declaration.',
   },
+  // generateAgiDeclaration writes the period's declaration only if it still
+  // holds what was read (salary run and status); two misses in a row answer
+  // this instead of writing over whatever got there first (#58).
+  AGI_GENERATION_CONFLICT: {
+    httpStatus: 409,
+    message_sv:
+      'Arbetsgivardeklarationen för perioden ändrades medan den skapades, till exempel av en annan generering eller en inlämning. Ladda om och försök igen.',
+    message_en:
+      'The employer declaration for the period changed while it was being generated, for example by another generation or a submission. Reload and try again.',
+    retryable: true,
+  },
   // Fora's monthly file (lib/salary/fora): details.issues names each blocker.
   FORA_REPORT_INCOMPLETE: {
     httpStatus: 400,

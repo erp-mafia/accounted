@@ -1376,4 +1376,32 @@ describe('POST /salary-runs/:id/generate-agi', () => {
     expect(body.error.code).toBe('AGI_INCOMPLETE_DATA')
     expect(body.error.details.missing_fields).toContain('contactPhone')
   })
+
+  it('answers 409 AGI_GENERATION_CONFLICT when the declaration changed under the generation (#58)', async () => {
+    mockServiceClient.mockReturnValue(
+      agiClient({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        idempotency_keys: { data: null, error: null },
+      }),
+    )
+    mocks.generateAgiDeclaration.mockResolvedValue({
+      ok: false,
+      code: 'AGI_GENERATION_CONFLICT',
+      // No status: the 409 must come from the error registry.
+      details: { period: '2026-05' },
+    })
+
+    const res = await generateAgi(
+      makeRequest(
+        `https://x.test/api/v1/companies/${COMPANY_ID}/salary-runs/${RUN_ID}/generate-agi`,
+        { method: 'POST' },
+      ),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error.code).toBe('AGI_GENERATION_CONFLICT')
+    expect(body.error.details.period).toBe('2026-05')
+  })
 })

@@ -222,6 +222,18 @@ describe('refreshAgiUnderlag (issue #69: submit regenerates an unfiled underlag)
     })
   })
 
+  it('answers filed when the declaration is filed between this check and the generator\'s own read', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: BOOKED_RUN })
+    enqueue({ data: { id: 'agi-1', status: 'pending_signature', submitted_at: null } })
+    mockGenerateAgiDeclaration.mockResolvedValue({ ...GENERATED, unchanged: true, filed: true })
+
+    await expect(refreshAgiUnderlag(supabase as never, 'company-1', 'user-1', 'sr-1')).resolves.toEqual({
+      ok: true,
+      outcome: 'filed',
+    })
+  })
+
   it('regenerates a declaration Skatteverket refused at kontroll, the crm#1265 case', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: BOOKED_RUN })
