@@ -180,10 +180,10 @@ describe('GET /reports/general-ledger: how the filter scopes the report', () => 
     })
   })
 
-  it('does not apply a parameter it does not document (from_date), and says so in X-Ignored-Query-Params', async () => {
-    const res = await call(generalLedger as Handler, 'general-ledger', `period_id=${PERIOD_ID}&from_date=2026-07-01`)
+  it('does not apply a parameter it does not document (from), and says so in X-Ignored-Query-Params', async () => {
+    const res = await call(generalLedger as Handler, 'general-ledger', `period_id=${PERIOD_ID}&from=2026-07-01`)
     expect(res.status).toBe(200)
-    expect(res.headers.get('X-Ignored-Query-Params')).toBe('from_date')
+    expect(res.headers.get('X-Ignored-Query-Params')).toBe('from')
     // The whole period, no filter: the parameter really was not applied.
     expect(mocks.generateGeneralLedger).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, PERIOD_ID, undefined, undefined, undefined)
   })
@@ -192,6 +192,49 @@ describe('GET /reports/general-ledger: how the filter scopes the report', () => 
     const res = await call(generalLedger as Handler, 'general-ledger', `period_id=${PERIOD_ID}&project=P001`)
     expect(res.status).toBe(400)
     expect((await res.json()).error.details.unknown_params).toEqual(['project'])
+    expect(mocks.generateGeneralLedger).not.toHaveBeenCalled()
+  })
+})
+
+describe('GET /reports/general-ledger with from_date + to_date (kontoanalys)', () => {
+  it('passes the window to the generator, which rolls earlier lines into the opening balance', async () => {
+    const res = await call(generalLedger as Handler, 'general-ledger', `period_id=${PERIOD_ID}&account_from=1930&account_to=1930&from_date=2026-03-01&to_date=2026-03-31`)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('X-Ignored-Query-Params')).toBeNull()
+    expect(mocks.generateGeneralLedger).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, PERIOD_ID, '1930', '1930', {
+      fromDate: '2026-03-01',
+      toDate: '2026-03-31',
+    })
+  })
+
+  it('accepts one bound alone', async () => {
+    const res = await call(generalLedger as Handler, 'general-ledger', `period_id=${PERIOD_ID}&from_date=2026-07-01`)
+    expect(res.status).toBe(200)
+    expect(mocks.generateGeneralLedger).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, PERIOD_ID, undefined, undefined, {
+      fromDate: '2026-07-01',
+    })
+  })
+
+  it('combines the window with the dimension filter', async () => {
+    const res = await call(generalLedger as Handler, 'general-ledger', `${FILTER}&from_date=2026-07-01&to_date=2026-09-30`)
+    expect(res.status).toBe(200)
+    expect(mocks.generateGeneralLedger).toHaveBeenCalledWith(expect.anything(), COMPANY_ID, PERIOD_ID, undefined, undefined, {
+      dimensions: { '6': 'P001' },
+      fromDate: '2026-07-01',
+      toDate: '2026-09-30',
+    })
+  })
+
+  it.each([
+    ['outside the fiscal period', 'from_date=2025-12-01&to_date=2026-01-31'],
+    ['from_date after to_date', 'from_date=2026-05-01&to_date=2026-04-01'],
+    ['not a date', 'from_date=2026-13-45'],
+  ])('400 for a window %s, and never builds the ledger', async (_label, window) => {
+    const res = await call(generalLedger as Handler, 'general-ledger', `period_id=${PERIOD_ID}&${window}`)
+    expect(res.status).toBe(400)
+    const body = await res.json()
+    expect(body.error.code).toBe('VALIDATION_ERROR')
+    expect(body.error.details.fields).toEqual(['from_date', 'to_date'])
     expect(mocks.generateGeneralLedger).not.toHaveBeenCalled()
   })
 })
