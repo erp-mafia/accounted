@@ -1,6 +1,18 @@
 import { proposeSendLines } from '@/lib/bookkeeping/propose-send-lines'
 import { buildInvoiceCashLines } from '@/lib/bookkeeping/invoice-lines'
 import { computeLineNet, computeLineVat } from '@/lib/bookkeeping/invoice-line-amounts'
+import { isZeroRatedInvoiceTreatment, resolveLineVatTreatment } from '@/lib/bookkeeping/invoice-line-vat-treatment'
+import {
+  DEFAULT_DEFERRED_REVENUE_ACCOUNT,
+  isAccruedIncomeAccount,
+  itemHasAccrual,
+} from '@/lib/bookkeeping/accruals/account-suggestions'
+import {
+  accruedCostReleaseDates,
+  deferralReleaseDate,
+  listCalendarMonths,
+  maxIsoDate,
+} from '@/lib/bookkeeping/accruals/compute'
 import { roundOre } from '@/lib/money'
 import {
   buildCreditNoteFields,
@@ -26,10 +38,20 @@ export interface DraftVoucherItem {
   vat_rate?: number | null
   deduction_type?: DeductionType | null
   work_type?: string | null
+  /** The line's own posting account (an article's or the Konto strip's). */
+  revenue_account?: string | null
+  /** Periodisering: the line credits the interim account instead of revenue. */
+  accrual_period_start?: string | null
+  accrual_period_end?: string | null
+  accrual_balance_account?: string | null
+  /** The line's dimensions, merged over the invoice's on its revenue line. */
+  dimensions?: Record<string, string> | null
 }
 
 export interface DraftVoucherInput {
   invoiceNumber: string | null
+  /** The form's invoice date: a deferral never dissolves before it. */
+  invoiceDate: string
   currency: string
   /** The invoice's header treatment (the customer's VAT rule). */
   vatTreatment: VatTreatment
@@ -77,6 +99,33 @@ export function proposeDraftCashLines(
     }))
 }
 
+/**
+ * The dates of the periodisering entries the send books after the verifikat,
+ * in date order, before any lock date moves one: an upplupen intäkt (17xx)
+ * on the last day of each month of its period, a förutbetald intäkt on the
+ * first of each month but never before the invoice date (the dates
+ * createSchedulesForCustomerInvoice and the accrual service give them).
+ * Reverse charge and export rows are never deferred. [] under the same
+ * conditions as proposeDraftSendLines.
+ */
+export function draftAccrualEntryDates(input: DraftVoucherInput): string[] {
+  const invoice = draftInvoice(input)
+  if (!invoice) return []
+  return invoice.items
+    .flatMap((item) => {
+      const start = item.accrual_period_start
+      const end = item.accrual_period_end
+      // draftInvoice already cleared the period on rows the send never defers.
+      if (!start || !end) return []
+      if (isZeroRatedInvoiceTreatment(resolveLineVatTreatment(item.vat_rate, input.vatTreatment))) return []
+      if (isAccruedIncomeAccount(item.accrual_balance_account)) return accruedCostReleaseDates(start, end)
+      return listCalendarMonths(start, end).map((month) =>
+        maxIsoDate(deferralReleaseDate(month, null), input.invoiceDate),
+      )
+    })
+    .sort()
+}
+
 /** The form as a stored invoice row, or null when it cannot be stated in kronor or prices nothing. */
 function draftInvoice(input: DraftVoucherInput) {
   if (input.currency !== 'SEK') return null
@@ -89,6 +138,9 @@ function draftInvoice(input: DraftVoucherInput) {
     // The write path's arithmetic (build-invoice-write): net of the line
     // discount, VAT rounded per line.
     const lineTotal = computeLineNet(quantity, unitPrice, discount)
+    // Periodisering as the write path stores it: never on a text or ROT/RUT
+    // row, the account only with both dates, 2970 when none was picked.
+    const deferred = !isText && !item.deduction_type && itemHasAccrual(item)
     return {
       id: `draft-${index}`,
       invoice_id: 'draft',
@@ -104,6 +156,11 @@ function draftInvoice(input: DraftVoucherInput) {
       vat_amount: computeLineVat(lineTotal, rate),
       deduction_type: item.deduction_type ?? null,
       work_type: item.work_type ?? null,
+      revenue_account: isText ? null : (item.revenue_account ?? null),
+      accrual_period_start: deferred ? item.accrual_period_start : null,
+      accrual_period_end: deferred ? item.accrual_period_end : null,
+      accrual_balance_account: deferred ? item.accrual_balance_account || DEFAULT_DEFERRED_REVENUE_ACCOUNT : null,
+      dimensions: isText ? {} : (item.dimensions ?? {}),
     } as InvoiceItem
   })
   const priced = items.filter((item) => item.line_type !== 'text')

@@ -120,10 +120,7 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import AccrualPeriodControl from '@/components/bookkeeping/AccrualPeriodControl'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import LineDimensionFields from '@/components/dimensions/LineDimensionFields'
-import {
-  DEFAULT_DEFERRED_REVENUE_ACCOUNT,
-  revenueBalanceAccountAfterEdit,
-} from '@/lib/bookkeeping/accruals/account-suggestions'
+import { DEFAULT_DEFERRED_REVENUE_ACCOUNT } from '@/lib/bookkeeping/accruals/account-suggestions'
 import { countCalendarMonths, invoiceMonthOnlyAccrualRows } from '@/lib/bookkeeping/accruals/compute'
 import {
   cashAccountPayee,
@@ -172,7 +169,12 @@ import {
 import { resolveEditorStatusLine } from '@/lib/invoices/editor/status-line'
 import { resolveTopBarMeta } from '@/lib/invoices/editor/top-bar-meta'
 import { buildEditorPreviewRequest, withQuoteValidity } from '@/lib/invoices/editor/preview-request'
-import { proposeDraftCashLines, proposeDraftSendLines } from '@/lib/invoices/editor/voucher-preview'
+import {
+  draftAccrualEntryDates,
+  proposeDraftCashLines,
+  proposeDraftSendLines,
+  type DraftVoucherInput,
+} from '@/lib/invoices/editor/voucher-preview'
 import { isPaidAtIssueAccount, paidAtIssueBlockReason } from '@/lib/invoices/paid-at-issue'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
 import { persistAndSend } from '@/lib/invoices/editor/send-sequence'
@@ -3531,27 +3533,28 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     (companySettings?.entity_type as EntityType | null | undefined) ?? company?.entity_type ?? 'enskild_firma'
   // The voucher is stated in kronor only for a SEK invoice (the rate is the send's).
   const confirmInForeignCurrency = confirmCurrency !== 'SEK'
+  // The form as the confirm's voucher previews read it.
+  const confirmDraft: DraftVoucherInput | null = confirmData
+    ? {
+        invoiceNumber: confirmNumber ?? null,
+        invoiceDate: confirmData.invoice_date,
+        currency: confirmCurrency,
+        vatTreatment: vatRules?.treatment ?? 'standard_25',
+        vatRegistered,
+        defaultVatRate: vatRules?.rate || 25,
+        items: confirmData.items,
+        defaultDimensions: defaultDims,
+        entityType,
+      }
+    : null
   let confirmVoucher: ConfirmVoucher | null = null
   if (confirmIntent?.kind === 'create') {
     confirmVoucher = { kind: 'note', text: tShell('confirm_create_note') }
-  } else if (isPaidConfirm && confirmData) {
+  } else if (isPaidConfirm && confirmData && confirmDraft) {
     // One verifikat in either accounting method: the payment account against
     // revenue and VAT, the generator the payment at issue books with.
     const lines = paidAccount
-      ? proposeDraftCashLines(
-          {
-            invoiceNumber: confirmNumber ?? null,
-            currency: confirmCurrency,
-            vatTreatment: vatRules?.treatment ?? 'standard_25',
-            vatRegistered,
-            defaultVatRate: vatRules?.rate || 25,
-            items: confirmData.items,
-            defaultDimensions: defaultDims,
-            entityType,
-          },
-          paidAccount,
-          { deferDeductionShare: accountingMethod === 'cash' },
-        )
+      ? proposeDraftCashLines(confirmDraft, paidAccount, { deferDeductionShare: accountingMethod === 'cash' })
       : []
     confirmVoucher =
       lines.length > 0
@@ -3570,7 +3573,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                   : 'confirm_voucher_paid',
             ),
           }
-  } else if (confirmChannel && confirmDocType === 'invoice' && confirmData) {
+  } else if (confirmChannel && confirmDocType === 'invoice' && confirmData && confirmDraft) {
     if (!booksOnIssue) {
       confirmVoucher = {
         kind: 'note',
@@ -3579,21 +3582,18 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
     } else if (confirmInForeignCurrency) {
       confirmVoucher = { kind: 'note', text: tShell('confirm_voucher_foreign') }
     } else {
-      const lines = proposeDraftSendLines({
-        invoiceNumber: confirmNumber ?? null,
-        currency: confirmCurrency,
-        vatTreatment: vatRules?.treatment ?? 'standard_25',
-        vatRegistered,
-        defaultVatRate: vatRules?.rate || 25,
-        items: confirmData.items,
-        defaultDimensions: defaultDims,
-        entityType,
-      })
+      const lines = proposeDraftSendLines(confirmDraft)
       if (lines.length > 0) {
+        // The periodisering entries the send books besides this verifikat.
+        const accrualDates = draftAccrualEntryDates(confirmDraft)
         confirmVoucher = {
           kind: 'lines',
           date: confirmData.invoice_date,
           lines: voucherLineViews(lines),
+          note:
+            accrualDates.length > 0
+              ? tShell('confirm_voucher_accruals', { count: accrualDates.length, first: accrualDates[0] })
+              : undefined,
         }
       }
     }
@@ -4727,24 +4727,7 @@ export default function InvoiceEditor(props: InvoiceEditorProps = { mode: 'creat
                                   onChange={(next) => {
                                     setValue(`items.${index}.accrual_period_start`, next.start, { shouldDirty: true })
                                     setValue(`items.${index}.accrual_period_end`, next.end, { shouldDirty: true })
-                                    // A period wholly before the invoice month is an
-                                    // upplupen intäkt (17xx), otherwise a förutbetald
-                                    // (29xx): moving the dates across that line
-                                    // re-suggests the account, a picked account stands.
-                                    setValue(
-                                      `items.${index}.accrual_balance_account`,
-                                      revenueBalanceAccountAfterEdit(
-                                        {
-                                          start: item?.accrual_period_start ?? '',
-                                          end: item?.accrual_period_end ?? '',
-                                          balanceAccount:
-                                            item?.accrual_balance_account || DEFAULT_DEFERRED_REVENUE_ACCOUNT,
-                                        },
-                                        next,
-                                        watchInvoiceDate,
-                                      ),
-                                      { shouldDirty: true },
-                                    )
+                                    setValue(`items.${index}.accrual_balance_account`, next.balanceAccount, { shouldDirty: true })
                                   }}
                                   onRemove={() => toggleAccrual(index)}
                                 />

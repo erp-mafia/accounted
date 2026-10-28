@@ -1,16 +1,36 @@
 import { describe, expect, it } from 'vitest'
 import {
-  expenseBalanceAccountAfterEdit,
+  accrualValueAfterEdit,
   isAccruedBalanceAccount,
   isAccruedCostAccount,
   isAccruedIncomeAccount,
   isValidBalanceAccount,
   periodEndsBeforeInvoiceMonth,
-  revenueBalanceAccountAfterEdit,
   suggestBalanceAccount,
   suggestExpenseBalanceAccount,
   suggestRevenueBalanceAccount,
+  type AccrualPanelValue,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
+
+/**
+ * Edits applied one after another the way AccrualPeriodControl applies them:
+ * each against the value the previous edit rendered. Returns every value.
+ */
+function typeInto(
+  line: Parameters<typeof accrualValueAfterEdit>[0],
+  start: AccrualPanelValue,
+  edits: Array<Partial<AccrualPanelValue>>,
+): AccrualPanelValue[] {
+  const values: AccrualPanelValue[] = []
+  let value = start
+  for (const patch of edits) {
+    value = accrualValueAfterEdit(line, value, patch)
+    values.push(value)
+  }
+  return values
+}
+
+const accounts = (values: AccrualPanelValue[]) => values.map((v) => v.balanceAccount)
 
 describe('suggestBalanceAccount', () => {
   it('maps cost accounts to the BAS-conventional interim account', () => {
@@ -77,44 +97,49 @@ describe('upplupen intäkt (17xx)', () => {
   })
 })
 
-describe('revenueBalanceAccountAfterEdit', () => {
-  const invoiceDate = '2026-10-15'
+describe('accrualValueAfterEdit: a customer invoice line (#112)', () => {
+  // The issue's invoice: dated 2026-10-26, the strip opened with the start
+  // on the invoice date and 2970.
+  const invoiceDate = '2026-10-26'
+  const line = { direction: 'revenue' as const, invoiceDate }
+  const opened: AccrualPanelValue = { start: invoiceDate, end: '', balanceAccount: '2970' }
 
-  it('moves 2970 to 1790 when the dates move wholly before the invoice month', () => {
-    expect(
-      revenueBalanceAccountAfterEdit(
-        { start: '2026-10-15', end: '', balanceAccount: '2970' },
-        { start: '2026-09-01', end: '2026-09-30', balanceAccount: '2970' },
-        invoiceDate,
-      ),
-    ).toBe('1790')
+  it('switches 2970 to 1790 once the period ends before the invoice month', () => {
+    const values = typeInto(line, opened, [{ start: '2026-09-01' }, { end: '2026-09-30' }])
+    expect(accounts(values)).toEqual(['2970', '1790'])
+    expect(values.at(-1)).toEqual({ start: '2026-09-01', end: '2026-09-30', balanceAccount: '1790' })
   })
 
-  it('moves a 17xx account back to 2970 when the period reaches the invoice month', () => {
-    expect(
-      revenueBalanceAccountAfterEdit(
-        { start: '2026-09-01', end: '2026-09-30', balanceAccount: '1790' },
-        { start: '2026-09-01', end: '2026-12-31', balanceAccount: '1790' },
-        invoiceDate,
-      ),
-    ).toBe('2970')
+  it('switches back to 2970 once the end reaches the invoice month or later', () => {
+    const september = { start: '2026-09-01', end: '2026-09-30', balanceAccount: '1790' }
+    expect(accounts(typeInto(line, september, [{ end: '2026-11-30' }]))).toEqual(['2970'])
+    expect(accounts(typeInto(line, september, [{ end: '2026-10-31' }]))).toEqual(['2970'])
   })
 
-  it('keeps an account of the right kind, and always the one the user picked', () => {
+  it('ends on the account the final date suggests when the year is typed digit by digit', () => {
+    // Chrome emits a change for every year digit of a date input.
+    const digits = (rest: string) => ['0002', '0020', '0202', '2026'].map((year) => ({ end: `${year}${rest}` }))
+    expect(accounts(typeInto(line, opened, digits('-09-30'))).at(-1)).toBe('1790')
+    expect(accounts(typeInto(line, opened, digits('-11-30'))).at(-1)).toBe('2970')
+  })
+
+  it('keeps a picked account, and an account of the right kind while the dates move', () => {
+    const novemberOn = { start: '2026-11-01', end: '', balanceAccount: '2970' }
     expect(
-      revenueBalanceAccountAfterEdit(
-        { start: '2026-08-01', end: '2026-08-31', balanceAccount: '1780' },
-        { start: '2026-08-01', end: '2026-09-30', balanceAccount: '1780' },
-        invoiceDate,
-      ),
-    ).toBe('1780')
+      accounts(typeInto(line, novemberOn, [{ balanceAccount: '2971' }, { end: '2026-12-31' }])),
+    ).toEqual(['2971', '2971'])
     expect(
-      revenueBalanceAccountAfterEdit(
-        { start: '2026-09-01', end: '2026-09-30', balanceAccount: '1790' },
-        { start: '2026-09-01', end: '2026-09-30', balanceAccount: '2979' },
-        invoiceDate,
-      ),
-    ).toBe('2979')
+      accounts(typeInto(line, { start: '2026-08-01', end: '2026-08-31', balanceAccount: '1780' }, [{ end: '2026-09-30' }])),
+    ).toEqual(['1780'])
+    // A pick against the suggestion stands too (#113 decides what booking does with it).
+    expect(
+      accounts(typeInto(line, { start: '2026-09-01', end: '2026-09-30', balanceAccount: '1790' }, [{ balanceAccount: '2979' }])),
+    ).toEqual(['2979'])
+  })
+
+  it('changes nothing when the edit changes nothing', () => {
+    const september = { start: '2026-09-01', end: '2026-09-30', balanceAccount: '2970' }
+    expect(accrualValueAfterEdit(line, september, { end: '2026-09-30' })).toEqual(september)
   })
 })
 
@@ -150,50 +175,30 @@ describe('upplupen kostnad (29xx)', () => {
   })
 })
 
-describe('expenseBalanceAccountAfterEdit', () => {
+describe('accrualValueAfterEdit: a supplier invoice line', () => {
   const invoiceDate = '2026-10-05'
+  const costLine = (targetAccount: string) => ({ direction: 'expense' as const, targetAccount, invoiceDate })
 
-  it('moves a 17xx account to 2990 when the dates move wholly before the invoice month', () => {
-    expect(
-      expenseBalanceAccountAfterEdit(
-        { start: '2026-10-05', end: '', balanceAccount: '1790' },
-        { start: '2026-07-01', end: '2026-09-30', balanceAccount: '1790' },
-        '5020',
-        invoiceDate,
-      ),
-    ).toBe('2990')
+  it('switches a 17xx account to 2990 (2960 for interest) once the period ends before the invoice month', () => {
+    const opened = (balanceAccount: string) => ({ start: invoiceDate, end: '', balanceAccount })
+    const july = [{ start: '2026-07-01' }, { end: '2026-09-30' }]
+    expect(accounts(typeInto(costLine('5020'), opened('1710'), july))).toEqual(['1710', '2990'])
+    expect(accounts(typeInto(costLine('8410'), opened('1740'), july))).toEqual(['1740', '2960'])
   })
 
-  it('moves a 29xx account back to the 17xx suggestion when the period reaches the invoice month', () => {
-    expect(
-      expenseBalanceAccountAfterEdit(
-        { start: '2026-07-01', end: '2026-09-30', balanceAccount: '2990' },
-        { start: '2026-07-01', end: '2026-12-31', balanceAccount: '2990' },
-        '6310',
-        invoiceDate,
-      ),
-    ).toBe('1730')
+  it('switches a 29xx account back to the 17xx suggestion once the period reaches the invoice month', () => {
+    const past = { start: '2026-07-01', end: '2026-09-30', balanceAccount: '2990' }
+    expect(accounts(typeInto(costLine('6310'), past, [{ end: '2026-12-31' }]))).toEqual(['1730'])
   })
 
   it('keeps an account of the right kind, and always the one the user picked', () => {
     // Dates move inside the same kind: the chosen 1710 stays.
     expect(
-      expenseBalanceAccountAfterEdit(
-        { start: '2026-10-01', end: '2026-12-31', balanceAccount: '1710' },
-        { start: '2026-10-01', end: '2027-03-31', balanceAccount: '1710' },
-        '6310',
-        invoiceDate,
-      ),
-    ).toBe('1710')
-    // The user picks 1790 for a past period: it stands (the API then refuses
-    // nothing, a 17xx line keeps today's behaviour).
+      accounts(typeInto(costLine('6310'), { start: '2026-10-01', end: '2026-12-31', balanceAccount: '1710' }, [{ end: '2027-03-31' }])),
+    ).toEqual(['1710'])
+    // The user picks 1790 for a past period: it stands.
     expect(
-      expenseBalanceAccountAfterEdit(
-        { start: '2026-07-01', end: '2026-09-30', balanceAccount: '2990' },
-        { start: '2026-07-01', end: '2026-09-30', balanceAccount: '1790' },
-        '5020',
-        invoiceDate,
-      ),
-    ).toBe('1790')
+      accounts(typeInto(costLine('5020'), { start: '2026-07-01', end: '2026-09-30', balanceAccount: '2990' }, [{ balanceAccount: '1790' }])),
+    ).toEqual(['1790'])
   })
 })

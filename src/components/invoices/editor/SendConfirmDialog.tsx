@@ -19,7 +19,8 @@ import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
 import type { VoucherLineView } from '@/lib/bookkeeping/voucher-line-view'
 
 export type ConfirmVoucher =
-  | { kind: 'lines'; date: string; lines: VoucherLineView[] }
+  /** `note`: what the send books besides this verifikat (periodiseringar). */
+  | { kind: 'lines'; date: string; lines: VoucherLineView[]; note?: string }
   /** No lines to show: why (kontantmetoden, deferred booking, foreign currency). */
   | { kind: 'note'; text: string }
 
@@ -119,6 +120,7 @@ export function SendConfirmDialog({
             <div data-ph-mask="">
               <VoucherLinesTable lines={voucher.lines} withCurrency showTotals />
             </div>
+            {voucher.note && <p className="pt-2 text-[13px] text-muted-foreground">{voucher.note}</p>}
           </div>
         )}
         {voucher?.kind === 'note' && <p className="text-[13px] text-muted-foreground">{voucher.text}</p>}

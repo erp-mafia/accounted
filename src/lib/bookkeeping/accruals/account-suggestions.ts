@@ -117,62 +117,42 @@ export function suggestRevenueBalanceAccount(
   return DEFAULT_DEFERRED_REVENUE_ACCOUNT
 }
 
-/**
- * The balance account after a periodisering panel edit. An account the user
- * picks stands. Moving the dates re-suggests only when the period crosses the
- * line between the two kinds (deferral from the invoice month on, upplupen
- * post before it).
- */
-function balanceAccountAfterEdit(
-  direction: AccrualDirection,
-  suggest: (periodEnd: string) => string,
-  previous: { start: string; end: string; balanceAccount: string },
-  next: { start: string; end: string; balanceAccount: string },
-): string {
-  if (next.balanceAccount !== previous.balanceAccount) return next.balanceAccount
-  if (next.start === previous.start && next.end === previous.end) return next.balanceAccount
-  const suggested = suggest(next.end)
-  return isAccruedBalanceAccount(direction, suggested) === isAccruedBalanceAccount(direction, next.balanceAccount)
-    ? next.balanceAccount
-    : suggested
+/** A periodisering panel's period and interim account, as the form holds them. */
+export interface AccrualPanelValue {
+  start: string
+  end: string
+  balanceAccount: string
 }
 
 /**
- * The balance account after the user edits a supplier-invoice line's
- * periodisering panel: a 17xx account moves to the 29xx suggestion once the
- * period lies wholly before the invoice month, and a 29xx account moves back
- * to the 17xx suggestion once it reaches that month.
+ * A periodisering panel's value after one edit (`patch`). An account the user
+ * picks stands. Moving the dates re-suggests the account only when the period
+ * crosses the line between the two kinds (deferral from the invoice month on,
+ * upplupen post before it): suggestRevenueBalanceAccount for a customer
+ * invoice line, suggestExpenseBalanceAccount (by the line's `targetAccount`)
+ * for a supplier invoice line.
+ *
+ * `value` must be the value the panel rendered with, never a form row read
+ * after the edit was written: react-hook-form's watch() hands out the live
+ * row, which then already holds the new dates, so nothing moves (#112).
+ * AccrualPeriodControl applies this to its own `value` prop for that reason.
  */
-export function expenseBalanceAccountAfterEdit(
-  previous: { start: string; end: string; balanceAccount: string },
-  next: { start: string; end: string; balanceAccount: string },
-  targetAccount: string,
-  invoiceDate: string | null | undefined,
-): string {
-  return balanceAccountAfterEdit(
-    'expense',
-    (periodEnd) => suggestExpenseBalanceAccount(targetAccount, periodEnd, invoiceDate),
-    previous,
-    next,
-  )
-}
-
-/**
- * The same for a customer-invoice line: a 29xx account moves to the 17xx
- * (upplupen intäkt) suggestion once the period lies wholly before the invoice
- * month, and back to 2970 once it reaches that month.
- */
-export function revenueBalanceAccountAfterEdit(
-  previous: { start: string; end: string; balanceAccount: string },
-  next: { start: string; end: string; balanceAccount: string },
-  invoiceDate: string | null | undefined,
-): string {
-  return balanceAccountAfterEdit(
-    'revenue',
-    (periodEnd) => suggestRevenueBalanceAccount(periodEnd, invoiceDate),
-    previous,
-    next,
-  )
+export function accrualValueAfterEdit(
+  line: { direction: AccrualDirection; targetAccount?: string | null; invoiceDate?: string | null },
+  value: AccrualPanelValue,
+  patch: Partial<AccrualPanelValue>,
+): AccrualPanelValue {
+  const next = { ...value, ...patch }
+  if (next.balanceAccount !== value.balanceAccount) return next
+  if (next.start === value.start && next.end === value.end) return next
+  const suggested =
+    line.direction === 'revenue'
+      ? suggestRevenueBalanceAccount(next.end, line.invoiceDate)
+      : suggestExpenseBalanceAccount(line.targetAccount ?? '', next.end, line.invoiceDate)
+  return isAccruedBalanceAccount(line.direction, suggested) ===
+    isAccruedBalanceAccount(line.direction, next.balanceAccount)
+    ? next
+    : { ...next, balanceAccount: suggested }
 }
 
 /**

@@ -27,16 +27,12 @@ import {
 import { useCompanyOptional } from '@/contexts/CompanyContext'
 import {
   DEFAULT_ACCRUED_REVENUE_ACCOUNT,
+  accrualValueAfterEdit,
   isAccruedBalanceAccount,
   periodEndsBeforeInvoiceMonth,
+  type AccrualPanelValue,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
 import type { AccrualDirection, EntityType } from '@/types'
-
-export interface AccrualFormValue {
-  start: string
-  end: string
-  balanceAccount: string
-}
 
 // The statutory BAS interim accounts per direction: a fixed list reads
 // better than a full account combobox and mirrors the DB CHECK (17xx/29xx).
@@ -80,6 +76,7 @@ export default function AccrualPeriodControl({
   exchangeRate,
   value,
   onChange,
+  targetAccount = null,
   onRemove,
   idPrefix,
   entityType,
@@ -98,8 +95,11 @@ export default function AccrualPeriodControl({
    * its foreign-currency lines instead of comparing kronor to euros.
    */
   exchangeRate?: number | null
-  value: AccrualFormValue
-  onChange: (next: AccrualFormValue) => void
+  value: AccrualPanelValue
+  /** The edited value, balance account re-suggested (accrualValueAfterEdit): the parent only writes it. */
+  onChange: (next: AccrualPanelValue) => void
+  /** The cost account a supplier invoice line books to: picks its 17xx suggestion. */
+  targetAccount?: string | null
   onRemove: () => void
   idPrefix: string
   /**
@@ -174,6 +174,10 @@ export default function AccrualPeriodControl({
     thresholdSek !== null && shouldShowK2AccrualHint({ amount, currency, exchangeRate, thresholdSek })
   const materialityHintKey = accrualHintKey(entityType)
 
+  // Against the value this render shows, never a form row (#112).
+  const edit = (patch: Partial<AccrualPanelValue>) =>
+    onChange(accrualValueAfterEdit({ direction, targetAccount, invoiceDate }, value, patch))
+
   return (
     <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
       <div className="flex items-center justify-between">
@@ -200,7 +204,7 @@ export default function AccrualPeriodControl({
             type="date"
             className="h-9"
             value={value.start}
-            onChange={(e) => onChange({ ...value, start: e.target.value })}
+            onChange={(e) => edit({ start: e.target.value })}
           />
         </div>
         <div className="space-y-1.5">
@@ -212,14 +216,14 @@ export default function AccrualPeriodControl({
             type="date"
             className="h-9"
             value={value.end}
-            onChange={(e) => onChange({ ...value, end: e.target.value })}
+            onChange={(e) => edit({ end: e.target.value })}
           />
         </div>
         <div className="space-y-1.5">
           <Label className="text-xs">{t('account_label')}</Label>
           <Select
             value={value.balanceAccount}
-            onValueChange={(account) => onChange({ ...value, balanceAccount: account })}
+            onValueChange={(account) => edit({ balanceAccount: account })}
           >
             <SelectTrigger className="h-9" aria-label={t('account_label')}>
               <SelectValue />
