@@ -426,9 +426,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
           })
           : {}
         if (opts.anl) {
-          const assets = await providerMigrate(consentId, {
-            importCustomers: false, importSuppliers: false, importSalesInvoices: false, importSupplierInvoices: false, importAssets: true,
-          }, (step) => { if (step) setRegText(step) })
+          const assets = await providerMigrate(consentId, { importAssets: true }, (step) => { if (step) setRegText(step) })
           if (assets.stepErrors?.length) results.stepErrors = assets.stepErrors
         }
         const invoices = (results.salesInvoices?.imported ?? 0) + (results.supplierInvoices?.imported ?? 0)

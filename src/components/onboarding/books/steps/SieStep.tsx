@@ -22,7 +22,7 @@ import { Facts, Wait } from '../ui/Verdicts'
 import { InsightPanel } from '../ui/InsightPanel'
 import { CHANGE_LINK_CLASS, OptRow, OptRows, Sentence, Switch } from '../ui/Sentence'
 import {
-  openProviderWindow, pointWindow, providerAccept, providerConnect, providerMigrate, providerSubmitToken, useProviderMessage,
+  openProviderWindow, pointWindow, providerAccept, providerConnect, providerImportRegisters, providerSubmitToken, useProviderMessage,
 } from '../lib/provider'
 import type { BooksCtx } from '../context'
 import { Button } from '@/components/ui/button'
@@ -369,7 +369,10 @@ export function SieStep({ ctx }: { ctx: BooksCtx }) {
     setRegShown(1)
     dispatch({ type: 'SET_WORKING', working: true })
     try {
-      const results = await providerMigrate(cId, { importCustomers: true, importSuppliers: true, importSalesInvoices: true, importSupplierInvoices: true, importAssets: false }, (_step, progress) => {
+      // The registers go through the background import, as on the provider
+      // step: /migrate refuses them (crm#1436).
+      const results = await providerImportRegisters(cId, ['customers', 'suppliers', 'salesInvoices', 'supplierInvoices'], (imported, total) => {
+        const progress = total > 0 ? (imported / total) * 100 : 0
         setRegShown(progress < 20 ? 2 : progress < 40 ? 3 : progress < 90 ? 4 : 5)
       })
       const counts = {

@@ -85,11 +85,13 @@ export interface MigrateResults {
   stepErrors?: { step: string; code: string; message: string }[]
 }
 
+/**
+ * What /migrate still imports. Customers, suppliers and invoices are not
+ * options here: /migrate refuses them (PROVIDER_REGISTERS_VIA_JOB) and
+ * providerImportRegisters runs them as the background job, so a caller
+ * cannot ask the wrong door for them.
+ */
 export interface MigrateOptions {
-  importCustomers: boolean
-  importSuppliers: boolean
-  importSalesInvoices: boolean
-  importSupplierInvoices: boolean
   importAssets: boolean
 }
 
