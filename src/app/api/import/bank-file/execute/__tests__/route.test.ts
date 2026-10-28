@@ -252,6 +252,80 @@ describe('POST /api/import/bank-file/execute (settlement account)', () => {
     expect(ingestOptions.settlementAccount).toBe('1940')
   })
 
+  describe('a company card as the target', () => {
+    // Stored sign: the wizard flipped the statement (purchases printed plus).
+    const cardRows = [
+      { date: '2025-03-10', description: 'Molnkontoret AB', amount: -349, currency: 'SEK' },
+      { date: '2025-03-12', description: 'Inbetalning, tack', amount: 12345, currency: 'SEK' },
+    ]
+
+    it('imports to the card\'s own ledger without creating an account or reading the chart', async () => {
+      enqueue({ data: { id: 'card-1', currency: 'SEK', enabled: true, name: 'Eurocard Företag' } }) // the card
+      enqueue({ data: { id: 'import-1' } }) // upsert
+      enqueue({ data: null }) // sie_imports overlap: none
+      enqueue({ data: null }) // status update
+      enqueue({ data: [{ id: 't-1' }] }) // imported tx for event
+
+      const request = createMockRequest('/api/import/bank-file/execute', {
+        method: 'POST',
+        body: makeBody({ format: 'generic_csv', settlement_account: '2890', transactions: cardRows }),
+      })
+      const response = await POST(request, emptyParams)
+
+      expect(response.status).toBe(200)
+      expect(ensureCashAccountMock).not.toHaveBeenCalled()
+      expect(supabase.from).not.toHaveBeenCalledWith('chart_of_accounts')
+      const ingestOptions = ingestMock.mock.calls[0][4] as Record<string, unknown>
+      expect(ingestOptions.settlementAccount).toBe('2890')
+      // The rows land with the sign the preview showed: a purchase is money out.
+      const rawRows = ingestMock.mock.calls[0][3] as Array<{ amount: number }>
+      expect(rawRows.map((row) => row.amount)).toEqual([-349, 12345])
+    })
+
+    it('refuses a 2890 that is no card of the company, before any write', async () => {
+      enqueue({ data: null }) // no card on 2890
+
+      const request = createMockRequest('/api/import/bank-file/execute', {
+        method: 'POST',
+        body: makeBody({ settlement_account: '2890', transactions: cardRows }),
+      })
+      const response = await POST(request, emptyParams)
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: { account: string } } }>(response)
+
+      expect(status).toBe(400)
+      expect(body.error.code).toBe('BANK_FILE_INVALID_SETTLEMENT_ACCOUNT')
+      expect(body.error.details.account).toBe('2890')
+      expect(ensureCashAccountMock).not.toHaveBeenCalled()
+      expect(supabase.from).not.toHaveBeenCalledWith('bank_file_imports')
+      expect(ingestMock).not.toHaveBeenCalled()
+    })
+
+    it('refuses a card billed in another currency than the file', async () => {
+      enqueue({ data: { id: 'card-1', currency: 'EUR', enabled: true, name: 'Amex' } })
+
+      const request = createMockRequest('/api/import/bank-file/execute', {
+        method: 'POST',
+        body: makeBody({ settlement_account: '2899', transactions: cardRows }),
+      })
+      const response = await POST(request, emptyParams)
+      const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE')
+      expect(ingestMock).not.toHaveBeenCalled()
+    })
+
+    it('still refuses 2893, which is never a card', async () => {
+      const request = createMockRequest('/api/import/bank-file/execute', {
+        method: 'POST',
+        body: makeBody({ settlement_account: '2893', transactions: cardRows }),
+      })
+      const response = await POST(request, emptyParams)
+      expect(response.status).toBe(400)
+      expect(supabase.from).not.toHaveBeenCalledWith('cash_accounts')
+    })
+  })
+
   it('denominates a new cash account in the currency most rows use', async () => {
     enqueue({ data: { account_number: '1932' } }) // chart_of_accounts
     enqueue({ data: { id: 'import-1' } })

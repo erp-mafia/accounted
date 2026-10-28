@@ -1011,6 +1011,13 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Kontot finns inte bland företagets registrerade bankkonton.',
     message_en: "The account is not one of the company's registered cash accounts.",
   },
+  TRANSACTION_MOVE_KIND_MISMATCH: {
+    httpStatus: 400,
+    message_sv:
+      'Raden kan inte flyttas mellan ett bankkonto och ett företagskort: kortets köp sparas med omvänt tecken mot bankens. Ångra importen och importera filen till rätt konto.',
+    message_en:
+      'The row cannot be moved between a bank account and a company card: card purchases are stored with the opposite sign of bank rows. Undo the import and import the file to the right account.',
+  },
   TRANSACTION_MOVE_CURRENCY_MISMATCH: {
     httpStatus: 400,
     message_sv:
@@ -2393,13 +2400,25 @@ const INVOICE: Record<string, StructuredErrorEntry> = {
   },
   CASH_ACCOUNT_LEDGER_TAKEN: {
     httpStatus: 409,
-    message_sv: 'Bokföringskontot används redan av ett annat bankkonto i företaget. Välj ett annat konto eller låt systemet välja nästa lediga.',
-    message_en: 'The ledger account is already used by another bank account of the company. Pick another one or omit it to get the next free one.',
+    message_sv: 'Bokföringskontot används redan av ett annat bankkonto eller företagskort i företaget. Välj ett annat konto eller låt systemet välja nästa lediga.',
+    message_en: 'The ledger account is already used by another bank account or company card of the company. Pick another one or omit it to get the next free one.',
   },
   CASH_ACCOUNT_NO_FREE_LEDGER: {
     httpStatus: 409,
     message_sv: 'Det finns inget ledigt bokföringskonto i 1931-1959 för ett nytt bankkonto. Ange ett bokföringskonto (1920-1999) själv.',
     message_en: 'No free ledger account in 1931-1959 is left for a new bank account. Pass a ledger_account (1920-1999) explicitly.',
+  },
+  // Company cards (lib/cash-accounts/card-ledger.ts): the card books its
+  // purchases against a liability account, never a 19xx bank account.
+  CARD_ACCOUNT_LEDGER_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Ett företagskort bokförs på ett skuldkonto: 2480-2489, 2890, 2894, 2896 eller 2899. Välj ett av dem.',
+    message_en: 'A company card books on a liability account: 2480-2489, 2890, 2894, 2896 or 2899. Pick one of them.',
+  },
+  CARD_ACCOUNT_NO_FREE_LEDGER: {
+    httpStatus: 409,
+    message_sv: 'Alla skuldkonton ett företagskort kan bokföras på (2480-2489, 2890, 2894, 2896, 2899) används redan av andra kort eller konton.',
+    message_en: 'Every liability account a company card can book on (2480-2489, 2890, 2894, 2896, 2899) is already used by another card or account.',
   },
   CASH_ACCOUNT_IBAN_DUPLICATE: {
     httpStatus: 409,
@@ -4611,8 +4630,8 @@ const BANK_FILE: Record<string, StructuredErrorEntry> = {
   },
   BANK_FILE_INVALID_SETTLEMENT_ACCOUNT: {
     httpStatus: 400,
-    message_sv: 'Bankkontot måste vara ett aktivt konto i kontoklass 19 i din kontoplan (till exempel 1930).',
-    message_en: 'The bank account must be an active class 19 account in your chart of accounts (for example 1930).',
+    message_sv: 'Kontot måste vara ett aktivt konto i kontoklass 19 i din kontoplan (till exempel 1930) eller ett av företagets företagskort.',
+    message_en: 'The account must be an active class 19 account in your chart of accounts (for example 1930) or one of the company cards.',
   },
   BANK_FILE_SETTLEMENT_ACCOUNT_UNAVAILABLE: {
     httpStatus: 409,

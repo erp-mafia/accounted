@@ -7,6 +7,7 @@ import {
 } from '@/lib/bookkeeping/counterparty-templates'
 import { loadCounterLegTopology, type CounterLegTopology } from '@/lib/cash-accounts/service'
 import { isCashLedger } from '@/lib/bookkeeping/bank-leg'
+import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import type { AssistantRead } from '@/lib/agent/categorize/read'
 import { ASSISTANT_READS } from '@/lib/composition/assistant-reads'
 import { CLEARING_PROPOSERS } from '@/lib/composition/clearing-proposals'
@@ -129,11 +130,13 @@ export async function proposeForTransactions(
     tmpl: CategorizationTemplate,
     tx: Transaction,
   ): Promise<CategorizationTemplate | null> => {
+    // A card-shaped ledger may be one of the company's cards: a template that
+    // still carries a card's 2890 on its bank leg is bound like a 19xx one.
     const accounts = [
       tmpl.debit_account,
       tmpl.credit_account,
       ...(tmpl.line_pattern ?? []).map((entry) => entry.account),
-    ].filter(isCashLedger)
+    ].filter((account) => isCashLedger(account) || isCardLedgerAccount(account))
     if (accounts.length === 0) return tmpl
     if (counterLegTopology === undefined) {
       counterLegTopology = await loadCounterLegTopology(supabase, companyId)
@@ -141,7 +144,9 @@ export async function proposeForTransactions(
     if (!counterLegTopology) return tmpl
     const { settlementLedger, twins } = counterLegTopology.contextFor(tx.cash_account_id)
 
-    const bound = settlementLedger ? bindTemplateToSettlementAccount(tmpl, tx.amount, settlementLedger) : tmpl
+    const bound = settlementLedger
+      ? bindTemplateToSettlementAccount(tmpl, tx.amount, settlementLedger, counterLegTopology.cardLedgers)
+      : tmpl
     let guarded = bound
     if (
       settlementLedger &&

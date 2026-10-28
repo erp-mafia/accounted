@@ -52,6 +52,20 @@ describe('cashAccountKontoLabel', () => {
   })
 })
 
+describe('cashAccountKontoLabel for a company card', () => {
+  it('names the card by its last four digits', () => {
+    expect(cashAccountKontoLabel(account({
+      name: 'Eurocard', kind: 'card', ledger_account: '2890', card_last4: ['3667', '1234'], bank_connection: null,
+    }))).toBe('Eurocard ••3667')
+  })
+
+  it('falls back to the card ledger when no digits were given', () => {
+    expect(cashAccountKontoLabel(account({
+      name: 'Eurocard', kind: 'card', ledger_account: '2899', card_last4: null, bank_connection: null,
+    }))).toBe('Eurocard 2899')
+  })
+})
+
 describe('cashAccountLogoUrl', () => {
   it('resolves the mark from the connection bank, not the printed payee', () => {
     expect(cashAccountLogoUrl(account({ bank_name: 'Northmill' }))).toBe('/logos/banks/revolut.png')

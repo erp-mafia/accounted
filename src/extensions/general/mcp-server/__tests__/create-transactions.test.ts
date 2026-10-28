@@ -105,7 +105,7 @@ describe('gnubok_create_transactions', () => {
       { type: 'api_key' },
     )
 
-    expect(findCalls('cash_accounts', 'eq')).toEqual([['company_id', 'company-1'], ['enabled', true], ['currency', 'EUR']])
+    expect(findCalls('cash_accounts', 'eq')).toEqual([['company_id', 'company-1'], ['enabled', true], ['kind', 'bank'], ['currency', 'EUR']])
     expect(mockPreview).toHaveBeenCalledWith(supabase, 'company-1', [expect.objectContaining({ currency: 'EUR' })], {
       settlementAccount: '1932',
     })

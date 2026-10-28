@@ -169,6 +169,34 @@ describe('PATCH /api/transactions/[id]/cash-account (move cash account)', () => 
     expect(body.error.code).toBe('TRANSACTION_MOVE_CURRENCY_MISMATCH')
   })
 
+  it('returns 400 when a card row would move to a bank account (the sign would be wrong)', async () => {
+    enqueue({ data: { ...movableTx(), cash_accounts: { kind: 'card' } }, error: null }) // tx on a card
+    enqueue({ data: [], error: null }) // tvl pre-check clean
+    enqueue({ data: { ...targetAccount, kind: 'bank' }, error: null })
+
+    const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TRANSACTION_MOVE_KIND_MISMATCH')
+    expect(findCalls('transactions', 'update')).toHaveLength(0)
+  })
+
+  it('returns 400 when a bank row would move to a company card', async () => {
+    enqueue({ data: { ...movableTx(), cash_accounts: { kind: 'bank' } }, error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { id: 'card-1', ledger_account: '2890', currency: 'SEK', kind: 'card' }, error: null })
+
+    const res = await PATCH(patchReq({ account_number: '2890' }), createMockRouteParams({ id: 'tx-1' }))
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(res)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('TRANSACTION_MOVE_KIND_MISMATCH')
+  })
+
+  it('returns 400 for a ledger that is neither a bank nor a card account', async () => {
+    const res = await PATCH(patchReq({ account_number: '2893' }), createMockRouteParams({ id: 'tx-1' }))
+    expect(res.status).toBe(400)
+  })
+
   it('moves a movable transaction to the target account', async () => {
     enqueue({ data: movableTx(), error: null }) // tx fetch
     enqueue({ data: [], error: null }) // tvl pre-check clean

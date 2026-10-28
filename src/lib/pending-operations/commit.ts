@@ -55,6 +55,8 @@ import {
   type IssuableInvoice,
 } from '@/lib/invoices/issue-and-book-invoice'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { findCardCashAccount } from '@/lib/cash-accounts/load-card-ledgers'
+import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { buildInvoiceMatchClearingLines } from '@/lib/bookkeeping/invoice-payment-lines'
 import { cashPartialBlockReason, supplierInvoiceBooksOnRegistration } from '@/lib/bookkeeping/booking-mode'
 import { ensureManualCashAccount, resolveDefaultCashAccount } from '@/lib/cash-accounts/service'
@@ -1952,8 +1954,25 @@ async function commitCreateTransaction(
   if (!date || !description.trim() || !Number.isFinite(amount)) {
     return { error: 'date, description, and amount are required', status: 400 }
   }
-  if (ledgerAccount && !/^19\d{2}$/.test(ledgerAccount)) {
-    return { error: 'ledger_account must be a BAS 19xx cash account', status: 400 }
+  // A 19xx cash account (a missing kassakonto is created below), or an
+  // existing company card's liability account. A card is never created here:
+  // it is added under Konton, owner/admin only.
+  const isCardLedger = !!ledgerAccount && isCardLedgerAccount(ledgerAccount)
+  if (ledgerAccount && !/^19\d{2}$/.test(ledgerAccount) && !isCardLedger) {
+    return { error: 'ledger_account must be a BAS 19xx cash account or a company card account', status: 400 }
+  }
+  let card: Awaited<ReturnType<typeof findCardCashAccount>> = null
+  if (ledgerAccount && isCardLedger) {
+    card = await findCardCashAccount(supabase, companyId, ledgerAccount)
+    if (!card) {
+      return {
+        error: `ledger_account ${ledgerAccount} is not a company card of this company: add the card under Konton first`,
+        status: 400,
+      }
+    }
+    if (card.currency.toUpperCase() !== currency.toUpperCase()) {
+      return { error: `The company card on ${ledgerAccount} is billed in ${card.currency}, not ${currency}`, status: 400 }
+    }
   }
 
   // A foreign-currency row must carry its SEK translation from the moment it
@@ -2021,9 +2040,11 @@ async function commitCreateTransaction(
   // that currency (crm#1171): a bank-feed or bank-file row is never stored
   // unbound, and an unbound one dropped out of every per-account view.
   // Ingest then settles the batch on the account's ledger number.
-  const cashAccount = ledgerAccount
-    ? { id: await ensureManualCashAccount(supabase, companyId, ledgerAccount, currency), ledger_account: ledgerAccount }
-    : await resolveDefaultCashAccount(supabase, companyId, currency, bankConnectionId)
+  const cashAccount = card && ledgerAccount
+    ? { id: card.id, ledger_account: ledgerAccount }
+    : ledgerAccount
+      ? { id: await ensureManualCashAccount(supabase, companyId, ledgerAccount, currency), ledger_account: ledgerAccount }
+      : await resolveDefaultCashAccount(supabase, companyId, currency, bankConnectionId)
 
   // Auto-categorization stays off: the row lands uncategorized and the agent
   // books it with gnubok_categorize_transaction, as the staging promised.

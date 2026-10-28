@@ -44,6 +44,8 @@ import { reconcileRcBasisWithChart } from '@/lib/bookkeeping/rc-basis-reconcile'
 import { chartVatTreatmentsLoader, type ChartVatTreatmentsLoader } from '@/lib/bookkeeping/chart-vat-treatments'
 import { applySettlementAccount, saveUserMappingRule } from '@/lib/bookkeeping/mapping-engine'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
+import { learnableBankPair } from '@/lib/bookkeeping/bank-leg'
+import { loadCardLedgers, needsCardLedgers } from '@/lib/cash-accounts/load-card-ledgers'
 import { guardCounterLegs } from '@/lib/cash-accounts/service'
 import { buildTransactionEntryLines, createTransactionJournalEntry } from '@/lib/bookkeeping/transaction-entries'
 import { finalFromCategorize, recordDecisions, snapshotSuggestions, type SuggestionSnapshot } from '@/lib/suggestion-log/record'
@@ -540,7 +542,16 @@ export async function buildCategorizeMapping(
     options.log,
     transaction.currency,
   )
-  mappingResult = applySettlementAccount(mappingResult, settlementAccount, transaction.amount)
+  mappingResult = applySettlementAccount(
+    mappingResult,
+    settlementAccount,
+    transaction.amount,
+    // A company card's ledger on the bank leg moves like a stale 19xx one;
+    // read only when the proposal carries one (load-card-ledgers.ts).
+    needsCardLedgers(mappingResult, transaction.amount, settlementAccount)
+      ? await loadCardLedgers(supabase, companyId)
+      : [],
+  )
 
   // The override replaces the business side of a category booking, never a
   // template's or a learned template's accounts. Re-validated at every
@@ -1107,12 +1118,15 @@ export async function categorizeTransaction(
   // refund/repayment booking; learning it would store backwards accounts.
   if (isBusiness && transaction.merchant_name && !mappingResult.direction_mismatch) {
     try {
+      // A card row teaches the 1930 placeholder, never its card ledger, so the
+      // rule replays on a bank row too (bank-leg.ts learnableBankPair).
+      const learned = learnableBankPair(mappingResult, transaction.amount)
       await saveUserMappingRule(
         supabase,
         companyId,
         transaction.merchant_name,
-        mappingResult.debit_account,
-        mappingResult.credit_account,
+        learned.debit_account,
+        learned.credit_account,
         !isBusiness,
         input.user_description,
         input.template_id,

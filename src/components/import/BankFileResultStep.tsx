@@ -15,11 +15,17 @@ import type { IngestResult } from '@/types'
 interface BankFileResultStepProps {
   result: IngestResult
   onNewImport: () => void
+  /** Where "Visa transaktioner" goes: a card import opens the card's rows. */
+  transactionsHref?: string
+  /** The company card imported to, when it was one. */
+  card?: { name: string } | null
 }
 
 export default function BankFileResultStep({
   result,
   onNewImport,
+  transactionsHref = '/transactions',
+  card,
 }: BankFileResultStepProps) {
   const t = useTranslations('transactions')
   const isSuccess = result.imported > 0 || result.duplicates > 0
@@ -126,8 +132,8 @@ export default function BankFileResultStep({
         </Button>
         {isSuccess && (
           <Button asChild>
-            <Link href="/transactions">
-              Visa transaktioner
+            <Link href={transactionsHref}>
+              {card ? t('import_card_book_purchases') : 'Visa transaktioner'}
               <ArrowRightIcon className="ml-2 h-4 w-4" />
             </Link>
           </Button>

@@ -1,0 +1,1 @@
+[2026-10-27] A transaction never moves between a bank account and a company card (TRANSACTION_MOVE_KIND_MISMATCH), against the design's "accept any ledger": the two store opposite signs for one printed row, so a moved purchase would land as a refund. Undo the import and re-import instead.

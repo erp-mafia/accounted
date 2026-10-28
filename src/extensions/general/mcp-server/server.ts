@@ -1,4 +1,5 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { CASH_OR_CARD_LEDGER_PATTERN } from '@/lib/cash-accounts/card-ledger'
 import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA } from './sie-import-status'
 import { MIGRATION_PROVIDER_IDS } from '@/lib/providers/catalog'
 import { isAnyUnattended, markUnattended, unattendedMarks, unattendedScopes } from './unattended'
@@ -7730,7 +7731,7 @@ export const tools: McpTool[] = [
               amount: { type: 'number', description: 'Positive = income, negative = expense.' },
               description: { type: 'string', description: 'Free-text description shown in /transactions.' },
               currency: { type: 'string', description: 'ISO 4217 code. Default SEK.' },
-              ledger_account: { type: 'string', description: 'BAS 19xx cash account the row settles on (e.g. "1935"); a missing kassakonto is created. Omitted: the default account in the row\'s currency.' },
+              ledger_account: { type: 'string', description: 'Cash account the row settles on: BAS 19xx (e.g. "1935"; a missing kassakonto is created) or an existing company card\'s account (a card purchase is negative). Omitted: the default bank account.' },
               bank_connection_id: { type: 'string', description: 'Optional UUID of a bank_connections row to associate with.' },
               external_id: { type: 'string', description: 'Optional external reference (e.g., Airtable record ID). A stored external_id, or a movement a feed already stored, is refused with TX_CREATE_DUPLICATE.' },
             },
@@ -7770,10 +7771,12 @@ export const tools: McpTool[] = [
         if (!description) {
           throw badArgument(`transactions.${i}.description`, `transactions[${i}].description is required.`)
         }
-        // Restrict the hint to BAS group 19 (kassa/bank): binding a transaction
-        // to a non-cash account would misroute reconciliation and matching.
-        if (ledgerAccount && !/^19\d{2}$/.test(ledgerAccount)) {
-          throw badArgument(`transactions.${i}.ledger_account`, `transactions[${i}].ledger_account must be a BAS 19xx cash account (e.g. "1935").`)
+        // Restrict the hint to BAS group 19 (kassa/bank) or a company card's
+        // liability account: binding a transaction to a non-cash account would
+        // misroute reconciliation and matching. That the card exists is
+        // checked at approval (commit.ts); a card is never created here.
+        if (ledgerAccount && !CASH_OR_CARD_LEDGER_PATTERN.test(ledgerAccount)) {
+          throw badArgument(`transactions.${i}.ledger_account`, `transactions[${i}].ledger_account must be a BAS 19xx cash account (e.g. "1935") or an existing company card's account.`)
         }
 
         const params = {

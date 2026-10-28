@@ -532,6 +532,8 @@ export interface CounterLegContext {
 export interface CounterLegTopology {
   /** Ledgers that must never be PROPOSED or accepted as a counter leg. */
   orphaned: ReadonlySet<string>
+  /** The ledgers of the company's cards: money ledgers besides 19xx (bank-leg.ts). */
+  cardLedgers: readonly string[]
   contextFor: (cashAccountId: string | null | undefined) => CounterLegContext
 }
 
@@ -552,6 +554,7 @@ export async function loadCounterLegTopology(
   const cache = new Map<string, CounterLegContext>()
   return {
     orphaned: topology.orphaned,
+    cardLedgers: topology.rows.filter((row) => row.kind === 'card').map((row) => row.ledger_account),
     contextFor: (cashAccountId) => {
       if (!cashAccountId) return { settlementLedger: null, twins: new Set() }
       const cached = cache.get(cashAccountId)
@@ -1274,11 +1277,14 @@ export async function resolveDefaultCashAccount(
   currency: string,
   bankConnectionId?: string | null,
 ): Promise<{ id: string; ledger_account: string } | null> {
+  // Banks only: a row created without naming an account is never a card
+  // purchase, and a card must not make the only bank account ambiguous.
   const { data, error } = await supabase
     .from('cash_accounts')
     .select('id, ledger_account, is_primary, bank_connection_id')
     .eq('company_id', companyId)
     .eq('enabled', true)
+    .eq('kind', 'bank')
     .eq('currency', currency.toUpperCase())
   if (error) {
     log.warn('resolveDefaultCashAccount lookup failed; row stays unassigned', {

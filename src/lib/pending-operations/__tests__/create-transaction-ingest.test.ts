@@ -170,6 +170,38 @@ describe('commitPendingOperation: create_transaction through ingestTransactions'
     expect(result.data).toMatchObject({ transaction_id: 'tx-42', cash_account_id: 'ca-1935' })
   })
 
+  describe('ledger_account on a company card', () => {
+    async function commitOnCard(card: unknown, params: Record<string, unknown> = {}) {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'op-7f3a' }, error: null }) // CAS claim
+      enqueue({ data: card, error: null }) // the card on that ledger
+      enqueue({ data: null, error: null }) // dispatcher's update
+      const result = await commitPendingOperation(
+        supabase as never,
+        'user-1',
+        'company-1',
+        makePendingOp({ date: '2026-10-01', amount: -349, description: 'Molnkontoret AB', currency: 'SEK', ledger_account: '2890', ...params }),
+      )
+      return { result, lookupEqs: findCalls('cash_accounts', 'eq') }
+    }
+
+    it('binds the row to the existing card and never creates an account', async () => {
+      mockIngest.mockResolvedValueOnce(ingestResult() as never)
+      const { result, lookupEqs } = await commitOnCard({ id: 'card-1', currency: 'SEK', enabled: true, name: 'Eurocard' })
+      expect(result.status).toBe('committed')
+      expect(ensureManualCashAccount).not.toHaveBeenCalled()
+      expect(mockIngest.mock.calls.at(-1)?.[4]).toEqual({ settlementAccount: '2890', skipAutoCategorization: true })
+      expect(lookupEqs).toContainEqual(['kind', 'card'])
+    })
+
+    it('refuses a card ledger no card of the company books on', async () => {
+      const { result } = await commitOnCard(null)
+      expect(result.status).not.toBe('committed')
+      expect(ensureManualCashAccount).not.toHaveBeenCalled()
+      expect(mockIngest).not.toHaveBeenCalled()
+    })
+  })
+
   // crm#1171: a row staged without ledger_account was stored with
   // cash_account_id NULL, while every bank-feed and bank-file row is bound.
   // Ingest binds a batch by its settlement account's ledger number.
@@ -212,7 +244,7 @@ describe('commitPendingOperation: create_transaction through ingestTransactions'
       expect(settlementAccount).toBe('1930')
       expect(result.data).toMatchObject({ cash_account_id: 'ca-1930' })
       // Only the company's own enabled accounts in the row's currency.
-      expect(lookupEqs).toEqual([['company_id', 'company-1'], ['enabled', true], ['currency', 'SEK']])
+      expect(lookupEqs).toEqual([['company_id', 'company-1'], ['enabled', true], ['kind', 'bank'], ['currency', 'SEK']])
     })
 
     it('settles only on an account of the given bank connection, never another bank', async () => {

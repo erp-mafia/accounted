@@ -169,4 +169,15 @@ describe('businessAccountOfLines', () => {
     ])).toBeNull()
     expect(businessAccountOfLines([])).toBeNull()
   })
+
+  it('leaves a card row\'s own settlement ledger out, like 19xx', () => {
+    const cardPurchase = [
+      { account: '6540', debit: 400, credit: 0 },
+      { account: '2641', debit: 100, credit: 0 },
+      { account: '2890', debit: 0, credit: 500 },
+    ]
+    expect(businessAccountOfLines(cardPurchase, ['2890'])).toBe('6540')
+    // Without it 2890 is a second business account (a bank row paying a debt).
+    expect(businessAccountOfLines(cardPurchase)).toBeNull()
+  })
 })

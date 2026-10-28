@@ -15,11 +15,12 @@ import { ToastAction } from '@/components/ui/toast'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { DestructiveConfirmDialog, useDestructiveConfirm } from '@/components/ui/destructive-confirm-dialog'
 import { DataListEmpty } from '@/components/ui/data-list'
+import { EmptyState } from '@/components/ui/empty-state'
 import { Skeleton } from '@/components/ui/skeleton'
 import { SegmentedControl } from '@/components/ui/segmented-control'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { TH_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
-import { AdjustmentsHorizontalIcon, CheckIcon, SpinnerIcon } from '@/components/icons'
+import { AdjustmentsHorizontalIcon, CheckIcon, CreditCardIcon, SpinnerIcon } from '@/components/icons'
 import { useUiState } from '@/lib/hooks/use-ui-state'
 import { persistUiState } from '@/lib/ui-state/client'
 import { TX_COLUMNS, resolveTxColumns, type TxColumnId } from '@/lib/transactions/columns-v2'
@@ -983,9 +984,13 @@ export default function TransactionsPage() {
 
   // Account chooser (concept scene 10): the source picker doubles as a
   // balance readout. The total sums only SEK ledgers (mixing currencies into
-  // one figure would be a lie); null hides the annotation entirely.
+  // one figure would be a lie); null hides the annotation entirely. A company
+  // card's balance is a debt, not cash: "Alla konton" never nets it against
+  // the bank (the card keeps its own figure in the picker).
   const totalSourceBalance = useMemo(() => {
-    const sekBalances = cashAccounts.filter((a) => a.currency === 'SEK' && a.balance != null)
+    const sekBalances = cashAccounts.filter(
+      (a) => a.currency === 'SEK' && a.balance != null && (a.kind ?? 'bank') === 'bank',
+    )
     if (sekBalances.length === 0) return null
     return sekBalances.reduce((sum, a) => sum + (a.balance ?? 0), 0)
   }, [cashAccounts])
@@ -1047,6 +1052,12 @@ export default function TransactionsPage() {
         sourceItems.map((item) => item.id),
       ),
     [sourceFilter, sourceItems],
+  )
+
+  // The company card the source picker narrows to, if it is one.
+  const emptyCardSource = useMemo(
+    () => cashAccounts.find((a) => a.kind === 'card' && `acct:${a.id}` === effectiveSourceFilter) ?? null,
+    [cashAccounts, effectiveSourceFilter],
   )
 
   // Skattekonto rows a verifikat already holds (imported history, PH 171):
@@ -4562,7 +4573,17 @@ export default function TransactionsPage() {
         />
       ) : mode === 'inbox' ? (
         inboxItems.length === 0 ? (
-          searchTerm || effectiveSourceFilter !== 'all' || periodBounds ? (
+          emptyCardSource && !searchTerm ? (
+            // A company card with nothing to book: its rows come from the
+            // card statement, so the way forward is importing the next one.
+            <EmptyState
+              icon={CreditCardIcon}
+              title={t('card_empty_title')}
+              description={t('card_empty_description')}
+              actionLabel={t('card_empty_action')}
+              actionHref={`/import?mode=bank&account=${emptyCardSource.id}`}
+            />
+          ) : searchTerm || effectiveSourceFilter !== 'all' || periodBounds ? (
             <DataListEmpty
               title="Inga träffar"
               description={

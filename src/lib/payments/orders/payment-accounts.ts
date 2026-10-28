@@ -29,6 +29,9 @@ export async function readPaymentAccounts(client: SupabaseClient, companyId: str
     .from('cash_accounts')
     .select('id, name, ledger_account, iban, currency, enabled, bank_connection:bank_connections(bank_name, bic, affiliated_aspsp_id, psu_type)')
     .eq('company_id', companyId)
+    // A payment file is paid from a bank account; a company card never pays
+    // one (it carries no IBAN either, so this is defense in depth).
+    .eq('kind', 'bank')
     .order('ledger_account', { ascending: true })
   if (error) throw error
   return ((data ?? []) as unknown as Array<{

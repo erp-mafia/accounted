@@ -41,6 +41,7 @@ function topology(
 ) {
   return {
     orphaned: new Set(orphaned),
+    cardLedgers: [] as string[],
     contextFor: (cashAccountId: string | null | undefined) => {
       const ctx = cashAccountId ? contexts[cashAccountId] : undefined
       return ctx

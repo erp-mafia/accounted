@@ -123,6 +123,7 @@ export const transactionsUpdate = defineOperation({
       'Send at least one of description or account_number.',
       'A booked or matched row returns 409 TRANSACTION_TITLE_LOCKED (title) or TRANSACTION_MOVE_BOOKED (move); a row bulk-booked into a samlingsverifikat also returns TRANSACTION_MOVE_BOOKED for a move.',
       'account_number is a STRING like "1931", never a number; an account that is not one of the company\'s cash accounts returns 404 TRANSACTION_MOVE_UNKNOWN_ACCOUNT, one in another currency 400 TRANSACTION_MOVE_CURRENCY_MISMATCH.',
+      'A row never moves between a bank account and a company card (400 TRANSACTION_MOVE_KIND_MISMATCH): a card stores purchases with the opposite sign of its statement; undo the import and import the file to the right account.',
     ],
     example: {
       request: { description: 'Lunch med kund' },
@@ -138,7 +139,7 @@ export const transactionsUpdate = defineOperation({
       description: UpdateTransactionTitleSchema.shape.description.optional().describe('New working title (1-500 characters).'),
       account_number: MoveTransactionCashAccountSchema.shape.account_number
         .optional()
-        .describe('Target cash account by its BAS 19xx ledger account, e.g. "1931".'),
+        .describe('Target cash account by its ledger account: BAS 19xx, e.g. "1931", or a company card\'s account for a row on a card.'),
     })
     .refine((body) => body.description !== undefined || body.account_number !== undefined, {
       message: 'Send description, account_number, or both.',
@@ -154,6 +155,7 @@ export const transactionsUpdate = defineOperation({
     'TRANSACTION_TITLE_LOCKED',
     'TRANSACTION_MOVE_BOOKED',
     'TRANSACTION_MOVE_UNKNOWN_ACCOUNT',
+    'TRANSACTION_MOVE_KIND_MISMATCH',
     'TRANSACTION_MOVE_CURRENCY_MISMATCH',
   ],
   http: {

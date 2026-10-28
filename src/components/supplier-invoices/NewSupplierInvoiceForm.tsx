@@ -19,6 +19,7 @@ import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { HOVER_REVEAL_CLASS, QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { SupplierInvoiceReviewContent } from '@/components/suppliers/SupplierInvoiceReviewContent'
 import { chartVatTreatmentsOf } from '@/lib/bookkeeping/vat-entries'
+import { isCardLedgerAccount } from '@/lib/cash-accounts/card-ledger'
 import { supplierInvoiceBookingMoment, supplierInvoiceRegistrationDate } from '@/lib/bookkeeping/booking-mode'
 import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
 import { getAccountDescription } from '@/lib/bookkeeping/account-descriptions'
@@ -732,7 +733,8 @@ export default function NewSupplierInvoiceForm({
           const debit: string | undefined = match?.template?.debit_account
           const credit: string | undefined = match?.template?.credit_account
           if (!match || (match.confidence ?? 0) < 0.5) return
-          if (!debit || !/^[4-8]/.test(debit) || !credit || !credit.startsWith('19')) return
+          // Settled on a bank or on a company card's liability account.
+          if (!debit || !/^[4-8]/.test(debit) || !credit || !(credit.startsWith('19') || isCardLedgerAccount(credit))) return
           requestAccountFill(debit, match.template.counterparty_name)
         } catch {
           // Prefill is best-effort; the rows stay blank.

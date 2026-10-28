@@ -92,6 +92,9 @@ export const SE_PACK_TERRITORY = [
   // The skattekonto in BAS terms for the booking guard: the accounts it runs
   // on and the tax liabilities a bank line must not clear itself (issue #50).
   'lib/transactions/skattekonto-tax-accounts.ts',
+  // Company cards in BAS terms: the liability accounts a card may book on
+  // (the cash_accounts_card_shape CHECK) and the order they are suggested in.
+  'lib/cash-accounts/card-ledger.ts',
   // Booking-time plausibility of a typed verifikat: Swedish VAT against its
   // base and revenue debited in a purchase, by BAS class range (the
   // 2026-10-26 forensic sweep).

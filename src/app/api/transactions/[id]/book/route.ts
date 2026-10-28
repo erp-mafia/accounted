@@ -372,7 +372,7 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
     // stamp it so it leaves the active inbox (best-effort, logged inside).
     await recordDecisions(supabase, suggestionSnapshot, [{
       transactionId: id,
-      final: finalFromLines(journalEntry.id, linesOf(journalEntry)),
+      final: finalFromLines(journalEntry.id, linesOf(journalEntry), [settlementAccount]),
       checks,
     }], user.id)
 
