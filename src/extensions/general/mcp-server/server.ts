@@ -12019,7 +12019,8 @@ export const tools: McpTool[] = [
         proposals[tx.id] = [...offered.filter((p) => !p.contested), ...offered.filter((p) => p.contested)]
           .map((p) => {
             // The read reports the purchase in another reverse-charge box
-            // (accounted#37): the agent sees both, as the review does.
+            // (accounted#37), or abroad where the proposal books Swedish
+            // moms (crm#1498): the agent sees both, as the review does.
             const box = reverseChargeBoxDispute(p)
             return {
               id: p.template_id,
@@ -12030,7 +12031,12 @@ export const tools: McpTool[] = [
               books_without_review: booksWithoutReview(p),
               ...(p.contested ? { contested: true } : {}),
               ...(box
-                ? { reverse_charge_box: { proposal: `ruta ${reverseChargeBoxNumber(box.proposal)}`, read: `ruta ${reverseChargeBoxNumber(box.read)}` } }
+                ? {
+                    reverse_charge_box: {
+                      proposal: box.proposal === 'swedish_vat' ? 'svensk moms' : `ruta ${reverseChargeBoxNumber(box.proposal)}`,
+                      read: `ruta ${reverseChargeBoxNumber(box.read)}`,
+                    },
+                  }
                 : {}),
               account:
                 p.booking.kind === 'template'

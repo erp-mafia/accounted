@@ -29,7 +29,7 @@ import {
 } from '@/components/icons'
 import { resolveTemplateAccountsForEntity } from '@/lib/bookkeeping/proposal-lines'
 import type { ProposalLine } from '@/lib/bookkeeping/proposal-lines'
-import { accountProposal, businessAccount, carriedCategory, categorizeBodyFor, inReverseChargeBox, PROPOSAL_REVERSE_CHARGE_KINDS, reverseChargeBoxDispute, reverseChargeBoxesOf, reverseChargeBoxNumber, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { accountProposal, booksSwedishInputVat, businessAccount, carriedCategory, categorizeBodyFor, inReverseChargeBox, PROPOSAL_REVERSE_CHARGE_KINDS, reverseChargeBoxDispute, reverseChargeBoxesOf, reverseChargeBoxNumber, reverseChargeKindOf, templateBehind, withAccount, withReverseChargeKind, type BookingProposal, type DisputedVat } from '@/lib/bookkeeping/proposal'
 import { booksReverseChargePurchase } from '@/lib/bookkeeping/category-mapping'
 import { DEFAULT_REVERSE_CHARGE_KIND, type ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { vatCodeRuleForAccount } from '@/lib/bookkeeping/voucher-line-vat-code'
@@ -600,12 +600,16 @@ export default function QuickReviewDialog({
   // came, over to the read's box, or for a booking the person already
   // changed, its box set to the other one.
   const currentBox = reverseChargeBoxesOf(proposal)[0] ?? null
+  // A proposal with Swedish moms that the read places abroad (crm#1498)
+  // disputes the same way, its side named 'swedish_vat'.
+  const swedishSide = boxDispute?.proposal === 'swedish_vat' && booksSwedishInputVat(proposal)
+  const currentSide: DisputedVat | null = swedishSide ? 'swedish_vat' : currentBox
   const boxSwitch = (() => {
-    if (!boxDispute || !currentBox) return null
-    const target = currentBox === boxDispute.read ? boxDispute.proposal : boxDispute.read
+    if (!boxDispute || !currentSide) return null
+    const target = currentSide === boxDispute.read ? boxDispute.proposal : boxDispute.read
     if (proposal === inReadBox) return { target, apply: () => setProposal(initialProposal) }
     if (proposal === initialProposal) return inReadBox ? { target, apply: () => setProposal(inReadBox) } : null
-    if (proposal.booking.kind === 'account' && PROPOSAL_REVERSE_CHARGE_KINDS.includes(target)) {
+    if (proposal.booking.kind === 'account' && target !== 'swedish_vat' && PROPOSAL_REVERSE_CHARGE_KINDS.includes(target)) {
       return { target, apply: () => setReverseChargeKind(target) }
     }
     return null
@@ -986,19 +990,30 @@ export default function QuickReviewDialog({
           </div>
           <p className="text-[12.5px] text-muted-foreground">{whyFor(proposal)}</p>
           {ruleLine && <p className="text-[12.5px] leading-snug text-muted-foreground">{ruleLine}</p>}
-          {boxDispute && currentBox && (
+          {boxDispute && currentSide && (
             <AttnLine
               action={
                 boxSwitch
-                  ? { label: t('rc_box_switch', { box: reverseChargeBoxNumber(boxSwitch.target) }), onClick: boxSwitch.apply }
+                  ? {
+                      label:
+                        boxSwitch.target === 'swedish_vat'
+                          ? t('rc_vat_switch_swedish')
+                          : t('rc_box_switch', { box: reverseChargeBoxNumber(boxSwitch.target) }),
+                      onClick: boxSwitch.apply,
+                    }
                   : undefined
               }
             >
-              {t('rc_box_dispute', {
-                proposal: t(`rc_box_${boxDispute.proposal}`),
-                read: t(`rc_box_${boxDispute.read}`),
-                current: t(`rc_box_${currentBox}`),
-              })}
+              {boxDispute.proposal === 'swedish_vat'
+                ? t('rc_vat_dispute', {
+                    read: t(`rc_box_${boxDispute.read}`),
+                    current: t(currentSide === 'swedish_vat' ? 'rc_vat_now_swedish' : 'rc_vat_now_reverse_charge'),
+                  })
+                : t('rc_box_dispute', {
+                    proposal: t(`rc_box_${boxDispute.proposal}`),
+                    read: t(`rc_box_${boxDispute.read}`),
+                    current: t(`rc_box_${currentSide}`),
+                  })}
             </AttnLine>
           )}
           {/* The assistant's read, unless this review already is its pick. */}

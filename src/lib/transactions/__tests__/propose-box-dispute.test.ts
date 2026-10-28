@@ -93,10 +93,10 @@ describe('disputeReverseChargeBox', () => {
     }
   })
 
-  it('leaves a proposal that books no reverse charge alone', () => {
-    const domestic = counterpart({ vat_treatment: 'standard_25', vat_account: '2641' })
-    const [out] = disputeReverseChargeBox([domestic], NON_EU)
-    expect(out).toBe(domestic)
+  it('leaves a proposal that books neither reverse charge nor Swedish moms alone', () => {
+    const noVat = counterpart({ vat_treatment: 'exempt', vat_account: null })
+    const [out] = disputeReverseChargeBox([noVat], NON_EU)
+    expect(out).toBe(noVat)
     expect(booksWithoutReview(out)).toBe(true)
   })
 
@@ -120,6 +120,77 @@ describe('disputeReverseChargeBox', () => {
       vat_treatment: 'reverse_charge', reverse_charge_kind: 'non_eu_services', amount: -200,
     })
     expect(disputeReverseChargeBox([read], EU)[0]).toBe(read)
+  })
+})
+
+/**
+ * crm#1498: a learned counterpart (or a catalog keyword) booked Google Ads and
+ * ChatGPT with Swedish ingående moms on 2641 straight from the row, while the
+ * assistant's read had placed the seller abroad. The read's box now disputes
+ * the Swedish moms the way it disputes another box.
+ */
+describe('disputeReverseChargeBox: Swedish moms on a purchase the read places abroad', () => {
+  const swedish = () => counterpart({ counterparty_name: 'google ads', debit_account: '5910', vat_treatment: 'standard_25', vat_account: '2641' })
+
+  it('sends a settled counterpart with Swedish moms to review on the read\'s box', () => {
+    const cp = swedish()
+    expect(booksWithoutReview(cp)).toBe(true)
+    const [out] = disputeReverseChargeBox([cp], EU)
+    expect(out.read_reverse_charge_kind).toBe('eu_services')
+    expect(reverseChargeBoxDispute(out)).toEqual({ proposal: 'swedish_vat', read: 'eu_services' })
+    expect(rowProposal([out])).toBe(out)
+    expect(booksWithoutReview(out)).toBe(false)
+    // The review opens as reverse charge on the counterpart's own account.
+    const opened = inReverseChargeBox(out, 'eu_services', -3000, 'aktiebolag')!
+    expect(opened.booking).toEqual({
+      kind: 'account', account: '5910', vat_treatment: 'reverse_charge', category: 'expense_other', reverse_charge_kind: 'eu_services',
+    })
+    expect(reverseChargeBoxDispute(opened)).toBeNull()
+  })
+
+  it('reads Swedish moms off a learned pattern\'s 2641 line', () => {
+    const cp = counterpart({
+      vat_treatment: null,
+      line_pattern: [
+        { account: '6540', type: 'business', side: 'debit', ratio: 1 },
+        { account: '2641', type: 'vat', side: 'debit', vat_rate: 0.25 },
+      ],
+    })
+    const [out] = disputeReverseChargeBox([cp], NON_EU)
+    expect(reverseChargeBoxDispute(out)).toEqual({ proposal: 'swedish_vat', read: 'non_eu_services' })
+    expect(booksWithoutReview(out)).toBe(false)
+  })
+
+  it('marks the catalog\'s Swedish-moms template too', () => {
+    const domestic = proposalFromTemplate(getTemplateById('it_saas_subscription')!, 'catalog', 0.9)
+    const [out] = disputeReverseChargeBox([domestic], NON_EU)
+    expect(reverseChargeBoxDispute(out)).toEqual({ proposal: 'swedish_vat', read: 'non_eu_services' })
+  })
+
+  it('books as before when the read names no box or Swedish moms', () => {
+    const cp = swedish()
+    for (const read of [
+      { vat_treatment: 'reverse_charge', reverse_charge_kind: null },
+      { vat_treatment: 'standard_25', reverse_charge_kind: null },
+      { vat_treatment: 'exempt', reverse_charge_kind: null },
+    ] as Read[]) {
+      const [out] = disputeReverseChargeBox([cp], read)
+      expect(out).toBe(cp)
+      expect(booksWithoutReview(out)).toBe(true)
+    }
+  })
+
+  it('leaves money in alone', () => {
+    const refund = counterpart({ debit_account: '1930', credit_account: '5420', vat_treatment: 'standard_25', vat_account: '2641' })
+    const [out] = disputeReverseChargeBox([refund], EU)
+    expect(out).toBe(refund)
+  })
+
+  it('says both in the why for an agent', () => {
+    const [out] = disputeReverseChargeBox([swedish()], NON_EU)
+    expect(whyTextSv(out)).toBe(
+      'Bokförd så 7 gånger tidigare, men assistentens läsning säger att säljaren finns utomlands: omvänd skattskyldighet i ruta 22, inte svensk moms. Svensk moms gäller bara om fakturan visar svensk moms och säljarens svenska momsregistreringsnummer',
+    )
   })
 })
 

@@ -1,4 +1,6 @@
 import { getTemplateById, type BookingTemplate, type TemplateGroup } from './booking-templates'
+import { PINNED_JURISDICTION, resolveAccountRole } from './account-roles'
+import { isCashLedger } from './bank-leg'
 import { isLibraryTemplateId } from './template-library'
 import { resolveTemplateAccountsForEntity } from './proposal-lines'
 import type { SkattekontoLedgerAccount } from '@/lib/skatteverket/skattekonto-account'
@@ -118,8 +120,11 @@ export interface BookingProposal {
    * in, set only when it is not a box the proposal books (ruta 22 read,
    * ruta 21 learned: accounted#37). Which box is right depends on the
    * company that invoices, which is on the invoice, not in the history or
-   * the bank text. Never booked without a review; the review opens on the
-   * read's box with the proposal's one click away.
+   * the bank text. Also set on a purchase the proposal books with Swedish
+   * ingående moms when the read says the seller is abroad (crm#1498): a
+   * seller abroad charges no Swedish moms unless the invoice shows it. Never
+   * booked without a review; the review opens on the read's box with the
+   * proposal's one click away.
    */
   read_reverse_charge_kind?: ReverseChargeKind
   /** Source 'clearing': the record behind it. Never booked without a review. */
@@ -281,15 +286,44 @@ export function reverseChargeBoxesOf(p: BookingProposal): ReverseChargeKind[] {
 }
 
 /**
+ * What a proposal books on a purchase, as a reverse-charge dispute names it:
+ * one of the reverse-charge boxes, or 'swedish_vat' for ingående moms at a
+ * Swedish rate (2641, ruta 48).
+ */
+export type DisputedVat = ReverseChargeKind | 'swedish_vat'
+
+const SWEDISH_INPUT_VAT_ACCOUNT = resolveAccountRole(PINNED_JURISDICTION, 'input_vat')
+const SWEDISH_RATES: ReadonlySet<VatTreatment> = new Set<VatTreatment>(['standard_25', 'reduced_12', 'reduced_6'])
+
+/**
+ * True when the proposal books a purchase with Swedish ingående moms: a
+ * learned pattern's debit moms line on 2641, otherwise a Swedish rate as the
+ * booking's treatment. Money in (the bank on the debit leg) is never one.
+ */
+export function booksSwedishInputVat(p: BookingProposal): boolean {
+  if (isCashLedger(p.debit_account)) return false
+  if (p.booking.kind === 'counterparty' && p.line_pattern && p.line_pattern.length > 0) {
+    return p.line_pattern.some((l) => l.type === 'vat' && l.side === 'debit' && l.account === SWEDISH_INPUT_VAT_ACCOUNT)
+  }
+  const template = templateBehind(p)
+  const vat = p.booking.kind === 'account' ? p.booking.vat_treatment : (template?.vat_treatment ?? p.vat_treatment)
+  return !!vat && SWEDISH_RATES.has(vat)
+}
+
+/**
  * The box a proposal books and the one the assistant's read names, when the
- * two differ (read_reverse_charge_kind, accounted#37); null otherwise.
+ * two differ (read_reverse_charge_kind, accounted#37); null otherwise. A
+ * proposal that books Swedish moms where the read names a reverse-charge
+ * box disputes as 'swedish_vat' (crm#1498).
  */
 export function reverseChargeBoxDispute(
   p: BookingProposal,
-): { proposal: ReverseChargeKind; read: ReverseChargeKind } | null {
+): { proposal: DisputedVat; read: ReverseChargeKind } | null {
   const read = p.read_reverse_charge_kind
   if (!read) return null
-  const own = reverseChargeBoxesOf(p).find((k) => k !== read)
+  const boxes = reverseChargeBoxesOf(p)
+  if (boxes.length === 0) return booksSwedishInputVat(p) ? { proposal: 'swedish_vat', read } : null
+  const own = boxes.find((k) => k !== read)
   return own ? { proposal: own, read } : null
 }
 
@@ -629,6 +663,9 @@ export function whyTextSv(p: BookingProposal): string {
   const why = sourceWhySv(p)
   const box = reverseChargeBoxDispute(p)
   if (!box) return why
+  if (box.proposal === 'swedish_vat') {
+    return `${why}, men assistentens läsning säger att säljaren finns utomlands: omvänd skattskyldighet i ruta ${reverseChargeBoxNumber(box.read)}, inte svensk moms. Svensk moms gäller bara om fakturan visar svensk moms och säljarens svenska momsregistreringsnummer`
+  }
   return `${why}, men assistentens läsning lägger köpet i ruta ${reverseChargeBoxNumber(box.read)}, inte ruta ${reverseChargeBoxNumber(box.proposal)}: rätt ruta beror på vilket bolag som fakturerar, se fakturan`
 }
 
