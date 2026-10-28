@@ -112,7 +112,8 @@ export async function GET(request: NextRequest) {
  *
  * Team acceptance inserts a team_members row; the DB sync trigger
  * (sync_team_member_to_companies) then grants membership in every company
- * attached to the team, so no company_members writes happen here.
+ * attached to the team, or the shared helper grants the invitation's chosen
+ * companies, so no company_members writes happen here.
  */
 export async function POST(request: NextRequest) {
   const { user, error } = await requireAuth()

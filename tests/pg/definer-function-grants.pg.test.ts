@@ -49,6 +49,9 @@ const ANON_CALLABLE_ALLOWLIST: string[] = []
 // PUBLIC), so both roles are asserted explicitly.
 const SERVICE_ROLE_ONLY = [
   'sync_team_to_company(uuid,uuid)',
+  // Byrå member company access (20261028110000): the team routes check the
+  // caller is team owner or admin, then call it on the service role.
+  'set_team_member_companies(uuid,uuid[])',
   'claim_due_webhook_deliveries(integer,timestamp with time zone)',
   // BankID signing (20261025200000): the signer's poll records the signature as
   // the service role after resolving the link or the member.

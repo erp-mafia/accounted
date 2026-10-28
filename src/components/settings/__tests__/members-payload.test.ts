@@ -101,6 +101,7 @@ describe('parseTeamMembersPayload', () => {
           teamKind: 'byra',
           isOwner: true,
           canInvite: true,
+          companies: [{ id: 'co-1', name: 'Klient AB' }],
         },
       }),
     ).toEqual({
@@ -111,6 +112,7 @@ describe('parseTeamMembersPayload', () => {
       teamKind: 'byra',
       isOwner: true,
       canInvite: true,
+      companies: [{ id: 'co-1', name: 'Klient AB' }],
     })
   })
 
@@ -123,6 +125,18 @@ describe('parseTeamMembersPayload', () => {
       teamKind: null,
       isOwner: false,
       canInvite: false,
+      companies: [],
+    })
+  })
+
+  it('keeps only well-formed companies for the access choice', () => {
+    expect(
+      parseTeamMembersPayload({
+        data: { members: [], companies: [{ id: 'co-1', name: 'Klient AB' }, { id: 7 }, null] },
+      }),
+    ).toMatchObject({ companies: [{ id: 'co-1', name: 'Klient AB' }] })
+    expect(parseTeamMembersPayload({ data: { members: [], companies: 'oops' } })).toMatchObject({
+      companies: [],
     })
   })
 

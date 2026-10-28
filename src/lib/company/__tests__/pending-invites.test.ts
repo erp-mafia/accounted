@@ -143,6 +143,53 @@ describe('acceptPendingTeamInviteByToken', () => {
     })
   })
 
+  it('drops chosen companies that left the team and grants the rest', async () => {
+    enqueue({ data: teamInvite({ role: 'member', company_ids: ['co-1', 'co-gone'] }) })
+    enqueue({ data: { id: 'tm-1' } }) // team_members insert
+    enqueue({ data: [{ id: 'co-1' }] }) // only co-1 is still a client of the team
+    enqueue({}) // set_team_member_companies
+    enqueue({ data: { active_company_id: 'existing' } })
+    enqueue({}) // status update
+
+    await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toMatchObject({
+      status: 'accepted',
+    })
+    expect(serviceSupabase.rpc).toHaveBeenCalledWith('set_team_member_companies', {
+      p_team_member_id: 'tm-1',
+      p_company_ids: ['co-1'],
+    })
+  })
+
+  it('fails closed when the chosen companies cannot be granted: no company, no fallback to all', async () => {
+    enqueue({ data: teamInvite({ role: 'member', company_ids: ['co-1'] }) })
+    enqueue({ data: { id: 'tm-1' } }) // team_members insert
+    enqueue({ data: [{ id: 'co-1' }] })
+    enqueue({ error: { message: 'boom' } }) // set_team_member_companies fails
+    enqueue({ data: { active_company_id: null } }) // prefs: none set
+    enqueue({}) // status update
+
+    await expect(acceptPendingTeamInviteByToken(user, 'tok')).resolves.toMatchObject({
+      status: 'accepted',
+    })
+    expect(findCalls('team_members', 'insert')[0]?.[0]).toMatchObject({ all_companies: false })
+    // No company is reachable, so none becomes the active one.
+    expect(findCalls('user_preferences', 'upsert')).toHaveLength(0)
+  })
+
+  it('ignores chosen companies on an admin invite: admins have every company', async () => {
+    enqueue({ data: teamInvite({ role: 'admin', company_ids: ['co-1'] }) })
+    enqueue({}) // team_members insert
+    enqueue({ data: { active_company_id: 'existing' } })
+    enqueue({}) // status update
+
+    await acceptPendingTeamInviteByToken(user, 'tok')
+    expect(findCalls('team_members', 'insert')[0]?.[0]).toMatchObject({
+      role: 'admin',
+      all_companies: true,
+    })
+    expect(serviceSupabase.rpc).not.toHaveBeenCalled()
+  })
+
   it('caps the role: a member invite never becomes owner', async () => {
     enqueue({ data: teamInvite({ role: 'owner' }) })
     enqueue({}) // insert
