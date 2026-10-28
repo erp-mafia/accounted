@@ -106,6 +106,7 @@ vi.mock('@/lib/bokslut/arsredovisning/model', () => ({
 // provider is wired. A provider whose every call throws: a staging preview must
 // never start or poll a BankID session.
 process.env.SIGNING_ENABLED = '1'
+process.env.SIGNING_ARSREDOVISNING_ENABLED = '1'
 vi.mock('@/lib/signing/bankid-provider', () => {
   const noBankId = async (): Promise<never> => {
     throw new Error('a staging preview contacted BankID')
@@ -1014,11 +1015,13 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     rows: { document_attachments: { file_name: 'kvitto.pdf', journal_entry_id: null } },
     empty: ['supplier_invoices', 'expense_claims', 'transactions', 'invoice_inbox_items', 'signing_requests'],
   },
-  // A current PDF in the archive and one outside signer with an address: the
-  // preview reads the row and the signers, never the file or BankID.
+  // A current PDF in the archive and one outside signer with an address, in
+  // a plan that holds signing: the preview reads the row and the signers,
+  // never the file or BankID.
   gnubok_request_signature: {
     args: { title: 'Hyresavtal', signers: [{ name: 'Anna Svensson', email: 'anna@example.se' }] },
     rows: {
+      'rpc:company_capability_grant_rows': { expires_at: null },
       document_attachments: {
         file_name: 'hyresavtal.pdf', mime_type: 'application/pdf', is_current_version: true, file_size_bytes: 48213,
         sha256_hash: '9b2e'.repeat(16), company_id: COMPANY_ID, user_id: USER_ID,
@@ -1063,11 +1066,13 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     args: { role: 'Styrelseledamot', signer_name: 'Anna Andersson' },
     empty: ['arsredovisning_signature_requests'],
   },
-  // A locked version with one pending slot and no open signing request: the
-  // preview checks the slots and the signers, renders and archives nothing.
+  // A locked version with one pending slot and no open signing request, in a
+  // plan that holds signing: the preview checks the slots and the signers,
+  // renders and archives nothing.
   gnubok_request_arsredovisning_signatures: {
     args: { signers: [] },
     rows: {
+      'rpc:company_capability_grant_rows': { expires_at: null },
       annual_report_versions: { status: 'ready_for_signature' },
       fiscal_periods: FISCAL_YEAR_2026,
       arsredovisning_signature_requests: { status: 'pending', signing_method: null, role: 'Styrelseledamot', signer_name: 'Anna Andersson' },

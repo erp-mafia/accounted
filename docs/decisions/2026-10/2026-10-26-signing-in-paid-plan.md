@@ -1,0 +1,1 @@
+[2026-10-26] BankID signing is part of the paid plan and the trial, no fee per document yet: on a yearly plan a per-document charge would reach the invoice only at renewal, we have no usage billing, and volume is small. Completed requests already count per company if a fee comes.

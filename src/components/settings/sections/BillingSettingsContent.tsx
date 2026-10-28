@@ -25,20 +25,23 @@ import { ConnectorSettingsSection } from '@/components/settings/ConnectorSetting
 import { PLAN_PRICES, planPrice } from '@/components/settings/billing-plans'
 import type { BillingPlan } from '@/lib/stripe/client'
 import { useBranding } from '@/lib/branding/brand-context'
+import { useSigningAvailability } from '@/components/signing/use-signing-availability'
 
 // What the paid tier unlocks: the external connections. One item per PAID
 // capability in lib/entitlements/keys.ts (bank_sync, skatteverket,
 // email_send, and stripe_payments + woocommerce_sync + shopify_sync +
 // zettle_sync as one "payments and webshop" item). Keep in step with
-// PAID_CAPABILITIES when a key is added. collections has its own item
-// (UNLOCK_COLLECTIONS_KEY), listed only where the feature is switched on for
-// the viewing company, so merging it shows nothing to anyone.
+// PAID_CAPABILITIES when a key is added. collections and signing have their
+// own items (UNLOCK_COLLECTIONS_KEY, UNLOCK_SIGNING_KEY), listed only where
+// the feature is switched on for the viewing company, so merging them shows
+// nothing to anyone.
 //
 // ai is deliberately not listed (owner, 2026-10-22): the assistant is meant
 // to be sold as an add-on later, so the page does not promise it as part of
 // the subscription. The capability itself is still granted with it.
 const UNLOCK_KEYS = ['unlock_bank', 'unlock_skv', 'unlock_email', 'unlock_payments_webshop'] as const
 const UNLOCK_COLLECTIONS_KEY = 'unlock_collections'
+const UNLOCK_SIGNING_KEY = 'unlock_signing'
 
 // What stays without a subscription (the free plan card). Retention is the
 // last item and carries its own gloss.
@@ -210,6 +213,9 @@ function BillingCoreContent() {
   // pilot list): only then does the paid list name it. A failed read keeps it
   // off, which is the merge-time state anyway.
   const [collectionsOffered, setCollectionsOffered] = useState(false)
+  // Whether BankID signing is switched on for this company (its rollout and
+  // a wired provider), whatever its plan: the paid list names it only then.
+  const signingOffered = useSigningAvailability().offered
 
   useEffect(() => {
     let active = true
@@ -494,6 +500,7 @@ function BillingCoreContent() {
               {collectionsOffered && (
                 <CheckItem label={t(UNLOCK_COLLECTIONS_KEY)} gloss={t(`${UNLOCK_COLLECTIONS_KEY}_gloss`)} />
               )}
+              {signingOffered && <CheckItem label={t(UNLOCK_SIGNING_KEY)} gloss={t(`${UNLOCK_SIGNING_KEY}_gloss`)} />}
             </>
           }
           footer={paidFooter}

@@ -72,6 +72,16 @@ export const CAPABILITY = {
    * toward a case already open at the provider (lib/collections/flags.ts).
    */
   collections: 'collections',
+  /**
+   * BankID signing of archive documents (lib/signing): sending a PDF for
+   * signing, from the app, v1 or MCP, and the board's BankID signatures on a
+   * locked årsredovisning. Part of the paid plan and the trial, no fee per
+   * document yet (docs/decisions/2026-10/2026-10-26-signing-in-paid-plan.md). The grant
+   * gates START paths only (creating a request): a lapsed plan never stops
+   * a signer finishing a request already sent, nor anyone reading the
+   * signed copy and evidence package.
+   */
+  signing: 'signing',
 } as const
 
 export type CapabilityKey = (typeof CAPABILITY)[keyof typeof CAPABILITY]
@@ -107,6 +117,8 @@ export const PAID_CAPABILITIES: readonly CapabilityKey[] = [
   CAPABILITY.multi_user,
   // Trial-seeded since 2026-10-22 (founder decision; paid plan only before).
   CAPABILITY.collections,
+  // Trial-seeded and Stripe-synced since 20261028130000.
+  CAPABILITY.signing,
 ] as const
 
 /**
@@ -122,7 +134,7 @@ export const PAID_PLAN_ONLY_CAPABILITIES: readonly CapabilityKey[] = [] as const
 /**
  * What the company-creation trial seeds: PAID_CAPABILITIES minus the paid-plan
  * only keys. The VALUES list in seed_trial_capability_grants() (latest body in
- * supabase/migrations/20261022120000_collections_in_trial.sql) must match this
+ * supabase/migrations/20261028130000_signing_capability.sql) must match this
  * list; tests/pg/trial-suppression-byra.pg.test.ts pins it.
  */
 export const TRIAL_CAPABILITIES: readonly CapabilityKey[] = PAID_CAPABILITIES.filter(
@@ -188,6 +200,9 @@ export const MCP_TOOL_CAPABILITY_MAP: Readonly<Partial<Record<string, Capability
   // Agent-triggered PSD2 sync: a paid Enable Banking call per account.
   gnubok_sync_bank: CAPABILITY.bank_sync,
   gnubok_connect_skatteverket: CAPABILITY.skatteverket,
+  // Sending a document for BankID signing (createSigningRequest re-checks it).
+  gnubok_request_signature: CAPABILITY.signing,
+  gnubok_request_arsredovisning_signatures: CAPABILITY.signing,
   // The MCP document uploads are not here: they archive the underlag on any
   // tier and skip only the paid OCR without `ai` (createDocumentInboxItem in
   // the MCP server), as the dashboard upload and v1 POST /documents do.
@@ -208,6 +223,8 @@ export const PAID_OPERATION_CAPABILITY_MAP: Readonly<Partial<Record<string, Capa
   reminder_daily_batch: CAPABILITY.email_send,
   submit_vat_declaration: CAPABILITY.skatteverket,
   submit_agi: CAPABILITY.skatteverket,
+  request_signature: CAPABILITY.signing,
+  request_arsredovisning_signatures: CAPABILITY.signing,
 } as const
 
 /**

@@ -45,8 +45,10 @@ const registryGet = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/extensions/registry', () => ({ extensionRegistry: { get: registryGet } }))
 const bankIdEnabled = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/auth/bankid-flags', () => ({ isBankIdEnabled: bankIdEnabled }))
+const capability = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/entitlements/has-capability', () => ({ hasCapability: capability }))
 
-import { cancelSigningRequest, createSigningRequest, describeRequester, remindSigner, type CreateSigningRequestInput } from '../requests'
+import { cancelSigningRequest, createSigningRequest, describeRequester, remindSigner, signingAvailability, type CreateSigningRequestInput } from '../requests'
 
 const NOW = Date.parse('2026-10-25T10:00:00.000Z')
 const STORAGE_PATH = `documents/${COMPANY}/${DOC}.pdf`
@@ -101,6 +103,7 @@ const createdSigners: TableMockResolver = (calls) => {
 beforeEach(() => {
   vi.clearAllMocks()
   vi.stubEnv('SIGNING_ENABLED', '1')
+  vi.stubEnv('SIGNING_ARSREDOVISNING_ENABLED', '1')
   vi.stubEnv('BANKID_ENCRYPTION_KEY', BANKID_TEST_KEY)
   members = [MEMBER]
   role = 'owner'
@@ -122,6 +125,7 @@ beforeEach(() => {
   ctx = { supabase: db.supabase as never, companyId: COMPANY, userId: SENDER, log }
   services = bankIdServices()
   bankIdEnabled.mockReturnValue(true)
+  capability.mockResolvedValue(true)
   registryGet.mockResolvedValue({ id: 'tic', services })
   mail.sendSigningRequestMail.mockResolvedValue({ emailSent: true })
 })
@@ -146,6 +150,22 @@ const insertedSigners = () => (db.payloads('signing_request_signers', 'insert')[
 const insertedPrivates = () => (db.payloads('signing_signer_private', 'insert')[0] ?? []) as Array<Record<string, unknown>>
 const tokenOf = (url: string) => url.split('/signera/')[1]!
 
+describe('signingAvailability', () => {
+  it('offers signing by the rollout and the provider, and lets the plan and the årsredovisning rollout decide the rest', async () => {
+    expect(await signingAvailability(db.supabase as never, COMPANY)).toEqual({ offered: true, available: true, arsredovisning: true })
+
+    vi.stubEnv('SIGNING_ARSREDOVISNING_ENABLED', '')
+    expect(await signingAvailability(db.supabase as never, COMPANY)).toEqual({ offered: true, available: true, arsredovisning: false })
+
+    capability.mockResolvedValue(false)
+    vi.stubEnv('SIGNING_ARSREDOVISNING_ENABLED', '1')
+    expect(await signingAvailability(db.supabase as never, COMPANY)).toEqual({ offered: true, available: false, arsredovisning: false })
+
+    vi.stubEnv('SIGNING_ENABLED', '00000000-0000-4000-8000-0000000000aa')
+    expect(await signingAvailability(db.supabase as never, COMPANY)).toEqual({ offered: false, available: false, arsredovisning: false })
+  })
+})
+
 describe('createSigningRequest refuses', () => {
   it('when the signing switch is off, BankID is off or no provider is wired, before reading anything', async () => {
     vi.stubEnv('SIGNING_ENABLED', '')
@@ -156,6 +176,28 @@ describe('createSigningRequest refuses', () => {
     bankIdEnabled.mockReturnValue(true)
     registryGet.mockResolvedValue(undefined)
     expect(await createSigningRequest(ctx, input())).toEqual({ ok: false, code: 'SIGNING_UNAVAILABLE' })
+    expect(db.tables()).toEqual([])
+  })
+
+  it('when the rollout leaves the company out, before reading anything', async () => {
+    vi.stubEnv('SIGNING_ENABLED', '00000000-0000-4000-8000-0000000000aa')
+    expect(await createSigningRequest(ctx, input())).toEqual({ ok: false, code: 'SIGNING_UNAVAILABLE' })
+    vi.stubEnv('SIGNING_ENABLED', `00000000-0000-4000-8000-0000000000aa, ${COMPANY.toUpperCase()}`)
+    capability.mockResolvedValue(false)
+    expect(await createSigningRequest(ctx, input())).toEqual({ ok: false, code: 'SIGNING_CAPABILITY_BLOCKED' })
+    expect(db.tables()).toEqual([])
+  })
+
+  it('when the plan does not hold signing, and asks the gate for this company only', async () => {
+    capability.mockResolvedValue(false)
+    expect(await createSigningRequest(ctx, input())).toEqual({ ok: false, code: 'SIGNING_CAPABILITY_BLOCKED' })
+    expect(capability).toHaveBeenCalledWith(db.supabase, COMPANY, 'signing')
+    expect(db.tables()).toEqual([])
+  })
+
+  it('an annual-report request while the årsredovisning rollout leaves the company out', async () => {
+    vi.stubEnv('SIGNING_ARSREDOVISNING_ENABLED', '')
+    expect(await createSigningRequest(ctx, input({ annualReportVersionId: VERSION }))).toEqual({ ok: false, code: 'SIGNING_UNAVAILABLE' })
     expect(db.tables()).toEqual([])
   })
 

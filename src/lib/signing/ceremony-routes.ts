@@ -23,14 +23,23 @@ export async function respondDescribe(_request: Request, { scope }: SignerRouteC
   return NextResponse.json({ data: await describeForSigner(scope) }, { headers: NO_STORE })
 }
 
-/** The PDF being signed, inline, only the request's own document. */
-export async function respondDocument(_request: Request, { scope, log, requestId }: SignerRouteContext): Promise<Response> {
-  const { service, request } = scope
+/**
+ * The PDF being signed, inline, only the request's own document. With
+ * ?copy=signed, once everyone has signed, the signed copy instead (the one
+ * every signer was mailed); never the evidence package.
+ */
+export async function respondDocument(request: Request, { scope, log, requestId }: SignerRouteContext): Promise<Response> {
+  const { service, request: signing } = scope
+  const wantsSignedCopy = new URL(request.url).searchParams.get('copy') === 'signed'
+  if (wantsSignedCopy && !(signing.status === 'completed' && signing.signed_document_id)) {
+    return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'signed copy not sealed' })
+  }
+  const documentId = wantsSignedCopy ? signing.signed_document_id! : signing.document_id
   const { data: doc } = await service
     .from('document_attachments')
     .select('file_name, storage_path')
-    .eq('company_id', request.company_id)
-    .eq('id', request.document_id)
+    .eq('company_id', signing.company_id)
+    .eq('id', documentId)
     .maybeSingle()
   const row = doc as { file_name: string; storage_path: string } | null
   if (!row) return errorResponseFromCode('NOT_FOUND', log, { requestId, reason: 'signing document missing' })
@@ -40,7 +49,7 @@ export async function respondDocument(_request: Request, { scope, log, requestId
     status: 200,
     headers: {
       'Content-Type': 'application/pdf',
-      'Content-Disposition': contentDisposition('inline', row.file_name),
+      'Content-Disposition': contentDisposition(wantsSignedCopy ? 'attachment' : 'inline', row.file_name),
       ...NO_STORE,
       'X-Content-Type-Options': 'nosniff',
     },

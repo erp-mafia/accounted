@@ -24,7 +24,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
-import { checkSigners, createSigningRequest, signingAvailable, type CreatedSigningRequest } from '@/lib/signing/requests'
+import { checkSigners, createSigningRequest, signingStartRefusal, type CreatedSigningRequest } from '@/lib/signing/requests'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getArsredovisningESigningPdf } from './file-service'
 
@@ -212,7 +212,8 @@ export async function requestArsredovisningSignatures(
   input: RequestArsredovisningSignaturesInput,
   { dryRun }: { dryRun: boolean },
 ): Promise<OperationOutcome<CreatedSigningRequest>> {
-  if (!(await signingAvailable())) return { ok: false, code: 'SIGNING_UNAVAILABLE' }
+  const refusal = await signingStartRefusal(ctx.supabase, ctx.companyId, { arsredovisning: true })
+  if (refusal) return { ok: false, code: refusal }
   const checked = await checkVersion(ctx, input)
   if (!checked.ok) return checked
   const pairs = pairSigners(checked.slots, input.signers)

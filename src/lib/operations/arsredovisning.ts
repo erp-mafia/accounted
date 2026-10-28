@@ -614,6 +614,7 @@ export const arsredovisningRequestSignatures = defineOperation({
       'SIGNING_REQUEST_ALREADY_OPEN: the version already waits in another request (details.signing_request_id).',
       'A name in the roster that differs from the signer\'s BankID name is refused at signing (SIGNING_NAME_MISMATCH): fix the name and lock a new version.',
       'Locking a new version cancels this request; signatures already made stay on the old version.',
+      'SIGNING_CAPABILITY_BLOCKED: signing is part of the paid plan and the trial; the company has neither.',
     ],
     example: {
       request: { signers: [{ signature_id: '7c1a…', email: 'anna@example.se' }] },
@@ -644,6 +645,7 @@ export const arsredovisningRequestSignatures = defineOperation({
   output: SigningRequestCreatedOut,
   errorCodes: [
     'SIGNING_UNAVAILABLE',
+    'SIGNING_CAPABILITY_BLOCKED',
     'ARSREDOVISNING_VERSION_NOT_SIGNABLE',
     'ARSREDOVISNING_SIGNING_TRACK_MIXED',
     'SIGNING_REQUEST_ALREADY_OPEN',

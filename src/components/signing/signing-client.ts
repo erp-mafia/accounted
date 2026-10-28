@@ -74,6 +74,8 @@ export function memberSignerBase(signerId: string): string {
 export interface SignerClient {
   /** Where the PDF being signed is served inline (the page embeds it and links it). */
   documentUrl: string
+  /** Where the signed copy is served once everyone has signed. */
+  signedCopyUrl: string
   describe(): Promise<SignerPageData>
   start(): Promise<StartedSigning>
   poll(signal?: AbortSignal): Promise<SignerPollAnswer>
@@ -85,6 +87,7 @@ export interface SignerClient {
 export function createSignerClient(base: string): SignerClient {
   return {
     documentUrl: `${base}/document`,
+    signedCopyUrl: `${base}/document?copy=signed`,
     describe: () => send<SignerPageData>(base),
     start: () => send<StartedSigning>(`${base}/start`, { method: 'POST' }),
     poll: (signal) => send<SignerPollAnswer>(`${base}/poll`, { method: 'POST', signal }),
@@ -101,10 +104,21 @@ export function createSignerClient(base: string): SignerClient {
 // The sender: the session routes
 // ---------------------------------------------------------------------------
 
-/** Whether signing with BankID is open here (the switch and a wired provider). */
-export async function fetchSigningAvailability(): Promise<boolean> {
-  const data = await send<{ available: boolean }>('/api/signing/availability')
-  return data.available === true
+export interface SigningAvailabilityView {
+  /** Signing exists for the active company (the rollout and a wired provider). */
+  offered: boolean
+  /** It may send documents for signing (offered, and in its plan or trial). */
+  available: boolean
+  /** It may send a locked årsredovisning to its board. */
+  arsredovisning: boolean
+}
+
+export const SIGNING_UNAVAILABLE_VIEW: SigningAvailabilityView = { offered: false, available: false, arsredovisning: false }
+
+/** What the active company may do with BankID signing (GET /api/signing/availability). */
+export async function fetchSigningAvailability(): Promise<SigningAvailabilityView> {
+  const data = await send<Partial<SigningAvailabilityView>>('/api/signing/availability')
+  return { offered: data.offered === true, available: data.available === true, arsredovisning: data.arsredovisning === true }
 }
 
 export interface CreateSigningRequestInput {

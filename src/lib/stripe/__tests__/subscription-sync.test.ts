@@ -155,8 +155,8 @@ describe('applySubscriptionState', () => {
     const grantUpsert = calls.find((c) => c.table === 'capability_grants')
     expect(grantUpsert?.op).toBe('upsert')
     const rows = grantUpsert?.payload as Array<{ capability_key: string; source: string }>
-    // Every paid key, collections included.
-    expect(rows.map((r) => r.capability_key).sort()).toEqual(['ai', 'bank_sync', 'collections', 'email_send', 'multi_user', 'shopify_sync', 'skatteverket', 'stripe_payments', 'woocommerce_sync', 'zettle_sync'])
+    // Every paid key, collections and signing included.
+    expect(rows.map((r) => r.capability_key).sort()).toEqual(['ai', 'bank_sync', 'collections', 'email_send', 'multi_user', 'shopify_sync', 'signing', 'skatteverket', 'stripe_payments', 'woocommerce_sync', 'zettle_sync'])
     expect(rows.every((r) => r.source === 'stripe')).toBe(true)
   })
 

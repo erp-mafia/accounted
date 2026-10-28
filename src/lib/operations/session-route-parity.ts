@@ -560,6 +560,8 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/signing/me/:signerId/poll': uiOnly(SIGNING_CEREMONY),
   'POST /api/signing/me/:signerId/cancel': uiOnly(SIGNING_CEREMONY),
   'POST /api/signing/me/:signerId/decline': uiOnly(SIGNING_CEREMONY),
+  // The public check of a signed file (/verifiera): a read by hash for anyone holding the file, nothing it changes.
+  'POST /api/verifiera': uiOnly('public check of a signed file by its SHA-256 (/verifiera): it reads what the copy itself prints and changes nothing, so no machine door needs it'),
 
   // ── Bank connections through Open Payments (lib/bank-feed) ──────────
   'POST /api/bank/open-payments/connections': uiOnly(BANK_CONSENT),

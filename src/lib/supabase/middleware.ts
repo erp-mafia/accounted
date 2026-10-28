@@ -436,6 +436,13 @@ async function updateSessionInner(
     return supabaseResponse
   }
 
+  // The public check of a signed copy: anyone holding a PDF signed through
+  // Accounted can see whether it is the copy that was signed (the browser
+  // hashes the file; only the SHA-256 is sent). See app/verifiera/page.tsx.
+  if (pathname === '/verifiera') {
+    return supabaseResponse
+  }
+
   // Reset-password is reachable in both auth states. The recovery flow lands
   // here with a fresh session (created by the OTP exchange in /auth/callback)
   // precisely so the user can call supabase.auth.updateUser({ password }). If

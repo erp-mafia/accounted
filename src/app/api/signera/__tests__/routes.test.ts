@@ -181,6 +181,7 @@ describe('GET /api/signera/:token', () => {
         sha256: 'ab'.repeat(32),
         state: 'open',
         expires_at: EXPIRES,
+        signed_copy: false,
       },
       signer: { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending', signed_at: null, bankid_name: null, locked: true, last_error_code: null },
       signers: [
@@ -210,6 +211,24 @@ describe('GET /api/signera/:token/document', () => {
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
     expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array([0x25, 0x50, 0x44, 0x46]))
     expect(db.findCalls('document_attachments', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY], ['id', DOC]]))
+  })
+
+  it('answers the signed copy as a download with ?copy=signed once everyone has signed and it is sealed', async () => {
+    const token = freshToken()
+    db.setTable('signing_requests', { data: requestRow({ status: 'completed', completed_at: new Date().toISOString(), signed_document_id: 'signed-doc', evidence_document_id: 'evidence-doc' }) })
+    const res = await documentRoute(get(`/api/signera/${token}/document?copy=signed`), params(token))
+    expect(res.status).toBe(200)
+    expect(res.headers.get('Content-Disposition')).toContain('attachment')
+    expect(db.findCalls('document_attachments', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY], ['id', 'signed-doc']]))
+    expect(db.findCalls('document_attachments', 'eq')).not.toEqual(expect.arrayContaining([['id', 'evidence-doc']]))
+  })
+
+  it('answers 404 for ?copy=signed before the request is completed and sealed, without reading the archive', async () => {
+    const token = freshToken()
+    expect((await documentRoute(get(`/api/signera/${token}/document?copy=signed`), params(token))).status).toBe(404)
+    db.setTable('signing_requests', { data: requestRow({ status: 'completed', completed_at: new Date().toISOString() }) })
+    expect((await documentRoute(get(`/api/signera/${token}/document?copy=signed`), params(token))).status).toBe(404)
+    expect(db.findCalls('document_attachments', 'eq')).toEqual([])
   })
 
   it('answers 404 when the document or its file is gone', async () => {

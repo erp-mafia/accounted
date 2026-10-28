@@ -159,7 +159,7 @@ export const signingRequestsCreate = defineOperation({
     description:
       'Freezes the document by its SHA-256 and creates one link per signer to a page at /signera/<token> where they read the PDF and sign it with BankID (an advanced electronic signature under eIDAS). ' +
       `Links are valid expires_in_days (default ${SIGNING_DEFAULT_TTL_DAYS}, at most ${SIGNING_MAX_TTL_DAYS}). Signers with an email get a mail; the answer carries the url only for a signer no mail reached. ` +
-      'A member of the company (user_id) can also sign in the app. When everyone has signed, the archive gets the signed PDF (with a Signeringsbevis page) and Bevispaket.zip; read them from GET /signing-requests/{id} or the signing.completed webhook. ' +
+      'A member of the company (user_id) can also sign in the app. When everyone has signed, the archive gets the signed PDF (with a Signeringsbevis page) and Bevispaket.zip, and every signer with an email gets the signed PDF; read them from GET /signing-requests/{id} or the signing.completed webhook. ' +
       'Dry-runnable: ?dry_run=true answers what would be sent and mints nothing.',
     useWhen: 'An agreement, minutes, a policy or any other PDF in the archive needs signatures from people inside or outside the company.',
     doNotUseFor: 'Signing bank payments (POST /payments/signing-links), the fastställelseintyg (signed at Bolagsverket), or documents that are not PDFs.',
@@ -168,7 +168,8 @@ export const signingRequestsCreate = defineOperation({
       'SIGNING_DOCUMENT_UNSUPPORTED: only the current version of a PDF of at most 10 MB without a password can be signed.',
       'SIGNING_SIGNERS_INVALID: a name is required, an email or member appears once, and user_id must be a member of the company (details.reason says which).',
       'A personnummer cannot be sent here; locking a signer to one person is done in the app.',
-      'SIGNING_UNAVAILABLE: BankID signing is not switched on for this deployment.',
+      'SIGNING_UNAVAILABLE: BankID signing is not switched on for this company.',
+      'SIGNING_CAPABILITY_BLOCKED: signing is part of the paid plan and the trial; the company has neither.',
     ],
     example: {
       request: {
@@ -201,7 +202,7 @@ export const signingRequestsCreate = defineOperation({
     })
     .strict(),
   output: SigningRequestCreatedOut,
-  errorCodes: ['SIGNING_UNAVAILABLE', 'SIGNING_DOCUMENT_NOT_FOUND', 'SIGNING_DOCUMENT_UNSUPPORTED', 'SIGNING_DOCUMENT_CHANGED', 'SIGNING_SIGNERS_INVALID'],
+  errorCodes: ['SIGNING_UNAVAILABLE', 'SIGNING_CAPABILITY_BLOCKED', 'SIGNING_DOCUMENT_NOT_FOUND', 'SIGNING_DOCUMENT_UNSUPPORTED', 'SIGNING_DOCUMENT_CHANGED', 'SIGNING_SIGNERS_INVALID'],
   http: { method: 'POST', path: '/api/v1/companies/:companyId/signing-requests' },
   mcp: {
     name: 'gnubok_request_signature',

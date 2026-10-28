@@ -193,8 +193,9 @@ export default function ArsredovisningPage() {
   const evidenceFileInput = useRef<HTMLInputElement>(null)
   const hasLockedVersion = versions.some((version) => version.status === 'ready_for_signature')
   // The board's BankID signing (lib/bokslut/arsredovisning/bankid-signing.ts):
-  // offered only where signing is open here, and one track per version.
-  const signingAvailable = useSigningAvailability()
+  // offered only where it is open for this company (its own rollout on top of
+  // signing, SIGNING_ARSREDOVISNING_ENABLED, and the plan), one track per version.
+  const signingAvailable = useSigningAvailability().arsredovisning
   const [signingReload, setSigningReload] = useState(0)
   const [manualOpen, setManualOpen] = useState(false)
   // A version the board signed with BankID is no longer a locked one: its
