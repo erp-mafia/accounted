@@ -33,6 +33,14 @@ const VALID_SIE = [
 
 const UNBALANCED_SIE = VALID_SIE.replace('#TRANS 3001 {} -1000.00', '#TRANS 3001 {} -900.00')
 
+// A whole-year export: the same verifikat with the year's #UB and #RES.
+// VALID_SIE alone carries verifikat and no balances, the shape of a card
+// provider's or payroll's file (crm#1049).
+const WHOLE_YEAR_SIE = VALID_SIE.replace(
+  '#KONTO 3001 "Försäljning"',
+  '#KONTO 3001 "Försäljning"\n#UB 0 1930 1000.00\n#RES 0 3001 -1000.00',
+)
+
 type MockConfig = {
   storedMappings?: unknown[]
   companyOrg?: string | null
@@ -238,7 +246,7 @@ describe('gnubok_sie_preflight', () => {
 
   it('returns verdict duplicate when the fiscal year overlaps a completed import', async () => {
     const result = await run(
-      { file_content: VALID_SIE },
+      { file_content: WHOLE_YEAR_SIE },
       {
         duplicatePeriod: {
           id: 'imp-2',
@@ -251,6 +259,23 @@ describe('gnubok_sie_preflight', () => {
 
     expect(result.verdict).toBe('duplicate')
     expect((result.duplicate as Record<string, unknown>).kind).toBe('period')
+  })
+
+  it('blocks a verifikat-only file over an imported year instead of offering the replacement (crm#1049)', async () => {
+    const result = await run(
+      { file_content: VALID_SIE },
+      {
+        duplicatePeriod: {
+          id: 'imp-2',
+          fiscal_year_start: `${YEAR}-01-01`,
+          fiscal_year_end: `${YEAR}-12-31`,
+          imported_at: '2026-08-01T00:00:00Z',
+        },
+      }
+    )
+
+    expect(result.verdict).toBe('blocked')
+    expect(JSON.stringify(result)).toContain('Ångra inte den tidigare importen')
   })
 
   // crm#1099: on top of earlier bookkeeping the file's #IB is not booked, so
@@ -428,7 +453,7 @@ describe('gnubok_sie_preflight: the import\'s admission rule', () => {
   })
 
   it('an import the overlap test cannot see (its verifikat in the year): duplicate', async () => {
-    const result = await run({ file_content: VALID_SIE }, {
+    const result = await run({ file_content: WHOLE_YEAR_SIE }, {
       period: OPEN_YEAR,
       admission: { reason: 'existing_import', import_id: 'imp-legacy' },
     })

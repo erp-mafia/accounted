@@ -12136,6 +12136,7 @@
       "validation_title": "Valideringsfel i SIE-filen",
       "validation_description": "{count} fel hittades som måste åtgärdas.",
       "parse_failed_title": "Kunde inte läsa filen",
+      "vouchers_only_title": "Filen kan inte läggas till i ett importerat år",
       "chart_load_failed": "Kunde inte hämta kontoplanen för momsgranskning.",
       "parsed_title": "Fil analyserad",
       "parsed_description": "{accounts} konton och {vouchers} verifikationer hittades",

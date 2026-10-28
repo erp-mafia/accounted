@@ -47,6 +47,7 @@ registerEndpoint({
     'Files up to 50 MB use POST /imports/sie/upload, then upload bytes to Storage and submit storagePath + filename. Inline multipart is limited by the hosting gateway.',
     'An identical retry returns the same execution. Deliberate replacement requires options.onExistingPeriod=replace and options.supersedesImportId naming the reviewed predecessor, and uses a new batch after storno.',
     'A fiscal year that already has a posted ingående balans booked outside an import (by hand or by a year-end close) answers 409 SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE when the import would book the file\'s IB on top of it (importOpeningBalances true and no earlier bookkeeping): resend with options.importOpeningBalances=false to import the vouchers on top of the posted IB. A year that already holds an import answers 409 SIE_IMPORT_PERIOD_ALREADY_IMPORTED.',
+    'A file with #VER and no #IB, #UB or #RES (a card provider, payroll or POS export) is never a replacement of an imported year: 409 SIE_IMPORT_VOUCHERS_ONLY_FILE. Never undo the year\'s import for it: create its vouchers with POST /journal-entries.',
     'A file whose #ORGNR is not the company\'s organisation number answers 409 SIE_IMPORT_ORG_NUMBER_MISMATCH with both numbers in details. Check with the user, then resend with options.confirmOrgNumberMismatch=true to import it anyway. A file without #ORGNR is not checked.',
     'The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
     'Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.',
@@ -199,7 +200,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
     } catch (err) {
       // Both numbers travel in details so the caller can show them; every
       // other refusal keeps the wrapper's mapping.
-      if (err instanceof SIEJobValidationError && err.code === 'SIE_IMPORT_ORG_NUMBER_MISMATCH') {
+      if (
+        err instanceof SIEJobValidationError &&
+        (err.code === 'SIE_IMPORT_ORG_NUMBER_MISMATCH' || err.code === 'SIE_IMPORT_VOUCHERS_ONLY_FILE')
+      ) {
         return v1ErrorResponseFromCode(err.code, ctx.log, { requestId: ctx.requestId, details: err.details })
       }
       throw err

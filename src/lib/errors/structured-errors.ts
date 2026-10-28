@@ -4496,6 +4496,23 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_sv: 'En SIE-import för ett överlappande räkenskapsår finns redan.',
     message_en: 'An SIE import for an overlapping fiscal period already exists.',
   },
+  // crm#1049: a file with verifikat and no balances (SIE 4I shape: a card
+  // provider's, payroll's or POS system's export) for a year that already
+  // holds an import. The import reads whole years, and replacing the year's
+  // import with it would drop every verifikat it does not carry.
+  SIE_IMPORT_VOUCHERS_ONLY_FILE: {
+    httpStatus: 409,
+    message_sv:
+      'Filen innehåller bara verifikationer, till exempel från ett kortföretag eller ett lönesystem, och räkenskapsåret är redan importerat. SIE-importen läser in hela räkenskapsår och kan inte lägga till verifikationer i ett importerat år. Ångra inte den tidigare importen: bokför filens verifikationer som vanliga verifikationer under Bokföring i stället.',
+    message_en:
+      'The file holds only vouchers, for example from a card provider or a payroll system, and the fiscal year is already imported. The SIE import reads whole fiscal years and cannot add vouchers to an imported year. Do not undo the earlier import: book the file\'s vouchers as ordinary vouchers under Bookkeeping instead.',
+    retryable: false,
+    remediation: {
+      description:
+        'Do not undo or replace the year\'s import (details.existing_import_id). Create each #VER of the file as an ordinary voucher (gnubok_create_voucher), checking first that it is not already booked (same date, amount and text).',
+      tool: 'gnubok_create_voucher',
+    },
+  },
   // start_sie_import_job's guard 'Existing SIE import requires reviewed
   // replacement or reconciliation' (55000), mapped by jobDatabaseError: the
   // year holds an earlier import's verifikat, or an import record overlaps
@@ -4503,11 +4520,11 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
   // (crm#1272).
   SIE_IMPORT_PERIOD_ALREADY_IMPORTED: {
     httpStatus: 409,
-    message_sv: 'Räkenskapsåret har redan importerats. Öppna importhistoriken och ångra den tidigare importen innan du importerar året igen.',
-    message_en: 'This fiscal year has already been imported. Open import history and undo the earlier import before importing the year again.',
+    message_sv: 'Räkenskapsåret har redan importerats, och SIE-importen läser in hela räkenskapsår. Ska året ersättas: öppna importhistoriken och ångra den tidigare importen först. Ska verifikationer från en annan fil läggas till: bokför dem som vanliga verifikationer i stället.',
+    message_en: 'This fiscal year has already been imported, and the SIE import reads whole fiscal years. To replace the year: open import history and undo the earlier import first. To add vouchers from another file: book them as ordinary vouchers instead.',
     retryable: false,
     remediation: {
-      description: 'Read gnubok_sie_import_status for the earlier import of this fiscal year, undo it (gnubok_undo_sie_import or import history in the app), then import the year again.',
+      description: 'Only when the file replaces the whole year: read gnubok_sie_import_status for the earlier import of this fiscal year, undo it (gnubok_undo_sie_import or import history in the app), then import the year again. When the file only adds verifikat (a card provider, payroll or POS export), never undo: create them as vouchers (gnubok_create_voucher).',
       tool: 'gnubok_sie_import_status',
       resource: '/import?mode=sie',
     },

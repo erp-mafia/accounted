@@ -24176,11 +24176,17 @@ export const tools: McpTool[] = [
       // What would refuse the import now although the file is fine: the
       // fiscal year conflicts with the company's years, or another import is
       // not finished. Swedish, for the widget and the user.
+      // A verifikat-only file (card provider, payroll, POS) over an imported
+      // year: neither an import nor a replacement of the year (crm#1049).
+      const { isVoucherOnlySIE } = await import('@/lib/import/sie-voucher-only')
+      const voucherOnlyOverImport =
+        Boolean(duplicatePeriod || refusal?.reason === 'existing_import') && isVoucherOnlySIE(parsed)
       const blockingTexts = [
         ...(fiscalYearRefusal ? [fiscalYearRefusal] : []),
         ...(unfinishedImport
           ? ['En annan SIE-import för företaget är inte klar. Låt den bli klar, eller ångra den, innan den här filen importeras.']
           : []),
+        ...(voucherOnlyOverImport ? [getErrorEntry('SIE_IMPORT_VOUCHERS_ONLY_FILE')?.message_sv ?? ''] : []),
       ]
       const bookedIbTexts = bookedIb
         ? [
@@ -24191,7 +24197,7 @@ export const tools: McpTool[] = [
       const allWarnings = [...validation.warnings, ...encodingWarnings, ...bookedIbTexts, ...continuityTexts]
       const verdict = !validation.valid
         ? 'invalid'
-        : duplicate
+        : duplicate && !voucherOnlyOverImport
           ? 'duplicate'
           : blockingTexts.length > 0
             ? 'blocked'
