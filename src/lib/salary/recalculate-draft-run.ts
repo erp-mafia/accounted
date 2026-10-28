@@ -41,6 +41,7 @@ export interface StoredPayslipRow {
   is_gross_deduction?: boolean | null
   source_benefit_id?: string | null
   source_recurring_line_id?: string | null
+  benefit_type?: string | null
 }
 
 export interface PayslipInspection {
@@ -66,7 +67,7 @@ const GROSS_DEDUCTION_ITEM_TYPES = ['gross_deduction_pension', 'gross_deduction_
  */
 export function inspectStoredPayslip(rows: readonly StoredPayslipRow[]): PayslipInspection {
   const grossDeductions = rows.filter((row) => GROSS_DEDUCTION_ITEM_TYPES.includes(row.item_type))
-  const lines = rows.map((row) => ({ itemType: row.item_type, amount: row.amount, row }))
+  const lines = rows.map((row) => ({ itemType: row.item_type, amount: row.amount, benefitType: row.benefit_type, row }))
   const resolution = resolveTaxableBenefits(lines)
   if (!resolution.ok) return { grossDeductions, flagged: [], resolutionError: resolution.error }
   return {

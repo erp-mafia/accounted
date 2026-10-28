@@ -108,6 +108,7 @@ describe('PATCH /api/salary/employees/[id]/recurring-lines/[lineId]', () => {
     expect(Object.keys(update?.[0] as Record<string, unknown>).sort()).toEqual([
       'account_number',
       'amount',
+      'benefit_type',
       'description',
       'is_active',
       'metadata',

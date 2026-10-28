@@ -68,6 +68,7 @@ const LineItemSchema = z
     item_type: z.string(),
     amount: z.number().nullable().optional(),
     quantity: z.number().nullable().optional(),
+    benefit_type: z.string().nullable().optional(),
   })
   .passthrough()
 
@@ -153,7 +154,7 @@ const NO_BENEFITS: TaxableBenefits = {
   grossTotal: 0,
   paid: 0,
   reduction: 0,
-  reducedType: null,
+  reducedTypes: [],
   taxableTotal: 0,
 }
 
@@ -479,7 +480,7 @@ export async function generateAgiDeclaration(
       }
     }
     const resolution = resolveTaxableBenefits(
-      (sre.line_items ?? []).map((li) => ({ itemType: li.item_type, amount: li.amount ?? 0 })),
+      (sre.line_items ?? []).map((li) => ({ itemType: li.item_type, amount: li.amount ?? 0, benefitType: li.benefit_type })),
     )
     if (!resolution.ok) {
       return {

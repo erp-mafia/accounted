@@ -22,6 +22,10 @@
  *   - account_number is a four-digit BAS number or null (null lets the
  *     engine fall back to its item-type mapping);
  *   - money is rounded with roundOre();
+ *   - benefit_type names the benefit a net_deduction_benefit_payment pays
+ *     for (crm#1492). It must be one the employee has registered, and an
+ *     unnamed payment next to two or more registered benefit types is
+ *     refused when the line is staged, not when a run is calculated;
  *   - deleting a line that a run has already derived from is refused by the
  *     NO ACTION FK on salary_line_items.source_recurring_line_id; the line is
  *     deactivated instead so the provenance link stays intact.
@@ -37,6 +41,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
 import {
+  RECURRING_LINE_BENEFIT_TYPE_MESSAGE,
   RECURRING_LINE_PERIOD_ORDER_MESSAGE,
   type CreateEmployeeRecurringLineSchema,
   type UpdateEmployeeRecurringLineSchema,
@@ -48,6 +53,12 @@ import {
   type RecurringLineItemType,
 } from '@/lib/salary/recurring-lines'
 import { isTextRow, normalizeTextRow, validateTextRow } from '@/lib/salary/text-rows'
+import {
+  BENEFIT_PAYMENT_ITEM_TYPE,
+  PAYMENT_BENEFIT_TYPES,
+  paymentBenefitLabel,
+  type PaymentBenefitType,
+} from '@/lib/salary/benefit-payments'
 
 export interface RecurringLineFailure {
   ok: false
@@ -70,6 +81,8 @@ export interface EmployeeRecurringLineRow {
   description: string
   amount: number
   account_number: string | null
+  /** On a net_deduction_benefit_payment line: the benefit it pays for; null = the only one. */
+  benefit_type: PaymentBenefitType | null
   valid_from: string
   valid_to: string | null
   metadata: Record<string, unknown>
@@ -95,7 +108,7 @@ export type DeleteEmployeeRecurringLineOutcome =
  * can verify the select. The dashboard historically selected `*`; listing
  * the columns keeps its payload identical. */
 export const RECURRING_LINE_COLUMNS =
-  'id, employee_id, company_id, user_id, item_type, description, amount, account_number, ' +
+  'id, employee_id, company_id, user_id, item_type, description, amount, account_number, benefit_type, ' +
   'valid_from, valid_to, metadata, is_active, created_at, updated_at'
 
 function validationFailure(field: string, message: string): RecurringLineFailure {
@@ -179,6 +192,67 @@ function textFailure(description: string): RecurringLineFailure | null {
   return issue ? validationFailure(issue.field, issue.message) : null
 }
 
+/**
+ * The benefit a nettolöneavdrag för förmån pays for, against the employee's
+ * benefit register (active, valid on or after the line starts). Checked when
+ * the line is staged so the caller learns it then, not at
+ * gnubok_calculate_salary_run (crm#1492):
+ *   - a named benefit must be one the employee has registered;
+ *   - unnamed, with two or more registered benefit types, the payment cannot
+ *     be matched to one (benefit-payments.ts refuses it at calculation), so
+ *     it is refused here. Zero-valued benefits count: they are still a kind
+ *     the payment could be for.
+ * `requireNamed` is false on an update, so an unrelated edit of a stored
+ * line is never blocked.
+ */
+async function paymentBenefitFailure(
+  supabase: SupabaseClient,
+  args: {
+    companyId: string
+    employeeId: string
+    itemType: string
+    benefitType: PaymentBenefitType | null
+    validFrom: string
+    requireNamed: boolean
+  },
+): Promise<RecurringLineFailure | null> {
+  if (args.itemType !== BENEFIT_PAYMENT_ITEM_TYPE) {
+    return args.benefitType ? validationFailure('benefit_type', RECURRING_LINE_BENEFIT_TYPE_MESSAGE) : null
+  }
+  if (!args.benefitType && !args.requireNamed) return null
+
+  const { data, error } = await supabase
+    .from('employee_benefits')
+    .select('benefit_type, valid_to')
+    .eq('employee_id', args.employeeId)
+    .eq('company_id', args.companyId)
+    .eq('is_active', true)
+  if (error) return dbFailure(error)
+  const registered = new Set(
+    ((data ?? []) as Array<{ benefit_type: string; valid_to: string | null }>)
+      .filter((b) => !b.valid_to || b.valid_to >= args.validFrom)
+      .map((b) => b.benefit_type),
+  )
+  const types = PAYMENT_BENEFIT_TYPES.filter((type) => registered.has(type))
+  const names = types.map(paymentBenefitLabel).join(', ')
+
+  if (args.benefitType) {
+    if (registered.has(args.benefitType)) return null
+    return validationFailure(
+      'benefit_type',
+      `Den anställde har ingen registrerad ${paymentBenefitLabel(args.benefitType)} som gäller från ${args.validFrom}. ` +
+        (types.length > 0
+          ? `Ange en av den anställdes förmåner (${names}), eller lägg upp förmånen först.`
+          : 'Lägg upp förmånen först.'),
+    )
+  }
+  if (types.length < 2) return null
+  return validationFailure(
+    'benefit_type',
+    `Den anställde har flera förmånstyper (${names}): ange vilken förmån avdraget betalar (benefit_type), annars går lönen inte att räkna.`,
+  )
+}
+
 export async function listEmployeeRecurringLines(
   supabase: SupabaseClient,
   args: {
@@ -193,7 +267,7 @@ export async function listEmployeeRecurringLines(
 
   let query = supabase
     .from('employee_recurring_lines')
-    .select('id, employee_id, company_id, user_id, item_type, description, amount, account_number, valid_from, valid_to, metadata, is_active, created_at, updated_at')
+    .select('id, employee_id, company_id, user_id, item_type, description, amount, account_number, benefit_type, valid_from, valid_to, metadata, is_active, created_at, updated_at')
     .eq('employee_id', args.employeeId)
     .eq('company_id', args.companyId)
     .order('valid_from', { ascending: false })
@@ -233,6 +307,17 @@ export async function createEmployeeRecurringLine(
   const emp = await assertEmployee(supabase, args.companyId, args.employeeId)
   if (!emp.ok) return emp
 
+  const benefitType = input.benefit_type ?? null
+  const invalidBenefit = await paymentBenefitFailure(supabase, {
+    companyId: args.companyId,
+    employeeId: args.employeeId,
+    itemType: input.item_type,
+    benefitType,
+    validFrom: input.valid_from,
+    requireNamed: true,
+  })
+  if (invalidBenefit) return invalidBenefit
+
   const row = {
     employee_id: args.employeeId,
     company_id: args.companyId,
@@ -243,6 +328,7 @@ export async function createEmployeeRecurringLine(
     // the amount of every other row.
     amount: text ? 0 : roundOre(input.amount as number),
     account_number: text ? null : (input.account_number ?? null),
+    benefit_type: benefitType,
     valid_from: input.valid_from,
     valid_to: input.valid_to ?? null,
     metadata: input.metadata ?? {},
@@ -263,12 +349,13 @@ export async function createEmployeeRecurringLine(
       description: row.description,
       amount: row.amount,
       account_number: row.account_number,
+      benefit_type: row.benefit_type,
       valid_from: row.valid_from,
       valid_to: row.valid_to,
       metadata: row.metadata,
       is_active: row.is_active,
     })
-    .select('id, employee_id, company_id, user_id, item_type, description, amount, account_number, valid_from, valid_to, metadata, is_active, created_at, updated_at')
+    .select('id, employee_id, company_id, user_id, item_type, description, amount, account_number, benefit_type, valid_from, valid_to, metadata, is_active, created_at, updated_at')
     .single()
 
   if (error) return mapWriteError(error)
@@ -292,7 +379,7 @@ export async function updateEmployeeRecurringLine(
   // under another employee or company is simply not found.
   const { data: existingRow, error: fetchError } = await supabase
     .from('employee_recurring_lines')
-    .select('id, employee_id, company_id, user_id, item_type, description, amount, account_number, valid_from, valid_to, metadata, is_active, created_at, updated_at')
+    .select('id, employee_id, company_id, user_id, item_type, description, amount, account_number, benefit_type, valid_from, valid_to, metadata, is_active, created_at, updated_at')
     .eq('id', args.lineId)
     .eq('employee_id', args.employeeId)
     .eq('company_id', args.companyId)
@@ -326,6 +413,18 @@ export async function updateEmployeeRecurringLine(
   const invalidAccount = accountFailure(patch.account_number)
   if (invalidAccount) return invalidAccount
 
+  if (patch.benefit_type !== undefined) {
+    const invalidBenefit = await paymentBenefitFailure(supabase, {
+      companyId: args.companyId,
+      employeeId: args.employeeId,
+      itemType: existing.item_type,
+      benefitType: patch.benefit_type,
+      validFrom: mergedValidFrom ?? existing.valid_from,
+      requireNamed: false,
+    })
+    if (invalidBenefit) return invalidBenefit
+  }
+
   // Explicit literal keys (not a body spread) so the phantom-column scanner
   // can verify every column this update can touch.
   const updates: Record<string, unknown> = {}
@@ -335,6 +434,7 @@ export async function updateEmployeeRecurringLine(
   if (patch.amount !== undefined) updates.amount = roundOre(patch.amount)
   // A text row has no account to set.
   if (patch.account_number !== undefined && !text) updates.account_number = patch.account_number
+  if (patch.benefit_type !== undefined) updates.benefit_type = patch.benefit_type
   if (patch.valid_from !== undefined) updates.valid_from = patch.valid_from
   if (patch.valid_to !== undefined) updates.valid_to = patch.valid_to
   if (patch.metadata !== undefined) updates.metadata = patch.metadata
@@ -356,6 +456,7 @@ export async function updateEmployeeRecurringLine(
       description: updates.description,
       amount: updates.amount,
       account_number: updates.account_number,
+      benefit_type: updates.benefit_type,
       valid_from: updates.valid_from,
       valid_to: updates.valid_to,
       metadata: updates.metadata,
@@ -364,7 +465,7 @@ export async function updateEmployeeRecurringLine(
     .eq('id', args.lineId)
     .eq('employee_id', args.employeeId)
     .eq('company_id', args.companyId)
-    .select('id, employee_id, company_id, user_id, item_type, description, amount, account_number, valid_from, valid_to, metadata, is_active, created_at, updated_at')
+    .select('id, employee_id, company_id, user_id, item_type, description, amount, account_number, benefit_type, valid_from, valid_to, metadata, is_active, created_at, updated_at')
     .single()
 
   if (error) {

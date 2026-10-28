@@ -1,0 +1,1 @@
+[2026-10-28] A benefit payment names its benefit by type (benefit_type, employee_benefits' vocabulary), not by employee_benefit_id: the AGI and the reduction key on the type, it covers hand-entered benefit rows, and it lifts the 2026-09-21 two-type refusal for named payments (crm#1492).

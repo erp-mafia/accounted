@@ -7,6 +7,7 @@ import {
   baseLineItemAccount,
   isCachedDefaultAccount,
   lineItemAccount,
+  netDeductionAccount,
   splitVacationLiabilityChange,
   vacationLiabilityChangeAccount,
 } from '../account-mapping'
@@ -79,6 +80,26 @@ describe('lineItemAccount', () => {
   it('reads a missing category as tjänsteman', () => {
     expect(lineItemAccount('monthly_salary', { employmentType: 'employee' })).toBe('7210')
     expect(baseLineItemAccount('monthly_salary')).toBe('7210')
+  })
+})
+
+describe('netDeductionAccount: a benefit payment books on the benefit it names (crm#1492)', () => {
+  const owner = { employmentType: 'company_owner' }
+  it('follows the named benefit: bostad 7381, kost 7382, bil 7385, the rest as the benefit row maps', () => {
+    expect(netDeductionAccount('net_deduction_benefit_payment', 'housing', owner)).toBe('7381')
+    expect(netDeductionAccount('net_deduction_benefit_payment', 'meals', owner)).toBe('7382')
+    expect(netDeductionAccount('net_deduction_benefit_payment', 'car', owner)).toBe('7385')
+    for (const type of ['bike', 'wellness', 'other'] as const) {
+      expect(netDeductionAccount('net_deduction_benefit_payment', type, owner)).toBe(
+        lineItemAccount(`benefit_${type}`, owner),
+      )
+    }
+  })
+
+  it('unnamed, or on another net deduction, keeps the item type default', () => {
+    expect(netDeductionAccount('net_deduction_benefit_payment', null, owner)).toBe('7385')
+    expect(netDeductionAccount('net_deduction_union', 'car', owner)).toBe('2794')
+    expect(netDeductionAccount('net_deduction_other', undefined, owner)).toBe('2799')
   })
 })
 

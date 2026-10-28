@@ -204,6 +204,7 @@ interface EmployeeOverrides {
     account_number: string | null
     is_net_deduction: boolean
     is_gross_deduction: boolean
+    benefit_type?: string | null
   }>
 }
 
@@ -397,6 +398,37 @@ describe('salary entries: net deductions', () => {
     expect(linesOn(salary, '2710')[0].credit_amount).toBe(10050)
     expect(linesOn(salary, '1930')[0].credit_amount).toBe(31286)
     // 48 000 = 6 664 + 10 050 + 31 286
+    assertBalanced(salary)
+  })
+
+  it('a payment that names its benefit credits that benefit\'s account: bostad 7381, not 7385 (crm#1492)', async () => {
+    const run = makeRun([
+      makeEmployee({
+        gross_salary: 48000,
+        tax_withheld: 10050,
+        net_salary: 33950,
+        avgifter_basis: 48000,
+        avgifter_amount: 15081.6,
+        line_items: [
+          { item_type: 'monthly_salary', amount: 48000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          { item_type: 'benefit_housing', amount: 4000, account_number: null, is_net_deduction: false, is_gross_deduction: false },
+          {
+            item_type: 'net_deduction_benefit_payment',
+            amount: -4000,
+            account_number: null,
+            is_net_deduction: true,
+            is_gross_deduction: false,
+            benefit_type: 'housing',
+          },
+        ],
+      }),
+    ])
+
+    await createSalaryRunEntries(makeSupabase(), 'company-1', 'user-1', run)
+    const salary = entryByDescription('Lön 2026-06')
+
+    expect(linesOn(salary, '7381')[0].credit_amount).toBe(4000)
+    expect(linesOn(salary, '7385')).toHaveLength(0)
     assertBalanced(salary)
   })
 

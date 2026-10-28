@@ -142,6 +142,8 @@ export interface CalculationLineItem {
    * regular taxation. Only meaningful on positive taxable additions.
    */
   oneOffTaxPercent?: number | null
+  /** On a net_deduction_benefit_payment row: the benefit it pays for (benefit-payments.ts). */
+  benefitType?: string | null
 }
 
 export interface CalculationStep {

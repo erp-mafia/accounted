@@ -29,6 +29,7 @@ import {
   SALARY_ACCOUNTS,
   isTaxFreeReimbursementType,
   lineItemAccount,
+  netDeductionAccount,
   vacationLiabilityChangeAccount,
   type MoneyLineItemType,
   type SalaryAccountContext,
@@ -97,6 +98,8 @@ export interface SalaryRunEmployee {
     account_number: string | null
     is_net_deduction: boolean
     is_gross_deduction: boolean
+    /** On a benefit payment: the benefit it pays for (its default account follows it). */
+    benefit_type?: string | null
   }>
   // Löneväxling pension (if applicable)
   pension_contribution?: number
@@ -222,6 +225,7 @@ export function salaryRunDataFromRows(run: SalaryRunRow, roster: SalaryRosterRow
           account_number: li.account_number as string | null,
           is_net_deduction: li.is_net_deduction as boolean,
           is_gross_deduction: li.is_gross_deduction as boolean,
+          ...(li.benefit_type ? { benefit_type: li.benefit_type as string } : {}),
         })),
       }
     }),
@@ -761,7 +765,7 @@ function buildSalaryLines(
         continue
       }
       if (li.is_net_deduction) {
-        const account = li.account_number || lineItemAccount(li.item_type as MoneyLineItemType, ctx)
+        const account = li.account_number || netDeductionAccount(li.item_type as MoneyLineItemType, li.benefit_type, ctx)
         netDeductionBuckets.set(account, (netDeductionBuckets.get(account) ?? 0) + li.amount)
         continue
       }

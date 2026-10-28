@@ -130,6 +130,8 @@ interface RecurringRow {
   description: string
   amount: number
   account_number: string | null
+  /** On a net_deduction_benefit_payment line: the benefit it pays for. */
+  benefit_type?: string | null
   valid_to: string | null
 }
 
@@ -547,12 +549,15 @@ export async function runSalaryCalculation(
         ),
     // valid_to is filtered in JS rather than with a dynamic .or() so the
     // phantom-column scanner can resolve every expression in this query.
+    // Every column, not a list: benefit_type (migration 20261028030447) is
+    // then simply absent, never a failed calculation, if this code is
+    // deployed before the migration is applied.
     employeeIds.length === 0
       ? Promise.resolve<RecurringRow[]>([])
       : fetchAllRows<RecurringRow>(({ from, to }) =>
           supabase
             .from('employee_recurring_lines')
-            .select('id, employee_id, item_type, description, amount, account_number, valid_to')
+            .select('*')
             .in('employee_id', employeeIds)
             .eq('company_id', companyId)
             .eq('is_active', true)
@@ -832,6 +837,10 @@ export async function runSalaryCalculation(
         // override, else the default resolved at booking (account-mapping.ts
         // lineItemAccount).
         account_number: text ? null : r.account_number || null,
+        // The benefit a payment line pays for travels with the payslip row:
+        // the engine, the AGI and the booking read it there. Only written
+        // when set, so the insert names no new column for any other row.
+        ...(r.benefit_type ? { benefit_type: r.benefit_type } : {}),
         sort_order: text ? RECURRING_TEXT_SORT_ORDER + textIdx++ : 250 + idx,
         source_recurring_line_id: r.id,
       }
@@ -943,6 +952,7 @@ export async function runSalaryCalculation(
         isGrossDeduction: li.is_gross_deduction as boolean,
         isNetDeduction: li.is_net_deduction as boolean,
         oneOffTaxPercent: (li.one_off_tax_percent as number | null | undefined) ?? null,
+        benefitType: (li.benefit_type as string | null | undefined) ?? null,
       }))
     const derivedLineItems = absenceResult.lineItems.map((li) => ({
       itemType: li.item_type as SalaryLineItemType,
@@ -979,6 +989,7 @@ export async function runSalaryCalculation(
       isVacationBasis: row.is_vacation_basis,
       isGrossDeduction: row.is_gross_deduction,
       isNetDeduction: row.is_net_deduction,
+      benefitType: 'benefit_type' in row ? row.benefit_type : null,
     }))
     const lineItems = [
       ...manualLineItems,

@@ -714,6 +714,7 @@ const RecurringLineFields = z.object({
     .string()
     .nullable()
     .describe('BAS account for the derived payslip row, as a string; null lets the engine map the item type.'),
+  benefit_type: z.string().nullable(),
   valid_from: z.string(),
   valid_to: z.string().nullable(),
   is_active: z.boolean(),
@@ -734,6 +735,7 @@ function toRecurringLineFields(
     description: row.description,
     amount: row.amount,
     account_number: row.account_number,
+    benefit_type: row.benefit_type ?? null,
     valid_from: row.valid_from,
     valid_to: row.valid_to,
     is_active: row.is_active,
@@ -756,6 +758,7 @@ const RECURRING_LINE_EXAMPLE = {
   description: 'Förmånscykel bruttolöneavdrag',
   amount: -670.17,
   account_number: null,
+  benefit_type: null,
   valid_from: '2026-01-01',
   valid_to: null,
   is_active: true,
@@ -772,6 +775,8 @@ const RECURRING_SIGN_PITFALL =
   'The amount follows the item_type: a deduction is negative (e.g. -670.17 for a benefit bike bruttolöneavdrag); a text row (item_type text) has none: omit amount (0 is accepted) and put the words in description, e.g. how the salary is built up. The wrong sign, or an amount on a text row, is refused with VALIDATION_ERROR on amount.'
 const RECURRING_ADDITION_PITFALL =
   'Recurring additions (a personligt tillägg next to Grundlön, a cash allowance) are refused: proration, absence deductions, sjuklön, semestertillägg and the OB rate read only monthly_salary, so a standing tillägg row would be paid in full through sick leave. Put a standing raise on monthly_salary (gnubok_update_employee) and explain the split with a text row.'
+const RECURRING_BENEFIT_PAYMENT_PITFALL =
+  'net_deduction_benefit_payment (the employee pays for a benefit) lowers that benefit\'s taxable value; benefit_type names it (car, meals, ...) and must be a benefit the employee has. With two or more benefit types an unnamed payment is refused (VALIDATION_ERROR on benefit_type).'
 const RECURRING_ACCOUNT_PITFALL =
   'account_number overrides the default BAS account for the derived payslip row; null lets the engine map the item type. A text row has no account: account_number is ignored.'
 
@@ -845,6 +850,7 @@ export const employeesRecurringLinesCreate = defineOperation({
       RECURRING_SIGN_PITFALL,
       RECURRING_ADDITION_PITFALL,
       'valid_to must be on or after valid_from (inclusive); omit it for an open-ended line.',
+      RECURRING_BENEFIT_PAYMENT_PITFALL,
       RECURRING_ACCOUNT_PITFALL,
       'Creating a line does not recalculate an open salary run: call gnubok_calculate_salary_run afterwards.',
     ],
@@ -866,7 +872,7 @@ export const employeesRecurringLinesCreate = defineOperation({
     name: 'gnubok_add_employee_recurring_line',
     title: 'Add Recurring Payslip Line',
     description:
-      'Stage a recurring payslip line for an employee, derived into every salary run whose payment date is within valid_from..valid_to: a deduction (negative amount) such as a union fee, or a text row (item_type text, no amount). Additions are refused.',
+      'Stage a recurring payslip line, derived into every salary run paid within valid_from..valid_to: a deduction (negative amount) or a text row (item_type text, no amount). Additions are refused.',
     keywords: ['återkommande avdrag', 'återkommande lönerad', 'bruttolöneavdrag', 'nettolöneavdrag', 'fackavgift', 'löneväxling', 'förmånscykel', 'textrad'],
     stage: {
       pendingType: 'add_employee_recurring_line',

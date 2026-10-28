@@ -79,10 +79,9 @@ const LINE_ITEM_ACCOUNTS: Record<MoneyLineItemType, string> = {
   // third party, so the default account is the credit-side settlement account,
   // not a 7xxx salary expense. Advance repayments credit the receivable (1613),
   // union fees credit 2794, everything unmapped lands on 2799 Övriga
-  // löneavdrag. There is a single benefit-payment item type, so its default
-  // credits 7385 Kostnader för fri bil, the dominant co-payment case;
-  // co-payments for other benefit kinds must set account_number on the line
-  // (7381/7382/7388/7389/7699).
+  // löneavdrag. A benefit payment that names its benefit credits that
+  // benefit's cost account (netDeductionAccount below); an unnamed one keeps
+  // 7385 Kostnader för fri bil, the dominant co-payment case.
   net_deduction_advance: '1613',
   net_deduction_union: '2794',
   net_deduction_benefit_payment: '7385',
@@ -147,6 +146,25 @@ export function lineItemAccount(itemType: MoneyLineItemType, ctx: SalaryAccountC
   if (ctx.employmentType === 'board_member') return BOARD_ACCOUNTS[base] ?? base
   if (ctx.personnelCategory === 'arbetare') return ARBETARE_ACCOUNTS[base] ?? base
   return base
+}
+
+/**
+ * The account a net deduction row books on when it carries no override. A
+ * benefit payment that names its benefit (salary_line_items.benefit_type,
+ * crm#1492) lowers the cost of THAT benefit: bostad 7381, kost 7382, bil
+ * 7385 (bas-7xxx.md), the account the benefit row itself maps to. Unnamed,
+ * it keeps the item type's 7385.
+ */
+export function netDeductionAccount(
+  itemType: MoneyLineItemType,
+  benefitType: string | null | undefined,
+  ctx: SalaryAccountContext,
+): string {
+  const benefitItemType = `benefit_${benefitType}`
+  if (itemType === 'net_deduction_benefit_payment' && benefitType && Object.hasOwn(LINE_ITEM_ACCOUNTS, benefitItemType)) {
+    return lineItemAccount(benefitItemType as MoneyLineItemType, ctx)
+  }
+  return lineItemAccount(itemType, ctx)
 }
 
 /**
