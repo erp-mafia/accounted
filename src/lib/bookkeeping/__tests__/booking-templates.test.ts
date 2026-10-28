@@ -1192,6 +1192,40 @@ describe('reverse-charge software lands in the box of the supplier location', ()
     expect(listed.sort()).toEqual(awaitingFounderCall)
   })
 
+  // crm#1498: card rows from sellers abroad were proposed with Swedish moms
+  // because the 25 % software template listed them by name, and Google Ads'
+  // card text matched only that template's 'google'.
+  it.each(['GOOGLE*ADS5845275194,CC GOOGLE.COM,IE', 'GOOGLE *ADS1234', 'Google Ads', 'FACEBK *ABC123'])(
+    'proposes reverse charge for online ads billed from Ireland: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('marketing_online_ads_eu')
+    },
+  )
+
+  it.each(['ADOBE *ADOBE,DUBLIN,IE', 'MICROSOFT-G193484448', 'SLACK T0123', 'DROPBOX*ABC'])(
+    'proposes the EU template for software billed from the EU: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_eu')
+      expect(topFor(text, 5734)?.id).toBe('it_saas_eu')
+    },
+  )
+
+  it.each(['NOTION LABS', 'FIGMA', 'ATLASSIAN', '1PASSWORD'])(
+    'proposes the non-EU template for software billed from outside the EU: %s',
+    (text) => {
+      expect(topFor(text)?.id).toBe('it_saas_non_eu')
+      expect(topFor(text, 5734)?.id).toBe('it_saas_non_eu')
+    },
+  )
+
+  it('lists on the 25 % software template no vendor the counterpart directory places abroad', () => {
+    const abroad = getTemplateById('it_saas_subscription')!.keywords.filter((k) => {
+      const country = matchSeedText(k)?.country
+      return !!country && country !== 'SE'
+    })
+    expect(abroad).toEqual([])
+  })
+
   it.each(['LOOPIA AB', 'LOOPIA AB,VASTERAAS,SE', 'BINERO'])(
     'proposes Swedish VAT for a Swedish web host or domain, not reverse charge: %s',
     (text) => {

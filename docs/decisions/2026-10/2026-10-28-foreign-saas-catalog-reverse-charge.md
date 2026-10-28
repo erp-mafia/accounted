@@ -1,0 +1,1 @@
+[2026-10-28] Vendors the counterpart directory places abroad left the 25 % software template for it_saas_eu or it_saas_non_eu by billing country; Sweden read off the underlag still wins over a candidate's reverse charge; US AI vendors stay in ruta 21 pending crm#1028 (crm#1498).

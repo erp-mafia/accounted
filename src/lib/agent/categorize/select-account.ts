@@ -100,6 +100,9 @@ const TRAVEL_OPTIONS: Array<{ id: string; template: string; label: string }> = [
 
 const NEEDS_REVIEW = 'needs_review'
 
+/** The Swedish moms rates a purchase answered "sverige" can carry. */
+const SWEDISH_PURCHASE_RATES: ReadonlySet<VatTreatment> = new Set<VatTreatment>(['standard_25', 'reduced_12', 'reduced_6'])
+
 /**
  * Where the purchase is taxed, as the model reads it off the row or the
  * underlag: the utlägg dialog's "Var finns säljaren?" (ExpenseVatCase), asked
@@ -306,6 +309,8 @@ interface RawPick {
   reasoning: string
   choice: string
   vatCase: SelectorVatCase
+  /** False when the model left "moms" out or answered outside the set, and vatCase is the default. */
+  answeredMoms: boolean
   confidence: 'high' | 'medium' | 'low'
 }
 
@@ -315,11 +320,13 @@ function parsePick(value: unknown, validIds: Set<string>): RawPick {
   const choice = typeof v.choice === 'string' && validIds.has(v.choice) ? v.choice : NEEDS_REVIEW
   const conf = v.confidence
   const confidence = conf === 'high' || conf === 'medium' || conf === 'low' ? conf : 'low'
+  const answeredMoms = VAT_CASE_IDS.includes(v.moms as VatCaseId)
   return {
     reasoning: typeof v.reasoning === 'string' ? v.reasoning : '',
     choice,
     // No answer, or one outside the closed set, is the default: Swedish moms.
-    vatCase: VAT_CASE_IDS.includes(v.moms as VatCaseId) ? VAT_CASE_BY_ID[v.moms as VatCaseId] : 'domestic',
+    vatCase: answeredMoms ? VAT_CASE_BY_ID[v.moms as VatCaseId] : 'domestic',
+    answeredMoms,
     confidence,
   }
 }
@@ -428,6 +435,25 @@ export async function selectAccount(input: SelectAccountInput): Promise<AccountS
   const reverseCharge = answeredKind !== null
   if (reverseCharge && input.vatRegistered) vatTreatment = 'reverse_charge'
   if (vatCase === 'abroad' && input.transaction.amount < 0) vatTreatment = 'exempt'
+  // Sweden read off the underlag outranks a reverse charge that only came
+  // from a candidate's history or the catalog (crm#1498): the invoice shows
+  // Swedish moms or a seller in Sweden. Without underlag "sverige" is also
+  // the model's default, so the candidate's reverse charge stands and its
+  // box is still asked for.
+  if (
+    vatTreatment === 'reverse_charge' &&
+    vatCase === 'domestic' &&
+    winningSample.answeredMoms &&
+    choice.kind !== 'needs_review' &&
+    !!input.underlag?.trim() &&
+    input.transaction.amount < 0
+  ) {
+    const categoryRate = category ? getDefaultVatTreatmentForCategory(category) : null
+    vatTreatment = vatTreatmentForRegistration(
+      categoryRate && SWEDISH_PURCHASE_RATES.has(categoryRate) ? categoryRate : 'standard_25',
+      input.vatRegistered,
+    )
+  }
 
   // Confidence is driven by DETERMINISTIC BACKING, not the model's self-report.
   // "backing" = the confidence of a candidate that independently points at the

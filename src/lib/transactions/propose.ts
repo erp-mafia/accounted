@@ -12,7 +12,7 @@ import type { AssistantRead } from '@/lib/agent/categorize/read'
 import { ASSISTANT_READS } from '@/lib/composition/assistant-reads'
 import { CLEARING_PROPOSERS } from '@/lib/composition/clearing-proposals'
 import { createLogger } from '@/lib/logger'
-import { proposalFromTemplate, reverseChargeBoxesOf, slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { booksSwedishInputVat, proposalFromTemplate, reverseChargeBoxesOf, slateAccount, type BookingProposal } from '@/lib/bookkeeping/proposal'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
 import { isSkatteverketPayment } from '@/lib/bookkeeping/skatteverket-payment'
 import { ASSISTANT_LIKELY, COUNTERPART_SEEN_FOR_DIRECT } from './direct-booking'
@@ -47,7 +47,7 @@ import type { Transaction, EntityType, CategorizationTemplate, MappingRule } fro
  * same row changes on purpose: a source added or dropped, the order, the
  * contest or box-dispute rules.
  */
-export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.3'
+export const BANK_PROPOSAL_RULES_REVISION = 'bank-proposals.4'
 
 const log = createLogger('transactions/propose')
 
@@ -323,8 +323,16 @@ export { rowProposal }
  * counterpart learned as one pair never learned it (it books the EU-service
  * default), and a catalog keyword names a vendor, not the company that
  * bills. A read that names no box (none asked, or a reverse charge taken
- * from a candidate's history) disputes nothing, and neither does a proposal
- * that books no reverse charge.
+ * from a candidate's history) disputes nothing.
+ *
+ * A proposal that books the purchase with Swedish ingående moms (2641) where
+ * the read names a box disputes the same way (crm#1498): a learned
+ * counterpart or a catalog keyword booked Google Ads and ChatGPT with
+ * Swedish moms from the row while the read had placed the seller abroad. A
+ * seller abroad charges Swedish moms only when registered for it here, and
+ * that is on the invoice, so the person sees both and picks. A proposal that
+ * books neither (no moms, a non-registered company's exempt booking) is left
+ * alone.
  */
 export function disputeReverseChargeBox(
   list: BookingProposal[],
@@ -335,6 +343,7 @@ export function disputeReverseChargeBox(
   return list.map((p) => {
     if (p.source === 'assistant' || p.source === 'manual') return p
     const boxes = reverseChargeBoxesOf(p)
-    return boxes.some((k) => k !== readKind) ? { ...p, read_reverse_charge_kind: readKind } : p
+    const disputed = boxes.length > 0 ? boxes.some((k) => k !== readKind) : booksSwedishInputVat(p)
+    return disputed ? { ...p, read_reverse_charge_kind: readKind } : p
   })
 }

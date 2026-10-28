@@ -121,6 +121,28 @@ describe('selectAccount', () => {
     expect(res.reverseChargeKind).toBeNull()
   })
 
+  // crm#1498: a seller abroad charges Swedish moms only when its invoice shows
+  // it, so "sverige" read off the underlag outranks a candidate's reverse charge.
+  it('books Swedish moms when the underlag shows it, over a candidate\'s reverse charge', async () => {
+    generateStructured.mockResolvedValue(pick('cand:0', { moms: 'sverige' }))
+    const res = await selectAccount(
+      input({
+        candidates: [{ ...CAND, account: '5420', vatTreatment: 'reverse_charge' }],
+        underlag: 'Leverantör: Microsoft\nMoms 25 %: 107,09 kr\nSumma: 535,45 kr',
+      }),
+    )
+    expect(res.vatTreatment).toBe('standard_25')
+    expect(res.reverseChargeKind).toBeNull()
+  })
+
+  it('keeps the candidate\'s reverse charge when the model left moms unsaid, underlag or not', async () => {
+    generateStructured.mockResolvedValue(pick('cand:0'))
+    const res = await selectAccount(
+      input({ candidates: [{ ...CAND, vatTreatment: 'reverse_charge' }], underlag: 'Leverantör: Adobe\nSumma: 300 kr' }),
+    )
+    expect(res.vatTreatment).toBe('reverse_charge')
+  })
+
   it('never applies reverse charge to a needs_review outcome', async () => {
     generateStructured.mockResolvedValue(pick('needs_review', { moms: 'omvand_eu' }))
     const res = await selectAccount(input())

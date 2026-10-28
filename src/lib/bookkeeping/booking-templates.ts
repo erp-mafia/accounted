@@ -326,9 +326,12 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     deductibility: 'full',
     mcc_codes: [5734, 5817, 5818],
     // Swedish web hosts and domain registrars charge 25 % moms: same account as
-    // it_cloud_hosting, but 2641 instead of reverse charge. GitHub is not here:
-    // GitHub, Inc. bills from the US (it_saas_non_eu, crm#1431).
-    keywords: ['software', 'saas', 'programvara', 'licens', 'subscription', 'app', 'microsoft', 'google', 'adobe', 'slack', 'notion', 'figma', 'atlassian', 'jira', 'antivirus', 'vpn', 'norton', '1password', 'lastpass', 'bitwarden', 'spotify', 'crm', 'hubspot', 'salesforce', 'pipedrive', 'asana', 'monday', 'trello', 'basecamp', 'clickup', 'linear', 'dropbox', 'onedrive', 'icloud', 'backup', 'loopia', 'binero'],
+    // it_cloud_hosting, but 2641 instead of reverse charge. No vendor the
+    // counterpart directory places abroad is here: a seller abroad charges no
+    // Swedish moms unless its invoice shows it, so it is on it_saas_eu or
+    // it_saas_non_eu by where it bills from (GitHub crm#1431, the rest
+    // crm#1498).
+    keywords: ['software', 'saas', 'programvara', 'licens', 'subscription', 'app', 'antivirus', 'vpn', 'norton', 'lastpass', 'bitwarden', 'spotify', 'crm', 'salesforce', 'asana', 'monday', 'trello', 'basecamp', 'clickup', 'linear', 'onedrive', 'icloud', 'backup', 'loopia', 'binero'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 10,
@@ -353,12 +356,12 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     special_rules_sv: 'Leverantör i annat EU-land fakturerar utan moms; du redovisar 25 % själv (ruta 21, 30 och 48). Leverantör utanför EU, till exempel i USA: välj Programvara / SaaS utanför EU (ruta 22).',
     mcc_codes: [5734, 5817, 5818],
     // Google Workspace is billed from Ireland. Card texts also write it
-    // "GOOGLE*WORKSPACE" and "GOOGLE *WORKSPACE", and every spelling needs two
-    // hits here to outrank the domestic template's broader 'google' keyword.
-    // 'copilot' alone is Microsoft's, billed from Ireland like Google Workspace,
-    // and its spellings with the vendor give the second hit over 'microsoft'.
-    // GitHub Copilot is GitHub's, billed from the US: it_saas_non_eu (crm#1431).
-    keywords: ['software', 'saas', 'eu', 'ireland', 'reverse charge', 'omvänd moms', 'openai', 'chatgpt', 'anthropic', 'claude', 'ai', 'midjourney', 'copilot', 'microsoft copilot', 'microsoft 365 copilot', 'm365 copilot', 'google cloud', 'aws', 'azure', 'google workspace', 'google*workspace', 'google *workspace', 'workspace', 'gsuite', 'google gsuite', 'google*gsuite'],
+    // "GOOGLE*WORKSPACE" and "GOOGLE *WORKSPACE". 'copilot' alone is
+    // Microsoft's, billed from Ireland like Google Workspace. GitHub Copilot
+    // is GitHub's, billed from the US: it_saas_non_eu (crm#1431). Microsoft,
+    // Adobe, Slack, Dropbox, HubSpot and Pipedrive bill from the EU too
+    // (counterpart directory) and left the 25 % template (crm#1498).
+    keywords: ['software', 'saas', 'eu', 'ireland', 'reverse charge', 'omvänd moms', 'openai', 'chatgpt', 'anthropic', 'claude', 'ai', 'midjourney', 'copilot', 'microsoft copilot', 'microsoft 365 copilot', 'm365 copilot', 'google cloud', 'aws', 'azure', 'google workspace', 'google*workspace', 'google *workspace', 'workspace', 'gsuite', 'google gsuite', 'google*gsuite', 'microsoft', 'adobe', 'slack', 'dropbox', 'hubspot', 'pipedrive'],
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 9,
@@ -388,7 +391,7 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     deductibility: 'full',
     special_rules_sv: 'Leverantör utanför EU, till exempel i USA, fakturerar utan moms; du redovisar 25 % själv (ruta 22, 30 och 48). Leverantör i annat EU-land: välj Programvara / SaaS (omvänd moms), ruta 21.',
     mcc_codes: [5734, 5817, 5818],
-    keywords: ['supabase', 'github', 'github copilot'],
+    keywords: ['supabase', 'github', 'github copilot', 'notion', 'figma', 'atlassian', '1password'],
     risk_level: 'LOW',
     requires_review: false,
     impact_score: 9,
@@ -490,7 +493,9 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     deductibility: 'full',
     special_rules_sv: 'Google/Meta fakturerar ofta från Irland → omvänd skattskyldighet',
     mcc_codes: [7311],
-    keywords: ['google ads', 'facebook ads', 'meta ads', 'instagram ads', 'linkedin ads', 'annons', 'advertising', 'adwords', 'kampanj', 'seo', 'sem', 'sökmotoroptimering', 'reklam'],
+    // Card texts write Google Ads "GOOGLE*ADS1234" and Meta's ads "FACEBK *"
+    // (crm#1498: they matched only the 25 % software template's 'google').
+    keywords: ['google ads', 'google*ads', 'google *ads', 'googleads', 'facebook ads', 'meta ads', 'instagram ads', 'linkedin ads', 'facebk', 'annons', 'advertising', 'adwords', 'kampanj', 'seo', 'sem', 'sökmotoroptimering', 'reklam'],
     risk_level: 'NONE',
     requires_review: false,
     impact_score: 9,
