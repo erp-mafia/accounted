@@ -1,4 +1,5 @@
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
+import { looksLikeSwedishPersonalNumber } from '@/lib/invariants/personal-number-shape'
 import type { JourneyStep } from './reducer'
 
 /** A company the caller already belongs to with the org number being set up. */
@@ -33,4 +34,15 @@ export function shouldGateDuplicate(input: {
   const current = normalizeOrgNumber(orgNumber ?? '')
   if (!current || current !== match.orgNumber) return false
   return acknowledgedOrgNumber !== match.orgNumber
+}
+
+/**
+ * True when the company the user already has is a sole trader's firm: its
+ * org number is the owner's personnummer. A person keeps one bookkeeping for
+ * all their verksamheter (BFL 4 kap. 4 §), so a "second set of books" for
+ * part of the firm, such as a property, is a project inside the same firm,
+ * not a copy of it (PH 216). The gate says so for this match.
+ */
+export function isSoleTraderMatch(match: ExistingCompanyMatch): boolean {
+  return looksLikeSwedishPersonalNumber(match.orgNumber)
 }
