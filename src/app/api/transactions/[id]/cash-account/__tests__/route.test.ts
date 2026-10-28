@@ -276,6 +276,83 @@ describe('PATCH /api/transactions/[id]/cash-account (move cash account)', () => 
     })
   })
 
+  // crm#1498: a company moved its företagskonto's bank rows onto the 1930 row
+  // of its second account, then swapped the two accounts' ledger accounts in
+  // the bank picker. The moved rows stayed with the other account and booked
+  // on 1935. A bank-feed row belongs to the account it was fetched from.
+  describe('a bank-feed row onto another bank account', () => {
+    const OWN = 'SE1250000000012345678901'
+    const OTHER = 'SE9850000000098765432109'
+    const feedRow = () => movableTx({ external_id: `eb_${OWN}_2026-10-01_-39900_0` })
+    const otherAccount = { ...targetAccount, ledger_account: '1930', iban: OTHER }
+
+    it('answers 409 naming the row\'s own account and moves nothing', async () => {
+      enqueue({ data: feedRow(), error: null }) // tx fetch
+      enqueue({ data: [], error: null }) // tvl pre-check clean
+      enqueue({ data: otherAccount, error: null }) // target: another IBAN
+      enqueue({
+        data: [
+          { ledger_account: '1930', iban: OTHER, currency: 'SEK' },
+          { ledger_account: '1935', iban: 'SE12 5000 0000 0123 4567 8901', currency: 'SEK' },
+        ],
+        error: null,
+      }) // the company's accounts with an IBAN
+
+      const res = await PATCH(patchReq({ account_number: '1930' }), createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{
+        error: { code: string; message: string; details?: Record<string, unknown> }
+      }>(res)
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TRANSACTION_MOVE_OTHER_BANK_ACCOUNT')
+      expect(body.error.message).toContain('8901')
+      expect(body.error.message).toContain('1935')
+      expect(body.error.details).toMatchObject({ origin_ledger_account: '1935', origin_iban_last4: '8901' })
+      expect(findCalls('transactions', 'update')).toHaveLength(0)
+    })
+
+    it('moves the row back onto its own account without reading the other accounts', async () => {
+      enqueue({ data: feedRow(), error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: { ...targetAccount, ledger_account: '1930', iban: OWN }, error: null })
+      enqueue({ data: { id: 'tx-1', cash_account_id: 'ca-2' }, error: null }) // move
+
+      const res = await PATCH(patchReq({ account_number: '1930' }), createMockRouteParams({ id: 'tx-1' }))
+      expect(res.status).toBe(200)
+      expect(findCalls('transactions', 'update')).toEqual([[{ cash_account_id: 'ca-2' }]])
+    })
+
+    it('moves the row onto an account without an IBAN (a manual or seeded row)', async () => {
+      enqueue({ data: feedRow(), error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: { ...targetAccount, iban: null }, error: null })
+      enqueue({ data: { id: 'tx-1', cash_account_id: 'ca-2' }, error: null })
+
+      const res = await PATCH(patchReq({ account_number: '1931' }), createMockRouteParams({ id: 'tx-1' }))
+      expect(res.status).toBe(200)
+    })
+
+    it('moves the row when its own account is not one of the company\'s cash accounts', async () => {
+      enqueue({ data: feedRow(), error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: otherAccount, error: null })
+      enqueue({ data: [{ ledger_account: '1930', iban: OTHER, currency: 'SEK' }], error: null })
+      enqueue({ data: { id: 'tx-1', cash_account_id: 'ca-2' }, error: null })
+
+      const res = await PATCH(patchReq({ account_number: '1930' }), createMockRouteParams({ id: 'tx-1' }))
+      expect(res.status).toBe(200)
+    })
+
+    it('moves a bank-file row (no feed origin) as before', async () => {
+      enqueue({ data: movableTx({ external_id: 'seb_2026-10-01_-399_0' }), error: null })
+      enqueue({ data: [], error: null })
+      enqueue({ data: otherAccount, error: null })
+      enqueue({ data: { id: 'tx-1', cash_account_id: 'ca-2' }, error: null })
+
+      const res = await PATCH(patchReq({ account_number: '1930' }), createMockRouteParams({ id: 'tx-1' }))
+      expect(res.status).toBe(200)
+    })
+  })
+
   it('returns 409 when the row is booked between read and write (optimistic-lock miss)', async () => {
     enqueue({ data: movableTx(), error: null }) // tx fetch passes the read gate
     enqueue({ data: [], error: null }) // tvl pre-check clean
