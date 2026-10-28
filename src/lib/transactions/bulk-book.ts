@@ -32,20 +32,25 @@
  * Rules before the RPC: every row belongs to the company; one currency, and
  * that currency SEK (the ledger columns are kronor and nothing here carries
  * a rate); the booking-time duplicate guard per row unless force=true (then
- * each dismissed candidate is recorded in behandlingshistorik); manual
- * lines only on active accounts of the company's chart; a template the
- * caller can see (system, the company's own, or a team the user belongs to:
- * the RLS rule, re-applied here because the v1 door runs as the service
- * role); the dimension policy (account rules and registry validation). The
- * RPC re-checks tenant scope, date, direction, balance, periods and
- * not-already-booked.
+ * each dismissed candidate is recorded in behandlingshistorik); the lines of
+ * a new verifikat (manual or from a template) only on accounts active in the
+ * company's chart (chartCheck); a template the caller can see (system, the company's own, or a team the user
+ * belongs to: the RLS rule, re-applied here because the v1 door runs as the
+ * service role); the dimension policy (account rules and registry
+ * validation). The RPC re-checks tenant scope, date, direction, balance,
+ * bank net, periods and not-already-booked.
  *
  * A dry run runs every rule above, then the RPC's refusals the rows already
  * show (a booked or zero row, two dates, two directions, a link target that
  * is missing or not posted, manual lines that do not balance or carry an
- * empty line), and answers the lines the verifikat would carry, with the
- * account names. It writes nothing (no RPC, no events, no
- * behandlingshistorik).
+ * empty line, a bank net that is not the rows' sum: bankNetMismatch), and
+ * answers the lines the verifikat would carry, with the account names. It
+ * writes nothing (no RPC, no events, no behandlingshistorik). Staging runs
+ * the dry run, so an approval never meets a refusal the rows and lines
+ * already showed (crm#1501). A transfer between two of the company's own
+ * cash accounts is such a refusal: the bank net counts every 19xx line, so
+ * its other end cancels the row's own; the refusal names the doors that
+ * book it (categorize the row with the other account, link the other row).
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { z } from 'zod'
@@ -54,7 +59,7 @@ import type { Logger } from '@/lib/logger'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import type { BookingTemplateLibraryLine, Transaction } from '@/types'
 import { applyTemplate, libraryLinesForCompanySkattekonto } from '@/lib/bookkeeping/template-library'
-import { bankNetAccountTest } from '@/lib/bookkeeping/bank-leg'
+import { bankNetAccountTest, isCashLedger } from '@/lib/bookkeeping/bank-leg'
 import { refuseImportVatWithoutBase } from '@/lib/bookkeeping/import-vat-base'
 import { isGeneratedVatAccount } from '@/lib/bookkeeping/vat-entries'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
@@ -220,30 +225,22 @@ export async function bulkBookTransactions(
     }
   }
 
+  // The ledger each row settles on, read once and only when needed.
+  let ledgersRead: Promise<Map<string, string>> | null = null
+  const rowLedgers = () => (ledgersRead ??= settlementLedgersByRow(supabase, companyId, txTyped, opLog))
+
   let newEntryPayload: { description: string; lines: ComputedLine[] } | null = null
 
   if (body.manual_lines && body.entry_description) {
     // The schema validated the account format; the RPC checks balance and
     // sides. Here: every account exists and is active in THIS company's chart.
-    const accountNumbers = Array.from(new Set(body.manual_lines.map((l) => l.account_number)))
-    const { data: knownAccounts, error: accountsError } = await supabase
-      .from('chart_of_accounts')
-      .select('account_number')
-      .eq('company_id', companyId)
-      .eq('is_active', true)
-      .in('account_number', accountNumbers)
-    if (accountsError) {
-      opLog.error('chart_of_accounts lookup failed', accountsError)
-      return { ok: false, code: 'BULK_BOOK_RPC_FAILED', details: { message: getUserErrorMessage(accountsError) } }
-    }
-    const validSet = new Set((knownAccounts ?? []).map((a: { account_number: string }) => a.account_number))
-    const invalid = accountNumbers.filter((n) => !validSet.has(n))
-    if (invalid.length > 0) return { ok: false, code: 'BULK_BOOK_INVALID_ACCOUNT', details: { invalid_accounts: invalid } }
+    const chart = await chartCheck(supabase, companyId, body.manual_lines.map((l) => l.account_number), opLog)
+    if (chart) return chart
 
     let isBusinessLine: (account: string) => boolean = () => false
     if (body.default_dimensions) {
       try {
-        isBusinessLine = await manualBusinessLineTest(supabase, companyId, txTyped, opLog)
+        isBusinessLine = manualBusinessLineTest([...(await rowLedgers()).values()])
       } catch (err) {
         return { ok: false, code: 'UNKNOWN_ERROR', error: err }
       }
@@ -346,6 +343,10 @@ export async function bulkBookTransactions(
         }
       }
     }
+    // A template's accounts meet the manual lines' rule, here and not first
+    // at approval, where the RPC refused an inactive one.
+    const chart = await chartCheck(supabase, companyId, lines.map((l) => l.account_number), opLog)
+    if (chart) return chart
     newEntryPayload = { description: body.entry_description, lines }
   }
 
@@ -377,21 +378,40 @@ export async function bulkBookTransactions(
     // The link target: there, posted, and its date (the later of the two
     // dates is the one whose period must be open).
     let existingEntryDate: string | null = null
+    // The lines whose bank net the RPC measures: the new verifikat's, or the
+    // posted one's the rows link to.
+    let bankNetLines: ReadonlyArray<Parameters<typeof bankNetMismatch>[1][number]> = newEntryPayload?.lines ?? []
     if (body.existing_journal_entry_id) {
       const { data: je, error: jeError } = await supabase
         .from('journal_entries')
-        .select('id, status, entry_date')
+        .select('id, status, entry_date, journal_entry_lines(account_number, debit_amount, credit_amount)')
         .eq('id', body.existing_journal_entry_id)
         .eq('company_id', companyId)
         .maybeSingle()
       if (jeError) return { ok: false, code: 'UNKNOWN_ERROR', error: jeError }
       if (!je) return { ok: false, code: 'BULK_BOOK_VOUCHER_NOT_FOUND' }
-      const entry = je as { status: string; entry_date: string }
+      const entry = je as {
+        status: string
+        entry_date: string
+        journal_entry_lines?: Parameters<typeof bankNetMismatch>[1] | null
+      }
       if (entry.status !== 'posted') {
         return { ok: false, code: 'BULK_BOOK_VOUCHER_NOT_POSTED', details: { status: entry.status } }
       }
       existingEntryDate = entry.entry_date
+      bankNetLines = entry.journal_entry_lines ?? []
     }
+    // The RPC's bank net, asked here so staging refuses what the approval
+    // could never post (crm#1501: a clean preview, then a refusal at commit).
+    let ledgerByRow: Map<string, string>
+    try {
+      ledgerByRow = await rowLedgers()
+    } catch (err) {
+      return { ok: false, code: 'UNKNOWN_ERROR', error: err }
+    }
+    const bankRows = txTyped.map((t) => ({ ledger: ledgerByRow.get(t.id)!, amount: t.amount }))
+    const mismatch = bankNetMismatch(bankRows, bankNetLines)
+    if (mismatch) return bankNetRefusal(mismatch, bankRows.map((r) => r.ledger), !!body.existing_journal_entry_id)
     const txSum = roundOre(txTyped.reduce((s, t) => s + t.amount, 0))
     const first = txTyped.find((t) => t.id === body.tx_ids[0]) ?? txTyped[0]!
     // Rows of several dates (a link only): the earliest and the latest.
@@ -652,21 +672,173 @@ function manualLinesRefusal(lines: NonNullable<BulkBookInput['manual_lines']>): 
  * ledgers), so a Stripe balance on 1686 is recognised as well as 1930. A
  * line's own bag is the caller's explicit choice and is never filtered.
  * The moms lines are told apart the way a proposal's are
- * (isGeneratedVatAccount). Throws on a failed cash account lookup (nothing
- * is written yet).
+ * (isGeneratedVatAccount).
  */
-async function manualBusinessLineTest(
+function manualBusinessLineTest(ledgers: string[]): (account: string) => boolean {
+  const isBankSide = bankNetAccountTest(ledgers)
+  return (account) => !isBankSide(account) && !isGeneratedVatAccount(account)
+}
+
+/**
+ * The ledger each selected row settles on, by row id: its cash account's
+ * ledger, or for a row without one the company's only enabled account in
+ * its currency, else 1930 (resolveSettlementAccount, the answer
+ * capture_bank_booking_context gives the RPC). One read per cash account.
+ * Throws on a failed cash account lookup (nothing is written yet).
+ */
+async function settlementLedgersByRow(
   supabase: SupabaseClient,
   companyId: string,
   txs: SelectedTx[],
   log: Logger,
-): Promise<(account: string) => boolean> {
+): Promise<Map<string, string>> {
   const cashAccountIds = Array.from(new Set(txs.map((t) => t.cash_account_id ?? null)))
   const ledgers = await Promise.all(
     cashAccountIds.map((id) => resolveSettlementAccount(supabase, companyId, id, log)),
   )
-  const isBankSide = bankNetAccountTest(ledgers)
-  return (account) => !isBankSide(account) && !isGeneratedVatAccount(account)
+  const byCashAccount = new Map(cashAccountIds.map((id, i) => [id, ledgers[i]!]))
+  return new Map(txs.map((t) => [t.id, byCashAccount.get(t.cash_account_id ?? null)!]))
+}
+
+/** A bank net the RPC refuses: the rows' sum against what the lines move on their ledgers. */
+export interface BankNetMismatch {
+  tx_sum: number
+  lines_bank_net: number
+  /** The first ledger, in account order, that does not move by its own rows' sum. */
+  account?: string
+  account_tx_sum?: number
+  account_net?: number
+  /**
+   * A transfer between own cash accounts: every row's own ledger moves by
+   * its rows' sum, and these other 19xx accounts move too. The RPC counts
+   * them into the bank net (the whole 1900-1999 range), so it refuses.
+   */
+  transfer_accounts?: string[]
+}
+
+/**
+ * The bank net bulk_book_transactions measures before it posts a new
+ * verifikat or links rows to a posted one: the lines on the rows' ledgers
+ * (bankNetAccountTest) must move by the rows' signed sum
+ * (BULK_BOOK_AMOUNT_MISMATCH), and each ledger by its own rows' sum
+ * (BANK_BOOKING_SETTLEMENT_CHANGED). The dry run, which staging runs, asks
+ * this so nothing reaches an approval that the RPC refuses at commit
+ * (crm#1501). Pure; null when the lines pass.
+ */
+export function bankNetMismatch(
+  rows: ReadonlyArray<{ ledger: string; amount: number }>,
+  lines: ReadonlyArray<{ account_number: string; debit_amount: number | string; credit_amount: number | string }>,
+): BankNetMismatch | null {
+  const net = (test: (account: string) => boolean) =>
+    roundOre(
+      lines
+        .filter((l) => test(String(l.account_number)))
+        .reduce((s, l) => s + Number(l.debit_amount) - Number(l.credit_amount), 0),
+    )
+  const txSum = roundOre(rows.reduce((s, r) => s + r.amount, 0))
+  const linesBankNet = net(bankNetAccountTest(rows.map((r) => r.ledger)))
+  const base = { tx_sum: txSum, lines_bank_net: linesBankNet }
+  const ledgers = Array.from(new Set(rows.map((r) => r.ledger))).sort()
+  const offLedger = ledgers.flatMap((ledger) => {
+    const ledgerSum = roundOre(rows.filter((r) => r.ledger === ledger).reduce((s, r) => s + r.amount, 0))
+    const ledgerNet = net((account) => account === ledger)
+    return Math.abs(ledgerNet - ledgerSum) > 0.005 ? [{ account: ledger, account_tx_sum: ledgerSum, account_net: ledgerNet }] : []
+  })
+  if (Math.abs(linesBankNet - txSum) > 0.005) {
+    if (offLedger.length > 0) return { ...base, ...offLedger[0]! }
+    // Each ledger moves by its own rows: what is left is another of the
+    // company's cash accounts, the other end of a transfer.
+    const transfer = Array.from(
+      new Set(
+        lines
+          .map((l) => String(l.account_number))
+          .filter((a) => isCashLedger(a) && !ledgers.includes(a)),
+      ),
+    ).sort()
+    return transfer.length > 0 ? { ...base, transfer_accounts: transfer } : base
+  }
+  return offLedger.length > 0 ? { ...base, ...offLedger[0]! } : null
+}
+
+/**
+ * The Swedish refusal for a bank net mismatch: naming the account and both
+ * amounts, or for a transfer between own cash accounts the two doors that
+ * book it (crm#1501: categorize the row with the other account as
+ * motkonto, then link the other account's row to that verifikat).
+ */
+function bankNetRefusal(mismatch: BankNetMismatch, ledgers: string[], linkExisting: boolean): Failure {
+  const bankAccounts = Array.from(new Set(ledgers)).sort()
+  const details = { ...mismatch, bank_accounts: bankAccounts, ...(linkExisting ? { link_existing: true } : {}) }
+  if (mismatch.transfer_accounts) {
+    const own = bankAccounts.join(', ')
+    const other = mismatch.transfer_accounts.join(', ')
+    return {
+      ok: false,
+      code: 'BULK_BOOK_AMOUNT_MISMATCH',
+      messageSv: linkExisting
+        ? `Verifikationen är en överföring mellan egna konton (${own} och ${other}), som samlingskopplingen inte tar. ` +
+          'Koppla raden till verifikationen en och en (link_transaction_to_journal_entry).'
+        : `En överföring mellan egna konton (${own} och ${other}) kan inte bokföras som samlingsverifikation. ` +
+          `Bokför raden på ${own} med motkonto ${other} (categorize_transaction med account_override ${other}) ` +
+          `och koppla sedan raden på ${other} till samma verifikation (link_transaction_to_journal_entry).`,
+      details,
+    }
+  }
+  const account = mismatch.account ?? bankAccounts.join(', ')
+  const expected = mismatch.account_tx_sum ?? mismatch.tx_sum
+  const moved = mismatch.account_net ?? mismatch.lines_bank_net
+  return {
+    ok: false,
+    code: 'BULK_BOOK_AMOUNT_MISMATCH',
+    messageSv:
+      `Verifikationen ska röra bankradernas konto ${account} med ${formatCurrency(expected)}, ` +
+      `men raderna rör det med ${formatCurrency(moved)}.`,
+    details,
+  }
+}
+
+/**
+ * The accounts of a new verifikat's lines (manual or from a template) must
+ * be active in the company's chart: the RPC refuses any other with
+ * BULK_BOOK_INVALID_ACCOUNT at commit, so staging refuses it first, saying
+ * which are deactivated and which are not in the chart at all. One chart
+ * read; null when every account is active.
+ */
+async function chartCheck(
+  supabase: SupabaseClient,
+  companyId: string,
+  accounts: string[],
+  log: Logger,
+): Promise<Failure | null> {
+  const accountNumbers = Array.from(new Set(accounts))
+  const { data, error } = await supabase
+    .from('chart_of_accounts')
+    .select('account_number, is_active')
+    .eq('company_id', companyId)
+    .in('account_number', accountNumbers)
+  if (error) {
+    log.error('chart_of_accounts lookup failed', error)
+    return { ok: false, code: 'BULK_BOOK_RPC_FAILED', details: { message: getUserErrorMessage(error) } }
+  }
+  const inChart = new Map(
+    ((data ?? []) as Array<{ account_number: string; is_active?: boolean | null }>).map((a) => [
+      String(a.account_number),
+      a.is_active !== false,
+    ]),
+  )
+  const inactive = accountNumbers.filter((n) => inChart.get(n) === false)
+  const missing = accountNumbers.filter((n) => !inChart.has(n))
+  const invalid = [...inactive, ...missing].sort()
+  if (invalid.length === 0) return null
+  return {
+    ok: false,
+    code: 'BULK_BOOK_INVALID_ACCOUNT',
+    details: {
+      invalid_accounts: invalid,
+      ...(inactive.length > 0 ? { inactive_accounts: inactive } : {}),
+      ...(missing.length > 0 ? { not_in_chart: missing } : {}),
+    },
+  }
 }
 
 /**

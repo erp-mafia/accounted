@@ -28,6 +28,12 @@ const rows = [
   { id: TX_2, amount: 150, currency: 'SEK', description: 'Swish 0702', merchant_name: null, date: '2026-05-12', journal_entry_id: null },
 ]
 
+/** A posted verifikat whose 1930 leg moves by `sum`: the bank net a link of rows summing to it needs. */
+const bankLegOf = (sum: number) => [
+  { account_number: '1930', debit_amount: Math.max(sum, 0), credit_amount: Math.max(-sum, 0) },
+  { account_number: '6570', debit_amount: Math.max(-sum, 0), credit_amount: Math.max(sum, 0) },
+]
+
 type Staged = { staged: boolean; preview: Record<string, unknown> }
 
 beforeEach(() => {
@@ -54,7 +60,15 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
       },
       error: null,
     }) // booking_template_library
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
     enqueue({ data: [], error: null }) // account_dimension_rules
+    enqueue({ data: [], error: null }) // the rows' ledger: no cash account, 1930
     enqueue({
       data: [
         { account_number: '1930', account_name: 'Företagskonto' },
@@ -104,7 +118,8 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
   it('links to an existing verifikat and reports the period of the later date', async () => {
     const { supabase, enqueue, findCall } = createQueuedMockSupabase()
     enqueue({ data: rows, error: null }) // transactions
-    enqueue({ data: { id: JE, status: 'posted', entry_date: '2026-06-02' }, error: null }) // link target
+    enqueue({ data: { id: JE, status: 'posted', entry_date: '2026-06-02', journal_entry_lines: bankLegOf(250) }, error: null }) // link target
+    enqueue({ data: [], error: null }) // the rows' ledger: no cash account, 1930
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
@@ -131,7 +146,8 @@ describe('gnubok_bulk_book_transactions: staged from the operation', () => {
       ],
       error: null,
     }) // transactions
-    enqueue({ data: { id: JE, status: 'posted', entry_date: '2026-09-30' }, error: null }) // link target
+    enqueue({ data: { id: JE, status: 'posted', entry_date: '2026-09-30', journal_entry_lines: bankLegOf(-15.25) }, error: null }) // link target
+    enqueue({ data: [], error: null }) // the rows' ledger: no cash account, 1930
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)

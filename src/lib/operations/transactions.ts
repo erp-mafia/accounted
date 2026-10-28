@@ -691,6 +691,7 @@ export const transactionsBulkBook = defineOperation({
       'All rows must share one direction and currency SEK, and one date unless they are linked to an existing verifikat: BULK_BOOK_DATE_MISMATCH / BULK_BOOK_DIRECTION_MISMATCH / BULK_BOOK_MIXED_CURRENCY / BULK_BOOK_FOREIGN_CURRENCY otherwise.',
       'A row that looks already booked returns 409 TRANSACTION_BOOK_POSSIBLE_DUPLICATE naming it; resend with force=true only after reviewing the candidate (each dismissal is logged in behandlingshistorik).',
       'manual_lines accounts must be active in the company\'s chart (BULK_BOOK_INVALID_ACCOUNT) and balance; amounts are kronor, account numbers strings.',
+      'The lines on 1900-1999 must net to the rows\' sum (BULK_BOOK_AMOUNT_MISMATCH), so a transfer between two own cash accounts is refused: categorize the row with account_override set to the other cash account, then link the other row with POST /transactions/{id}/link-journal-entry.',
       'default_dimensions tag the business lines only: the bank side and the moms lines stay untagged. A line\'s own dimensions are kept as given.',
       'A posted samlingsverifikat is permanent: undo with storno (POST /journal-entries/{id}/reverse).',
     ],
@@ -838,6 +839,8 @@ export const transactionsBulkBook = defineOperation({
             }
           : {}),
         ...(p.dimension_resolutions ? { dimension_resolutions: p.dimension_resolutions } : {}),
+        // BAS accounts the approval adds to the chart (crm#1501), as gnubok_create_voucher shows them.
+        ...(p.will_activate_accounts ? { will_activate_accounts: p.will_activate_accounts } : {}),
       }),
       extras: (_input, p) => {
         // The latest row date: a link may carry rows of several dates.
@@ -907,6 +910,46 @@ export const transactionsBulkBook = defineOperation({
               `Possible double booking: transaction ${details?.transaction_id} looks already booked by verifikat ${dup.voucher_label} (${dup.entry_date})` +
                 `${dup.amount_verified ? '' : ', though the amounts could not be compared in SEK'}. ` +
                 'Link the transaction to that verifikat instead. Call again with force=true only after the user confirms it is a genuinely separate business event.',
+            )
+          }
+          // The staging dry run asks the RPC's bank net (crm#1501): name the
+          // account and both amounts, or for a transfer between own cash
+          // accounts the doors that book it.
+          case 'BULK_BOOK_AMOUNT_MISMATCH': {
+            const d = (failure.details ?? {}) as {
+              tx_sum?: number
+              lines_bank_net?: number
+              account?: string
+              account_tx_sum?: number
+              account_net?: number
+              bank_accounts?: string[]
+              transfer_accounts?: string[]
+              link_existing?: boolean
+            }
+            if (!d.bank_accounts) return undefined
+            if (d.transfer_accounts) {
+              const own = d.bank_accounts.join(', ')
+              const other = d.transfer_accounts.join(', ')
+              return codedRefusal(
+                failure.code,
+                `A transfer between the company's own cash accounts (${own} and ${other}) cannot be bulk-booked or bulk-linked: the bank net counts every 1900-1999 line, so the other end cancels the row. ` +
+                  (d.link_existing
+                    ? 'Link each row to the verifikat with gnubok_link_transaction_to_journal_entry.'
+                    : `Book the row with gnubok_categorize_transaction (account_override "${d.transfer_accounts[0]}"), then link the row on ${other} to that verifikat with gnubok_link_transaction_to_journal_entry.`),
+              )
+            }
+            return codedRefusal(
+              failure.code,
+              `The lines must move the rows' own bank account ${d.account ?? d.bank_accounts.join(', ')} by ${d.account_tx_sum ?? d.tx_sum} (debit in, credit out); they move it by ${d.account_net ?? d.lines_bank_net}.`,
+            )
+          }
+          case 'BULK_BOOK_INVALID_ACCOUNT': {
+            const d = (failure.details ?? {}) as { inactive_accounts?: string[]; not_in_chart?: string[] }
+            if (!d.inactive_accounts && !d.not_in_chart) return undefined
+            const accounts = [...(d.inactive_accounts ?? []), ...(d.not_in_chart ?? [])].join(', ')
+            return codedRefusal(
+              failure.code,
+              `Not active in the chart: ${accounts}. Ask the user, then activate them with gnubok_activate_accounts (BAS 2026 numbers; it also reactivates a deactivated one) and stage again.`,
             )
           }
           default:
