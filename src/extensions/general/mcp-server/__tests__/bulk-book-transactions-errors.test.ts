@@ -200,7 +200,19 @@ describe('gnubok_bulk_book_transactions: duplicate-booking guard at stage', () =
   it('stages with force=true and carries the override to the approval', async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({ data: [ROW], error: null }) // transactions fetch
-    enqueue({ data: { id: JE_1, entry_date: '2026-05-12', status: 'posted' }, error: null }) // link target
+    enqueue({
+      data: {
+        id: JE_1,
+        entry_date: '2026-05-12',
+        status: 'posted',
+        journal_entry_lines: [
+          { account_number: '2440', debit_amount: 1250, credit_amount: 0 },
+          { account_number: '1930', debit_amount: 0, credit_amount: 1250 },
+        ],
+      },
+      error: null,
+    }) // link target: its 1930 leg is the row's -1 250
+    enqueue({ data: [], error: null }) // the row's ledger: no cash account, 1930
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
     enqueue({ data: null, error: null })
     enqueue({ data: [], error: null }) // open operations on these rows: none (crm#1264)
@@ -243,5 +255,96 @@ describe('gnubok_bulk_book_transactions: duplicate-booking guard at stage', () =
       { id: TX_1, amount: -100, currency: 'EUR', date: '2026-05-12', journal_entry_id: null },
     ]).catch((e: unknown) => e)
     expect(getStructuredError(err).code).toBe('BULK_BOOK_FOREIGN_CURRENCY')
+  })
+})
+
+/**
+ * crm#1501: the staging refused nothing and the approval failed with
+ * BULK_BOOK_AMOUNT_MISMATCH. The dry run now asks the RPC's bank net, so the
+ * agent hears it at staging, with the doors that book a transfer between own
+ * accounts; nothing is staged.
+ */
+describe('gnubok_bulk_book_transactions: bank net and accounts at stage (crm#1501)', () => {
+  const OUT = { id: TX_1, amount: -5000, currency: 'SEK', date: '2026-10-20', journal_entry_id: null, cash_account_id: 'cash-1930' }
+
+  it('refuses a transfer between own cash accounts, naming categorize + link, and stages nothing', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [OUT], error: null }) // transactions fetch
+    enqueue({ data: [{ account_number: '1930', is_active: true }, { account_number: '1931', is_active: true }], error: null }) // chart
+    enqueue({ data: [], error: null }) // account_dimension_rules
+    enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null }) // the row's cash account
+
+    const err = await bulkBook
+      .execute(
+        {
+          tx_ids: [TX_1],
+          entry_description: 'Överföring',
+          manual_lines: [
+            { account_number: '1931', debit_amount: 5000, credit_amount: 0, currency: 'SEK' },
+            { account_number: '1930', debit_amount: 0, credit_amount: 5000, currency: 'SEK' },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+      .catch((e: unknown) => e as Error & { code?: string })
+
+    expect((err as Error & { code?: string }).code).toBe('BULK_BOOK_AMOUNT_MISMATCH')
+    expect((err as Error).message).toContain("transfer between the company's own cash accounts (1930 and 1931)")
+    expect((err as Error).message).toContain('gnubok_categorize_transaction (account_override "1931")')
+    expect((err as Error).message).toContain('gnubok_link_transaction_to_journal_entry')
+    expect(findCalls('pending_operations', 'insert')).toHaveLength(0)
+  })
+
+  it('names the account and both amounts for a plain mismatch', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [OUT], error: null })
+    enqueue({ data: [{ account_number: '1930', is_active: true }, { account_number: '6570', is_active: true }], error: null })
+    enqueue({ data: [], error: null })
+    enqueue({ data: { ledger_account: '1930', currency: 'SEK' }, error: null })
+
+    const err = await bulkBook
+      .execute(
+        {
+          tx_ids: [TX_1],
+          entry_description: 'Bankavgift',
+          manual_lines: [
+            { account_number: '6570', debit_amount: 4000, credit_amount: 0, currency: 'SEK' },
+            { account_number: '1930', debit_amount: 0, credit_amount: 4000, currency: 'SEK' },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+      .catch((e: unknown) => e as Error & { code?: string })
+
+    expect((err as Error).message).toContain('own bank account 1930 by -5000 (debit in, credit out); they move it by -4000')
+  })
+
+  it('names the accounts not active in the chart and the tool that activates them', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [OUT], error: null })
+    enqueue({ data: [{ account_number: '1930', is_active: true }], error: null }) // 2645 not in the chart
+
+    const err = await bulkBook
+      .execute(
+        {
+          tx_ids: [TX_1],
+          entry_description: 'Tjänst från EU',
+          manual_lines: [
+            { account_number: '2645', debit_amount: 5000, credit_amount: 0, currency: 'SEK' },
+            { account_number: '1930', debit_amount: 0, credit_amount: 5000, currency: 'SEK' },
+          ],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+      )
+      .catch((e: unknown) => e as Error & { code?: string })
+
+    expect((err as Error & { code?: string }).code).toBe('BULK_BOOK_INVALID_ACCOUNT')
+    expect((err as Error).message).toContain('Not active in the chart: 2645. Ask the user, then activate them with gnubok_activate_accounts')
   })
 })

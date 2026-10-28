@@ -258,6 +258,15 @@ describe('POST /api/transactions/bulk-book', () => {
       error: null,
     })
 
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '2611', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
+
     // applyTemplate stub: return a balanced 3-line set per call.
     vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
       { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
@@ -985,6 +994,14 @@ describe('POST /api/transactions/bulk-book: default_dimensions on business lines
       },
       error: null,
     })
+    enqueue({
+      data: [
+        { account_number: '1930', is_active: true },
+        { account_number: '2611', is_active: true },
+        { account_number: '3001', is_active: true },
+      ],
+      error: null,
+    }) // chart_of_accounts: the template's accounts are active
     vi.mocked(applyTemplate).mockImplementation((_lines, total) => [
       { account_number: '1930', debit_amount: String(total), credit_amount: '', line_description: 'Bank' },
       { account_number: '3001', debit_amount: '', credit_amount: String(total * 0.8), line_description: 'Försäljning' },

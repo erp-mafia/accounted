@@ -8378,7 +8378,7 @@ export const tools: McpTool[] = [
         throw badArgument(
           'account_override',
           'account_override must be exactly 4 digits, e.g. "4020": it books the whole business side on ONE account. ' +
-            'To split a bank transaction over several accounts (e.g. a Skatteverket payment clearing 2710 + 2731), use gnubok_bulk_book_transactions with new_entry.lines (the bank leg is added automatically), ' +
+            'To split a bank transaction over several accounts (e.g. a Skatteverket payment clearing 2710 + 2731), use gnubok_bulk_book_transactions with manual_lines (including the bank line on the transaction\'s own cash account), ' +
             'or gnubok_create_voucher for the lines and then gnubok_bulk_book_transactions with existing_journal_entry_id.',
         )
       }

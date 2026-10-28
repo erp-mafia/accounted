@@ -1272,6 +1272,7 @@ describe('gnubok_bulk_book_transactions: dimension policy at stage', () => {
     enqueue({ data: { dimensions_enabled: true }, error: null }) // registry validation: settings
     enqueue({ data: REGISTRY_ROWS, error: null })
     enqueue({ data: VALUE_ROWS, error: null })
+    enqueue({ data: [], error: null }) // the row's ledger: no cash account, 1930
     enqueue({ data: [], error: null }) // chart_of_accounts names
     enqueue({ data: null, error: null }) // resolvePeriodStatusForDate
     enqueue({ data: null, error: null })

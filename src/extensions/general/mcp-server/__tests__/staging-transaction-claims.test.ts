@@ -14,6 +14,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { createQueuedMockSupabase, makeTransaction } from '@/tests/helpers'
 import { getStructuredError } from '@/lib/errors/get-structured-error'
+import { roundOre } from '@/lib/money'
 import { appendProcessingHistory } from '@/lib/processing-history/append'
 import { detectBookingDuplicate } from '@/lib/transactions/booking-duplicate-detection'
 import { toToolError } from '../tool-result'
@@ -49,6 +50,15 @@ const AGENT = { type: 'api_key' as const, id: 'key-1', label: 'ChatGPT' }
 
 const FEE_ROW = { id: TX_1, amount: -4.29, currency: 'SEK', description: 'Stripe fee', merchant_name: null, date: '2026-08-07', journal_entry_id: null }
 
+/** A posted verifikat whose 1930 leg moves by the rows' sum: the bank net the link needs. */
+function voucherLines(rows: Array<{ amount: number }>) {
+  const sum = roundOre(rows.reduce((s, r) => s + r.amount, 0))
+  return [
+    { account_number: '1930', debit_amount: Math.max(sum, 0), credit_amount: Math.max(-sum, 0) },
+    { account_number: '6570', debit_amount: Math.max(-sum, 0), credit_amount: Math.max(sum, 0) },
+  ]
+}
+
 /** What the first staging stored: the params the generated tool stages for a link with force. */
 const FIRST_PARAMS = { tx_ids: [TX_1], existing_journal_entry_id: JE_1, force: true }
 
@@ -79,7 +89,11 @@ function openOperation(overrides: Record<string, unknown> = {}) {
 function stageLink(args: Record<string, unknown>, open: unknown[], rows: unknown[] = [FEE_ROW], actor: unknown = AGENT) {
   const mock = createQueuedMockSupabase()
   mock.enqueue({ data: rows, error: null }) // transactions fetch
-  mock.enqueue({ data: { id: JE_1, entry_date: '2026-08-31', status: 'posted' }, error: null }) // link target
+  mock.enqueue({
+    data: { id: JE_1, entry_date: '2026-08-31', status: 'posted', journal_entry_lines: voucherLines(rows as Array<{ amount: number }>) },
+    error: null,
+  }) // link target
+  mock.enqueue({ data: [], error: null }) // the rows' ledger: no cash account, 1930
   mock.enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
   mock.enqueue({ data: null, error: null })
   mock.enqueue({ data: open, error: null }) // open operations naming the rows
@@ -260,7 +274,11 @@ describe('gnubok_bulk_book_transactions: rows already in an open proposal', () =
     const key = '0f2b6f5e-3f2a-4b9e-9c1d-6e9c2a1b7d55'
     const mock = createQueuedMockSupabase()
     mock.enqueue({ data: [FEE_ROW], error: null }) // transactions fetch
-    mock.enqueue({ data: { id: JE_1, entry_date: '2026-08-31', status: 'posted' }, error: null }) // link target
+    mock.enqueue({
+      data: { id: JE_1, entry_date: '2026-08-31', status: 'posted', journal_entry_lines: voucherLines([FEE_ROW]) },
+      error: null,
+    }) // link target
+    mock.enqueue({ data: [], error: null }) // the rows' ledger: no cash account, 1930
     mock.enqueue({ data: null, error: null }) // resolvePeriodStatusForDate: 2 layers
     mock.enqueue({ data: null, error: null })
     mock.enqueue({ data: [openOperation()], error: null }) // the first staging, still pending
