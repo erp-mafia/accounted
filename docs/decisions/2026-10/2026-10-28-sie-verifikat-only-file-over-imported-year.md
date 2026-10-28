@@ -1,0 +1,1 @@
+[2026-10-28] A SIE file with #VER and no #IB/#UB/#RES (card provider, payroll, POS) is refused over an imported year and never replaces one (crm#1049): the import reads whole years; adding such verifikat via staged vouchers is the follow-up, not a second import batch.

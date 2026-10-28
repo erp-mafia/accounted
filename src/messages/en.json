@@ -12136,6 +12136,7 @@
       "validation_title": "Validation errors in the SIE file",
       "validation_description": "{count, plural, one {# error was} other {# errors were}} found that must be fixed.",
       "parse_failed_title": "Could not read the file",
+      "vouchers_only_title": "The file cannot be added to an imported year",
       "chart_load_failed": "Could not load the chart of accounts for the VAT review.",
       "parsed_title": "File analysed",
       "parsed_description": "{accounts, plural, one {# account} other {# accounts}} and {vouchers, plural, one {# voucher} other {# vouchers}} found",

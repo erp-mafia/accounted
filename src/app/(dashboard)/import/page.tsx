@@ -915,7 +915,9 @@ function SIEImportWizard({
         } else {
           setErrorType('parse')
           setError(message)
-          toast({ title: flowT('parse_failed_title'), description: message, variant: 'destructive' })
+          // crm#1049: the file was read; it only cannot become the year's import.
+          const title = code === 'SIE_IMPORT_VOUCHERS_ONLY_FILE' ? flowT('vouchers_only_title') : flowT('parse_failed_title')
+          toast({ title, description: message, variant: 'destructive' })
         }
         return
       }

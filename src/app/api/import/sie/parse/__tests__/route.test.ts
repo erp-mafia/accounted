@@ -144,6 +144,42 @@ describe('POST /api/import/sie/parse', () => {
     expect(response.status).toBe(200)
   })
 
+  // crm#1049: CLEAN_SIE carries verifikat and no balances (a card provider's
+  // or payroll's export). Over a year that already holds an import it is
+  // refused before mapping, so "Ersätt" is never offered for it.
+  it('refuses a verifikat-only file for an already imported year with 409', async () => {
+    const { checkDuplicatePeriodImport } = await import('@/lib/import/sie-import')
+    const existing = { id: 'import-2024', fiscal_year_start: '2024-01-01', fiscal_year_end: '2024-12-31' } as never
+    // Read twice: the route's own existingImport and the refusal's check.
+    vi.mocked(checkDuplicatePeriodImport).mockResolvedValueOnce(existing).mockResolvedValueOnce(existing)
+
+    const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
+    const body = (await response.json()) as { error?: { code?: string; message?: string; details?: Record<string, unknown> } }
+
+    expect(response.status).toBe(409)
+    expect(body.error?.code).toBe('SIE_IMPORT_VOUCHERS_ONLY_FILE')
+    expect(body.error?.message).toContain('Ångra inte den tidigare importen')
+    expect(body.error?.details).toMatchObject({ existing_import_id: 'import-2024', vouchers: 1 })
+  })
+
+  it('still parses a whole-year file for an imported year (the replacement path)', async () => {
+    const { checkDuplicatePeriodImport } = await import('@/lib/import/sie-import')
+    vi.mocked(checkDuplicatePeriodImport).mockResolvedValueOnce({
+      id: 'import-2024',
+      fiscal_year_start: '2024-01-01',
+      fiscal_year_end: '2024-12-31',
+    } as never)
+    enqueue({ data: [] }) // company chart
+    enqueue({ data: { id: 'p-2024' } }) // containing fiscal period
+
+    const withBalances = CLEAN_SIE.replace('#RAR 0 20240101 20241231', '#RAR 0 20240101 20241231\n#UB 0 1930 -100.00\n#RES 0 4056 100.00')
+    const response = await POST(fileRequest(withBalances), emptyParams)
+    const body = (await response.json()) as { existingImport?: { id: string } }
+
+    expect(response.status).toBe(200)
+    expect(body.existingImport?.id).toBe('import-2024')
+  })
+
   it('returns 400 for a file extension that is not SIE', async () => {
     const response = await POST(fileRequest(CLEAN_SIE, 'test.txt'), emptyParams)
     const body = (await response.json()) as { error?: { code?: string; message?: string } }

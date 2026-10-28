@@ -13,6 +13,7 @@ import { isValidBASRange } from './account-mapper'
 import { onlyUsedSIEMappings } from './sie-preview-mappings'
 import { SIELegacyReviewRequiredError } from './sie-legacy-recovery'
 import { checkSIEOrgNumber } from './sie-org-number'
+import { isVoucherOnlySIE } from './sie-voucher-only'
 import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { appSIEArrivalDoor, recordSIEImportArrival, type SIEArchivedOriginal, type SIEArrivalDoor } from './sie-arrival'
@@ -365,6 +366,22 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   // Decided here, before the input is sealed, so the job's account pass and
   // every resumed checkpoint read the same mappings (#63).
   if (options.onlyUsedAccounts) mappings = onlyUsedSIEMappings(parsed, mappings)
+  // A verifikat-only file (a card provider's, payroll's or POS system's) never
+  // replaces a year's import: the replacement would drop every verifikat the
+  // file does not carry (crm#1049). Without "replace" the database refuses an
+  // imported year itself (SIE_IMPORT_PERIOD_ALREADY_IMPORTED).
+  if (options.onExistingPeriod === 'replace' && isVoucherOnlySIE(parsed)) {
+    throw new SIEJobValidationError(
+      'SIE-filen innehåller bara verifikationer och kan inte ersätta räkenskapsårets import.',
+      'SIE_IMPORT_VOUCHERS_ONLY_FILE',
+      {
+        existing_import_id: options.supersedesImportId ?? null,
+        fiscal_year_start: parsed.stats.fiscalYearStart,
+        fiscal_year_end: parsed.stats.fiscalYearEnd,
+        vouchers: parsed.vouchers.length,
+      },
+    )
+  }
   await resolveSIEFiscalYear(supabase,companyId,parsed)
   validateSIEJobInput(content, parsed, mappings, options)
   // Every door passes here (dashboard, onboarding, v1, MCP approval, provider
