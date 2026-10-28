@@ -115,6 +115,20 @@ export function buildStableExternalIds(
   })
 }
 
+/**
+ * The IBAN a bank-feed row was fetched for, read back from its stored
+ * `external_id` (`eb_{accountScope}_{date}_{öre}_{n}`, both aggregators).
+ * The scope is the account's pinned dedup scope, else its normalized IBAN,
+ * so for an account with an IBAN it names the physical account the row
+ * belongs to, whichever cash account the row sits on now. Null for every
+ * other id (bank files, a uid scope, legacy provider ids): the origin is
+ * then unknown and callers must not guess.
+ */
+export function bankFeedIbanOf(externalId: string | null | undefined): string | null {
+  const match = /^eb_([A-Z]{2}\d{2}[A-Z0-9]{1,30})_\d{4}-\d{2}-\d{2}_-?\d+_\d+$/.exec(externalId ?? '')
+  return match ? match[1] : null
+}
+
 /** What `dropRepeatedBankRows` reads from a fetched row. */
 export interface BankRowIdentity {
   /** The bank's own id for the row (entry_reference / transaction_id), when it sent one. */

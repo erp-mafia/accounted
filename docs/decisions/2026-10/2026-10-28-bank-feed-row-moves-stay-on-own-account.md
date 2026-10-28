@@ -1,0 +1,1 @@
+[2026-10-28] A bank-feed row cannot be moved onto another bank account's cash account (its own account is read from its external id): moved rows stayed behind when the account later changed ledger account and booked on the wrong 19xx (crm#1498).

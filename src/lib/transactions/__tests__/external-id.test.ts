@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   amountToOre,
+  bankFeedIbanOf,
   buildStableExternalIds,
   contentBucketKey,
   descriptionsBridge,
@@ -494,5 +495,25 @@ describe('idsProveDistinctBookings: bank feeds and bank files (crm#1312)', () =>
     expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_bbbb', 'bfi-2'))).toBe(false)
     expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_bbbb', null))).toBe(false)
     expect(idsProveDistinctBookings(file('nordea_aaaa', 'bfi-1'), file('nordea_aaaa', 'bfi-1'))).toBe(false)
+  })
+})
+
+describe('bankFeedIbanOf (crm#1498)', () => {
+  it('reads the IBAN scope back from an id buildStableExternalIds built', () => {
+    const [id] = buildStableExternalIds('eb', 'SE4550000000058398257466', [{ date: '2026-10-01', amount: -399 }])
+    expect(bankFeedIbanOf(id)).toBe('SE4550000000058398257466')
+    const [credit] = buildStableExternalIds('eb', 'SE4550000000058398257466', [{ date: '2026-10-12', amount: 266.15 }])
+    expect(bankFeedIbanOf(credit)).toBe('SE4550000000058398257466')
+  })
+
+  it('answers null when the origin is unknown', () => {
+    // A provider-uid scope (account without an IBAN).
+    const [uidScoped] = buildStableExternalIds('eb', '484e1c7e-0b5f-4b47-ade4-4a868eefaf7d', [{ date: '2026-10-01', amount: 1 }])
+    expect(bankFeedIbanOf(uidScoped)).toBeNull()
+    // Bank files and other sources.
+    expect(bankFeedIbanOf('seb_2026-10-01_-39900_0')).toBeNull()
+    expect(bankFeedIbanOf('lansforsakringar_abc')).toBeNull()
+    expect(bankFeedIbanOf(null)).toBeNull()
+    expect(bankFeedIbanOf(undefined)).toBeNull()
   })
 })

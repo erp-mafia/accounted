@@ -1025,6 +1025,15 @@ const TRANSACTIONS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The transaction currency does not match the target account currency. A transaction can only be moved to an account in the same currency.',
   },
+  // updateTransaction: a bank-feed row onto another bank account's cash
+  // account. The move answers with a sentence naming the row's own account.
+  TRANSACTION_MOVE_OTHER_BANK_ACCOUNT: {
+    httpStatus: 409,
+    message_sv:
+      'Transaktionen hämtades från ett annat bankkonto och kan inte flyttas hit. Flytta den till kontot den hämtades från, eller byt bokföringskonto för hela bankkontot under Inställningar → Kopplingar.',
+    message_en:
+      'The transaction was fetched from another bank account and cannot be moved here. Move it to the account it was fetched from, or change the ledger account of the whole bank account under Settings → Connections.',
+  },
   // resolveSettlementAccount: the transaction's cash account is in another
   // currency than the transaction. The bank-booking guards look the account up
   // by the transaction's currency and refuse every booking and link on it, so

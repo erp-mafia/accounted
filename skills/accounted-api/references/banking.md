@@ -3495,6 +3495,7 @@ description replaces the working title (the bank's original stays in original_de
 - A booked or matched row returns 409 TRANSACTION_TITLE_LOCKED (title) or TRANSACTION_MOVE_BOOKED (move); a row bulk-booked into a samlingsverifikat also returns TRANSACTION_MOVE_BOOKED for a move.
 - account_number is a STRING like "1931", never a number; an account that is not one of the company's cash accounts returns 404 TRANSACTION_MOVE_UNKNOWN_ACCOUNT, one in another currency 400 TRANSACTION_MOVE_CURRENCY_MISMATCH.
 - A row never moves between a bank account and a company card (400 TRANSACTION_MOVE_KIND_MISMATCH): a card stores purchases with the opposite sign of its statement; undo the import and import the file to the right account.
+- A bank-feed row cannot move onto another bank account's cash account: 409 TRANSACTION_MOVE_OTHER_BANK_ACCOUNT names the account it was fetched from. To put a whole bank account on another ledger account, change it in the bank settings.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
