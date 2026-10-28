@@ -159,6 +159,8 @@ describe('readDocumentBytes', () => {
     mock(readOfficeDocument).mockResolvedValue([{ pageNo: 1, text: '# Avtal', reader: 'office', hasTextLayer: true }])
     expect(await readDocumentBytes(Buffer.from('PK'), DOCX)).toMatchObject({ ok: true, reader: 'office' })
     expect(readImageWithModel).toHaveBeenCalledTimes(1)
+    // The office reader gets the type: a CSV has no signature to detect it by.
+    expect(readOfficeDocument).toHaveBeenCalledWith(Buffer.from('PK'), DOCX)
   })
 
   it('hands the model the fitted photo, and skips a HEIC the build cannot decode', async () => {
