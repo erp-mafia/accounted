@@ -3,11 +3,8 @@ import { withRouteContext } from '@/lib/api/with-route-context'
 import { validateBody, validateQuery } from '@/lib/api/validate'
 import { MarkVatFilingSchema, VatFilingPeriodSchema } from '@/lib/api/schemas'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
-import {
-  listVatFilings,
-  markVatPeriodFiled,
-  unmarkVatPeriodFiled,
-} from '@/lib/vat/filing-record-store'
+import { markVatPeriodFiled, unmarkVatPeriodFiled } from '@/lib/vat/filing-record-store'
+import { listVatFilingsWithChanges } from '@/lib/vat/filed-period-changes'
 
 /**
  * /api/reports/vat-declaration/filings (issues #2746, #2786)
@@ -19,9 +16,11 @@ import {
  * the connection, and POST here completes it for a declaration filed by hand
  * on skatteverket.se (the free path). The view reads the list to open the
  * next period once the last one is filed and to mark filed periods in the
- * picker.
+ * picker. Each record carries changed_after_filing: what verifikat posted or
+ * corrected since moved in the filed period (lib/vat/filed-period-changes),
+ * or null.
  *
- *   GET    -> { data: VatFilingRecord[] }
+ *   GET    -> { data: VatFilingRecordWithChange[] }
  *   POST   { period_type, year, period, filed_on, reference? } -> { data: VatFilingRecord }
  *   DELETE ?period_type&year&period -> { data: { deadline_id } }
  *
@@ -30,7 +29,7 @@ import {
  */
 export const GET = withRouteContext('report.vat_filings.list', async (_request, ctx) => {
   const { supabase, companyId } = ctx
-  const data = await listVatFilings(supabase, companyId!)
+  const data = await listVatFilingsWithChanges(supabase, companyId!)
   return NextResponse.json({ data })
 })
 

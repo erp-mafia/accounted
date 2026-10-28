@@ -33,6 +33,12 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/vat/filing-record-store', () => store)
 
+const changes = vi.hoisted(() => ({ listVatFilingsWithChanges: vi.fn() }))
+vi.mock('@/lib/vat/filed-period-changes', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/vat/filed-period-changes')>()),
+  listVatFilingsWithChanges: changes.listVatFilingsWithChanges,
+}))
+
 import { validateApiKey, createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { GET, POST, DELETE } from '../route'
 import { createTableMockSupabase } from '@/tests/helpers'
@@ -108,6 +114,7 @@ describe('v1 VAT filing records', () => {
       }).supabase,
     )
     store.listVatFilings.mockResolvedValue([RECORD])
+    changes.listVatFilingsWithChanges.mockResolvedValue([{ ...RECORD, changed_after_filing: null }])
     store.markVatPeriodFiled.mockResolvedValue({ ok: true, record: RECORD, created: false, changed: true })
     store.unmarkVatPeriodFiled.mockResolvedValue({ ok: true, deadline_id: DEADLINE_ID })
   })
@@ -125,8 +132,8 @@ describe('v1 VAT filing records', () => {
     const res = await GET(req(BASE), params())
     expect(res.status).toBe(200)
     const body = await res.json()
-    expect(body.data).toEqual([RECORD])
-    expect(store.listVatFilings).toHaveBeenCalledWith(expect.anything(), COMPANY_ID)
+    expect(body.data).toEqual([{ ...RECORD, changed_after_filing: null }])
+    expect(changes.listVatFilingsWithChanges).toHaveBeenCalledWith(expect.anything(), COMPANY_ID)
   })
 
   it('404 for a company the key holder is not a member of', async () => {

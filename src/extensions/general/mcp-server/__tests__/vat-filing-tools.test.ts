@@ -24,6 +24,12 @@ const store = vi.hoisted(() => ({
 }))
 vi.mock('@/lib/vat/filing-record-store', () => store)
 
+const changes = vi.hoisted(() => ({ listVatFilingsWithChanges: vi.fn() }))
+vi.mock('@/lib/vat/filed-period-changes', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/vat/filed-period-changes')>()),
+  listVatFilingsWithChanges: changes.listVatFilingsWithChanges,
+}))
+
 import { isDefaultCatalogTool, tools } from '../server'
 
 const tool = (name: string) => tools.find((t) => t.name === name)!
@@ -110,12 +116,13 @@ describe('registration', () => {
 })
 
 describe('gnubok_list_vat_filings', () => {
-  it('lists the filed periods of every cadence from the store', async () => {
-    store.listVatFilings.mockResolvedValue([YEARLY_RECORD])
+  it('lists the filed periods of every cadence with what changed each one after filing', async () => {
+    const record = { ...YEARLY_RECORD, changed_after_filing: null }
+    changes.listVatFilingsWithChanges.mockResolvedValue([record])
     const supabase = {} as never
     const result = await listTool().execute({}, 'company-1', 'user-1', supabase)
-    expect(result).toEqual({ filings: [YEARLY_RECORD] })
-    expect(store.listVatFilings).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(result).toEqual({ filings: [record] })
+    expect(changes.listVatFilingsWithChanges).toHaveBeenCalledWith(supabase, 'company-1')
   })
 })
 

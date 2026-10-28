@@ -33,6 +33,7 @@ import { ReportBodyLoading } from '@/components/reports/ReportLoading'
 import { ReportExportMenu } from '@/components/reports/ReportExportMenu'
 import { useReportRowExpansion } from '@/components/reports/ReportRowExpansion'
 import { VatFilingStatusCard } from '@/components/reports/VatFilingStatusCard'
+import { VatFiledChangesLine } from '@/components/reports/VatFiledChangesLine'
 import { PayDeclarationViaBankButton } from '@/components/payments/PayDeclarationViaBankButton'
 import { VatChecksCard } from '@/components/reports/VatChecksCard'
 import { SKATTEVERKET_DIRECT_FILING, SkatteverketPanel } from '@/components/reports/SkatteverketPanel'
@@ -48,6 +49,7 @@ import {
   vatFilingTaxPeriod,
   type VatFilingRecord,
 } from '@/lib/vat/filing-record'
+import type { VatFilingRecordWithChange } from '@/lib/vat/filed-period-changes'
 import { cn, formatAmount, formatDate } from '@/lib/utils'
 import { formatDateISO } from '@/lib/calendar/utils'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
@@ -603,9 +605,11 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
   // filed, through the Skatteverket connection or marked by hand. Tagged with
   // the company they were fetched for, because the initial period seed below
   // must read them: a filed period is skipped in favour of the next one.
+  // `changed` holds the filed periods whose books moved after the filing.
   const [filings, setFilings] = useState<{
     key: string
     byPeriod: Map<string, VatFilingRecord>
+    changed: VatFilingRecordWithChange[]
   } | null>(null)
   const [filingsRefreshKey, setFilingsRefreshKey] = useState(0)
   // Per-verifikat RC-basis scan, fetched here (not only inside VatChecksCard)
@@ -646,11 +650,15 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
       .then(async (res) => {
         const json = await res.json().catch(() => null)
         if (cancelled) return
-        const rows: VatFilingRecord[] = res.ok && Array.isArray(json?.data) ? json.data : []
-        setFilings({ key: companyKey, byPeriod: indexVatFilings(rows) })
+        const rows: VatFilingRecordWithChange[] = res.ok && Array.isArray(json?.data) ? json.data : []
+        setFilings({
+          key: companyKey,
+          byPeriod: indexVatFilings(rows),
+          changed: rows.filter((row) => row.changed_after_filing),
+        })
       })
       .catch(() => {
-        if (!cancelled) setFilings({ key: companyKey, byPeriod: new Map() })
+        if (!cancelled) setFilings({ key: companyKey, byPeriod: new Map(), changed: [] })
       })
     return () => {
       cancelled = true
@@ -1198,6 +1206,18 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
             </Button>
           </CardContent>
         </Card>
+      )}
+
+      {filingsReady && filings.changed.length > 0 && (
+        <VatFiledChangesLine
+          changed={filings.changed}
+          onOpen={(record) => {
+            setPeriodType(record.period_type)
+            setYear(record.year)
+            setPeriod(record.period)
+            setPickedFiscalPeriodId('')
+          }}
+        />
       )}
 
       {!error && (awaitingFiscalPeriod || (loading && !data)) && <ReportBodyLoading />}

@@ -2286,7 +2286,7 @@ Response `200` (`application/xml`).
 **List the VAT periods the company has recorded as filed.**
 `scope:reports:read · risk:low · idempotent`
 
-Returns every monthly, quarterly or yearly momsdeklaration period the company has on record as filed, newest first, with the dates each period covers (`period_start`, `period_end`). `source` is `skatteverket` when the filing was confirmed by a Skatteverket kvittens through the connection, `manual` when a person or an API caller recorded it (POST on this path, or completing the period's moms deadline). `reference` is the Skatteverket reference typed at manual marking, if any. Local state: not a Skatteverket read.
+Returns every monthly, quarterly or yearly momsdeklaration period the company has on record as filed, newest first, with the dates each period covers (`period_start`, `period_end`). `source` is `skatteverket` when the filing was confirmed by a Skatteverket kvittens through the connection, `manual` when a person or an API caller recorded it (POST on this path, or completing the period's moms deadline). `reference` is the Skatteverket reference typed at manual marking, if any. `changed_after_filing` says what verifikat posted, corrected or re-dated after the filing moved in the declared period (per ruta, signed as filed, with the verifikat), or null when the books still read as filed. Local state: not a Skatteverket read.
 
 **Use when:** Deciding which VAT period is next to prepare, checking whether a period was already filed before recomputing it, or reconciling a filing calendar against the books.
 **Do not use for:** Reading what Skatteverket actually has on file (use /skatteverket/vat-declarations) or computing the declaration figures (use /reports/vat-declaration).
@@ -2294,6 +2294,7 @@ Returns every monthly, quarterly or yearly momsdeklaration period the company ha
 **Pitfalls:**
 - An empty list means nothing is recorded, not that nothing was filed: companies that file on skatteverket.se by hand only get records when they mark the period (POST here or in the app).
 - Yearly (helårsmoms) is the räkenskapsår: `year` is the year it ends in, `period` is 1, and a broken fiscal year ends in its own month (tax_period `2025/2026`, period_end `2026-06-30`), placed from the company's fiscal-year settings.
+- A non-null `changed_after_filing` does not reach Skatteverket by itself: the filed declaration and the books now differ by `rutor_change`.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2302,7 +2303,7 @@ Returns every monthly, quarterly or yearly momsdeklaration period the company ha
 Response `200`:
 ```ts
 {
-  data: { deadline_id: string, period_type: "monthly" | "quarterly" | "yearly", year: number, period: number, tax_period: string, period_start: string, period_end: string, filed_on: string, source: "skatteverket" | "manual", reference: string | null }[],
+  data: { deadline_id: string, period_type: "monthly" | "quarterly" | "yearly", year: number, period: number, tax_period: string, period_start: string, period_end: string, filed_on: string, source: "skatteverket" | "manual", reference: string | null, changed_after_filing: { changed_after: string, rutor_change: Record<string, number>, verifikat: { journal_entry_id: string, voucher: string, entry_date: string, changed_at: string, kind: "posted" | "rattelse" | "redated", rutor_change: Record<string, number> }[] } | null }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -2329,7 +2330,8 @@ Example response `200`:
       "period_end": "2026-06-30",
       "filed_on": "2026-08-10",
       "source": "manual",
-      "reference": null
+      "reference": null,
+      "changed_after_filing": null
     }
   ],
   "meta": {
