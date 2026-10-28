@@ -211,6 +211,43 @@ export async function verifyTotp(
   return { error }
 }
 
+/** Verified security-key (WebAuthn) factors, crm#1448. */
+export function verifiedWebauthnFactors(status: MfaStatus | null): MfaFactor[] {
+  return status?.factors.filter((factor) => factor.factor_type === 'webauthn' && factor.status === 'verified') ?? []
+}
+
+export interface WebauthnCeremony {
+  factorId: string
+  challengeId: string
+  publicKey: Record<string, unknown>
+}
+
+/** Start a security-key enrolment: a new factor plus its creation options. */
+export async function enrollWebauthn(friendlyName?: string): Promise<CallResult<WebauthnCeremony>> {
+  return call('/api/auth/mfa/webauthn/enroll', {
+    method: 'POST',
+    body: friendlyName ? { friendlyName } : {},
+  })
+}
+
+/** Request options for signing in with a verified security key. */
+export async function challengeWebauthn(
+  factorId: string,
+): Promise<CallResult<{ challengeId: string; publicKey: Record<string, unknown> }>> {
+  return call('/api/auth/mfa/webauthn/challenge', { method: 'POST', body: { factorId } })
+}
+
+/** Finish a ceremony; on success the session is AAL2. */
+export async function verifyWebauthn(input: {
+  factorId: string
+  challengeId: string
+  type: 'create' | 'request'
+  credential: Record<string, unknown>
+}): Promise<{ error: AuthClientError | null }> {
+  const { error } = await call('/api/auth/mfa/webauthn/verify', { method: 'POST', body: input })
+  return { error }
+}
+
 export async function unenrollFactor(factorId: string): Promise<{ error: AuthClientError | null }> {
   const { error } = await call('/api/auth/mfa/unenroll', {
     method: 'POST',

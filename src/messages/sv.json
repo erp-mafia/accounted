@@ -1724,7 +1724,13 @@
     "unexpected_error": "Ett oväntat fel uppstod. Försök igen.",
     "wait_seconds": "Vänta {seconds}s",
     "lost_authenticator": "Förlorat din autentiseringsapp?",
-    "contact_support": "Kontakta support"
+    "contact_support": "Kontakta support",
+    "use_security_key": "Använd säkerhetsnyckel",
+    "use_named_security_key": "Använd {name}",
+    "security_key_or": "eller",
+    "security_key_failed_title": "Säkerhetsnyckeln godkändes inte",
+    "security_key_failed_description": "Försök igen.",
+    "security_key_cancelled": "Ingen nyckel användes. Försök igen när nyckeln är ansluten."
   },
   "reset_password": {
     "title": "Välj nytt lösenord",
@@ -4134,7 +4140,21 @@
     "mfa_required_note": "Tvåfaktorsautentisering är obligatorisk och kan inte inaktiveras.",
     "mfa_inactive_title": "2FA är inte aktiverad",
     "mfa_inactive_description": "Vi rekommenderar att du aktiverar tvåfaktorsautentisering.",
-    "enable_mfa": "Aktivera 2FA"
+    "enable_mfa": "Aktivera 2FA",
+    "security_keys_title": "Säkerhetsnycklar",
+    "security_keys_description": "En säkerhetsnyckel (till exempel YubiKey) eller enhetens inbyggda inloggning kan användas som andra steg i stället för koden från autentiseringsappen.",
+    "security_keys_none": "Ingen säkerhetsnyckel tillagd",
+    "add_security_key": "Lägg till säkerhetsnyckel",
+    "adding_security_key": "Väntar på nyckeln…",
+    "remove_security_key": "Ta bort",
+    "remove_security_key_aria": "Ta bort {name}",
+    "security_key_unsupported": "Webbläsaren stödjer inte säkerhetsnycklar.",
+    "toast_security_key_added_title": "Säkerhetsnyckeln är tillagd",
+    "toast_security_key_added_description": "Du kan använda den nästa gång du loggar in.",
+    "toast_security_key_failed_title": "Kunde inte lägga till säkerhetsnyckeln",
+    "toast_security_key_cancelled": "Ingen nyckel registrerades. Försök igen när nyckeln är ansluten.",
+    "toast_security_key_removed_title": "Säkerhetsnyckeln är borttagen",
+    "toast_security_key_remove_failed_title": "Kunde inte ta bort säkerhetsnyckeln"
   },
   "settings_calendar_feed": {
     "title": "Kalendersynkronisering",

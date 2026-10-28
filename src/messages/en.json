@@ -1724,7 +1724,13 @@
     "unexpected_error": "An unexpected error occurred. Please try again.",
     "wait_seconds": "Wait {seconds}s",
     "lost_authenticator": "Lost your authenticator app?",
-    "contact_support": "Contact support"
+    "contact_support": "Contact support",
+    "use_security_key": "Use security key",
+    "use_named_security_key": "Use {name}",
+    "security_key_or": "or",
+    "security_key_failed_title": "The security key was not accepted",
+    "security_key_failed_description": "Try again.",
+    "security_key_cancelled": "No key was used. Try again with the key connected."
   },
   "reset_password": {
     "title": "Choose a new password",
@@ -4134,7 +4140,21 @@
     "mfa_required_note": "Two-factor authentication is mandatory and cannot be disabled.",
     "mfa_inactive_title": "2FA is not enabled",
     "mfa_inactive_description": "We recommend enabling two-factor authentication.",
-    "enable_mfa": "Enable 2FA"
+    "enable_mfa": "Enable 2FA",
+    "security_keys_title": "Security keys",
+    "security_keys_description": "A security key (such as a YubiKey) or your device's built-in sign-in can be used as the second step instead of the code from the authenticator app.",
+    "security_keys_none": "No security key added",
+    "add_security_key": "Add security key",
+    "adding_security_key": "Waiting for the key…",
+    "remove_security_key": "Remove",
+    "remove_security_key_aria": "Remove {name}",
+    "security_key_unsupported": "This browser does not support security keys.",
+    "toast_security_key_added_title": "Security key added",
+    "toast_security_key_added_description": "You can use it the next time you sign in.",
+    "toast_security_key_failed_title": "Could not add the security key",
+    "toast_security_key_cancelled": "No key was registered. Try again with the key connected.",
+    "toast_security_key_removed_title": "Security key removed",
+    "toast_security_key_remove_failed_title": "Could not remove the security key"
   },
   "settings_calendar_feed": {
     "title": "Calendar sync",
