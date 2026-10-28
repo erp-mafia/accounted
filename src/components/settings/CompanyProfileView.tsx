@@ -164,7 +164,7 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
         <SettingsRow label="Bankuppgifter" align="baseline">
           {/* Registry read-out, not a setting: without the note this row makes
               the bankgiro look configured while payment files and invoices
-              read the editable fields under Fakturering. */}
+              read the bank accounts under Fakturor. */}
           <div className="w-full space-y-1">
             <ul className="space-y-1">
               {snapshot.bankAccounts.map((b, i) => (
@@ -175,8 +175,8 @@ export function CompanyProfileView({ snapshot }: { snapshot: SnapshotShape | nul
               ))}
             </ul>
             <SettingsRowNote className="block">
-              Enligt Bolagsverket. Fakturor och betalfiler använder bankuppgifterna
-              under Inställningar → Fakturering.
+              Enligt Bolagsverket. Fakturor och betalfiler använder bankkontona
+              under Inställningar → Fakturor.
             </SettingsRowNote>
           </div>
         </SettingsRow>

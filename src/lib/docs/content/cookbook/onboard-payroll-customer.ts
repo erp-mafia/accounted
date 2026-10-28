@@ -20,7 +20,7 @@ curl "https://app.gnubok.se/api/v1/companies" \\
   -d '{ "name": "Ingager AB", "entity_type": "aktiebolag", "org_number": "5566778899", "vat_registered": true, "moms_period": "monthly", "accounting_method": "accrual", "f_skatt": true }'
 \`\`\`
 
-The response carries the \`id\` you use as \`$COMPANY_ID\` from here on. The BAS chart of accounts is seeded on creation; the fiscal year follows \`fiscal_year_start_month\` (default January). Bank details for the payment file (IBAN + BIC for pain.001, bankgiro for Bankgirot LB) go on \`PATCH /companies/{id}/settings\`.
+The response carries the \`id\` you use as \`$COMPANY_ID\` from here on. The BAS chart of accounts is seeded on creation; the fiscal year follows \`fiscal_year_start_month\` (default January). The pain.001 payment file pays from the account the salaries are booked on, the company's primary bank account, with that account's IBAN and BIC. A company whose only bank account has no IBAN of its own (a company created over the API starts with one, 1930) uses the IBAN and BIC on \`PATCH /companies/{id}/settings\`; the bankgiro a Bankgirot LB file is sent from goes there too.
 
 ## 2. Payroll settings, once, before the first run
 
@@ -33,7 +33,6 @@ curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/setting
     "salary_pay_day": 25,
     "salary_deviation_period": "previous_month",
     "preferred_payment_format": "pain001",
-    "salary_default_bank": "seb",
     "salary_net_rounding": false,
     "salary_voucher_series": "L"
   }'
@@ -41,6 +40,7 @@ curl -X PATCH "https://app.gnubok.se/api/v1/companies/$COMPANY_ID/salary/setting
 
 - \`salary_deviation_period\` is the avvikelseperiod: \`previous_month\` means a run for September reads August's absence, sick days, VAB and worked hours (the standard "innevarande månads lön, föregående månads avvikelser"). \`same_month\` reads September. The window is snapshotted on each run at creation, so decide this before the first run: switching later makes the next run's window overlap the previous run and it is refused with \`409 SALARY_RUN_DEVIATION_PERIOD_OVERLAP\`.
 - \`salary_pay_day\` only sets the default \`payment_date\` of new runs.
+- There is no salary bank to set: the file pays from the primary bank account, and the dashboard shows the upload instructions of that account's bank. \`salary_default_bank\` is still accepted, as the fallback for an account whose bank has no instructions in the dashboard.
 - \`salary_voucher_series\` is the verifikationsserie salary vouchers book under. A fresh company defaults to K; send the letter explicitly when provisioning so it is never a surprise.
 
 Read it back with \`GET /salary/settings\`. There is no separate "avtal" to configure: statutory parameters (arbetsgivaravgifter, traktamenten, karens, sjuklön) live centrally per year and are maintained by Accounted.

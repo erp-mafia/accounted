@@ -24,6 +24,7 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { useCanWrite } from '@/lib/hooks/use-can-write'
 import { useAgiSubmission } from '@/lib/hooks/use-agi-submission'
+import { usePaymentFileAccount } from '@/lib/hooks/use-payment-file-account'
 import { deriveAgiFilingState } from '@/lib/salary/agi-submission-state'
 import {
   buildPayslipZipReport,
@@ -105,11 +106,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   // bank-detail reasons returned by the approve route (overridable block).
   const [approveOverride, setApproveOverride] = useState<string[] | null>(null)
   const [preferredPaymentFormat, setPreferredPaymentFormat] = useState<'bg_lb' | 'pain001'>('pain001')
-  const [defaultBank, setDefaultBank] = useState<string | null>(null)
   // undefined = settings not loaded yet, null = confirmed missing. The panel
   // only warns on null, so a failed settings fetch never shows a false alarm.
   const [senderBankgiro, setSenderBankgiro] = useState<string | null | undefined>(undefined)
-  const [senderIban, setSenderIban] = useState<string | null | undefined>(undefined)
   // Gates the default-dimensions chips on the employee rows: same
   // company_settings.dimensions_enabled UI gate as the voucher form.
   const [dimensionsEnabled, setDimensionsEnabled] = useState(false)
@@ -152,6 +151,18 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
   const { submission: agiSubmission, refresh: refreshAgiSubmission } = useAgiSubmission(
     run && run.status === 'booked' ? formatAgiPeriodCompact(agiReportingPeriod(run)) : null,
   )
+
+  // The account the payment files pay from (crm#1483). The salary file pays
+  // from the account the run's verifikat credits (the primary until it is
+  // booked); the tax file from the primary. Read only while a panel shows.
+  const showsPaymentFile = Boolean(run && ['approved', 'paid', 'booked'].includes(run.status))
+  const { account: runFileAccount, refresh: refreshRunFileAccount } = usePaymentFileAccount(id, {
+    enabled: showsPaymentFile,
+    runStatus: run?.status ?? null,
+  })
+  const { account: taxFileAccount, refresh: refreshTaxFileAccount } = usePaymentFileAccount(null, {
+    enabled: Boolean(run && run.status === 'booked' && run.agi_generated_at),
+  })
 
   async function loadRun() {
     const res = await fetch(`/api/salary/runs/${id}`)
@@ -198,11 +209,9 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
     if (!data) return
     const format = data.preferred_payment_format
     if (format === 'pain001' || format === 'bg_lb') setPreferredPaymentFormat(format)
-    setDefaultBank(typeof data.salary_default_bank === 'string' ? data.salary_default_bank : null)
     setSenderBankgiro(
       typeof data.bankgiro === 'string' && data.bankgiro.trim() ? data.bankgiro : null,
     )
-    setSenderIban(typeof data.iban === 'string' && data.iban.trim() ? data.iban : null)
     setDimensionsEnabled(data.dimensions_enabled === true)
   }, [companySettings])
 
@@ -217,16 +226,21 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
 
   // The payment-file warning links to settings, which opens as an intercepting
   // modal over this still-mounted page. When the URL returns here after that
-  // detour, refetch settings so a bankgiro/IBAN saved in the modal clears the
-  // warning instead of leaving it asserting a stale "file cannot be created".
+  // detour, refetch settings and the paying account so a bankgiro, IBAN or
+  // new primary saved there clears the warning instead of leaving it
+  // asserting a stale "file cannot be created".
   const pathnameSeen = useRef(false)
   useEffect(() => {
     if (!pathnameSeen.current) {
       pathnameSeen.current = true
       return
     }
-    if (pathname === `/salary/runs/${id}`) void invalidateReferenceData('company_settings')
-  }, [pathname, id])
+    if (pathname === `/salary/runs/${id}`) {
+      void invalidateReferenceData('company_settings')
+      refreshRunFileAccount()
+      refreshTaxFileAccount()
+    }
+  }, [pathname, id, refreshRunFileAccount, refreshTaxFileAccount])
 
   // Refetch when the tab regains focus. AGI can be generated out-of-band (via
   // the MCP server, the public API, or another browser tab) and this page
@@ -1095,9 +1109,8 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
       paymentFileGeneratedAt={run.payment_file_generated_at}
       paymentFileVersion={run.payment_file_version ?? 1}
       defaultFormat={preferredPaymentFormat}
-      defaultBank={defaultBank}
       senderBankgiro={senderBankgiro}
-      senderIban={senderIban}
+      fileAccount={runFileAccount}
       readOnly={!canWrite}
       settled={run.status === 'paid' || run.status === 'booked'}
       folded={payViaBankFirst}
@@ -1161,7 +1174,7 @@ export default function SalaryRunPage({ params }: { params: Promise<{ id: string
             agiPeriod={taxPayment ? formatAgiPeriodDashed(agiReportingPeriod(run)) : null}
             defaultFormat={preferredPaymentFormat}
             senderBankgiro={senderBankgiro}
-            senderIban={senderIban}
+            fileAccount={taxFileAccount}
             readOnly={!canWrite}
             onChange={loadRun}
           />

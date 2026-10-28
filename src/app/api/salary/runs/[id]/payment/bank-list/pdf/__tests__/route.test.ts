@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
-import { createMockRequest, createMockRouteParams, createQueuedMockSupabase } from '@/tests/helpers'
+import { createMockRequest, createMockRouteParams, createQueuedMockSupabase, payingAccountReads } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, enqueueMany, reset, calls } = createQueuedMockSupabase()
 
@@ -89,7 +89,7 @@ describe('GET /api/salary/runs/[id]/payment/bank-list/pdf', () => {
   })
 
   it('renders the bank list of the file, without archiving or stamping', async () => {
-    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna] }])
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, ...payingAccountReads(), { data: [anna] }])
     const response = await GET(createMockRequest(URL), createMockRouteParams({ id: 'run-1' }))
     expect(response.status).toBe(200)
     expect(response.headers.get('Content-Type')).toBe('application/pdf')

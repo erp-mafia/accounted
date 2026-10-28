@@ -100,7 +100,7 @@ Missing email is a **non-blocking warning** (lönebesked can't be sent automatic
 
 ## 4. Pay, then mark paid (approved → paid)
 
-The bank file comes from the API too. \`POST /salary-runs/{id}/payment-file\` with \`{ "format": "pain001" }\` (or \`"bg_lb"\`; omitted = the company's \`preferred_payment_format\`) returns the ISO 20022 pain.001 XML inline as \`data.content\` with a \`data.filename\`, plus the employee count, the total and any warnings. It needs the company's IBAN and BIC (bankgiro for LB) and each employee's clearing and account number, and the run must be approved. Write the content to disk and upload it in the bank's file channel; generating it does not change the run's state. Dry-run it first to see the preview without stamping the run.
+The bank file comes from the API too. \`POST /salary-runs/{id}/payment-file\` with \`{ "format": "pain001" }\` (or \`"bg_lb"\`; omitted = the company's \`preferred_payment_format\`) returns the ISO 20022 pain.001 XML inline as \`data.content\` with a \`data.filename\`, plus the employee count, the total, \`data.paying_account\` and any warnings. A pain.001 pays from the account the salary is booked on: a booked run's verifikat account, otherwise the company's primary bank account, which \`:book\` will credit (\`data.paying_account\` names it). It needs that account's IBAN and a BIC (bankgiro for LB) and each employee's clearing and account number, and the run must be approved. Write the content to disk and upload it in the bank's file channel; generating it does not change the run's state. Dry-run it first to see the preview without stamping the run.
 
 After the bank transfer settles (or you mark it on the same day for cash-method shops), tell Accounted:
 

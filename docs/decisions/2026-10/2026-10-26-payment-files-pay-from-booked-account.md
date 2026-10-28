@@ -1,0 +1,1 @@
+[2026-10-26] Payment files (salary, supplier batch, Skatteverket) pay from the cash account the salary verifikat credits (a booked run's entry, else the primary), not company_settings.iban: that IBAN mirrors the invoice payee, so a file paid from savings while the books credited 1930 (crm#1483).

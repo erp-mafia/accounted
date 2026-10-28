@@ -343,6 +343,29 @@ describe('GET /api/skatteverket/tax-payments/[period]/payment-file', () => {
     expect(mockGeneratePain001).not.toHaveBeenCalled()
   })
 
+  it('returns 400 naming the paying account when it has no IBAN (crm#1483)', async () => {
+    mockResolveBatchDebtor.mockResolvedValue({
+      ok: false,
+      missing: 'iban',
+      account: { cash_account_id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930', iban_last4: null },
+    })
+    enqueue({ data: { id: 'agi-1', total_tax: 1000, total_avgifter: 500 } }) // agi
+    enqueue({ data: { name: 'Test AB', org_number: '5566778899', entity_type: 'aktiebolag' } }) // companies
+
+    const response = await GET(
+      createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {
+        searchParams: { format: 'pain001' },
+      }),
+      createMockRouteParams({ period: '2026-04' }),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe(
+      'Betalfilen betalar från Företagskonto (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+    )
+    expect(mockGeneratePain001).not.toHaveBeenCalled()
+  })
+
   it('returns 400 for an unknown format', async () => {
     const response = await GET(
       createMockRequest('/api/skatteverket/tax-payments/2026-04/payment-file', {

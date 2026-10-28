@@ -94,7 +94,7 @@ describe('GET /api/salary/runs/[id]/payment/bg-lb', () => {
     const body = await response.json()
     // The message must name where the setting lives: the settings overview
     // shows a registry bankgiro this route does not read.
-    expect(body.error).toContain('Inställningar → Fakturering')
+    expect(body.error).toContain('Inställningar → Fakturor')
   })
 
   it('returns 400 and makes no file when a correction run has no difference to pay', async () => {

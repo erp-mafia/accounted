@@ -36,6 +36,7 @@ import {
   type SupplierPaymentBatchPlan,
 } from './batch-service'
 import { formatPayeeLabel, type SupplierPayee } from './supplier-payee'
+import { payingAccountMissingSv } from './paying-account'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -43,6 +44,15 @@ type Failure = Extract<OperationOutcome<never>, { ok: false }>
 function createFailure(result: Exclude<CreateBatchResult, { ok: true }>): Failure {
   switch (result.code) {
     case 'debtor_incomplete':
+      // An IBAN or BIC refusal names the paying account and where to fill it in.
+      if (result.account && (result.missing === 'iban' || result.missing === 'bic')) {
+        return {
+          ok: false,
+          code: 'SI_BATCH_DEBTOR_INCOMPLETE',
+          messageSv: payingAccountMissingSv(result.missing, result.account),
+          details: { missing: result.missing, account: result.account },
+        }
+      }
       return { ok: false, code: 'SI_BATCH_DEBTOR_INCOMPLETE', details: { missing: result.missing } }
     case 'ineligible':
       // Only the Swedbank ISO 2.0 refusal says what to do instead; any other

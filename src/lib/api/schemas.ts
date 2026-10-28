@@ -3924,8 +3924,9 @@ export const UpdateSettingsSchema = z.object({
   // Salary payment file
   preferred_payment_format: z.enum(['bg_lb', 'pain001']).optional(),
   // Salary settings (migration 20260703190000). Day of month salaries are
-  // paid (1–28 so it exists in every month) and the default bank whose
-  // upload instructions the payment-file panel pre-selects.
+  // paid (1-28 so it exists in every month) and the fallback bank for the
+  // payment-file panel's upload instructions (the paying account's bank
+  // comes first, lib/salary/payment/instruction-bank.ts).
   salary_pay_day: z.number().int().min(1).max(28).optional(),
   salary_default_bank: z
     .enum(['swedbank', 'seb', 'handelsbanken', 'nordea', 'other'])

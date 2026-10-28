@@ -53,6 +53,14 @@ const BATCH_ID = z
   .uuid()
   .describe('The payment batch id (supplier_payment_batch_id from the list or create answer).')
 
+/** The company account the file pays from, as refusals name it (lib/payments/paying-account.ts). */
+const PAYING_ACCOUNT = z.object({
+  cash_account_id: z.string().uuid().nullable().describe('cash_accounts.id; null for a company without cash accounts.'),
+  name: z.string().nullable(),
+  ledger_account: z.string().describe('The BAS account the salary verifikat credits the net pay on, e.g. 1930.'),
+  iban_last4: z.string().nullable().describe('The last four characters of the IBAN the file would pay from; null when it has none.'),
+})
+
 const WARNING = z
   .enum(['unattested', 'already_batched', 'ocr_invalid', 'payee_city_missing'])
   .describe(
@@ -164,13 +172,13 @@ export const supplierPaymentBatchesPreview = defineOperation({
   docs: {
     summary: 'Check which supplier invoices can go into a payment file (betalfil), with amounts, payees and warnings.',
     description:
-      'Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, or today when it has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; the file form the company\'s bank takes (format: pain001, or bg_lb for Svea Bank); and whether the company\'s own bank details (IBAN, BIC, org number, and the bankgiro an LB file is sent from) are complete. Reads only; creates nothing.',
+      'Evaluates the given supplier invoices exactly as create will: eligible lines with the default amount (the remaining amount), payment date (the due date, or today when it has passed), payee (bankgiro, plusgiro or bank account from the supplier) and reference (OCR when valid, else the invoice number), plus non-blocking warnings; excluded invoices with the reason; the file form the company\'s bank takes (format: pain001, or bg_lb for Svea Bank); and whether the company\'s own bank details are complete. The file pays from the company\'s primary bank account, the account salaries are booked on, with that account\'s IBAN and BIC; org number, and the bankgiro an LB file is sent from, come from company settings. Reads only; creates nothing.',
     useWhen: 'Before creating a payment batch, to see what would be paid and what blocks it.',
     doNotUseFor:
       'Creating the batch (POST /supplier-payment-batches) or listing unpaid supplier invoices (GET /supplier-invoices).',
     pitfalls: [
       'Excluded reasons: not_payable (draft, paid, credited...), nothing_remaining, credit_note, foreign_currency (only SEK), payee_missing / payee_invalid (fix the supplier\'s bankgiro, plusgiro or clearing + account number), reference_missing (no valid OCR and no supplier invoice number: add one of them to the invoice), payee_unconfirmed / payee_rejected (the invoice states bank details the supplier card lacks and a person has not approved them, or rejected them: a person decides in Accounted under Att göra; gnubok_confirm_supplier_payee stages the approval), attest_required (the attest policy of the company requires attest for the invoice and it has not been given: an attester approves it first), not_found, in_bank_payment, swedbank_iso2_giro_payee (the company pays through Swedbank, whose ISO 2.0 file agreement pays to bank accounts only: a supplier with a bankgiro or plusgiro is left out; pay those invoices with a bank payment or in the internet bank), lb_bank_account_payee (the company\'s bank takes only an LB file, which here pays to bankgiro and plusgiro only: a supplier paid to a bank account is left out; pay it in the internet bank).',
-      'debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names the company setting to fill in (iban, bic, org_number, swedbank_ids: a Swedbank company\'s swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without, or bankgiro: the company\'s bankgiro, which an LB file is sent from).',
+      'debtor_ok false means create will refuse with SI_BATCH_DEBTOR_INCOMPLETE: debtor_missing names what to fill in (iban or bic: the paying account, named in debtor_account, has no IBAN or its bank cannot be determined; fill it in on that account under Inställningar → Fakturor, Bankkonton för kundfakturor, or make another account primary under Inställningar → Bokföring. org_number, swedbank_ids: a Swedbank company\'s swedbank_signer_id and swedbank_corporate_pay_id, which Swedbank assigns and refuses a file without, or bankgiro: the company\'s bankgiro, which an LB file is sent from).',
       'already_batched is a warning here but a refusal at create unless confirm_already_batched is true: paying the same invoice twice is the risk.',
       'Only SEK invoices; at most 100 per call.',
     ],
@@ -197,6 +205,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
           currency: 'SEK',
           debtor_ok: true,
           debtor_missing: null,
+          debtor_account: null,
         },
         meta: META,
       },
@@ -252,6 +261,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
     currency: z.literal('SEK'),
     debtor_ok: z.boolean(),
     debtor_missing: z.enum(['iban', 'bic', 'org_number', 'swedbank_ids', 'bankgiro']).nullable(),
+    debtor_account: PAYING_ACCOUNT.nullable().describe('With debtor_missing iban or bic: the paying account that lacks it. Null otherwise.'),
   }),
   http: { method: 'POST', path: '/api/v1/companies/:companyId/supplier-payment-batches/preview' },
   mcp: {
@@ -283,6 +293,7 @@ export const supplierPaymentBatchesPreview = defineOperation({
         currency: 'SEK' as const,
         debtor_ok: preview.debtor_ok,
         debtor_missing: preview.debtor_missing ?? null,
+        debtor_account: preview.debtor_account ?? null,
       },
     }
   },
@@ -309,7 +320,7 @@ export const supplierPaymentBatchesCreate = defineOperation({
     pitfalls: [
       'Money leaves the company\'s account once the file is uploaded and signed in the bank: preview first (POST /supplier-payment-batches/preview) and check amounts and payees.',
       'An invoice already in an active batch answers 409 SI_BATCH_DUPLICATE_INVOICE with details.invoices; resend with confirm_already_batched true only when paying it twice is intended, otherwise cancel the old batch.',
-      'Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic, org_number, swedbank_ids or bankgiro (company settings; swedbank_ids means a Swedbank company lacks swedbank_signer_id or swedbank_corporate_pay_id, bankgiro that a Svea Bank company lacks the bankgiro its LB file is sent from).',
+      'Incomplete company bank details answer 400 SI_BATCH_DEBTOR_INCOMPLETE; details.missing is iban, bic, org_number, swedbank_ids or bankgiro. iban and bic concern the paying account, the company\'s primary bank account (the one salaries are booked on), named in details.account: fill in its IBAN or BIC under Inställningar → Fakturor, Bankkonton för kundfakturor. The rest are company settings: swedbank_ids means a Swedbank company lacks swedbank_signer_id or swedbank_corporate_pay_id, bankgiro that a Svea Bank company lacks the bankgiro its LB file is sent from.',
       'An ineligible invoice fails the whole request with 400 SI_BATCH_INELIGIBLE_INVOICE and a reason per invoice; amount above the remaining amount answers 400 SI_BATCH_AMOUNT_EXCEEDS_REMAINING.',
       'A Swedbank company (swedbank_signer_id set, or swedbank_ids missing) can only pay bank accounts in a file: a bankgiro or plusgiro payee is ineligible with reason swedbank_iso2_giro_payee. A Svea Bank company\'s LB file pays bankgiro and plusgiro only: a bank-account payee is ineligible with reason lb_bank_account_payee. Leave those invoices out (the preview already does) and create the batch with the rest.',
       'A payment_date in the past is moved to today (banks reject passed execution dates). Only SEK invoices; at most 100 per batch.',

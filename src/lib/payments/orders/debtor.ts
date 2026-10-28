@@ -85,7 +85,7 @@ export function bicFromSwedishIban(iban: string): string | null {
 }
 
 /** The connection's own BIC in the form a payment call carries (8 or 11 characters), or null when it stores none. */
-function connectionBic(connection: DebtorConnectionSource | null): string | null {
+export function connectionBic(connection: DebtorConnectionSource | null): string | null {
   const bic = (connection?.bic ?? '').replace(/\s/g, '').toUpperCase()
   return /^[A-Z0-9]{8}([A-Z0-9]{3})?$/.test(bic) ? bic : null
 }

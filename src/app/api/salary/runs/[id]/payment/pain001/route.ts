@@ -35,15 +35,10 @@ function legacyError(result: SalaryPaymentFileError): NextResponse {
     case 'SETTINGS_MISSING':
       return NextResponse.json({ error: 'Företagsinställningar saknas' }, { status: 400 })
     case 'IBAN_MISSING':
-      return NextResponse.json(
-        { error: 'Företagets IBAN saknas i företagsinställningar. Fyll i det under Inställningar → Fakturering för att skapa betalfil (ISO 20022).' },
-        { status: 400 },
-      )
     case 'BIC_MISSING':
-      return NextResponse.json(
-        { error: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturering för att skapa betalfil.' },
-        { status: 400 },
-      )
+      // Names the paying account (the one the salary is booked on) and where
+      // its IBAN or BIC is entered.
+      return NextResponse.json({ error: result.details.message as string }, { status: 400 })
     case 'SWEDBANK_IDS_MISSING':
       return NextResponse.json({ error: result.details.message as string }, { status: 400 })
     case 'IN_BANK_PAYMENT':
@@ -82,6 +77,12 @@ function legacyError(result: SalaryPaymentFileError): NextResponse {
       if (stage === 'run') return NextResponse.json({ error: 'Lönekörning hittades inte' }, { status: 404 })
       if (stage === 'company') return NextResponse.json({ error: 'Företag hittades inte' }, { status: 404 })
       if (stage === 'settings') return NextResponse.json({ error: 'Företagsinställningar saknas' }, { status: 400 })
+      if (stage === 'account') {
+        return NextResponse.json(
+          { error: 'Kunde inte läsa bankkontot som betalfilen betalar från. Försök igen.' },
+          { status: 500 },
+        )
+      }
       return NextResponse.json({ error: 'Inga anställda i lönekörningen' }, { status: 400 })
     default:
       return NextResponse.json({ error: 'Betalfilen kunde inte skapas' }, { status: 400 })

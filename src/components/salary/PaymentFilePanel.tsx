@@ -14,6 +14,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { DetailSection, DefRow } from '@/components/ui/detail-section'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { AttnLine } from '@/components/ui/attn-line'
 import { SettingsSelect } from '@/components/settings/SettingsRows'
@@ -25,7 +26,8 @@ import { failureDescription } from '@/lib/browser/action-failure'
 import { cn, formatDate, formatDateTime } from '@/lib/utils'
 import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { parseSalaryPaymentFormat, type SalaryPaymentFileFormat } from '@/lib/salary/payment/payment-format'
-import { salaryInstructionBankFromIban } from '@/lib/salary/payment/instruction-bank'
+import type { PaymentFileAccountView } from '@/lib/salary/payment/payment-account'
+import { payingAccountDisplay, payingAccountName } from '@/lib/payments/paying-account-label'
 
 type PaymentFormat = SalaryPaymentFileFormat
 
@@ -38,19 +40,19 @@ interface PaymentFilePanelProps {
   paymentFileVersion?: number
   defaultFormat: PaymentFormat
   /**
-   * company_settings.salary_default_bank: sorts and auto-expands the matching
-   * bank's instructions. Null falls back to the bank senderIban names.
-   */
-  defaultBank?: string | null
-  /**
-   * company_settings.bankgiro / iban: the sender account each format requires.
-   * null means missing as of the latest settings fetch (warn up front, the
-   * download would 400); undefined means unknown (settings not loaded), so no
-   * warning is shown. The caller must refetch after detours that can fix the
-   * setting (the warning links into the settings modal over this page).
+   * company_settings.bankgiro: the sender of an LB file. null means missing
+   * as of the latest settings fetch (warn up front, the download would 400);
+   * undefined means unknown (settings not loaded), so no warning is shown.
    */
   senderBankgiro?: string | null
-  senderIban?: string | null
+  /**
+   * The account the pain.001 pays from (GET /api/salary/payment-account for
+   * this run, usePaymentFileAccount): named on its own row, warned about when
+   * it lacks an IBAN or BIC, and its bank's upload instructions open first.
+   * undefined while unknown: no warning. The caller refetches after detours
+   * that can fix it (the links lead into settings).
+   */
+  fileAccount?: PaymentFileAccountView
   readOnly?: boolean
   /**
    * The run is paid or booked: the file has done its job, so a run that has
@@ -89,9 +91,8 @@ export function PaymentFilePanel({
   paymentFileGeneratedAt,
   paymentFileVersion = 1,
   defaultFormat,
-  defaultBank,
   senderBankgiro,
-  senderIban,
+  fileAccount,
   readOnly,
   settled,
   folded,
@@ -109,15 +110,18 @@ export function PaymentFilePanel({
   const nextVersion = paymentFileVersion + 1
 
   const banks = BANKS_BY_FORMAT[format]
-  // The company's pick, otherwise the bank of its own account (the IBAN the
-  // pain.001 debits): a SEB company that never opened the salary settings
-  // still meets SEB's line first and open (crm#1391). 'other' stays no match.
-  const ownBank = defaultBank ?? salaryInstructionBankFromIban(senderIban)
+  // The bank of the account the file pays from, the one it is uploaded to
+  // (crm#1391, crm#1483); the company's stored pick only when that bank has
+  // no instructions here. Resolved on the server with the account.
+  const ownBank = fileAccount?.instruction_bank ?? null
   const matchedBank = banks.find((b) => b === ownBank) ?? null
   const sortedBanks = matchedBank
     ? [matchedBank, ...banks.filter((b) => b !== matchedBank)]
     : banks
-  const [showInstructions, setShowInstructions] = useState(Boolean(matchedBank))
+  // Open on the account's own bank until the person toggles it: the account
+  // arrives after the first render, so a useState seed would miss it.
+  const [instructionsChoice, setInstructionsChoice] = useState<boolean | null>(null)
+  const showInstructions = instructionsChoice ?? Boolean(matchedBank)
   // The company's own bank alone, until the person asks for the others.
   const [otherBanks, setOtherBanks] = useState(false)
   const shownBanks = matchedBank && !otherBanks ? [matchedBank] : sortedBanks
@@ -135,13 +139,13 @@ export function PaymentFilePanel({
       ? `/api/salary/runs/${salaryRunId}/payment/bg-lb`
       : `/api/salary/runs/${salaryRunId}/payment/pain001`
 
-  // The sender account lives in company_settings, not in the Bolagsverket
-  // snapshot shown on the settings overview: users see a bankgiro there and
-  // reasonably believe it is configured. Say the precondition here, before
-  // the download 400s on it.
-  const senderMissing =
-    (format === 'bg_lb' && senderBankgiro === null) ||
-    (format === 'pain001' && senderIban === null)
+  // The LB sender lives in company_settings, not in the Bolagsverket snapshot
+  // shown on the settings overview: users see a bankgiro there and
+  // reasonably believe it is configured. The pain.001 pays from the account
+  // the salary is booked on, which needs an IBAN and a BIC of its own. Say
+  // the precondition here, before the download 400s on it.
+  const accountMissing = format === 'pain001' ? (fileAccount?.missing ?? null) : null
+  const senderMissing = (format === 'bg_lb' && senderBankgiro === null) || accountMissing !== null
 
   // fileFormat: the format to download; the settled line's "download again"
   // passes the one the run's file was made in, not the select's.
@@ -221,6 +225,7 @@ export function PaymentFilePanel({
       <p className="mt-2">
         <span className="font-medium">{FORMAT_LABEL.bg_lb}</span>: {t('format_description_bg_lb')}
       </p>
+      <p className="mt-2">{t('pays_from_help')}</p>
       <p className="mt-2">{t('bank_list_help')}</p>
       <p className="mt-2 text-muted-foreground">{t('open_payments_note')}</p>
     </HelpPopover>
@@ -260,6 +265,26 @@ export function PaymentFilePanel({
           </DefRow>
         )}
 
+        {/* The account the pain.001 pays from, by the rule the file runs:
+            the one the salary verifikat credits (crm#1483). The primary is
+            changed under Bokföring; a booked run's account is the
+            verifikat's, so it offers no change. */}
+        {format === 'pain001' && fileAccount && (
+          <DefRow label={t('pays_from_label')}>
+            <span className="tabular-nums" data-ph-mask="">
+              {payingAccountDisplay(fileAccount.account)}
+            </span>
+            {fileAccount.basis === 'primary' && !readOnly && (
+              <>
+                {' '}
+                <Link href="/settings/bookkeeping" className={QUIET_LINK_CLASS}>
+                  {t('pays_from_change')}
+                </Link>
+              </>
+            )}
+          </DefRow>
+        )}
+
         {/* The banklista of the chosen format: the payment file builder's
             own payee lines, so the list and the file cannot disagree. */}
         <PaymentBankList salaryRunId={salaryRunId} format={format} />
@@ -274,8 +299,17 @@ export function PaymentFilePanel({
               file, so it sits behind the "?" beside the download instead. */}
           {senderMissing ? (
             <>
-              <AttnLine action={{ label: t('missing_sender_link'), href: '/settings/invoicing' }}>
-                {format === 'bg_lb' ? t('missing_bankgiro_warning') : t('missing_iban_warning')}
+              <AttnLine
+                action={{
+                  label: accountMissing ? t('missing_account_link') : t('missing_sender_link'),
+                  href: '/settings/invoicing',
+                }}
+              >
+                {accountMissing && fileAccount
+                  ? t(accountMissing === 'iban' ? 'missing_account_iban_warning' : 'missing_account_bic_warning', {
+                      account: payingAccountName(fileAccount.account),
+                    })
+                  : t('missing_bankgiro_warning')}
               </AttnLine>
               {format === 'bg_lb' && (
                 <p className="text-xs text-muted-foreground">
@@ -297,7 +331,7 @@ export function PaymentFilePanel({
           <div className="flex flex-wrap items-center justify-between gap-3">
             <button
               type="button"
-              onClick={() => setShowInstructions((s) => !s)}
+              onClick={() => setInstructionsChoice(!showInstructions)}
               className="inline-flex items-center gap-2 text-xs text-muted-foreground transition-colors duration-150 hover:text-foreground"
               aria-expanded={showInstructions}
             >

@@ -1,6 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { createMockSupabase, createQueuedMockSupabase } from '@/tests/helpers'
-import { resolvePrimaryBankAccount, resolveSettlementAccount } from '../settlement-account'
+import { resolvePrimaryBankAccount, resolvePrimaryBankAccountRow, resolveSettlementAccount } from '../settlement-account'
 import { BookkeepingDatabaseError } from '../errors'
 import { errorResponse, getStructuredError } from '@/lib/errors/get-structured-error'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
@@ -298,5 +298,45 @@ describe('resolvePrimaryBankAccount', () => {
       operation: 'resolve_settlement_account',
       message: expect.stringContaining('boom'),
     })
+  })
+})
+
+// crm#1483: the payment files pay from the row the salary is booked on, so the
+// row resolution and the ledger resolution are one function.
+describe('resolvePrimaryBankAccountRow', () => {
+  it("returns the eligible primary's id with its ledger account", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'ca-1931', ledger_account: '1931', enabled: true, currency: 'SEK' }, error: null })
+
+    expect(await resolvePrimaryBankAccountRow(supabase as never, 'company-1', noopLog)).toEqual({
+      id: 'ca-1931',
+      ledger_account: '1931',
+    })
+  })
+
+  it('returns the only enabled SEK account, with its id, when the primary cannot carry a payment', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'ca-1930', ledger_account: '1930', enabled: false, currency: 'SEK' }, error: null })
+    enqueue({ data: [{ id: 'ca-1931', ledger_account: '1931' }], error: null })
+
+    expect(await resolvePrimaryBankAccountRow(supabase as never, 'company-1', noopLog)).toEqual({
+      id: 'ca-1931',
+      ledger_account: '1931',
+    })
+  })
+
+  it('returns 1930 with no row when nothing answers, exactly what resolvePrimaryBankAccount books on', async () => {
+    const a = createQueuedMockSupabase()
+    a.enqueue({ data: null, error: null })
+    a.enqueue({ data: [], error: null })
+    expect(await resolvePrimaryBankAccountRow(a.supabase as never, 'company-1', noopLog)).toEqual({
+      id: null,
+      ledger_account: '1930',
+    })
+
+    const b = createQueuedMockSupabase()
+    b.enqueue({ data: null, error: null })
+    b.enqueue({ data: [], error: null })
+    expect(await resolvePrimaryBankAccount(b.supabase as never, 'company-1', noopLog)).toBe('1930')
   })
 })

@@ -3,6 +3,7 @@
 import { useTranslations } from 'next-intl'
 import { SettingsGroup, SettingsInput, SettingsRow } from '@/components/settings/SettingsRows'
 import { useCompany } from '@/contexts/CompanyContext'
+import { usePaymentFileAccount } from '@/lib/hooks/use-payment-file-account'
 import { isSwedbankCompany } from '@/lib/payments/swedbank'
 import type { CompanySettings } from '@/types'
 
@@ -13,17 +14,21 @@ const SWEDBANK_FILE_ID_FIELDS = ['swedbank_signer_id', 'swedbank_corporate_pay_i
  * Swedbank's own ids for payment files (lib/payments/swedbank.ts): the
  * SignerID and the Corporate Pay agreement id that every pain.001 file to
  * Swedbank must carry. Shown to an owner or admin of a company whose bank
- * resolves to Swedbank (or a savings bank), or that already has an id saved.
+ * resolves to Swedbank (or a savings bank), whose payment files pay from a
+ * Swedbank account (the primary bank account, lib/payments/paying-account.ts:
+ * the files require the ids then, crm#1483), or that already has an id saved.
  * The rows sit inside the page's SettingsFormWrapper, so they share its
  * dirty-only save bar; swedbankFileIdUpdates reads them on save.
  */
 export function SwedbankFileIdsSettings({ settings }: { settings: CompanySettings }) {
   const t = useTranslations('settings_swedbank_file_ids')
   const { role } = useCompany()
+  const canEdit = role === 'owner' || role === 'admin'
+  const { account: payingAccount } = usePaymentFileAccount(null, { enabled: canEdit })
 
-  if (role !== 'owner' && role !== 'admin') return null
+  if (!canEdit) return null
   const hasIds = Boolean(settings.swedbank_signer_id || settings.swedbank_corporate_pay_id)
-  if (!isSwedbankCompany(settings) && !hasIds) return null
+  if (!isSwedbankCompany(settings) && !payingAccount?.swedbank && !hasIds) return null
 
   return (
     <SettingsGroup label={t('heading')} help={t('help')}>

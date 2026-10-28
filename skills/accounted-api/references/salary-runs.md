@@ -1546,7 +1546,7 @@ Builds the salary batch payment file for an approved (or paid / booked) run and 
 
 **Pitfalls:**
 - Run status must be one of approved, paid, booked: a draft or review run returns 409 SALARY_RUN_PAYMENT_FILE_NOT_READY. Approve the run first (:approve).
-- pain001 needs the company IBAN and a BIC (saved, or derived from the company clearing number / bank name) in company settings, plus clearing number and account number on every employee with a net payout. bg_lb needs a valid company bankgiro number. Missing company details return 422 SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS (details.problem names the field); missing employee accounts return 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING with details.employees.
+- pain001 pays from the bank account the salary is booked on: for a booked run the account its salary verifikat credits, for any other run the company's primary bank account (the one :book will credit). paying_account names it. The file uses that account's IBAN (the bank-reported one for a connected account, the entered one for a manual account) and its BIC (saved on the account, named by the bank connection, or derived from the IBAN, clearing number or bank name); a company with a single SEK bank account and no IBAN on it, or with no cash accounts, falls back to the IBAN and BIC in company settings. Every employee with a net payout needs clearing number and account number. bg_lb needs a valid company bankgiro number. Missing company details return 422 SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS (details.problem names the field, details.account the paying account for iban_missing and bic_missing); missing employee accounts return 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_MISSING with details.employees.
 - An employee account that names no payable account returns 422 SALARY_RUN_PAYMENT_FILE_EMPLOYEE_BANK_INVALID with details.employees (employee_id, name, problem) for every affected employee at once; the response never echoes an account number. problem is clearing_format or account_format (correct the employee's bank details: clearing 4 digits or 5 starting with 8, account 5-10 digits without the clearing number). Both formats carry every account that passes entry, including a 5-digit Swedbank clearing with a 10-digit account. A dry run reports the same error, so preview before payday.
 - The file comes back inline as `content` (a string). Write it to disk under `filename` (pain001 as UTF-8, bg_lb as ISO 8859-1 with CRLF line endings, exactly as returned) and upload it in the bank's file channel. Nothing is transmitted to the bank by this call.
 - Generating the file does NOT mark the run paid and moves no money. Call :mark-paid once the bank has executed the batch, then :book to post the verifikationer.
@@ -1555,7 +1555,7 @@ Builds the salary batch payment file for an approved (or paid / booked) run and 
 - A correction run (is_correction, from :correct) pays only the difference: each employee's corrected net payout minus what the run it corrects already paid them (a new employee gets the full net). An employee with no difference is left out; one the correction paid too much (a lower corrected net, or removed from the run) is never paid or deducted and is named in warnings, so the person handles it. A correction with no positive difference returns 422 SALARY_RUN_PAYMENT_FILE_NOTHING_TO_PAY with details.correction.overpaid.
 - Every generated file is archived and listable: the response carries payment_file_id (the archived row) and sha256 (over the bytes as encoded for the bank: UTF-8 for pain001, ISO 8859-1 for bg_lb). Compare it with the checksum of what you uploaded, and use GET /salary-runs/{id}/payment-files to retrieve exactly what was generated earlier instead of regenerating: a regeneration after a bank-detail change (new employee account, changed company IBAN) is a different file, and the archive is the record of what the bank actually received. An archive failure returns an error and no file.
 - The file always uses the run's payment_date as the requested execution date; the body accepts no execution date (unknown fields return 400). Change the run's payment_date (PATCH while draft) if the transfer day must move.
-- Dry run (?dry_run=true) validates every precondition and returns format, filename, payment_date, employee_count, total_amount and warnings without the content, without archiving and without stamping the run.
+- Dry run (?dry_run=true) validates every precondition and returns format, filename, payment_date, employee_count, total_amount, paying_account and warnings without the content, without archiving and without stamping the run.
 - Every call returns the run's current file version with the same MsgId and EndToEndIds, so the bank refuses a second upload of the month as a duplicate. If the bank refused or never approved the earlier pain001 file (for example a corrected bank account), send new_version: true with confirm_previous_not_approved: true: the file gets new ids and becomes the run's version from then on. Only confirm when the earlier file was NOT approved at the bank; two approved files pay the salaries twice. Without the confirmation the call returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNCONFIRMED; bg_lb returns 422 SALARY_RUN_PAYMENT_FILE_NEW_VERSION_UNSUPPORTED.
 
 | Parameter | In | Type | Required | Notes |
@@ -1592,6 +1592,7 @@ Response `200`:
     employee_count: number,
     total_amount: number,
     currency: "SEK",
+    paying_account: { cash_account_id: string | null, name: string | null, ledger_account: string, iban_last4: string | null } | null,
     warnings: string[],
     generated_at: string
   },
@@ -1623,6 +1624,12 @@ Example response `200`:
     "employee_count": 3,
     "total_amount": 76500,
     "currency": "SEK",
+    "paying_account": {
+      "cash_account_id": "abababab-abab-4bab-8bab-abababababab",
+      "name": "Företagskonto",
+      "ledger_account": "1930",
+      "iban_last4": "0123"
+    },
     "warnings": [],
     "generated_at": "2026-05-20T08:00:00.000Z"
   },

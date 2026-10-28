@@ -6,7 +6,7 @@
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import { createQueuedMockSupabase, payingAccountReads } from '@/tests/helpers'
 import { buildSalaryPaymentFile } from '../build-payment-file'
 import { buildSalaryBankList, salaryBankListFileName } from '../bank-list'
 
@@ -58,6 +58,9 @@ const rows = [
   employee('emp-3', 'Cia', 0, { clearing: '', account: '' }, 3),
 ]
 
+/** The paying account's reads (the seeded 1930 without an IBAN: it pays from the settings IBAN). */
+const PAYING_ACCOUNT_READS = payingAccountReads()
+
 function client() {
   const mock = createQueuedMockSupabase()
   return { ...mock, supabase: mock.supabase as unknown as Parameters<typeof buildSalaryPaymentFile>[0] }
@@ -65,7 +68,15 @@ function client() {
 
 async function build(format: 'pain001' | 'bg_lb', dryRun = true) {
   const { supabase, enqueueMany } = client()
-  enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: rows }, { data: null }, { data: null }])
+  enqueueMany([
+    { data: run },
+    { data: company },
+    { data: settings },
+    ...(format === 'pain001' ? PAYING_ACCOUNT_READS : []),
+    { data: rows },
+    { data: null },
+    { data: null },
+  ])
   const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format, dryRun })
   if (!result.ok) throw new Error(`expected a file, got ${result.code}`)
   return result
@@ -101,9 +112,14 @@ describe('bank list: pain.001', () => {
     expect(file.employeeCount).toBe(file.payees.length)
   })
 
-  it('names the payer as the file does', async () => {
+  it('names the payer as the file does, and the cash account it pays from', async () => {
     const file = await build('pain001')
-    expect(file.payer).toEqual({ name: 'Testbolaget AB', orgNumber: '556000-0000', account: 'SE4550000000058398257466' })
+    expect(file.payer).toEqual({
+      name: 'Testbolaget AB',
+      orgNumber: '556000-0000',
+      account: 'SE4550000000058398257466',
+      cashAccount: { cash_account_id: 'ca-1930', name: 'Företagskonto (SEK)', ledger_account: '1930', iban_last4: '7466' },
+    })
     expect(file.content).toContain(`<IBAN>${file.payer.account}</IBAN>`)
   })
 })
@@ -132,6 +148,8 @@ describe('bank list: Bankgirot LB', () => {
   it('names the sender bankgiro as the payer account', async () => {
     const file = await build('bg_lb')
     expect(file.payer.account).toBe('5050-1055')
+    // An LB file is sent from the bankgiro, not from a cash account's IBAN.
+    expect(file.payer.cashAccount).toBeNull()
   })
 })
 
@@ -174,6 +192,7 @@ describe('buildSalaryBankList', () => {
       { data: { ...run, corrects_run_id: 'run-0' } },
       { data: company },
       { data: settings },
+      ...PAYING_ACCOUNT_READS,
       // Anna up 1 000; Bo's override is gone, so his payout drops by 500.
       { data: [{ ...rows[0], net_salary: 21000.5 }, { ...rows[1], tax_withheld_override: null }, rows[2]] },
       { data: { id: 'run-0', corrects_run_id: null } },

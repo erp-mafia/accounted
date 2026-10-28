@@ -7,7 +7,13 @@
 
 import { createHash } from 'crypto'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import {
+  createQueuedMockSupabase,
+  createTableMockSupabase,
+  makePayingCashAccount,
+  payingAccountReads,
+  payingCashAccountsTable,
+} from '@/tests/helpers'
 import {
   buildSalaryPaymentFile,
   SALARY_PAYMENT_FILE_ALLOWED_STATUSES,
@@ -44,6 +50,10 @@ const anna = {
   employee: { first_name: 'Anna', last_name: 'A', clearing_number: '6000', bank_account_number: '1234567', specification_number: 1 },
 }
 
+/** The paying account's two reads for the seeded 1930 without an IBAN: it pays from the settings IBAN. */
+const ONLY_1930 = payingAccountReads()
+const cashAccount = makePayingCashAccount
+
 function client() {
   const mock = createQueuedMockSupabase()
   return { ...mock, supabase: mock.supabase as unknown as Parameters<typeof buildSalaryPaymentFile>[0] }
@@ -58,12 +68,13 @@ describe('buildSalaryPaymentFile', () => {
     expect([...SALARY_PAYMENT_FILE_ALLOWED_STATUSES]).toEqual(['approved', 'paid', 'booked'])
   })
 
-  it('loads run, company, settings, employees in that order, archives the file and stamps the run', async () => {
+  it('loads run, company, settings, the paying account, employees in that order, archives the file and stamps the run', async () => {
     const { supabase, enqueueMany, calls, findCall } = client()
     enqueueMany([
       { data: run },
       { data: company },
       { data: settings },
+      ...ONLY_1930,
       { data: [anna] },
       { data: null }, // salary_payment_files insert
       { data: null }, // salary_runs update
@@ -85,12 +96,26 @@ describe('buildSalaryPaymentFile', () => {
     // Sender name follows company_settings.company_name, not companies.name.
     expect(result.content).toContain('<Nm>Bolaget AB</Nm>')
     expect(result.content).not.toContain('Onboarding Name AB')
-    // BIC derived from the clearing (Handelsbanken) since none is saved.
-    expect(result.content).toContain('<BIC>HANDSESS</BIC>')
-    expect(result.warnings.some((w) => w.includes('HANDSESS'))).toBe(true)
+    // BIC derived from the IBAN's bank code (SEB) since none is saved.
+    expect(result.content).toContain('<BIC>ESSESESS</BIC>')
+    expect(result.warnings.some((w) => w.includes('ESSESESS'))).toBe(true)
+    expect(result.payer.cashAccount).toEqual({
+      cash_account_id: 'ca-1930',
+      name: 'Företagskonto (SEK)',
+      ledger_account: '1930',
+      iban_last4: '7466',
+    })
 
     const tables = calls.filter((c) => c.method === 'select' || c.method === 'update').map((c) => c.table)
-    expect(tables).toEqual(['salary_runs', 'companies', 'company_settings', 'salary_run_employees', 'salary_runs'])
+    expect(tables).toEqual([
+      'salary_runs',
+      'companies',
+      'company_settings',
+      'cash_accounts',
+      'cash_accounts',
+      'salary_run_employees',
+      'salary_runs',
+    ])
     const stamp = findCall('salary_runs', 'update')?.[0] as Record<string, unknown>
     expect(stamp.payment_file_format).toBe('pain001')
     expect(typeof stamp.payment_file_generated_at).toBe('string')
@@ -188,24 +213,28 @@ describe('buildSalaryPaymentFile', () => {
     expect(result).toMatchObject({ ok: false, code: 'COMPANY_NOT_FOUND' })
   })
 
-  it('requires IBAN, then a saved or derivable BIC, for pain001', async () => {
+  it('requires an IBAN, then a saved or derivable BIC, on the paying account for pain001', async () => {
+    const account = { cash_account_id: 'ca-1930', name: 'Företagskonto (SEK)', ledger_account: '1930' }
     const a = client()
-    a.enqueueMany([{ data: run }, { data: company }, { data: { ...settings, iban: '  ' } }])
+    a.enqueueMany([{ data: run }, { data: company }, { data: { ...settings, iban: '  ' } }, ...ONLY_1930])
     expect(await buildSalaryPaymentFile(a.supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })).toMatchObject({
       ok: false,
       code: 'IBAN_MISSING',
-      details: { field: 'iban' },
+      details: {
+        field: 'iban',
+        account: { ...account, iban_last4: null },
+        message:
+          'Betalfilen betalar från Företagskonto (SEK) (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+      },
     })
 
+    // A foreign IBAN names no bank by its code, and nothing else does either.
     const b = client()
-    b.enqueueMany([
-      { data: run },
-      { data: company },
-      { data: { ...settings, bic: null, clearing_number: null, bank_name: 'Okänd Bank' } },
-    ])
+    b.enqueueMany([{ data: run }, { data: company }, { data: { ...settings, iban: 'DK5000400440116243', bic: null } }, ...ONLY_1930])
     expect(await buildSalaryPaymentFile(b.supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })).toMatchObject({
       ok: false,
       code: 'BIC_MISSING',
+      details: { field: 'bic', account: { ...account, iban_last4: '6243' } },
     })
   })
 
@@ -228,7 +257,7 @@ describe('buildSalaryPaymentFile', () => {
 
   it('reports NO_EMPLOYEES for an empty roster', async () => {
     const { supabase, enqueueMany } = client()
-    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [] }])
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, ...ONLY_1930, { data: [] }])
     expect(await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })).toMatchObject({
       ok: false,
       code: 'NO_EMPLOYEES',
@@ -244,7 +273,7 @@ describe('buildSalaryPaymentFile', () => {
       employee: { first_name: 'Noll', last_name: 'N', clearing_number: null, bank_account_number: null },
     }
     const a = client()
-    a.enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, zeroNet] }, { data: null }])
+    a.enqueueMany([{ data: run }, { data: company }, { data: settings }, ...ONLY_1930, { data: [anna, zeroNet] }, { data: null }])
     const okResult = await buildSalaryPaymentFile(a.supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
     expect(okResult.ok).toBe(true)
     if (!okResult.ok) return
@@ -253,7 +282,7 @@ describe('buildSalaryPaymentFile', () => {
 
     const noAccount = { ...anna, employee: { ...anna.employee, bank_account_number: null } }
     const b = client()
-    b.enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [noAccount] }])
+    b.enqueueMany([{ data: run }, { data: company }, { data: settings }, ...ONLY_1930, { data: [noAccount] }])
     const blocked = await buildSalaryPaymentFile(b.supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
     expect(blocked).toMatchObject({
       ok: false,
@@ -269,6 +298,7 @@ describe('buildSalaryPaymentFile', () => {
       { data: run },
       { data: company },
       { data: settings },
+      ...ONLY_1930,
       { data: [{ ...anna, tax_withheld_override: 5500 }] },
       { data: null },
     ])
@@ -332,7 +362,7 @@ describe('buildSalaryPaymentFile', () => {
 
   it('pays the same employees with pain.001, which has no fixed-width account field', async () => {
     const { supabase, enqueueMany } = client()
-    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, sara, sven] }, { data: null }, { data: null }])
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, ...ONLY_1930, { data: [anna, sara, sven] }, { data: null }, { data: null }])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
     expect(result.ok).toBe(true)
     if (!result.ok) return
@@ -343,7 +373,13 @@ describe('buildSalaryPaymentFile', () => {
   it('names an employee whose stored details name no payable account, in every format', async () => {
     for (const format of ['pain001', 'bg_lb'] as const) {
       const { supabase, enqueueMany, calls } = client()
-      enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna, legacy] }])
+      enqueueMany([
+        { data: run },
+        { data: company },
+        { data: settings },
+        ...(format === 'pain001' ? ONLY_1930 : []),
+        { data: [anna, legacy] },
+      ])
       const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format })
       expect(result).toMatchObject({
         ok: false,
@@ -362,7 +398,7 @@ describe('buildSalaryPaymentFile', () => {
   it('reports an invalid clearing as EMPLOYEE_BANK_INVALID, not as a raw generator throw', async () => {
     const badClearing = { ...anna, employee: { ...anna.employee, clearing_number: '12' } }
     const { supabase, enqueueMany, calls } = client()
-    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [badClearing] }])
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, ...ONLY_1930, { data: [badClearing] }])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
     expect(result).toMatchObject({
       ok: false,
@@ -397,7 +433,7 @@ describe('buildSalaryPaymentFile', () => {
 
   it('dry run builds the file but never stamps', async () => {
     const { supabase, enqueueMany, calls } = client()
-    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna] }])
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, ...ONLY_1930, { data: [anna] }])
     const result = await buildSalaryPaymentFile(supabase, {
       companyId: COMPANY_ID,
       runId: RUN_ID,
@@ -424,6 +460,7 @@ describe('buildSalaryPaymentFile', () => {
       { data: run },
       { data: company },
       { data: settings },
+      ...ONLY_1930,
       { data: [anna] },
       { data: null, error: { code: '42501', message: 'permission denied' } },
     ])
@@ -441,6 +478,7 @@ describe('buildSalaryPaymentFile', () => {
       { data: run },
       { data: company },
       { data: settings },
+      ...ONLY_1930,
       { data: [anna] },
       { data: null, error: { code: '23514', message: 'salary run is paid through the bank', hint: 'salary_run_in_bank_payment' } },
     ])
@@ -464,6 +502,7 @@ describe('buildSalaryPaymentFile', () => {
       { data: run },
       { data: company },
       { data: settings },
+      ...ONLY_1930,
       { data: [anna] },
       { data: null }, // archive insert succeeds
       { data: null, error: { code: '42501', message: 'permission denied' } },
@@ -495,6 +534,7 @@ describe('buildSalaryPaymentFile for a Swedbank debtor', () => {
       { data: run },
       { data: company },
       { data: { ...swedbankSettings, swedbank_signer_id: null, swedbank_corporate_pay_id: '  ' } },
+      ...ONLY_1930,
     ])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
 
@@ -508,12 +548,14 @@ describe('buildSalaryPaymentFile for a Swedbank debtor', () => {
     expect(calls.filter((c) => c.method === 'insert' || c.method === 'update')).toHaveLength(0)
   })
 
-  it('also asks a company whose Swedbank BIC is derived from the clearing, naming only the missing id', async () => {
+  it('also asks a company whose paying account is at a savings bank by its IBAN, naming only the missing id', async () => {
     const { supabase, enqueueMany } = client()
     enqueueMany([
       { data: run },
       { data: company },
-      { data: { ...swedbankSettings, bic: null, clearing_number: '8327-9', swedbank_corporate_pay_id: null } },
+      // The settings still name another bank: the paying account decides.
+      { data: { ...swedbankSettings, bic: 'HANDSESS', swedbank_corporate_pay_id: null } },
+      ...payingAccountReads([cashAccount({ payee_iban: 'SE6480000832790000012345' })]),
     ])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
     expect(result).toMatchObject({ ok: false, code: 'SWEDBANK_IDS_MISSING', details: { fields: ['swedbank_corporate_pay_id'] } })
@@ -535,7 +577,15 @@ describe('buildSalaryPaymentFile for a Swedbank debtor', () => {
 
   it("writes Swedbank's form: its ids, the day before payday, and both towns", async () => {
     const { supabase, enqueueMany, calls, findCall } = client()
-    enqueueMany([{ data: run }, { data: company }, { data: swedbankSettings }, { data: [annaInArboga] }, { data: null }, { data: null }])
+    enqueueMany([
+      { data: run },
+      { data: company },
+      { data: swedbankSettings },
+      ...ONLY_1930,
+      { data: [annaInArboga] },
+      { data: null },
+      { data: null },
+    ])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
 
     expect(result.ok).toBe(true)
@@ -553,7 +603,15 @@ describe('buildSalaryPaymentFile for a Swedbank debtor', () => {
     // The ids, the town and the employee town are read in the queries the
     // dashboard route tests already order.
     const tables = calls.filter((c) => c.method === 'select' || c.method === 'update').map((c) => c.table)
-    expect(tables).toEqual(['salary_runs', 'companies', 'company_settings', 'salary_run_employees', 'salary_runs'])
+    expect(tables).toEqual([
+      'salary_runs',
+      'companies',
+      'company_settings',
+      'cash_accounts',
+      'cash_accounts',
+      'salary_run_employees',
+      'salary_runs',
+    ])
   })
 
   it('leaves every other bank as before: Swedbank ids on file change nothing there', async () => {
@@ -562,6 +620,7 @@ describe('buildSalaryPaymentFile for a Swedbank debtor', () => {
       { data: run },
       { data: company },
       { data: { ...swedbankSettings, bic: 'HANDSESS' } },
+      ...ONLY_1930,
       { data: [annaInArboga] },
       { data: null },
       { data: null },
@@ -591,6 +650,7 @@ describe('payment file versions', () => {
     { data: runRow },
     { data: company },
     { data: settings },
+    ...ONLY_1930,
     { data: [anna] },
     { data: null }, // salary_payment_files insert
     { data: null }, // salary_runs update
@@ -685,7 +745,7 @@ describe('payment file versions', () => {
 
   it('a dry run previews the next version without archiving or stamping', async () => {
     const { supabase, enqueueMany, calls } = client()
-    enqueueMany(QUEUE({ ...run, payment_file_version: 1 }).slice(0, 4))
+    enqueueMany(QUEUE({ ...run, payment_file_version: 1 }).slice(0, 6))
 
     const result = await buildSalaryPaymentFile(supabase, {
       companyId: COMPANY_ID,
@@ -727,6 +787,157 @@ describe('payment file versions', () => {
   })
 })
 
+// crm#1483: the file paid from the savings account while the verifikat
+// credited 1930. The file now pays from the account the salary verifikat
+// credits. Answered per table (cash_accounts by what the chain asked), so
+// the same test reads the file the old builder wrote from company_settings.
+describe('the account the file pays from (crm#1483)', () => {
+  /** 1930's IBAN as the bank reports it: the account the books say the net pay leaves. */
+  const IBAN_1930 = 'SE4550000000058398257466'
+  /** The savings account 1931: the IBAN SEK invoices print, so the one company_settings mirrors. */
+  const IBAN_1931 = 'SE7150000000058391234567'
+  const SEB = { bank_name: 'SEB', bic: 'ESSESESS' }
+
+  const connected1930 = cashAccount({
+    name: 'Företagskonto',
+    bank_connection_id: 'bc-1',
+    iban: IBAN_1930,
+    bank_connection: SEB,
+  })
+  const savings1931 = cashAccount({
+    id: 'ca-1931',
+    name: 'Sparkonto',
+    ledger_account: '1931',
+    is_primary: false,
+    bank_connection_id: 'bc-1',
+    iban: IBAN_1931,
+    payee_iban: IBAN_1931,
+    invoice_payee: true,
+    bank_connection: SEB,
+  })
+
+  function tableClient(opts: {
+    accounts: Array<ReturnType<typeof cashAccount>>
+    runRow?: Record<string, unknown>
+    settingsRow?: Record<string, unknown>
+    postedEntries?: unknown[]
+  }) {
+    const mock = createTableMockSupabase({
+      salary_runs: [{ data: opts.runRow ?? run }, { data: null }],
+      companies: { data: company },
+      company_settings: { data: opts.settingsRow ?? { ...settings, iban: IBAN_1931, bic: 'ESSESESS' } },
+      journal_entries: { data: opts.postedEntries ?? [] },
+      cash_accounts: payingCashAccountsTable(opts.accounts),
+      salary_run_employees: { data: [anna] },
+      salary_payment_files: { data: null },
+    })
+    return { ...mock, supabase: mock.supabase as unknown as Parameters<typeof buildSalaryPaymentFile>[0] }
+  }
+
+  const debtorIban = (xml: string) => xml.match(/<DbtrAcct>[\s\S]*?<IBAN>([^<]+)<\/IBAN>/)?.[1]
+
+  it('pays from the primary the verifikat credits, not the savings account invoices print', async () => {
+    const { supabase } = tableClient({ accounts: [connected1930, savings1931] })
+
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(debtorIban(result.content)).toBe(IBAN_1930)
+    expect(result.content).not.toContain(IBAN_1931)
+    expect(result.payer).toMatchObject({
+      account: IBAN_1930,
+      cashAccount: { cash_account_id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930', iban_last4: '7466' },
+    })
+    // The bank connection names the bank: nothing was guessed.
+    expect(result.warnings.some((w) => w.includes('härleddes'))).toBe(false)
+  })
+
+  it('pays a booked run from the account its verifikat credits, though the primary changed since', async () => {
+    // Booked while the savings account was primary: the verifikat credits
+    // 1931. 1930 is primary today. The file must follow the books.
+    const postedSalary = {
+      id: 'je-salary',
+      description: 'Lön 2026-04',
+      voucher_series: 'K',
+      voucher_number: 12,
+      lines: [
+        { account_number: '7210', line_description: 'Lön 2026-04: Löner', debit_amount: 26000, credit_amount: 0 },
+        { account_number: '2710', line_description: 'Lön 2026-04: Personalskatt', debit_amount: 0, credit_amount: 6000 },
+        { account_number: '1931', line_description: 'Lön 2026-04: Nettolön', debit_amount: 0, credit_amount: 20000 },
+      ],
+    }
+    const { supabase, calls } = tableClient({
+      accounts: [connected1930, savings1931],
+      runRow: { ...run, status: 'booked', salary_entry_id: 'je-salary' },
+      postedEntries: [postedSalary],
+    })
+
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(debtorIban(result.content)).toBe(IBAN_1931)
+    expect(result.payer.cashAccount).toMatchObject({ cash_account_id: 'ca-1931', ledger_account: '1931' })
+    // The posted verifikat decided; the primary was never asked.
+    expect(calls.some((c) => c.table === 'cash_accounts' && c.method === 'eq' && c.args[0] === 'is_primary')).toBe(false)
+  })
+
+  it("keeps the settings IBAN for a company whose only bank account has none of its own", async () => {
+    const { supabase } = tableClient({ accounts: [cashAccount()], settingsRow: { ...settings, bic: 'HANDSESS' } })
+
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    expect(debtorIban(result.content)).toBe(settings.iban)
+    // The BIC saved beside that IBAN, as before: no lookup warning.
+    expect(result.content).toContain('<BIC>HANDSESS</BIC>')
+    expect(result.warnings.some((w) => w.includes('härleddes'))).toBe(false)
+  })
+
+  it('refuses, naming the account, when the primary has no IBAN and the company has other accounts', async () => {
+    const { supabase, calls } = tableClient({ accounts: [cashAccount({ name: 'Företagskonto' }), savings1931] })
+
+    const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'IBAN_MISSING',
+      details: {
+        field: 'iban',
+        account: { cash_account_id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930', iban_last4: null },
+        message:
+          'Betalfilen betalar från Företagskonto (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+      },
+    })
+    if (result.ok) return
+    // v1, MCP and the bank list carry the account in the refusal details.
+    expect(salaryPaymentFileRefusal(result)).toMatchObject({
+      code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS',
+      reason: 'IBAN_MISSING',
+      details: { problem: 'iban_missing', account: { cash_account_id: 'ca-1930', ledger_account: '1930' } },
+    })
+    expect(calls.some((c) => c.table === 'salary_run_employees')).toBe(false)
+  })
+
+  it('maps a failed account read to DB_ERROR at the account stage', async () => {
+    const mock = createTableMockSupabase({
+      salary_runs: { data: run },
+      companies: { data: company },
+      company_settings: { data: settings },
+      cash_accounts: { error: { code: '57014', message: 'canceling statement due to statement timeout' } },
+    })
+    const result = await buildSalaryPaymentFile(mock.supabase as unknown as Parameters<typeof buildSalaryPaymentFile>[0], {
+      companyId: COMPANY_ID,
+      runId: RUN_ID,
+      userId: USER_ID,
+      format: 'pain001',
+    })
+    expect(result).toMatchObject({ ok: false, code: 'DB_ERROR', stage: 'account' })
+  })
+})
+
 describe('payment file of a correction run', () => {
   const correctionRun = { ...run, corrects_run_id: 'run-0' }
   const bertil = {
@@ -752,6 +963,7 @@ describe('payment file of a correction run', () => {
       { data: correctionRun },
       { data: company },
       { data: settings },
+      ...ONLY_1930,
       // Anna up 1 500, Bertil down 250, Cecilia unchanged, Dora new.
       {
         data: [
@@ -790,7 +1002,16 @@ describe('payment file of a correction run', () => {
     expect(findCall('salary_payment_files', 'insert')?.[0]).toMatchObject({ employee_count: 2, total_amount: 10500 })
 
     const reads = calls.filter((c) => c.method === 'select').map((c) => c.table)
-    expect(reads).toEqual(['salary_runs', 'companies', 'company_settings', 'salary_run_employees', 'salary_runs', 'salary_run_employees'])
+    expect(reads).toEqual([
+      'salary_runs',
+      'companies',
+      'company_settings',
+      'cash_accounts',
+      'cash_accounts',
+      'salary_run_employees',
+      'salary_runs',
+      'salary_run_employees',
+    ])
     expect(findCall('salary_run_employees', 'in')).toEqual(['salary_run_id', ['run-0']])
   })
 
@@ -830,7 +1051,7 @@ describe('payment file of a correction run', () => {
 
   it('refuses with DB_ERROR (stage correction) when the corrected run cannot be read, never paying the full net', async () => {
     const { supabase, enqueueMany, calls } = client()
-    enqueueMany([{ data: correctionRun }, { data: company }, { data: settings }, { data: [anna] }, { data: null }])
+    enqueueMany([{ data: correctionRun }, { data: company }, { data: settings }, ...ONLY_1930, { data: [anna] }, { data: null }])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
     expect(result).toMatchObject({ ok: false, code: 'DB_ERROR', stage: 'correction' })
     expect(calls.filter((c) => c.method === 'insert')).toHaveLength(0)
@@ -838,7 +1059,7 @@ describe('payment file of a correction run', () => {
 
   it('leaves an ordinary run without a correction', async () => {
     const { supabase, enqueueMany } = client()
-    enqueueMany([{ data: run }, { data: company }, { data: settings }, { data: [anna] }, { data: null }, { data: null }])
+    enqueueMany([{ data: run }, { data: company }, { data: settings }, ...ONLY_1930, { data: [anna] }, { data: null }, { data: null }])
     const result = await buildSalaryPaymentFile(supabase, { companyId: COMPANY_ID, runId: RUN_ID, userId: USER_ID, format: 'pain001' })
     expect(result).toMatchObject({ ok: true, correction: null, totalAmount: 20000 })
   })
