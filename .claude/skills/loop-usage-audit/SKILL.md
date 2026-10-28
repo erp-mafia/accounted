@@ -45,7 +45,7 @@ Their companies (`select distinct company_id from company_members where user_id 
 internal companies. Some are real customers the founders help; that only makes the company counts
 cautious.
 
-**PostHog, `posthog-pages.json`.** Run with `call --json execute-sql` so the rows come back as JSON:
+**PostHog, `posthog-pages.json`.** Run with `call execute-sql`; the answer is a pipe table (`path|views|companies|company_ids`, ids as a bracketed list) even with `--json`, and it lands in a tool-results file at this size, so parse that file with a short script:
 
 ```sql
 SELECT
