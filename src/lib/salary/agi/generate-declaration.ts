@@ -4,11 +4,12 @@
  * Both the internal dashboard route (`GET /api/salary/runs/{id}/agi/xml`)
  * and the v1 public route (`POST /api/v1/companies/{companyId}/salary-runs/{id}/generate-agi`)
  * call this helper. It loads the salary run + employees + per-day absence
- * records, builds the Skatteverket AGI XML, upserts the agi_declarations
+ * records, builds the Skatteverket AGI XML, writes the agi_declarations
  * row (correction-aware: a correction run taking over the period's row
- * resets its filing state), updates `salary_runs.agi_generated_at`, emits
- * `agi.generated`, and auto-completes the `arbetsgivardeklaration` deadline
- * for the period.
+ * resets its filing state), updates `salary_runs.agi_generated_at` and emits
+ * `agi.generated`. What it may write is decided once, by decideAgiWrite, on
+ * checked reads: a filed declaration is never rewritten (the stored XML comes
+ * back), and every write compares and sets on the row it read.
  *
  * Returns a discriminated result so callers can wrap it in their own
  * response envelope (internal uses raw `Response`; v1 uses the JSON `ok`
@@ -45,6 +46,7 @@ import { eventBus } from '@/lib/events'
 import { truncateToWholeKronor } from '@/lib/money'
 import { declaredAvgifterForRun, isFSkattStatus } from '../declared-avgifter'
 import { regionalSupportForRun } from '../regional-support'
+import { agiFiledForRun } from '../agi-submission-state'
 import type { Logger } from '@/lib/logger'
 
 // Strict runtime validation of the joined salary_run_employees row. Without
@@ -137,8 +139,13 @@ export type GenerateAgiDeclarationResult =
       isCorrection: boolean
       totals: AGITotals
       orgNumber: string
-      /** writeOnlyIfChanged only: the stored declaration already matched, nothing was written. */
+      /**
+       * Nothing was written and `xml` is the stored declaration: it is filed
+       * (never rewritten), or writeOnlyIfChanged found it already matching.
+       */
       unchanged?: boolean
+      /** With `unchanged`: the stored declaration is filed, so nothing may replace it. */
+      filed?: boolean
     }
   | {
       ok: false
@@ -219,10 +226,12 @@ function agiXmlWithoutCreatedStamp(xml: string): string {
   return xml.replace(/<gem:Skapad>[^<]*<\/gem:Skapad>/, '')
 }
 
-/** The stored row the writeOnlyIfChanged comparison reads. */
+/** The period's stored declaration: what the write decision and the writeOnlyIfChanged comparison read. */
 interface StoredAgiDeclaration {
   id: string
   salary_run_id: string | null
+  status: string
+  submitted_at: string | null
   xml_content?: string | null
   total_gross?: number | string | null
   total_tax?: number | string | null
@@ -245,6 +254,220 @@ function storedDeclarationMatches(
     Number(stored.employee_count) === fresh.employeeCount &&
     Number(stored.total_gross) === Number(fresh.totalGross)
   )
+}
+
+/** What a generation may do with its period's one agi_declarations row. */
+export type AgiWriteDecision = 'insert' | 'update_own' | 'take_over' | 'conflict' | 'filed'
+
+/** The run fields the write decision reads (salary_runs row). */
+export interface AgiWriteRun {
+  id: string
+  corrects_run_id?: string | null
+  agi_generated_at?: string | null
+  agi_submitted_at?: string | null
+}
+
+/**
+ * The one decision on what a generation may write over its period's
+ * declaration (#58). It used to be spread over unchecked reads and callers:
+ * the filed rule lived only in the Skatteverket submit path, so the
+ * dashboard download, v1 and MCP rewrote a filed XML, and a failed read
+ * looked like "no row" or "no live run".
+ *
+ * - no row: insert one.
+ * - the run's own row: `filed` when it carries the run's kvittens
+ *   (agiFiledForRun), answered with the stored XML and never rewritten;
+ *   otherwise `update_own`.
+ * - the row of the run this one corrects, of a corrected run, or of no run:
+ *   `take_over` (the row starts unfiled under this run).
+ * - any other run's row, including one whose run cannot be found: `conflict`.
+ *   Two live runs paid out in one month would have to be merged into one
+ *   declaration, which the generator cannot do; overwriting would file the
+ *   wrong amounts. Reachable since the period follows payment_date (#2191):
+ *   an August run paid 25 Sept and a September run paid 30 Sept both land
+ *   in 202609.
+ *
+ * `holder` is the run holding the row when that is neither this run nor the
+ * one it corrects (null when not found); only then is it read.
+ */
+export function decideAgiWrite(
+  row: Pick<StoredAgiDeclaration, 'salary_run_id' | 'status' | 'submitted_at'> | null,
+  run: AgiWriteRun,
+  holder: { status: string } | null,
+): AgiWriteDecision {
+  if (!row) return 'insert'
+  if (row.salary_run_id === run.id) return agiFiledForRun(run, row) ? 'filed' : 'update_own'
+  if (
+    row.salary_run_id === null ||
+    (run.corrects_run_id != null && row.salary_run_id === run.corrects_run_id) ||
+    holder?.status === 'corrected'
+  ) {
+    return 'take_over'
+  }
+  return 'conflict'
+}
+
+/** The run holding the period's row, for the conflict answer. */
+interface AgiHolderRun {
+  id: string
+  status: string
+  period_year: number
+  period_month: number
+}
+
+type AgiPeriodRead =
+  | { ok: true; row: StoredAgiDeclaration | null; holder: AgiHolderRun | null }
+  | { ok: false; error: unknown }
+
+/**
+ * Reads the period's declaration and, when another run holds it, that run.
+ * A read error is an error, never "no row" or "no live run": either would
+ * let the generation insert or take over on a guess.
+ */
+async function readAgiPeriod(
+  supabase: SupabaseClient,
+  companyId: string,
+  period: { periodYear: number; periodMonth: number },
+  run: AgiWriteRun,
+): Promise<AgiPeriodRead> {
+  // maybeSingle: no row is the first generation, not an error. The stored
+  // XML and totals are read too, for the filed answer and writeOnlyIfChanged
+  // (one literal select, so the column guard can check it).
+  const { data, error } = await supabase
+    .from('agi_declarations')
+    .select('id, salary_run_id, status, submitted_at, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
+    .eq('company_id', companyId)
+    .eq('period_year', period.periodYear)
+    .eq('period_month', period.periodMonth)
+    .maybeSingle()
+  if (error) return { ok: false, error }
+  const row = data as StoredAgiDeclaration | null
+  const holderId = row?.salary_run_id
+  if (!holderId || holderId === run.id || holderId === run.corrects_run_id) {
+    return { ok: true, row, holder: null }
+  }
+  const { data: holder, error: holderError } = await supabase
+    .from('salary_runs')
+    .select('id, status, period_year, period_month')
+    .eq('id', holderId)
+    .eq('company_id', companyId)
+    .maybeSingle()
+  if (holderError) return { ok: false, error: holderError }
+  return { ok: true, row, holder: holder as AgiHolderRun | null }
+}
+
+/** The declaration columns a generation writes, whichever way it writes them. */
+interface AgiDeclarationContent {
+  xml_content: string
+  individuppgifter: unknown
+  total_gross: unknown
+  total_tax: number
+  total_avgifter_basis: number
+  total_avgifter: number
+  employee_count: number
+}
+
+/** A decision that writes, with the row it was made on. */
+type AgiWriteTarget =
+  | { decision: 'insert'; row: null }
+  | { decision: 'update_own' | 'take_over'; row: StoredAgiDeclaration }
+
+/** The identity columns of a new declaration: whose it is and for which period. */
+interface AgiDeclarationKeys {
+  company_id: string
+  user_id: string
+  salary_run_id: string
+  period_year: number
+  period_month: number
+}
+
+/**
+ * One write of the decided kind. An update only lands on the row as it was
+ * read (same salary run, same status): a submission, a kvittens or another
+ * run's takeover in between makes it miss. A miss (or an insert that lost
+ * the race to the unique period key, 23505) comes back as `id: null` for the
+ * caller to read and decide again.
+ */
+async function writeAgiDeclaration(
+  supabase: SupabaseClient,
+  target: AgiWriteTarget,
+  keys: AgiDeclarationKeys,
+  content: AgiDeclarationContent,
+): Promise<{ ok: true; id: string | null } | { ok: false; error: unknown }> {
+  if (target.decision === 'insert') {
+    const { data, error } = await supabase
+      .from('agi_declarations')
+      // Literal payloads, here and below: the phantom-column guard checks
+      // every column of a literal and none of a spread.
+      .insert({
+        company_id: keys.company_id,
+        user_id: keys.user_id,
+        salary_run_id: keys.salary_run_id,
+        period_year: keys.period_year,
+        period_month: keys.period_month,
+        xml_content: content.xml_content,
+        individuppgifter: content.individuppgifter,
+        total_gross: content.total_gross,
+        total_tax: content.total_tax,
+        total_avgifter_basis: content.total_avgifter_basis,
+        total_avgifter: content.total_avgifter,
+        employee_count: content.employee_count,
+      })
+      .select('id')
+      .single()
+    if ((error as { code?: string } | null)?.code === '23505') return { ok: true, id: null }
+    if (error || !data) return { ok: false, error }
+    return { ok: true, id: (data as { id: string }).id }
+  }
+
+  const { row } = target
+  const update = (
+    target.decision === 'take_over'
+      ? supabase.from('agi_declarations').update({
+          xml_content: content.xml_content,
+          individuppgifter: content.individuppgifter,
+          total_gross: content.total_gross,
+          total_tax: content.total_tax,
+          total_avgifter_basis: content.total_avgifter_basis,
+          total_avgifter: content.total_avgifter,
+          employee_count: content.employee_count,
+          is_correction: true,
+          salary_run_id: keys.salary_run_id,
+          // A takeover clears the filing state. The period's one row then
+          // takes another run's declaration: the run this one corrects (or a
+          // corrected one before it). That declaration's filing state does
+          // not carry over: this XML has not been sent, so the row starts
+          // unfiled, and the submit flips it to pending_signature and the
+          // kvittens reconciliation promotes it on the correction's OWN
+          // kvittens. The original's receipt is not lost: agi_kvittenser
+          // keeps every kvittens and its run keeps agi_submitted_at.
+          status: 'generated',
+          kvittensnummer: null,
+          submitted_at: null,
+          submitted_by: null,
+          response_data: null,
+        })
+      : supabase.from('agi_declarations').update({
+          xml_content: content.xml_content,
+          individuppgifter: content.individuppgifter,
+          total_gross: content.total_gross,
+          total_tax: content.total_tax,
+          total_avgifter_basis: content.total_avgifter_basis,
+          total_avgifter: content.total_avgifter,
+          employee_count: content.employee_count,
+          is_correction: true,
+          salary_run_id: keys.salary_run_id,
+        })
+  )
+    .eq('id', row.id)
+    .eq('status', row.status)
+  const { data, error } = await (row.salary_run_id === null
+    ? update.is('salary_run_id', null)
+    : update.eq('salary_run_id', row.salary_run_id)
+  ).select('id')
+  if (error) return { ok: false, error }
+  const updated = (data ?? []) as Array<{ id: string }>
+  return { ok: true, id: updated[0]?.id ?? null }
 }
 
 /** The employer identity and kontaktperson an AGI files with, before its period is known. */
@@ -391,7 +614,7 @@ export async function generateAgiDeclaration(
     }>
   >()
   if (employeeIds.length > 0) {
-    const { data: absenceRows } = await supabase
+    const { data: absenceRows, error: absenceError } = await supabase
       .from('salary_absence_days')
       .select('employee_id, absence_date, absence_type, hours, franvaro_specifikationsnummer')
       .eq('company_id', companyId)
@@ -399,6 +622,11 @@ export async function generateAgiDeclaration(
       .gte('absence_date', periodStart)
       .lte('absence_date', periodEnd)
       .in('employee_id', employeeIds)
+    // An unread absence list is not an empty one: filing on it would drop
+    // the frånvarouppgifter (FK821-FK827) Försäkringskassan reads.
+    if (absenceError) {
+      return { ok: false, code: 'DATABASE_ERROR', details: absenceError }
+    }
     for (const row of (absenceRows ?? []) as Array<{
       employee_id: string
       absence_date: string
@@ -757,52 +985,63 @@ export async function generateAgiDeclaration(
     }
   }
 
-  // 6. Existing AGI determines correction status. Use `.maybeSingle()`
-  // because the lookup must tolerate the no-row case without throwing:
-  // that's the FIRST-time generation path. `.single()` would surface a
-  // PGRST116 row-not-found error and abort what should be a clean insert.
-  // The stored XML and totals are read too, for writeOnlyIfChanged to compare
-  // below (one literal select, so the column guard can check it).
-  const { data: existingAgi } = (await supabase
-    .from('agi_declarations')
-    .select('id, salary_run_id, xml_content, total_gross, total_tax, total_avgifter_basis, total_avgifter, employee_count')
-    .eq('company_id', companyId)
-    .eq('period_year', agiPeriod.periodYear)
-    .eq('period_month', agiPeriod.periodMonth)
-    .maybeSingle()) as { data: StoredAgiDeclaration | null }
-
-  // Two runs may share a redovisningsperiod only when one corrects the
-  // other (a correction replaces the month's declaration wholesale). Any
-  // other run paid out in the same calendar month would have to be MERGED
-  // into one declaration, which this generator cannot do: overwriting the
-  // existing XML would file the wrong amounts, so refuse instead. Reachable
-  // now that the period follows payment_date (#2191): an August run paid
-  // 25 Sept and a September run paid 30 Sept both land in 202609.
-  if (
-    existingAgi?.salary_run_id &&
-    existingAgi.salary_run_id !== run.id &&
-    existingAgi.salary_run_id !== run.corrects_run_id
-  ) {
-    const { data: otherRun } = await supabase
-      .from('salary_runs')
-      .select('id, status, period_year, period_month')
-      .eq('id', existingAgi.salary_run_id)
-      .eq('company_id', companyId)
-      .maybeSingle()
-    if (otherRun && otherRun.status !== 'corrected') {
+  // 6. The period's declaration decides what this generation may write
+  // (decideAgiWrite). A conflict and a filed declaration write nothing, so
+  // they are answered before any XML is built.
+  // The stored declaration answers with its own figures, so the XML and the
+  // totals next to it always agree. Only the per-category breakdown is not
+  // stored; it is today's, which for a booked run is the filed one.
+  const storedAnswer = (row: StoredAgiDeclaration, filed: boolean): GenerateAgiDeclarationResult => ({
+    ok: true,
+    xml: row.xml_content as string,
+    agiDeclarationId: row.id,
+    periodYear: agiPeriod.periodYear,
+    periodMonth: agiPeriod.periodMonth,
+    employeeCount: Number(row.employee_count),
+    isCorrection: true,
+    totals: {
+      ...totals,
+      totalTax: Number(row.total_tax),
+      totalAvgifterBasis: Number(row.total_avgifter_basis),
+      totalAvgifterAmount: Number(row.total_avgifter),
+    },
+    orgNumber: companyData.orgNumber,
+    unchanged: true,
+    ...(filed ? { filed: true } : {}),
+  })
+  const readAndDecide = async (): Promise<{ answer: GenerateAgiDeclarationResult } | AgiWriteTarget> => {
+    const read = await readAgiPeriod(supabase, companyId, agiPeriod, run)
+    if (!read.ok) return { answer: { ok: false, code: 'DATABASE_ERROR', details: read.error } }
+    const decision = decideAgiWrite(read.row, run, read.holder)
+    if (decision === 'conflict') {
       return {
-        ok: false,
-        code: 'AGI_PERIOD_CONFLICT',
-        details: {
-          period: formatAgiPeriodDashed(agiPeriod),
-          other_salary_run_id: otherRun.id,
-          other_run_period: `${otherRun.period_year}-${String(otherRun.period_month).padStart(2, '0')}`,
+        answer: {
+          ok: false,
+          code: 'AGI_PERIOD_CONFLICT',
+          status: 409,
+          details: {
+            period: formatAgiPeriodDashed(agiPeriod),
+            other_salary_run_id: read.row?.salary_run_id ?? null,
+            ...(read.holder
+              ? {
+                  other_run_period: formatAgiPeriodDashed({
+                    periodYear: read.holder.period_year,
+                    periodMonth: read.holder.period_month,
+                  }),
+                }
+              : {}),
+          },
         },
       }
     }
+    if (decision === 'filed') return { answer: storedAnswer(read.row as StoredAgiDeclaration, true) }
+    if (decision === 'insert') return { decision, row: null }
+    return { decision, row: read.row as StoredAgiDeclaration }
   }
 
-  const isCorrection = !!existingAgi
+  let target = await readAndDecide()
+  if ('answer' in target) return target.answer
+  let isCorrection = target.row !== null
 
   // 7. Generate XML.
   let xml: string
@@ -830,169 +1069,75 @@ export async function generateAgiDeclaration(
     }
     throw err
   }
-  const individuppgifter = buildIndividuppgifterSnapshot(employeeData)
-
-  // 7b. Submit-time regeneration: the run's own stored declaration already
-  // says this, so leave it (and agi_generated_at) exactly as it is.
-  if (
-    writeOnlyIfChanged &&
-    existingAgi &&
-    existingAgi.salary_run_id === run.id &&
-    storedDeclarationMatches(existingAgi, {
-      xml,
-      totals,
-      employeeCount: employeeData.length,
-      totalGross: run.total_gross,
-    })
-  ) {
-    return {
-      ok: true,
-      xml: existingAgi.xml_content as string,
-      agiDeclarationId: existingAgi.id,
-      periodYear: agiPeriod.periodYear,
-      periodMonth: agiPeriod.periodMonth,
-      employeeCount: employeeData.length,
-      isCorrection,
-      totals,
-      orgNumber: companyData.orgNumber,
-      unchanged: true,
-    }
+  const content: AgiDeclarationContent = {
+    xml_content: xml,
+    individuppgifter: buildIndividuppgifterSnapshot(employeeData),
+    total_gross: run.total_gross,
+    // Declared whole-krona totals, exactly as serialised into the XML
+    // (FK497/FK487): the amounts Skatteverket computes from the declared
+    // underlag and draws from the skattekonto (modulo the two documented
+    // krona-scale approximations in declared-avgifter.ts). This is what
+    // agi-tax-settlement matches the draw against. run.total_tax would
+    // drift: it keeps öre and includes removed rows.
+    total_tax: totals.totalTax,
+    total_avgifter_basis: totals.totalAvgifterBasis,
+    total_avgifter: totals.totalAvgifterAmount,
+    employee_count: employeeData.length,
+  }
+  const keys: AgiDeclarationKeys = {
+    company_id: companyId,
+    user_id: userId,
+    salary_run_id: run.id,
+    period_year: agiPeriod.periodYear,
+    period_month: agiPeriod.periodMonth,
   }
 
-  // 8. UPSERT agi_declarations.
-  let agiDeclarationId: string
-  if (existingAgi) {
-    // The period's one row now takes another run's declaration: the run this
-    // one corrects (or a corrected one before it). That declaration's filing
-    // state does not carry over: this XML has not been sent, so the row
-    // starts unfiled, and the submit flips it to pending_signature and the
-    // kvittens reconciliation promotes it on the correction's OWN kvittens.
-    // Keeping 'submitted' left the correction unpromotable and showed the
-    // original's receipt as the period's. The original's receipt is not lost:
-    // agi_kvittenser keeps every kvittens and its run keeps agi_submitted_at.
-    const takesOverAnotherRun = existingAgi.salary_run_id !== run.id
-    const { error: updErr } = takesOverAnotherRun
-      ? await supabase
-          .from('agi_declarations')
-          .update({
-            xml_content: xml,
-            individuppgifter,
-            total_gross: run.total_gross,
-            // Declared whole-krona totals: see the update below.
-            total_tax: totals.totalTax,
-            total_avgifter_basis: totals.totalAvgifterBasis,
-            total_avgifter: totals.totalAvgifterAmount,
-            employee_count: employeeData.length,
-            is_correction: true,
-            salary_run_id: run.id,
-            status: 'generated',
-            kvittensnummer: null,
-            submitted_at: null,
-            submitted_by: null,
-            response_data: null,
-          })
-          .eq('id', existingAgi.id)
-      : await supabase
-          .from('agi_declarations')
-          .update({
-            xml_content: xml,
-            individuppgifter,
-            total_gross: run.total_gross,
-            // Declared whole-krona totals, exactly as serialised into the XML
-            // (FK497/FK487): the amounts Skatteverket computes from the declared
-            // underlag and draws from the skattekonto (modulo the two documented
-            // krona-scale approximations in declared-avgifter.ts). This is what
-            // agi-tax-settlement matches the draw against. run.total_tax would
-            // drift: it keeps öre and includes removed rows.
-            total_tax: totals.totalTax,
-            total_avgifter_basis: totals.totalAvgifterBasis,
-            total_avgifter: totals.totalAvgifterAmount,
-            employee_count: employeeData.length,
-            is_correction: true,
-            salary_run_id: run.id,
-          })
-          .eq('id', existingAgi.id)
-    if (updErr) {
-      return { ok: false, code: 'DATABASE_ERROR', details: updErr }
+  // 8. Write: compare-and-set on the row as read. A miss means something
+  // else wrote the period in between (another generation, the submit, the
+  // kvittens): read and decide once more, then give up rather than write
+  // over it blind.
+  let agiDeclarationId: string | null = null
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (attempt > 0) {
+      target = await readAndDecide()
+      if ('answer' in target) return target.answer
+      // The re-read can turn a lost insert into an update of the row the
+      // winner wrote: the caller is told what this write is. The XML does
+      // not depend on it (generateAGIXml ignores the flag).
+      isCorrection = target.row !== null
     }
-    agiDeclarationId = existingAgi.id as string
-  } else {
-    const { data: inserted, error: insErr } = await supabase
-      .from('agi_declarations')
-      .insert({
-        company_id: companyId,
-        user_id: userId,
-        salary_run_id: run.id,
-        period_year: agiPeriod.periodYear,
-        period_month: agiPeriod.periodMonth,
-        xml_content: xml,
-        individuppgifter,
-        total_gross: run.total_gross,
-        // Declared whole-krona totals: see the update branch above.
-        total_tax: totals.totalTax,
-        total_avgifter_basis: totals.totalAvgifterBasis,
-        total_avgifter: totals.totalAvgifterAmount,
-        employee_count: employeeData.length,
-      })
-      .select('id')
-      .single()
 
-    if (insErr) {
-      // Concurrent-call race: two :generate-agi requests for the same
-      // (company, period) reached the INSERT branch simultaneously. The
-      // earlier read of `existingAgi` returned null for both, but the
-      // first INSERT wins and the second hits the unique constraint.
-      // Postgres error 23505 is the unique-violation code; recover by
-      // re-fetching the now-existing row and treating this call as a
-      // correction (the second caller's XML supersedes the first).
-      if ((insErr as { code?: string }).code === '23505') {
-        const { data: nowExisting, error: refetchErr } = await supabase
-          .from('agi_declarations')
-          .select('id')
-          .eq('company_id', companyId)
-          .eq('period_year', agiPeriod.periodYear)
-          .eq('period_month', agiPeriod.periodMonth)
-          .maybeSingle()
-        if (refetchErr || !nowExisting) {
-          return { ok: false, code: 'DATABASE_ERROR', details: refetchErr || insErr }
-        }
-        const { error: raceUpdErr } = await supabase
-          .from('agi_declarations')
-          .update({
-            xml_content: xml,
-            individuppgifter,
-            total_gross: run.total_gross,
-            // Declared whole-krona totals: see the update branch above.
-            total_tax: totals.totalTax,
-            total_avgifter_basis: totals.totalAvgifterBasis,
-            total_avgifter: totals.totalAvgifterAmount,
-            employee_count: employeeData.length,
-            is_correction: true,
-            salary_run_id: run.id,
-          })
-          .eq('id', nowExisting.id)
-        if (raceUpdErr) {
-          return { ok: false, code: 'DATABASE_ERROR', details: raceUpdErr }
-        }
-        agiDeclarationId = nowExisting.id as string
-        opLog.warn('agi_declarations insert raced; recovered via update', {
-          companyId,
-          periodYear: agiPeriod.periodYear,
-          periodMonth: agiPeriod.periodMonth,
-        })
-        // Note: the caller-facing `isCorrection` flag (set above based on
-        // the pre-INSERT existingAgi lookup) reports `false` even though
-        // the database state is now technically a correction. Edge case
-        // limited to the race window; the agi_declarations row is
-        // correctly marked is_correction=true and the next call will
-        // see it.
-      } else {
-        return { ok: false, code: 'DATABASE_ERROR', details: insErr }
-      }
-    } else if (!inserted) {
-      return { ok: false, code: 'DATABASE_ERROR', details: insErr }
-    } else {
-      agiDeclarationId = inserted.id as string
+    // Submit-time regeneration: the run's own stored declaration already
+    // says this, so leave it (and agi_generated_at) exactly as it is.
+    if (
+      writeOnlyIfChanged &&
+      target.decision === 'update_own' &&
+      storedDeclarationMatches(target.row, {
+        xml,
+        totals,
+        employeeCount: employeeData.length,
+        totalGross: run.total_gross,
+      })
+    ) {
+      return storedAnswer(target.row, false)
+    }
+
+    const written = await writeAgiDeclaration(supabase, target, keys, content)
+    if (!written.ok) return { ok: false, code: 'DATABASE_ERROR', details: written.error }
+    agiDeclarationId = written.id
+    if (agiDeclarationId !== null) break
+  }
+  if (agiDeclarationId === null) {
+    opLog.warn('agi_declarations write missed twice; refusing', {
+      companyId,
+      periodYear: agiPeriod.periodYear,
+      periodMonth: agiPeriod.periodMonth,
+    })
+    return {
+      ok: false,
+      code: 'AGI_GENERATION_CONFLICT',
+      status: 409,
+      details: { period: formatAgiPeriodDashed(agiPeriod) },
     }
   }
 

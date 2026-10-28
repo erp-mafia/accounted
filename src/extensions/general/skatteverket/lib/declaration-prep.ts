@@ -3,6 +3,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import type { VatDeclaration, VatPeriodType } from '@/types'
 import { calculateVatDeclaration, resolvePeriodDates } from '@/lib/reports/vat-declaration'
 import { generateAgiDeclaration } from '@/lib/salary/agi/generate-declaration'
+import { agiFiledForRun } from '@/lib/salary/agi-submission-state'
 import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { createLogger } from '@/lib/logger'
 import { rutorToMomsuppgift, formatRedovisare, formatRedovisningsperiod } from './mappers'
@@ -142,9 +143,6 @@ export async function buildMomsuppgift(
 /** Salary run statuses an AGI may be submitted from (finalised payroll only). */
 const AGI_SUBMITTABLE_RUN_STATUSES: readonly string[] = ['review', 'approved', 'paid', 'booked']
 
-/** agi_declarations statuses that carry Skatteverket's filing receipt. */
-const AGI_RECEIPT_STATUSES: readonly string[] = ['submitted', 'accepted']
-
 const agiRefreshLog = createLogger('skatteverket/agi-refresh')
 
 export type AgiRefreshResult =
@@ -166,31 +164,6 @@ export type AgiRefreshResult =
       error: string
       details?: Record<string, unknown>
     }
-
-function epochOf(value: string | null | undefined): number | null {
-  if (!value) return null
-  const parsed = Date.parse(value)
-  return Number.isNaN(parsed) ? null : parsed
-}
-
-/**
- * Whether the run's declaration is already filed. The run's own kvittens
- * stamp (agi_submitted_at) is authoritative. Without it, a receipt on the row
- * counts only when it is not older than the run's XML: a correction run that
- * took over the original's filed row before the generator reset its filing
- * state kept that original's status and kvittens, and its own declaration is
- * still unfiled.
- */
-function agiFiledForRun(
-  run: { agi_submitted_at: string | null; agi_generated_at: string | null },
-  declaration: { status: string; submitted_at: string | null } | null,
-): boolean {
-  if (run.agi_submitted_at) return true
-  if (!declaration || !AGI_RECEIPT_STATUSES.includes(declaration.status)) return false
-  const receiptAt = epochOf(declaration.submitted_at)
-  const generatedAt = epochOf(run.agi_generated_at)
-  return receiptAt === null || generatedAt === null || receiptAt >= generatedAt
-}
 
 /**
  * Bring the run's stored AGI underlag up to date before it is posted to
@@ -269,6 +242,7 @@ export async function refreshAgiUnderlag(
       ...(details ? { details } : {}),
     }
   }
+  if (result.filed) return { ok: true, outcome: 'filed' }
   if (result.unchanged) return { ok: true, outcome: 'unchanged' }
 
   agiRefreshLog.info('AGI underlag regenerated before submit: stored XML replaced', {

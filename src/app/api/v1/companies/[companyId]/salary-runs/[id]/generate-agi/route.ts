@@ -68,7 +68,8 @@ registerEndpoint({
   pitfalls: [
     'Run status must be one of review, approved, paid, booked, corrected: `draft` returns 400 AGI_GENERATE_NOT_BOOKABLE.',
     'Generating AGI from a `review`-status run risks submitting figures that will change at `:approve`. The dashboard allows this for flexibility; agents should prefer `approved+` unless an early-warning workflow specifically wants the preview.',
-    'Subsequent calls for the same period UPDATE the agi_declarations row (is_correction=true) and overwrite the XML. The FK570 specifikationsnummer stays consistent per employee: different number = new record per Skatteverket spec.',
+    'Subsequent calls for the same period UPDATE the agi_declarations row (is_correction=true) and overwrite the XML, until it is filed: a run whose declaration carries its kvittens gets the stored, filed XML back and nothing is rewritten. The FK570 specifikationsnummer stays consistent per employee: different number = new record per Skatteverket spec.',
+    'AGI_PERIOD_CONFLICT (409): another live run already holds the payout month. AGI_GENERATION_CONFLICT (409): the declaration changed while it was generated (another generation or a submission); retry.',
     'AGI_INCOMPLETE_DATA returns 400 when company contact info is missing (org_number, contact name, phone, email). Fix via /settings/company before retrying.',
     'The XML content is räkenskapsinformation: BFL 7 kap retention applies. The agi_declarations row is never auto-deleted.',
   ],

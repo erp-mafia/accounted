@@ -109,6 +109,30 @@ function epoch(value: string | null | undefined): number | null {
   return Number.isNaN(parsed) ? null : parsed
 }
 
+/** agi_declarations statuses that carry Skatteverket's filing receipt. */
+const AGI_RECEIPT_STATUSES: readonly string[] = ['submitted', 'accepted']
+
+/**
+ * Whether the run's declaration is already filed: the one rule for every
+ * writer, so a filed declaration is never rewritten (the generator answers
+ * with the stored XML, the submit path leaves it alone). The run's own
+ * kvittens stamp (agi_submitted_at) is authoritative. Without it, a receipt
+ * on the row counts only when it is not older than the run's XML: a
+ * correction run that took over the original's filed row before the
+ * generator reset its filing state kept that original's status and kvittens,
+ * and its own declaration is still unfiled.
+ */
+export function agiFiledForRun(
+  run: Pick<AgiFilingRun, 'agi_submitted_at' | 'agi_generated_at'>,
+  declaration: { status: string; submitted_at: string | null } | null,
+): boolean {
+  if (run.agi_submitted_at) return true
+  if (!declaration || !AGI_RECEIPT_STATUSES.includes(declaration.status)) return false
+  const receiptAt = epoch(declaration.submitted_at)
+  const generatedAt = epoch(run.agi_generated_at)
+  return receiptAt === null || generatedAt === null || receiptAt >= generatedAt
+}
+
 /**
  * Narrow the period-scoped submission record to the run it actually describes.
  *
