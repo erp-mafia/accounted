@@ -2,7 +2,9 @@
 
 import * as React from "react"
 import * as DialogPrimitive from "@radix-ui/react-dialog"
+import { useTranslations } from "next-intl"
 import { XMarkIcon } from '@/components/icons'
+import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
 
 const Dialog = DialogPrimitive.Root
@@ -68,14 +70,39 @@ const DialogContent = React.forwardRef<
       {...props}
     >
       {children}
-      <DialogPrimitive.Close className="absolute right-4 top-4 rounded-sm opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 disabled:pointer-events-none data-[state=open]:bg-accent data-[state=open]:text-muted-foreground">
-        <XMarkIcon className="h-4 w-4" />
-        <span className="sr-only">Close</span>
-      </DialogPrimitive.Close>
+      <DialogCloseButton />
     </DialogPrimitive.Content>
   </DialogPortal>
 ))
 DialogContent.displayName = DialogPrimitive.Content.displayName
+
+/**
+ * The X in a dialog's corner. It was a bare 16px icon, and session replays
+ * showed the first click on it doing nothing: a click a few px beside the
+ * icon missed it, and with a select or popover open inside the dialog Radix
+ * handed the click to that inner layer, which only closed itself. Now it is
+ * the shared icon-sm button (32px, 40px on touch) centred where the icon
+ * sat, and pointer-events-auto lets it take the click while an inner layer
+ * holds pointer events, so one click closes the dialog. data-attr names it
+ * for PostHog autocapture (the project's data attribute), so its rage
+ * clicks can be counted across icon changes.
+ */
+function DialogCloseButton() {
+  const t = useTranslations("common")
+  return (
+    <DialogPrimitive.Close asChild>
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        aria-label={t("close")}
+        data-attr="dialog-close"
+        className="pointer-events-auto absolute right-2 top-2 text-muted-foreground"
+      >
+        <XMarkIcon className="h-4 w-4" />
+      </Button>
+    </DialogPrimitive.Close>
+  )
+}
 
 /**
  * Backdrop for non-modal dialogs. Radix renders no Overlay when the root has
