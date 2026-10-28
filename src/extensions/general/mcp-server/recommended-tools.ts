@@ -211,6 +211,7 @@ export const WORKFLOW_SKILLS_WITHOUT_LOADOUT: Readonly<Record<string, string>> =
   'customer-onboarding': 'Decision tree for one customer record; invoice_run carries the customer tools.',
   onboarding: 'One-time company setup through the connect_* tools in the default catalog.',
   'create-skill': "Authors the user's own skill with one tool, gnubok_create_skill.",
+  'company-facts-import': 'One-time onboarding import through gnubok_remember_fact, in the default catalog.',
   'kvittojakten-claude': 'Client variant of kvittojakten, which receipt_hunt names.',
   'kvittojakten-chatgpt': 'Client variant of kvittojakten, which receipt_hunt names.',
   'kvittojakten-grok': 'Client variant of kvittojakten, which receipt_hunt names.',

@@ -3,7 +3,7 @@
 Run from the repository root with Node 22 or newer.
 No Docker or local database is used. The scripts refuse the production URL and
 never load `.env.local`. They create clearly named synthetic companies in the
-`erp-base` staging branch (`metjnjrhvujscngnpzdv`). Fixtures remain there for inspection.
+`erp-base` staging branch (`<staging-project-ref>`). Fixtures remain there for inspection.
 
 ## Worker results recorded on 2026-09-19
 
@@ -75,11 +75,11 @@ These earlier database-only numbers exclude worker and HTTP timings. See the
 Create an ignored `.env.provider-load.local` file with the staging values:
 
 ```dotenv
-NEXT_PUBLIC_SUPABASE_URL=https://metjnjrhvujscngnpzdv.supabase.co
+NEXT_PUBLIC_SUPABASE_URL=https://<staging-project-ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<staging service-role key>
 ```
 
-A Supabase CLI `branches get staging --project-ref pwxtzglxptnnvjrpixpg -o env`
+A Supabase CLI `branches get staging --project-ref <parent-project-ref> -o env`
 file also works via `--env /path/to/file`, using its `SUPABASE_URL` and
 `SUPABASE_SERVICE_ROLE_KEY`/`SERVICE_ROLE_KEY` fields. Keep this file private.
 
@@ -169,7 +169,7 @@ node --import tsx --conditions react-server scripts/provider-migration/write-sql
 
 This only generates `.env.provider-sql-load-plan.json`. Execute each provider's
 `seed`, then every `batches` statement in order, then `finish`, using the connected
-Supabase app's SQL tool with project ID `metjnjrhvujscngnpzdv`. Do not execute it
+Supabase app's SQL tool with project ID `<staging-project-ref>`. Do not execute it
 on another project. These statements contain no schema changes.
 
 The SQL plan uses the production Visma/Bokio and invoice mappers. It persists
@@ -183,7 +183,7 @@ not be presented as an end-to-end timeout test.
 ## Targeted regressions and other data
 
 ```bash
-node node_modules/vitest/vitest.mjs run extensions/general/arcim-migration/lib/__tests__ lib/providers/__tests__ lib/providers/visma/__tests__ lib/providers/bokio/__tests__
+node node_modules/vitest/vitest.mjs run src/extensions/general/arcim-migration/lib/__tests__ src/lib/providers/__tests__ src/lib/providers/visma/__tests__ src/lib/providers/bokio/__tests__
 ```
 
 These cover stalled provider/database operations, oversized invoices, failed

@@ -125,12 +125,15 @@ describe('POST /api/pending-operations/:id/commit', () => {
 
     const request = createMockRequest('/api/pending-operations/op-1/commit', { method: 'POST' })
     const response = await POST(request, routeParams)
-    const { status, body } = await parseJsonResponse<{ error: string }>(response)
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
 
     expect(status).toBe(409)
-    // The executor's English error string maps to the Swedish HTTP-409
-    // fallback: raw English never reaches the toast (issue #337).
-    expect(body.error).toBe('En konflikt uppstod. Ladda om sidan och försök igen.')
+    // A second approval of an operation already approved (the row a click
+    // hit before the list dropped it): the registered "already handled"
+    // answer the v1 approve door gives, not the generic conflict text that
+    // read as a failed approval in the toast. Swedish, never raw English.
+    expect(body.error.code).toBe('PENDING_OPERATION_NOT_PENDING')
+    expect(body.error.message).toBe('Åtgärden är redan hanterad och kan inte godkännas eller avvisas igen.')
     // The attempt is recorded with its outcome, as the MCP and API doors do.
     expect(mockRecordAppApproval).toHaveBeenCalledWith(
       expect.objectContaining({ commitMethod: 'user_accept', outcome: 'failed' }),

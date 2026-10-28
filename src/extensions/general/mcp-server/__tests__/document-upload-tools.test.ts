@@ -636,3 +636,64 @@ describe('MCP model-free document upload tools', () => {
     }
   })
 })
+
+/**
+ * crm#1455 follow-up: gnubok_create_sie_upload hands out the same proxied
+ * upload_url, under the same 4.5 MB platform cap on hosted, while a
+ * multi-year SIE file runs to several MB. It now answers like the document
+ * upload (documentUploadLimits): the proxy's limit, and the raw Storage URL
+ * for a file up to the SIE import's own limit.
+ */
+describe('gnubok_create_sie_upload: the real limit and the direct Storage URL', () => {
+  const sieUpload = () => findTool('gnubok_create_sie_upload')
+  // The tool also reads the target company's name and org number for the
+  // card: every read answers empty, which the tool tolerates.
+  const supabase = { from: vi.fn(() => makeQueryBuilder({ data: null, error: null })) }
+  const run = () => sieUpload().execute({ filename: 'export.se' }, companyId, userId, supabase as never) as Promise<Record<string, unknown>>
+
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  it('on hosted: upload_url takes 4 MB, direct_upload_url the import limit of 50 MB', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://pwxtzglxptnnvjrpixpg.supabase.co')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://app.accounted.se')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', '')
+    const signedUrl =
+      'https://pwxtzglxptnnvjrpixpg.supabase.co/storage/v1/object/upload/sign/documents/co/user/pending/up/export.se?token=signed'
+    mocks.createPendingDocumentUpload.mockResolvedValue({ uploadId, signedUrl, expiresAt: '2026-10-28T12:00:00.000Z' })
+
+    const result = await run()
+
+    expect(result).toMatchObject({
+      upload_id: uploadId,
+      upload_url: 'https://app.accounted.se/api/storage/upload/sign/documents/co/user/pending/up/export.se?token=signed',
+      max_bytes: 4 * 1024 * 1024,
+      direct_upload_url: signedUrl,
+      direct_max_bytes: 50 * 1024 * 1024,
+    })
+    expect(result.notice).toMatch(/at most 4 MB.*up to 50 MB.*direct_upload_url/)
+  })
+
+  it('self-hosted: upload_url carries the import limit and no second URL', async () => {
+    vi.stubEnv('NEXT_PUBLIC_SUPABASE_URL', 'https://storage.self-hosted.example')
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', 'https://books.self-hosted.example')
+    vi.stubEnv('NEXT_PUBLIC_SELF_HOSTED', 'true')
+    mocks.createPendingDocumentUpload.mockResolvedValue({
+      uploadId,
+      signedUrl: 'https://storage.self-hosted.example/storage/v1/object/upload/sign/documents/co/user/pending/up/export.se?token=signed',
+      expiresAt: '2026-10-28T12:00:00.000Z',
+    })
+
+    const result = await run()
+
+    expect(result.max_bytes).toBe(50 * 1024 * 1024)
+    expect(result).not.toHaveProperty('direct_upload_url')
+    expect(result).not.toHaveProperty('notice')
+  })
+
+  it('states the limit by reference, not a false fixed number', () => {
+    expect(sieUpload().description).toContain('(see max_bytes)')
+    expect(sieUpload().description).not.toContain('max 50 MB')
+  })
+})

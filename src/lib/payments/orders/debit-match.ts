@@ -15,8 +15,8 @@
  *       booking date or its value date. Exactly one such order: 0.95. Payee
  *       evidence raises that to 0.98 and decides between several orders that
  *       satisfy (b): the payee's bankgiro or plusgiro digits in the text
- *       (Swedbank writes the bankgiro zero-padded, '0000052386828' carries
- *       '52386828'; a hyphen inside the number is allowed), the payee IBAN
+ *       (Swedbank writes the bankgiro zero-padded, '0000055778815' carries
+ *       '55778815'; a hyphen inside the number is allowed), the payee IBAN
  *       as the counterparty IBAN, or the payee name's significant words in
  *       the description. Several candidates and no evidence: no match.
  *
@@ -119,8 +119,8 @@ export function debitInExecutionWindow(debit: OrderDebit, order: Pick<DebitMatch
 /**
  * Whether `text` carries the giro number: its digits in order, a hyphen
  * allowed between any two of them, any number of leading zeros, and no other
- * digit touching it. '0000052386828', '5238-6828' and '52386828' all carry
- * 52386828; '152386828' does not.
+ * digit touching it. '0000055778815', '5577-8815' and '55778815' all carry
+ * 55778815; '155778815' does not.
  */
 function containsGiroNumber(text: string | null | undefined, giro: string | null): boolean {
   if (!text || !giro) return false

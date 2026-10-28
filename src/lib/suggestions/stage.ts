@@ -15,6 +15,7 @@
 import { stagedRiskLevel } from '@/lib/pending-operations/stage'
 import { assertNoPlaintextPersonnummer } from '@/lib/pending-operations/staging-pii-guard'
 import type { DetectorContext, SuggestionProposal } from './types'
+import { toError } from '@/lib/errors/to-error'
 
 export type StageOutcome =
   | { staged: true; suggestionId: string; pendingOperationId: string }
@@ -89,7 +90,7 @@ export async function stageSuggestion(
     const reason = result.reason === 'open' || result.reason === 'snoozed' || result.reason === 'declined' ? result.reason : 'failed'
     return { staged: false, reason }
   } catch (err) {
-    ctx.log.error('suggestion could not be staged', err instanceof Error ? err : new Error(String(err)), {
+    ctx.log.error('suggestion could not be staged', toError(err), {
       companyId: ctx.companyId,
       detector: detectorId,
       key: proposal.key,

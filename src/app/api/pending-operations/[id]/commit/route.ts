@@ -4,6 +4,7 @@ import { commitPendingOperation } from '@/lib/pending-operations/commit'
 import { recordAppApproval } from '@/lib/pending-operations/record-app-approval'
 import { bookkeepingErrorResponse, AccountsNotInChartError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import type { PendingOperation } from '@/types'
 
 // An approved match_batch_allocate of MAX_BANK_ROW_SPLIT invoices commits here
@@ -48,6 +49,14 @@ export const POST = withRouteContext<{ params: Promise<{ id: string }> }>(
 
       if (result.status === 'committed') {
         return NextResponse.json({ data: result.data })
+      }
+      // Lost the pending -> committing claim: the operation was already
+      // approved (a second click, another tab) or rejected, or another
+      // approval is running it. Nothing ran here. The v1 approve door's
+      // answer, instead of the generic 409 "En konflikt uppstod" that read
+      // as a failed approval.
+      if (result.http_status === 409 && result.operation_status === undefined) {
+        return errorResponseFromCode('PENDING_OPERATION_NOT_PENDING', log)
       }
       // Recoverable accounts-not-in-chart: return the structured envelope (code +
       // account_numbers) so the client can offer activation and retry the still-

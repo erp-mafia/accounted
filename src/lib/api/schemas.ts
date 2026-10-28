@@ -1471,8 +1471,6 @@ export const LinkInvoiceAttachmentsSchema = z.object({
 /** POST /api/invoices/preview-email: the preview draft plus this send's own texts. */
 export const InvoiceEmailPreviewSchema = InvoicePreviewSchema.extend(InvoiceEmailOverrideShape)
 
-export type InvoiceEmailPreviewInput = z.infer<typeof InvoiceEmailPreviewSchema>
-
 // ============================================================
 // Customer schemas
 // ============================================================

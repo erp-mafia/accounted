@@ -1165,7 +1165,7 @@ export default function VatDeclarationView({ pageTitle }: { pageTitle?: string }
           pickers (convention 8: the context picker far right), so no row is
           spent on them. The primary action belongs to the step in front of
           the person (Korrigera alla, Bokför momsen, Lämna in), not to the
-          spreadsheet (Jakob, 2026-09-09). XML and PDF live in "Lämna in":
+          spreadsheet (design decision 2026-09-09). XML and PDF live in "Lämna in":
           they are filing artifacts, not report exports. */}
       {pageTitle ? (
         <PageHeader

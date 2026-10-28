@@ -31,19 +31,6 @@ import type { ReminderLevel } from './policy'
  * stock English texts, since the company's texts are written in Swedish.
  */
 
-/** Placeholders a reminder text may use; the settings legend lists them. */
-export const REMINDER_EMAIL_PLACEHOLDER_KEYS = [
-  'fakturanummer',
-  'kundnamn',
-  'förnamn',
-  'företag',
-  'fakturadatum',
-  'förfallodatum',
-  'belopp',
-  'dagar',
-  'betala_senast',
-] as const
-
 /** The final reminder asks for payment within this many days of its send date, shown as a date. */
 export const FINAL_REMINDER_PAY_WITHIN_DAYS = 8
 

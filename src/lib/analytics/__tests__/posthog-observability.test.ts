@@ -44,10 +44,17 @@ describe('postHogSink.captureException', () => {
   it('leaves error_code out when the error has none', () => {
     postHogSink.captureException(redact(new Error('plain')), { module: 'api/x' })
 
-    const [error, distinctId, properties] = posthog.captureException.mock.calls[0]
+    const [error, , properties] = posthog.captureException.mock.calls[0]
     expect((error as Error).message).toBe('plain')
-    expect(distinctId).toBeUndefined()
     expect(properties).toEqual({ module: 'api/x' })
+  })
+
+  it('files an error with no user under one stable server id, not a new person per event', () => {
+    postHogSink.captureException(redact(new Error('cron failed')), { module: 'cron/x' })
+    postHogSink.captureException(redact(new Error('cron failed')), { module: 'cron/x' })
+
+    const ids = posthog.captureException.mock.calls.map((call) => call[1])
+    expect(ids).toEqual(['server', 'server'])
   })
 })
 

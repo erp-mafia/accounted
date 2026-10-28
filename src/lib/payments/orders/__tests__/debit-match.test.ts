@@ -124,12 +124,12 @@ describe('debitInExecutionWindow', () => {
 describe('debitNamesPayee', () => {
   it('finds the bankgiro zero-padded, hyphenated, or as the counterparty account, never inside a longer number', () => {
     const order = arcimOrder()
-    expect(debitNamesPayee({ ...BARE, description: 'MATTSSON BG 0000052386828' }, order)).toBe(true)
-    expect(debitNamesPayee({ ...BARE, description: 'BG 5238-6828' }, order)).toBe(true)
-    expect(debitNamesPayee({ ...BARE, reference: '52386828' }, order)).toBe(true)
-    expect(debitNamesPayee({ ...BARE, counterparty_account: '5238-6828' }, order)).toBe(true)
-    expect(debitNamesPayee({ ...BARE, description: 'REF 152386828' }, order)).toBe(false)
-    expect(debitNamesPayee({ ...BARE, description: 'REF 523868281' }, order)).toBe(false)
+    expect(debitNamesPayee({ ...BARE, description: 'EXEMPEL BG 0000055778815' }, order)).toBe(true)
+    expect(debitNamesPayee({ ...BARE, description: 'BG 5577-8815' }, order)).toBe(true)
+    expect(debitNamesPayee({ ...BARE, reference: '55778815' }, order)).toBe(true)
+    expect(debitNamesPayee({ ...BARE, counterparty_account: '5577-8815' }, order)).toBe(true)
+    expect(debitNamesPayee({ ...BARE, description: 'REF 155778815' }, order)).toBe(false)
+    expect(debitNamesPayee({ ...BARE, description: 'REF 557788151' }, order)).toBe(false)
   })
 
   it('finds the plusgiro the same way, and never a run of four digits or fewer', () => {
@@ -146,8 +146,8 @@ describe('debitNamesPayee', () => {
 
   it('finds the payee name by its significant words, legal forms and short words aside, half of them enough', () => {
     const order = arcimOrder({ payee_bankgiro: null })
-    expect(debitNamesPayee({ ...BARE, description: 'MATTSSON SYSTEMS' }, order)).toBe(true)
-    expect(debitNamesPayee({ ...BARE, description: 'Mattsson System AB' }, order)).toBe(true)
+    expect(debitNamesPayee({ ...BARE, description: 'EXEMPEL SYSTEMS' }, order)).toBe(true)
+    expect(debitNamesPayee({ ...BARE, description: 'Exempel System AB' }, order)).toBe(true)
     expect(debitNamesPayee({ ...BARE, description: 'SYSTEMS AB' }, order)).toBe(true)
     expect(debitNamesPayee({ ...BARE, description: 'AB' }, order)).toBe(false)
     expect(debitNamesPayee({ ...BARE, description: 'VATTENFALL' }, order)).toBe(false)

@@ -62,12 +62,6 @@ const Attempt = z.object({
   failure_text: z.string().nullable(),
 })
 
-const Signer = z.object({
-  personalNumber: z.string().nullable(),
-  ipAddress: z.string().nullable(),
-  userAgent: z.string().nullable(),
-})
-
 const ConnectionOut = z.object({
   connection_id: z.string().uuid(),
   bank_name: z.string().nullable(),

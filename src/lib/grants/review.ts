@@ -56,10 +56,37 @@ function toPosting(row: Record<string, unknown>): GrantPosting {
   }
 }
 
+/**
+ * The agent behind each posting: the pending operation the grant use names
+ * carries who staged it (actor_type, actor_label) and for whom (user_id).
+ * One read by id for at most MAX_REVIEW_POSTINGS operations. Best-effort: a
+ * failed read leaves the postings without an agent.
+ */
+async function withAgents(supabase: SupabaseClient, companyId: string, postings: GrantPosting[]): Promise<GrantPosting[]> {
+  const ids = [...new Set(postings.map((p) => p.pending_operation_id).filter((id): id is string => !!id))]
+  if (ids.length === 0) return postings
+  const { data, error } = await supabase
+    .from('pending_operations')
+    .select('id, actor_type, actor_label, user_id')
+    .eq('company_id', companyId)
+    .in('id', ids)
+  if (error) {
+    log.warn('grant posting agents could not be read', { companyId, code: error.code, error: error.message })
+    return postings
+  }
+  const byId = new Map(
+    ((data ?? []) as Array<{ id: string; actor_type: string; actor_label: string | null; user_id: string | null }>).map((op) => [op.id, op]),
+  )
+  return postings.map((p) => {
+    const op = p.pending_operation_id ? byId.get(p.pending_operation_id) : undefined
+    return { ...p, agent: op ? { actor_type: op.actor_type, actor_label: op.actor_label, user_id: op.user_id } : null }
+  })
+}
+
 export async function loadGrantReview(
   supabase: SupabaseClient,
   companyId: string,
-  opts: { limit?: number } = {},
+  opts: { limit?: number; withAgents?: boolean } = {},
 ): Promise<GrantReview> {
   try {
     // One probe first: a company that never had a grant (nearly all of them)
@@ -93,8 +120,9 @@ export async function loadGrantReview(
       log.warn('grant postings could not be read', { companyId, code: error?.code, error: error?.message })
       return EMPTY
     }
+    const postings = ((postingsRes.data ?? []) as Array<Record<string, unknown>>).map(toPosting)
     return {
-      postings: ((postingsRes.data ?? []) as Array<Record<string, unknown>>).map(toPosting),
+      postings: opts.withAgents ? await withAgents(supabase, companyId, postings) : postings,
       paused: (settingsRes.data as { paused?: boolean } | null)?.paused === true,
       has_active_grants: (activeRes.count ?? 0) > 0,
     }

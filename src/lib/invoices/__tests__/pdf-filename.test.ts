@@ -4,16 +4,16 @@ import { invoicePdfFilename, paymentConfirmationPdfFilename } from '../pdf-filen
 describe('invoicePdfFilename', () => {
   it('includes company, customer, document type, number, and invoice date', () => {
     expect(invoicePdfFilename({
-      companyName: 'Oppy',
+      companyName: 'Exempelbolaget',
       customerName: 'Kund AB',
       invoiceNumber: '2621',
       invoiceDate: '2026-07-21',
-    })).toBe('Oppy x Kund AB Faktura nr 2621 20260721.pdf')
+    })).toBe('Exempelbolaget x Kund AB Faktura nr 2621 20260721.pdf')
   })
 
   it('uses the correct label for credit notes and other document types', () => {
     const base = {
-      companyName: 'Oppy',
+      companyName: 'Exempelbolaget',
       customerName: 'Kund AB',
       invoiceNumber: '42',
       invoiceDate: '2026-07-21',
@@ -29,30 +29,30 @@ describe('invoicePdfFilename', () => {
 
   it('labels a quote (offert) with its OF- number', () => {
     expect(invoicePdfFilename({
-      companyName: 'Oppy',
+      companyName: 'Exempelbolaget',
       customerName: 'Kund AB',
       invoiceNumber: 'OF-001',
       invoiceDate: '2026-09-02',
       documentType: 'quote',
-    })).toBe('Oppy x Kund AB Offert nr OF-001 20260902.pdf')
+    })).toBe('Exempelbolaget x Kund AB Offert nr OF-001 20260902.pdf')
   })
 
   it('keeps drafts identifiable without inventing an invoice number', () => {
     expect(invoicePdfFilename({
-      companyName: 'Oppy',
+      companyName: 'Exempelbolaget',
       customerName: 'Kund AB',
       invoiceId: 'bbbbbbbb-1111-2222-3333-cccccccccccc',
       invoiceDate: '2026-07-21',
-    })).toBe('Oppy x Kund AB Faktura utkast-bbbbbbbb 20260721.pdf')
+    })).toBe('Exempelbolaget x Kund AB Faktura utkast-bbbbbbbb 20260721.pdf')
   })
 
   it('removes characters that are unsafe in cross-platform filenames', () => {
     expect(invoicePdfFilename({
-      companyName: 'Oppy / Sverige',
+      companyName: 'Exempelbolaget / Sverige',
       customerName: 'Kund: "Nord" * AB',
       invoiceNumber: '../26/21',
       invoiceDate: '2026-07-21',
-    })).toBe('Oppy Sverige x Kund Nord AB Faktura nr .. 26 21 20260721.pdf')
+    })).toBe('Exempelbolaget Sverige x Kund Nord AB Faktura nr .. 26 21 20260721.pdf')
   })
 
   it('falls back when company and customer names are empty', () => {

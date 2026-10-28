@@ -272,17 +272,6 @@ export interface KontantmetodCutoffPostingStatus {
   duplicates: string[]
 }
 
-export function hasIncompleteKontantmetodCutoffPair(
-  status: KontantmetodCutoffPostingStatus,
-  lines: CutoffLines,
-): boolean {
-  const receivablePartial = lines.receivableLines.length > 0 &&
-    Boolean(status.receivableEntryId) !== Boolean(status.receivableReversalId)
-  const payablePartial = lines.payableLines.length > 0 &&
-    Boolean(status.payableEntryId) !== Boolean(status.payableReversalId)
-  return status.duplicates.length > 0 || receivablePartial || payablePartial
-}
-
 // Go through roundOre first: Math.round(x * 100) alone mis-rounds exact-half
 // values that arrive with float drift (lib/money.ts).
 const toOre = (amount: number): number => Math.round(roundOre(amount) * 100)

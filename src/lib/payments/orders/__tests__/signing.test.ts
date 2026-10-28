@@ -161,6 +161,26 @@ describe('startPaymentSigning', () => {
     expect(db.findCalls('payment_order_events', 'eq')).toContainEqual(['event_type', 'provider_cancelled'])
   })
 
+  // crm#1485: one open skattekonto order per execution day.
+  it('refuses to move an approved skattekonto order onto a day that already has an open skattekonto payment, leaving it approved', async () => {
+    const provider = fakeProvider({ createPayment: vi.fn() })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_orders', [
+      { data: [order('o1', { purpose: 'skattekonto', supplier_invoice_id: null, requested_execution_date: '2026-10-09' })] }, // preview: a passed day
+      { data: [{ id: 'o9', status: 'accepted', requested_execution_date: '2026-10-12' }] }, // the next banking day's open order
+    ])
+
+    const result = await startPaymentSigning(ctx, { orderIds: ['o1'], method: 'qr', signer: SIGNER, today: '2026-10-11' })
+
+    expect(result).toMatchObject({
+      ok: false,
+      code: 'SKATTEKONTO_PAYMENT_DAY_TAKEN',
+      details: { payment_order_id: 'o1', requested_execution_date: '2026-10-12', existing_payment_order_id: 'o9', existing_status: 'accepted' },
+    })
+    expect(orderPatches()).toHaveLength(0)
+    expect(provider.createPayment).not.toHaveBeenCalled()
+  })
+
   it('re-attests an approved order whose day is no banking day before the bank is asked', async () => {
     const provider = fakeProvider({
       createPayment: vi.fn().mockResolvedValue({ providerPaymentId: 'pay-1', product: 'swedish-giro', providerStatus: 'RCVD', status: 'submitted', messages: [] }),
@@ -668,7 +688,7 @@ describe('startPaymentSigning', () => {
   it('signs a skattekonto payment in one basket with a supplier payment: it has no invoice to check', async () => {
     const provider = fakeProvider()
     registerPaymentInitiationProvider(provider)
-    const tax = { purpose: 'skattekonto', supplier_invoice_id: null, payee_name: 'Skatteverket', payee_source: 'skatteverket', amount: 11000, reference: '1655954700217' } as const
+    const tax = { purpose: 'skattekonto', supplier_invoice_id: null, payee_name: 'Skatteverket', payee_source: 'skatteverket', amount: 11000, reference: '1655446688087' } as const
     db.setTable('payment_orders', [
       { data: [order('o1'), order('t1', tax)] }, // preview
       { data: [{ id: 'o1' }] },
@@ -695,7 +715,7 @@ describe('startPaymentSigning', () => {
     expect(instructions[1]).toMatchObject({
       amount: 11000,
       payee: { type: 'bankgiro', bankgiro: '50501055', name: 'Skatteverket' },
-      reference: { type: 'ocr', value: '1655954700217' },
+      reference: { type: 'ocr', value: '1655446688087' },
     })
   })
 

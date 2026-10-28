@@ -82,12 +82,6 @@ export type UpdateEmployeeBenefitInput = z.infer<typeof UpdateEmployeeBenefitSch
 /** Shared 400 copy for annual_market_value on a row that is not a bike benefit. */
 export const ANNUAL_MARKET_VALUE_BIKE_ONLY_MESSAGE = 'annual_market_value gäller endast cykelförmån'
 
-// Literal projection at every call site: tests/schema/no-phantom-columns can
-// only check column names it can read statically, and the v1 rule is never
-// SELECT *. company_id and user_id are tenancy scoping, not resource data.
-const BENEFIT_COLUMNS =
-  'id, employee_id, benefit_type, description, monthly_value, valid_from, valid_to, metadata, is_active, created_at, updated_at'
-
 const NOT_FOUND_DETAILS: Record<string, unknown> = { resource: 'employee_benefit' }
 
 async function assertEmployee(

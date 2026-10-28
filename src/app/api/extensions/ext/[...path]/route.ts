@@ -18,6 +18,7 @@ import type { ApiRouteDefinition } from '@/lib/extensions/types'
 import { errorResponseFromCode } from '@/lib/errors/get-structured-error'
 import { startPackageForKey } from '@/lib/modules/package-doors'
 import { packageStartRefusal } from '@/lib/modules/package-gate'
+import { readCompletionLog, shouldWriteCompletionLog } from '@/lib/extensions/completion-log'
 
 const dispatcherLog = createLogger('extension-dispatcher')
 
@@ -230,7 +231,16 @@ async function handleRequest(
       })
     }
     const response = await route.handler(handlerRequest)
-    log.info('extension call completed', { durationMs: Date.now() - start, status: response.status })
+    // The handler may name the call (the MCP endpoint: method, tool, key) or
+    // mark it as protocol chatter that needs no line (lib/extensions/completion-log.ts).
+    const note = readCompletionLog(handlerRequest)
+    if (shouldWriteCompletionLog(note, response.status)) {
+      log.info('extension call completed', {
+        durationMs: Date.now() - start,
+        status: response.status,
+        ...note?.fields,
+      })
+    }
     return decorateResponse(response, requestId)
   }
 

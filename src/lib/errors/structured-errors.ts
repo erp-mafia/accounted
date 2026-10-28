@@ -5351,6 +5351,17 @@ const PROVIDER_MIGRATION: Record<string, StructuredErrorEntry> = {
     message_en:
       'Bokio could not find the company. Check the company ID and that the integration token was created for the same company.',
   },
+  // 422, same reasoning as PROVIDER_TOKEN_INVALID. What was pasted as the
+  // Bokio company id holds no GUID (an org number, or the token in the wrong
+  // field), so no retry can work; Bokio answered such a request with a 400
+  // that read as "try again" (crm#1081 follow-up, 2026-10-27).
+  BOKIO_COMPANY_ID_INVALID: {
+    httpStatus: 422,
+    message_sv:
+      'Företags-ID:t från Bokio har fel format. Det är en lång kod med bokstäver, siffror och bindestreck (ett GUID) som syns i webbadressen när du visar företagets översikt i Bokio, inte organisationsnumret. Klistra in den eller hela webbadressen i fältet Företags-ID, och integrationstoken i fältet Integrationstoken.',
+    message_en:
+      'The Bokio company ID has the wrong format. It is a long code of letters, digits and hyphens (a GUID) shown in the address bar when you view the company overview in Bokio, not the organisation number. Paste it, or the whole address, into the Company ID field, and the integration token into the Integration token field.',
+  },
   BOKIO_PLAN_NO_API: {
     // 422, same reasoning as PROVIDER_TOKEN_INVALID. Bokio answered 403
     // price_plan_feature_required: the company's plan has no API access for
@@ -10441,6 +10452,17 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'En betalning till Skatteverket väntar redan under Betalningar.',
     message_en: 'A payment to Skatteverket is already waiting under Payments.',
+  },
+  // A draft whose day has passed moves to the next banking day when it is
+  // approved or signed; that day already has an open skattekonto payment (crm#1485).
+  SKATTEKONTO_PAYMENT_DAY_TAKEN: {
+    httpStatus: 409,
+    message_sv: 'Dagen för betalningen har passerat, och nästa bankdag har redan en betalning till skattekontot. Avbryt den här betalningen under Betalningar och förbered den igen: då läggs beloppet ihop med den som redan finns, eller så väljer du en annan dag.',
+    message_en: 'The payment day has passed, and the next banking day already has a payment to the tax account. Cancel this payment under Payments and prepare it again: the amount is then added to the one already there, or you pick another day.',
+    remediation: {
+      description:
+        'details.requested_execution_date is the day the order would move to; details.existing_payment_order_id (when known) holds it. Cancel this order and prepare the skattekonto payment again: an unsigned order on that day takes the amount as an addition.',
+    },
   },
   SKATTEKONTO_PAYMENT_NOTHING_DUE: {
     httpStatus: 409,

@@ -3,7 +3,7 @@
  * counterparty booked the same way N times, proposed as a company grant
  * (lib/grants), the autonomy half of Phase 3.
  *
- * Behind GRANT_SUGGESTIONS (off unless `true` or `1`): Jakob's master
+ * Behind GRANT_SUGGESTIONS (off unless `true` or `1`): the master
  * switch for the whole feature. With it off this detector never runs, the
  * create_grant executor refuses, and the staging door never asks the claim
  * gate, so nothing changes for anyone.
@@ -52,7 +52,7 @@ import { SUGGESTION_RANKS } from '../package-proposals'
 import type { Detector, DetectorContext, SuggestionProposal } from '../types'
 
 /**
- * GRANT_SUGGESTIONS (lib/grants/flag.ts), Jakob's master switch for the
+ * GRANT_SUGGESTIONS (lib/grants/flag.ts), the master switch for the
  * whole grants feature: the detector runs only while it is on.
  */
 export const grantSuggestionsEnabled = grantsEnabled

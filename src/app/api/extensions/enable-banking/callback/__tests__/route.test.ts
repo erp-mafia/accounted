@@ -167,6 +167,8 @@ describe('one callback transaction', () => {
       mirrors: [{ uid: 'a', ledger_account: '1930' }, { uid: 'b', ledger_account: '1931' }] })
     for (const c of chains) { expect(c.update).not.toHaveBeenCalled(); expect(c.delete).not.toHaveBeenCalled() }
     for (const call of mocks.resolve.mock.calls) expect(call[3].prepareOnly).toBe(true)
+    // Each account is placed knowing the whole consent: the seeded row goes to the one its details name (crm#1498).
+    for (const call of mocks.resolve.mock.calls) expect(call[3].consent.map((a: { uid: string }) => a.uid)).toEqual(['a', 'b'])
     expect(mocks.balance).not.toHaveBeenCalled()
     expect(emitted).toHaveBeenCalledWith(expect.objectContaining({ type: 'bank_connection.consent_granted' }))
   })

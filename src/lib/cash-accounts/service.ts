@@ -10,6 +10,8 @@ import {
   bankLedgerName,
   defaultLedgerForCurrency,
   holderAdoptableBy,
+  seededRowBelongsToAnother,
+  type ConsentAccountRef,
   normalizeIban,
   overflowLedgerSlots,
 } from '@/lib/cash-accounts/ledger-slots'
@@ -731,6 +733,8 @@ export async function getRevokedConnectionIds(
  *     so the account overflows instead of failing the whole connection.
  *     `options.iban` is the incoming account's IBAN; omitted, it counts as
  *     an account without one, which never takes over a holder that has one.
+ *     A seeded row whose onboarding payment details name another account of
+ *     the same consent (`options.consent`) is left to that account.
  *   - Overflow walks the free-use 1931–1959 sub-account slots, skipping the
  *     four currency defaults (reserved as suggestions for their currencies)
  *     and any slot held by ANY existing row — promoting an unrelated manual
@@ -754,13 +758,19 @@ export async function findFreeLedgerAccount(
   companyId: string,
   currency: string,
   exclude: ReadonlySet<string> = new Set(),
-  options: { strictReads?: boolean; iban?: string | null } = {},
+  options: {
+    strictReads?: boolean
+    iban?: string | null
+    bban?: string | null
+    /** Every account the caller is placing from the same consent, the incoming one included. */
+    consent?: readonly ConsentAccountRef[]
+  } = {},
 ): Promise<string | null> {
   const preferred = defaultLedgerForCurrency(currency)
 
   const { data: rows, error } = await supabase
     .from('cash_accounts')
-    .select('ledger_account, bank_connection_id, iban, currency')
+    .select('ledger_account, bank_connection_id, iban, currency, clearing_number, account_number')
     .eq('company_id', companyId)
 
   if (error) {
@@ -793,6 +803,8 @@ export async function findFreeLedgerAccount(
     bank_connection_id: string | null
     iban: string | null
     currency: string
+    clearing_number?: string | null
+    account_number?: string | null
   }>
   const revokedConnectionIds = await getRevokedConnectionIds(
     supabase,
@@ -810,7 +822,11 @@ export async function findFreeLedgerAccount(
       live: holder.bank_connection_id !== null && !revokedConnectionIds.has(holder.bank_connection_id),
     },
     { iban: options.iban, currency },
-  )
+  ) && !(options.consent && seededRowBelongsToAnother(
+    holder,
+    { iban: options.iban ?? null, bban: options.bban ?? null, currency },
+    options.consent,
+  ))
 
   if (!exclude.has(preferred) && preferredFree) return preferred
 
@@ -849,6 +865,9 @@ export async function allocatePsd2LedgerAccount(
     currency: string
     /** The account's IBAN: decides whether it may take over the row on its currency default. */
     iban?: string | null
+    bban?: string | null
+    /** The consent's accounts: the seeded row goes to the one its payment details name. */
+    consent?: readonly ConsentAccountRef[]
     accountName?: string | null
     exclude?: ReadonlySet<string>
     prepareOnly?: boolean
@@ -857,6 +876,8 @@ export async function allocatePsd2LedgerAccount(
   const ledger = await findFreeLedgerAccount(supabase, companyId, input.currency, input.exclude ?? new Set(), {
     strictReads: input.prepareOnly,
     iban: input.iban ?? null,
+    bban: input.bban ?? null,
+    consent: input.consent,
   })
   if (!ledger) return null
   if (input.prepareOnly) return ledger
@@ -987,7 +1008,14 @@ export async function resolvePsd2LedgerAccount(
   userId: string,
   input: {
     iban?: string | null
+    bban?: string | null
     currency: string
+    /**
+     * Every account the caller places from the same consent, this one
+     * included. The seeded row then goes to the account its onboarding
+     * payment details name, whichever order the bank lists them in.
+     */
+    consent?: readonly ConsentAccountRef[]
     accountName?: string | null
     exclude?: ReadonlySet<string>
     /** The atomic configuration writer creates any missing chart account. */
@@ -1051,6 +1079,8 @@ export async function resolvePsd2LedgerAccount(
   const allocated = await allocatePsd2LedgerAccount(supabase, companyId, userId, {
     currency: input.currency,
     iban: input.iban ?? null,
+    bban: input.bban ?? null,
+    consent: input.consent,
     accountName: input.accountName,
     exclude,
     prepareOnly: input.prepareOnly,

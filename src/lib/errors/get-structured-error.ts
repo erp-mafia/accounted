@@ -16,6 +16,7 @@
  */
 import { NextResponse } from 'next/server'
 import { userFacingCode } from './user-facing'
+import { toError } from './to-error'
 import { ZodError } from 'zod'
 import { getErrorMessage } from './get-error-message'
 import { foreignKeyRefusal } from './foreign-key-refusal'
@@ -578,12 +579,12 @@ export function errorResponse(
   }
   const pgCode = classified.details?.pgCode
   if (code === 'INTERNAL_ERROR') {
-    log.error('unhandled error', err instanceof Error ? err : new Error(String(err)), {
+    log.error('unhandled error', toError(err), {
       requestId: ctx.requestId,
       ...(pgCode ? { pgCode } : {}),
     })
   } else {
-    logAtLevel(log, entry.httpStatus, code, err instanceof Error ? err : new Error(String(err)), {
+    logAtLevel(log, entry.httpStatus, code, toError(err), {
       requestId: ctx.requestId,
       ...(pgCode ? { pgCode } : {}),
     })

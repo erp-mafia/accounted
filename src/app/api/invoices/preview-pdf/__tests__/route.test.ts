@@ -75,7 +75,7 @@ function previewRequest(body: unknown) {
 describe('POST /api/invoices/preview-pdf', () => {
   const user = { id: 'user-1', email: 'owner@example.test' }
   const customer = makeCustomer({ id: CUSTOMER_ID, name: 'Kund ÅÄÖ AB' })
-  const company = makeCompanySettings({ company_name: 'Oppy Sverige', bankgiro: '123-4567' })
+  const company = makeCompanySettings({ company_name: 'Exempelbolaget Sverige', bankgiro: '123-4567' })
   const validBody = {
     customer_id: customer.id,
     invoice_number: '2621',
@@ -149,7 +149,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     expect(response.headers.get('Cache-Control')).toBe('private, no-store')
     expect(response.headers.get('X-Invoice-Missing')).toBeNull()
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-      .toBe('Oppy Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
+      .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Faktura nr 2621 20260721.pdf')
   })
 
   it('reports the page count of the rendered PDF', async () => {
@@ -184,7 +184,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     expect(response.status).toBe(200)
     expect(response.headers.get('X-Invoice-Missing')).toBeNull()
     expect(contentDispositionFilename(response.headers.get('Content-Disposition')))
-      .toBe('Oppy Sverige x Kund ÅÄÖ AB Offert nr OF-001 20260721.pdf')
+      .toBe('Exempelbolaget Sverige x Kund ÅÄÖ AB Offert nr OF-001 20260721.pdf')
     const { invoice } = lastRenderProps()
     expect(invoice.document_type).toBe('quote')
     expect(invoice.valid_until).toBe('2026-08-20')
@@ -787,7 +787,7 @@ describe('POST /api/invoices/preview-pdf', () => {
     // A bankgiro with a valid check digit and an org number: auto prints the
     // bank-app code to a business customer.
     const qrCompany = makeCompanySettings({
-      company_name: 'Oppy Sverige',
+      company_name: 'Exempelbolaget Sverige',
       org_number: '5566778899',
       bankgiro: '5050-1055',
     })

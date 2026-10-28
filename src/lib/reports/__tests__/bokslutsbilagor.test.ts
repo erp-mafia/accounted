@@ -103,7 +103,7 @@ describe('generateBokslutsbilagor', () => {
   it('builds one bilaga per account from the snapshot, the sign-offs, the specification and the files', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD }) // fiscal period
-    enqueue({ data: { name: 'Väla Redovisning AB', org_number: '5592383508' } }) // company
+    enqueue({ data: { name: 'Exempel Redovisning AB', org_number: '5577889909' } }) // company
     enqueue({ data: [signoffRow({})] }) // sign-offs on the balansdag
 
     const report = await generateBokslutsbilagor(supabase as never, COMPANY, 'fy-2026', {
@@ -112,7 +112,7 @@ describe('generateBokslutsbilagor', () => {
       resolveUserLabels: async (ids) => new Map(ids.map((id) => [id, `${id}@example.se`])),
     })
     expect(report).not.toBeNull()
-    expect(report!.company).toEqual({ name: 'Väla Redovisning AB', org_number: '5592383508' })
+    expect(report!.company).toEqual({ name: 'Exempel Redovisning AB', org_number: '5577889909' })
     expect(report!.accounts.map((a) => a.account_number)).toEqual(['1930', '1510', '2350'])
 
     const [bank, ar, loan] = report!.accounts

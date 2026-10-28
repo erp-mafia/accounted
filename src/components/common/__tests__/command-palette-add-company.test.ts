@@ -20,6 +20,13 @@ describe('CommandPalette, adding a company', () => {
     expect(entryFor(en)?.label).toBe('Add company')
   })
 
+  it('links the href the layout chose for this user, else the picker door', () => {
+    const entry = (href?: string) =>
+      actionEntries({ label: 'x', keywords: '', href }).find((e) => e.id === 'add-company')
+    expect(entry('/onboarding')?.href).toBe('/onboarding')
+    expect(entry(undefined)?.href).toBe('/select-company?choose=1')
+  })
+
   it('is found by the words the tickets used', () => {
     const entry = entryFor(sv)!
     for (const query of ['lägg till bolag', 'lägg till företag', 'nytt bolag', 'ytterligare ett bolag', 'fler företag']) {

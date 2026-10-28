@@ -353,10 +353,6 @@ export function fetchOpenPaymentsAvailability(signal?: AbortSignal): Promise<Ope
   return sessionOpenPaymentsApi.fetchAvailability(signal)
 }
 
-export function fetchOpenPaymentsBankDetails(bic: string, signal?: AbortSignal): Promise<OpenPaymentsBankDetails> {
-  return sessionOpenPaymentsApi.fetchBankDetails(bic, signal)
-}
-
 /** One Enable Banking connection the switch campaign still waits for (GET .../switch-progress). */
 export interface BankSwitchConnection {
   connection_id: string

@@ -520,14 +520,14 @@ describe('withdrawRevokedPeppolRegistrations', () => {
       ],
       error: null,
     })
-    enqueue({ data: [live('c-disabled', '5565810776')], error: null })
-    enqueue({ data: { ...live('c-disabled', '5565810776'), status: 'deregistered' }, error: null })
+    enqueue({ data: [live('c-disabled', '5522334456')], error: null })
+    enqueue({ data: { ...live('c-disabled', '5522334456'), status: 'deregistered' }, error: null })
     enqueue({ data: [live('c-receive-off', '5595386219')], error: null })
     enqueue({ data: { ...live('c-receive-off', '5595386219'), status: 'deregistered' }, error: null })
 
     expect(await withdraw(transport)).toEqual({ withdrawn: ['c-disabled', 'c-receive-off'], failed: [] })
     expect(transport.unregisterRecipient).toHaveBeenCalledTimes(2)
-    expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5565810776' })
+    expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5522334456' })
     expect(transport.unregisterRecipient).toHaveBeenCalledWith({ scheme: '0007', identifier: '5595386219' })
     expect(calls.find((c) => c.table === 'peppol_registrations' && c.method === 'in')?.args).toEqual(['status', ['pending', 'registered']])
     expect(updates()).toHaveLength(2)
@@ -609,7 +609,7 @@ describe('registerGrantedPeppolReceivers', () => {
       ],
       error: null,
     })
-    enqueue({ data: [companySettings('c-new', '5567983027'), companySettings('c-crashed', '5595386219')], error: null })
+    enqueue({ data: [companySettings('c-new', '5533445564'), companySettings('c-crashed', '5595386219')], error: null })
     // c-new: no history, insert pending, finalize
     enqueue({ data: [], error: null })
     enqueue({ data: { id: 'reg-new' }, error: null })
@@ -623,7 +623,7 @@ describe('registerGrantedPeppolReceivers', () => {
     expect(await registerGranted(transport)).toEqual({ registered: ['c-new', 'c-crashed'], failed: [], skipped: [] })
     expect(transport.registerRecipient).toHaveBeenCalledTimes(2)
     expect(transport.registerRecipient).toHaveBeenCalledWith(expect.objectContaining({
-      participant: { scheme: '0007', identifier: '5567983027' }, tenantReference: 'c-new',
+      participant: { scheme: '0007', identifier: '5533445564' }, tenantReference: 'c-new',
     }))
     expect(inserts()[0]).toMatchObject({ company_id: 'c-new', user_id: 'user-1', status: 'pending' })
     expect(inserts()[1]).toMatchObject({ company_id: 'c-crashed', user_id: null })

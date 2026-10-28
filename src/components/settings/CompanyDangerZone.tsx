@@ -51,9 +51,8 @@ interface CompanyDangerZoneProps {
  * POST /api/company/[id]/delete. All bookkeeping data is retained per
  * BFL 7 kap. 2§; the row just disappears from the user's UI.
  *
- * TODO(bankid): once users have a linked BankID identity, wrap the
- * confirm step in a BankID signature gate. Guarded behind a
- * capabilities.bankIdLinked boolean fetched from the user profile.
+ * The confirm step is the typed company name; it has no BankID signature
+ * gate.
  */
 export function CompanyDangerZone({ deleteDoor, onDeleteDoorChange }: CompanyDangerZoneProps) {
   const t = useTranslations('settings_company')

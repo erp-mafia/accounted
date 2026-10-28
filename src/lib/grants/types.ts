@@ -61,7 +61,6 @@ export const GrantCredentialSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('api_key'), api_key_id: z.string().uuid() }).strict(),
   z.object({ kind: z.literal('service_account'), service_account_id: z.string().uuid() }).strict(),
 ])
-export type GrantCredential = z.infer<typeof GrantCredentialSchema>
 
 /** The booking pattern a grant permits: exactly this, nothing near it. */
 export const GrantPatternSchema = z
@@ -166,8 +165,6 @@ export const CreateGrantParamsSchema = z.discriminatedUnion('operation_type', [
   SupplierInvoiceGrantParamsSchema,
 ])
 export type CreateGrantParams = z.infer<typeof CreateGrantParamsSchema>
-export type CategorizeGrantParams = z.infer<typeof CategorizeGrantParamsSchema>
-export type SupplierInvoiceGrantParams = z.infer<typeof SupplierInvoiceGrantParamsSchema>
 
 /** pending_operations.params of revoke_grant. */
 export const RevokeGrantParamsSchema = z
@@ -227,7 +224,6 @@ export const GRANT_REFUSAL_REASONS = [
   'duplicate_invoice_number',
   'registration_not_booked',
 ] as const
-export type GrantRefusalReason = (typeof GRANT_REFUSAL_REASONS)[number]
 
 /**
  * Refusals that mean "no grant was in play" for this operation: the agent is
@@ -278,6 +274,12 @@ export interface GrantPosting {
   pattern_verified: boolean | null
   committed_at: string | null
   reviewed_at: string | null
+  /**
+   * The agent that staged the operation the rule let through, and the person
+   * it acted for (its pending_operations row). Read only when asked for
+   * (loadGrantReview withAgents); null when not read or not found.
+   */
+  agent?: { actor_type: string; actor_label: string | null; user_id: string | null } | null
 }
 
 /** What the review surfaces read: the postings to look at and whether grants are paused. */

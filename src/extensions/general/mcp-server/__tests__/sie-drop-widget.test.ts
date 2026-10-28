@@ -221,3 +221,24 @@ describe('SIE drop widget: company binding', async () => {
     expect(card.element('actions').hidden()).toBe(false)
   })
 })
+
+// crm#1455 follow-up: the card sends the file as base64 inside tools/call,
+// under the platform's request cap on hosted. A larger file got a bare
+// failure; the card now says so before reading it and tells the agent the
+// direct Storage upload.
+describe('SIE drop widget: files over what the card can carry', () => {
+  const html = findUiWidget('ui://sie-drop/app.html')!.html
+
+  it('derives its limit from the tool result: 3/4 of max_bytes where direct_upload_url is offered', () => {
+    expect(html).toContain('sc.direct_upload_url && typeof sc.max_bytes')
+    expect(html).toContain('inlineMaxBytes = Math.floor(sc.max_bytes * 3 / 4)')
+  })
+
+  it('stops before reading the file, tells the user where to import it and the agent how to upload it', () => {
+    const guard = html.indexOf('if (inlineMaxBytes && file.size > inlineMaxBytes)')
+    expect(guard).toBeGreaterThan(-1)
+    expect(guard).toBeLessThan(html.indexOf('new FileReader()'))
+    expect(html).toContain('app.accounted.se/import?mode=sie')
+    expect(html).toContain('PUT filens exakta bytes till direct_upload_url')
+  })
+})

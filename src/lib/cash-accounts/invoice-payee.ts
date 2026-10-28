@@ -202,7 +202,7 @@ export interface ManualBankAccountPlan {
  * Refuses an IBAN another of the company's rows already carries, as its
  * bank identity (iban) or as its printed payee IBAN: two rows for one
  * physical account is how a company ends up with a second 19xx ledger for
- * the same money (the Grönsinka 1938 case).
+ * the same money (seen on a 1938 account).
  */
 export async function planManualBankAccount(
   supabase: SupabaseClient,

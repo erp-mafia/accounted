@@ -39,9 +39,14 @@ export function verifyInboundWebhook(rawBody: string, requestHeaders: Headers): 
 }
 
 // Fetches the full received email (body, headers, attachment metadata) by email_id.
-export async function fetchReceivingEmail(emailId: string): Promise<ResendReceivedEmail> {
+// By default Resend rewrites the HTML's cid: image references to data: URIs;
+// htmlFormat 'cid' keeps the references as received.
+export async function fetchReceivingEmail(
+  emailId: string,
+  opts: { htmlFormat?: 'data_uri' | 'cid' } = {}
+): Promise<ResendReceivedEmail> {
   const resend = getResendClient()
-  const { data, error } = await resend.emails.receiving.get(emailId)
+  const { data, error } = await resend.emails.receiving.get(emailId, { html_format: opts.htmlFormat })
   if (error || !data) {
     throw new Error(`Failed to fetch received email ${emailId}: ${error?.message ?? 'no data'}`)
   }

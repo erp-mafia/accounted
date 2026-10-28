@@ -286,12 +286,12 @@ describe('payment-orders.prepare with skattekonto', () => {
     amount: 77404,
     payee_name: 'Skatteverket',
     payee_source: 'skatteverket',
-    reference: '1655954700217',
+    reference: '1655446688087',
     requested_execution_date: '2026-11-11',
   })
 
   beforeEach(() => {
-    db.setTable('companies', { data: { org_number: '559547-0021', entity_type: 'aktiebolag' } })
+    db.setTable('companies', { data: { org_number: '554466-8808', entity_type: 'aktiebolag' } })
     db.setTable('skattekonto_transactions', { data: [] })
     db.setTable('agi_declarations', { data: { status: 'submitted', total_tax: 18000, total_avgifter: 12568, tax_paid_at: null } })
     db.setTable('deadlines', { data: [] })
@@ -333,7 +333,7 @@ describe('payment-orders.prepare with skattekonto', () => {
         supplier_invoice_id: null,
         amount: 77404,
         payee: expect.objectContaining({ label: 'BG 5050-1055', name: 'Skatteverket', source: 'skatteverket' }),
-        reference: { type: 'ocr', value: '1655954700217' },
+        reference: { type: 'ocr', value: '1655446688087' },
       }),
     ])
     expect(result.data.skattekonto).toMatchObject({

@@ -27,7 +27,6 @@ const defaultLog = createLogger('zettle/order-sync')
  * orgnr/email). Currency amounts are minor units from the API.
  */
 
-export const ZETTLE_IMPORT_SOURCE = 'zettle'
 const CURSOR_OVERLAP_MS = 24 * 60 * 60 * 1000
 const MAX_PURCHASES_PER_RUN = 10_000
 const VAT_REMAINDER_TOLERANCE = 0.5

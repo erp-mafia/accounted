@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { useRouter } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import Link from 'next/link'
 import {
@@ -32,7 +31,6 @@ export default function SandboxPage() {
   const [captchaToken, setCaptchaToken] = useState<string | null>(null)
   const turnstileRef = useRef<TurnstileChallengeHandle>(null)
   const { toast } = useToast()
-  const router = useRouter()
   const tAuth = useTranslations('auth')
 
   useEffect(() => {
@@ -67,7 +65,6 @@ export default function SandboxPage() {
 
       const res = await fetch('/api/sandbox/seed', { method: 'POST' })
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}))
         // Clean up the orphaned anonymous session so the user can retry cleanly
         await signOut()
         toast({

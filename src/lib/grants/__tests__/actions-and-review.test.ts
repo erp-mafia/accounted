@@ -242,6 +242,33 @@ describe('loadGrantReview', () => {
     })
   })
 
+  it('names the agent behind each posting and the person it acted for, only when asked', async () => {
+    const posting = {
+      use_id: 'u1', grant_id: GRANT, grant_version: 1, counterparty_label: 'Spotify AB', account_number: '5420',
+      amount_limit_sek: '200.00', grant_accepted_at: '2026-10-16T10:00:00Z', grant_revoked_at: null,
+      pending_operation_id: 'op-1', transaction_id: 't1', journal_entry_id: 'je-1', voucher: 'A12', entry_status: 'posted',
+      entry_date: '2026-06-03', amount_sek: '149.00', pattern_verified: true, committed_at: '2026-10-16T11:00:00Z', reviewed_at: null,
+    }
+    const tables = () => ({
+      company_grants: [{ data: [{ id: GRANT }] }, { data: null, count: 1 }],
+      'rpc:list_company_grant_postings': { data: [posting, { ...posting, use_id: 'u2', pending_operation_id: 'op-gone' }] },
+      company_grant_settings: { data: null },
+      pending_operations: { data: [{ id: 'op-1', actor_type: 'api_key', actor_label: 'Claude (Anthropic)', user_id: USER }] },
+    })
+    const asked = createTableMockSupabase(tables())
+    const review = await loadGrantReview(asked.supabase as never, COMPANY, { withAgents: true })
+    expect(review.postings.map((p) => p.agent)).toEqual([
+      { actor_type: 'api_key', actor_label: 'Claude (Anthropic)', user_id: USER },
+      null,
+    ])
+    expect(asked.findCall('pending_operations', 'in')).toEqual(['id', ['op-1', 'op-gone']])
+    expect(asked.findCall('pending_operations', 'eq')).toEqual(['company_id', COMPANY])
+
+    const notAsked = createTableMockSupabase(tables())
+    expect((await loadGrantReview(notAsked.supabase as never, COMPANY)).postings[0].agent).toBeUndefined()
+    expect(notAsked.findCall('pending_operations', 'select')).toBeUndefined()
+  })
+
   it("lists a supplier invoice a rule booked with its invoice, inbox item and the rule's line bookings", async () => {
     const mock = createTableMockSupabase({
       company_grants: [{ data: [{ id: GRANT }] }, { data: null, count: 1 }],

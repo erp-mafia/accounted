@@ -261,7 +261,6 @@ describe('validateQuery', () => {
 
     expect(result.success).toBe(false)
     if (!result.success) {
-      const body = result.response as unknown as { status: number }
       expect(result.response.status).toBe(400)
     }
   })

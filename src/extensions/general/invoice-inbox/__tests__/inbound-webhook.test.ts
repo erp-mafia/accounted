@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { PDFArray, PDFDict, PDFDocument, PDFHexString, PDFName, PDFRawStream, PDFStream, PDFString, decodePDFRawStream } from 'pdf-lib'
 import { invoiceInboxExtension } from '@/extensions/general/invoice-inbox'
 import { ResendSignatureError } from '@/extensions/general/invoice-inbox/lib/resend-inbound'
 import { createQueuedMockSupabase, createMockRequest, testRoutes } from '@/tests/helpers'
@@ -743,6 +744,229 @@ describe('POST /inbound', () => {
     expect(fetchInboundAttachment).toHaveBeenCalledWith('em_123', 'att_photo')
   })
 
+  describe('a receipt whose logos are marked attachment but embedded by cid (Booking.com, 2026-10-28)', () => {
+    // The prod mail's shape: MIME::Lite::HTML gives every part its HTML shows
+    // a content id, `Content-Disposition: attachment` and no filename. Each
+    // logo became an inbox item named attachment-<id>, and the receipt text,
+    // the only underlag in the mail, was never filed.
+    const BOOKING_ATTACHMENTS = [
+      { id: 'att_logo', filename: null, size: 2_969, content_type: 'image/png', content_id: '<dc40@MIME-Lite-HTML-1.25>', content_disposition: 'attachment' },
+      { id: 'att_icon', filename: null, size: 935, content_type: 'image/png', content_id: '<55a4@MIME-Lite-HTML-1.25>', content_disposition: 'attachment' },
+      { id: 'att_spacer', filename: null, size: 1_097, content_type: 'image/gif', content_id: '<c82c@MIME-Lite-HTML-1.25>', content_disposition: 'attachment' },
+    ]
+    const RECEIPT =
+      '---------- Forwarded message ---------\nFrån: Booking.com <noreply@booking.example>\nSubject: Betalning genomförd\n\n' +
+      'Betalning genomförd\nBokningsnummer 5123456789\nHotell Exempel, Stockholm\n' +
+      'Incheckning 2 nov. 2026, utcheckning 4 nov. 2026\nBelopp SEK 2 450\nBetalt med Visa som slutar på 1234'
+    const BODY_HTML = `<div>${RECEIPT.replace(/\n/g, '<br>')}</div>`
+    // Resend's default HTML: the references rewritten to data: URIs. This is
+    // the form the body document embeds.
+    const DATA_URI_HTML =
+      `<img src="data:image/png;base64,iVBORw0KGgo=">${BODY_HTML}` +
+      '<img src="data:image/png;base64,iVBORw0KGgo="><img src="data:image/gif;base64,R0lGODlh">'
+    // html_format=cid: the HTML as received.
+    const CID_HTML =
+      `<img src="cid:dc40@MIME-Lite-HTML-1.25">${BODY_HTML}` +
+      '<img src="cid:55a4@MIME-Lite-HTML-1.25"><img src="cid:c82c@MIME-Lite-HTML-1.25">'
+
+    function bookingMail(html: string, attachments: unknown[] = BOOKING_ATTACHMENTS, text = RECEIPT) {
+      return {
+        object: 'email',
+        id: 'em_123',
+        to: ['acme-ab-x7f2@arcim.io'],
+        from: 'anna@example.se',
+        created_at: '2026-10-28T21:19:00Z',
+        subject: 'Fwd: Betalning genomförd',
+        bcc: null,
+        cc: null,
+        reply_to: null,
+        html,
+        text,
+        headers: {},
+        message_id: '<fwd-booking@example.se>',
+        raw: null,
+        attachments,
+      }
+    }
+
+    function serveBothForms(attachments: unknown[] = BOOKING_ATTACHMENTS, cidHtml = CID_HTML, text = RECEIPT) {
+      vi.mocked(fetchReceivingEmail).mockImplementation(async (_id, opts) =>
+        bookingMail(opts?.htmlFormat === 'cid' ? cidHtml : DATA_URI_HTML, attachments, text) as never,
+      )
+    }
+
+    it('files the body as one document and none of the logos', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(
+        mockReceivedEvent({ from: 'anna@example.se', subject: 'Fwd: Betalning genomförd', attachments: BOOKING_ATTACHMENTS }) as never,
+      )
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // body-document dedupe check finds nothing
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-body-booking' } as never)
+      serveBothForms()
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+      expect(res.status).toBe(200)
+      expect(body.data.reason).toBe('email_body')
+      expect(body.data.inbox_item_id).toBe('item-body-booking')
+      expect(fetchReceivingEmail).toHaveBeenCalledWith('em_123', { htmlFormat: 'cid' })
+      // No logo downloaded, no attachment-<id> row.
+      expect(fetchInboundAttachment).not.toHaveBeenCalled()
+      expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+      expect(uploadAndExtract).toHaveBeenCalledTimes(1)
+
+      const [, , , file, , emailMeta] = vi.mocked(uploadAndExtract).mock.calls[0]
+      expect(file.type).toBe('application/pdf')
+      expect(file.name).toBe('mail-Fwd__Betalning_genomf_rd.pdf')
+      expect(emailMeta?.bodyText).toBe(RECEIPT)
+      // The archive keeps the form it always had: the logos ride along in
+      // the embedded HTML, only the classification read the cid form.
+      expect(await embeddedOriginalHtml(file.buffer)).toBe(DATA_URI_HTML)
+      expect(receivedEvents()[0].payload).toMatchObject({
+        outcome: 'email_body',
+        inbox_item_id: 'item-body-booking',
+        attachment_count: 3,
+        attachments: [
+          { id: 'att_logo', outcome: 'ignored', reason: 'signature_image', mime: 'image/png' },
+          { id: 'att_icon', outcome: 'ignored', reason: 'signature_image', mime: 'image/png' },
+          { id: 'att_spacer', outcome: 'ignored', reason: 'signature_image', mime: 'image/gif' },
+        ],
+      })
+    })
+
+    it('still files a small image the HTML does not embed (Gmail gives real attachments a content id too)', async () => {
+      const attached = { id: 'att_png', filename: 'kvitto.png', size: 30_000, content_type: 'image/png', content_id: '<f_lk3j2l1>', content_disposition: 'attachment' }
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [attached] }) as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // per-attachment dup check
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-png-1' } as never)
+      serveBothForms([attached], '<p>Se bifogat kvitto.</p>', 'Se bifogat kvitto.')
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_png',
+        filename: 'kvitto.png',
+        contentType: 'image/png',
+        buffer: new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer as ArrayBuffer,
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+      expect(res.status).toBe(200)
+      expect(body.data.results).toEqual([{ attachment_id: 'att_png', inbox_item_id: 'item-png-1' }])
+      expect(fetchInboundAttachment).toHaveBeenCalledWith('em_123', 'att_png')
+    })
+
+    it('classifies by disposition, as before, when the cid form cannot be fetched', async () => {
+      const [logo] = BOOKING_ATTACHMENTS
+      vi.mocked(verifyInboundWebhook).mockReturnValue(mockReceivedEvent({ attachments: [logo] }) as never)
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // per-attachment dup check
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-logo-1' } as never)
+      vi.mocked(fetchReceivingEmail).mockImplementation(async (_id, opts) => {
+        if (opts?.htmlFormat === 'cid') throw new Error('Resend 503')
+        return bookingMail(DATA_URI_HTML, [logo]) as never
+      })
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_logo',
+        filename: 'attachment-att_logo',
+        contentType: 'image/png',
+        buffer: new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer as ArrayBuffer,
+      })
+      const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+      // A logo filed is visible and discardable; a mail lost is not.
+      expect(res.status).toBe(200)
+      expect(body.data.results).toEqual([{ attachment_id: 'att_logo', inbox_item_id: 'item-logo-1' }])
+      expect(warn).toHaveBeenCalled()
+      warn.mockRestore()
+    })
+
+    it('applies the same rule inside a forwarded .eml, where mailparser marks the embedded parts related', async () => {
+      vi.mocked(verifyInboundWebhook).mockReturnValue(
+        mockReceivedEvent({
+          subject: 'Fwd: Betalning genomförd',
+          attachments: [
+            { id: 'att_eml', filename: 'Betalning genomförd.eml', size: 6_000, content_type: 'message/rfc822', content_id: null, content_disposition: 'attachment' },
+          ],
+        }) as never,
+      )
+      const { supabase, enqueue, calls } = createQueuedMockSupabase()
+      enqueue({ data: { id: 'inbox-1', company_id: 'company-1', status: 'active' } })
+      enqueue({ data: { created_by: 'user-owner-1' } })
+      enqueue({ data: null }) // per-attachment dup check for the .eml
+      vi.mocked(createClient).mockReturnValue(supabase as never)
+      vi.mocked(uploadAndExtract).mockResolvedValue({ inbox_item_id: 'item-inner-booking' } as never)
+      vi.mocked(fetchReceivingEmail).mockResolvedValue(
+        bookingMail('', [
+          { id: 'att_eml', filename: 'Betalning genomförd.eml', size: 6_000, content_type: 'message/rfc822', content_id: null, content_disposition: 'attachment' },
+        ], '') as never,
+      )
+      const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0]).toString('base64')
+      const imagePart = (cid: string, type: string) => [
+        '--B1',
+        `Content-Type: ${type}`,
+        'Content-Transfer-Encoding: base64',
+        `Content-ID: <${cid}>`,
+        'Content-Disposition: attachment',
+        '',
+        png,
+      ]
+      const eml = [
+        'From: Booking.com <noreply@booking.example>',
+        'To: anna@example.se',
+        'Subject: Betalning genomförd',
+        'Date: Wed, 28 Oct 2026 21:00:00 +0100',
+        'Message-ID: <inner-booking@booking.example>',
+        'MIME-Version: 1.0',
+        'Content-Type: multipart/related; boundary="B1"',
+        '',
+        '--B1',
+        'Content-Type: text/html; charset=utf-8',
+        '',
+        CID_HTML,
+        ...imagePart('dc40@MIME-Lite-HTML-1.25', 'image/png'),
+        ...imagePart('55a4@MIME-Lite-HTML-1.25', 'image/png'),
+        ...imagePart('c82c@MIME-Lite-HTML-1.25', 'image/gif'),
+        '--B1--',
+        '',
+      ].join('\r\n')
+      vi.mocked(fetchInboundAttachment).mockResolvedValue({
+        id: 'att_eml',
+        filename: 'Betalning genomförd.eml',
+        contentType: 'message/rfc822',
+        buffer: new Uint8Array(Buffer.from(eml, 'utf8')).buffer as ArrayBuffer,
+      })
+
+      const res = await webhookRoute.handler(createMockRequest('/inbound', { method: 'POST', body: {} }))
+      const body = await res.json()
+      expect(res.status).toBe(200)
+      expect(body.data.results).toEqual([{ attachment_id: 'att_eml', inbox_item_id: 'item-inner-booking' }])
+      expect(calls.find((c) => c.table === 'invoice_inbox_items' && c.method === 'insert')).toBeUndefined()
+      // The outer mail has no image of its own: no cid-form fetch.
+      expect(fetchReceivingEmail).toHaveBeenCalledTimes(1)
+      const [, , , file] = vi.mocked(uploadAndExtract).mock.calls[0]
+      expect(file.name).toBe('mail-Betalning_genomf_rd.pdf')
+      expect(receivedEvents()[0].payload).toMatchObject({
+        attachments: [
+          { id: 'att_eml#0', outcome: 'ignored', reason: 'signature_image', mime: 'image/png' },
+          { id: 'att_eml#1', outcome: 'ignored', reason: 'signature_image', mime: 'image/png' },
+          { id: 'att_eml#2', outcome: 'ignored', reason: 'signature_image', mime: 'image/gif' },
+          { id: 'att_eml', outcome: 'filed', inbox_item_id: 'item-inner-booking' },
+        ],
+      })
+    })
+  })
+
   it('keeps the error row for a no-attachment mail with an empty body', async () => {
     vi.mocked(verifyInboundWebhook).mockReturnValue(
       mockReceivedEvent({ attachments: [] }) as never
@@ -1088,6 +1312,22 @@ describe('POST /inbound', () => {
     })
   })
 })
+
+/** The original.html a body document embeds (catalog EmbeddedFiles name tree). */
+async function embeddedOriginalHtml(buffer: ArrayBuffer): Promise<string | undefined> {
+  const pdf = await PDFDocument.load(buffer, { updateMetadata: false })
+  const entries = pdf.catalog
+    .lookup(PDFName.of('Names'), PDFDict)
+    .lookup(PDFName.of('EmbeddedFiles'), PDFDict)
+    .lookup(PDFName.of('Names'), PDFArray)
+  for (let i = 0; i < entries.size(); i += 2) {
+    if ((entries.lookup(i) as PDFString | PDFHexString).decodeText() !== 'original.html') continue
+    const spec = entries.lookup(i + 1, PDFDict)
+    const stream = spec.lookup(PDFName.of('EF'), PDFDict).lookup(PDFName.of('F'), PDFStream) as PDFRawStream
+    return new TextDecoder().decode(decodePDFRawStream(stream).decode())
+  }
+  return undefined
+}
 
 /** Every InboundMailReceived append, in order. */
 function receivedEvents() {

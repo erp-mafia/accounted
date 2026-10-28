@@ -9,7 +9,7 @@ import type { ProviderPreviewCounts } from '@/lib/providers/preview-counts'
 import type { TheaterModel } from '@/lib/import/theater-model'
 import type { SIEAccount } from '@/lib/import/types'
 import type { ProviderFileStatus } from '@/lib/onboarding-books/provider-years'
-import type { MigrationResource, ProviderMigrationStatus } from '@/lib/providers/migration-contract'
+import { migrationRefusals, type MigrationResource, type ProviderMigrationStatus } from '@/lib/providers/migration-contract'
 
 /**
  * The provider migration routes as the books act calls them. Same
@@ -83,6 +83,8 @@ export interface MigrateResults {
   supplierInvoices?: MigrateStep
   reconciliation?: { autoLinked?: number; unmatched?: number }
   stepErrors?: { step: string; code: string; message: string }[]
+  /** Registers the provider refused, grouped by remedy (migrationRefusals). */
+  refused?: { messageKey: string; resources: MigrationResource[] }[]
 }
 
 /**
@@ -174,9 +176,18 @@ function registerCounts(status: ProviderMigrationStatus): { imported: number; to
     { imported: 0, total: 0 })
 }
 
+/**
+ * The job's counts, and the registers the provider refused. A refused
+ * register has no counts at all, so without its refusal the books act read
+ * as "0 customers" with no reason, where the Import page names the register
+ * and the remedy (a Fortnox licence, the connecting user's rights, a Bokio
+ * token's read permission).
+ */
 function registerResults(status: ProviderMigrationStatus): MigrateResults {
   const results: MigrateResults = {}
   for (const row of status.counts) results[row.resource] = { imported: row.imported, total: row.total, skipped: row.skipped }
+  const refused = migrationRefusals(status.job)
+  if (refused.length > 0) results.refused = refused
   return results
 }
 

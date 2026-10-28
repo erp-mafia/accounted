@@ -184,7 +184,7 @@ describe('bank payment tools', () => {
     const { client, recording } = recordingClient({
       company_settings: { org_number: '5566778899', is_sandbox: false, vat_registered: true, vat_taxable_base_over_40m: false },
       cash_accounts: { id: ACCOUNT_ID, iban: 'SE3550000000054910000003', currency: 'SEK', name: 'Företagskonto', enabled: true, bank_connection: { bank_name: 'SEB' } },
-      companies: { org_number: '559547-0021', entity_type: 'aktiebolag' },
+      companies: { org_number: '554466-8808', entity_type: 'aktiebolag' },
       agi_declarations: { status: 'submitted', total_tax: 18000, total_avgifter: 12568, tax_paid_at: null },
       deadlines: [],
       payment_orders: [],

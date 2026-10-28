@@ -1,5 +1,5 @@
 /**
- * GRANT_SUGGESTIONS: Jakob's master switch for grants (lib/grants). Off
+ * GRANT_SUGGESTIONS: the master switch for grants (lib/grants). Off
  * unless `true` or `1`.
  *
  * Off means the whole feature is off, not only the suggestion:

@@ -4,7 +4,7 @@
  *
  * The dashboard door refuses a batch allocation with
  * BATCH_TX_POSSIBLE_DUPLICATE when posted, unlinked vouchers on the row's
- * settlement account sum exactly to the row (gecko's Bankgirot aggregate, PR
+ * settlement account sum exactly to the row (a Bankgirot aggregate, PR
  * #2300). The MCP door used to stage straight past that, so an agent could
  * book the aggregate a second time. The tool is now generated from the
  * operation transactions.match-batch, whose dry run is the dashboard's guard

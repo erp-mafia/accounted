@@ -124,15 +124,15 @@ describe('GET /api/company/search', () => {
       mode: 'starts_with',
       total: 4,
       truncated: false,
-      candidates: [sameName('8208300239'), sameName('8209094872'), sameName('0201173275'), candidate()],
+      candidates: [sameName('8201011239'), sameName('8201022343'), sameName('0201011236'), candidate()],
     })
 
     it("lists only the firm whose org number is the caller's BankID personnummer", async () => {
-      mockCreateClient.mockResolvedValue(buildSupabase({ id: 'user-1' }, '198209094872') as never)
+      mockCreateClient.mockResolvedValue(buildSupabase({ id: 'user-1' }, '198201022343') as never)
       searchByName.mockResolvedValue(result())
       const res = await GET(createMockRequest('/api/company/search?q=Anna%20Andersson'))
       const { body } = await parseJsonResponse<{ data: { suggestions: Array<{ orgNumber: string }> } }>(res)
-      expect(body.data.suggestions.map((s) => s.orgNumber)).toEqual(['8209094872', '5566778899'])
+      expect(body.data.suggestions.map((s) => s.orgNumber)).toEqual(['8201022343', '5566778899'])
     })
 
     it('lists no sole trader to an account without BankID', async () => {

@@ -23,7 +23,8 @@ export interface HistoryEvent {
   id: string
   at: string
   kind: HistoryEventKind
-  actor: { kind: HistoryActorKind; label: string | null }
+  /** user_id: for a key or a service account, the person it acted for (the key's owner, the sponsor). */
+  actor: { kind: HistoryActorKind; label: string | null; user_id?: string | null }
   document: { id: string; file_name: string } | null
   detail: string | null
 }
@@ -42,7 +43,7 @@ const keyKind = (type: string | null | undefined): 'api_key' | 'service_account'
 
 const personOrSystem = (row: AuditRow): HistoryEvent['actor'] => {
   const key = keyKind(row.actor_type)
-  if (key) return { kind: key, label: row.actor_label ?? null }
+  if (key) return { kind: key, label: row.actor_label ?? null, user_id: row.user_id }
   return row.user_id ? { kind: 'user', label: row.actor_label ?? null } : { kind: 'system', label: null }
 }
 

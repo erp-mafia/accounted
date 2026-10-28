@@ -25,7 +25,7 @@ import { roundOre } from '@/lib/money';
  * rate the amount cannot be split and is returned as it is, and the
  * consumer's rows-versus-header check reports the disagreement.
  *
- * Found on Profilio (2026-09-05): 345 VAT-inclusive invoices whose rows were
+ * Found in one migration (2026-09-05): 345 VAT-inclusive invoices whose rows were
  * stored as if net, so the rows summed to the gross and carried 25 % VAT on
  * top of it, beside a header that was right.
  */
@@ -314,7 +314,7 @@ export function mapFortnoxToSalesInvoice(raw: Record<string, unknown>): SalesInv
 
   // Freight and administration fee live on the header, not in InvoiceRows,
   // and Fortnox's `Net` excludes them while `TotalVAT` and `Total` include
-  // them. Verified on live payloads (Profilio 295 and 242, 2026-09-05):
+  // them. Verified on live payloads (two invoices of one migration, 2026-09-05):
   // `Freight` is the fee as the customer saw it (gross when VATIncluded,
   // net otherwise) and `FreightVAT` is the VAT AMOUNT on it, not a rate
   // (88 and 22 on a 25 % invoice). The same pair exists for the fee. Without

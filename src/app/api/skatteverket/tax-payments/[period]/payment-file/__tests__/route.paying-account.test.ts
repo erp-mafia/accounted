@@ -28,7 +28,7 @@ vi.mock('@/lib/auth/require-write', () => ({
 }))
 
 vi.mock('@/lib/skatteverket/skattekonto-ocr', () => ({
-  resolveSkattekontoOcr: vi.fn().mockResolvedValue('1655954700217'),
+  resolveSkattekontoOcr: vi.fn().mockResolvedValue('1655446688087'),
   SKATTEKONTO_BANKGIRO: '5050-1055',
 }))
 

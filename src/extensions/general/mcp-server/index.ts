@@ -5,6 +5,7 @@ import { isForbiddenOrigin, forbiddenOriginResponse } from './origin-guard'
 import { registerAgentToolLoader } from '@/lib/agent/tools/registry'
 import type { AgentTool } from '@/lib/agent/tools/types'
 import { currentAppVersion } from '@/lib/reports/app-version'
+import { noteCompletionLog } from '@/lib/extensions/completion-log'
 
 // lib/init registers every extension on every route, so a static import of
 // ./server would load the whole MCP server (every tool and its services) on
@@ -59,6 +60,8 @@ export const mcpServerExtension: Extension = {
       // bootstrapped on the POST 401 (WWW-Authenticate), not here.
       handler: async (request: Request) => {
         if (isForbiddenOrigin(request)) return forbiddenOriginResponse()
+        // The fixed answer to a spec probe: no log line per call.
+        noteCompletionLog(request, { quiet: true })
         return new Response('Method Not Allowed', {
           status: 405,
           headers: { Allow: 'POST, DELETE' },
@@ -72,6 +75,7 @@ export const mcpServerExtension: Extension = {
       // Stateless: no sessions to terminate
       handler: async (request: Request) => {
         if (isForbiddenOrigin(request)) return forbiddenOriginResponse()
+        noteCompletionLog(request, { quiet: true })
         return new Response(null, { status: 204 })
       },
     },

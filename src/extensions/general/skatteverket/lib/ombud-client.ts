@@ -98,8 +98,8 @@ export interface OmbudRoleLike {
  * Which of Accounted's behörigheter a register role represents, or null
  * when it is some other role (companies hand out many; only two matter).
  * A pinned code wins over the text match, and a pinned code that does NOT
- * match disqualifies the text fallback for that key: once Emil has told us
- * the code, a differently-coded role with similar wording is a different role.
+ * match disqualifies the text fallback for that key: once the code is known,
+ * a differently-coded role with similar wording is a different role.
  */
 export function classifyOmbudRole(role: OmbudRoleLike): SkvBehorighet | null {
   for (const key of OMBUD_ROLE_KEYS) {

@@ -4,7 +4,11 @@
  * have changed.
  *
  * Schedule. A hold exists only while an import or undo job is unfinished
- * (running or paused), and the banner follows it every 5 s. Otherwise the
+ * (running or paused), and the banner follows it every 5 s for its first two
+ * minutes in this tab, then every minute: a hold that outlives that is a
+ * paused job waiting for someone, or one left behind, and a tab left open on
+ * it polled 720 times an hour. An announcement restarts the fast window, so
+ * a resumed job is followed closely again. Otherwise the
  * answer changes only when a job starts or someone acknowledges an
  * opening-balance review, so there is no timer: navigation, focus and the tab
  * coming back refetch once the last answer is a minute old while a review is
@@ -25,8 +29,12 @@ export type HeldPeriod = {
   opening_balance_entry_id?: string | null
 }
 
-/** While a hold exists the banner follows the job at this pace. */
+/** While a hold is new the banner follows the job at this pace. */
 export const SIE_HOLD_POLL_MS = 5_000
+/** How long this tab follows the same hold at SIE_HOLD_POLL_MS. */
+export const SIE_HOLD_FAST_WINDOW_MS = 2 * 60_000
+/** A hold seen for longer than the fast window is followed at this pace. */
+export const SIE_HOLD_WAITING_POLL_MS = 60_000
 /** A review on screen: navigation and focus refetch at most this often. */
 export const SIE_HOLD_REVIEW_STALE_MS = 60_000
 /** Nothing on screen: navigation and focus refetch at most this often. */
@@ -41,8 +49,38 @@ function hasHold(periods: HeldPeriod[] | undefined): boolean {
   return !!periods?.some((period) => period.import_hold)
 }
 
-export function sieHoldPollInterval(periods: HeldPeriod[] | undefined): number | null {
-  return hasHold(periods) ? SIE_HOLD_POLL_MS : null
+/** `heldForMs`: how long this tab has seen the same hold (createSIEHoldClock). */
+export function sieHoldPollInterval(periods: HeldPeriod[] | undefined, heldForMs = 0): number | null {
+  if (!hasHold(periods)) return null
+  return heldForMs < SIE_HOLD_FAST_WINDOW_MS ? SIE_HOLD_POLL_MS : SIE_HOLD_WAITING_POLL_MS
+}
+
+export interface SIEHoldClock {
+  /** Milliseconds this tab has seen the same holds; a new or changed hold starts over. */
+  heldFor: (periods: HeldPeriod[] | undefined) => number
+  /** Start the fast window over (an announced start, resume or undo). */
+  restart: () => void
+}
+
+export function createSIEHoldClock(now: () => number = Date.now): SIEHoldClock {
+  let key: string | null = null
+  let since = 0
+  return {
+    heldFor: (periods) => {
+      const next = (periods ?? [])
+        .filter((period) => period.import_hold)
+        .map((period) => `${period.id}:${period.import_hold}`)
+        .join(',')
+      if (next !== key) {
+        key = next
+        since = now()
+      }
+      return now() - since
+    },
+    restart: () => {
+      key = null
+    },
+  }
 }
 
 export function sieHoldStaleAfter(periods: HeldPeriod[] | undefined): number {

@@ -210,12 +210,6 @@ export function getCountryOptions(locale: 'sv' | 'en' = 'sv'): CountryOption[] {
 // Country vs customer type
 // ---------------------------------------------------------------------------
 
-export type CountryPartyType =
-  | 'individual'
-  | 'swedish_business'
-  | 'eu_business'
-  | 'non_eu_business'
-
 export type CountryConsistencyIssue =
   | 'SWEDISH_BUSINESS_REQUIRES_SE'
   | 'EU_BUSINESS_COUNTRY_IS_SE'

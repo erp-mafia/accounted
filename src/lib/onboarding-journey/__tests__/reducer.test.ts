@@ -793,7 +793,7 @@ describe('registry hint after a TIC miss (SCB knew the org number)', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
     const s = run(
       initJourney(),
-      { type: 'ORG_SUBMITTED', orgNumber: '802481-1658' },
+      { type: 'ORG_SUBMITTED', orgNumber: '802233-4455' },
       { type: 'LOOKUP_RESULT', outcome: { status: 'not_found', registry: hint() } },
     )
     expect(s.settings.entity_type).toBe('ideell_forening')
@@ -809,7 +809,7 @@ describe('registry hint after a TIC miss (SCB knew the org number)', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
     const s = run(
       initJourney(),
-      { type: 'ORG_SUBMITTED', orgNumber: '802481-1658' },
+      { type: 'ORG_SUBMITTED', orgNumber: '802233-4455' },
       {
         type: 'LOOKUP_RESULT',
         outcome: { status: 'not_found', registry: hint({ address: null, registration: { fTax: true, vat: null } }) },
@@ -839,7 +839,7 @@ describe('registry hint after a TIC miss (SCB knew the org number)', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', '')
     const s = run(
       initJourney(),
-      { type: 'ORG_SUBMITTED', orgNumber: '802481-1658' },
+      { type: 'ORG_SUBMITTED', orgNumber: '802233-4455' },
       { type: 'LOOKUP_RESULT', outcome: { status: 'not_found', registry: hint() } },
     )
     expect(s.step).toBe('planned')
@@ -849,7 +849,7 @@ describe('registry hint after a TIC miss (SCB knew the org number)', () => {
   it('a miss without a hint still goes to the not-found stop', () => {
     const s = run(
       initJourney(),
-      { type: 'ORG_SUBMITTED', orgNumber: '802481-1658' },
+      { type: 'ORG_SUBMITTED', orgNumber: '802233-4455' },
       { type: 'LOOKUP_RESULT', outcome: { status: 'not_found' } },
     )
     expect(s.step).toBe('notfound')

@@ -25,7 +25,7 @@ import { selfBilledSaleAmounts } from '@/lib/invoices/self-billed-amounts'
 import type { DocumentVatMismatch } from '@/lib/vat/document-vat'
 import { createLogger } from '@/lib/logger'
 import { linkBasisColumns } from '@/lib/links/stamp'
-import type { EntityType, Invoice } from '@/types'
+import type { Invoice } from '@/types'
 import { checkAccountingMethod } from '@/lib/company/accounting-method'
 
 const log = createLogger('self-billed-sale')

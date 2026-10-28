@@ -37,7 +37,7 @@ describe('companyFactsFrom', () => {
         activeEmployees: 2,
         accountingMethod: 'accrual',
         fiscalYearStartMonth: 1,
-        tic: { sniCodes: [{ code: '62010', name: 'Dataprogrammering' }], beneficialOwners: [{ name: 'Jakob Wennberg', extentDescription: '100 %' }], employeeRange: 'Inga anställda' },
+        tic: { sniCodes: [{ code: '62010', name: 'Dataprogrammering' }], beneficialOwners: [{ name: 'Anna Exempel', extentDescription: '100 %' }], employeeRange: 'Inga anställda' },
         bankConnections: [{ bank_name: 'Swedbank', created_at: '2026-02-01T10:00:00Z' }],
         counterparties: [{ name: 'Almi', flow: 60000 }],
       }),
@@ -104,9 +104,9 @@ describe('companyFactsFrom', () => {
   })
 
   it('reads industry, owners and the registry employee range from the Bolagsverket snapshot', () => {
-    const drafts = companyFactsFrom(inputs({ tic: { sniCodes: [{ code: '62010', name: 'Dataprogrammering' }, { code: '64920', name: 'Annan kreditgivning' }], beneficialOwners: [{ name: 'Jakob Wennberg', extentDescription: '100 %' }], employeeRange: 'Inga anställda' } }))
+    const drafts = companyFactsFrom(inputs({ tic: { sniCodes: [{ code: '62010', name: 'Dataprogrammering' }, { code: '64920', name: 'Annan kreditgivning' }], beneficialOwners: [{ name: 'Anna Exempel', extentDescription: '100 %' }], employeeRange: 'Inga anställda' } }))
     expect(by(drafts, 'sni_codes')[0].valueText).toBe('62010 Dataprogrammering; 64920 Annan kreditgivning')
-    expect(by(drafts, 'beneficial_owners')[0].valueText).toBe('Jakob Wennberg (100 %)')
+    expect(by(drafts, 'beneficial_owners')[0].valueText).toBe('Anna Exempel (100 %)')
     expect(by(drafts, 'employee_range_registry')[0].valueText).toBe('Inga anställda (enligt registret)')
   })
 

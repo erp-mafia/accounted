@@ -39,7 +39,16 @@ export function inboxSawABill(extracted: Record<string, unknown> | null | undefi
   return kind === 'government_letter' || arkivType === 'other'
 }
 
-export type RouteOutcome = 'queued' | 'requeued' | 'retyped' | 'already_queued' | 'booked' | 'routed_to_arkiv' | 'left' | 'not_found'
+export type RouteOutcome =
+  | 'queued'
+  | 'requeued'
+  | 'retyped'
+  | 'already_queued'
+  | 'booked'
+  | 'duplicate_of_queued_or_booked'
+  | 'routed_to_arkiv'
+  | 'left'
+  | 'not_found'
 
 /** The queue item's hint for a voucher type: a credit note comes from a supplier, so its hint is supplier_invoice. */
 const kindHintFor = (docType: string): 'receipt' | 'supplier_invoice' => (docType === 'receipt' ? 'receipt' : 'supplier_invoice')
@@ -83,6 +92,7 @@ interface DocumentRow {
   extracted_data: Record<string, unknown> | null
   upload_source?: string | null
   file_name?: string | null
+  sha256_hash?: string | null
 }
 
 interface ItemRow {
@@ -103,7 +113,7 @@ export async function routeClassifiedDocument(
 ): Promise<RouteOutcome> {
   const { data: doc, error: docError } = await supabase
     .from('document_attachments')
-    .select('id, user_id, journal_entry_id, extracted_data, created_at, upload_source, file_name')
+    .select('id, user_id, journal_entry_id, extracted_data, created_at, upload_source, file_name, sha256_hash')
     .eq('id', input.documentId)
     .eq('company_id', input.companyId)
     .maybeSingle()
@@ -150,6 +160,10 @@ export async function routeClassifiedDocument(
       return open.routed_to_arkiv_at ? 'requeued' : 'retyped'
     }
     if (d.created_at && Date.now() - new Date(d.created_at).getTime() > QUEUE_NEW_WITHIN_MS) return 'left'
+    // A byte-identical copy of a document that is already booked or already has its place in the queue gets no
+    // second item: queueing it is a double-booking risk. Not every upload door dedupes on content, so the routing
+    // that would put the copy in front of a person checks it here.
+    if (await hasQueuedOrBookedTwin(supabase, input.companyId, d)) return 'duplicate_of_queued_or_booked'
     // The door the document came through, not 'upload' for all of them: the source column keeps the closest value
     // its CHECK allows, and the canonical door rides beside it in channel_context (lib/intake/sources.ts).
     const intakeSource = intakeSourceFromUploadSource(d.upload_source, { fileName: d.file_name }) ?? 'upload'
@@ -187,6 +201,36 @@ export async function routeClassifiedDocument(
     )
   if (error) throw new Error(`inbox item update failed: ${error.message}`)
   return 'routed_to_arkiv'
+}
+
+/**
+ * True when another document of the company carries the same content hash and is booked on a verifikat, or has an
+ * inbox item of its own (open or consumed). Documents without a hash are never treated as copies.
+ */
+async function hasQueuedOrBookedTwin(supabase: SupabaseClient, companyId: string, doc: DocumentRow): Promise<boolean> {
+  if (!doc.sha256_hash) return false
+  const { data: twins, error } = await supabase
+    .from('document_attachments')
+    .select('id, journal_entry_id')
+    .eq('company_id', companyId)
+    .eq('sha256_hash', doc.sha256_hash)
+    .neq('id', doc.id)
+    .limit(20)
+  if (error) throw new Error(`duplicate lookup failed: ${error.message}`)
+  const rows = (twins ?? []) as Array<{ id: string; journal_entry_id: string | null }>
+  if (rows.length === 0) return false
+  if (rows.some((t) => t.journal_entry_id)) return true
+  const { data: twinItems, error: itemsError } = await supabase
+    .from('invoice_inbox_items')
+    .select('id')
+    .eq('company_id', companyId)
+    .in(
+      'document_id',
+      rows.map((t) => t.id),
+    )
+    .limit(1)
+  if (itemsError) throw new Error(`duplicate lookup failed: ${itemsError.message}`)
+  return ((twinItems as Array<{ id: string }> | null) ?? []).length > 0
 }
 
 /**

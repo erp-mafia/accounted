@@ -456,7 +456,7 @@ describe('what a salary order is', () => {
       payee_name: 'Skatteverket',
       payee_source: 'skatteverket',
       reference_type: 'ocr',
-      reference: '1655954700217',
+      reference: '1655446688087',
     }
     await expect(insertOrder(p, { ...skattekonto, employee_id: null })).rejects.toThrow(/payment_orders_salary_instruction/)
     await expect(insertOrder(p, { ...skattekonto, salary_run_id: null })).rejects.toThrow(/payment_orders_salary_instruction/)

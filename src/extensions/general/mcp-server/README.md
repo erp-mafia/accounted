@@ -1,6 +1,6 @@
 # Accounted MCP server
 
-JSON-RPC 2.0 server exposing the Accounted bookkeeping engine to MCP clients (Claude Desktop, Claude Code, etc.). Endpoint: `/api/extensions/ext/mcp-server/mcp`. Add `?tool_namespace=accounted` for the Accounted tool names. Requests without it retain the legacy Gnubok namespace. OAuth and stdio bridges live alongside the API surface: see `app/api/mcp-oauth/`, `packages/accounted-mcp/`, and the compatibility package in `packages/gnubok-mcp/`.
+JSON-RPC 2.0 server exposing the Accounted bookkeeping engine to MCP clients (Claude Desktop, Claude Code, etc.). Endpoint: `/api/extensions/ext/mcp-server/mcp`. Add `?tool_namespace=accounted` for the Accounted tool names. Requests without it retain the legacy Gnubok namespace. OAuth and stdio bridges live alongside the API surface: see `src/app/api/mcp-oauth/`, `packages/accounted-mcp/`, and the compatibility package in `packages/gnubok-mcp/`.
 
 ## Tool authoring contract
 
@@ -10,14 +10,14 @@ Enforced by tests in `__tests__/`: these are not style preferences, they're guar
 2. **Descriptions ≤ 280 chars.** Guarded by `output-schema.test.ts`. No `Args:` / `Returns:` / `Examples:` prose: those belong in JSON Schema. Use agent-native hints ("Use to…", "Call X first", "HIGH risk").
 3. **Staged-operation envelope** for write tools: `outputSchema: STAGED_OPERATION_SCHEMA` (`server.ts`). Fields: `staged, risk_level, actor, message, preview, period_status?, next?`. The `staged: true` boolean is the explicit completion signal; agents must not infer completion from prose. Do NOT introduce a parallel `{ success, shouldContinue, output }` envelope.
 4. **`period_status` threading**: any tool that ties to a fiscal-period-bound date (categorize, mark paid, create voucher, correct/reverse entry, approve supplier invoice) passes `dateForPeriodCheck` to `stage()`. Response then includes `period_status: { period_id, status: open|locked|closed, lock_date }` so widgets and agents disable writes without round-trips.
-5. **Scope mapping**: every new tool needs an entry in `lib/auth/api-keys.ts` `TOOL_SCOPE_MAP`. Missing entries default to deny.
-6. **Tests for new write tools**: add staging-gate coverage to `__tests__/voucher-tools.test.ts` (or a sibling) plus executor coverage to `lib/pending-operations/__tests__/voucher-executors.test.ts` if the tool stages a new `operation_type`.
+5. **Scope mapping**: every new tool needs an entry in `src/lib/auth/scope-catalog.ts` `TOOL_SCOPE_MAP`. Missing entries default to deny.
+6. **Tests for new write tools**: add staging-gate coverage to `__tests__/voucher-tools.test.ts` (or a sibling) plus executor coverage to `src/lib/pending-operations/__tests__/voucher-executors.test.ts` if the tool stages a new `operation_type`.
 
 ## Determinism / cache stability
 
 Tool definitions (name, description, inputSchema, outputSchema, annotations) are declared as static object literals at module load: no timestamps, no UUIDs, no Date/Math.random in the definition layer. This makes the `tools/list` JSON payload byte-stable across requests, which lets agent-side prompt caches stay warm. **Do not introduce per-request non-determinism into the definitions block.** Anything time-bound or random belongs inside `execute()`.
 
-For internal Anthropic API usage (the SDK is called from `lib/ai/provider.ts` and `lib/ai/services/anthropic-family.ts`; features such as `lib/documents/inbox-extraction/extract-invoice-fields.ts` go through `getAiService()` in `lib/ai` rather than the SDK directly): annotate stable prefixes with `cache_control: { type: 'ephemeral' }` and log `usage.cache_read_input_tokens` for hit-ratio observability. The 1h TTL from the agent-native API plan (item 10) requires the direct Anthropic API; Accounted's Bedrock path defaults to a shorter TTL.
+For internal Anthropic API usage (the SDK is called from `src/lib/ai/provider.ts` and `src/lib/ai/services/anthropic-family.ts`; features such as `src/lib/documents/inbox-extraction/extract-invoice-fields.ts` go through `getAiService()` in `src/lib/ai` rather than the SDK directly): annotate stable prefixes with `cache_control: { type: 'ephemeral' }` and log `usage.cache_read_input_tokens` for hit-ratio observability. The 1h TTL from the agent-native API plan (item 10) requires the direct Anthropic API; Accounted's Bedrock path defaults to a shorter TTL.
 
 ## Payload-size watchdog
 

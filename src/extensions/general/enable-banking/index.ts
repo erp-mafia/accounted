@@ -1531,12 +1531,14 @@ export const enableBankingExtension: Extension = {
         // mappings explicitly cleared). Unchecked accounts were all settled
         // above: kept, yielded, or never mirrored. This is preparation only;
         // allocation failure aborts before any configuration or chart write.
-        for (const a of updatedAccounts) {
-          if (!enabledSet.has(a.uid) || effectiveLedgerByUid.has(a.uid)) continue
+        const unplaced = updatedAccounts.filter(a => enabledSet.has(a.uid) && !effectiveLedgerByUid.has(a.uid))
+        for (const a of unplaced) {
           let allocated: string | null = null
           try {
             const resolved = await resolvePsd2LedgerAccount(supabase, companyId, ctx.userId, {
               iban: a.iban,
+              bban: a.bban,
+              consent: unplaced,
               currency: a.currency,
               accountName: a.name,
               exclude: usedLedgers,

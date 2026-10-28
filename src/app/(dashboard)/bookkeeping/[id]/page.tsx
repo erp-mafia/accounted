@@ -63,6 +63,7 @@ import { useDimensions } from '@/lib/reference-data/hooks'
 import { DetailPager } from '@/components/common/DetailPager'
 import { listContextKey } from '@/lib/navigation/list-context'
 import { useCompanyOptional } from '@/contexts/CompanyContext'
+import { useAttribution } from '@/lib/attribution/use-attribution'
 import type { JournalEntry, JournalEntryLine } from '@/types'
 import type { UnderlagReference } from '@/lib/core/bookkeeping/journal-entry-references'
 import type { VoucherOwner } from '@/lib/core/bookkeeping/voucher-owner'
@@ -103,38 +104,6 @@ type RattelseLogRow = {
 
 type PeriodStatus = 'open' | 'locked' | 'closed'
 
-/**
- * Human "who committed this" line from the committed_actor_* snapshot
- * (WHO relayed the commit; commit_method records HOW). The claude.ai MCP
- * connector mints a gnubok_sk_ API key, so MCP traffic arrives as
- * actor_type='api_key' with the key name as the label.
- */
-function committedByLabel(
-  actorType: string,
-  actorLabel: string | null,
-  t: (key: string, values?: Record<string, string>) => string,
-): string {
-  switch (actorType) {
-    case 'user':
-      return actorLabel || t('committed_by_user')
-    case 'api_key':
-    case 'mcp_oauth':
-      return actorLabel ? t('committed_by_ai', { label: actorLabel }) : t('committed_by_ai_plain')
-    case 'agent_chat':
-      return t('committed_by_agent_chat')
-    case 'service_account':
-      return actorLabel
-        ? t('committed_by_service_account', { label: actorLabel })
-        : t('committed_by_service_account_plain')
-    case 'cron':
-      return t('committed_by_cron')
-    case 'system':
-      return t('committed_by_system')
-    default:
-      return actorType
-  }
-}
-
 // Ledger amounts render as plain sv-SE numbers with two decimals (no currency
 // suffix), the same way the verifikat list's line tables do.
 const fmtAmount = (value: number | string): string =>
@@ -149,6 +118,7 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
   const t = useTranslations('journal_detail')
   const tCommon = useTranslations('common')
   const tCorrection = useTranslations('journal_correction')
+  const { format: attribute } = useAttribution()
   const sourceTypeLabels = useSourceTypeLabels()
   const [entry, setEntry] = useState<JournalEntry | null>(null)
   const [chain, setChain] = useState<JournalEntry[]>([])
@@ -806,7 +776,14 @@ export default function JournalEntryDetailPage({ params }: { params: Promise<{ i
             <DefRow label={t('field_committed_by')}>
               <span className="inline-flex items-center gap-1">
                 {entry.committed_actor_type !== 'user' && <CpuChipIcon className="h-4 w-4 shrink-0 text-muted-foreground" />}
-                {committedByLabel(entry.committed_actor_type, entry.committed_actor_label, t)}
+                {/* Who relayed the commit (committed_actor_*; commit_method
+                    records how), named with the person it acted for:
+                    committed_by, or the entry's user before it was stamped. */}
+                {attribute({
+                  actorType: entry.committed_actor_type,
+                  actorLabel: entry.committed_actor_label,
+                  userId: entry.committed_by ?? entry.user_id,
+                })}
               </span>
             </DefRow>
           )}

@@ -46,11 +46,6 @@ const DOOR_ICON: Record<IntakeSourceId, AppIcon> = {
   portal: GlobeAltIcon,
 }
 
-export function DoorIcon({ door, className }: { door: IntakeSourceId; className?: string }) {
-  const Icon = DOOR_ICON[door]
-  return <Icon aria-hidden="true" className={className ?? 'h-[15px] w-[15px] shrink-0 text-muted-foreground'} />
-}
-
 /**
  * The doors that are a vendor wear its mark: a connected mailbox is Gmail
  * (the one Lägg till brevlåda connects), and WhatsApp, Peppol, Kivra, Billo

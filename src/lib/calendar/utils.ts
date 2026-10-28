@@ -1,12 +1,6 @@
 import { Invoice, Deadline } from '@/types'
 import { isInvoiceOverdue as isCustomerInvoiceOverdue } from '@/lib/invoices/overdue'
 
-// Swedish month names
-export const SWEDISH_MONTHS = [
-  'Januari', 'Februari', 'Mars', 'April', 'Maj', 'Juni',
-  'Juli', 'Augusti', 'September', 'Oktober', 'November', 'December'
-]
-
 // Parse ISO date string to Date object at start of day
 export function parseDate(dateString: string): Date {
   const [year, month, day] = dateString.split('-').map(Number)
@@ -29,15 +23,6 @@ export function startOfDay(date: Date): Date {
 // Check if date is before another
 export function isBefore(date1: Date, date2: Date): boolean {
   return startOfDay(date1).getTime() < startOfDay(date2).getTime()
-}
-
-// Check if two dates are the same day
-export function isSameDay(date1: Date, date2: Date): boolean {
-  return (
-    date1.getFullYear() === date2.getFullYear() &&
-    date1.getMonth() === date2.getMonth() &&
-    date1.getDate() === date2.getDate()
-  )
 }
 
 // Check if invoice is overdue

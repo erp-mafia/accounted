@@ -106,13 +106,6 @@ export type DeleteEmployeeRecurringLineOutcome =
   | { id: string; deleted: true }
   | { id: string; deleted: false; deactivated: true }
 
-/** Every column on the table, as a literal so the phantom-column scanner
- * can verify the select. The dashboard historically selected `*`; listing
- * the columns keeps its payload identical. */
-export const RECURRING_LINE_COLUMNS =
-  'id, employee_id, company_id, user_id, item_type, description, amount, account_number, benefit_type, ' +
-  'valid_from, valid_to, metadata, is_active, created_at, updated_at'
-
 function validationFailure(field: string, message: string): RecurringLineFailure {
   return { ok: false, code: 'VALIDATION_ERROR', details: { issues: [{ field, message }] } }
 }

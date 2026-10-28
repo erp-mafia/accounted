@@ -45,7 +45,7 @@ Accounted is one company per ledger. A group is a set of companies, which `teams
 3. **Consolidated trial balance without eliminations (M)**: aggregation across members in the statutory scope, comparatives, policy adjustments for the legal-entity reliefs (obeskattade reserver to deferred tax and equity first).
 4. **Acquisition analysis and goodwill (L)**: förvärvsanalys at acquisition, amortisation, minority interest, deferred tax on surplus values.
 5. **Eliminations (L)**: counterpart tagging on koncern accounts, matched proposals, internvinst entries, the consolidation ledger and its lock.
-6. **K3K document (L)**: group RR, BR, KFA (reusing the K3 chapter 7 statement, `lib/bokslut/kassaflodesanalys`), equity specification, notes, förvaltningsberättelse; PDF for paper.
+6. **K3K document (L)**: group RR, BR, KFA (reusing the K3 chapter 7 statement, `src/lib/reports/kassaflodesanalys-statement.ts`), equity specification, notes, förvaltningsberättelse; PDF for paper.
 7. **K3K iXBRL (M, after P3's K3 iXBRL)**: K3K registry from the presentation linkbases, two-schema instance, Arelle fixtures.
 8. **Foreign subsidiaries (M)**: translation, equity reserve, recycling.
 

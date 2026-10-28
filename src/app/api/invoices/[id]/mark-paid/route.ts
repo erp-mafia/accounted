@@ -15,7 +15,7 @@ import { sessionFailureResponse } from '@/lib/operations/session'
 import { refundCreditNote, type RefundCreditNoteRow, type RefundCustomLine } from '@/lib/invoices/refund-credit-note'
 import type { RouteContext } from '@/lib/api/with-route-context'
 import type { Logger } from '@/lib/logger'
-import type { EntityType, Invoice } from '@/types'
+import type { Invoice } from '@/types'
 
 /**
  * The refund of a kreditfaktura (follow-up of crm#1435): the body is the

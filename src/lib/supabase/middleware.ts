@@ -9,6 +9,7 @@ import {
   createProxyTimings,
   formatProxyServerTiming,
   proxyRouteTemplate,
+  shouldLogProxyCompletion,
   timed,
   type ProxyTimings,
 } from '@/lib/supabase/proxy-timing'
@@ -137,13 +138,15 @@ export async function updateSession(request: NextRequest) {
       formatProxyServerTiming(timing, totalMs),
     )
   }
-  log.info('proxy completed', {
-    kind,
-    route: proxyRouteTemplate(pathname),
-    status: response.status,
-    ...timing,
-    totalMs,
-  })
+  if (shouldLogProxyCompletion(kind, request.cookies.getAll().map((cookie) => cookie.name))) {
+    log.info('proxy completed', {
+      kind,
+      route: proxyRouteTemplate(pathname),
+      status: response.status,
+      ...timing,
+      totalMs,
+    })
+  }
   return response
 }
 

@@ -21,8 +21,10 @@ import {
   SIDE_DOORS,
   sideDoorServerUrl,
   type SideDoor,
+  type SkippableSetupStep,
   type VatDeadlineLine,
 } from '@/lib/onboarding/checklist'
+import { persistUiState } from '@/lib/ui-state/client'
 import { ENABLED_EXTENSION_IDS } from '@/lib/extensions/_generated/enabled-extensions'
 import { useAssistantAvailable, useCapability, useCompanyOptional } from '@/contexts/CompanyContext'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -49,6 +51,9 @@ interface NewUserChecklistProps {
    *  signal that means "connected to Claude"; the in-app AI-profile flag
    *  used to tick this step and never corresponded to it (issue #2133). */
   hasMcpKey?: boolean
+  /** Steps this user skipped for this company (ui_state.setup_skipped). A
+   *  skipped step counts as done for the thread and for completion. */
+  skippedSteps?: SkippableSetupStep[]
   /** Personalized VAT-deadline line for the Skatteverket step (null = say nothing). */
   vatLine?: VatDeadlineLine
   /** Latest SIE reconciliation-sweep outcome: surfaces "X matchade, Y att
@@ -101,6 +106,7 @@ export default function NewUserChecklist({
   skvOmbudEnabled = false,
   hasInboxItems = false,
   hasMcpKey = false,
+  skippedSteps = [],
   vatLine = null,
   sieSweep = null,
   unfinishedConnect = null,
@@ -116,8 +122,11 @@ export default function NewUserChecklist({
   // Only owner/admin can record the setup state (company_settings RLS). A
   // member still gets every step as plain navigation: see
   // canRecordInitialSetup.
-  const canRecord = canRecordInitialSetup(useCompanyOptional()?.role)
+  const companyContext = useCompanyOptional()
+  const canRecord = canRecordInitialSetup(companyContext?.role)
+  const companyId = companyContext?.company?.id ?? null
   const [state, setState] = useState(initialState)
+  const [skipped, setSkipped] = useState<SkippableSetupStep[]>(skippedSteps)
   const [saving, setSaving] = useState<InitialSetupPath | 'dismiss' | 'complete' | null>(null)
   // The completion signature: 'verdict' shows the orb check-morph and the
   // verdict line, 'closing' fades the block, 'done' keeps it retired for the
@@ -190,9 +199,14 @@ export default function NewUserChecklist({
   const step2Done = hasBankConnected
   // Companies built without the skatteverket/inbox extensions skip those
   // steps; so does the Claude step where it does not render.
-  const step3Done = !hasSkatteverket || hasSkatteverketConnected
-  const step4Done = !hasInbox || hasInboxItems
-  const step5Done = !hasClaudeStep || hasMcpKey
+  // A skipped step (lib/onboarding/checklist SKIPPABLE_SETUP_STEPS) counts
+  // as done; it shows as skipped only while the data does not say done.
+  const skvSkipped = skipped.includes('skatteverket') && !hasSkatteverketConnected
+  const receiptsSkipped = skipped.includes('receipts') && !hasInboxItems
+  const claudeSkipped = skipped.includes('claude') && !hasMcpKey
+  const step3Done = !hasSkatteverket || hasSkatteverketConnected || skvSkipped
+  const step4Done = !hasInbox || hasInboxItems || receiptsSkipped
+  const step5Done = !hasClaudeStep || hasMcpKey || claudeSkipped
 
   useEffect(() => {
     // The block retires itself once every step is done; Dölj remains the
@@ -337,6 +351,19 @@ export default function NewUserChecklist({
       // Clipboard access can be denied; the button simply stays on "Kopiera".
     }
   }
+  // Skipping is the user's own preference (ui_state), so any member may.
+  // Without a company id (outside a CompanyProvider) there is nothing to key
+  // it on and the step offers no skip.
+  const skipStep = companyId
+    ? (step: SkippableSetupStep) => {
+        if (skipped.includes(step)) return
+        const next = [...skipped, step]
+        setSkipped(next)
+        persistUiState({ setup_skipped: { [companyId]: next } })
+        captureSetup('onboarding_setup_step_skipped', { step })
+      }
+    : undefined
+  const skippedNote = <span>{t('step_skipped')}</span>
   const dismiss = () =>
     void persist({ dismissed: true }, 'dismiss').then((updated) => {
       if (updated) captureSetup('onboarding_setup_dismissed', {})
@@ -478,6 +505,9 @@ export default function NewUserChecklist({
             active={activeStep === 3}
             title={t('step_skv_title')}
             last={lastStep === 'skv'}
+            onSkip={skipStep && (() => skipStep('skatteverket'))}
+            skipLabel={t('step_skip')}
+            doneNote={skvSkipped ? skippedNote : undefined}
             action={(variant) =>
               skvOmbudEnabled ? (
                 <Button
@@ -535,6 +565,9 @@ export default function NewUserChecklist({
             active={activeStep === 4}
             title={t('step_receipts_title')}
             last={lastStep === 'receipts'}
+            onSkip={skipStep && (() => skipStep('receipts'))}
+            skipLabel={t('step_skip')}
+            doneNote={receiptsSkipped ? skippedNote : undefined}
             action={(variant) => (
               <Button size="sm" variant={variant} onClick={goReceipts}>
                 {t('step_receipts_action')}
@@ -557,6 +590,9 @@ export default function NewUserChecklist({
           active={activeStep === 5}
           title={t('step_claude_title')}
           last
+          onSkip={skipStep && (() => skipStep('claude'))}
+          skipLabel={t('step_skip')}
+          doneNote={claudeSkipped ? skippedNote : undefined}
           action={(variant) => (
             <Button size="sm" variant={variant} onClick={goClaude}>
               {t('step_claude_action')}
@@ -636,6 +672,8 @@ function Step({
   marks,
   doneNote,
   footnote,
+  onSkip,
+  skipLabel,
   last = false,
   children,
 }: {
@@ -654,6 +692,9 @@ function Step({
    *  (which lives inside a <p>), this may hold nested block elements, e.g.
    *  the Claude step's ChatGPT and Grok side doors. */
   footnote?: React.ReactNode
+  /** Offered on the open step only: skipping counts it as done. */
+  onSkip?: () => void
+  skipLabel?: string
   last?: boolean
   children: React.ReactNode
 }) {
@@ -701,6 +742,15 @@ function Step({
             )}
           </div>
           {!done && action?.(open ? 'default' : 'outline')}
+          {open && onSkip && skipLabel && (
+            <button
+              type="button"
+              onClick={onSkip}
+              className="text-xs text-muted-foreground underline decoration-border underline-offset-4 transition-colors hover:text-foreground"
+            >
+              {skipLabel}
+            </button>
+          )}
           {done && doneNote && (
             <span className="text-xs tabular-nums text-muted-foreground">{doneNote}</span>
           )}

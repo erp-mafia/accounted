@@ -342,8 +342,8 @@ describe('Accounted://attention', () => {
   it('marks pending operations as critical when any high-risk op is queued', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     const ops = [
-      { id: 'op-1', operation_type: 'close_period', title: 'Stäng FY2025', risk_level: 'high', actor_label: 'Claude', created_at: new Date().toISOString() },
-      { id: 'op-2', operation_type: 'create_customer', title: 'Ny kund', risk_level: 'low', actor_label: 'Claude', created_at: new Date().toISOString() },
+      { id: 'op-1', operation_type: 'close_period', title: 'Stäng FY2025', risk_level: 'high', actor_type: 'api_key', actor_label: 'Claude (Anthropic)', user_id: 'user-1', created_at: new Date().toISOString() },
+      { id: 'op-2', operation_type: 'create_customer', title: 'Ny kund', risk_level: 'low', actor_type: 'agent_chat', actor_label: null, user_id: null, created_at: new Date().toISOString() },
     ]
 
     enqueue({ data: [] })
@@ -360,12 +360,17 @@ describe('Accounted://attention', () => {
     enqueue({ data: [] })
     enqueue({ data: null })
     enqueue({ data: null })
+    enqueue({ data: [] }) // the unlinked documents
+    enqueue({ data: [{ id: 'user-1', email: 'jonas@example.com', full_name: 'Jonas Ek' }] }) // who the agents acted for
 
     const result = (await attentionResource.read(ctx(supabase))) as AttentionResponse
     const cat = result.categories.find((c) => c.key === 'pending_operations')
     expect(cat?.severity).toBe('critical')
     expect(cat?.count).toBe(2)
     expect(result.summary.critical).toBe(1)
+    // Who staged each one, with the person it acted for; the raw user id stays out.
+    expect(cat?.samples.map((op) => op.proposed_by)).toEqual(['Claude åt Jonas Ek', 'Assistenten'])
+    expect(cat?.samples.every((op) => !('user_id' in op) && !('actor_label' in op))).toBe(true)
   })
 
   it('surfaces documents that nothing references, pointing at the link tool', async () => {

@@ -20,7 +20,7 @@ const COMPANY = 'company-1'
 // A Friday; Skatteverket draws the next charge on Thursday 2026-11-12.
 const TODAY = '2026-10-16'
 const DUE = '2026-11-12'
-const OCR = '1655954700217'
+const OCR = '1655446688087'
 
 const ACCOUNT = {
   id: 'acct-1',
@@ -80,7 +80,7 @@ beforeEach(() => {
   registerPaymentInitiationProvider(provider)
   db = createTableMockSupabase({
     cash_accounts: { data: ACCOUNT },
-    companies: { data: { org_number: '559547-0021', entity_type: 'aktiebolag' } },
+    companies: { data: { org_number: '554466-8808', entity_type: 'aktiebolag' } },
     skattekonto_transactions: { data: UPCOMING },
     extension_data: snapshot(4000),
     payment_orders: paymentOrders([]),
@@ -166,10 +166,10 @@ describe('prepareSkattekontoPaymentOrder', () => {
     })
     expect(db.findCall('rpc:create_skattekonto_payment_order', 'rpc')).toBeUndefined()
 
-    db.setTable('extension_data', snapshot(4000, '1655954700217'))
+    db.setTable('extension_data', snapshot(4000, '1655446688087'))
     const result = await prepareSkattekontoPaymentOrder(ctx, { cashAccountId: 'acct-1', today: TODAY })
     expect(result.ok).toBe(true)
-    expect(rpcArgs().p_reference).toBe('1655954700217')
+    expect(rpcArgs().p_reference).toBe('1655446688087')
   })
 
   it('warns that a payment on or after the due date is late, and moves a day the bank does not take', async () => {

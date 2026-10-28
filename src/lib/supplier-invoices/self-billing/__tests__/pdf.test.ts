@@ -35,8 +35,8 @@ describe('selfBillingPayToLines', () => {
 
 describe('selfBillingPdfFilename', () => {
   it('names the kind, the number and the seller', () => {
-    expect(selfBillingPdfFilename({ number: 'SF-007', isCreditNote: false, sellerName: 'Crayfish Energy AB' })).toBe(
-      'Självfaktura SF-007 Crayfish Energy AB.pdf',
+    expect(selfBillingPdfFilename({ number: 'SF-007', isCreditNote: false, sellerName: 'Exempel Energi AB' })).toBe(
+      'Självfaktura SF-007 Exempel Energi AB.pdf',
     )
     expect(selfBillingPdfFilename({ number: 'SF-008', isCreditNote: true, sellerName: 'A/B "X"' })).toBe('Kreditfaktura SF-008 A B X.pdf')
   })
@@ -46,12 +46,12 @@ describe('renderSelfBillingPdfBuffer', () => {
   it('renders a PDF of the invoice and of its credit note', async () => {
     const built = buildSelfBillingSnapshot({
       supplier: {
-        name: 'Crayfish Energy AB', org_number: '5594774076', vat_number: 'SE559477407601', address_line1: 'Bruksvägen 2',
+        name: 'Exempel Energi AB', org_number: '5599887766', vat_number: 'SE559988776601', address_line1: 'Bruksvägen 2',
         address_line2: null, postal_code: '662 30', city: 'Åmål', country: 'SE', bankgiro: '5050-1055', plusgiro: null,
         iban: null, bic: null, clearing_number: null, account_number: null,
       },
       company: {
-        company_name: 'Oppy Balancing Services AB', org_number: '5594105693', vat_number: null, address_line1: 'Storgatan 1',
+        company_name: 'Exempelbolaget AB', org_number: '5566778899', vat_number: null, address_line1: 'Storgatan 1',
         address_line2: null, postal_code: '111 22', city: 'Stockholm', country: 'SE',
       },
       agreementRef: 'Flexavtal 2026',

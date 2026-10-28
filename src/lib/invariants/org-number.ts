@@ -97,8 +97,8 @@ export function orgNumberKey(raw: string | null | undefined): string | null {
  * it (CompanyRoles, Lens documents), or null when it is not one.
  *
  * TIC registers an enskild firma under 16 digits: the century-prefixed
- * personnummer plus a 4-digit serial (`2002011732750001` for personnummer
- * `0201173275`). Accounted stores that firm under the 10-digit personnummer,
+ * personnummer plus a 4-digit serial (`2002010112360001` for personnummer
+ * `0201011236`). Accounted stores that firm under the 10-digit personnummer,
  * so comparing the raw registration number with `companies.org_number` never
  * matches and a sole trader's own firm reads as a company not yet added.
  * Every other shape keys exactly as {@link orgNumberKey}.

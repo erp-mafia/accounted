@@ -32,6 +32,4 @@ export const ContractSchema = z
     path: ['stated_grade'],
   })
 
-export type ContractBody = z.input<typeof ContractSchema>
-
 export const BookContractRevenueSchema = z.object({ fiscal_period_id: z.uuid() })

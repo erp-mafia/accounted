@@ -33,14 +33,6 @@ export const FINAL_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> = new
   'failed',
 ])
 
-/** The bank has the payment and has not finished with it: what the status poll walks. */
-export const IN_FLIGHT_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> = new Set([
-  'submitted',
-  'awaiting_signature',
-  'awaiting_second_signer',
-  'accepted',
-])
-
 /**
  * Signed, or being signed: the bank pays it on its date unless it is
  * cancelled there. A second payment of the invoice meanwhile pays the
@@ -54,9 +46,6 @@ export const SIGNED_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> = ne
   'awaiting_second_signer',
   'accepted',
 ])
-
-/** Statuses in which the instruction (amount, payee, reference, debtor, date) may still be edited. */
-export const EDITABLE_PAYMENT_ORDER_STATUSES: ReadonlySet<PaymentOrderStatus> = new Set(['draft'])
 
 export const PAYMENT_ORDER_TRANSITIONS: Readonly<Record<PaymentOrderStatus, readonly PaymentOrderStatus[]>> = {
   draft: ['approved', 'cancelled'],

@@ -1568,6 +1568,8 @@ describe('updateSession redirect destinations', () => {
   describe('per-request timing header and log line', () => {
     const TIMING_RE =
       /^mw-auth;dur=\d+, mw-session;dur=\d+, mw-company;dur=\d+, mw-mfa;dur=\d+, mw-total;dur=\d+$/
+    // The proxy only logs an /api call that carries a session cookie.
+    const SESSION_COOKIE = 'sb-test-auth-token=x'
 
     function lastLog() {
       expect(logState.info).toHaveBeenCalledTimes(1)
@@ -1602,10 +1604,19 @@ describe('updateSession redirect destinations', () => {
 
     it('/api responses use X-Proxy-Timing and leave Server-Timing to the route wrapper', async () => {
       state.user = SIGNED_IN
-      const res = await run('/api/settings')
+      const res = await run('/api/settings', { headers: { cookie: SESSION_COOKIE } })
       expect(res.headers.get('x-proxy-timing')).toMatch(TIMING_RE)
       expect(res.headers.get('server-timing')).toBeNull()
       expect(lastLog().kind).toBe('api')
+    })
+
+    it('writes no line for a sessionless /api call (a Bearer MCP call), still sends the header', async () => {
+      const res = await run('/api/extensions/ext/mcp-server/mcp', {
+        method: 'POST',
+        headers: { authorization: 'Bearer gnubok_sk_test' },
+      })
+      expect(res.headers.get('x-proxy-timing')).toMatch(TIMING_RE)
+      expect(logState.info.mock.calls.filter(([msg]) => msg === 'proxy completed')).toHaveLength(0)
     })
 
     it('redirect responses also carry the header and log their status', async () => {
@@ -1631,7 +1642,7 @@ describe('updateSession redirect destinations', () => {
         expect(typeof ctx.companyMs).toBe('number')
         logState.info.mockClear()
 
-        const api = await run('/api/settings')
+        const api = await run('/api/settings', { headers: { cookie: SESSION_COOKIE } })
         expect(api.headers.get('x-proxy-timing')).toBeNull()
         expect(api.headers.get('server-timing')).toBeNull()
         expect(lastLog().kind).toBe('api')

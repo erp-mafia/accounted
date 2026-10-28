@@ -104,9 +104,9 @@ describe('orgNumberKey', () => {
 describe('registrationNumberKey', () => {
   it('keys a sole trader\'s 16-digit TIC number to the stored personnummer', () => {
     // crm#68: the BankID picker listed the owner's own firm as new because
-    // 1982090948720001 was compared raw with the stored 8209094872.
-    expect(registrationNumberKey('1982090948720001')).toBe('8209094872')
-    expect(registrationNumberKey('2002011732750002')).toBe('0201173275')
+    // 1982010223430001 was compared raw with the stored 8201022343.
+    expect(registrationNumberKey('1982010223430001')).toBe('8201022343')
+    expect(registrationNumberKey('2002010112360002')).toBe('0201011236')
   })
 
   it('keys every other shape exactly as orgNumberKey', () => {
@@ -171,6 +171,6 @@ describe('toRedovisare12', () => {
   it('prefixes 16 for an ideell förening like every other juridisk person', () => {
     // 8-series org numbers are issued by Skatteverket to föreningar; they
     // must never be read as a personnummer century.
-    expect(toRedovisare12('814400-9464', 'ideell_forening')).toBe('168144009464')
+    expect(toRedovisare12('814433-4458', 'ideell_forening')).toBe('168144334458')
   })
 })

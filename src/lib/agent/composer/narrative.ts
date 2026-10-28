@@ -4,7 +4,7 @@ import type { ComposerInputs } from './inputs'
 
 // Two voices: second-person ownership ("Du driver…") only when BankID
 // CompanyRoles has confirmed the active user holds a director-like position
-// at this company. Otherwise we use neutral third-person ("Coredination AB
+// at this company. Otherwise we use neutral third-person ("Exempel AB
 // är…") so manual-orgnr signups (accountant-on-behalf-of, employees,
 // family members setting up a parent's company) don't get a narrative
 // presuming they personally own the company. Same content, different voice.
@@ -24,7 +24,7 @@ Skriv endast själva profiltexten. Ingen rubrik, inga punktlistor.`
 
 const VOICE_DIRECTOR = `\n\nRöst: Andra person, ägar-/ledningsperspektiv. "Du driver…", "Din verksamhet…". Användaren är verifierad styrelseledamot eller firmatecknare i bolaget.`
 
-const VOICE_NEUTRAL = `\n\nRöst: Tredje person, neutral. "Coredination AB är…", "Bolaget bedriver…". Användaren kan vara ägare, anställd eller redovisningskonsult: vi vet inte. Skriv ALDRIG "Du driver…", "Din verksamhet…" eller andra formuleringar som antar att användaren själv äger eller leder bolaget. Använd företagsnamnet eller "Bolaget".`
+const VOICE_NEUTRAL = `\n\nRöst: Tredje person, neutral. "Exempel AB är…", "Bolaget bedriver…". Användaren kan vara ägare, anställd eller redovisningskonsult: vi vet inte. Skriv ALDRIG "Du driver…", "Din verksamhet…" eller andra formuleringar som antar att användaren själv äger eller leder bolaget. Använd företagsnamnet eller "Bolaget".`
 
 function systemPromptFor(userIsConfirmedDirector: boolean): string {
   return SHARED_PROMPT_HEADER + (userIsConfirmedDirector ? VOICE_DIRECTOR : VOICE_NEUTRAL)

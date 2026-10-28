@@ -106,6 +106,28 @@ describe('gnubok_list_pending_operations', () => {
     expect(result.next_offset).toBe(1)
   })
 
+  it('names who staged each operation with the person it acted for, never the raw user id', async () => {
+    const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { id: 'op-1', status: 'pending', actor_type: 'api_key', actor_label: 'Claude (Anthropic)', user_id: 'user-1' },
+        { id: 'op-2', status: 'pending', actor_type: 'api_key', actor_label: OAUTH_MCP_KEY_NAME, user_id: 'user-gone' },
+        { id: 'op-3', status: 'pending', actor_type: 'service_account', actor_label: 'Lager', user_id: 'user-1' },
+      ],
+      error: null,
+      count: 3,
+    })
+    enqueue({ data: [{ id: 'user-1', email: 'jonas@example.com', full_name: 'Jonas Ek' }], error: null })
+
+    const result = (await listTool.execute({}, 'company-1', 'user-1', supabase as never, { type: 'api_key' })) as {
+      operations: Array<Record<string, unknown>>
+    }
+
+    expect(result.operations.map((op) => op.proposed_by)).toEqual(['Claude åt Jonas Ek', 'AI-anslutning', 'Tjänstekontot Lager åt Jonas Ek'])
+    expect(result.operations.every((op) => !('user_id' in op))).toBe(true)
+    expect(findCalls('profiles', 'in')[0]).toEqual(['id', ['user-1', 'user-gone']])
+  })
+
   it("returns each operation's agent_reason, why its stager proposes it", async () => {
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
     enqueue({

@@ -91,7 +91,7 @@ node --import tsx --conditions react-server scripts/sie-import/acceptance-manual
 node scripts/sie-import/run-next-staging.mjs build
 ```
 
-The TypeScript runners post through the engine and load lib/init (event_log,
+The TypeScript runners post through the engine and load src/lib/init (event_log,
 webhooks, extensions), which needs the react-server condition, as the Next.js
 server has. Run without `--conditions react-server` they stop before doing
 anything, with exit code 1 and that fix in the message
@@ -160,7 +160,7 @@ each require their own review and authorization.
 staging Micro: full audit used 13.39 WAL MiB per 1,000 vouchers and 32.84 seconds
 writer time; compact used 7.50 MiB and 30.43 seconds. WAL deltas can include
 background writes and do not establish physical amplification or outage cause.
-Compact remains off pending compliance review and Emil's decision.
+Compact remains off pending compliance review and a maintainer's decision.
 
 `io-snapshot.sql` records index definitions/use, sizes and reset times. Collect
 at least a week including month/year-end query plans before index pruning.

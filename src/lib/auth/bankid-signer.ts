@@ -87,9 +87,3 @@ export async function rememberSignerPersonalNumber(userId: string, personalNumbe
     .upsert({ user_id: userId, personal_number_enc: encryptPersonalNumberForStorage(normalized), updated_at: new Date().toISOString() }, { onConflict: 'user_id' })
   if (error) throw error
 }
-
-/** Forget the remembered number (the person changes who signs). */
-export async function forgetSignerPersonalNumber(userId: string): Promise<void> {
-  const { error } = await createServiceClient().from('payment_signers').delete().eq('user_id', userId)
-  if (error) throw error
-}

@@ -225,14 +225,14 @@ describe('answer flow (text rows through processInboundMessage)', () => {
       ok: true,
       data: {
         is_denial: false,
-        participants: [{ name: 'Elias Karlsson', company: 'Canguro Media' }],
+        participants: [{ name: 'Erik Exempel', company: 'Exempel Media' }],
         purpose: null,
         event_date: null,
         note: null,
       },
     })
     const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
-    enqueue({ data: makeTextRow('Elias Karlsson från Canguro Media') })
+    enqueue({ data: makeTextRow('Erik Exempel från Exempel Media') })
     enqueue({ data: { id: 'msg-t1' } })
     enqueue({ data: makeLink() })
     enqueue({ data: awaitingConversation('representation') })
@@ -259,7 +259,7 @@ describe('answer flow (text rows through processInboundMessage)', () => {
     // The follow-up asks only for the purpose, never for the names again.
     const reply = sendTextMock.mock.calls[0][1]
     expect(reply.template).toBe(TEMPLATE.m8RepNeedPurpose)
-    expect(reply.body).toContain('Elias Karlsson (Canguro Media)')
+    expect(reply.body).toContain('Erik Exempel (Exempel Media)')
     expect(reply.body.toLowerCase()).toContain('syftet')
 
     // Conversation must NOT go idle, or the next reply draws the fallback.

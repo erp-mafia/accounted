@@ -148,10 +148,12 @@ function runScenario(s: AgreementScenario): void {
 
 describe('payroll scenarios, area c: kollektivavtal', () => {
   for (const s of AGREEMENT_SCENARIOS) {
+    // A todo scenario waits for an engine capability (todoReason) and is not
+    // run here; catalogue.test.ts keeps its data consistent until then.
+    if (s.status === 'todo') continue
     const name = scenarioTestName(s)
-    if (s.status === 'todo') it.todo(name)
     // SCENARIO_SHOW_BUGS=1 runs the suspected engine bugs as plain tests, to see the diff.
-    else if (s.status === 'engine-bug' && !process.env.SCENARIO_SHOW_BUGS) it.fails(`${name} [suspected engine bug, see note]`, () => runScenario(s))
+    if (s.status === 'engine-bug' && !process.env.SCENARIO_SHOW_BUGS) it.fails(`${name} [suspected engine bug, see note]`, () => runScenario(s))
     else it(name, () => runScenario(s))
   }
 })

@@ -21,6 +21,7 @@ import { SCHEDULED_DETECTORS } from './detectors'
 import { MAX_OPEN_SUGGESTIONS } from './list'
 import { createDetectorContext, runDetector } from './run'
 import type { Detector } from './types'
+import { toError } from '@/lib/errors/to-error'
 
 /** Companies looked at per run at most. */
 export const SWEEP_COMPANY_LIMIT = 300
@@ -120,7 +121,7 @@ export async function runScheduledSuggestions(
         if (staged > 0) break
       }
     } catch (err) {
-      log.error('scheduled suggestions failed for a company', err instanceof Error ? err : new Error(String(err)), {
+      log.error('scheduled suggestions failed for a company', toError(err), {
         companyId: company.id,
       })
     }

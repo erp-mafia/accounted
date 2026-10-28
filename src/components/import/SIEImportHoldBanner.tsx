@@ -7,6 +7,7 @@ import { usePathname } from 'next/navigation'
 import { AttnLine } from '@/components/ui/attn-line'
 import { createVisiblePoller, type VisiblePoller } from '@/lib/browser/visible-poller'
 import {
+  createSIEHoldClock,
   fetchSIEHolds,
   onSIEHoldsChanged,
   sieHoldPollInterval,
@@ -24,18 +25,23 @@ export function SIEImportHoldBanner({ companyId }: { companyId: string | null })
   useEffect(() => {
     if (!companyId) return
     const activeCompanyId = companyId
-    // Mounted on every dashboard page: follow a hold every 5 s, otherwise
-    // refetch only when it can have changed (lib/import/sie-holds-client.ts).
+    // Mounted on every dashboard page: follow a new hold every 5 s and an
+    // old one every minute, otherwise refetch only when it can have changed
+    // (lib/import/sie-holds-client.ts).
+    const clock = createSIEHoldClock()
     const poller = createVisiblePoller({
       load: fetchSIEHolds,
       onResult: (periods) => setSnapshot({ companyId: activeCompanyId, periods }),
-      intervalMs: sieHoldPollInterval,
+      intervalMs: (last) => sieHoldPollInterval(last, clock.heldFor(last)),
       staleAfterMs: sieHoldStaleAfter,
       retryMs: SIE_HOLD_RETRY_MS,
       isVisible: () => document.visibilityState !== 'hidden',
     })
     pollerRef.current = poller
-    const unsubscribe = onSIEHoldsChanged(poller.refresh)
+    const unsubscribe = onSIEHoldsChanged(() => {
+      clock.restart()
+      poller.refresh()
+    })
     document.addEventListener('visibilitychange', poller.nudge)
     window.addEventListener('focus', poller.nudge)
     poller.refresh()

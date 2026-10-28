@@ -36,6 +36,7 @@ import {
 } from '@/lib/bookkeeping/errors'
 import type { CreateJournalEntryInput, JournalEntry } from '@/types'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
+import { toError } from '@/lib/errors/to-error'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -61,7 +62,7 @@ export async function updateDraftJournalEntry(
     if (isBookkeepingError(err)) return typedFailure(err)
     // Untyped errors map to Swedish via getErrorMessage: the raw message is
     // logged and must never reach the user verbatim (issue #337).
-    ctx.log.error('failed to update draft journal entry', err instanceof Error ? err : new Error(String(err)), { entryId })
+    ctx.log.error('failed to update draft journal entry', toError(err), { entryId })
     return {
       ok: false,
       code: 'JOURNAL_ENTRY_UPDATE_FAILED',
@@ -286,7 +287,7 @@ export async function cancelDraftJournalEntry(
     return { ok: true, data: (data ?? cancelled) as unknown as JournalEntryHeader }
   } catch (err) {
     if (isBookkeepingError(err)) return typedFailure(err)
-    ctx.log.error('cancel draft journal entry failed', err instanceof Error ? err : new Error(String(err)), { entryId })
+    ctx.log.error('cancel draft journal entry failed', toError(err), { entryId })
     return { ok: false, code: 'BOOKKEEPING_DATABASE_ERROR', details: { step: 'cancel' } }
   }
 }

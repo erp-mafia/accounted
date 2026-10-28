@@ -7,7 +7,7 @@ import {
 
 // Luhn-valid numbers: 802000-0000 style 8-series (förening), 556036-0793 (AB),
 // 19850420-1234 is not a legal person (month 04 < 20).
-const FORENING = '802481-1658'
+const FORENING = '802233-4455'
 const AB = '556036-0793'
 
 describe('suggestedFormForOrgNumber', () => {
@@ -18,8 +18,8 @@ describe('suggestedFormForOrgNumber', () => {
   it('suggests ideell förening for an 8-series juridisk person while the form is creatable', () => {
     vi.stubEnv('NEXT_PUBLIC_IDEELL_FORENING_ENABLED', 'true')
     expect(suggestedFormForOrgNumber(FORENING)).toBe('ideell_forening')
-    expect(suggestedFormForOrgNumber('8024811658')).toBe('ideell_forening')
-    expect(suggestedFormForOrgNumber('168024811658')).toBe('ideell_forening')
+    expect(suggestedFormForOrgNumber('8022334455')).toBe('ideell_forening')
+    expect(suggestedFormForOrgNumber('168022334455')).toBe('ideell_forening')
   })
 
   it('suggests nothing while the form cannot be created', () => {

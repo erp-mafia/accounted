@@ -11,9 +11,9 @@ import { selfBilledLockedFields } from '../edit-guard'
 import { resolveSupplierInvoiceDueDate, supplierPaymentTermsDays } from '../../due-date'
 
 const SUPPLIER: SelfBillingSupplierSource = {
-  name: 'Crayfish Energy AB',
-  org_number: '5594774076',
-  vat_number: 'SE559477407601',
+  name: 'Exempel Energi AB',
+  org_number: '5599887766',
+  vat_number: 'SE559988776601',
   address_line1: 'Bruksvägen 2',
   address_line2: null,
   postal_code: '662 30',
@@ -28,9 +28,9 @@ const SUPPLIER: SelfBillingSupplierSource = {
 }
 
 const COMPANY: SelfBillingCompanySource = {
-  company_name: 'Oppy Balancing Services AB',
-  org_number: '5594105693',
-  vat_number: 'SE559410569301',
+  company_name: 'Exempelbolaget AB',
+  org_number: '5566778899',
+  vat_number: 'SE556677889901',
   address_line1: 'Storgatan 1',
   address_line2: null,
   postal_code: '111 22',
@@ -46,9 +46,9 @@ describe('buildSelfBillingSnapshot', () => {
     expect(result.snapshot).toEqual({
       v: 1,
       seller: {
-        name: 'Crayfish Energy AB',
-        org_number: '5594774076',
-        vat_number: 'SE559477407601',
+        name: 'Exempel Energi AB',
+        org_number: '5599887766',
+        vat_number: 'SE559988776601',
         address_line1: 'Bruksvägen 2',
         address_line2: null,
         postal_code: '662 30',
@@ -56,9 +56,9 @@ describe('buildSelfBillingSnapshot', () => {
         country: 'SE',
       },
       buyer: {
-        name: 'Oppy Balancing Services AB',
-        org_number: '5594105693',
-        vat_number: 'SE559410569301',
+        name: 'Exempelbolaget AB',
+        org_number: '5566778899',
+        vat_number: 'SE556677889901',
         address_line1: 'Storgatan 1',
         address_line2: null,
         postal_code: '111 22',

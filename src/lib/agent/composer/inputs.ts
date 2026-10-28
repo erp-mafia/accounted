@@ -90,7 +90,7 @@ export async function loadCompanySettings(
 // at this company per BankID CompanyRoles. When true, the narrative is safe
 // to use second-person ownership voice ("Du driver…"); when false (manual-
 // orgnr signup, accountant-on-behalf-of, etc.) the narrative falls back to
-// neutral third-person ("Coredination AB är…") so we don't put words about
+// neutral third-person ("Exempel AB är…") so we don't put words about
 // ownership in the user's mouth.
 //
 // We match the user's enrichment row against this company's org_number.
@@ -599,7 +599,7 @@ export interface ComposerInputs {
   // True when BankID CompanyRoles confirms the active user holds a
   // director-like position at this company. Controls whether the narrative
   // uses second-person ownership voice ("Du driver…") or neutral
-  // third-person ("Coredination AB är…"). Default false so unknown users
+  // third-person ("Exempel AB är…"). Default false so unknown users
   // never get the presumptive voice.
   userIsConfirmedDirector: boolean
 }

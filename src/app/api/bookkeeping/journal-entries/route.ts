@@ -19,6 +19,7 @@ import {
   type MissingUnderlagPage,
 } from '@/lib/bookkeeping/missing-underlag'
 import { MAX_ROWS_PER_REQUEST } from '@/lib/lists/collect-pages'
+import { countUnderlagForJournalEntries } from '@/lib/core/documents/underlag-counts'
 
 // Query params are hand-parsed with per-param clamping/regex validation (see
 // each param's comment) rather than a Zod schema; response shapes are legacy
@@ -93,6 +94,22 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // dialog's "Visa saknade underlag" toggle). Committed view only: the
   // predicate is posted-only, so it is meaningless for the drafts view.
   const missingUnderlag = searchParams.get('missing_underlag') === 'true' && status !== 'draft'
+  // The verifikat list asks for its rows' underlag counts with the rows
+  // (include_counts=true) instead of a second request to
+  // /api/documents/counts per page. Best effort: when the count reads fail
+  // the counts are left out and the list asks the counts route as before.
+  const includeCounts = searchParams.get('include_counts') === 'true'
+  const listResponse = async (data: unknown[] | null, count: number | null) => {
+    if (!includeCounts || !data || data.length === 0) return NextResponse.json({ data, count })
+    try {
+      const ids = (data as { id: string }[]).map((entry) => entry.id)
+      const { counts, invoice_references } = await countUnderlagForJournalEntries(supabase, companyId, ids)
+      return NextResponse.json({ data, count, attachment_counts: counts, invoice_references })
+    } catch (err) {
+      log.warn('underlag counts for the verifikat list failed', err)
+      return NextResponse.json({ data, count })
+    }
+  }
 
   const dateAscending = sortDate === 'asc'
   const sortDateParam = soloDateKey ? (soloDateKey.ascending ? 'asc' : 'desc') : sortDate === 'asc' ? 'asc' : 'desc'
@@ -159,7 +176,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     // Reassemble in the sorted page order (the .in() fetch has no order).
     const data = pageIds.map((id) => rowsById.get(id)).filter(Boolean)
 
-    return NextResponse.json({ data, count: total })
+    return listResponse(data, total)
   }
 
   // Non-date sorts (and stacked sorts): the include_related RPC only orders
@@ -195,7 +212,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
     const entries = rows.map((r: { entry: unknown }) => r.entry)
     const count = rows.length > 0 ? Number((rows[0] as { total_count: number | string }).total_count) : 0
 
-    return NextResponse.json({ data: entries, count })
+    return listResponse(entries, count)
   }
 
   let query = supabase
@@ -336,7 +353,7 @@ export const GET = withRouteContext('bookkeeping.journal_entries.list', async (r
   // message in the log line.
   if (error) return errorResponse(dbError(error, 'Journal entries'), log, { requestId: ctx.requestId })
 
-  return NextResponse.json({ data, count })
+  return listResponse(data, count)
 })
 
 export const POST = withRouteContext(

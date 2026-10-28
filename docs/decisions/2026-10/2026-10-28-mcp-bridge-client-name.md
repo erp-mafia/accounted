@@ -1,0 +1,1 @@
+[2026-10-28] Calls via the accounted-mcp and gnubok-mcp stdio bridges get clientSource bridge, labelled from the clientInfo name the bridge adds to its User-Agent (claude-ai is claude-desktop over stdio; unknown or none is other plus the bridge name): user_agent names the HTTP client itself.

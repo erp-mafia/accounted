@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { addableEngagements, isCeasedCompanyStatus } from '../engagements'
+import { addableEngagements, isCeasedCompanyStatus, mayHaveBankIdEngagements } from '../engagements'
 import type { EnrichmentCompanyRole } from '../types'
 
 // Synthetic identifiers only: the Volvo org number used across the test
@@ -127,5 +127,21 @@ describe('addableEngagements', () => {
     const bankrupt = role({ companyRegistrationNumber: '5569999997', companyStatus: 'BankruptcyProceedingsTerminated' })
     const board = role({ companyRegistrationNumber: '5569999998', legalEntityType: 'Bostadsrättsförening' })
     expect(addableEngagements([own, struckOff, bankrupt, board], [OWN_AB, null])).toEqual([board])
+  })
+})
+
+describe('mayHaveBankIdEngagements', () => {
+  it('is true for an account that has been through BankID, linked or not', () => {
+    expect(mayHaveBankIdEngagements({ bankid_linked: true })).toBe(true)
+    expect(mayHaveBankIdEngagements({ bankid_pending: true, has_password: false })).toBe(true)
+    // Unlinking keeps the key, and the stored engagements stay.
+    expect(mayHaveBankIdEngagements({ bankid_linked: false, has_password: true })).toBe(true)
+  })
+
+  it('is false for an account that never used BankID', () => {
+    expect(mayHaveBankIdEngagements({ provider: 'email', providers: ['email'] })).toBe(false)
+    expect(mayHaveBankIdEngagements({})).toBe(false)
+    expect(mayHaveBankIdEngagements(null)).toBe(false)
+    expect(mayHaveBankIdEngagements(undefined)).toBe(false)
   })
 })

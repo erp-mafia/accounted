@@ -854,21 +854,21 @@ describe('payment confirmation email templates', () => {
 
 describe('greeting name (issue: "Hej {förnamn}" printed the first word of the firm)', () => {
   it('greets by the contact person first name when one is set', () => {
-    const customer = makeCustomer({ name: 'Eminos Bygg AB', contact_person: 'Anna Svensson', language: 'sv' })
+    const customer = makeCustomer({ name: 'Exempel Bygg AB', contact_person: 'Anna Svensson', language: 'sv' })
     const html = generateInvoiceEmailHtml({ invoice, customer, company })
     expect(html).toContain('Hej Anna,')
     expect(generateInvoiceEmailText({ invoice, customer, company })).toContain('Hej Anna,')
   })
 
   it('greets a company without a contact person by its full name, never a truncated one', () => {
-    const customer = makeCustomer({ name: 'Eminos Bygg AB', contact_person: null, language: 'sv' })
+    const customer = makeCustomer({ name: 'Exempel Bygg AB', contact_person: null, language: 'sv' })
     const html = generateInvoiceEmailHtml({ invoice, customer, company })
-    expect(html).toContain('Hej Eminos Bygg AB,')
-    expect(html).not.toContain('Hej Eminos,')
+    expect(html).toContain('Hej Exempel Bygg AB,')
+    expect(html).not.toContain('Hej Exempel,')
   })
 
   it('feeds the same name into the {förnamn} placeholder of custom texts', () => {
-    const customer = makeCustomer({ name: 'Eminos Bygg AB', contact_person: 'Anna Svensson', language: 'sv' })
+    const customer = makeCustomer({ name: 'Exempel Bygg AB', contact_person: 'Anna Svensson', language: 'sv' })
     const custom = makeCompanySettings({
       ...company,
       invoice_email_texts: { sv: { greeting: 'Hejsan {förnamn}!' } },

@@ -680,7 +680,12 @@ export const arcimMigrationExtension: Extension = {
           )
           return NextResponse.json({ success: true, consentId })
         } catch (error) {
-          log.error('arcim submit-token failed', error as Error, { provider })
+          // A verdict on what was pasted is the user's to fix and is answered
+          // with its own code below: a warning, not a server error.
+          const verdict = error instanceof ProviderTokenInvalidError || error instanceof ProviderCompanyMismatchError
+            || error instanceof ConsentNotFoundError
+          if (verdict) log.warn('arcim submit-token refused', { provider, err: { name: (error as Error).name, message: (error as Error).message } })
+          else log.error('arcim submit-token failed', error as Error, { provider })
           // Consent missing or owned by another company: same 404 either way.
           if (error instanceof ConsentNotFoundError) {
             return errorResponseFromCode('PROVIDER_CONSENT_NOT_FOUND', moduleLog, {
@@ -692,6 +697,11 @@ export const arcimMigrationExtension: Extension = {
           if (error instanceof ProviderTokenInvalidError) {
             if (error.kind === 'company-not-found') {
               return errorResponseFromCode('BOKIO_COMPANY_NOT_FOUND', moduleLog, {
+                details: { provider, reason: error.message },
+              })
+            }
+            if (error.kind === 'company-id-invalid') {
+              return errorResponseFromCode('BOKIO_COMPANY_ID_INVALID', moduleLog, {
                 details: { provider, reason: error.message },
               })
             }
@@ -986,7 +996,14 @@ export const arcimMigrationExtension: Extension = {
             },
           })
         } catch (error) {
-          log.error('OAuth callback exchange failed', error)
+          // Credentials for another company, or a key the provider refused,
+          // are answered below with the sentence that says what to do: a
+          // warning, not a server error.
+          if (error instanceof ProviderCompanyMismatchError || error instanceof ProviderTokenInvalidError) {
+            log.warn('OAuth callback exchange refused', (error as Error).name)
+          } else {
+            log.error('OAuth callback exchange failed', error)
+          }
           // Valid tokens for the WRONG company: exchangeAuthToken stored
           // nothing. Show the same Swedish sentence /submit-token answers with
           // for Bokio/WINT (it names the company the login opened) instead of

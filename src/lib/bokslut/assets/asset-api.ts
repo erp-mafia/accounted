@@ -508,8 +508,6 @@ export function assetView(asset: Asset, hasPostedDepreciation: boolean) {
   }
 }
 
-export type AssetView = ReturnType<typeof assetView>
-
 /**
  * The disposal plan as the approver sees it: the lines that will be posted,
  * the gain or loss, and the jämkning outcome. Shared by the v1 dry-run and
@@ -544,8 +542,6 @@ export function disposalPreviewView(preview: AssetDisposalPreview, input: Dispos
     posts_journal_entry: plan.lines.length > 0,
   }
 }
-
-export type DisposalPreviewView = ReturnType<typeof disposalPreviewView>
 
 // ── Response contracts (Zod, for the v1 OpenAPI registry) ────────
 

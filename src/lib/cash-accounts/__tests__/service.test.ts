@@ -32,6 +32,8 @@ type CashRow = {
   currency?: string
   is_primary?: boolean
   created_at?: string
+  clearing_number?: string | null
+  account_number?: string | null
 }
 type ConnRow = { id: string; status: string }
 
@@ -316,6 +318,44 @@ describe('findFreeLedgerAccount: only a holder of the same bank account gives up
       { connections: [{ id: 'conn-live', status: 'active' }] },
     )
     expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { iban: OWN })).toBe('1937')
+  })
+})
+
+describe('findFreeLedgerAccount: the seeded row goes to the account its payment details name (crm#1498)', () => {
+  // Fictitious numbers. The bank lists an empty second account first; the
+  // onboarding details on the seeded 1930 row name the company's own account.
+  const SECOND = { iban: 'SE0150000000055011112222', bban: '55011112222', currency: 'SEK' }
+  const OWN = { iban: 'SE0250000000055013334444', bban: '55013334444', currency: 'SEK' }
+  const consent = [SECOND, OWN]
+  const seeded = (account_number: string | null) => makeSupabase([
+    { ledger_account: '1930', bank_connection_id: null, iban: null, currency: 'SEK', clearing_number: '5501', account_number },
+  ])
+
+  it('lets the named account take 1930 whichever order the bank lists them in', async () => {
+    const supabase = seeded('3334444')
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { ...SECOND, consent })).toBe('1931')
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(['1931']), { ...OWN, consent })).toBe('1930')
+  })
+
+  it('keeps the first-come rule when the details name no account of the consent', async () => {
+    const supabase = seeded('9999999')
+    expect(await findFreeLedgerAccount(supabase, 'c1', 'SEK', new Set(), { ...SECOND, consent })).toBe('1930')
+  })
+
+  it('keeps the first-come rule for a caller that passes no consent', async () => {
+    expect(await findFreeLedgerAccount(seeded('3334444'), 'c1', 'SEK', new Set(), { iban: SECOND.iban })).toBe('1930')
+  })
+
+  it('resolvePsd2LedgerAccount hands the same answer to each account of the consent', async () => {
+    const supabase = seeded('3334444')
+    const used = new Set<string>()
+    const ledgers: string[] = []
+    for (const account of consent) {
+      const resolved = await resolvePsd2LedgerAccount(supabase, 'c1', 'u1', { ...account, consent, exclude: used, prepareOnly: true })
+      ledgers.push(resolved!.ledgerAccount)
+      used.add(resolved!.ledgerAccount)
+    }
+    expect(ledgers).toEqual(['1931', '1930'])
   })
 })
 

@@ -34,10 +34,6 @@ import { ORE_ROUNDING_ACCOUNT, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
 
 const accountNumber = accountNumberSchema
 
-/** Rates the mapping knows, in percent, as the string keys JSON stores. */
-export const POS_VAT_RATE_KEYS = ['25', '12', '6', '0'] as const
-export type PosVatRateKey = (typeof POS_VAT_RATE_KEYS)[number]
-
 export const posSalesSettingsSchema = z.object({
   tender_accounts: z.object(
     Object.fromEntries(POS_TENDER_KINDS.map((kind) => [kind, accountNumber.nullable()])) as Record<

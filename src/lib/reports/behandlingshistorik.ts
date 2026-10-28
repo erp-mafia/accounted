@@ -7,6 +7,7 @@ import { fetchAppReleases, type AppReleaseRow } from '@/lib/reports/app-releases
 import { SOURCE_TYPE_LABELS_SV } from '@/lib/reports/systemdokumentation'
 import { getPackage, packageForConfigKey } from '@/lib/modules/packages'
 import { parseGrantPolicyVersion } from '@/lib/grants/types'
+import { formatActorAttribution } from '@/lib/attribution/format-actor'
 import {
   buildDecisionReceipts,
   fetchPeriodDecisions,
@@ -692,21 +693,15 @@ export function formatActorLabel(actor: RawActor, userLabels: Map<string, string
   const userLabel = actor.user_id ? userLabels.get(actor.user_id) : undefined
   const fallbackUser = actor.user_id ? `Användare ${actor.user_id.slice(0, 8)}` : null
   switch (actor.type) {
+    // An agent is named with the person it acted for, the row's user: the
+    // key's owner, a service account's sponsor (who answers for it), who
+    // chatted. "Claude åt anna@example.se", never the credential's name
+    // (lib/attribution, in its Swedish words: this report stays Swedish).
     case 'api_key':
-      return actor.actor_label ? `API-nyckel: ${actor.actor_label}` : 'API-nyckel'
     case 'mcp_oauth':
-      return actor.actor_label ? `MCP-anslutning: ${actor.actor_label}` : 'MCP-anslutning'
-    case 'agent_chat': {
-      const who = userLabel ?? fallbackUser
-      return who ? `Assistenten, på uppdrag av ${who}` : 'Assistenten'
-    }
-    case 'service_account': {
-      // A service account's key acts as its sponsor (the row's user_id): the
-      // label names the account, the sponsor answers for it.
-      const account = actor.actor_label ? `Tjänstekonto: ${actor.actor_label}` : 'Tjänstekonto'
-      const sponsor = userLabel ?? fallbackUser
-      return sponsor ? `${account}, på uppdrag av ${sponsor}` : account
-    }
+    case 'agent_chat':
+    case 'service_account':
+      return formatActorAttribution({ actorType: actor.type, actorLabel: actor.actor_label, personName: userLabel ?? fallbackUser })
     case 'cron':
       return actor.actor_label ? `Schemalagd körning: ${actor.actor_label}` : 'Schemalagd körning'
     case 'system':
@@ -2318,8 +2313,13 @@ function percent(value: number): string {
   return `${Math.round(value * 100)} %`
 }
 
-/** What was on offer, what was taken and on what basis, what was booked, and who proposed it. */
-export function decisionDetails(r: DecisionReceipt): string[] {
+/**
+ * What was on offer, what was taken and on what basis, what was booked, and
+ * who proposed it: the agent and the person it staged the proposal for,
+ * named from `userLabels` (the generator resolves them before it builds the
+ * decisions).
+ */
+export function decisionDetails(r: DecisionReceipt, userLabels: Map<string, string> = new Map()): string[] {
   const details: string[] = []
   if (r.booked?.voucher) details.push(`Gäller: ${decisionSubject(r.subject_kind)}`)
   if (r.candidates.length === 0) {
@@ -2346,8 +2346,8 @@ export function decisionDetails(r: DecisionReceipt): string[] {
   }
   if (r.proposed_by && r.proposed_by.actor_type !== 'user') {
     const proposer = formatActorLabel(
-      { type: normaliseActorType(r.proposed_by.actor_type), user_id: null, actor_label: r.proposed_by.label },
-      new Map(),
+      { type: normaliseActorType(r.proposed_by.actor_type), user_id: r.proposed_by.user_id ?? null, actor_label: r.proposed_by.label },
+      userLabels,
     )
     details.push(`Föreslaget av: ${proposer}`)
   }
@@ -2361,7 +2361,7 @@ export function decisionDetails(r: DecisionReceipt): string[] {
   return details
 }
 
-function decisionEvent(r: DecisionReceipt): RawBehandlingshistorikEvent {
+function decisionEvent(r: DecisionReceipt, userLabels: Map<string, string>): RawBehandlingshistorikEvent {
   return {
     id: `decision:${r.receipt_id}`,
     occurred_at: toIso(r.decided_at) ?? r.decided_at,
@@ -2370,7 +2370,7 @@ function decisionEvent(r: DecisionReceipt): RawBehandlingshistorikEvent {
     event: decisionEventLabel(r),
     object: r.booked?.voucher ?? decisionObject(r.subject_kind),
     actor: { type: r.decided_by.actor_type, user_id: r.decided_by.user_id, actor_label: r.decided_by.label },
-    details: decisionDetails(r),
+    details: decisionDetails(r, userLabels),
     source: 'suggestion_log',
     count: 1,
   }
@@ -2383,13 +2383,13 @@ function decisionEvent(r: DecisionReceipt): RawBehandlingshistorikEvent {
  * their count, the way bursts of identical changes are collapsed. Decisions
  * on one voucher at different moments stay separate events.
  */
-export function decisionEvents(receipts: DecisionReceipt[]): RawBehandlingshistorikEvent[] {
+export function decisionEvents(receipts: DecisionReceipt[], userLabels: Map<string, string> = new Map()): RawBehandlingshistorikEvent[] {
   const byVoucher = new Map<string, DecisionReceipt[]>()
   const events: RawBehandlingshistorikEvent[] = []
   for (const r of receipts) {
     const entryId = r.booked?.journal_entry_id
     if (!entryId) {
-      events.push(decisionEvent(r))
+      events.push(decisionEvent(r, userLabels))
       continue
     }
     const key = `${entryId}|${r.decided_at}`
@@ -2399,7 +2399,7 @@ export function decisionEvents(receipts: DecisionReceipt[]): RawBehandlingshisto
   }
   for (const group of byVoucher.values()) {
     if (group.length === 1) {
-      events.push(decisionEvent(group[0]))
+      events.push(decisionEvent(group[0], userLabels))
       continue
     }
     const sorted = [...group].sort((a, b) => a.decided_at.localeCompare(b.decided_at) || a.receipt_id.localeCompare(b.receipt_id))
@@ -2407,7 +2407,7 @@ export function decisionEvents(receipts: DecisionReceipt[]): RawBehandlingshisto
     const counts = new Map<string, number>()
     for (const r of sorted) counts.set(decisionEventLabel(r), (counts.get(decisionEventLabel(r)) ?? 0) + 1)
     const proposer = first.proposed_by && first.proposed_by.actor_type !== 'user'
-      ? decisionDetails(first).find((d) => d.startsWith('Föreslaget av: '))
+      ? decisionDetails(first, userLabels).find((d) => d.startsWith('Föreslaget av: '))
       : undefined
     events.push({
       id: `decision:${first.receipt_id}:batch`,
@@ -2431,6 +2431,48 @@ export function decisionEvents(receipts: DecisionReceipt[]): RawBehandlingshisto
     })
   }
   return events
+}
+
+/** Operation ids per sponsor read: 100 ids stay well under the gateway's 8 KB request line. */
+const SPONSOR_ID_CHUNK = 100
+
+/**
+ * The person each agent proposal was staged for (pending_operations.user_id:
+ * the key's owner, a service account's sponsor, who chatted), which
+ * behandlingshistorik_decisions does not return. Read by operation id, for
+ * agent proposals only. Best-effort: a failed read leaves the proposal named
+ * by its agent alone, never fails the report.
+ */
+async function withProposalSponsors(
+  supabase: SupabaseClient,
+  companyId: string,
+  receipts: DecisionReceipt[],
+): Promise<DecisionReceipt[]> {
+  const ids = [
+    ...new Set(
+      receipts
+        .map((r) => r.proposed_by)
+        .filter((p): p is NonNullable<DecisionReceipt['proposed_by']> => !!p && p.actor_type !== 'user' && !p.user_id)
+        .map((p) => p.pending_operation_id),
+    ),
+  ]
+  if (ids.length === 0) return receipts
+  const sponsors = new Map<string, string>()
+  const reads = await Promise.all(
+    chunk(ids, SPONSOR_ID_CHUNK).map((part) =>
+      supabase.from('pending_operations').select('id, user_id').eq('company_id', companyId).in('id', part),
+    ),
+  )
+  for (const { data, error } of reads) {
+    if (error) continue
+    for (const row of (data ?? []) as { id: string; user_id: string | null }[]) {
+      if (row.user_id) sponsors.set(row.id, row.user_id)
+    }
+  }
+  return receipts.map((r) => {
+    const sponsor = r.proposed_by ? sponsors.get(r.proposed_by.pending_operation_id) : undefined
+    return sponsor && r.proposed_by ? { ...r, proposed_by: { ...r.proposed_by, user_id: sponsor } } : r
+  })
 }
 
 /**
@@ -3003,9 +3045,17 @@ export async function generateBehandlingshistorik(
     if (isWithin(row.occurred_at, fromMs, toMsBound)) raw.push(collectionDecisionEvent(row, caseById.get(row.case_id)))
   }
   // Beslut och förslag: each decision read as its receipt (suggestions on
-  // offer, the one taken, who decided, the agent proposal that carried it).
+  // offer, the one taken, who decided, the agent proposal that carried it
+  // and the person the agent staged it for, named before the details are
+  // written).
+  const userLabels = new Map<string, string>()
   if (decisions.rows.length > 0) {
-    raw.push(...decisionEvents(buildDecisionReceipts(decisions.rows, decisions.context)))
+    const receipts = await withProposalSponsors(supabase, companyId, buildDecisionReceipts(decisions.rows, decisions.context))
+    const sponsorIds = [...new Set(receipts.map((r) => r.proposed_by?.user_id).filter((id): id is string => !!id))]
+    if (options.resolveUserLabels && sponsorIds.length > 0) {
+      for (const [id, label] of await options.resolveUserLabels(sponsorIds)) userLabels.set(id, label)
+    }
+    raw.push(...decisionEvents(receipts, userLabels))
   }
 
   let events = collapseBursts(sortEvents(raw))
@@ -3015,11 +3065,11 @@ export async function generateBehandlingshistorik(
   }
 
   const userIds = [
-    ...new Set(events.flatMap((e) => [e.actor.user_id, e.verified?.user_id]).filter((id): id is string => !!id)),
+    ...new Set(events.flatMap((e) => [e.actor.user_id, e.verified?.user_id]).filter((id): id is string => !!id && !userLabels.has(id))),
   ]
-  const userLabels = options.resolveUserLabels && userIds.length > 0
-    ? await options.resolveUserLabels(userIds)
-    : new Map<string, string>()
+  if (options.resolveUserLabels && userIds.length > 0) {
+    for (const [id, label] of await options.resolveUserLabels(userIds)) userLabels.set(id, label)
+  }
   const finalEvents = events.map((e) => finaliseEvent(e, userLabels))
 
   const byCategory = Object.fromEntries(

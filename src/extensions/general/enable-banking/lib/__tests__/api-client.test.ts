@@ -1100,9 +1100,9 @@ describe('connector mode', () => {
 
   it('sends prefilled credentials with autosubmit off, and neither field when there is nothing to prefill', async () => {
     fetchSpy.mockResolvedValue(okJson({ url: 'https://bank/auth', authorization_id: 'a1' }))
-    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '5568098239' })
+    await startAuthorization('Handelsbanken', 'SE', 'https://instance.test/callback', 'oauth-state-1', 'business', 'BANKID', 'company-42', { companyId: '5544556672' })
     const withCredentials = JSON.parse(String(lastCall().init.body))
-    expect(withCredentials.credentials).toEqual({ companyId: '5568098239' })
+    expect(withCredentials.credentials).toEqual({ companyId: '5544556672' })
     expect(withCredentials.credentials_autosubmit).toBe(false)
     expect(withCredentials.auth_method).toBe('BANKID')
 

@@ -42,9 +42,9 @@ From the ekonomisk förening branch:
 
 From the rest of the product:
 
-- K3 machinery: `lib/bokslut/assets/k3-components.ts`, the depreciation engine, K3 noter builder, K3 equity-changes statement, `generateKassaflodesanalys` (used by the K3 document). Paper filing for K3 is disabled ("granskningsutkast") and the K3 equity statement is AB-shaped.
-- Recurring invoice schedules (`lib/invoices/recurring-*`) with text rows and placeholders, e-invoice, reminders: the raw material for avisering.
-- Kontrolluppgifter module (`lib/salary/ku`) for KU10/KU20/KU31: the transport for KU55 exists, the record type does not.
+- K3 machinery: `src/lib/bokslut/assets/k3-components.ts`, the depreciation engine, K3 noter builder, K3 equity-changes statement, `generateKassaflodesanalys` (used by the K3 document). Paper filing for K3 is disabled ("granskningsutkast") and the K3 equity statement is AB-shaped.
+- Recurring invoice schedules (`src/lib/invoices/recurring-*`) with text rows and placeholders, e-invoice, reminders: the raw material for avisering.
+- No kontrolluppgifter module: the KU10 export was removed; only the KU deadline reminder and `src/lib/tax/ku-signal.ts` remain, so KU55 needs both a file transport and its record type.
 - Fastighetsavgift only as BAS accounts (5xxx), no calculation, no deadline.
 - No member register, no apartment register, no andelstal, no pant register, no autogiro (BG Autogiro / Bankgirot) integration.
 

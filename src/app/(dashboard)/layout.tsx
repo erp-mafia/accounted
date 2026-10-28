@@ -44,6 +44,8 @@ import { resolveBrandDomainBounce } from '@/lib/auth/brand-signup-gate'
 import { INVITE_COOKIE_NAME } from '@/lib/auth/consume-invite-cookie'
 import { resolveBrandsForTeams } from '@/lib/branding/team-brands'
 import { isNoCompanyDashboardPath } from '@/lib/company/no-company-routes'
+import { mayHaveBankIdEngagements } from '@/lib/company-lookup/engagements'
+import { addCompanyHref } from '@/components/settings/company-deletion'
 import {
   partitionCompaniesByHomeDomain,
   isCompanyHomedOnHost,
@@ -133,6 +135,7 @@ export default async function DashboardLayout({
     { data: userPrefs },
     { data: allMemberships },
     acceptance,
+    bankIdEnrichment,
   ] = await Promise.all([
     getDashboardCompanyId(),
     // Read the pathname forwarded by middleware so we can branch on it.
@@ -152,7 +155,25 @@ export default async function DashboardLayout({
     // analytics choice: the acceptance prompt and whether PostHog may start.
     // Its own reads, so a failure never touches the ones above.
     readAcceptanceState(supabase, user.id),
+    // The BankID engagements behind "Lägg till företag" (addCompanyHref
+    // below). Read only for an account that has been through BankID, the
+    // only way the row gets written: nobody else pays for the request.
+    mayHaveBankIdEngagements(user.app_metadata)
+      ? supabase.from('bankid_enrichment').select('company_roles').eq('user_id', user.id).maybeSingle()
+      : null,
   ])
+
+  // "Lägg till företag" (user menu, switcher, Företag settings, ⌘K): straight
+  // into the journey when the BankID picker would be empty, instead of via
+  // /select-company's redirect. A failed read keeps the picker door, which
+  // decides for itself.
+  const companyAddHref = addCompanyHref(
+    bankIdEnrichment === null ? null : bankIdEnrichment.error ? undefined : (bankIdEnrichment.data?.company_roles ?? null),
+    (allMemberships ?? []).map((m) => {
+      const c = m.companies as { org_number?: string | null; archived_at?: string | null } | null
+      return c && !c.archived_at ? c.org_number : null
+    }),
+  )
 
   const pathname = headerStore.get('x-pathname') ?? ''
   // Dashboard pages that stay reachable without an active company (Profil
@@ -252,6 +273,7 @@ export default async function DashboardLayout({
           trialEndsAt: null,
           entitlementState: 'none' as const,
           trialExpiredAt: null,
+          addCompanyHref: companyAddHref,
         }}
       >
         <SessionTimeoutController />
@@ -432,6 +454,7 @@ export default async function DashboardLayout({
       trialEndsAt: null,
       entitlementState: 'none' as const,
       trialExpiredAt: null,
+      addCompanyHref: companyAddHref,
     }
 
     return (
@@ -594,6 +617,7 @@ export default async function DashboardLayout({
     entitlementState: entitlements.entitlementState,
     trialExpiredAt: entitlements.trialExpiredAt,
     lockedCompanyIds: [...dormantCompanyIds],
+    addCompanyHref: companyAddHref,
   }
 
   // Signpost gate (WL-01): a company is opened ONLY on its home domain. When

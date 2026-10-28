@@ -1289,7 +1289,7 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     '#PROGRAM\t"Bollbok"\t2078',
     '#GEN\t20260512\t""',
     '#SIETYP\t4',
-    '#ORGNR\t"950406-3679"',
+    '#ORGNR\t"950101-1234"',
     '#FNAMN\t"Erik Hellqvist "',
     '#RAR 0 20250101 20251231',
     '#KPTYP\tEUBAS97',
@@ -1314,7 +1314,7 @@ describe('parseSIEFile: tab-separated fields (Bollbok export shape)', () => {
     '#FORMAT\tPC8',
     '#GEN\t20260514\t""',
     '#SIETYP\t4',
-    '#ORGNR\t"950406-3679"',
+    '#ORGNR\t"950101-1234"',
     '#FNAMN\t"Erik Hellqvist "',
     '#RAR 0 20260101 20261231',
     '#KPTYP\tEUBAS97',
@@ -1523,7 +1523,7 @@ describe('parseSIEFile: silent-failure diagnostic warnings', () => {
 })
 
 describe('getEffectiveOpeningBalances: derive IB from #UB -1 (issue #675)', () => {
-  // Issue #675 (ro66an): some systems export no #IB 0 records: the current
+  // Issue #675: some systems export no #IB 0 records: the current
   // year's IB exists only via the continuity invariant IB(0) = UB(-1).
   const SIE_NO_IB0 = [
     '#FLAGGA 0',

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  bridgeClientLabel,
   clientInfoNameFromMeta,
   clientLabelForName,
   clientLabelForOAuthProvider,
@@ -60,6 +61,7 @@ describe('clientLabelForName', () => {
     expect(clientLabelForName('Gemini-CLI/0.9')).toBe('gemini')
     expect(clientLabelForName('grok')).toBe('grok')
     expect(clientLabelForName('Visual Studio Code')).toBe('vscode')
+    expect(clientLabelForName('Visual-Studio-Code')).toBe('vscode')
   })
 
   it('finds a product token later in a browser-style User-Agent', () => {
@@ -97,6 +99,52 @@ describe('clientInfoNameFromMeta', () => {
   })
 })
 
+describe('bridgeClientLabel', () => {
+  it('maps the client name inside a bridge User-Agent, claude-ai to claude-desktop', () => {
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 (claude-ai/0.14.10)'))
+      .toEqual({ client: 'claude-desktop', clientName: null, clientSource: 'bridge' })
+    expect(bridgeClientLabel('gnubok-mcp/1.2.0 (Claude-AI/0.14.10)'))
+      .toEqual({ client: 'claude-desktop', clientName: null, clientSource: 'bridge' })
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 (cursor-vscode/1.0.0)'))
+      .toEqual({ client: 'cursor', clientName: null, clientSource: 'bridge' })
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 (claude-code/2.0.14)'))
+      .toEqual({ client: 'claude-code', clientName: null, clientSource: 'bridge' })
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 (Visual-Studio-Code/1.105.1)'))
+      .toEqual({ client: 'vscode', clientName: null, clientSource: 'bridge' })
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 (codex-mcp-client)'))
+      .toEqual({ client: 'codex', clientName: null, clientSource: 'bridge' })
+  })
+
+  it('labels an unknown client name other, with the bridge as clientName', () => {
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 (my-agent/0.1)'))
+      .toEqual({ client: 'other', clientName: 'accounted-mcp', clientSource: 'bridge' })
+    expect(bridgeClientLabel('gnubok-mcp/1.2.0 (my-agent/0.1)'))
+      .toEqual({ client: 'other', clientName: 'gnubok-mcp', clientSource: 'bridge' })
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 (node/24.10.0)'))
+      .toEqual({ client: 'other', clientName: 'accounted-mcp', clientSource: 'bridge' })
+  })
+
+  it('labels a bridge User-Agent without a client name other, with the bridge as clientName', () => {
+    expect(bridgeClientLabel('accounted-mcp/1.1.0'))
+      .toEqual({ client: 'other', clientName: 'accounted-mcp', clientSource: 'bridge' })
+    expect(bridgeClientLabel('gnubok-mcp/1.2.0'))
+      .toEqual({ client: 'other', clientName: 'gnubok-mcp', clientSource: 'bridge' })
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 ()'))
+      .toEqual({ client: 'other', clientName: 'accounted-mcp', clientSource: 'bridge' })
+    expect(bridgeClientLabel('accounted-mcp/1.1.0 (/1.0)'))
+      .toEqual({ client: 'other', clientName: 'accounted-mcp', clientSource: 'bridge' })
+  })
+
+  it('returns null for a User-Agent that is not one of the bridges', () => {
+    expect(bridgeClientLabel('node')).toBeNull()
+    expect(bridgeClientLabel('claude-code/2.0.14')).toBeNull()
+    expect(bridgeClientLabel('accounted-mcp')).toBeNull()
+    expect(bridgeClientLabel('my-accounted-mcp/1.0 (claude-ai/1.0)')).toBeNull()
+    expect(bridgeClientLabel('Mozilla/5.0 accounted-mcp/1.1.0 (claude-ai/1.0)')).toBeNull()
+    expect(bridgeClientLabel(null)).toBeNull()
+  })
+})
+
 describe('resolveClientLabel', () => {
   it('keeps a valid marker exactly as before, ignoring every fallback', () => {
     expect(resolveClientLabel({ marker: 'Claude-Desktop', oauthProvider: 'chatgpt', clientInfoName: 'cursor', userAgent: 'node' }))
@@ -119,6 +167,23 @@ describe('resolveClientLabel', () => {
       .toEqual({ client: 'other', clientName: 'python-httpx/0.28.1', clientSource: 'user_agent' })
     expect(resolveClientLabel({ marker: null, clientInfoName: 'My <Agent>', userAgent: 'node' }))
       .toEqual({ client: 'other', clientName: 'My Agent', clientSource: 'client_info' })
+  })
+
+  it('labels a bridge User-Agent by the client name it carries, source bridge', () => {
+    expect(resolveClientLabel({ marker: null, userAgent: 'accounted-mcp/1.1.0 (claude-ai/0.14.10)' }))
+      .toEqual({ client: 'claude-desktop', clientName: null, clientSource: 'bridge' })
+    expect(resolveClientLabel({ marker: null, userAgent: 'accounted-mcp/1.1.0' }))
+      .toEqual({ client: 'other', clientName: 'accounted-mcp', clientSource: 'bridge' })
+  })
+
+  it('keeps the marker, OAuth provider and clientInfo ahead of a bridge User-Agent', () => {
+    const userAgent = 'accounted-mcp/1.1.0 (claude-ai/0.14.10)'
+    expect(resolveClientLabel({ marker: 'openclaw', userAgent }))
+      .toEqual({ client: 'openclaw', clientName: null, clientSource: null })
+    expect(resolveClientLabel({ marker: null, oauthProvider: 'chatgpt', userAgent }))
+      .toEqual({ client: 'chatgpt', clientName: null, clientSource: 'oauth' })
+    expect(resolveClientLabel({ marker: null, clientInfoName: 'cursor', userAgent }))
+      .toEqual({ client: 'cursor', clientName: null, clientSource: 'client_info' })
   })
 
   it('labels a request with no source at all other, source none', () => {

@@ -276,6 +276,9 @@ export interface UserUiState {
   trial_expired_ack?: Record<string, string>
   // Transaktioner column visibility (lib/transactions/columns-v2).
   tx_columns?: { hidden?: string[] }
+  // Kom igång steps this user chose to skip, keyed per company
+  // (companyId -> step ids, lib/onboarding/checklist SKIPPABLE_SETUP_STEPS).
+  setup_skipped?: Record<string, string[]>
 }
 
 export type AgentPanelMode = 'docked' | 'floating'
@@ -2385,6 +2388,9 @@ export interface JournalEntry {
   // (e.g. the API key name).
   committed_actor_type: string | null
   committed_actor_label: string | null
+  // The person who posted it (auth.uid(), or user_id for a trusted backend
+  // caller; migration 20260929220100). NULL on drafts and older entries.
+  committed_by?: string | null
   rubric_version: string | null
   source_voucher_series: string | null
   source_voucher_number: number | null

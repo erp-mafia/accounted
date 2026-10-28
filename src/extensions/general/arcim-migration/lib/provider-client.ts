@@ -72,7 +72,10 @@ export class ProviderTokenInvalidError extends Error {
       | 'company-key-not-found'
       // Bokio: the company's price plan has no API access (Basic, or an
       // expired plan). The token can be fine; the fix is the plan.
-      | 'plan-no-api' = 'credentials',
+      | 'plan-no-api'
+      // Bokio: what was pasted as the company id holds no GUID, so Bokio
+      // can never find a company by it.
+      | 'company-id-invalid' = 'credentials',
   ) {
     super(message)
     this.name = 'ProviderTokenInvalidError'
@@ -684,6 +687,18 @@ export async function ensureConsentSourceIdentity(
   return 'filled'
 }
 
+const GUID = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi
+
+/**
+ * The Bokio company id in what the user pasted: the GUID itself, or the
+ * address of a Bokio page that holds exactly one (the connect help points at
+ * the address bar). Null when there is none, or more than one to choose from.
+ */
+export function bokioCompanyIdFrom(pasted: string): string | null {
+  const found = [...new Map((pasted.match(GUID) ?? []).map(id => [id.toLowerCase(), id])).values()]
+  return found.length === 1 ? found[0] : null
+}
+
 export async function submitProviderToken(
   consentId: string,
   provider: ProviderName,
@@ -818,17 +833,25 @@ export async function submitProviderToken(
   // storing anything: it proves the credentials work and returns the
   // organizationNumber to compare.
   if (provider === 'bokio') {
-    const bokioCompanyId = providerCompanyId?.trim() ?? ''
+    const pastedCompanyId = providerCompanyId?.trim() ?? ''
     accessToken = normalizeBokioAccessToken(apiToken)
 
     if (!accessToken) {
       throw new ProviderTokenInvalidError('Bokio requires an integration token')
     }
-    if (!bokioCompanyId) {
+    if (!pastedCompanyId) {
       throw new ProviderTokenInvalidError(
         'Bokio requires a company id',
         'company-not-found',
       )
+    }
+    // Decided here, not by Bokio: a value without a GUID (an org number, the
+    // token pasted into the wrong field) drew a Bokio 400 that the route
+    // answered with "try again", five times in a row for one user on
+    // 2026-10-27. Every Bokio company id stored since the probe is a GUID.
+    const bokioCompanyId = bokioCompanyIdFrom(pastedCompanyId)
+    if (!bokioCompanyId) {
+      throw new ProviderTokenInvalidError('Bokio company id holds no GUID', 'company-id-invalid')
     }
     storedProviderCompanyId = bokioCompanyId
 

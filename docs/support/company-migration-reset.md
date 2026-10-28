@@ -129,9 +129,8 @@ Start with the request ID from the API response or browser network panel. The
 routes log operations `company.migration-reset.preview`,
 `company.migration-reset.execute`, and `company.migration-reset.archive`.
 
-Use read-only checks only. Do not run a reset RPC on behalf of a customer, do
-not run `scripts/clear-user-data.sql`, and do not disable retention or journal
-enforcement triggers.
+Use read-only checks only. Do not run a reset RPC on behalf of a customer, and
+do not disable retention or journal enforcement triggers.
 
 The retained source is hidden from normal company selection. A current owner
 of the active replacement can use **Settings > Company > Previous migration >
@@ -263,7 +262,7 @@ applied migration file.
 
 ## Escalation boundary
 
-Escalate to Emil and an accounting/legal reviewer when the owner cannot make
+Escalate to a maintainer and an accounting/legal reviewer when the owner cannot make
 the filing attestation (a filing made on the basis of the bookkeeping in
 Accounted, through any channel), the company is outside the 30-day window, a
 period is closed or locked, or a known authority submission exists. A

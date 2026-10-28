@@ -9,12 +9,12 @@
  * Format (per Skatteverket "Referensnummer (OCR) för inbetalning till
  * skattekonto"):
  *   - The person-, samordnings- or organisationsnummer in its TWELVE-digit
- *     form: an organisationsnummer carries the "16" prefix (5595470021 →
- *     165595470021), a personnummer its century (880225-1234 → 198802251234)
+ *     form: an organisationsnummer carries the "16" prefix (5544668808 →
+ *     165544668808), a personnummer its century (880225-1234 → 198802251234)
  *   - Followed by a single Luhn check digit
  *   - Total: 13 digits
  *
- * Example: 559547-0021 → "165595470021" + check digit "7" = "1655954700217"
+ * Example: 554466-8808 → "165544668808" + check digit "7" = "1655446688087"
  *
  * The twelve-digit form is the same "redovisare" identity the AGI and moms
  * APIs take, so it is built with the shared `toRedovisare12` converter rather

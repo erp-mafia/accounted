@@ -134,6 +134,11 @@ export const DecisionReceiptSchema = z.object({
       actor_type: z.string(),
       actor_id: z.string().nullable(),
       label: z.string().nullable(),
+      user_id: z
+        .string()
+        .nullable()
+        .optional()
+        .describe("The person the operation was staged for: the key's owner, a service account's sponsor, who chatted. Absent when not read."),
       risk_level: z.string().nullable(),
       model: z.string().nullable(),
       prompt_hash: z.string().nullable(),
@@ -251,6 +256,8 @@ export interface ReceiptOperationRow {
   actor_type: string
   actor_id: string | null
   actor_label: string | null
+  /** The person the operation was staged for. Absent from behandlingshistorik_decisions rows. */
+  user_id?: string | null
   risk_level: string | null
   agent_metadata: { model?: unknown; prompt_hash?: unknown } | null
   created_at: string
@@ -401,6 +408,7 @@ export function buildDecisionReceipt(row: SuggestionLogRow, ctx: ReceiptContext)
           actor_type: op.actor_type,
           actor_id: op.actor_id,
           label: op.actor_label,
+          ...(op.user_id !== undefined ? { user_id: op.user_id } : {}),
           risk_level: op.risk_level,
           model: str(meta?.model),
           prompt_hash: str(meta?.prompt_hash),
@@ -630,7 +638,7 @@ export async function loadReceiptContext(
   for (const ids of chunk(operationIds, ID_CHUNK)) {
     const { data, error } = await supabase
       .from('pending_operations')
-      .select('id, operation_type, actor_type, actor_id, actor_label, risk_level, agent_metadata, created_at, resolved_at, journal_entry_id:result_data->>journal_entry_id, registration_journal_entry_id:result_data->>registration_journal_entry_id')
+      .select('id, operation_type, actor_type, actor_id, actor_label, user_id, risk_level, agent_metadata, created_at, resolved_at, journal_entry_id:result_data->>journal_entry_id, registration_journal_entry_id:result_data->>registration_journal_entry_id')
       .eq('company_id', companyId)
       .in('id', ids)
     if (error) throw dbError(error)
@@ -668,13 +676,13 @@ export async function loadReceiptContext(
     const [byEntry, byRegistration] = await Promise.all([
       supabase
         .from('pending_operations')
-        .select('id, operation_type, actor_type, actor_id, actor_label, risk_level, agent_metadata, created_at, resolved_at, journal_entry_id:result_data->>journal_entry_id, registration_journal_entry_id:result_data->>registration_journal_entry_id')
+        .select('id, operation_type, actor_type, actor_id, actor_label, user_id, risk_level, agent_metadata, created_at, resolved_at, journal_entry_id:result_data->>journal_entry_id, registration_journal_entry_id:result_data->>registration_journal_entry_id')
         .eq('company_id', companyId)
         .eq('status', 'committed')
         .in('result_data->>journal_entry_id', ids),
       supabase
         .from('pending_operations')
-        .select('id, operation_type, actor_type, actor_id, actor_label, risk_level, agent_metadata, created_at, resolved_at, journal_entry_id:result_data->>journal_entry_id, registration_journal_entry_id:result_data->>registration_journal_entry_id')
+        .select('id, operation_type, actor_type, actor_id, actor_label, user_id, risk_level, agent_metadata, created_at, resolved_at, journal_entry_id:result_data->>journal_entry_id, registration_journal_entry_id:result_data->>registration_journal_entry_id')
         .eq('company_id', companyId)
         .eq('status', 'committed')
         .in('result_data->>registration_journal_entry_id', ids),

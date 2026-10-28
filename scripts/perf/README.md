@@ -6,7 +6,7 @@ Why this exists: a customer reported that "it takes time before all fields load 
 
 | Surface | Where | Header | Log line |
 |---|---|---|---|
-| Auth proxy (every page, RSC, prefetch, `/api` request) | `lib/supabase/middleware.ts` via `lib/supabase/proxy-timing.ts` | `Server-Timing: mw-auth, mw-session, mw-company, mw-mfa, mw-total` on page/RSC/prefetch responses; `X-Proxy-Timing` (same value) on `/api` responses | `proxy completed` with `kind` (`page`, `rsc`, `prefetch`, `api`), `route` (ids and tokens collapsed), `status`, `authMs`, `sessionMs`, `companyMs`, `mfaMs`, `totalMs` |
+| Auth proxy (every page, RSC, prefetch, `/api` request) | `lib/supabase/middleware.ts` via `lib/supabase/proxy-timing.ts` | `Server-Timing: mw-auth, mw-session, mw-company, mw-mfa, mw-total` on page/RSC/prefetch responses; `X-Proxy-Timing` (same value) on `/api` responses | `proxy completed` (not for an `/api` call without a session cookie: Bearer, cron, webhook; the route's own line covers those) with `kind` (`page`, `rsc`, `prefetch`, `api`), `route` (ids and tokens collapsed), `status`, `authMs`, `sessionMs`, `companyMs`, `mfaMs`, `totalMs` |
 | Route wrapper (`withRouteContext`, 367 of 529 routes) | `lib/api/with-route-context.ts` | `Server-Timing: auth, company, handler` | `op completed` with `operation`, `status`, `durationMs`, `authMs`, `companyMs`, `handlerMs` |
 | Browser | `@vercel/speed-insights` mounted in `app/layout.tsx` | n/a | Vercel dashboard > Speed Insights > Routes (p75 TTFB, FCP, LCP, INP, CLS per route) |
 
@@ -73,7 +73,7 @@ Interactions to record every time: `/transactions` soft navigation; open Bokför
 
 Why this exists: the work that brought every report under 200 ms p95 for a company with 50 000 verifikat a year (!821, !822, !823, 2026-10-23) was measured with a harness that lived in a session scratchpad and was lost with it. This is that instrument in the repository, with budgets and a scheduled CI job, so a later change cannot make a report slow again without a red job saying which call.
 
-It times the database side only: each report RPC the app calls, with the arguments the app passes (`cases.ts`, traced from the call sites), and the posting path (`commit_journal_entry` on a draft made the way `lib/bookkeeping/engine.ts` makes one). The auth proxy and the route wrapper add 50 to 90 ms per request in production (see above), and one report request can make several of these calls, so a DB budget of about 100 ms per call is what keeps a request under 200 ms.
+It times the database side only: each report RPC the app calls, with the arguments the app passes (`cases.ts`, traced from the call sites), and the posting path (`commit_journal_entry` on a draft made the way `src/lib/bookkeeping/engine.ts` makes one). The auth proxy and the route wrapper add 50 to 90 ms per request in production (see above), and one report request can make several of these calls, so a DB budget of about 100 ms per call is what keeps a request under 200 ms.
 
 ### What it runs against
 

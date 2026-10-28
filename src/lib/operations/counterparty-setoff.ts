@@ -101,7 +101,7 @@ export const invoicesCounterpartyBalanceGet = defineOperation({
       request: { customer_id: '6b0e…' },
       response: {
         data: {
-          party: { party_id: '7fc2…', name: 'Crayfish Energy AB', org_number: '5594774076' },
+          party: { party_id: '7fc2…', name: 'Exempel Energi AB', org_number: '5599887766' },
           totals: [{ currency: 'SEK', receivable: 1388, payable: 4504, net: -3116, direction: 'we_pay' }],
         },
         meta: META,

@@ -47,7 +47,7 @@ export function TransactionPartsSection({ transactionId, onMatch, processing }: 
   const kinds = new Set(prefills.map((p) => p.kind))
 
   return (
-    <div className="border-b border-border px-5 py-3">
+    <div className="border-b border-border px-6 py-3">
       <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.08em] text-muted-foreground">
         {t('heading', { count: parts.length })}
       </p>

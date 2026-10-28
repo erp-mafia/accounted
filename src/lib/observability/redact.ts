@@ -163,6 +163,36 @@ function nameOfObject(o: Record<string, unknown>): string {
   return 'Error'
 }
 
+/** What any thrown value says about itself, before redaction. */
+export interface ThrownDescription {
+  name: string
+  message: string
+  stack?: string
+  code?: unknown
+}
+
+/**
+ * The name, message, stack and code of any thrown value: an Error's own, a
+ * plain object's from the shapes messageOfObject knows, a string as its own
+ * message. Not redacted: redactedError redacts for a vendor, and toError
+ * (lib/errors/to-error.ts) hands the logger an Error it redacts itself.
+ */
+export function describeThrown(err: unknown): ThrownDescription {
+  if (err instanceof Error) {
+    return {
+      name: err.name,
+      message: err.message,
+      stack: typeof err.stack === 'string' ? err.stack : undefined,
+      code: (err as Error & { code?: unknown }).code,
+    }
+  }
+  if (typeof err === 'object' && err !== null) {
+    const o = err as Record<string, unknown>
+    return { name: nameOfObject(o), message: messageOfObject(o), stack: nonEmptyString(o.stack), code: o.code }
+  }
+  return { name: 'Error', message: typeof err === 'string' ? err : `Non-Error value captured: ${String(err)}` }
+}
+
 /**
  * An Error a vendor SDK can take (it wants an instance, not redact()'s plain
  * object), with the message and the stack redacted as redact() does them.
@@ -181,26 +211,7 @@ function nameOfObject(o: Record<string, unknown>): string {
  * carried it either; `cause` is not followed for the same reason.
  */
 export function redactedError(err: unknown): RedactedError {
-  let name: string
-  let message: string
-  let stack: string | undefined
-  let code: unknown
-  if (err instanceof Error) {
-    name = err.name
-    message = err.message
-    stack = typeof err.stack === 'string' ? err.stack : undefined
-    code = (err as Error & { code?: unknown }).code
-  } else if (typeof err === 'object' && err !== null) {
-    const o = err as Record<string, unknown>
-    name = nameOfObject(o)
-    message = messageOfObject(o)
-    stack = nonEmptyString(o.stack)
-    code = o.code
-  } else {
-    name = 'Error'
-    message = typeof err === 'string' ? err : `Non-Error value captured: ${String(err)}`
-  }
-
+  const { name, message, stack, code } = describeThrown(err)
   const safe: RedactedError = new Error(redactString(message))
   safe.name = redactString(name)
   safe.stack = stack !== undefined ? redactString(stack) : `${safe.name}: ${safe.message}`

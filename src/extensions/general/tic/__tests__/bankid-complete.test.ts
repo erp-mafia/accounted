@@ -950,9 +950,9 @@ describe('POST /bankid/complete', () => {
         name: 'Anna Andersson',
         enrichedAtUtc: '2026-05-06T11:30:00Z',
         companyRoles: [
-          role(1, '1982083002390001', 'Enskild näringsidkare', 'Andersson, Anna'),
+          role(1, '1982010112390001', 'Enskild näringsidkare', 'Andersson, Anna'),
           role(2, '1990010112340001', 'Enskild näringsidkare', 'Andersson, Anna'),
-          role(3, '2002011732750001', 'Enskild näringsidkare', 'Andersson, Anna'),
+          role(3, '2002010112360001', 'Enskild näringsidkare', 'Andersson, Anna'),
           role(4, '5566778899', 'Aktiebolag', 'Exempel AB'),
         ],
       })

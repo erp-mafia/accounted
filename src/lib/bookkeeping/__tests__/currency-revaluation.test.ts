@@ -1516,7 +1516,7 @@ describe('currency-revaluation', () => {
     })
 
     it('executeCurrencyRevaluation posts nothing when nothing was open on balansdagen', async () => {
-      // The Oppy case end to end: only a post-balansdagen invoice exists, so
+      // The reported case end to end: only a post-balansdagen invoice exists, so
       // the year-end run must not create any verifikat at all.
       const laterInvoice = makeInvoice({
         status: 'sent',

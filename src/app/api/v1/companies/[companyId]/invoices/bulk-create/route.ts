@@ -182,8 +182,9 @@ function buildFailure(code: string, details?: Record<string, unknown>): NonNulla
  * creates from the same body. Returns a ResultItem instead of an HTTP
  * response so the caller can aggregate.
  *
- * TODO: move the insert, rollback and event below into a shared lib
- * function with POST /invoices as well. Tracked as cross-route cleanup.
+ * The insert, rollback and event below are a second copy of the same steps
+ * in POST /invoices (src/app/api/invoices/route.ts): a change to one belongs
+ * in the other.
  */
 async function createOneInvoice(
   supabase: SupabaseClient,

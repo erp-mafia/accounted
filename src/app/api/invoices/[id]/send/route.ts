@@ -58,7 +58,6 @@ import type {
   CompanySettings,
   CreditNote,
   Customer,
-  EntityType,
   Invoice,
   InvoiceItem,
 } from '@/types'

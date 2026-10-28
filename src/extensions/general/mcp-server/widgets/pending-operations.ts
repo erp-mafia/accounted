@@ -231,7 +231,7 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
       html += '<tr class="' + cls + '" data-idx="' + i + '">';
       html += '<td class="date">' + esc((op.created_at || '').slice(0, 10)) + '</td>';
       html += '<td><span class="title" data-toggle="' + i + '">' + esc(op.title || op.operation_type || '') + '</span>' +
-        '<div class="op-type">' + esc(op.operation_type || '') + (op.actor_label ? ' \\u00b7 ' + esc(op.actor_label) : '') + '</div>' +
+        '<div class="op-type">' + esc(op.operation_type || '') + (proposer(op) ? ' \\u00b7 ' + esc(proposer(op)) : '') + '</div>' +
         (op._error ? '<div class="error-msg">' + esc(op._error) + '</div>' : '') +
         '</td>';
       html += '<td>' + riskChip(op.risk_level) + '</td>';
@@ -260,6 +260,12 @@ export const PENDING_OPERATIONS_HTML = `<!DOCTYPE html>
     document.querySelectorAll('button[data-reject]').forEach(function(b) {
       b.addEventListener('click', function() { reject(parseInt(b.dataset.reject)); });
     });
+  }
+
+  // Who staged it, as the list tool names it ("Claude \\u00e5t Jonas Ek");
+  // the raw label from an older server that does not send proposed_by.
+  function proposer(op) {
+    return op.proposed_by || op.actor_label || '';
   }
 
   function riskChip(level) {

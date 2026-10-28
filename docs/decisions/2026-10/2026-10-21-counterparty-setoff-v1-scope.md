@@ -1,1 +1,1 @@
-[2026-10-21] Kvittning v1 is SEK only and refuses kontantmetoden, ROT/RUT invoices, credit notes, open collection cases and supplier invoices with a payment in flight: Oppy (accrual, SEK) needs none, and each needs rules of its own (pro rata VAT, FX legs) (crm#1367).
+[2026-10-21] Kvittning v1 is SEK only and refuses kontantmetoden, ROT/RUT invoices, credit notes, open collection cases and supplier invoices with a payment in flight: the first case (accrual, SEK) needs none, and each needs rules of its own (pro rata VAT, FX legs) (crm#1367).

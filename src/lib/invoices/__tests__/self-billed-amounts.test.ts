@@ -7,7 +7,7 @@ import { createTableMockSupabase } from '@/tests/helpers'
 import { selfBilledSaleAmounts } from '../self-billed-amounts'
 import { resolveSelfBilledSaleDraft } from '../self-billed-sale'
 
-// Deepgrid's received self-bill: netto 7 868,80 gives moms 1 967,20 on the
+// A received self-bill: netto 7 868,80 gives moms 1 967,20 on the
 // summed base; line by line it came to 1 967,21.
 const ITEMS = [
   { quantity: 1, unit_price: 7000.02, vat_rate: 25 },

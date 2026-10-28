@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl'
 import { cn } from '@/lib/utils'
 import { POPOVER_ENTER_CLASS, POPOVER_SURFACE_CLASS } from '@/components/ui/popover-surface'
 import { useCompany } from '@/contexts/CompanyContext'
+import { ADD_COMPANY_HREF } from '@/components/settings/company-deletion'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import { useToast } from '@/components/ui/use-toast'
 import {
@@ -18,7 +19,7 @@ import {
 } from '@/components/icons'
 
 export default function CompanySwitcher() {
-  const { company, companies, isSandbox, foreignCompanies = [], lockedCompanyIds = [] } = useCompany()
+  const { company, companies, isSandbox, foreignCompanies = [], lockedCompanyIds = [], addCompanyHref = ADD_COMPANY_HREF } = useCompany()
   const t = useTranslations('company_switcher')
   const { toast } = useToast()
   const [open, setOpen] = useState(false)
@@ -115,7 +116,7 @@ export default function CompanySwitcher() {
     if (isSandbox) return null
     return (
       <Link
-        href="/select-company?choose=1"
+        href={addCompanyHref}
         className="flex items-center gap-2 w-full text-left rounded-lg border border-dashed border-border hover:border-foreground/30 hover:bg-secondary/60 -mx-1 px-2 py-1.5 transition-colors duration-150"
       >
         <PlusIcon className="h-3.5 w-3.5 text-muted-foreground flex-shrink-0" />
@@ -234,7 +235,7 @@ export default function CompanySwitcher() {
           {!isSandbox && (
             <div className={cn((companies.length > 0 || foreignCompanies.length > 0) && 'border-t border-border mt-1 pt-1', 'px-1')}>
               <Link
-                href="/select-company?choose=1"
+                href={addCompanyHref}
                 onClick={() => setOpen(false)}
                 className="flex items-center gap-2 px-2.5 py-2 text-[13px] text-muted-foreground hover:text-foreground hover:bg-secondary/60 rounded-sm transition-colors md:whitespace-nowrap"
               >

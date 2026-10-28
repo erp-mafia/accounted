@@ -47,8 +47,25 @@ describe('migrationJobErrorMessageKey', () => {
 
   it('keeps the kind of every other code, the provider aside', () => {
     expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_AUTH_EXPIRED', provider: 'bokio' })).toBe('ext_arcim_job_error_connection')
-    expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_LICENSE_MISSING', provider: 'fortnox' })).toBe('ext_arcim_job_error_access')
+    expect(migrationJobErrorMessageKey({ error_code: 'MIGRATION_WRITE_FORBIDDEN', provider: 'fortnox' })).toBe('ext_arcim_job_error_access')
     expect(migrationJobErrorMessageKey({ error_code: 'MIGRATION_RETRY' })).toBe('ext_arcim_job_error_retry')
+  })
+
+  // A subscription that shuts the API out stops the whole job. "Check the
+  // provider's API subscription and your permission" named neither the
+  // Visma API module nor the licence (crm#1081).
+  it('names what to activate when the subscription shuts the API out', () => {
+    expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_API_MODULE_INACTIVE', provider: 'visma' })).toBe('ext_arcim_job_error_api_module')
+    expect(migrationJobErrorMessageKey({ error_code: 'PROVIDER_LICENSE_MISSING', provider: 'fortnox' })).toBe('ext_arcim_job_error_api_license')
+    for (const key of ['ext_arcim_job_error_api_module', 'ext_arcim_job_error_api_license']) {
+      for (const messages of [sv, en]) {
+        const text = (messages as { extensions: Record<string, string> }).extensions[key]
+        expect(text).toBeTruthy()
+        expect(text).not.toMatch(/[\u2013\u2014]/)
+      }
+    }
+    expect(sv.extensions.ext_arcim_job_error_api_module).toContain('API-modulen')
+    expect(sv.extensions.ext_arcim_job_error_api_license).toContain('{provider}')
   })
 })
 

@@ -163,14 +163,14 @@ describe('gnubok_import_sie: stage-time validation', () => {
     ).rejects.toThrow(/file_content/)
   })
 
-  // Lookma AB regression (support case 2026-05-28): staging with mappings=[]
+  // Regression (support case 2026-05-28): staging with mappings=[]
   // committed a 0-entry 'completed' sie_imports row that then blocked retry.
   // The fix refuses to stage when the mappings can't cover the file.
   it('rejects when mappings is empty and the file has vouchers', async () => {
     const { supabase } = createQueuedMockSupabase()
     await expect(
       importSie.execute(
-        { file_content: VALID_SIE, filename: 'lookma.se', mappings: [] },
+        { file_content: VALID_SIE, filename: 'empty-mappings.se', mappings: [] },
         'company-1',
         'user-1',
         supabase as never,
@@ -195,9 +195,9 @@ describe('gnubok_import_sie: stage-time validation', () => {
     ).rejects.toThrow(/täcker inga konton/i)
   })
 
-  it('rejects when targetAccount is null on every mapping (Lookma shape)', async () => {
+  it('rejects when targetAccount is null on every mapping (support-case shape)', async () => {
     const { supabase } = createQueuedMockSupabase()
-    // The original Lookma agent sent #KONTO rows formatted as mapping objects
+    // The original agent sent #KONTO rows formatted as mapping objects
     // but with no targetAccount resolved. The job's mapping schema refuses
     // them at staging, as submitSIEJob would after approval.
     const halfBakedMappings = [

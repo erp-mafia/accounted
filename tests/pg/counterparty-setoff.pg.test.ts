@@ -16,8 +16,8 @@ import { insertAuthUser, insertCompanyMember, insertPostedJournalEntry, seedComp
  *  - reverse_counterparty_setoff restores both invoices exactly after the
  *    voucher's storno
  *
- * Oppy's July case: a customer invoice of 1 388 kr and a self-billed supplier
- * invoice of 4 504 kr to Crayfish Energy AB, set off for 1 388 kr, leaving
+ * The July case: a customer invoice of 1 388 kr and a self-billed supplier
+ * invoice of 4 504 kr to Exempel Energi AB, set off for 1 388 kr, leaving
  * 3 116 kr to pay.
  */
 
@@ -31,26 +31,26 @@ interface Pair {
   supplierInvoiceId: string
 }
 
-const ORG = '5594774076'
+const ORG = '5599887766'
 
 /** The party, one customer card and one supplier card of it. */
 async function insertCounterparty(s: Seeded, org = ORG): Promise<{ partyId: string; customerId: string; supplierId: string }> {
   const partyId = randomUUID()
   await getPool().query(
     `INSERT INTO public.parties (id, company_id, user_id, display_name, org_number, kind, status)
-     VALUES ($1, $2, $3, 'Crayfish Energy AB', $4, 'company', 'confirmed')`,
+     VALUES ($1, $2, $3, 'Exempel Energi AB', $4, 'company', 'confirmed')`,
     [partyId, s.companyId, s.userId, org],
   )
   const customerId = randomUUID()
   await getPool().query(
     `INSERT INTO public.customers (id, user_id, company_id, name, customer_type, org_number, party_id)
-     VALUES ($1, $2, $3, 'Crayfish Energy AB (Hällsbäck)', 'swedish_business', $4, $5)`,
+     VALUES ($1, $2, $3, 'Exempel Energi AB (Anläggning Norr)', 'swedish_business', $4, $5)`,
     [customerId, s.userId, s.companyId, `${org.slice(0, 6)}-${org.slice(6)}`, partyId],
   )
   const supplierId = randomUUID()
   await getPool().query(
     `INSERT INTO public.suppliers (id, user_id, company_id, name, supplier_type, org_number, party_id)
-     VALUES ($1, $2, $3, 'Crayfish Energy AB (Blackriver)', 'swedish_business', $4, $5)`,
+     VALUES ($1, $2, $3, 'Exempel Energi AB (Anläggning)', 'swedish_business', $4, $5)`,
     [supplierId, s.userId, s.companyId, org, partyId],
   )
   return { partyId, customerId, supplierId }
@@ -276,7 +276,7 @@ async function withSetting<T>(setting: string, fn: (client: PoolClient) => Promi
 }
 
 describe('counterparty set-off (migration 20261022130100)', () => {
-  it("books Oppy's July set-off: Dr 2440 / Cr 1510, both invoices lowered, a payment row on each side", async () => {
+  it("books the July set-off: Dr 2440 / Cr 1510, both invoices lowered, a payment row on each side", async () => {
     const s = await seedCompany()
     const pair = await insertPair(s)
     const setoffId = randomUUID()

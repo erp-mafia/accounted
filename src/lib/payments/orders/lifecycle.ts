@@ -23,6 +23,7 @@ import { SIGNING_FINISHED_BATCH_STATUSES } from './status'
 import { logPaymentOrderEvents, type PaymentOrderRow } from './types'
 import { executionDateFor } from '@/lib/payments/bank-days'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import { dayTakenRefusal, isDayTakenError, skattekontoDayRefusal } from './skattekonto-day'
 
 /** What a person is told when the bank answered a cancel with anything but a confirmation. */
 const CANCEL_ANSWER_CODES: Record<Exclude<PaymentCancelOutcome, 'cancelled'>, string> = {
@@ -128,17 +129,28 @@ export async function approvePaymentOrders(
   // a day that has passed since it was prepared): it moves to the next banking
   // day here, while the instruction can still change, and the event says so.
   const today = input.today ?? todayIsoStockholm()
-  const movedDates = new Map<string, { from: string; to: string }>()
+  const moves: Array<{ order: PaymentOrderRow; to: string }> = []
   for (const o of orders) {
     const to = bankDayFor(o.requested_execution_date, today)
-    if (!to || to === o.requested_execution_date) continue
+    if (to && to !== o.requested_execution_date) moves.push({ order: o, to })
+  }
+  // A skattekonto draft moving onto a day that already has an open
+  // skattekonto order is refused before anything is written (crm#1485).
+  const dayTaken = await skattekontoDayRefusal(writer, ctx.companyId, moves)
+  if (dayTaken) return dayTaken
+  const movedDates = new Map<string, { from: string; to: string }>()
+  for (const { order: o, to } of moves) {
     const { error: moveError } = await writer
       .from('payment_orders')
       .update({ requested_execution_date: to })
       .eq('company_id', ctx.companyId)
       .eq('id', o.id)
       .eq('status', 'draft')
-    if (moveError) throw moveError
+    if (moveError) {
+      // Another order took the day after the check above.
+      if (o.purpose === 'skattekonto' && isDayTakenError(moveError)) return dayTakenRefusal(o.id, to, null)
+      throw moveError
+    }
     movedDates.set(o.id, { from: o.requested_execution_date, to })
   }
   const { data, error } = await writer

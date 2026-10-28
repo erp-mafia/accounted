@@ -735,6 +735,18 @@ export default function AttGoraSection({
                         detail={tAttest('row_detail', { date: formatDate(a.due_date) })}
                       />
                     ))}
+                    {/* The agent's proposals lead the company-wide rows: they
+                        are fresh work the agent is blocked on, and /pending is
+                        what people open most from Hem (14 days to 2026-10-28:
+                        397 users via the nav, 110 via this row). */}
+                    {counts.pending_operations > 0 && (
+                      <WorklistRow
+                        href="/pending"
+                        icon={ShieldCheckIcon}
+                        label={t('row_pending_ops')}
+                        count={counts.pending_operations}
+                      />
+                    )}
                     {counts.supplier_invoice_approval > 0 && (
                       <WorklistRow
                         href="/supplier-invoices"
@@ -752,14 +764,6 @@ export default function AttGoraSection({
                         label={t('row_missing_underlag')}
                         detail={missingUnderlagDetail}
                         count={counts.verifikat_missing_document}
-                      />
-                    )}
-                    {counts.pending_operations > 0 && (
-                      <WorklistRow
-                        href="/pending"
-                        icon={ShieldCheckIcon}
-                        label={t('row_pending_ops')}
-                        count={counts.pending_operations}
                       />
                     )}
                     {counts.document_relevance > 0 && (

@@ -436,13 +436,13 @@ describe('ingestTransactions', () => {
   it('books the Swedbank debit of an executed order, which carries no end-to-end id, by amount, account, date and the zero-padded bankgiro', async () => {
     const { supabase, enqueue, updates } = createQueueMockSupabase()
     const raw = makeRaw({
-      date: '2026-10-13', amount: -10, description: 'MATTSSON SYSTEMS BG 0000052386828',
+      date: '2026-10-13', amount: -10, description: 'EXEMPEL SYSTEMS BG 0000055778815',
       reference: 'Bg-bet. via internet', value_date: '2026-10-13', import_source: 'open_payments',
     })
     mockLoadOpenPaymentOrders.mockResolvedValueOnce([arcimOrder()])
     mockSettleOrderWithDebit.mockResolvedValueOnce({ ok: true, journalEntryId: 'je-1', orderLinked: true, linkedBy: 'trigger' })
     enqueue({ data: [] }, { data: [] }) // booked map, unbooked map
-    enqueue({ data: [{ id: ARCIM.invoiceId, status: 'approved', total: 10, remaining_amount: 10, supplier: { name: 'Mattsson Systems AB' } }] }) // supplier invoices
+    enqueue({ data: [{ id: ARCIM.invoiceId, status: 'approved', total: 10, remaining_amount: 10, supplier: { name: 'Exempel Systems AB' } }] }) // supplier invoices
     enqueue({ data: [] }) // external_id dedup
     enqueue({ data: arcimDebit({ potential_supplier_invoice_id: null }) }) // insert
 
@@ -460,7 +460,7 @@ describe('ingestTransactions', () => {
   it("keeps the suggestion when the order's debit cannot be booked (a locked period), as before", async () => {
     const { supabase, enqueue, updates, inserts } = createQueueMockSupabase()
     const raw = makeRaw({
-      date: '2026-10-13', amount: -10, description: 'MATTSSON SYSTEMS BG 0000052386828',
+      date: '2026-10-13', amount: -10, description: 'EXEMPEL SYSTEMS BG 0000055778815',
       reference: 'Bg-bet. via internet', import_source: 'open_payments',
     })
     mockLoadOpenPaymentOrders.mockResolvedValueOnce([arcimOrder()])
@@ -3130,7 +3130,7 @@ describe('ingestTransactions', () => {
       const { supabase, enqueue, updates } = createQueueMockSupabase()
       const stored = arcimDebit({ external_id: 'eb_SE1_2026-10-13_-1000_0', potential_supplier_invoice_id: null, reference: null })
       const raw = makeRaw({
-        external_id: 'eb_SE1_2026-10-13_-1000_0', date: '2026-10-13', amount: -10, description: 'MATTSSON SYSTEMS BG 0000052386828',
+        external_id: 'eb_SE1_2026-10-13_-1000_0', date: '2026-10-13', amount: -10, description: 'EXEMPEL SYSTEMS BG 0000055778815',
         import_source: 'open_payments', end_to_end_id: ARCIM.endToEndId, is_enriched: true,
       })
       mockLoadOpenPaymentOrders.mockResolvedValueOnce([arcimOrder()])

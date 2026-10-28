@@ -4,7 +4,7 @@
  *
  * Behind SUGGESTIONS_HIDE_UNUSED (off unless `true` or `1`). Unlike the event
  * detectors this one reaches every existing company, Standard companies
- * included, so it stays dark until Jakob turns it on. It runs from the daily
+ * included, so it stays dark until the operator turns it on. It runs from the daily
  * pending-operations cron (app/api/pending-operations/expire/cron) through
  * ./sweep.ts, never from a request.
  *

@@ -23,7 +23,6 @@ const log = createLogger('intake/partner-delivery')
 
 /** The extension that owns the pipeline, and the service it registers. */
 export const INVOICE_INBOX_EXTENSION_ID = 'invoice-inbox'
-export const FILE_INBOX_DELIVERY_SERVICE = 'fileInboxDelivery'
 
 /** The canonical door id of a partner delivery (ARRIVAL_SOURCES). */
 export const PARTNER_DELIVERY_SOURCE = 'partner_api' as const

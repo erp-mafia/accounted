@@ -51,22 +51,10 @@ import {
 } from './skattekonto-sources'
 import { openPaymentsDoor } from './switched-on'
 import type { PaymentOrderRow } from './types'
+import { OPEN_SKATTEKONTO_ORDER_STATUSES } from './skattekonto-day'
 
 /** The name every skattekonto order carries as its payee (set by create_skattekonto_payment_order). */
 export const SKATTEKONTO_PAYEE_NAME = 'Skatteverket'
-
-/**
- * An open skattekonto order: from the draft until the bank accepted it. The
- * database allows one per company and execution day (uq_payment_orders_open_skattekonto_per_date).
- */
-export const OPEN_SKATTEKONTO_ORDER_STATUSES = [
-  'draft',
-  'approved',
-  'submitted',
-  'awaiting_signature',
-  'awaiting_second_signer',
-  'accepted',
-] as const
 
 export interface PrepareSkattekontoPaymentInput {
   cashAccountId: string

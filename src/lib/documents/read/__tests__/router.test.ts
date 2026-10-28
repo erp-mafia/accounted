@@ -89,12 +89,12 @@ describe('readDocumentBytes', () => {
     }
     mock(readPdfTextLayer).mockResolvedValue(local)
     mock(extractSinglePagePdf).mockResolvedValue(Buffer.from('%PDF-page2'))
-    mock(transcribeWithModel).mockResolvedValue({ ok: true, text: 'Schedule 1.2 - Cap Table\nJakob Wennberg 60 000' })
+    mock(transcribeWithModel).mockResolvedValue({ ok: true, text: 'Schedule 1.2 - Cap Table\nAnna Exempel 60 000' })
     const read = await readDocumentBytes(Buffer.from('%PDF-'), 'application/pdf')
     expect(extractSinglePagePdf).toHaveBeenCalledWith(expect.any(Buffer), 2)
     expect(read.ok && read.pages.map((p) => [p.pageNo, p.reader, p.text])).toEqual([
       [1, 'pdf_text', 'Shareholders Agreement'],
-      [2, 'claude_vision', 'Schedule 1.2 - Cap Table\nJakob Wennberg 60 000'],
+      [2, 'claude_vision', 'Schedule 1.2 - Cap Table\nAnna Exempel 60 000'],
     ])
 
     vi.clearAllMocks()

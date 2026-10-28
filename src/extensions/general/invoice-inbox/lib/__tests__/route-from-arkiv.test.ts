@@ -103,6 +103,53 @@ describe('routeClassifiedDocument', () => {
     expect(findCall('invoice_inbox_items', 'insert')?.[0]).toMatchObject({ source, channel_context: { intake_source: intakeSource } })
   })
 
+  describe('a byte-identical copy of a document already booked or queued', () => {
+    const hashed = { ...doc, sha256_hash: 'hash-1' }
+
+    it('does not queue a copy of a document booked on a verifikat (double-booking risk)', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'doc-booked', journal_entry_id: 'je-1' }] })
+      expect(await classified('receipt')).toBe('duplicate_of_queued_or_booked')
+      expect(findCall('invoice_inbox_items', 'insert')).toBeUndefined()
+    })
+
+    it('does not queue a copy of a document that already has an inbox item', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'doc-queued', journal_entry_id: null }] })
+      enqueue({ data: [{ id: 'item-9' }] })
+      expect(await classified('receipt')).toBe('duplicate_of_queued_or_booked')
+      expect(findCall('invoice_inbox_items', 'insert')).toBeUndefined()
+    })
+
+    it('queues it when the copy is neither booked nor queued', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: [{ id: 'doc-loose', journal_entry_id: null }] })
+      enqueue({ data: [] })
+      enqueue({})
+      expect(await classified('receipt')).toBe('queued')
+      expect(findCall('invoice_inbox_items', 'insert')?.[0]).toMatchObject({ document_id: 'doc-1' })
+    })
+
+    it('queues it when no other document of the company has the same content', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: [] })
+      enqueue({})
+      expect(await classified('receipt')).toBe('queued')
+    })
+
+    it('throws when the lookup fails, so the handler logs it instead of queueing blind', async () => {
+      enqueue({ data: hashed })
+      enqueue({ data: [] })
+      enqueue({ data: null, error: { message: 'boom' } })
+      await expect(classified('receipt')).rejects.toThrow('duplicate lookup failed: boom')
+      expect(findCall('invoice_inbox_items', 'insert')).toBeUndefined()
+    })
+  })
+
   it('reads the upload door from the document row it fetched', async () => {
     enqueue({ data: doc })
     enqueue({ data: [] })

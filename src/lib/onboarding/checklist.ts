@@ -1,4 +1,4 @@
-import type { InitialSetupPath, MomsPeriod } from '@/types'
+import type { DocumentUploadSource, InitialSetupPath, MomsPeriod, UserUiState } from '@/types'
 
 /**
  * What the Skatteverket checklist step should say about VAT deadlines.
@@ -139,3 +139,41 @@ export function claudeConnectorLink(input: { origin: string; appName: string }):
     `&connectorUrl=${encodeURIComponent(serverUrl)}`
   )
 }
+
+/**
+ * Kom igång steps a user may skip. Books and bank are what "the bookkeeping
+ * is running" means, so they never skip (books already has "Starta från
+ * början"). The other three depend on the company: no Skatteverket
+ * connection wanted yet, no receipts at hand, no AI client. Before skipping
+ * existed, one of them left open was the usual reason the checklist never
+ * finished: only Dölj ended it, and Dölj records no completion.
+ */
+export const SKIPPABLE_SETUP_STEPS = ['skatteverket', 'receipts', 'claude'] as const
+export type SkippableSetupStep = (typeof SKIPPABLE_SETUP_STEPS)[number]
+
+/** The steps this user skipped for `companyId` (ui_state.setup_skipped), unknown ids dropped. */
+export function skippedSetupSteps(
+  uiState: UserUiState | null | undefined,
+  companyId: string,
+): SkippableSetupStep[] {
+  const stored = uiState?.setup_skipped?.[companyId]
+  if (!Array.isArray(stored)) return []
+  return SKIPPABLE_SETUP_STEPS.filter((step) => stored.includes(step))
+}
+
+/**
+ * Upload sources that mean a person put an underlag into the company: the
+ * receipts step's goal. The inbox is one way in, uploading or photographing
+ * straight onto a transaction or verifikat is another, and so are mailed,
+ * WhatsApp'd and mail-hunted documents and e-invoices. 'api' is left out because a provider
+ * migration imports old documents under it, and 'system' is generated.
+ */
+export const RECEIPT_UPLOAD_SOURCES = [
+  'camera',
+  'file_upload',
+  'scan',
+  'email',
+  'whatsapp',
+  'mail_hunt',
+  'e_invoice',
+] as const satisfies readonly DocumentUploadSource[]

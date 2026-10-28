@@ -16,7 +16,6 @@
  * a helper several frames down (reverseEntry, correctEntry) actually sees.
  */
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest'
-import { NextResponse } from 'next/server'
 
 beforeAll(() => {
   process.env.NEXT_PUBLIC_SUPABASE_URL ||= 'http://localhost:54321'

@@ -28,7 +28,7 @@ import {
   makeJournalEntry,
   makeSupplier,
 } from '@/tests/helpers'
-import type { PendingOperation, SupplierInvoiceItem } from '@/types'
+import type { PendingOperation } from '@/types'
 
 vi.mock('@/lib/supabase/server', () => ({ createClient: vi.fn(), createServiceClient: vi.fn() }))
 vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async (importOriginal) => ({

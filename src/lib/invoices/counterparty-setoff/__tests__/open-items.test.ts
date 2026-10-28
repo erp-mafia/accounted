@@ -86,10 +86,10 @@ function supplierRow(over: Record<string, unknown> = {}) {
 }
 
 describe('loadCounterpartyBalance', () => {
-  it("shows Oppy's Crayfish relation: both cards, both open invoices, we pay 3 116 kr net", async () => {
+  it("shows a two-way counterparty relation: both cards, both open invoices, we pay 3 116 kr net", async () => {
     const { supabase, calls } = tableMock({
-      customers: [ok({ party_id: 'party-1' }), ok([{ id: 'cust-1', name: 'Crayfish Energy AB (Blackriver Hällsbäck)' }])],
-      suppliers: [ok([{ id: 'sup-1', name: 'Crayfish Energy AB (Blackriver)' }])],
+      customers: [ok({ party_id: 'party-1' }), ok([{ id: 'cust-1', name: 'Exempel Energi AB (Anläggning Norr)' }])],
+      suppliers: [ok([{ id: 'sup-1', name: 'Exempel Energi AB (Anläggning)' }])],
       counterparty_setoffs: [ok([])],
       invoices: [ok([invoiceRow()])],
       supplier_invoices: [ok([supplierRow()])],
@@ -98,13 +98,13 @@ describe('loadCounterpartyBalance', () => {
       supplier_payment_batch_items: [ok([])],
     }, {
       rows: [{ id: 'party-1', merged_into: null }],
-      byId: { 'party-1': { id: 'party-1', display_name: 'Crayfish', legal_name: 'Crayfish Energy AB', org_number: '5594774076' } },
+      byId: { 'party-1': { id: 'party-1', display_name: 'Exempel Energi', legal_name: 'Exempel Energi AB', org_number: '5599887766' } },
     })
     const balance = await loadCounterpartyBalance(supabase as never, 'company-1', { customerId: 'cust-1' })
     expect(balance).toEqual({
-      party: { party_id: 'party-1', name: 'Crayfish Energy AB', org_number: '5594774076' },
-      customers: [{ customer_id: 'cust-1', name: 'Crayfish Energy AB (Blackriver Hällsbäck)' }],
-      suppliers: [{ supplier_id: 'sup-1', name: 'Crayfish Energy AB (Blackriver)' }],
+      party: { party_id: 'party-1', name: 'Exempel Energi AB', org_number: '5599887766' },
+      customers: [{ customer_id: 'cust-1', name: 'Exempel Energi AB (Anläggning Norr)' }],
+      suppliers: [{ supplier_id: 'sup-1', name: 'Exempel Energi AB (Anläggning)' }],
       receivables: [
         {
           invoice_id: 'inv-1',
@@ -149,8 +149,8 @@ describe('loadCounterpartyBalance', () => {
 
   it('marks what cannot be set off now, and why', async () => {
     const { supabase } = tableMock({
-      customers: [ok([{ id: 'cust-1', name: 'Crayfish' }])],
-      suppliers: [ok([{ id: 'sup-1', name: 'Crayfish' }])],
+      customers: [ok([{ id: 'cust-1', name: 'Exempel Energi' }])],
+      suppliers: [ok([{ id: 'sup-1', name: 'Exempel Energi' }])],
       counterparty_setoffs: [
         ok([{ id: 'set-0', setoff_date: '2026-09-30', amount: '500.00', status: 'reversed', invoice_id: 'inv-0', supplier_invoice_id: 'si-0', journal_entry_id: 'je-0', note: null }]),
       ],
@@ -161,7 +161,7 @@ describe('loadCounterpartyBalance', () => {
       supplier_payment_batch_items: [ok([])],
     }, {
       rows: [{ id: 'party-1', merged_into: null }],
-      byId: { 'party-1': { id: 'party-1', display_name: 'Crayfish', legal_name: null, org_number: null } },
+      byId: { 'party-1': { id: 'party-1', display_name: 'Exempel Energi', legal_name: null, org_number: null } },
     })
     const balance = await loadCounterpartyBalance(supabase as never, 'company-1', { partyId: 'party-1' })
     expect(balance?.receivables.map((r) => [r.invoice_id, r.ineligible_reason])).toEqual([
@@ -176,7 +176,7 @@ describe('loadCounterpartyBalance', () => {
       { currency: 'EUR', receivable: 100, payable: 0, net: 100, direction: 'they_pay' },
       { currency: 'SEK', receivable: 1388, payable: 4704, net: -3316, direction: 'we_pay' },
     ])
-    expect(balance?.party.name).toBe('Crayfish')
+    expect(balance?.party.name).toBe('Exempel Energi')
     expect(balance?.setoffs).toEqual([
       { setoff_id: 'set-0', setoff_date: '2026-09-30', amount: 500, status: 'reversed', invoice_id: 'inv-0', supplier_invoice_id: 'si-0', journal_entry_id: 'je-0', note: null },
     ])
@@ -184,7 +184,7 @@ describe('loadCounterpartyBalance', () => {
 
   it('follows a merged party to its survivor and gathers the cards of every merged party', async () => {
     const { supabase, calls } = tableMock({
-      suppliers: [ok({ party_id: 'party-old' }), ok([{ id: 'sup-1', name: 'Crayfish' }])],
+      suppliers: [ok({ party_id: 'party-old' }), ok([{ id: 'sup-1', name: 'Exempel Energi' }])],
       customers: [ok([])],
       counterparty_setoffs: [ok([])],
       supplier_invoices: [ok([])],
@@ -193,7 +193,7 @@ describe('loadCounterpartyBalance', () => {
         { id: 'party-old', merged_into: 'party-1' },
         { id: 'party-1', merged_into: null },
       ],
-      byId: { 'party-1': { id: 'party-1', display_name: 'Crayfish', legal_name: null, org_number: '5594774076' } },
+      byId: { 'party-1': { id: 'party-1', display_name: 'Exempel Energi', legal_name: null, org_number: '5599887766' } },
     })
     const balance = await loadCounterpartyBalance(supabase as never, 'company-1', { supplierId: 'sup-1' })
     expect(balance?.party.party_id).toBe('party-1')

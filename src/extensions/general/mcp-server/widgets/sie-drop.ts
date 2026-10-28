@@ -125,6 +125,12 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
   // The company this card imports into: target_company from the tool result
   // ({ company_id, name, org_number }). null until the host delivers it.
   let target = null;
+  // The largest file the card can send (crm#1455). It sends the bytes as
+  // base64 inside tools/call, and where the tool result offers
+  // direct_upload_url the platform caps that request at max_bytes (4 MB):
+  // base64 grows a file by a third, so the card carries 3/4 of it. null: no
+  // cap below the import's own.
+  let inlineMaxBytes = null;
 
   function sendRequest(method, params) {
     const id = rpcId++;
@@ -153,6 +159,9 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
       if (sc && sc.target_company && sc.target_company.company_id) {
         target = sc.target_company;
         renderTarget();
+      }
+      if (sc && sc.direct_upload_url && typeof sc.max_bytes === 'number') {
+        inlineMaxBytes = Math.floor(sc.max_bytes * 3 / 4);
       }
       return;
     }
@@ -230,6 +239,14 @@ export const SIE_DROP_HTML = `<!DOCTYPE html>
     const lower = file.name.toLowerCase();
     if (!${JSON.stringify(SIE_FILE_EXTENSIONS)}.some(function(x) { return lower.endsWith(x); })) {
       note('Filen måste vara en SIE-export (${SIE_FILE_EXTENSIONS_SV}).');
+      return;
+    }
+    if (inlineMaxBytes && file.size > inlineMaxBytes) {
+      const mb = function(bytes) { return (bytes / 1024 / 1024).toFixed(1).replace('.', ','); };
+      note('Filen är ' + mb(file.size) + ' MB och kortet tar högst ' + mb(inlineMaxBytes) + ' MB. Ladda upp den via app.accounted.se/import?mode=sie i stället.');
+      sendNotification('ui/updateContext', {
+        content: 'Användaren släppte ' + file.name + ' (' + file.size + ' bytes) på importkortet, över kortets gräns på ' + inlineMaxBytes + ' bytes. PUT filens exakta bytes till direct_upload_url från gnubok_create_sie_upload och skicka upload_id + sha256 till gnubok_sie_preflight, eller be användaren importera i appen.'
+      });
       return;
     }
     drop.textContent = 'Kontrollerar ' + file.name + '…';

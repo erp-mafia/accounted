@@ -1,4 +1,4 @@
-# `lib/invariants`
+# `src/lib/invariants`
 
 Shared **product contracts**: the formats and bounds that more than one consumer
 must agree on, with the reason for each rule recorded next to it.
@@ -16,9 +16,9 @@ disagreement is invisible until a customer's filing fails.
 ## What does not belong here
 
 - **Rules specific to one module.** They stay in that module.
-- **General helpers.** `lib/utils.ts`, `lib/money.ts`.
+- **General helpers.** `src/lib/utils.ts`, `src/lib/money.ts`.
 - **Database questions.** "Is this account in the company's chart?" is
-  `lib/bookkeeping/account-validation.ts`, not a format rule.
+  `src/lib/bookkeeping/account-validation.ts`, not a format rule.
 - **Business rules.** "Is this fiscal year open?" is a period question.
 
 ## Naming

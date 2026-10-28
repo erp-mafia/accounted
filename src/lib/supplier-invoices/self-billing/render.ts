@@ -22,7 +22,7 @@ export async function renderSelfBillingPdfBuffer(input: RenderSelfBillingPdfInpu
   return renderToBuffer(SelfBillingPDF(input))
 }
 
-/** "Självfaktura SF-007 Crayfish Energy AB.pdf", "Kreditfaktura SF-008 ...". */
+/** "Självfaktura SF-007 Leverantör AB.pdf", "Kreditfaktura SF-008 ...". */
 export function selfBillingPdfFilename(input: {
   number: string | null
   isCreditNote: boolean

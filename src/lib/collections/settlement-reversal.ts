@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import { toError } from '@/lib/errors/to-error'
 
 const log = createLogger('collections/settlement-reversal')
 
@@ -74,7 +75,7 @@ export async function releaseSettlementAfterReversal(
     log.info('payout returned to the settlements view after its voucher was reversed', { settlementId, entryId })
     return { released: true }
   } catch (err) {
-    log.error('failed to release the payout of a reversed payout voucher', err instanceof Error ? err : new Error(String(err)), {
+    log.error('failed to release the payout of a reversed payout voucher', toError(err), {
       companyId,
       entryId,
     })

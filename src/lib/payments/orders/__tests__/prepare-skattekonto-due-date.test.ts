@@ -93,7 +93,7 @@ beforeEach(() => {
   registerPaymentInitiationProvider(provider)
   db = createTableMockSupabase({
     cash_accounts: { data: ACCOUNT },
-    companies: { data: { org_number: '559547-0021', entity_type: 'aktiebolag' } },
+    companies: { data: { org_number: '554466-8808', entity_type: 'aktiebolag' } },
     company_settings: companySettings,
     extension_data: { data: { value: { saldo: { saldoSkatteverket: 5000 }, fetchedAt: Date.parse('2026-10-15T06:00:00Z') } } },
     agi_declarations: agiByMonth({ 10: AGI_ROW, 9: AGI_ROW }),

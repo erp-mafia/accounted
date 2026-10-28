@@ -9,8 +9,8 @@
  * nothing. It becomes the company's profile (companies.profile_id) only on
  * public signup and only while the instance sets PROFILES_APPLY_ON_SIGNUP
  * (`true` or `1`). Unset, a new public signup keeps profile_id NULL,
- * "Standard (allt på)", and sees exactly what signups see today. Jakob flips
- * it after confirming the package and profile lists. A byrå's client company
+ * "Standard (allt på)", and sees exactly what signups see today. The operator
+ * sets it after confirming the package and profile lists. A byrå's client company
  * never takes the derived profile: the byrå picks one in its invite form.
  */
 import { deriveSignupProfile, latestProfile, type ProfileId } from './profiles'
