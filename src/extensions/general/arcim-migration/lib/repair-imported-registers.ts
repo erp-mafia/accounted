@@ -580,8 +580,8 @@ export interface RegisterRepairProgress {
 const MAX_ATTEMPTS = 3
 /** Companies read side by side; each provider limits each connection on its own. */
 const PARALLEL_COMPANIES = 4
-/** A company is not started with less time than this left in the run. */
-const MIN_COMPANY_MS = 30_000
+/** A company is not started with less time than this left in the run: listing a large Fortnox register takes most of a minute. */
+const MIN_COMPANY_MS = 60_000
 
 export interface RegisterRepairRunSummary {
   /** Company and provider pairs with a live connection and no outcome yet, before this run. */

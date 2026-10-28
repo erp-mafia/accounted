@@ -32,14 +32,14 @@ describe('register repair cron', () => {
     expect(runRegisterRepair).not.toHaveBeenCalled()
   })
 
-  it('runs within 240 s of the start and answers the summary', async () => {
+  it('stops starting work 150 s in, half the time the platform allows, and answers the summary', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const start = Date.now()
     const summary = { pending: 3, worked: 2, finished: 1, changed: 40 }
     vi.mocked(runRegisterRepair).mockResolvedValue(summary)
     const response = await GET(request())
     expect(maxDuration).toBe(300)
-    expect(runRegisterRepair).toHaveBeenCalledWith(expect.anything(), start + 240_000)
+    expect(runRegisterRepair).toHaveBeenCalledWith(expect.anything(), start + 150_000)
     expect(await response.json()).toEqual({ data: summary })
   })
 
