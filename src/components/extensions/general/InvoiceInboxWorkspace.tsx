@@ -52,7 +52,7 @@ import {
 } from '@/components/icons'
 import Link from 'next/link'
 import { cn, formatCurrency, formatDate, formatDateTime } from '@/lib/utils'
-import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS, ROW_CHECKBOX_HIT_AREA_CLASS } from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { GoogleMark, MicrosoftMark } from '@/components/ui/provider-marks'
 import { StartCard } from '@/components/dashboard/StartCard'
@@ -2338,7 +2338,7 @@ function InboxRow({
             }}
             onCheckedChange={() => onToggleChecked(shiftHeld.current)}
             aria-label="Markera post"
-            className="h-3.5 w-3.5 border-foreground"
+            className={cn('h-3.5 w-3.5 border-foreground', ROW_CHECKBOX_HIT_AREA_CLASS)}
           />
         </div>
       )}

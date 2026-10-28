@@ -7,8 +7,7 @@ import { useDocumentExtraction } from '@/lib/hooks/use-document-extraction'
 import ExtractionStatus from '@/components/ui/extraction-status'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Checkbox } from '@/components/ui/checkbox'
-import { TD_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, RowSelectCheckbox, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { cn, formatCurrency, formatDate } from '@/lib/utils'
 import { isImportedTransaction } from '@/lib/transactions/origin'
 import { canOfferSplitMatch } from '@/lib/transactions/split-match'
@@ -401,18 +400,14 @@ export default function TransactionInboxCard({
           onClick={(e) => e.stopPropagation()}
         >
           {selectable && (
-            <Checkbox
+            <RowSelectCheckbox
               checked={isSelected}
               onClick={(e) => {
                 shiftHeld.current = e.shiftKey
               }}
               onCheckedChange={() => onToggleSelect(transaction.id, shiftHeld.current)}
               aria-label="Välj transaktion"
-              className={cn(
-                'border-foreground duration-150',
-                'block',
-                isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
-              )}
+              className="block"
             />
           )}
         </td>

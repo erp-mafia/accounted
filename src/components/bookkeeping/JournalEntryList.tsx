@@ -18,7 +18,6 @@ import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
-import { Checkbox } from '@/components/ui/checkbox'
 import {
   Dialog,
   DialogContent,
@@ -40,7 +39,7 @@ import {
   TH_CLASS,
   TD_CLASS,
   QUIET_LINK_CLASS,
-  CHECKBOX_REVEAL_CLASS,
+  RowSelectCheckbox,
   HOVER_REVEAL_CLASS,
   RowFoldout,
   SortableTh,
@@ -1645,19 +1644,14 @@ export default function JournalEntryList({
                         onClick={(e) => e.stopPropagation()}
                       >
                         {selectable && (
-                          <Checkbox
+                          <RowSelectCheckbox
                             checked={selectedIds.has(entry.id)}
+                            dense={compact}
                             onClick={(e) => {
                               shiftHeld.current = e.shiftKey
                             }}
                             onCheckedChange={() => toggleSelect(entry.id, shiftHeld.current)}
                             aria-label={t('batch_select_row')}
-                            className={cn(
-                              'border-foreground duration-150',
-                              selectedIds.has(entry.id)
-                                ? 'opacity-100'
-                                : CHECKBOX_REVEAL_CLASS,
-                            )}
                           />
                         )}
                       </td>

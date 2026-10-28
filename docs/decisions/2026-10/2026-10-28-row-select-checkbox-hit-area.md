@@ -1,0 +1,1 @@
+[2026-10-28] Row selection checkboxes render RowSelectCheckbox (dry-table): a 16px box with a 32px ::after hit area (40px on touch, 4px vertical in compact rows), not a hit area on the Checkbox primitive, where dense checkbox lists would overlap.

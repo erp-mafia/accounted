@@ -4,8 +4,7 @@ import { useRef } from 'react'
 import { useTranslations } from 'next-intl'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
-import { TD_CLASS, CHECKBOX_REVEAL_CLASS } from '@/components/ui/dry-table'
+import { TD_CLASS, RowSelectCheckbox } from '@/components/ui/dry-table'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -109,18 +108,14 @@ export default function SkattekontoInboxCard({
           column: the full-bleed panel has no margin for it to hang in. */}
       <td className={cn(TD_CLASS, 'select-none', 'w-7 !pl-0 !pr-2')}>
         {selectable && (
-          <Checkbox
-            checked={isSelected}
+          <RowSelectCheckbox
+            checked={!!isSelected}
             onClick={(e) => {
               shiftHeld.current = e.shiftKey
             }}
             onCheckedChange={() => onToggleSelect?.(row.id, shiftHeld.current)}
             aria-label={t('select_row')}
-            className={cn(
-              'border-foreground duration-150',
-              'block',
-              isSelected ? 'opacity-100' : CHECKBOX_REVEAL_CLASS,
-            )}
+            className="block"
           />
         )}
       </td>

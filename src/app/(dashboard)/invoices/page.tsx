@@ -12,7 +12,6 @@ import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { Button } from '@/components/ui/button'
 import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Badge } from '@/components/ui/badge'
-import { Checkbox } from '@/components/ui/checkbox'
 import { ConfirmationDialog } from '@/components/ui/confirmation-dialog'
 import { RowStatus, type RowStatusDescriptor } from '@/components/ui/row-status'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
@@ -22,7 +21,7 @@ import {
   TH_CLASS,
   TD_CLASS,
   QUIET_LINK_CLASS,
-  CHECKBOX_REVEAL_CLASS,
+  RowSelectCheckbox,
   SortableTh,
   SHOW_MORE_STEP,
   ShowMoreFooter,
@@ -1236,19 +1235,14 @@ export default function InvoicesPage() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         {isBulkSelectable(invoice) && (
-                          <Checkbox
+                          <RowSelectCheckbox
                             checked={selectedIds.has(invoice.id)}
+                            revealed={selectedIds.size > 0}
                             onClick={(e) => {
                               shiftHeld.current = e.shiftKey
                             }}
                             onCheckedChange={() => toggleSelect(invoice.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
-                            className={cn(
-                              'border-foreground duration-150',
-                              selectedIds.has(invoice.id) || selectedIds.size > 0
-                                ? 'opacity-100'
-                                : CHECKBOX_REVEAL_CLASS,
-                            )}
                           />
                         )}
                       </td>

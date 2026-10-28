@@ -13,7 +13,7 @@ import { BulkSelectionBar } from '@/components/ui/bulk-selection-bar'
 import { Checkbox } from '@/components/ui/checkbox'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { DataListEmpty } from '@/components/ui/data-list'
-import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, CHECKBOX_REVEAL_CLASS, HOVER_REVEAL_CLASS, SortableTh } from '@/components/ui/dry-table'
+import { TH_CLASS, TD_CLASS, QUIET_LINK_CLASS, RowSelectCheckbox, HOVER_REVEAL_CLASS, SortableTh } from '@/components/ui/dry-table'
 import { useBulkSelection } from '@/lib/hooks/use-bulk-selection'
 import { FyPicker } from '@/components/common/FyPicker'
 import { ContextPicker } from '@/components/common/ContextPicker'
@@ -804,19 +804,14 @@ export default function SupplierInvoicesPage() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         {selectable && (
-                          <Checkbox
+                          <RowSelectCheckbox
                             checked={selectedIds.has(inv.id)}
+                            revealed={selectedIds.size > 0}
                             onClick={(e) => {
                               shiftHeld.current = e.shiftKey
                             }}
                             onCheckedChange={() => toggleSelect(inv.id, shiftHeld.current)}
                             aria-label={t('bulk_select_row')}
-                            className={cn(
-                              'border-foreground duration-150',
-                              selectedIds.has(inv.id) || selectedIds.size > 0
-                                ? 'opacity-100'
-                                : CHECKBOX_REVEAL_CLASS,
-                            )}
                           />
                         )}
                       </td>
