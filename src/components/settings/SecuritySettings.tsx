@@ -18,6 +18,7 @@ import { isBankIdEnabled } from '@/lib/auth/bankid-flags'
 import { isSelfHosted as readSelfHostedFlag } from '@/lib/env/public-flags'
 import { AutoLogoutToggle } from '@/components/settings/AutoLogoutToggle'
 import { BankIdSettings } from '@/components/settings/BankIdSettings'
+import { SecurityKeySettings } from '@/components/settings/SecurityKeySettings'
 import { userHasPassword } from '@/lib/auth/has-password'
 import { getErrorMessage as getUserErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import {
@@ -314,6 +315,10 @@ export function SecuritySettings() {
           )}
         </SettingsRow>
       )}
+
+      {/* Security keys (crm#1448): renders nothing unless the WebAuthn MFA
+          flag is on, and never on self-hosted (the flag reads it). */}
+      <SecurityKeySettings />
 
       {/* Automatic logout: per-user opt-in, renders nothing on self-hosted */}
       <AutoLogoutToggle />

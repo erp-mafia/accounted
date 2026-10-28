@@ -4,11 +4,16 @@ import { useState, useEffect, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useTranslations } from 'next-intl'
 import {
+  challengeWebauthn,
   fetchMfaStatus,
   signOutAndNavigate,
   verifiedTotpFactor,
+  verifiedWebauthnFactors,
   verifyTotp,
+  verifyWebauthn,
+  type MfaFactor,
 } from '@/lib/auth/session-client'
+import { getWebauthnCredential } from '@/lib/auth/webauthn-browser'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -37,6 +42,10 @@ function MfaVerifyContent() {
   const [code, setCode] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [factorId, setFactorId] = useState<string | null>(null)
+  // Verified security keys (crm#1448). Empty for everyone without one, and
+  // then the page is exactly the TOTP page it always was.
+  const [securityKeys, setSecurityKeys] = useState<MfaFactor[]>([])
+  const [keyBusyId, setKeyBusyId] = useState<string | null>(null)
   const [failedAttempts, setFailedAttempts] = useState(0)
   const [lockoutUntil, setLockoutUntil] = useState<number | null>(null)
   const [lockoutRemaining, setLockoutRemaining] = useState(0)
@@ -53,10 +62,13 @@ function MfaVerifyContent() {
 
   useEffect(() => {
     async function loadFactor() {
-      const verifiedFactor = verifiedTotpFactor(await fetchMfaStatus())
+      const status = await fetchMfaStatus()
+      const verifiedFactor = verifiedTotpFactor(status)
+      const keys = verifiedWebauthnFactors(status)
+      setSecurityKeys(keys)
       if (verifiedFactor) {
         setFactorId(verifiedFactor.id)
-      } else {
+      } else if (keys.length === 0) {
         router.push('/')
       }
     }
@@ -170,6 +182,57 @@ function MfaVerifyContent() {
     }
   }
 
+  // Security-key sign-in: challenge on the server, the ceremony in the
+  // browser, verify on the server (which raises the session to AAL2 in the
+  // HttpOnly cookie). Lands exactly where a verified TOTP code lands.
+  const handleSecurityKey = async (keyId: string) => {
+    setKeyBusyId(keyId)
+    try {
+      const started = await challengeWebauthn(keyId)
+      if (started.error || !started.data) {
+        toast({
+          title: t('security_key_failed_title'),
+          description: t('verify_challenge_failed_description'),
+          variant: 'destructive',
+        })
+        return
+      }
+      const credential = await getWebauthnCredential(started.data.publicKey)
+      if (!credential) {
+        toast({ title: t('security_key_failed_title'), description: t('security_key_cancelled') })
+        return
+      }
+      const { error } = await verifyWebauthn({
+        factorId: keyId,
+        challengeId: started.data.challengeId,
+        type: 'request',
+        credential,
+      })
+      if (error) {
+        toast({
+          title: t('security_key_failed_title'),
+          description: t('security_key_failed_description'),
+          variant: 'destructive',
+        })
+        return
+      }
+      if (await acceptPendingInvite()) {
+        window.location.href = '/'
+        return
+      }
+      // Hard navigation for the same reasons as the TOTP path above.
+      window.location.assign(returnTo === '/' ? await resolvePostLoginDestination() : returnTo)
+    } catch {
+      toast({
+        title: t('verify_failed_title'),
+        description: t('unexpected_error'),
+        variant: 'destructive',
+      })
+    } finally {
+      setKeyBusyId(null)
+    }
+  }
+
   const handleLogout = async () => {
     await signOutAndNavigate('/login')
   }
@@ -190,6 +253,30 @@ function MfaVerifyContent() {
         </div>
 
         <div className="rounded-lg border bg-card p-6">
+          {securityKeys.length > 0 && (
+            <div className="space-y-2">
+              {securityKeys.map((key) => (
+                <Button
+                  key={key.id}
+                  type="button"
+                  size="lg"
+                  variant={factorId ? 'outline' : 'default'}
+                  className="w-full"
+                  onClick={() => handleSecurityKey(key.id)}
+                  loading={keyBusyId === key.id}
+                  disabled={keyBusyId !== null}
+                >
+                  {securityKeys.length === 1 || !key.friendly_name
+                    ? t('use_security_key')
+                    : t('use_named_security_key', { name: key.friendly_name })}
+                </Button>
+              ))}
+              {factorId && (
+                <p className="pt-3 text-center text-xs text-muted-foreground">{t('security_key_or')}</p>
+              )}
+            </div>
+          )}
+          {(factorId || securityKeys.length === 0) && (
           <form onSubmit={handleVerify} className="space-y-5">
             <div className="space-y-2">
               <Label htmlFor="code">{t('verify_code_label')}</Label>
@@ -224,6 +311,7 @@ function MfaVerifyContent() {
               )}
             </Button>
           </form>
+          )}
         </div>
 
         <Button
