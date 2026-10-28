@@ -6,6 +6,7 @@ import {
   findMissingCompanyData,
 } from '../agi/xml-generator'
 import type { AGICompanyData, AGIEmployeeData, AGITotals } from '../agi/xml-generator'
+import { maskPersonnummerInText } from '../personnummer-format'
 
 // Mock personnummer decryption
 vi.mock('../personnummer', () => ({
@@ -680,11 +681,14 @@ describe('findMissingCompanyData: the check generation and staging share (crm#14
 })
 
 describe('buildIndividuppgifterSnapshot', () => {
-  it('builds snapshot with decrypted personnummer', () => {
+  it('stores no personnummer, in clear or sealed: FK570 rides on specificationNumber (#58)', () => {
     const snapshot = buildIndividuppgifterSnapshot(employees)
-    expect(snapshot).toHaveLength(2)
-    expect(snapshot[0].personnummer).toBe('199001011234')
-    expect(snapshot[1].personnummer).toBe('198506159876')
+    expect(snapshot).toEqual([
+      { specificationNumber: 1, grossSalary: 40000, taxWithheld: 12000, avgifterBasis: 40000, removed: false },
+      { specificationNumber: 2, grossSalary: 35000, taxWithheld: 10500, avgifterBasis: 35000, removed: false },
+    ])
+    const stored = JSON.stringify(snapshot)
+    expect(maskPersonnummerInText(stored)).toBe(stored)
   })
 
   it('preserves specificationNumber for correction reference', () => {

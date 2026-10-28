@@ -756,39 +756,37 @@ export function generateAGIXml(
   return xml
 }
 
+/** One IU in agi_declarations.individuppgifter: no personnummer, in clear or sealed. */
+export interface AGIIndividuppgiftSnapshot {
+  specificationNumber: number
+  grossSalary: number
+  taxWithheld: number
+  avgifterBasis: number
+  removed: boolean
+}
+
 /**
  * Build individuppgifter snapshot for storage in agi_declarations.individuppgifter
- * (jsonb). Sole purpose: stabilise FK570 (specifikationsnummer) across
- * corrections by recording the (personnummer → specificationNumber) binding
- * along with the headline totals that drive a re-issue decision.
+ * (jsonb): per IU, its FK570 specifikationsnummer, the headline amounts and
+ * the FK205 borttag flag. FK570 stays stable across corrections through
+ * employees.specification_number.
  *
  * GDPR Art.25 (data minimisation): xml_content is the authoritative record
- * of what was filed. Storing the full per-benefit breakdown here would
- * duplicate sensitive financial detail with no incremental audit value, so
- * detailed benefit fields (car/fuel/housing/meals/other) and their
- * underlag family are deliberately omitted from the snapshot. Reconstruct them from
- * xml_content when needed.
+ * of what was filed, so the snapshot holds no personnummer and no
+ * per-benefit breakdown (car/fuel/housing/meals/other and their underlag
+ * family). Reconstruct them from xml_content when needed.
  */
 export function buildIndividuppgifterSnapshot(
   employees: AGIEmployeeData[]
-): Record<string, unknown>[] {
-  return employees.map(emp => {
-    let pnr: string
-    try {
-      pnr = decryptPersonnummer(emp.personnummer)
-    } catch {
-      pnr = 'DECRYPTION_FAILED'
-    }
-
-    return {
-      personnummer: pnr,
-      specificationNumber: emp.specificationNumber,
-      grossSalary: emp.grossSalary,
-      taxWithheld: emp.taxWithheld,
-      avgifterBasis: emp.avgifterBasis,
-      removed: emp.removed ?? false,
-    }
-  })
+): AGIIndividuppgiftSnapshot[] {
+  // Typed on the callback, so a key added back (a personnummer) fails to compile.
+  return employees.map((emp): AGIIndividuppgiftSnapshot => ({
+    specificationNumber: emp.specificationNumber,
+    grossSalary: emp.grossSalary,
+    taxWithheld: emp.taxWithheld,
+    avgifterBasis: emp.avgifterBasis,
+    removed: emp.removed ?? false,
+  }))
 }
 
 // ============================================================

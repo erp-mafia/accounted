@@ -15,6 +15,8 @@ import { roundOre } from '@/lib/money'
 import { declaredAvgifterForRun } from '../declared-avgifter'
 import { effectiveRunTotals } from '../effective-figures'
 import type { Logger } from '@/lib/logger'
+import type { AGIIndividuppgiftSnapshot } from '../agi/xml-generator'
+import { maskPersonnummerInText } from '../personnummer-format'
 
 vi.mock('../personnummer', () => ({
   decryptPersonnummer: (encrypted: string) => {
@@ -197,6 +199,28 @@ describe('generateAgiDeclaration: kontaktperson (agent feedback seq 948847)', ()
     if (result.ok) return
     expect(result.code).toBe('AGI_INCOMPLETE_DATA')
     expect((result.details as { missing_fields: string[] }).missing_fields).toContain('telefon')
+  })
+})
+
+describe('generateAgiDeclaration: the stored snapshot holds no personnummer (#58)', () => {
+  const SNAPSHOT_KEYS = ['avgifterBasis', 'grossSalary', 'removed', 'specificationNumber', 'taxWithheld']
+
+  it('writes individuppgifter keyed by specifikationsnummer only, while the XML still files the personnummer', async () => {
+    const { supabase, enqueueMany, findCall } = createQueuedMockSupabase()
+    enqueueHappyPath(enqueueMany, [REGULAR_ROW, F_SKATT_ROW])
+
+    const result = await generateAgiDeclaration({ supabase: supabase as never, ...ARGS })
+
+    expect(result.ok).toBe(true)
+    if (!result.ok) return
+    // Skatteverket gets the personnummer (FK215) in the filed XML ...
+    expect(result.xml).toContain('199001011234')
+    // ... the jsonb copy beside it does not.
+    const insert = findCall('agi_declarations', 'insert')?.[0] as { individuppgifter: AGIIndividuppgiftSnapshot[] }
+    expect(insert.individuppgifter.map((iu) => Object.keys(iu).sort())).toEqual([SNAPSHOT_KEYS, SNAPSHOT_KEYS])
+    expect(insert.individuppgifter.map((iu) => iu.specificationNumber)).toEqual([1, 2])
+    const stored = JSON.stringify(insert.individuppgifter)
+    expect(maskPersonnummerInText(stored)).toBe(stored)
   })
 })
 
