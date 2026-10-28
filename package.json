@@ -31,7 +31,10 @@
     "test": "vitest run --project unit",
     "test:pg": "vitest run --project pg-real",
     "tools:pg:reset": "bash scripts/tool-pg/reset.sh",
-    "test:tools": "TOOL_PG_REST_URL=${TOOL_PG_REST_URL:-http://127.0.0.1:54330} vitest run --project tool-pg"
+    "test:tools": "TOOL_PG_REST_URL=${TOOL_PG_REST_URL:-http://127.0.0.1:54330} vitest run --project tool-pg",
+    "local:up": "bash scripts/local/up.sh",
+    "local:check": "tsx scripts/local/check.ts",
+    "local:down": "tsx scripts/local/down.ts"
   },
   "dependencies": {
     "@ai-sdk/openai-compatible": "2.0.69",
@@ -110,6 +113,7 @@
     "eslint-config-next": "16.3.8",
     "fast-xml-parser": "^5.7.2",
     "pg": "^8.22.0",
+    "puppeteer-core": "25.12.0",
     "tailwindcss": "^4",
     "tsx": "4.20.5",
     "typescript": "^5",
