@@ -1,6 +1,12 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { NextResponse } from 'next/server'
-import { createQueuedMockSupabase, createMockRequest, createMockRouteParams } from '@/tests/helpers'
+import {
+  createQueuedMockSupabase,
+  createMockRequest,
+  createMockRouteParams,
+  makePayingCashAccount,
+  payingAccountReads,
+} from '@/tests/helpers'
 
 // The route is wrapped in withRouteContext and gated with requireWrite (it
 // persists payment_file_generated_at). The XML generator, net-payout helper and
@@ -83,6 +89,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25', corrects_run_id: 'run-0' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
       { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS' } }, // company_settings
+      ...payingAccountReads(),
       { data: [employee] }, // salary_run_employees
       { data: { id: 'run-0', corrects_run_id: null } }, // the corrected run
       { data: [{ id: 'sre-0', ...employee }] }, // its roster
@@ -118,6 +125,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
       { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS' } }, // settings
+      ...payingAccountReads(),
       {
         data: [
           { employee_id: 'e1', employee: { first_name: 'Lena', last_name: 'L', clearing_number: '5037', bank_account_number: '96123456789' } },
@@ -145,6 +153,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
       { data: { company_name: 'Bolaget AB', iban: 'SE4580000832790000012345', bic: 'SWEDSESS' } }, // settings
+      ...payingAccountReads(),
     ])
 
     const response = await GET(
@@ -155,7 +164,39 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
     expect(response.status).toBe(400)
     const body = await response.json()
     expect(body.error).toContain('SignerID')
-    expect(body.error).toContain('Inställningar → Fakturering')
+    expect(body.error).toContain('Inställningar → Fakturor')
+    expect(generatePain001).not.toHaveBeenCalled()
+  })
+
+  it('returns 400 naming the paying account and where its IBAN is filled when it has none (crm#1483)', async () => {
+    const { enqueueMany } = authed()
+    enqueueMany([
+      { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
+      { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
+      // The settings IBAN is the savings account's: the company has two
+      // accounts, so the primary's missing IBAN is never filled from it.
+      { data: { company_name: 'Bolaget AB', iban: 'SE7150000000058391234567', bic: 'ESSESESS' } },
+      ...payingAccountReads([
+        makePayingCashAccount({ name: 'Företagskonto' }),
+        makePayingCashAccount({
+          id: 'ca-1931',
+          name: 'Sparkonto',
+          ledger_account: '1931',
+          is_primary: false,
+          payee_iban: 'SE7150000000058391234567',
+        }),
+      ]),
+    ])
+
+    const response = await GET(
+      createMockRequest('/api/salary/runs/run-1/payment/pain001'),
+      createMockRouteParams({ id: 'run-1' }),
+    )
+
+    expect(response.status).toBe(400)
+    expect((await response.json()).error).toBe(
+      'Betalfilen betalar från Företagskonto (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+    )
     expect(generatePain001).not.toHaveBeenCalled()
   })
 
@@ -165,6 +206,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 9, payment_date: '2026-09-25' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } },
       { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS' } },
+      ...payingAccountReads(),
       {
         data: [
           { employee_id: 'e2', employee: { first_name: 'Sara', last_name: 'S', clearing_number: '8327-9', bank_account_number: '9612345678' } },
@@ -187,6 +229,7 @@ describe('GET /api/salary/runs/[id]/payment/pain001', () => {
       { data: { id: 'run-1', status: 'approved', period_year: 2026, period_month: 3, payment_date: '2026-03-25' } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
       { data: { company_name: 'Bolaget AB', iban: 'SE4550000000058398257466', bic: 'NDEASESS' } }, // settings
+      ...payingAccountReads(),
       {
         data: [
           {
@@ -253,6 +296,7 @@ describe('POST /api/salary/runs/[id]/payment/pain001 (new version)', () => {
       { data: { id: 'run-1', status: 'booked', period_year: 2026, period_month: 10, payment_date: '2026-10-23', payment_file_version: 1 } },
       { data: { name: 'Bolaget AB', org_number: '5560000000' } }, // companies
       { data: { company_name: 'Bolaget AB', iban: 'SE7212000000012200111878', bic: 'DABASESX' } }, // settings
+      ...payingAccountReads(),
       {
         data: [
           {

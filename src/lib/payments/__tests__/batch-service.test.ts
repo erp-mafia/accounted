@@ -17,9 +17,26 @@ vi.mock('@/lib/logger', async (importOriginal) => {
   }
 })
 
+// The paying account (lib/payments/paying-account.ts, tested on its own)
+// reads cash_accounts between the batch's other reads, and the queued client
+// below answers by order. So the real rule runs on a per-table client of its
+// own: by default the company's only bank account is the seeded 1930 without
+// an IBAN, which borrows the settings IBAN and BIC, as every batch did before
+// accounts carried one (crm#1483).
+const { resolvePayingAccountMock } = vi.hoisted(() => ({ resolvePayingAccountMock: vi.fn() }))
+vi.mock('@/lib/payments/paying-account', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/payments/paying-account')>()),
+  resolvePayingAccount: resolvePayingAccountMock,
+}))
+
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { createQueuedMockSupabase } from '@/tests/helpers'
+import {
+  createQueuedMockSupabase,
+  createTableMockSupabase,
+  makePayingCashAccount,
+  payingCashAccountsTable,
+} from '@/tests/helpers'
 import {
   batchFileBytes,
   createSupplierPaymentBatch,
@@ -27,6 +44,24 @@ import {
   renderSupplierPaymentBatchFile,
 } from '@/lib/payments/batch-service'
 import type { SupplierPaymentBatch, SupplierPaymentBatchItem } from '@/types'
+
+const { resolvePayingAccount: realResolvePayingAccount } =
+  await vi.importActual<typeof import('@/lib/payments/paying-account')>('@/lib/payments/paying-account')
+
+const cashAccount = makePayingCashAccount
+
+/** Let the paying-account rule read these cash accounts (the primary, the enabled-SEK listing, every account). */
+function payingAccountsAre(accounts: Array<ReturnType<typeof cashAccount>>) {
+  const accountsClient = createTableMockSupabase({ cash_accounts: payingCashAccountsTable(accounts) })
+  resolvePayingAccountMock.mockImplementation(
+    (_supabase: SupabaseClient, companyId: string, log: Parameters<typeof realResolvePayingAccount>[2], options: Parameters<typeof realResolvePayingAccount>[3]) =>
+      realResolvePayingAccount(accountsClient.supabase as unknown as SupabaseClient, companyId, log, options),
+  )
+}
+
+beforeEach(() => {
+  payingAccountsAre([cashAccount()])
+})
 
 const COMPANY_ID = 'c0000000-0000-0000-0000-000000000001'
 const USER_ID = 'u0000000-0000-0000-0000-000000000001'
@@ -935,7 +970,12 @@ describe('createSupplierPaymentBatch', () => {
       { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
-    expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'iban' })
+    expect(result).toEqual({
+      ok: false,
+      code: 'debtor_incomplete',
+      missing: 'iban',
+      account: { cash_account_id: 'ca-1930', name: 'Företagskonto (SEK)', ledger_account: '1930', iban_last4: null },
+    })
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
@@ -987,7 +1027,8 @@ describe('createSupplierPaymentBatch', () => {
     const mock = createQueuedMockSupabase()
     mock.enqueueMany([
       { data: companyRow },
-      { data: { ...settingsRow, bic: null, clearing_number: null, bank_name: 'Testbanken' } },
+      // A foreign IBAN names no Swedish bank code, and no BIC is saved.
+      { data: { ...settingsRow, iban: 'DK5000400440116243', bic: null, clearing_number: null, bank_name: 'Testbanken' } },
     ])
 
     const result = await createSupplierPaymentBatch(
@@ -997,7 +1038,12 @@ describe('createSupplierPaymentBatch', () => {
       { items: [{ supplier_invoice_id: 'inv-1' }] },
     )
 
-    expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'bic' })
+    expect(result).toEqual({
+      ok: false,
+      code: 'debtor_incomplete',
+      missing: 'bic',
+      account: { cash_account_id: 'ca-1930', name: 'Företagskonto (SEK)', ledger_account: '1930', iban_last4: '6243' },
+    })
     expect(mock.supabase.rpc).not.toHaveBeenCalled()
   })
 
@@ -1065,9 +1111,12 @@ describe('createSupplierPaymentBatch', () => {
     }
   })
 
-  it('treats a company whose clearing number is Swedbank or a savings bank as Swedbank when no BIC is saved', async () => {
+  it('treats a company whose paying account is at a savings bank as Swedbank when no BIC is saved', async () => {
+    // The account's own IBAN names a savings bank (bank code 800); the
+    // settings, what invoices print, name SEB. The paying account decides.
+    payingAccountsAre([cashAccount({ payee_iban: 'SE6480000832790000012345' })])
     const mock = createQueuedMockSupabase()
-    mock.enqueueMany([{ data: companyRow }, { data: { ...settingsRow, bic: null, clearing_number: '8327-9' } }])
+    mock.enqueueMany([{ data: companyRow }, { data: settingsRow }])
 
     const result = await createSupplierPaymentBatch(
       mock.supabase as unknown as SupabaseClient,
@@ -1251,6 +1300,80 @@ function storedBankgiroItem(): SupplierPaymentBatchItem {
     created_at: '2026-08-10T12:00:00Z',
   }
 }
+
+// crm#1483: the files paid from the IBAN SEK invoices print. A supplier
+// batch pays from the account the salary verifikat credits, the primary, by
+// the same rule as the salary file (lib/payments/paying-account.ts).
+describe('the account a supplier batch pays from (crm#1483)', () => {
+  const IBAN_1930 = 'SE4550000000058398257466'
+  const IBAN_1931 = 'SE7150000000058391234567'
+  const SEB = { bank_name: 'SEB', bic: 'ESSESESS' }
+  const connected1930 = cashAccount({ name: 'Företagskonto', bank_connection_id: 'bc-1', iban: IBAN_1930, bank_connection: SEB })
+  const savings1931 = cashAccount({
+    id: 'ca-1931',
+    name: 'Sparkonto',
+    ledger_account: '1931',
+    is_primary: false,
+    bank_connection_id: 'bc-1',
+    iban: IBAN_1931,
+    payee_iban: IBAN_1931,
+    bank_connection: SEB,
+  })
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    eventBus.clear()
+  })
+
+  it('snapshots the primary as debtor, not the savings account whose IBAN the settings mirror', async () => {
+    payingAccountsAre([connected1930, savings1931])
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: { ...settingsRow, iban: IBAN_1931 } },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
+      { data: { ok: true, batch: batchRow() } },
+    ])
+
+    const result = await createSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, USER_ID, {
+      items: [{ supplier_invoice_id: 'inv-1' }],
+    })
+
+    expect(result.ok).toBe(true)
+    const args = mock.supabase.rpc.mock.calls[0][1] as { p_debtor_snapshot: SupplierPaymentBatch['debtor_snapshot'] }
+    expect(args.p_debtor_snapshot).toMatchObject({ iban: IBAN_1930, bic: 'ESSESESS' })
+    // A bank-account payee is debited from the IBAN (a bankgiro payee at SEB goes BGNR to BGNR).
+    const bankAccountItem: SupplierPaymentBatchItem = {
+      ...storedBankgiroItem(),
+      payee_type: 'bank_account',
+      payee_bankgiro: null,
+      payee_clearing: '6000',
+      payee_account: '123456789',
+    }
+    const file = renderSupplierPaymentBatchFile(batchRow({ debtor_snapshot: args.p_debtor_snapshot }), [bankAccountItem])
+    expect(file.content.match(/<DbtrAcct>[\s\S]*?<IBAN>([^<]+)<\/IBAN>/)?.[1]).toBe(IBAN_1930)
+    expect(file.content).not.toContain(IBAN_1931)
+  })
+
+  it('names the account in the preview when the primary has no IBAN and the company has other accounts', async () => {
+    payingAccountsAre([cashAccount({ name: 'Företagskonto' }), savings1931])
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([{ data: [invoiceRow()] }, { data: [] }, { data: companyRow }, { data: settingsRow }])
+
+    const preview = await previewSupplierPaymentBatch(mock.supabase as unknown as SupabaseClient, COMPANY_ID, {
+      ids: ['inv-1'],
+    })
+
+    expect(preview.debtor_ok).toBe(false)
+    expect(preview.debtor_missing).toBe('iban')
+    expect(preview.debtor_account).toEqual({ cash_account_id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930', iban_last4: null })
+    // Still a preview: the lines show what the file would carry.
+    expect(preview.eligible).toHaveLength(1)
+  })
+})
 
 describe('renderSupplierPaymentBatchFile', () => {
   it('renders a deterministic pain.001 file from stored rows alone', () => {

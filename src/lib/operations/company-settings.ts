@@ -405,6 +405,7 @@ export const settingsUpdate = defineOperation({
       'Only an owner or admin of the company may change settings: other members get 403 FORBIDDEN.',
       'contact_person is stored as default_our_reference: the default "Vår referens" on new invoices.',
       'bankgiro and plusgiro must carry a valid Luhn check digit; null or empty string clears them.',
+      'iban and bic are what SEK invoices print. The salary, supplier and tax payment files pay from the account the salary is booked on (the primary bank account) with that account\'s own IBAN; they use iban and bic from here only when that account has no IBAN and is the company\'s only SEK bank account, or the company has no bank accounts. The bankgiro here is the sender of a Bankgirot LB file.',
       'invoice_email_texts only accepts the placeholders {fakturanummer} {kundnamn} {förnamn} {företag} {förfallodatum} {belopp}.',
       'reminder_days_level_1 < _2 < _3 must hold after the change (stored values fill in the ones not sent).',
       'The booking engine reads default_voucher_series_per_source_type, not default_voucher_series: send the map to move bookings to another series.',

@@ -3,6 +3,8 @@ import {
   createMockRequest,
   parseJsonResponse,
   createQueuedMockSupabase,
+  makePayingCashAccount,
+  payingAccountReads,
 } from '@/tests/helpers'
 
 const { supabase: mockSupabase, enqueue, enqueueMany, reset, findCall, findCalls } =
@@ -199,6 +201,7 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
     enqueueMany([
       { data: companyRow },
       { data: settingsRow },
+      ...payingAccountReads(),
       { data: [invoiceRow()] },
       { data: [] },
       { data: [] }, // open bank payment orders: none
@@ -224,6 +227,7 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
     enqueueMany([
       { data: companyRow },
       { data: settingsRow },
+      ...payingAccountReads(),
       { data: [invoiceRow({ status: 'paid' })] },
       { data: [] },
     ])
@@ -246,6 +250,7 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
     enqueueMany([
       { data: companyRow },
       { data: settingsRow },
+      ...payingAccountReads(),
       { data: [invoiceRow()] },
       { data: [{ supplier_invoice_id: UUID_A, batch: { id: BATCH_ID, status: 'created' } }] },
     ])
@@ -261,8 +266,17 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
     expect(body.error.code).toBe('SI_BATCH_DUPLICATE_INVOICE')
   })
 
-  it('maps missing debtor details to SI_BATCH_DEBTOR_INCOMPLETE', async () => {
-    enqueueMany([{ data: companyRow }, { data: { ...settingsRow, iban: null } }])
+  it('maps missing debtor details to SI_BATCH_DEBTOR_INCOMPLETE, naming the paying account (crm#1483)', async () => {
+    // The primary has no IBAN and the company has another account, so the
+    // settings IBAN (what invoices print) is not borrowed.
+    enqueueMany([
+      { data: companyRow },
+      { data: settingsRow },
+      ...payingAccountReads([
+        makePayingCashAccount({ name: 'Företagskonto' }),
+        makePayingCashAccount({ id: 'ca-1931', name: 'Sparkonto', ledger_account: '1931', is_primary: false, payee_iban: settingsRow.iban }),
+      ]),
+    ])
     const response = await createBatch(
       createMockRequest('/api/supplier-invoices/payment-batches', {
         method: 'POST',
@@ -270,12 +284,16 @@ describe('POST /api/supplier-invoices/payment-batches', () => {
       }),
     )
     const { status, body } = await parseJsonResponse<{
-      error: { code: string; details: { missing: string } }
+      error: { code: string; message: string; details: { missing: string; account: Record<string, unknown> } }
     }>(response)
 
     expect(status).toBe(400)
     expect(body.error.code).toBe('SI_BATCH_DEBTOR_INCOMPLETE')
     expect(body.error.details.missing).toBe('iban')
+    expect(body.error.details.account).toEqual({ cash_account_id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930', iban_last4: null })
+    expect(body.error.message).toBe(
+      'Betalfilen betalar från Företagskonto (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+    )
   })
 })
 

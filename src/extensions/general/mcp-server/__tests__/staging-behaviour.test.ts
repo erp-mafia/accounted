@@ -830,6 +830,11 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
     rows: {
       companies: { name: 'Testbolaget AB', org_number: '556677-8899' },
       company_settings: { company_name: 'Testbolaget AB', org_number: '556677-8899', city: 'Stockholm', iban: 'SE3550000000054910000003', bic: 'ESSESESS', bankgiro: null },
+      // The account the file pays from (lib/payments/paying-account.ts): the primary, with its own IBAN.
+      cash_accounts: {
+        ledger_account: '1930', currency: 'SEK', enabled: true, is_primary: true, name: 'Företagskonto',
+        iban: null, payee_iban: 'SE3550000000054910000003', bic: 'ESSESESS', bank_connection_id: null, bank_connection: null,
+      },
       supplier_invoices: {
         status: 'approved', approved_at: '2026-08-01T10:00:00Z', due_date: '2099-08-20', remaining_amount: 737.5, currency: 'SEK',
         is_credit_note: false, payment_reference: null, supplier_invoice_number: 'CD3014794407',

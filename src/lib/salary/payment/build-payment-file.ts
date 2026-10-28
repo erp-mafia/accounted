@@ -18,8 +18,11 @@
  *   2. run status is approved, paid or booked
  *   3. company row exists
  *   4. company_settings row (pain.001) / bankgiro (LB) present and valid
- *   5. company IBAN present and BIC present or derivable (pain.001), and
- *      for a Swedbank debtor Swedbank's SignerID and Corporate Pay id
+ *   5. the paying account (pain.001, lib/payments/paying-account.ts): the
+ *      cash account the salary verifikat credits (a booked run's posted
+ *      entry, else the primary bank account), with an IBAN and a BIC saved
+ *      or derivable, and for a Swedbank debtor Swedbank's SignerID and
+ *      Corporate Pay id
  *   6. the run has employees
  *   7. every employee with a positive payout has clearing + account
  *   8. every one of those accounts names a payable account
@@ -62,6 +65,7 @@
 import { createHash, randomUUID } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
+import { createLogger } from '@/lib/logger'
 import { getBranding } from '@/lib/branding/service'
 import { formatCurrency } from '@/lib/utils'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
@@ -82,16 +86,25 @@ import { resolveSwedbankFileIds } from '@/lib/payments/swedbank'
 import {
   checkEmployeeAccountChecksum,
   describePayeeAccountProblems,
-  lookupBicByBankName,
-  lookupBicByClearing,
   maskPayeeAccount,
-  normalizeBankNumber,
   payeeAccountProblem,
 } from '@/lib/payments/bank-account'
+import {
+  derivedBicWarningSv,
+  payingAccountMissingEn,
+  payingAccountMissingSv,
+  payingAccountSummary,
+  resolvePayingAccount,
+  type PayingAccountResolution,
+  type PayingAccountSummary,
+} from '@/lib/payments/paying-account'
+import { bookedNetPayAccount } from '@/lib/salary/posted-run-entries'
 
 import { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat } from './payment-format'
 
 export { SALARY_PAYMENT_FILE_FORMATS, type SalaryPaymentFileFormat }
+
+const log = createLogger('salary/payment/build-payment-file')
 
 /** Run statuses a payment file may be generated from. */
 export const SALARY_PAYMENT_FILE_ALLOWED_STATUSES = ['approved', 'paid', 'booked'] as const
@@ -144,7 +157,7 @@ export type SalaryPaymentFileErrorCode =
   | 'IN_BANK_PAYMENT'
   | 'NOTHING_TO_PAY'
 
-export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'employees' | 'correction'
+export type SalaryPaymentFileLoadStage = 'run' | 'company' | 'settings' | 'account' | 'employees' | 'correction'
 
 /**
  * One payment the file carries, in file order: the banklista line. Built from
@@ -171,6 +184,12 @@ export interface SalaryPaymentFilePayer {
   orgNumber: string | null
   /** The debtor IBAN (pain.001) or the sender bankgiro (LB), as written in the file. */
   account: string
+  /**
+   * The cash account the pain.001 pays from, the one the salary verifikat
+   * credits (lib/payments/paying-account.ts); null for an LB file, which is
+   * sent from the company bankgiro.
+   */
+  cashAccount: PayingAccountSummary | null
 }
 
 export interface SalaryPaymentFileError {
@@ -244,16 +263,17 @@ interface RunRow {
   payment_date: string
   /** The run's pain.001 version (20261015230000); absent before the column existed. */
   payment_file_version?: number | null
+  /** The posted salary verifikat of a booked run: its net pay credit names the paying account. */
+  salary_entry_id?: string | null
   /** The run a correction run corrects (salary_runs.corrects_run_id); null for an ordinary run. */
   corrects_run_id?: string | null
 }
 
 interface SettingsRow {
   company_name: string | null
+  /** The legacy payer columns: borrowed only by an account without an IBAN of its own (paying-account.ts). */
   iban: string | null
   bic: string | null
-  clearing_number: string | null
-  bank_name: string | null
   bankgiro: string | null
   preferred_payment_format: string | null
   city: string | null
@@ -293,7 +313,7 @@ function fail(
  * file without them at upload ("Aktivt id för fullmaktshavare saknas").
  */
 export const SWEDBANK_IDS_MISSING_SV =
-  'Swedbank kräver företagets SignerID och avtals-id (Corporate Pay) i betalfilen. Du får dem av Swedbank. Fyll i dem under Inställningar → Fakturering.'
+  'Swedbank kräver företagets SignerID och avtals-id (Corporate Pay) i betalfilen. Du får dem av Swedbank. Fyll i dem under Inställningar → Fakturor.'
 
 /** A builder refusal in the structured-errors catalogue (lib/errors/structured-errors.ts). */
 export interface SalaryPaymentFileRefusal {
@@ -440,10 +460,11 @@ export async function buildSalaryPaymentFile(
     .maybeSingle()
   if (companyErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'company', cause: companyErr })
 
-  // 4. Settings: the sender's bank details live here, not on companies.
+  // 4. Settings: the sender's name, town, bankgiro and Swedbank ids live
+  // here, not on companies. The paying account is step 5.
   const { data: settingsData, error: settingsErr } = await supabase
     .from('company_settings')
-    .select('company_name, iban, bic, clearing_number, bank_name, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id')
+    .select('company_name, iban, bic, bankgiro, preferred_payment_format, city, swedbank_signer_id, swedbank_corporate_pay_id')
     .eq('company_id', companyId)
     .maybeSingle()
   if (settingsErr) return fail('DB_ERROR', requestedFormat, {}, { stage: 'settings', cause: settingsErr })
@@ -459,34 +480,38 @@ export async function buildSalaryPaymentFile(
 
   let pain001Company: Pain001CompanyData | null = null
   let bgLbCompany: BgLbCompanyData | null = null
+  let payingCashAccount: PayingAccountSummary | null = null
 
   if (format === 'pain001') {
     if (!settings) return fail('SETTINGS_MISSING', format)
 
-    // Debtor account: the company's own IBAN, the canonical payer form every
-    // Swedish bank accepts. Set under Inställningar → Fakturering.
-    const senderIban = (settings.iban ?? '').replace(/\s/g, '').toUpperCase()
-    if (!senderIban) return fail('IBAN_MISSING', format, { field: 'iban' })
-
-    // Debtor bank BIC: the saved BIC, otherwise derived from the clearing
-    // number (or bank name) the company already entered, so most users only
-    // need to fill in the IBAN. Required by the receiving bank.
-    const savedBic = settings.bic?.trim() || null
-    const senderBic =
-      savedBic ||
-      lookupBicByClearing(normalizeBankNumber(settings.clearing_number)) ||
-      lookupBicByBankName(settings.bank_name)
-    if (!senderBic) return fail('BIC_MISSING', format, { field: 'bic' })
-    if (!savedBic) {
-      warnings.push(
-        `BIC (${senderBic}) härleddes från företagets clearingnummer eller banknamn. Spara BIC under Inställningar → Fakturering om banken avvisar filen.`,
-      )
+    // 5. The debtor account: the cash account the salary verifikat credits
+    // (a booked run's posted entry, else the primary bank account the booking
+    // will credit), never the customer-invoice IBAN (crm#1483). Its IBAN is
+    // the canonical payer form every Swedish bank accepts; its BIC is saved,
+    // named by the bank connection or looked up, so most accounts need no BIC.
+    let paying: PayingAccountResolution
+    try {
+      const bookedLedgerAccount = await bookedNetPayAccount(supabase, companyId, runRow)
+      paying = await resolvePayingAccount(supabase, companyId, log, { settings, bookedLedgerAccount })
+    } catch (err) {
+      return fail('DB_ERROR', format, {}, { stage: 'account', cause: err })
     }
+    if (!paying.ok) {
+      return fail(paying.missing === 'iban' ? 'IBAN_MISSING' : 'BIC_MISSING', format, {
+        field: paying.missing,
+        account: payingAccountSummary(paying.account),
+        message: payingAccountMissingSv(paying.missing, paying.account),
+        message_en: payingAccountMissingEn(paying.missing, paying.account),
+      })
+    }
+    const debtor = paying.account
+    if (debtor.bic_derived) warnings.push(derivedBicWarningSv(debtor))
 
     // Swedbank (savings banks included) identifies the sender and the
     // agreement by its own SignerID and Corporate Pay id, never the org
     // number, and refuses a file without them (lib/payments/swedbank.ts).
-    const swedbank = resolveSwedbankFileIds(senderBic, settings)
+    const swedbank = resolveSwedbankFileIds(debtor.bic, settings)
     if (!swedbank.ok) {
       return fail('SWEDBANK_IDS_MISSING', format, {
         fields: (['swedbank_signer_id', 'swedbank_corporate_pay_id'] as const).filter(
@@ -501,11 +526,12 @@ export async function buildSalaryPaymentFile(
       // not the frozen onboarding companies.name.
       name: settings.company_name || companyRow.name,
       orgNumber: companyRow.org_number || '',
-      iban: senderIban,
-      bic: senderBic,
+      iban: debtor.iban,
+      bic: debtor.bic,
       city: settings.city,
       swedbank: swedbank.ids,
     }
+    payingCashAccount = payingAccountSummary(debtor)
   } else {
     // The settings overview shows a bankgiro from the Bolagsverket snapshot,
     // which is display data only; the file reads company_settings.bankgiro.
@@ -712,11 +738,17 @@ export async function buildSalaryPaymentFile(
     payees,
     correction,
     payer: pain001Company
-      ? { name: pain001Company.name, orgNumber: companyRow.org_number, account: pain001Company.iban }
+      ? {
+          name: pain001Company.name,
+          orgNumber: companyRow.org_number,
+          account: pain001Company.iban,
+          cashAccount: payingCashAccount,
+        }
       : {
           name: (bgLbCompany as BgLbCompanyData).name,
           orgNumber: companyRow.org_number,
           account: (bgLbCompany as BgLbCompanyData).senderBankgiro,
+          cashAccount: null,
         },
     warnings,
   }

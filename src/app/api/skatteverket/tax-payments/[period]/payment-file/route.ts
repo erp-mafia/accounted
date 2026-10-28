@@ -4,6 +4,7 @@ import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { generateBankgiroPaymentBgLb } from '@/lib/salary/payment/bg-lb-generator'
 import { generateSupplierPain001 } from '@/lib/payments/pain001-supplier'
 import { paysThroughSwedbankIso2, resolveBatchDebtor } from '@/lib/payments/batch-service'
+import { payingAccountMissingSv } from '@/lib/payments/paying-account'
 import { resolveSkattekontoOcr, SKATTEKONTO_BANKGIRO } from '@/lib/skatteverket/skattekonto-ocr'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
 import { roundOre } from '@/lib/money'
@@ -127,9 +128,11 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
 
   if (format === 'pain001') {
     // The paying company resolves exactly like a supplier payment batch:
-    // IBAN + BIC (derived when possible) + org number, with the company
-    // bankgiro riding along so the BG payee is debited BGNR-to-BGNR where
-    // the bank's MIG demands it (Swedbank Validex rule 219).
+    // the paying account (the primary bank account, the one salaries are
+    // booked on: lib/payments/paying-account.ts) with its IBAN and BIC, plus
+    // the org number, with the company bankgiro riding along so the BG payee
+    // is debited BGNR-to-BGNR where the bank's MIG demands it (Swedbank
+    // Validex rule 219).
     const debtorResolution = await resolveBatchDebtor(supabase, companyId)
     // A Swedbank company's file takes Swedbank's ISO 2.0 form, which pays to
     // bank accounts only, and Skatteverket is paid on its bankgiro: no file
@@ -144,12 +147,16 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       )
     }
     if (!debtorResolution.ok) {
-      const message = {
-        iban: 'Företagets IBAN saknas i företagsinställningar. Fyll i det under Inställningar → Fakturering för att skapa betalfil (ISO 20022).',
-        bic: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturering för att skapa betalfilen.',
-        org_number: 'Organisationsnummer saknas för företaget.',
-        swedbank_ids: 'Swedbank kräver ditt SignerID och avtals-id (Corporate Pay) i betalfilen. Fyll i dem under Inställningar → Fakturering.',
-      }[debtorResolution.missing]
+      const { missing, account } = debtorResolution
+      const message =
+        (missing === 'iban' || missing === 'bic') && account
+          ? payingAccountMissingSv(missing, account)
+          : {
+              iban: 'Företagets IBAN saknas. Fyll i det under Inställningar → Fakturor för att skapa betalfil (ISO 20022).',
+              bic: 'Företagsbankens BIC saknas och kunde inte härledas. Fyll i BIC under Inställningar → Fakturor för att skapa betalfilen.',
+              org_number: 'Organisationsnummer saknas för företaget.',
+              swedbank_ids: 'Swedbank kräver ditt SignerID och avtals-id (Corporate Pay) i betalfilen. Fyll i dem under Inställningar → Fakturor.',
+            }[missing]
       return NextResponse.json({ error: message }, { status: 400 })
     }
     const { debtor } = debtorResolution
@@ -210,7 +217,7 @@ export const GET = withRouteContext<{ params: Promise<{ period: string }> }>(
       return NextResponse.json(
         // Same wording as the salary LB route: the settings overview shows a
         // registry bankgiro that this route does not read.
-        { error: 'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturering för att skapa betalfilen.' },
+        { error: 'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturor för att skapa betalfilen.' },
         { status: 400 }
       )
     }

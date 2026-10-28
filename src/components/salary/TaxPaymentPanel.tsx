@@ -17,6 +17,8 @@ import type { ErrorLocale } from '@/lib/errors/get-error-message'
 import { cn, formatCurrency, formatDateTime } from '@/lib/utils'
 import { roundOre } from '@/lib/money'
 import { PayDeclarationViaBankButton } from '@/components/payments/PayDeclarationViaBankButton'
+import type { PaymentFileAccountView } from '@/lib/salary/payment/payment-account'
+import { payingAccountName } from '@/lib/payments/paying-account-label'
 
 type PaymentFormat = 'bg_lb' | 'pain001'
 
@@ -41,12 +43,17 @@ interface TaxPaymentPanelProps {
   /** company_settings.preferred_payment_format: seeds the format selector. */
   defaultFormat: PaymentFormat
   /**
-   * company_settings.bankgiro / iban: the sender account each format requires.
-   * null means missing as of the latest settings fetch (warn up front, the
-   * download would 400); undefined means unknown (settings not loaded).
+   * company_settings.bankgiro: the sender of an LB file. null means missing
+   * as of the latest settings fetch (warn up front, the download would 400);
+   * undefined means unknown (settings not loaded).
    */
   senderBankgiro?: string | null
-  senderIban?: string | null
+  /**
+   * The account a pain.001 pays from: the primary bank account
+   * (GET /api/salary/payment-account without a run). undefined while
+   * unknown: no warning.
+   */
+  fileAccount?: PaymentFileAccountView
   readOnly?: boolean
   /**
    * The AGI's redovisningsperiod (YYYY-MM) when the AGI declaration exists:
@@ -71,7 +78,7 @@ export function TaxPaymentPanel({
   paymentDueDate,
   defaultFormat,
   senderBankgiro,
-  senderIban,
+  fileAccount,
   readOnly,
   agiPeriod,
   onChange,
@@ -162,12 +169,13 @@ export function TaxPaymentPanel({
     pain001: t('format_pain001'),
   }
 
-  // The sender account lives in company_settings, not in the Bolagsverket
-  // snapshot shown on the settings overview: say the precondition here,
-  // before the download 400s on it (same logic as PaymentFilePanel).
-  const senderMissing =
-    (format === 'bg_lb' && senderBankgiro === null) ||
-    (format === 'pain001' && senderIban === null)
+  // The LB sender lives in company_settings, not in the Bolagsverket
+  // snapshot shown on the settings overview; the pain.001 pays from the
+  // primary bank account, which needs an IBAN and a BIC of its own. Say the
+  // precondition here, before the download 400s on it (same logic as
+  // PaymentFilePanel).
+  const accountMissing = format === 'pain001' ? (fileAccount?.missing ?? null) : null
+  const senderMissing = (format === 'bg_lb' && senderBankgiro === null) || accountMissing !== null
 
   return (
     <DetailSection
@@ -235,8 +243,17 @@ export function TaxPaymentPanel({
 
       {!readOnly && senderMissing && (
         <div className="mt-3">
-          <AttnLine action={{ label: t('missing_sender_link'), href: '/settings/invoicing' }}>
-            {format === 'bg_lb' ? t('missing_bankgiro_warning') : t('missing_iban_warning')}
+          <AttnLine
+            action={{
+              label: accountMissing ? t('missing_account_link') : t('missing_sender_link'),
+              href: '/settings/invoicing',
+            }}
+          >
+            {accountMissing && fileAccount
+              ? t(accountMissing === 'iban' ? 'missing_account_iban_warning' : 'missing_account_bic_warning', {
+                  account: payingAccountName(fileAccount.account),
+                })
+              : t('missing_bankgiro_warning')}
           </AttnLine>
         </div>
       )}

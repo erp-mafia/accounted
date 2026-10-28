@@ -320,6 +320,50 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(stampCalls(calls)).toHaveLength(0)
   })
 
+  it('names the paying account in a 422 when the primary has no IBAN and the company has other accounts (crm#1483)', async () => {
+    const account = (overrides: Record<string, unknown>) => ({
+      name: null,
+      currency: 'SEK',
+      enabled: true,
+      iban: null,
+      payee_iban: null,
+      bic: null,
+      clearing_number: null,
+      bank_name: null,
+      bank_connection_id: null,
+      bank_connection: null,
+      ...overrides,
+    })
+    const { supabase, calls } = makeRecordingSupabase(
+      happyTables({
+        // Read in order: the primary, then every account of the company.
+        cash_accounts: [
+          { data: { id: 'ca-1930', ledger_account: '1930', enabled: true, currency: 'SEK' } },
+          {
+            data: [
+              account({ id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930' }),
+              account({ id: 'ca-1931', name: 'Sparkonto', ledger_account: '1931', payee_iban: 'SE7150000000058391234567' }),
+            ],
+          },
+        ],
+      }),
+    )
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await paymentFile(
+      makeRequest(URL, { body: JSON.stringify({ format: 'pain001' }) }),
+      detailParams(COMPANY_ID, RUN_ID),
+    )
+    expect(res.status).toBe(422)
+    const body = await res.json()
+    expect(body.error.code).toBe('SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS')
+    expect(body.error.details).toMatchObject({
+      problem: 'iban_missing',
+      account: { cash_account_id: 'ca-1930', name: 'Företagskonto', ledger_account: '1930', iban_last4: null },
+    })
+    expect(stampCalls(calls)).toHaveLength(0)
+  })
+
   it('returns 422 MISSING_BANK_DETAILS with problem bankgiro_missing for bg_lb without a bankgiro', async () => {
     mockServiceClient.mockReturnValue(
       makeRecordingSupabase(
@@ -475,6 +519,13 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(body.data.total_amount).toBe(25000)
     expect(body.data.currency).toBe('SEK')
     expect(typeof body.data.generated_at).toBe('string')
+    // No cash accounts: the file pays from the settings IBAN, on the historical 1930.
+    expect(body.data.paying_account).toEqual({
+      cash_account_id: null,
+      name: null,
+      ledger_account: '1930',
+      iban_last4: '7466',
+    })
 
     // The real generator ran: debtor IBAN (whitespace stripped), SALA batch,
     // the employee's clearing as SESBA member id and the account as BBAN.
@@ -631,6 +682,7 @@ describe('POST /salary-runs/:id/payment-file', () => {
     expect(body.data.preview.filename).toBe('pain001_lon_2026-05.xml')
     expect(body.data.preview.employee_count).toBe(1)
     expect(body.data.preview.total_amount).toBe(25000)
+    expect(body.data.preview.paying_account).toMatchObject({ ledger_account: '1930', iban_last4: '7466' })
     expect(Array.isArray(body.data.preview.warnings)).toBe(true)
     expect(body.data.preview).not.toHaveProperty('content')
     expect(body.data.preview).not.toHaveProperty('generated_at')

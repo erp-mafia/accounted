@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { salaryInstructionBankFromIban } from '../instruction-bank'
+import { salaryInstructionBank, salaryInstructionBankFromIban } from '../instruction-bank'
 
 // Made-up account digits; only the bank code (characters 5-7) matters here.
 describe('salaryInstructionBankFromIban', () => {
@@ -29,5 +29,25 @@ describe('salaryInstructionBankFromIban', () => {
     ['undefined', undefined],
   ])('answers null for %s', (_label, iban) => {
     expect(salaryInstructionBankFromIban(iban)).toBeNull()
+  })
+})
+
+// crm#1483: the instructions follow the bank the file pays from; the stored
+// salary_default_bank is only the fallback for a bank without instructions.
+describe('salaryInstructionBank', () => {
+  it("opens the paying account's bank first, whatever the company once picked", () => {
+    expect(salaryInstructionBank('SE45 5000 0000 0583 9825 7466', 'swedbank')).toBe('seb')
+    expect(salaryInstructionBank('SE12 6000 0000 0000 0000 0001', null)).toBe('handelsbanken')
+  })
+
+  it('falls back to the stored pick when the paying bank has no instructions, or there is no IBAN', () => {
+    expect(salaryInstructionBank('SE12 1200 0000 0000 0000 0001', 'nordea')).toBe('nordea')
+    expect(salaryInstructionBank(null, 'swedbank')).toBe('swedbank')
+  })
+
+  it("answers null for 'other', an unknown value or nothing stored", () => {
+    expect(salaryInstructionBank('SE12 1200 0000 0000 0000 0001', 'other')).toBeNull()
+    expect(salaryInstructionBank(null, 'lunar')).toBeNull()
+    expect(salaryInstructionBank(undefined, null)).toBeNull()
   })
 })

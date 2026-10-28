@@ -1,4 +1,5 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
+import { isBankLedgerAccount } from '@/lib/core/bookkeeping/correction-bank-leg'
 import type { SupabaseClient } from '@supabase/supabase-js'
 
 /**
@@ -46,6 +47,33 @@ export class PostedSalaryEntriesReadError extends Error {
     this.name = 'PostedSalaryEntriesReadError'
     this.cause = cause
   }
+}
+
+/**
+ * The bank account a posted salary verifikat credits the net pay on: its
+ * credit on a bank account (isBankLedgerAccount, the rättelse paths' own
+ * definition), the leg buildSalaryLines books as "<description>: Nettolön".
+ * Null when the verifikat credits no bank account. Should a rättelse have
+ * spread the net pay over several bank accounts, the account carrying the
+ * largest credit is the answer.
+ */
+export function postedNetPayAccount(entry: PostedSalaryEntry | null): string | null {
+  if (!entry) return null
+  const creditByAccount = new Map<string, number>()
+  for (const line of entry.lines) {
+    if (!isBankLedgerAccount(line.account_number, [])) continue
+    const credit = (line.credit_amount ?? 0) - (line.debit_amount ?? 0)
+    creditByAccount.set(line.account_number, (creditByAccount.get(line.account_number) ?? 0) + credit)
+  }
+  let account: string | null = null
+  let largest = 0
+  for (const [candidate, credit] of creditByAccount) {
+    if (credit > largest) {
+      account = candidate
+      largest = credit
+    }
+  }
+  return account
 }
 
 /**
@@ -108,4 +136,21 @@ export async function loadPostedSalaryRunEntries(
     vacationEntry: toEntry(run.vacation_entry_id),
     pensionEntry: toEntry(run.pension_entry_id),
   }
+}
+
+/**
+ * The bank account a booked run's net pay was credited on (postedNetPayAccount
+ * of its posted salary verifikat): what its payment file pays from. Null for a
+ * run that is not booked yet, which books on the primary bank account, and
+ * for a booked run without a salary verifikat (a nollkörning). Throws
+ * PostedSalaryEntriesReadError like loadPostedSalaryRunEntries.
+ */
+export async function bookedNetPayAccount(
+  supabase: SupabaseClient,
+  companyId: string,
+  run: PostedSalaryRunRef & { status: string },
+): Promise<string | null> {
+  if (run.status !== 'booked' || !run.salary_entry_id) return null
+  const posted = await loadPostedSalaryRunEntries(supabase, companyId, run)
+  return postedNetPayAccount(posted.salaryEntry)
 }

@@ -1154,3 +1154,70 @@ export function testRoutes(extension: Extension): TestExtensionRoute[] {
   return (extension.apiRoutes ?? []) as TestExtensionRoute[]
 }
 
+
+// ============================================================
+// Payment files: the paying account
+// ============================================================
+
+/**
+ * A cash account as the payment-file rule reads it (lib/payments/
+ * paying-account.ts: id, name, ledger, currency, enabled, both IBANs, BIC,
+ * clearing, bank name and the bank connection). Defaults to the seeded
+ * primary 1930 without an IBAN of its own.
+ */
+export function makePayingCashAccount(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'ca-1930',
+    name: 'Företagskonto (SEK)',
+    ledger_account: '1930',
+    currency: 'SEK',
+    enabled: true,
+    is_primary: true,
+    kind: 'bank' as 'bank' | 'card',
+    iban: null as string | null,
+    payee_iban: null as string | null,
+    bic: null as string | null,
+    clearing_number: null as string | null,
+    bank_name: null as string | null,
+    bank_connection_id: null as string | null,
+    bank_connection: null as { bank_name: string | null; bic: string | null } | null,
+    ...overrides,
+  }
+}
+
+/**
+ * The two reads a pain.001 makes for its paying account, for a
+ * createQueuedMockSupabase queue: the primary, then every cash account. With
+ * no accounts given, the company's only account is the seeded 1930 without
+ * an IBAN, which pays from the settings IBAN as before accounts carried one.
+ */
+export function payingAccountReads(
+  accounts: Array<ReturnType<typeof makePayingCashAccount>> = [makePayingCashAccount()],
+): TableMockResult[] {
+  const primary = accounts.find((a) => a.is_primary) ?? null
+  return [
+    { data: primary && { id: primary.id, ledger_account: primary.ledger_account, enabled: primary.enabled, currency: primary.currency } },
+    { data: accounts.filter((a) => a.kind === 'bank') },
+  ]
+}
+
+/**
+ * A createTableMockSupabase answer for cash_accounts that serves the three
+ * reads of the paying-account rule by what the chain asked: the primary
+ * (is_primary), the enabled SEK listing (enabled), or every account.
+ */
+export function payingCashAccountsTable(
+  accounts: Array<ReturnType<typeof makePayingCashAccount>>,
+): TableMockResolver {
+  return (chain) => {
+    const eqs = chain.filter((c) => c.method === 'eq')
+    const columns = eqs.map((c) => c.args[0])
+    const kind = eqs.find((c) => c.args[0] === 'kind')?.args[1]
+    const scoped = kind ? accounts.filter((a) => a.kind === kind) : accounts
+    if (columns.includes('is_primary')) return { data: scoped.find((a) => a.is_primary) ?? null }
+    if (columns.includes('enabled')) {
+      return { data: scoped.filter((a) => a.enabled && a.currency === 'SEK') }
+    }
+    return { data: scoped }
+  }
+}

@@ -30,12 +30,8 @@ import { getBranding } from '@/lib/branding/service'
 import { getSwedishLocalDate } from '@/lib/bookkeeping/engine'
 import { ORE_TOLERANCE, roundOre, sumOre } from '@/lib/money'
 import { validateBankgiroNumber } from '@/lib/bankgiro/luhn'
-import {
-  lookupBicByClearing,
-  lookupBicByBankName,
-  normalizeBankNumber,
-  SVEA_BANK_BICS,
-} from '@/lib/payments/bank-account'
+import { SVEA_BANK_BICS } from '@/lib/payments/bank-account'
+import { payingAccountSummary, resolvePayingAccount, type PayingAccountSummary } from './paying-account'
 import {
   evaluateInvoiceForBatch,
   type BatchExclusionReason,
@@ -99,15 +95,22 @@ export interface BatchDebtor {
 }
 
 /**
- * The company setting a payment file cannot be made without. swedbank_ids:
- * the debtor's bank is Swedbank and its SignerID or Corporate Pay agreement
- * id is missing; Swedbank refuses a file without them at upload.
+ * The company setting a payment file cannot be made without. iban and bic:
+ * the paying account (lib/payments/paying-account.ts) has no IBAN, or its
+ * bank cannot be named. swedbank_ids: the debtor's bank is Swedbank and its
+ * SignerID or Corporate Pay agreement id is missing; Swedbank refuses a file
+ * without them at upload.
  */
 export type DebtorMissing = 'iban' | 'bic' | 'org_number' | 'swedbank_ids'
 
-export type DebtorResolution =
-  | { ok: true; debtor: BatchDebtor }
-  | { ok: false; missing: DebtorMissing }
+/** A refused debtor: what is missing and, for iban and bic, the paying account that lacks it. */
+export interface DebtorRefusal {
+  ok: false
+  missing: DebtorMissing
+  account?: PayingAccountSummary
+}
+
+export type DebtorResolution = { ok: true; debtor: BatchDebtor } | DebtorRefusal
 
 /**
  * What a supplier payment file cannot be made without: the debtor settings,
@@ -119,7 +122,7 @@ export type FileDebtorMissing = DebtorMissing | 'bankgiro'
 /** The debtor of a supplier payment file and the form its bank takes (resolveFileDebtor). */
 export type FileDebtorResolution =
   | { ok: true; debtor: BatchDebtor; format: SupplierPaymentBatchFormat }
-  | { ok: false; missing: FileDebtorMissing }
+  | (Omit<DebtorRefusal, 'missing'> & { missing: FileDebtorMissing })
 
 /**
  * Banks, by 8-character BIC, whose file upload takes Bankgirot's LB file and
@@ -172,14 +175,14 @@ function payeeOutsideFile(
 }
 
 /**
- * Resolve the paying company (pain.001 debtor) from settings, mirroring the
- * salary pain001 route: saved BIC first, then derivation from the clearing
- * number or bank name the company already entered, so most users only ever
- * fill in the IBAN. The org number is required: InitgPty must carry an OrgId
- * (Swedbank Validex PFH_002). The bankgiro rides along when valid so
- * bankgiro payees can be debited BGNR-to-BGNR where the debtor's bank takes
- * that. A Swedbank debtor also needs the two ids Swedbank assigns; without
- * them no file is made, because Swedbank would refuse it.
+ * Resolve the paying company (pain.001 debtor). The account is the one the
+ * salary file pays from too (lib/payments/paying-account.ts): the primary
+ * bank account, with its IBAN and a BIC saved or derived, never the
+ * customer-invoice IBAN (crm#1483). The org number is required: InitgPty
+ * must carry an OrgId (Swedbank Validex PFH_002). The bankgiro rides along
+ * when valid so bankgiro payees can be debited BGNR-to-BGNR where the
+ * debtor's bank takes that. A Swedbank debtor also needs the two ids Swedbank
+ * assigns; without them no file is made, because Swedbank would refuse it.
  */
 export async function resolveBatchDebtor(
   supabase: SupabaseClient,
@@ -189,21 +192,14 @@ export async function resolveBatchDebtor(
     supabase.from('companies').select('name, org_number').eq('id', companyId).single(),
     supabase
       .from('company_settings')
-      .select(
-        'company_name, org_number, city, iban, bic, bankgiro, clearing_number, bank_name, swedbank_signer_id, swedbank_corporate_pay_id',
-      )
+      .select('company_name, org_number, city, iban, bic, bankgiro, swedbank_signer_id, swedbank_corporate_pay_id')
       .eq('company_id', companyId)
       .single(),
   ])
 
-  const iban = (settings?.iban ?? '').replace(/\s/g, '').toUpperCase()
-  if (!iban) return { ok: false, missing: 'iban' }
-
-  const bic =
-    settings?.bic?.trim() ||
-    lookupBicByClearing(normalizeBankNumber(settings?.clearing_number)) ||
-    lookupBicByBankName(settings?.bank_name)
-  if (!bic) return { ok: false, missing: 'bic' }
+  const paying = await resolvePayingAccount(supabase, companyId, log, { settings: settings ?? null })
+  if (!paying.ok) return { ok: false, missing: paying.missing, account: payingAccountSummary(paying.account) }
+  const { iban, bic } = paying.account
 
   // Settings first: it is the maintained value; companies.org_number is the
   // write-once onboarding snapshot and may be empty.
@@ -342,6 +338,8 @@ export interface BatchPreview {
   total: number
   debtor_ok: boolean
   debtor_missing?: FileDebtorMissing
+  /** The paying account that lacks the IBAN or BIC (debtor_missing iban or bic). */
+  debtor_account?: PayingAccountSummary
 }
 
 export async function previewSupplierPaymentBatch(
@@ -423,7 +421,12 @@ export async function previewSupplierPaymentBatch(
     excluded,
     total,
     debtor_ok: debtorResolution.ok,
-    ...(debtorResolution.ok ? {} : { debtor_missing: debtorResolution.missing }),
+    ...(debtorResolution.ok
+      ? {}
+      : {
+          debtor_missing: debtorResolution.missing,
+          ...(debtorResolution.account ? { debtor_account: debtorResolution.account } : {}),
+        }),
   }
 }
 
@@ -474,7 +477,7 @@ export function payeeFingerprint(payee: SupplierPayee): string {
 
 export type CreateBatchResult =
   | { ok: true; batch: SupplierPaymentBatch }
-  | { ok: false; code: 'debtor_incomplete'; missing: FileDebtorMissing }
+  | { ok: false; code: 'debtor_incomplete'; missing: FileDebtorMissing; account?: PayingAccountSummary }
   | { ok: false; code: 'ineligible'; details: Array<{ id: string; reason: string }> }
   | { ok: false; code: 'amount_exceeds_remaining'; details: Array<{ id: string }> }
   | { ok: false; code: 'invalid_amount'; details: Array<{ id: string }> }
@@ -524,7 +527,12 @@ export async function planSupplierPaymentBatch(
 
   const debtorResolution = await resolveFileDebtor(supabase, companyId)
   if (!debtorResolution.ok) {
-    return { ok: false, code: 'debtor_incomplete', missing: debtorResolution.missing }
+    return {
+      ok: false,
+      code: 'debtor_incomplete',
+      missing: debtorResolution.missing,
+      ...(debtorResolution.account ? { account: debtorResolution.account } : {}),
+    }
   }
   const { debtor, format } = debtorResolution
 

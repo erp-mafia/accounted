@@ -26,7 +26,7 @@ import { CORRECTION_NOTHING_TO_PAY_SV } from '@/lib/salary/payment/payable'
 // The settings overview shows a bankgiro from the Bolagsverket snapshot,
 // which is display data only; point at the field this route reads.
 const BANKGIRO_MISSING_MESSAGE =
-  'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturering för att skapa Bankgirot LB-fil.'
+  'Företagets bankgironummer är inte ifyllt. Fyll i det under Inställningar → Fakturor för att skapa Bankgirot LB-fil.'
 
 function legacyError(result: SalaryPaymentFileError): NextResponse {
   const stage = result.code === 'DB_ERROR' ? result.stage : undefined

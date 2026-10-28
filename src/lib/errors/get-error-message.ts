@@ -726,13 +726,15 @@ export function getErrorMessage(
         return [getErrorEntry(structured.code)?.message_en ?? '', ...named].join(' ').trim()
       }
 
-      // Vacation days the calculation cannot price (issue #85): both
-      // sentences are composed where the run is refused and name each
-      // employee and what to do, so an English UI gets the English one, not
-      // the registry's generic line.
+      // Vacation days the calculation cannot price (issue #85), and a
+      // payment file whose paying account lacks its IBAN or BIC (crm#1483):
+      // both sentences are composed where the request is refused and name
+      // who or which account and what to do, so an English UI gets the
+      // English one, not the registry's generic line.
       if (
         locale === 'en' &&
-        structured.code === 'SALARY_RUN_VACATION_PAY_UNDETERMINED' &&
+        (structured.code === 'SALARY_RUN_VACATION_PAY_UNDETERMINED' ||
+          structured.code === 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS') &&
         typeof structured.message_en === 'string' &&
         structured.message_en.trim()
       ) {

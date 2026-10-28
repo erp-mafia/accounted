@@ -309,6 +309,29 @@ describe('getErrorMessage: payment-file route messages surface (issue #945)', ()
   })
 })
 
+describe('getErrorMessage: the paying account of a payment file (crm#1483)', () => {
+  const body = {
+    error: {
+      code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS',
+      message:
+        'Betalfilen betalar från Företagskonto (1930), men kontot saknar IBAN. Fyll i kontots IBAN under Inställningar → Fakturor, Bankkonton för kundfakturor.',
+      message_en:
+        'The payment file pays from Företagskonto (1930), but the account has no IBAN. Fill in its IBAN under Settings → Invoices, Bank accounts for customer invoices.',
+    },
+  }
+
+  it('shows the sentence naming the account in an English UI, not the registry line', () => {
+    expect(getErrorMessage(body, { locale: 'en', statusCode: 422 })).toBe(body.error.message_en)
+  })
+
+  it('keeps the registry line in English when the refusal composed none (an LB file without bankgiro)', () => {
+    const lb = { error: { code: 'SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS', message: 'x' } }
+    expect(getErrorMessage(lb, { locale: 'en', statusCode: 422 })).toBe(
+      getErrorEntry('SALARY_RUN_PAYMENT_FILE_MISSING_BANK_DETAILS')?.message_en,
+    )
+  })
+})
+
 describe('getErrorMessage: existing patterns still work', () => {
   it('regex match for "Entry date ... outside fiscal period" on plain string', () => {
     const msg = getErrorMessage('Entry date 2024-06-15 is outside fiscal period "FY 2025"')

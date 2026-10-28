@@ -22,6 +22,8 @@ import { failureDescription } from '@/lib/browser/action-failure'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import { formatCurrency } from '@/lib/utils'
 import { parseAmountInput } from '@/lib/money'
+import type { PayingAccountSummary } from '@/lib/payments/paying-account'
+import { payingAccountName } from '@/lib/payments/paying-account-label'
 
 interface PreviewLine {
   id: string
@@ -44,6 +46,8 @@ interface Preview {
   total: number
   debtor_ok: boolean
   debtor_missing?: 'iban' | 'bic' | 'org_number' | 'swedbank_ids' | 'bankgiro'
+  /** With debtor_missing iban or bic: the paying account (the primary bank account) that lacks it. */
+  debtor_account?: PayingAccountSummary
 }
 
 /** The sentence for each company setting the file cannot be made without. */
@@ -241,7 +245,11 @@ export default function PaymentFileDialog({
                     : { label: t('debtor_missing_link'), href: '/settings/invoicing' }
                 }
               >
-                {t(DEBTOR_MISSING_MESSAGE[preview.debtor_missing ?? 'iban'])}
+                {preview.debtor_account && (preview.debtor_missing === 'iban' || preview.debtor_missing === 'bic')
+                  ? t(preview.debtor_missing === 'iban' ? 'debtor_account_missing_iban' : 'debtor_account_missing_bic', {
+                      account: payingAccountName(preview.debtor_account),
+                    })
+                  : t(DEBTOR_MISSING_MESSAGE[preview.debtor_missing ?? 'iban'])}
               </AttnLine>
             )}
 
