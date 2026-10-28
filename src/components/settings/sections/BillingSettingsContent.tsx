@@ -563,6 +563,12 @@ function BillingCoreContent() {
       {/* An expired trial is consequential: one attn-tone sentence. The
           running countdown lives in the subscription card's footer. */}
       {selling && daysLeft === 0 && <AttnLine className="mt-3">{t('trial_ended')}</AttnLine>}
+      {/* A running trial: say plainly what happens when it ends (crm#1502).
+          The trial is a capability grant, not a Stripe subscription, so
+          nothing renews: only a checkout the owner starts creates one. */}
+      {selling && daysLeft !== null && daysLeft > 0 && (
+        <p className="mt-3 text-[13px] text-muted-foreground">{t('trial_end_free_note')}</p>
+      )}
 
       <SegmentedControl<BillingTab>
         className="mt-6"
