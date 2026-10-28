@@ -251,6 +251,23 @@ function filedDeliveryResult(docId: string, item: FiledDeliveryItem) {
   }
 }
 
+/**
+ * Where an inbox item a duplicate upload was folded into stands: booked
+ * (a supplier invoice or a verifikat holds it), taken by Arkiv (not
+ * underlag, it lives in Dokument) or still in the inbox.
+ */
+export type DuplicateItemState = 'booked' | 'arkiv' | 'inbox'
+
+export function duplicateItemState(item: {
+  created_supplier_invoice_id: string | null
+  created_journal_entry_id: string | null
+  routed_to_arkiv_at?: string | null
+}): DuplicateItemState {
+  if (item.created_supplier_invoice_id || item.created_journal_entry_id) return 'booked'
+  if (item.routed_to_arkiv_at) return 'arkiv'
+  return 'inbox'
+}
+
 // ── Shared helper: upload + extract + create inbox item ──────
 
 export interface ArchivedDocumentProcessingOptions {
@@ -362,7 +379,7 @@ async function processArchivedDocumentInner(
     const { data: existingItem, error: itemLookupError } = await supabase
       .from('invoice_inbox_items')
       .select(
-        'id, status, extracted_data, matched_supplier_id, matched_transaction_id, kind_hint, created_supplier_invoice_id, created_journal_entry_id',
+        'id, status, created_at, extracted_data, matched_supplier_id, matched_transaction_id, kind_hint, created_supplier_invoice_id, created_journal_entry_id, routed_to_arkiv_at',
       )
       .eq('company_id', companyId)
       .eq('document_id', doc.id)
@@ -382,6 +399,8 @@ async function processArchivedDocumentInner(
       kind_hint: InboxKindHint | null
       created_supplier_invoice_id: string | null
       created_journal_entry_id: string | null
+      created_at?: string | null
+      routed_to_arkiv_at?: string | null
     }> | null)?.[0]
     if (adopted) {
       // Dedupe keeps ONE archived copy of the bytes (7-year retention, and a
@@ -482,6 +501,13 @@ async function processArchivedDocumentInner(
         skip_reason: 'duplicate_content' as const,
         page_count: null,
         duplicate: true as const,
+        // Where the earlier copy is, so the door that received this one can
+        // say so instead of promising a new item (PH 225): a booked item never
+        // shows in Behöver dig, and one Arkiv took is in Dokument.
+        duplicate_of: {
+          received_at: adopted.created_at ?? null,
+          state: duplicateItemState(adopted),
+        },
       }
     }
   }

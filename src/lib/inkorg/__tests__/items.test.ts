@@ -12,6 +12,8 @@ import {
   orderByArrival,
   parseViewKey,
   queueFor,
+  recentlyRoutedAway,
+  ROUTED_AWAY_NOTICE_MS,
   stillInInbox,
   viewKey,
 } from '../items'
@@ -197,5 +199,36 @@ describe('an invoice and its receipt as one row', () => {
     expect(companionOf(invoice, [invoice, receipt])?.id).toBe('receipt')
     expect(companionOf(invoice, [invoice])).toBeNull()
     expect(companionOf(receipt, [invoice, receipt])).toBeNull()
+  })
+})
+
+describe('recentlyRoutedAway: what left the inbox for Dokument lately (PH 225)', () => {
+  const now = Date.parse('2026-10-27T16:00:00Z')
+  const routed = (id: string, source: string, at: string) =>
+    makeItem({ id, source, routed_to_arkiv_at: at, created_at: '2026-10-27T15:09:00Z' })
+
+  it('Behöver dig names every recent one; a door only those it received', () => {
+    const items = [
+      routed('mail-1', 'email', '2026-10-27T15:12:00Z'),
+      routed('mail-2', 'email', '2026-10-27T15:12:30Z'),
+      routed('upload-1', 'upload', '2026-10-26T09:00:00Z'),
+      makeItem({ id: 'open-1', source: 'email' }),
+    ]
+    expect(recentlyRoutedAway(items, { kind: 'need' }, now).map((i) => i.id)).toEqual(['mail-1', 'mail-2', 'upload-1'])
+    expect(recentlyRoutedAway(items, { kind: 'door', door: doorOf(items[0]) }, now).map((i) => i.id)).toEqual(['mail-1', 'mail-2'])
+    expect(recentlyRoutedAway(items, { kind: 'door', door: doorOf(items[2]) }, now).map((i) => i.id)).toEqual(['upload-1'])
+  })
+
+  it('forgets one that left more than the notice window ago, and Saknar underlag names none', () => {
+    const old = routed('old', 'email', new Date(now - ROUTED_AWAY_NOTICE_MS - 1000).toISOString())
+    const fresh = routed('fresh', 'email', new Date(now - 60_000).toISOString())
+    expect(recentlyRoutedAway([old, fresh], { kind: 'need' }, now).map((i) => i.id)).toEqual(['fresh'])
+    expect(recentlyRoutedAway([fresh], { kind: 'missing' }, now)).toEqual([])
+  })
+
+  it('stays out of every queue it is named under', () => {
+    const item = routed('mail-1', 'email', '2026-10-27T15:12:00Z')
+    expect(queueFor([item], { kind: 'need' })).toEqual([])
+    expect(queueFor([item], { kind: 'door', door: doorOf(item) })).toEqual([])
   })
 })

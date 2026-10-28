@@ -224,6 +224,26 @@ export function queueFor(items: readonly InkorgItem[], view: InkorgView): Inkorg
   return orderByArrival(inView)
 }
 
+/** How long an item Arkiv took out of the inbox is still named in the view it left: long enough to notice. */
+export const ROUTED_AWAY_NOTICE_MS = 7 * 24 * 60 * 60 * 1000
+
+/**
+ * Items that came in and then left the inbox for Dokument within the notice
+ * window: Arkiv read them as no underlag to book (a bank statement, an
+ * agreement). Behöver dig names all of them, a door the ones it received.
+ * Without this a mailed batch of statements showed for a minute and was gone
+ * with no word on where (PH 225).
+ */
+export function recentlyRoutedAway(items: readonly InkorgItem[], view: InkorgView, now: number = Date.now()): InkorgItem[] {
+  if (view.kind === 'missing') return []
+  return items.filter((item) => {
+    if (!item.routed_to_arkiv_at) return false
+    const left = Date.parse(item.routed_to_arkiv_at)
+    if (!Number.isFinite(left) || now - left > ROUTED_AWAY_NOTICE_MS) return false
+    return view.kind === 'need' || doorOf(item) === view.door
+  })
+}
+
 /** One row of the rail's Brevlådor: a door in use, and how many of its items are still in the inbox. */
 export interface DoorRow {
   door: IntakeSourceId

@@ -6,8 +6,18 @@ import { exceedsHostedUploadLimit, exceedsInboxUploadLimit } from '@/lib/documen
 
 const INBOX_URL = '/api/extensions/ext/invoice-inbox'
 
+/**
+ * The file was already in the company's archive: the upload joined the item
+ * that came in first instead of filing a new one, and this is where that
+ * item stands (booked, in Dokument, or still in the inbox). PH 225.
+ */
+export interface UploadDuplicate {
+  receivedAt: string | null
+  state: 'booked' | 'arkiv' | 'inbox'
+}
+
 export type UploadOutcome =
-  | { ok: true; itemId: string }
+  | { ok: true; itemId: string; duplicateOf?: UploadDuplicate }
   | { ok: false; reason: 'too_large'; size: number }
   | { ok: false; reason: 'failed'; message: string }
 
@@ -24,6 +34,24 @@ function reportUploadFailure(report: { status: number; size: number; type: strin
   }).catch(() => {
     // Reporting the failure must never become a second failure.
   })
+}
+
+const DUPLICATE_STATES = new Set<UploadDuplicate['state']>(['booked', 'arkiv', 'inbox'])
+
+/** The earlier copy a content duplicate joined, as the upload route names it; nothing for a new item. */
+function duplicateOf(data: {
+  skip_reason?: string | null
+  duplicate_of?: { received_at?: string | null; state?: string }
+} | undefined): { duplicateOf?: UploadDuplicate } {
+  if (data?.skip_reason !== 'duplicate_content') return {}
+  const state = data.duplicate_of?.state
+  return {
+    duplicateOf: {
+      receivedAt: data.duplicate_of?.received_at ?? null,
+      // A state the client does not know: the item exists, so it is at least in the inbox's records.
+      state: state && DUPLICATE_STATES.has(state as UploadDuplicate['state']) ? (state as UploadDuplicate['state']) : 'inbox',
+    },
+  }
 }
 
 /**
@@ -53,10 +81,16 @@ export async function uploadToInbox(original: File, locale: ErrorLocale): Promis
       reportUploadFailure({ status: res.status, size: file.size, type: file.type || 'unknown', reason: 'route refused' })
       return { ok: false, reason: 'failed', message: await getResponseErrorMessage(res, undefined, locale) }
     }
-    const json = (await res.json()) as { data?: { inbox_item_id?: string } }
+    const json = (await res.json()) as {
+      data?: {
+        inbox_item_id?: string
+        skip_reason?: string | null
+        duplicate_of?: { received_at?: string | null; state?: string }
+      }
+    }
     const itemId = json.data?.inbox_item_id
     if (!itemId) return { ok: false, reason: 'failed', message: getErrorMessage(null, { locale }) }
-    return { ok: true, itemId }
+    return { ok: true, itemId, ...duplicateOf(json.data) }
   } catch {
     // fetch rejected before a response existed: the network, not the route.
     reportUploadFailure({ status: 0, size: file.size, type: file.type || 'unknown', reason: 'network' })

@@ -1658,12 +1658,15 @@ export const invoiceInboxExtension: Extension = {
           // delivery of this mail that filed the attachment first (Resend
           // redelivers while a slow run is still extracting): already
           // received, not a failure, and the rest of the mail goes on.
+          // 'duplicate_content' is a file the company already had: it joined
+          // that earlier item (often booked long ago) and nothing new was
+          // filed, so the mail's history must not say it was (PH 225).
           const recordUpload = (
             attachmentId: string,
             result: { inbox_item_id: string; skip_reason?: string | null },
             replacedItemId?: string,
           ) => {
-            const duplicate = result.skip_reason === 'duplicate_delivery'
+            const duplicate = result.skip_reason === 'duplicate_delivery' || result.skip_reason === 'duplicate_content'
             results.push({
               attachment_id: attachmentId,
               inbox_item_id: result.inbox_item_id,
@@ -1673,6 +1676,7 @@ export const invoiceInboxExtension: Extension = {
               id: attachmentId,
               outcome: duplicate ? 'duplicate' : 'filed',
               inbox_item_id: result.inbox_item_id,
+              ...(result.skip_reason === 'duplicate_content' ? { reason: 'duplicate_content' } : {}),
               ...(replacedItemId ? { replaced_item_id: replacedItemId } : {}),
             })
           }
