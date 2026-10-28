@@ -8,7 +8,10 @@ import { runRegisterRepair } from '@/extensions/general/arcim-migration/lib/repa
 // Remove this route, its vercel.json entry and the progress table once every
 // company has an outcome.
 export const maxDuration = 300
-const RUN_BUDGET_MS = 240_000
+// The cutoff stops new reads, not the ones in flight, a company's listing or
+// its card writes, which can take more than a minute after it; a run the
+// platform ends at maxDuration saves no company it was still working on.
+const RUN_BUDGET_MS = 150_000
 
 export const GET = withCronContext('cron.arcim_migration_register_repair', async (_request, ctx) => {
   const summary = await runRegisterRepair(createServiceClientNoCookies(), ctx.startedAt + RUN_BUDGET_MS)
