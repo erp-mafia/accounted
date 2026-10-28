@@ -210,6 +210,9 @@ describe('company twin plan and atomic receipt', () => {
     await expect(verify(operationId, randomUUID())).rejects.toMatchObject({ code: 'P0002' })
   })
 
+  // 1 101 rows through the transactions triggers: ~55 s on a loaded CI runner,
+  // where a 45 s timeout left the insert running and failed every later test
+  // in the file on the stuck connection.
   it('captures and verifies transaction bindings beyond the REST page limit', async () => {
     await client.query(`INSERT INTO transactions(company_id, user_id, date, amount, currency, description, cash_account_id)
       SELECT $1, $2, '2026-01-02', -25, 'SEK', 'PG large repair', $3 FROM generate_series(1, 1101)`,
@@ -219,7 +222,7 @@ describe('company twin plan and atomic receipt', () => {
     expect(await verify()).toMatchObject({ status: 'consistent', transactionsChecked: 1101 })
     await client.query('UPDATE transactions SET cash_account_id = null WHERE id = $1', [lateId])
     expect(await verify()).toMatchObject({ status: 'changed', issues: [{ kind: 'transaction-or-anchor-changed', id: lateId }] })
-  }, 45_000)
+  }, 120_000)
 
   it('proves that an existing posted voucher and its anchored transaction were preserved', async () => {
     const historical = await seedCompany()
