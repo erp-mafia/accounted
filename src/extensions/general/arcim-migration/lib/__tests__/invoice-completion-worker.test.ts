@@ -7,18 +7,19 @@ vi.mock('@/lib/supabase/server', () => ({ createServiceClient: vi.fn() }))
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: vi.fn() }))
 vi.mock('@/lib/providers/provider-data-fetcher', () => ({
   fetchInvoiceCompletionDetail: vi.fn(), fetchInvoiceCompletionPage: vi.fn(),
-  fetchSalesInvoicesDirect: vi.fn(), hydrateSalesInvoices: vi.fn(),
+  fetchSalesInvoicesDirect: vi.fn(), hydrateSalesInvoices: vi.fn(), fetchCompanyInfoDirect: vi.fn(),
 }))
 import { FortnoxApiError } from '@/lib/providers/fortnox/client'
 import { VismaApiError } from '@/lib/providers/visma/client'
 import { BokioApiError } from '@/lib/providers/bokio/client'
 import { ProviderCallError } from '@/lib/providers/with-provider-call'
 import { resolveConsent } from '@/lib/providers/resolve-consent'
-import { fetchInvoiceCompletionDetail, fetchInvoiceCompletionPage } from '@/lib/providers/provider-data-fetcher'
+import { fetchCompanyInfoDirect, fetchInvoiceCompletionDetail, fetchInvoiceCompletionPage } from '@/lib/providers/provider-data-fetcher'
 import { completeInvoiceCompletionWork, runInvoiceCompletion, type InvoiceCompletionWork } from '../invoice-completion-worker'
 const detail = vi.mocked(fetchInvoiceCompletionDetail)
 const page = vi.mocked(fetchInvoiceCompletionPage)
 const resolve = vi.mocked(resolveConsent)
+const companyInfo = vi.mocked(fetchCompanyInfoDirect)
 
 function fixture() {
   const work: InvoiceCompletionWork = { company_id: randomUUID(), consent_id: randomUUID(), provider: 'fortnox',
@@ -254,12 +255,75 @@ describe('a provider that refuses the connection outside Fortnox (B11)', () => {
     expect(retrySeconds(db)).toBe(3600)
   })
 
-  it('leaves Fortnox to its own block and delay', async () => {
+  it('keeps the hour for a Fortnox token that aged out mid-run, and blocks nothing', async () => {
     const { work, db } = listingWork('fortnox')
     page.mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 401 Unauthorized', 401))
 
     await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
     expect(retrySeconds(db)).toBe(3600)
+    expect(companyInfo).not.toHaveBeenCalled()
+    expect(db.rpc.mock.calls.some(([name]) => name === 'block_invoice_completion_work')).toBe(false)
+  })
+})
+
+describe('an opaque Fortnox 403 is read against the token (#51)', () => {
+  /** Fortnox's answer with no documented code, as the reporting company gets it. */
+  const opaque = () => new FortnoxApiError('Fortnox API error: 403 Forbidden', 403, 'Du saknar behörighet för GET-anrop mot /3/invoices')
+  const retrySeconds = (db: ReturnType<typeof database>) =>
+    db.rpc.mock.calls.find(([name]) => name === 'release_invoice_completion_work')?.[1]?.p_retry_seconds
+
+  it('records the block when the token still answers, so the recovery card names the missing permission', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    detail.mockRejectedValueOnce(opaque())
+    companyInfo.mockResolvedValueOnce({ name: 'Synthetic company' } as never)
+
+    expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)).toMatchObject({ companiesBlocked: 1, companiesFailed: 1 })
+    expect(companyInfo).toHaveBeenCalledWith('fortnox', 'synthetic-token', 'synthetic-account')
+    expect(db.rpc).toHaveBeenCalledWith('block_invoice_completion_work', expect.objectContaining({
+      p_consent_id: work.consent_id, p_credential_revision: 'request-revision', p_reason: 'PROVIDER_RESOURCE_FORBIDDEN',
+    }))
+    expect(retrySeconds(db)).toBeUndefined()
+  })
+
+  it.each([
+    ['no longer answers', () => companyInfo.mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 401 Unauthorized', 401))],
+    ['answers nothing', () => companyInfo.mockResolvedValueOnce(null)],
+  ])('waits a day, blocking nothing, when the token %s', async (_case, arrange) => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    detail.mockRejectedValueOnce(opaque())
+    arrange()
+
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(retrySeconds(db)).toBe(86_400)
+    expect(db.rpc.mock.calls.some(([name]) => name === 'block_invoice_completion_work')).toBe(false)
+  })
+
+  it('asks nothing of the token when no block could be recorded (no credential revision)', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    resolve.mockResolvedValue({ consent: { provider: 'fortnox' }, accessToken: 'synthetic-token', providerCompanyId: 'synthetic-account' } as never)
+    detail.mockRejectedValueOnce(opaque())
+
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(companyInfo).not.toHaveBeenCalled()
+    expect(retrySeconds(db)).toBe(86_400)
+  })
+
+  it('blocks a documented refusal without asking the token', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    detail.mockRejectedValueOnce(new FortnoxApiError('denied', 403, JSON.stringify({ ErrorInformation: { code: 2000663 } })))
+
+    expect(await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)).toMatchObject({ companiesBlocked: 1 })
+    expect(companyInfo).not.toHaveBeenCalled()
+    expect(db.rpc).toHaveBeenCalledWith('block_invoice_completion_work', expect.objectContaining({ p_reason: 'PROVIDER_RESOURCE_FORBIDDEN' }))
+  })
+
+  it('keeps a rate limit retryable with its Retry-After, asking nothing of the token', async () => {
+    const { work, rows } = fixture(); const db = database(rows, work)
+    detail.mockRejectedValueOnce(new FortnoxApiError('Fortnox API error: 429 Too Many Requests', 429, undefined, 7_200_000))
+
+    await completeInvoiceCompletionWork(db.supabase, work, Date.now() + 120_000)
+    expect(retrySeconds(db)).toBe(7200)
+    expect(companyInfo).not.toHaveBeenCalled()
     expect(db.rpc.mock.calls.some(([name]) => name === 'block_invoice_completion_work')).toBe(false)
   })
 })

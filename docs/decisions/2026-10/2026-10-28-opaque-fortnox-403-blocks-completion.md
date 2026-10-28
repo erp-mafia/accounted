@@ -1,0 +1,1 @@
+[2026-10-28] Supersedes 2026-10-14 "Invoice completion still blocks only on documented codes": an opaque Fortnox 403 also blocks once the token that drew it still answers (readProviderRefusal), and every provider shares one retry rule, a day for a refusal (#51).
