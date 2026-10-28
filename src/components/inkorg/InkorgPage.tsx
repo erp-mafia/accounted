@@ -15,7 +15,7 @@ import { cn } from '@/lib/utils'
 import { LEGACY_INBOX_HREF } from '@/lib/inkorg/flag'
 import { ALL_STARTABLE, type InkorgStartable } from '@/lib/inkorg/decision'
 import { focusAfterChange, focusKeyAction, neighbour } from '@/lib/inkorg/focus'
-import { companionOf, doorOf, doorsInUse, needCount, parseViewKey, queueFor, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
+import { companionOf, doorOf, doorsInUse, needCount, parseViewKey, queueFor, recentlyRoutedAway, viewKey, type InkorgItem, type InkorgView } from '@/lib/inkorg/items'
 import { dragCarriesFiles, missingDecision, orderMissing, splitMissing } from '@/lib/inkorg/missing'
 import { portalRows, purchasesAtPortal } from '@/lib/inkorg/portals'
 import { AddMailboxDialog } from './AddMailboxDialog'
@@ -154,6 +154,8 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
     () => queueFor(items, view).filter((item) => !following.has(item.id) && !booking.has(item.id)),
     [items, view, following, booking],
   )
+  // What came in here and left for Dokument lately: named under the list, so it never just vanishes (PH 225).
+  const routedAway = useMemo(() => recentlyRoutedAway(items, view).length, [items, view])
   // Saknar underlag works through bank purchases, not items: its own queue, newest first,
   // what needs a person before what is on its way (the order the view lists them in).
   const purchaseIds = useMemo(() => purchases.map((p) => p.id), [purchases])
@@ -682,15 +684,25 @@ function InkorgPageInner({ startable, ownerAccount }: { startable: InkorgStartab
                   onRetry={() => void refresh()}
                 />
               ) : (
-                <InkorgList
-                  view={view}
-                  items={queue}
-                  state={itemsState}
-                  onOpen={open}
-                  onRetry={() => void refresh()}
-                  lastOpenedId={lastOpenedId}
-                  bankMatches={bankMatches}
-                />
+                <>
+                  <InkorgList
+                    view={view}
+                    items={queue}
+                    state={itemsState}
+                    onOpen={open}
+                    onRetry={() => void refresh()}
+                    lastOpenedId={lastOpenedId}
+                    bankMatches={bankMatches}
+                  />
+                  {itemsState === 'ready' && routedAway > 0 && (
+                    <p className="mt-4 text-[12.5px] leading-5 text-muted-foreground">
+                      {t('routed_away', { count: routedAway })}{' '}
+                      <Link href="/arkiv" className={QUIET_LINK_CLASS}>
+                        {t('routed_away_open')}
+                      </Link>
+                    </p>
+                  )}
+                </>
               )}
             </section>
           )}

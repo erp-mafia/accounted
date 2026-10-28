@@ -7,7 +7,8 @@ import { Button } from '@/components/ui/button'
 import { useToast } from '@/components/ui/use-toast'
 import { INBOX_UPLOAD_ACCEPT } from '@/lib/documents/upload-types'
 import { formatMegabytes, INBOX_MAX_UPLOAD_BYTES } from '@/lib/documents/upload-size'
-import { uploadToInbox, type UploadOutcome } from './attach-underlag'
+import { formatDateLong } from '@/lib/utils'
+import { uploadToInbox, type UploadDuplicate, type UploadOutcome } from './attach-underlag'
 
 /**
  * Ladda upp, the page's primary action in the top bar: files chosen here
@@ -15,6 +16,9 @@ import { uploadToInbox, type UploadOutcome } from './attach-underlag'
  * (uploadToInbox, the calls the Underlag workspace makes), and show up under
  * Behöver dig once they are read. Nothing is matched to a purchase here:
  * a file for a purchase is dropped on that purchase under Saknar underlag.
+ * A file the company already had is not filed again: it joins the item that
+ * came in first, and the toast says where that one is (PH 225), since a
+ * booked item never shows under Behöver dig.
  */
 export function UploadButton({ onUploaded }: { onUploaded: () => Promise<void> }) {
   const t = useTranslations('inkorg')
@@ -27,12 +31,14 @@ export function UploadButton({ onUploaded }: { onUploaded: () => Promise<void> }
     if (files.length === 0 || progress) return
     setProgress({ done: 0, total: files.length })
     const failures: Extract<UploadOutcome, { ok: false }>[] = []
+    const duplicates: UploadDuplicate[] = []
     let uploaded = 0
     try {
       for (const file of files) {
         const outcome = await uploadToInbox(file, locale)
-        if (outcome.ok) uploaded += 1
-        else failures.push(outcome)
+        if (!outcome.ok) failures.push(outcome)
+        else if (outcome.duplicateOf) duplicates.push(outcome.duplicateOf)
+        else uploaded += 1
         setProgress((p) => (p ? { ...p, done: p.done + 1 } : p))
       }
     } finally {
@@ -40,8 +46,21 @@ export function UploadButton({ onUploaded }: { onUploaded: () => Promise<void> }
     }
     if (uploaded > 0) {
       toast({ title: t('uploaded', { count: uploaded }), description: t('uploaded_body', { count: uploaded }) })
-      await onUploaded()
     }
+    const duplicate = duplicates[0]
+    if (duplicate) {
+      const when = duplicate.receivedAt ? formatDateLong(duplicate.receivedAt, locale) : null
+      toast({
+        title: t('upload_duplicate', { count: duplicates.length }),
+        description:
+          duplicates.length > 1
+            ? t('upload_duplicate_many_body')
+            : when
+              ? t(`upload_duplicate_${duplicate.state}`, { date: when })
+              : t(`upload_duplicate_${duplicate.state}_undated`),
+      })
+    }
+    if (uploaded > 0 || duplicates.length > 0) await onUploaded()
     // One toast for what failed, naming the first reason: the others are almost always the same one.
     const first = failures[0]
     if (first) {
