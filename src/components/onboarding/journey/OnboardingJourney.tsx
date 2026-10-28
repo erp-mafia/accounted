@@ -931,6 +931,10 @@ export default function OnboardingJourney({
             ) : chips.length === FORM_PICKER_FIRST.length ? (
               <p className="jny-more">{t('journey_form_more_soon')}</p>
             ) : null}
+            {/* A handelsbolag or kommanditbolag has no chip and is a legal
+                person, so its owner picks Aktiebolag (PH 207): say what
+                holds and what does not before they do. */}
+            <p className="jny-more">{t('journey_form_hb_kb')}</p>
           </Question>
         )
       }

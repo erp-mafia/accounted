@@ -619,14 +619,28 @@ describe('journeyReducer: robustness', () => {
         type: 'LOOKUP_RESULT',
         outcome: {
           status: 'found',
-          result: lookup({ companyName: 'Sjöutsikten HB', legalEntityType: 'HB' }),
+          result: lookup({ companyName: 'Sjöutsikten Gruvbolag', legalEntityType: 'Gruvbolag' }),
         },
       },
     )
     expect(s.step).toBe('form')
     expect(s.plannedForm).toBeNull()
-    expect(s.settings.company_name).toBe('Sjöutsikten HB')
+    expect(s.settings.company_name).toBe('Sjöutsikten Gruvbolag')
     expect(s.lookupRan).toBe(true)
+  })
+
+  it('a kommanditbolag from the lookup stops before the picker instead of passing as an aktiebolag (PH 207)', () => {
+    const s = run(
+      initJourney(),
+      { type: 'ORG_SUBMITTED', orgNumber: '969612-3456' },
+      {
+        type: 'LOOKUP_RESULT',
+        outcome: { status: 'found', result: lookup({ companyName: 'Sjöutsikten KB', legalEntityType: 'Kommanditbolag' }) },
+      },
+    )
+    expect(s.step).toBe('planned')
+    expect(s.plannedForm).toBe('kommanditbolag')
+    expect(s.settings.entity_type).toBeUndefined()
   })
 })
 

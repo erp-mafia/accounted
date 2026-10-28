@@ -2100,6 +2100,7 @@
     "journey_form_more_pre": "{form}? Ange organisationsnumret så hittar vi den, eller",
     "journey_form_more_link": "välj {form}",
     "journey_form_more_soon": "Föreningar och stiftelser kommer snart.",
+    "journey_form_hb_kb": "Handelsbolag eller kommanditbolag? Stöds inte ännu. Väljer du aktiebolag fungerar bokföring, moms och arbetsgivardeklaration, men eget kapital och bokslut följer aktiebolagets regler, och deklarationen blir INK2 i stället för bolagets INK4.",
     "journey_planned_title": "{form} stöds inte ännu.",
     "journey_planned_sub": "Vi bygger stöd för fler företagsformer. Att registrera den som en annan form ger fel kontoplan och fel eget kapital.",
     "journey_planned_continue": "Välj företagsform ändå",

@@ -93,6 +93,9 @@ export function mapSetupEntityType(ticType: string | null | undefined): EntityTy
 const PLANNED_FORM_VALUES: Readonly<Record<string, ReadonlySet<string>>> = {
   samfallighetsforening: new Set(['samfällighetsförening', 'samfallighetsforening', 'samfällighet']),
   stiftelse: new Set(['stiftelse', 'annan stiftelse', 'familjestiftelse', 'stiftelser']),
+  // SCB's legal form 31 names both in one code; it stops as a handelsbolag.
+  handelsbolag: new Set(['handelsbolag', 'hb', 'handelsbolag eller kommanditbolag']),
+  kommanditbolag: new Set(['kommanditbolag', 'kb']),
 }
 
 /** The planned form a registry type names, or null. Never maps a creatable form. */

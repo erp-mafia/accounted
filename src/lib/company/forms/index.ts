@@ -30,4 +30,8 @@ export const LEGAL_FORMS: Readonly<Record<EntityType, LegalFormProfile>> = {
 export const PLANNED_LEGAL_FORMS: ReadonlyArray<PlannedLegalForm> = [
   { jurisdiction: 'SE', code: 'samfallighetsforening', label: 'Samfällighetsförening' },
   { jurisdiction: 'SE', code: 'stiftelse', label: 'Stiftelse', reference: '#2072' },
+  // A handelsbolag (a kommanditbolag is a kind of one) files INK4, not
+  // INK2, and its equity and bokslut differ from an aktiebolag's (PH 207).
+  { jurisdiction: 'SE', code: 'handelsbolag', label: 'Handelsbolag' },
+  { jurisdiction: 'SE', code: 'kommanditbolag', label: 'Kommanditbolag' },
 ]

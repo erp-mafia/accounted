@@ -90,10 +90,19 @@ describe('mapPlannedLegalForm: the scoped-but-not-creatable forms', () => {
     expect(mapPlannedLegalForm('Annan stiftelse')?.code).toBe('stiftelse')
   })
 
+  it('stops a handelsbolag or kommanditbolag instead of offering the aktiebolag chart (PH 207)', () => {
+    expect(mapPlannedLegalForm('Handelsbolag')).toMatchObject({ code: 'handelsbolag', label: 'Handelsbolag' })
+    expect(mapPlannedLegalForm('HB')?.code).toBe('handelsbolag')
+    expect(mapPlannedLegalForm('Kommanditbolag')).toMatchObject({ code: 'kommanditbolag', label: 'Kommanditbolag' })
+    expect(mapPlannedLegalForm('KB')?.code).toBe('kommanditbolag')
+    // SCB legal form 31 is one code for both.
+    expect(mapPlannedLegalForm('Handelsbolag eller kommanditbolag')?.code).toBe('handelsbolag')
+    expect(mapEntityType('Kommanditbolag')).toBeNull()
+  })
+
   it('never maps a creatable form, an unrelated form or a loose substring', () => {
     expect(mapPlannedLegalForm('Aktiebolag')).toBeNull()
     expect(mapPlannedLegalForm('Ideell förening')).toBeNull()
-    expect(mapPlannedLegalForm('Handelsbolag')).toBeNull()
     expect(mapPlannedLegalForm('Registrerat trossamfund')).toBeNull()
     expect(mapPlannedLegalForm('Enskild stiftelse')).toBeNull()
     expect(mapPlannedLegalForm('')).toBeNull()

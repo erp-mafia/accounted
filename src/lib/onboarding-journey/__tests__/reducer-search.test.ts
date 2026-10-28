@@ -124,7 +124,7 @@ describe('journeyReducer: name search', () => {
       { type: 'SEARCH_SUBMITTED', query: 'Testbrand' },
       {
         type: 'SEARCH_RESULT',
-        outcome: { status: 'found', hits: [hit('1111111111', { legalEntityType: 'HB' })] },
+        outcome: { status: 'found', hits: [hit('1111111111', { legalEntityType: 'Gruvbolag' })] },
       },
     )
     expect(s.step).toBe('form')
