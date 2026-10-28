@@ -157,6 +157,7 @@ export const V1_HANDLE_COVERAGE: Readonly<Record<string, HandleDeclaration>> = O
   'fiscal-periods.unlock': FP,
   'fiscal-periods.close-external': FP,
   'fiscal-periods.reopen-external': FP,
+  'fiscal-periods.delete': FP,
 
   // Payroll
   'employees.list': EMP,

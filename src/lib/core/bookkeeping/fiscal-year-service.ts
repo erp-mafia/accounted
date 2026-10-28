@@ -778,3 +778,58 @@ export async function reopenExternallyClosedFiscalPeriod(
     return failure
   }
 }
+
+/**
+ * Remove the company's first räkenskapsår when it holds nothing (crm#1450):
+ * the empty year an older onboarding could seed before the company existed
+ * (crm#1140), which otherwise keeps the real first year from starting on the
+ * registration day. Every rule (first year only, never the only year, no
+ * verifikat or draft of any status, no issued voucher number, nothing that
+ * points at the year, not closed, locked, held or filed) is checked by the
+ * delete_empty_fiscal_period RPC in the same transaction that deletes, and
+ * the RPC writes the audit_log row naming who removed it.
+ */
+export async function deleteEmptyFiscalPeriod(
+  ctx: OperationContext,
+  fiscalPeriodId: string,
+  options: { dryRun?: boolean } = {},
+): Promise<OperationOutcome<FiscalPeriod>> {
+  // The dry run (the MCP staging preview) reads the STABLE preview; the
+  // writer runs the same check again under the row lock before it deletes.
+  const { data, error } = await ctx.supabase.rpc(
+    options.dryRun ? 'delete_empty_fiscal_period_preview' : 'delete_empty_fiscal_period',
+    { p_company_id: ctx.companyId, p_period_id: fiscalPeriodId, p_user_id: ctx.userId },
+  )
+  // A jsonb answer, read like merge-customers' rpcAnswer (a client may wrap it).
+  const result = (Array.isArray(data) ? data[0] : data) as RedateRpcResult | null
+  if (error || !result || typeof result.ok !== 'boolean') {
+    ctx.log.error('fiscal period delete failed', error ?? new Error('no result'))
+    return { ok: false, code: 'UNKNOWN_ERROR', error: error ?? undefined }
+  }
+  if (!result.ok) {
+    if (result.code === 'PERIOD_NOT_FOUND') return { ok: false, code: 'PERIOD_NOT_FOUND' }
+    if (result.code === 'FORBIDDEN') return { ok: false, code: 'FORBIDDEN' }
+    const blockers = result.blockers ?? []
+    return {
+      ok: false,
+      code: 'FISCAL_PERIOD_DELETE_BLOCKED',
+      details: { blockers },
+      messageSv: ['Räkenskapsåret kan inte tas bort.', ...blockers.map((b) => b.message_sv)].join(' '),
+    }
+  }
+  const period = result.period as FiscalPeriod
+  if (options.dryRun) {
+    return {
+      ok: true,
+      dryRun: true,
+      preview: {
+        fiscal_period_id: period.id,
+        name: period.name,
+        period_start: period.period_start,
+        period_end: period.period_end,
+        will: 'remove this empty first fiscal year; the next year becomes the first',
+      },
+    }
+  }
+  return { ok: true, data: period }
+}

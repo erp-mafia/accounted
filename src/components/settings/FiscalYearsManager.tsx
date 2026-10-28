@@ -1,7 +1,7 @@
 'use client'
 
 import { useTranslations, useLocale } from 'next-intl'
-import { useState, useCallback } from 'react'
+import { useState, useCallback, useEffect } from 'react'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -20,6 +20,7 @@ import {
   LockOpenIcon,
   PencilIcon,
   PlusIcon,
+  TrashIcon,
 } from '@/components/icons'
 import { formatDate } from '@/lib/utils'
 import type { FiscalPeriod } from '@/types'
@@ -73,6 +74,61 @@ export function FiscalYearsManager() {
   // Newest first: matches the API's ordering and reads most-recent-at-top.
   const sorted = [...periods].sort((a, b) => b.period_start.localeCompare(a.period_start))
   const earliestId = sorted.length > 0 ? sorted[sorted.length - 1].id : null
+  const earliest = sorted.length > 0 ? sorted[sorted.length - 1] : null
+
+  // crm#1450: an empty first year (seeded before the company existed by an
+  // older onboarding) can be removed. Offered only on the earliest open year
+  // of a company with more than one year and no posted verifikat in it; the
+  // server checks everything else (drafts, voucher numbers, linked records).
+  const [earliestPostedCount, setEarliestPostedCount] = useState<number | null>(null)
+  const earliestCandidateId =
+    canManage && sorted.length > 1 && earliest && periodStatus(earliest) === 'open' ? earliest.id : null
+  useEffect(() => {
+    setEarliestPostedCount(null)
+    if (!earliestCandidateId) return
+    let cancelled = false
+    fetch(`/api/bookkeeping/fiscal-periods/${earliestCandidateId}/entry-count`)
+      .then((res) => (res.ok ? res.json() : null))
+      .then((body: { data?: { posted_count?: number } } | null) => {
+        if (!cancelled && typeof body?.data?.posted_count === 'number') setEarliestPostedCount(body.data.posted_count)
+      })
+      .catch(() => {
+        // Safe to ignore: without the count Ta bort is simply not offered,
+        // and the server refuses any year that is not empty anyway.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [earliestCandidateId])
+
+  async function handleDelete(period: FiscalPeriod) {
+    const ok = await confirm({
+      title: t('fy_delete_confirm_title', { name: period.name }),
+      description: t('fy_delete_confirm_body', { name: period.name }),
+      confirmLabel: t('fy_action_delete'),
+      cancelLabel: t('fy_confirm_cancel'),
+      variant: 'destructive',
+    })
+    if (!ok) return
+    setMutatingId(period.id)
+    try {
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${period.id}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        throw new Error(getUserErrorMessage(body, { locale: errorLocale, fallback: t('fy_action_error') }))
+      }
+      toast({ title: t('fy_delete_success') })
+      await refreshPeriods()
+    } catch (err) {
+      toast({
+        title: t('fy_action_error'),
+        description: err instanceof Error ? getUserErrorMessage(err) : undefined,
+        variant: 'destructive',
+      })
+    } finally {
+      setMutatingId(null)
+    }
+  }
 
   function openEdit(period: FiscalPeriod, mode: 'edit' | 'start') {
     setEditMode(mode)
@@ -182,6 +238,7 @@ export function FiscalYearsManager() {
           // pin the start, so the action is not offered then.
           const canCorrectStart =
             canManage && status !== 'open' && p.id === earliestId && !p.opening_balance_entry_id
+          const canDelete = p.id === earliestCandidateId && earliestPostedCount === 0
           return (
             <div key={p.id} className="flex flex-col items-start gap-3 border-b border-border px-1 py-3 sm:flex-row sm:items-center">
               <div className="min-w-0 flex-1">
@@ -249,6 +306,18 @@ export function FiscalYearsManager() {
                   >
                     <BackspaceIcon className="mr-1.5 h-4 w-4" />
                     {t('fy_action_reset')}
+                  </Button>
+                )}
+                {canDelete && (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="text-destructive hover:text-destructive"
+                    loading={isMutating}
+                    onClick={() => handleDelete(p)}
+                  >
+                    {!isMutating && <TrashIcon className="mr-1.5 h-4 w-4" />}
+                    {t('fy_action_delete')}
                   </Button>
                 )}
                 {canManage && status === 'locked' && (

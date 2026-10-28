@@ -237,6 +237,10 @@ const READ_ONLY_RPCS = new Set([
   // plus 2012 for an enskild firma): STABLE SQL, the create_voucher preview
   // reads it to say whether the declaration would read the voucher, crm#1447.
   'skattekonto_shape_accounts',
+  // Whether an empty first räkenskapsår can be removed (crm#1450): STABLE,
+  // the gnubok_delete_fiscal_period preview reads it; the delete itself runs
+  // at approval.
+  'delete_empty_fiscal_period_preview',
 ])
 
 /**
@@ -900,6 +904,15 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_delete_asset: { empty: ['depreciation_schedules'] },
   gnubok_update_dimension: { args: { name: 'Avdelning' }, rows: { dimensions: { is_system: false, name: 'Avd' } } },
   gnubok_update_supplier: { args: { city: 'Göteborg' }, rows: { suppliers: { name: 'Leverantören AB', city: null, archived_at: null } } },
+  // An empty first year (crm#1450): the STABLE preview answers ok.
+  gnubok_delete_fiscal_period: {
+    rows: {
+      'rpc:delete_empty_fiscal_period_preview': {
+        ok: true,
+        period: { id: SOME_UUID, name: 'Räkenskapsår 2025/2026', period_start: '2025-03-01', period_end: '2026-02-28' },
+      },
+    },
+  },
   // Two distinct cards (the synthesized ids would be one and the same, which
   // the merge refuses); the preview answers what would move.
   gnubok_merge_customers: {

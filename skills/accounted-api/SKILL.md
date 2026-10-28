@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 386 endpoints.
+  pagination, scopes), and all 387 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -218,7 +218,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 386 operations. Paths are shown without
+API version `2026-05-12`, 387 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -277,7 +277,7 @@ POST /companies/{companyId}/journal-entries/no-document-required : Mark many pos
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (51)
+### Periods and registers (52)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -306,6 +306,7 @@ DELETE /companies/{companyId}/dimensions/rules/{id} : Delete an account dimensio
 GET /companies/{companyId}/fiscal-periods : List fiscal periods (räkenskapsår) [scope:reports:read risk:low idempotent]
 POST /companies/{companyId}/fiscal-periods : Create a fiscal year (räkenskapsår) [scope:bookkeeping:write risk:medium idempotent dry-run]
 PATCH /companies/{companyId}/fiscal-periods/{id} : Rename or re-date an open fiscal year [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
+DELETE /companies/{companyId}/fiscal-periods/{id} : Remove an empty first fiscal year [scope:bookkeeping:write risk:high idempotent dry-run]
 PATCH /companies/{companyId}/fiscal-periods/{id}/arsredovisning/compliance : Answer the årsredovisning compliance questions and record the confirmations [scope:bookkeeping:write risk:medium idempotent dry-run reversible]
 GET /companies/{companyId}/fiscal-periods/{id}/arsredovisning/ixbrl : The K2 årsredovisning as an inline XBRL (XHTML) document [scope:reports:read risk:low idempotent]
 GET /companies/{companyId}/fiscal-periods/{id}/arsredovisning/ixbrl/validate : Pre-flight the generated iXBRL årsredovisning against Bolagsverket's kontrollera rules [scope:reports:read risk:low idempotent]

@@ -42,6 +42,7 @@ import {
 import {
   fiscalPeriodsCloseExternal,
   fiscalPeriodsCreate,
+  fiscalPeriodsDelete,
   fiscalPeriodsReopenExternal,
   fiscalPeriodsUnlock,
   fiscalPeriodsUpdate,
@@ -294,6 +295,7 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   fiscalPeriodsUnlock,
   fiscalPeriodsCloseExternal,
   fiscalPeriodsReopenExternal,
+  fiscalPeriodsDelete,
   // opening-balances
   openingBalancesSetManual,
   openingBalancesCorrect,

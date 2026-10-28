@@ -5,11 +5,13 @@
  * lock, close and year-end keep their hand-written v1 routes.
  *
  * MCP: fiscal-periods.unlock is gnubok_unlock_period, staged as unlock_period.
+ * fiscal-periods.delete removes only an empty first year (crm#1450).
  */
 import { z } from 'zod'
 import {
   closeFiscalPeriodExternally,
   createFiscalPeriod,
+  deleteEmptyFiscalPeriod,
   reopenExternallyClosedFiscalPeriod,
   unlockFiscalPeriod,
   updateFiscalPeriod,
@@ -372,4 +374,48 @@ export const fiscalPeriodsReopenExternal = defineOperation({
   },
   run: async (ctx, { fiscal_period_id }, { dryRun }) =>
     publicOutcome(await reopenExternallyClosedFiscalPeriod(ctx, fiscal_period_id, { dryRun })),
+})
+
+export const fiscalPeriodsDelete = defineOperation({
+  id: 'fiscal-periods.delete',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'high',
+  reversible: false,
+  docs: {
+    summary: 'Remove an empty first fiscal year.',
+    description:
+      'Removes the company\'s earliest räkenskapsår when it holds nothing: no verifikat or draft of any status, no issued voucher number, no SIE import or other record pointing at it, not closed, locked, behind the lock date or filed. The next year becomes the first year, so its start may then move to the registration day (PATCH, 18-month cap). The removal is written to the audit log. Dry-runnable.',
+    useWhen:
+      'An empty year lies before the company existed (seeded by an older onboarding) and keeps the real first year from starting on the registration day.',
+    doNotUseFor:
+      'Removing a year that holds verifikat (correct them, or reset the year first), a year after the first, or merging two years.',
+    pitfalls: [
+      'Any reason answers 409 FISCAL_PERIOD_DELETE_BLOCKED; details.blockers names each (has_entries, not_first_year, only_year, period_locked, linked_records, ...).',
+    ],
+    example: { response: { data: PERIOD_EXAMPLE, meta: META_EXAMPLE } },
+  },
+  input: z.object({ fiscal_period_id: FISCAL_PERIOD_ID }),
+  output: FiscalPeriod,
+  errorCodes: ['PERIOD_NOT_FOUND', 'FISCAL_PERIOD_DELETE_BLOCKED'],
+  http: {
+    method: 'DELETE',
+    path: '/api/v1/companies/:companyId/fiscal-periods/:id',
+    pathParams: { id: 'fiscal_period_id' },
+  },
+  mcp: {
+    name: 'gnubok_delete_fiscal_period',
+    title: 'Delete Empty Fiscal Period',
+    description:
+      'Stage removal of an empty first räkenskapsår (no verifikat, drafts, voucher numbers or linked records), e.g. one seeded before the company existed. The next year becomes the first and may then start on the registration day.',
+    keywords: ['ta bort räkenskapsår', 'radera räkenskapsår', 'tomt räkenskapsår', 'första räkenskapsåret'],
+    hints: { destructive: true },
+    stage: {
+      pendingType: 'delete_fiscal_period',
+      title: (_input, preview = {}) =>
+        `Ta bort tomt räkenskapsår: ${preview.name} (${preview.period_start} till ${preview.period_end})`,
+    },
+  },
+  run: async (ctx, { fiscal_period_id }, { dryRun }) =>
+    publicOutcome(await deleteEmptyFiscalPeriod(ctx, fiscal_period_id, { dryRun })),
 })
