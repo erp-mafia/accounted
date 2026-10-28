@@ -53,7 +53,7 @@ import {
   readOrgFieldText,
   suggestedFormForOrgNumber,
 } from '@/lib/onboarding-journey/org-number-hint'
-import { shouldGateDuplicate, type ExistingCompanyMatch } from '@/lib/onboarding-journey/duplicate-gate'
+import { isSoleTraderMatch, shouldGateDuplicate, type ExistingCompanyMatch } from '@/lib/onboarding-journey/duplicate-gate'
 import { performCompanySwitch } from '@/lib/company/switch-client'
 import JourneyOrb, { type OrbState } from './JourneyOrb'
 
@@ -679,7 +679,9 @@ export default function OnboardingJourney({
       return (
         <Question
           title={t('journey_dup_title', { name: dupMatch.name })}
-          sub={t('journey_dup_sub', { appName })}
+          // A sole trader's firm has one bookkeeping for all its business:
+          // a part kept apart (a property) is a project there, not a copy.
+          sub={isSoleTraderMatch(dupMatch) ? t('journey_dup_ef_sub', { appName }) : t('journey_dup_sub', { appName })}
           attn={dupSwitchFailed ? t('journey_dup_open_failed') : undefined}
         >
           <ChipRow
@@ -820,6 +822,12 @@ export default function OnboardingJourney({
                 <p className="jny-enterhint">
                   {t('journey_press')} <b>Enter</b>
                 </p>
+                {/* A search that found nothing is where someone setting up
+                    books for something owned together (no org number, two
+                    personnummer) gets stuck (PH 216): say what works. */}
+                {state.lookupNote === 'nomatch' ? (
+                  <p className="jny-more">{t('journey_search_nomatch_joint')}</p>
+                ) : null}
               </>
             )}
           </Question>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { shouldGateDuplicate, type ExistingCompanyMatch } from '../duplicate-gate'
+import { isSoleTraderMatch, shouldGateDuplicate, type ExistingCompanyMatch } from '../duplicate-gate'
 
 const match: ExistingCompanyMatch = { orgNumber: '5593974149', companyId: 'c1', name: 'ISolution AB' }
 
@@ -43,5 +43,16 @@ describe('shouldGateDuplicate', () => {
     expect(
       shouldGateDuplicate({ match, orgNumber: '165593974149', acknowledgedOrgNumber: null, step: 'name' }),
     ).toBe(true)
+  })
+})
+
+describe('isSoleTraderMatch', () => {
+  it('is true for a firm whose org number is a personnummer (PH 216)', () => {
+    // A Luhn-valid test personnummer (month 12 < 20: a natural person).
+    expect(isSoleTraderMatch({ orgNumber: '1212121212', companyId: 'c2', name: 'Firma' })).toBe(true)
+  })
+
+  it('is false for a juridisk person', () => {
+    expect(isSoleTraderMatch(match)).toBe(false)
   })
 })
