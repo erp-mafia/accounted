@@ -34,6 +34,8 @@ import { findUnattributedEuSales, type PsWarning } from '@/lib/reports/periodisk
 import { euTradeInRutor, formatEuTradeBoxes } from '@/lib/vat/eu-trade'
 import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
+import { computeSettlementAccountDrift, type SettlementAccountDrift } from '@/lib/reports/vat-settlement-account-drift'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import { getVatDeadlineForPeriod, type VatDeadlineCalculationSettings } from '@/lib/tax/deadline-config'
 import { adjustDeadlineToNextBankingDay } from '@/lib/tax/swedish-holidays'
@@ -478,6 +480,32 @@ export function toCompletenessFindings(
   }))
 }
 
+/**
+ * The medium finding for moms left on 2650/1650 after Skatteverket charged or
+ * paid it: never a stop on the close, because the period being declared is
+ * right; the books around it are not. Below 100 kr it is rounding.
+ */
+export function settlementAccountDriftBlocker(drift: SettlementAccountDrift): VatCloseBlocker | null {
+  const MIN_DRIFT_KR = 100
+  const parts: string[] = []
+  if (drift.payable_drift >= MIN_DRIFT_KR) {
+    parts.push(`${formatCurrency(drift.payable_drift, 'SEK')} på 2650 är moms att betala som fördes dit för mer än 150 dagar sedan och som Skatteverkets debitering aldrig har bokförts mot`)
+  }
+  if (drift.receivable_drift >= MIN_DRIFT_KR) {
+    parts.push(`${formatCurrency(drift.receivable_drift, 'SEK')} på 1650 är moms att få tillbaka äldre än 150 dagar som aldrig har bokförts som utbetald`)
+  }
+  if (parts.length === 0) return null
+  return {
+    kind: 'earlier_vat_on_settlement_account',
+    severity: 'medium',
+    count: parts.length,
+    message: `${parts.join('; ')}. Tidigare perioders moms ligger alltså kvar, och skulden eller fordran i balansräkningen stämmer inte.`,
+    hint:
+      'Bokför Skatteverkets momsrader på skattekontot (sidan Skattekonto, eller gnubok_book_skattekonto_rows), eller betalningen till ' +
+      'Skatteverket mot 2650. Hör beloppet till en period som redan är betald och bokförd på annat konto, rätta med en verifikation.',
+  }
+}
+
 // ── VAT close check (composes VAT report + blocker scans + sanity ratios) ──
 //
 // Intent-shaped tool: answers "can I close VAT for this period?" in one call.
@@ -498,6 +526,7 @@ interface VatCloseBlocker {
     | 'momsredovisning_entries_excluded'
     | 'eu_trade_setting_off'
     | 'unattributed_eu_sale'
+    | 'earlier_vat_on_settlement_account'
   severity: 'high' | 'medium' | 'low'
   count: number
   message: string
@@ -1391,6 +1420,17 @@ export async function computeVatCloseCheck(
     } catch {
       // Previous period unavailable: skip comparison silently
     }
+  }
+
+  // Moms earlier periods left on 2650/1650 after Skatteverket charged or paid
+  // it (lib/reports/vat-settlement-account-drift.ts). Read last, as today's
+  // state of the books; a failed read leaves the close check as it was.
+  try {
+    const drift = await computeSettlementAccountDrift(supabase, companyId, todayIsoStockholm())
+    const driftBlocker = settlementAccountDriftBlocker(drift)
+    if (driftBlocker) blockers.push(driftBlocker)
+  } catch (err) {
+    log.warn('settlement account drift unavailable', { companyId, error: err instanceof Error ? err.message : String(err) })
   }
 
   const highBlockers = blockers.filter((b) => b.severity === 'high').length
