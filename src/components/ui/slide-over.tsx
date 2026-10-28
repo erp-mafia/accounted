@@ -2,7 +2,9 @@
 
 import * as React from 'react'
 import * as DialogPrimitive from '@radix-ui/react-dialog'
+import { useTranslations } from 'next-intl'
 import { XMarkIcon } from '@/components/icons'
+import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'
 import { useDashShellInert } from './dialog'
 
@@ -96,6 +98,7 @@ function SlideOverHeader({
   className?: string
   closeLabel?: string
 }) {
+  const t = useTranslations('common')
   return (
     <div className={cn('flex-shrink-0 border-b border-border px-6 py-4', className)}>
       <div className="flex items-start justify-between gap-3">
@@ -111,11 +114,20 @@ function SlideOverHeader({
             {title}
           </DialogPrimitive.Title>
         </div>
-        <DialogPrimitive.Close
-          aria-label={closeLabel}
-          className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors duration-150 hover:bg-secondary/60 hover:text-foreground"
-        >
-          <XMarkIcon className="h-4 w-4" />
+        {/* The shared icon-sm button (40px on touch) with a label even when
+            the caller passes none; pointer-events-auto so one click closes
+            the panel while a select inside it is open (see DialogCloseButton
+            in ./dialog). */}
+        <DialogPrimitive.Close asChild>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={closeLabel ?? t('close')}
+            data-attr="dialog-close"
+            className="pointer-events-auto flex-shrink-0 text-muted-foreground"
+          >
+            <XMarkIcon className="h-4 w-4" />
+          </Button>
         </DialogPrimitive.Close>
       </div>
     </div>
