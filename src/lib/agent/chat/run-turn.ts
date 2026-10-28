@@ -10,6 +10,7 @@ import type { AgentIntent } from '@/lib/agent/intents/types'
 import { agentToolRegistry } from '@/lib/agent/tools/registry'
 import type { AgentTool, AgentActorContext, StagedOperationResult } from '@/lib/agent/tools/types'
 import { isStagedOperation } from '@/lib/agent/tools/types'
+import { runWithAgentReason, splitAgentReason } from '@/lib/pending-operations/agent-reason'
 import { buildSystemPrompt } from './system-prompt'
 import { loadFiscalYearInventory } from '@/lib/agent/fiscal-years'
 import { createLogger } from '@/lib/logger'
@@ -601,12 +602,11 @@ export async function runChatTurn(args: RunTurnArgs): Promise<void> {
       }
 
       try {
-        const result = await tool.execute(
-          tu.input as Record<string, unknown>,
-          companyId,
-          userId,
-          supabase,
-          actor,
+        // A staging tool's `reason` is the agent's note to the approver,
+        // never an input of the tool (lib/pending-operations/agent-reason.ts).
+        const { args, reason } = splitAgentReason(tool, tu.input as Record<string, unknown>)
+        const result = await runWithAgentReason(reason, () =>
+          tool.execute(args, companyId, userId, supabase, actor),
         )
 
         // If the tool staged a pending_operation, stamp the agent metadata

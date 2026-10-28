@@ -167,6 +167,23 @@ describe('bookingWhy summary', () => {
     expect(rowMap(view).proposal).toBe('Regel · konto 5410 · från Claude (API-nyckel)')
   })
 
+  it("shows the agent's reason as recorded, under its label, right after the proposal", () => {
+    const reason = 'Telia every month on 6212; the OCR matches the last eleven.'
+    const r = buildDecisionReceipt(bankRow({ pending_operation_id: OP, agent_reason: reason }), ctx(userEntryRow, zapierOp))
+    const view = bookingWhy(data({ receipts: [r] }), opts())
+    const row = view.rows.find((x) => x.id === 'reason')
+    expect(row).toEqual({ id: 'reason', label: 'Agentens motivering', value: reason })
+    expect(view.rows.map((x) => x.id).slice(0, 3)).toEqual(['decision', 'proposal', 'reason'])
+    expect(bookingWhy(data({ receipts: [r] }), opts('en')).rows.find((x) => x.id === 'reason')?.label).toBe("Agent's reason")
+  })
+
+  it('leaves the reason row out when none was recorded', () => {
+    const r = buildDecisionReceipt(bankRow(), ctx(userEntryRow, zapierOp))
+    expect(bookingWhy(data({ receipts: [r] }), opts()).rows.some((x) => x.id === 'reason')).toBe(false)
+    const blank: ReceiptLike = { ...r, agent_reason: '   ' }
+    expect(bookingWhy(data({ receipts: [blank] }), opts()).rows.some((x) => x.id === 'reason')).toBe(false)
+  })
+
   it('labels an API key and a connected AI by their label', () => {
     const apiEntry = { ...userEntryRow, committed_actor_type: 'api_key', committed_actor_label: 'Zapier', commit_method: 'api_key' }
     const r = buildDecisionReceipt(bankRow({ actor_type: 'api_key', resolved_by: null }), ctx(apiEntry))

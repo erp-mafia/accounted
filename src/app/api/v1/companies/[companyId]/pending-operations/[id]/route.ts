@@ -13,6 +13,7 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode } from '@/lib/api/v1/errors'
 import {
+  readPendingOperationView,
   selectPendingOperationView,
   PENDING_OPERATION_VIEW_EXAMPLE,
   PendingOperationView,
@@ -54,10 +55,9 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string; id: string }
       })
     }
 
-    const { data, error } = await selectPendingOperationView(ctx.supabase)
-      .eq('id', id)
-      .eq('company_id', ctx.companyId!)
-      .maybeSingle()
+    const { data, error } = await readPendingOperationView((options) =>
+      selectPendingOperationView(ctx.supabase, options).eq('id', id).eq('company_id', ctx.companyId!).maybeSingle(),
+    )
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
     if (!data) {
       return v1ErrorResponseFromCode('PENDING_OPERATION_NOT_FOUND', ctx.log, {

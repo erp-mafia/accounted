@@ -3,6 +3,7 @@ import { z } from 'zod'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { slateAccount } from '@/lib/bookkeeping/proposal'
 import { dbError } from '@/lib/errors/db-error'
+import { isMissingColumnError } from '@/lib/pending-operations/agent-reason'
 import type { BankLineFinal, DecisionOutcome, LoggedSuggestion } from './classify'
 import type { InboxFinal, InboxSuggestion } from './inbox-classify'
 import { DECISION_CHECK_RESULTS } from './checks'
@@ -36,7 +37,8 @@ import { DECISION_CHECK_RESULTS } from './checks'
  * labelled 'model_reported' and never presented as evidence. A staged
  * operation carries no score: its basis is null.
  *
- * rule_version, policy_version, input_hash, checks and confidence_band are
+ * rule_version, policy_version, input_hash, checks, confidence_band and
+ * agent_reason (the reason the agent gave when it staged the operation) are
  * read as they were recorded at decision time (./record.ts, ./inbox.ts,
  * ./operation.ts),
  * never derived here: the rules and thresholds in force now are not the ones
@@ -195,6 +197,12 @@ export const DecisionReceiptSchema = z.object({
     .describe(
       "Under policy_version at decision time: direct, the acted-on suggestion books without a review; review, it opens one. From deterministic evidence, never the model's own score. For a staged operation: review when a person approved it, direct when a key credential did within its unattended ceiling or a company grant let it through. Null without an acted-on suggestion, and for an underlag.",
     ),
+  agent_reason: z
+    .string()
+    .nullable()
+    .describe(
+      'Why the agent that staged the operation proposed it, in its own words, as the approver saw it (the reason given when staging, at most 500 characters). Null when none was given, for a decision no staged operation carried, and for decisions before 2026-10-28.',
+    ),
 })
 
 export type DecisionCandidate = z.infer<typeof DecisionCandidateSchema>
@@ -223,6 +231,8 @@ export interface SuggestionLogRow {
   checks?: unknown
   confidence_band?: string | null
   pending_operation_id?: string | null
+  // Copied from the approved operation from 2026-10-28 (migration 20261028210000).
+  agent_reason?: string | null
 }
 
 export interface ReceiptEntryRow {
@@ -415,6 +425,7 @@ export function buildDecisionReceipt(row: SuggestionLogRow, ctx: ReceiptContext)
     input_hash: str(row.input_hash),
     checks: checksFrom(row.checks),
     confidence_band: bandFrom(row.confidence_band),
+    agent_reason: str(row.agent_reason),
   }
 }
 
@@ -440,6 +451,7 @@ export interface CompactDecision {
   other_receipts?: number
   rule_version?: string
   confidence_band?: 'direct' | 'review'
+  agent_reason?: string
 }
 
 const MAX_ALTERNATIVES = 3
@@ -485,6 +497,7 @@ export function toCompactDecision(receipts: DecisionReceipt[]): CompactDecision 
     ...(receipts.length > 1 ? { other_receipts: receipts.length - 1 } : {}),
     ...(r.rule_version ? { rule_version: r.rule_version } : {}),
     ...(r.confidence_band ? { confidence_band: r.confidence_band } : {}),
+    ...(r.agent_reason ? { agent_reason: r.agent_reason } : {}),
   }
 }
 
@@ -502,20 +515,34 @@ export async function fetchDecisionRows(
   companyId: string,
   subject: DecisionSubject,
 ): Promise<SuggestionLogRow[]> {
-  const base = supabase
-    .from('suggestion_log')
-    .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id')
-    .eq('company_id', companyId)
-  const filtered =
-    'journalEntryId' in subject
-      ? base.eq('final->>journal_entry_id', subject.journalEntryId)
-      : 'transactionId' in subject
-        ? base.eq('transaction_id', subject.transactionId)
-        : base.eq('document_id', subject.documentId)
-  const { data, error } = await filtered
-    .order('created_at', { ascending: false })
-    .order('id', { ascending: false })
-    .limit(MAX_RECEIPTS_PER_SUBJECT)
+  const withReason = () =>
+    supabase
+      .from('suggestion_log')
+      .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id, agent_reason')
+      .eq('company_id', companyId)
+  const read = (withAgentReason: boolean) => {
+    // Without agent_reason while the column is not there yet: the code is
+    // live a few minutes before migration 20261028210000 runs.
+    const base = withAgentReason
+      ? withReason()
+      : (supabase
+          .from('suggestion_log')
+          .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id')
+          .eq('company_id', companyId) as unknown as ReturnType<typeof withReason>)
+    const filtered =
+      'journalEntryId' in subject
+        ? base.eq('final->>journal_entry_id', subject.journalEntryId)
+        : 'transactionId' in subject
+          ? base.eq('transaction_id', subject.transactionId)
+          : base.eq('document_id', subject.documentId)
+    return filtered
+      .order('created_at', { ascending: false })
+      .order('id', { ascending: false })
+      .limit(MAX_RECEIPTS_PER_SUBJECT)
+  }
+  let result = await read(true)
+  if (isMissingColumnError(result.error)) result = await read(false)
+  const { data, error } = result
   if (error) throw dbError(error)
   return (data ?? []) as SuggestionLogRow[]
 }

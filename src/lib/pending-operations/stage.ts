@@ -10,6 +10,9 @@
  * the staging credential as the actor. Approval reaches
  * commitPendingOperation, which runs the operation for real.
  *
+ * The stager's reason (./agent-reason.ts) is stored like the MCP door
+ * stores it.
+ *
  * Not here: the MCP-only parts of staging (the agent session's skill
  * provenance, the cross-company batch id, the per-tool idempotency_key
  * argument). The v1 door's Idempotency-Key is the wrapper's (withApiV1).
@@ -18,6 +21,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { resolvePeriodStatusForDate, type PeriodStatusForDate } from '@/lib/core/bookkeeping/period-status'
 import type { Logger } from '@/lib/logger'
 import type { PendingOperation, PendingOperationActorType } from '@/types'
+import { agentReasonColumn, writeWithAgentReason } from './agent-reason'
 import { getRiskLevel } from './risk-tiers'
 import { assertNoPlaintextPersonnummer } from './staging-pii-guard'
 
@@ -34,6 +38,8 @@ export interface StagedOperationInsert {
   dateForPeriodCheck?: string
   /** Advisory warning the approver sees, echoed as preview_data.compliance_warning. */
   complianceNote?: string
+  /** Why the stager proposes it (./agent-reason.ts), already normalized. */
+  agentReason?: string | null
 }
 
 export interface StagedOperationInserted {
@@ -82,22 +88,25 @@ export async function insertStagedOperation(
     }
   }
 
-  const { data, error } = await supabase
-    .from('pending_operations')
-    .insert({
-      company_id: input.companyId,
-      user_id: input.userId,
-      operation_type: input.operationType,
-      title: input.title,
-      params: input.params,
-      preview_data: previewData,
-      actor_type: input.actor.type,
-      actor_id: input.actor.id ?? null,
-      actor_label: input.actor.label ?? null,
-      risk_level: stagedRiskLevel(input.operationType, input.params),
-    })
-    .select('*')
-    .single()
+  const { data, error } = await writeWithAgentReason(input.agentReason, (agentReason) =>
+    supabase
+      .from('pending_operations')
+      .insert({
+        company_id: input.companyId,
+        user_id: input.userId,
+        operation_type: input.operationType,
+        title: input.title,
+        params: input.params,
+        preview_data: previewData,
+        actor_type: input.actor.type,
+        actor_id: input.actor.id ?? null,
+        actor_label: input.actor.label ?? null,
+        risk_level: stagedRiskLevel(input.operationType, input.params),
+        ...agentReasonColumn(agentReason),
+      })
+      .select('*')
+      .single(),
+  )
 
   if (error || !data) throw new Error(`Failed to stage operation: ${error?.message ?? 'no row returned'}`)
   return { row: data as PendingOperation, ...(periodStatus ? { periodStatus } : {}) }

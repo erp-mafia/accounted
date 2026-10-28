@@ -3,7 +3,8 @@ import type { DecisionReceipt } from './receipts'
 /**
  * "Därför bokades den så": a verifikat's decision receipts and commit actor,
  * read into one summary line (who booked it, how, when) and a few detail
- * rows (decision, proposal, grounds, what changed, checks, policy). Pure and
+ * rows (decision, proposal, the agent's reason, grounds, what changed,
+ * checks, policy). Pure and
  * client-safe: the verifikat page and the Inkorg both render from it.
  *
  * Only what is recorded is shown. A field the receipt or the entry does not
@@ -36,6 +37,8 @@ export type ReceiptLike = Pick<
   policy_version?: string | null
   confidence_band?: string | null
   checks?: ReadonlyArray<ReceiptCheckLike> | null
+  /** Why the agent that staged it proposed it; recorded from 2026-10-28. */
+  agent_reason?: string | null
 }
 
 /** The journal entry columns the display reads: the commit actor snapshot plus who created it. */
@@ -97,7 +100,7 @@ export interface BookingWhyOptions {
 
 export type EvidenceLevel = 'exact' | 'strong' | 'likely' | 'your_choice'
 
-export type BookingWhyRowId = 'decision' | 'proposal' | 'grounds' | 'changes' | 'checks' | 'policy' | 'more'
+export type BookingWhyRowId = 'decision' | 'proposal' | 'reason' | 'grounds' | 'changes' | 'checks' | 'policy' | 'more'
 
 export interface BookingWhyRow {
   id: BookingWhyRowId
@@ -449,6 +452,8 @@ export function bookingWhy(data: BookingWhyData, o: BookingWhyOptions): BookingW
   push('decision', upperFirst([whoText, viaText(who, r?.decided_by.commit_method ?? entry.commit_method, o), when].filter(Boolean).join(' · ')))
   if (r) {
     push('proposal', proposalRow(r, data, o))
+    // The agent's own words, as recorded: shown as given, never paraphrased.
+    push('reason', text(r.agent_reason))
     push('grounds', groundsRow(r, o))
     push('changes', changesRow(r, o))
     push('checks', checksRow(r, o))

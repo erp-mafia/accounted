@@ -1,4 +1,5 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
+import type { AgentReasonArg } from '@/lib/pending-operations/agent-reason'
 
 // Actor context for the tool dispatch. Mirrors the shape the MCP server's
 // ActorContext type uses (extensions/general/mcp-server/server.ts:70) so a
@@ -31,6 +32,9 @@ export interface AgentTool {
     idempotentHint?: boolean
     openWorldHint?: boolean
   }
+  // How a staging tool takes the agent's reason (lib/pending-operations/
+  // agent-reason.ts): split off its arguments before execute() runs.
+  agentReason?: AgentReasonArg
   execute: (
     args: Record<string, unknown>,
     companyId: string,

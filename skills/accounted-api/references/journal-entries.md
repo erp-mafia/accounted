@@ -233,7 +233,7 @@ Response `200`:
     lines: { id: string, account_number: string, debit_amount: number, credit_amount: number, line_description: string | null, currency: string | null, amount_in_currency: number | null, exchange_rate: number | null, tax_code: string | null, dimensions: Record<string, string>, cost_center: string | null, project: string | null, sort_order: number }[],
     created_at: string,
     updated_at: string,
-    decision_receipts: { receipt_id: string, subject_kind: "bank_line" | "inbox_item" | "operation", decided_at: string, outcome: "accepted" | "changed" | "manual" | "dismissed", decided_by: { actor_type: "user" | "api_key" | "mcp_oauth" | "cron" | "system" | "agent_chat" | "service_account", user_id: string | null, label: string | null, commit_method: string | null }, proposed_by: { pending_operation_id: string, operation_type: string, actor_type: string, actor_id: string | null, label: string | null, risk_level: string | null, model: string | null, prompt_hash: string | null, staged_at: string, approved_at: string | null } | null, candidates: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction" | "pending_operation", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null }[], chosen: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction" | "pending_operation", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null } | null, booked: { journal_entry_id: string | null, voucher: string | null, entry_status: string | null, account: string | null, vat_treatment: string | null, supplier_invoice_id: string | null, changed_fields: string[] } | null, evidence: { transaction_id: string | null, inbox_item_id: string | null, document_ids: string[] }, confidence: { value: number | null, basis: "backing" | "model_reported" | null }, rule_version: string | null, policy_version: string | null, input_hash: string | null, checks: { id: string, result: "pass" | "warn" | "fail", detail: string | null }[] | null, confidence_band: "direct" | "review" | null }[] | null,
+    decision_receipts: { receipt_id: string, subject_kind: "bank_line" | "inbox_item" | "operation", decided_at: string, outcome: "accepted" | "changed" | "manual" | "dismissed", decided_by: { actor_type: "user" | "api_key" | "mcp_oauth" | "cron" | "system" | "agent_chat" | "service_account", user_id: string | null, label: string | null, commit_method: string | null }, proposed_by: { pending_operation_id: string, operation_type: string, actor_type: string, actor_id: string | null, label: string | null, risk_level: string | null, model: string | null, prompt_hash: string | null, staged_at: string, approved_at: string | null } | null, candidates: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction" | "pending_operation", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null }[], chosen: { source: "assistant" | "rule" | "catalog" | "counterparty_template" | "recent" | "extraction" | "pending_operation", source_id: string, rank: number, accounts: string[], vat_treatment: string | null, confidence: number | null, model: string | null, prompt_sha256: string | null, matches_final: boolean, contested: boolean, agreement: number | null, from_candidate: boolean | null, reasoning_sha256: string | null } | null, booked: { journal_entry_id: string | null, voucher: string | null, entry_status: string | null, account: string | null, vat_treatment: string | null, supplier_invoice_id: string | null, changed_fields: string[] } | null, evidence: { transaction_id: string | null, inbox_item_id: string | null, document_ids: string[] }, confidence: { value: number | null, basis: "backing" | "model_reported" | null }, rule_version: string | null, policy_version: string | null, input_hash: string | null, checks: { id: string, result: "pass" | "warn" | "fail", detail: string | null }[] | null, confidence_band: "direct" | "review" | null, agent_reason: string | null }[] | null,
     links: { kind: "bank_transaction" | "document" | "invoice_payment" | "supplier_invoice_payment" | "ledger_settlement", transaction_id: string | null, via: "pointer" | "voucher_link" | null, document_id: string | null, invoice_id: string | null, invoice_payment_id: string | null, supplier_invoice_id: string | null, supplier_invoice_payment_id: string | null, settlement_id: string | null, basis: "user_confirmed" | "user_created" | "rule_ocr_reference" | "rule_amount_date" | "rule_counterparty" | "agent_proposed_user_approved" | "agent_autonomous_within_grant" | "client_asserted" | "import_carried_over" | "system_derived" | null, evidence: { rule_id?: string, reference?: string, score?: number, receipt_id?: string, pending_operation_id?: string, source_system?: string } | null }[] | null
   },
   meta: {
@@ -819,7 +819,7 @@ Metadata rättelse (BFL 5 kap 5 § and 9 §): changes the verifikationstext and/
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1013,7 +1013,7 @@ The note is annotation metadata beside the verifikat, not räkenskapsinformation
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1168,7 +1168,7 @@ Fixes a verifikat booked on the wrong date or year (e.g. 2026-07-03 that should 
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1330,7 +1330,7 @@ Line rättelse (BFL 5 kap 5 §): removes the listed lines from a posted verifika
 | `companyId` | path | `string` | yes |  |
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts
@@ -1519,7 +1519,7 @@ BFL 5 kap 6 § requires a verifikation for every affärshändelse; where no exte
 |---|---|---|---|---|
 | `companyId` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
-| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
 
 Request body:
 ```ts

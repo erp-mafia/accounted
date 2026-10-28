@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { CommitActor } from '@/lib/bookkeeping/actor-context'
 import { createLogger } from '@/lib/logger'
+import { agentReasonColumn, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
 import type { PendingOperation } from '@/types'
 import { grantPolicyVersion } from '@/lib/grants/types'
@@ -27,6 +28,8 @@ import { operationInputHash } from './provenance'
  *     let it through without a person (grant.<revision>;grant_id=...;
  *     grant_version=..., lib/grants). An approver of any other kind records
  *     neither, as a policy is never recorded without its band.
+ * The stager's reason (pending_operations.agent_reason) is copied as the
+ * row's agent_reason, as the bank-line and underlag doors copy it.
  * The one suggestion on offer is the staged operation, acted on as staged
  * (acted_on 0, outcome 'accepted'): an approval books what was staged or
  * nothing. checks stays null (the commit door does not report the
@@ -129,7 +132,7 @@ export interface OperationDecision {
   companyId: string
   /** The approving user: the person, or the key's owner (a service account's sponsor). */
   userId: string
-  operation: Pick<PendingOperation, 'id' | 'operation_type' | 'params' | 'preview_data' | 'risk_level' | 'agent_metadata'>
+  operation: Pick<PendingOperation, 'id' | 'operation_type' | 'params' | 'preview_data' | 'risk_level' | 'agent_metadata' | 'agent_reason'>
   /** What the commit answered (pending_operations.result_data). */
   resultData: Record<string, unknown> | null | undefined
   /**
@@ -144,8 +147,16 @@ export interface OperationDecision {
   grant?: { grantId: string; grantVersion: number } | null
 }
 
-/** The rows for `entries`, one per voucher; `posted` is every voucher the approval posted. */
-export function buildOperationDecisionRows(decision: OperationDecision, entries: string[], posted: string[]) {
+/**
+ * The rows for `entries`, one per voucher; `posted` is every voucher the
+ * approval posted. `agentReason` defaults to the operation's.
+ */
+export function buildOperationDecisionRows(
+  decision: OperationDecision,
+  entries: string[],
+  posted: string[],
+  agentReason: string | null = decision.operation.agent_reason ?? null,
+) {
   const { operation, actor } = decision
   const policy = approvalPolicy(actor, decision.grant)
   const model = typeof operation.agent_metadata?.model === 'string' ? operation.agent_metadata.model : null
@@ -179,6 +190,8 @@ export function buildOperationDecisionRows(decision: OperationDecision, entries:
     confidence_band: policy.band,
     input_hash: inputHash,
     checks: null,
+    // Why the stager proposed it, as the approver saw it.
+    ...agentReasonColumn(agentReason),
   }))
 }
 
@@ -245,10 +258,11 @@ export async function recordOperationDecision(supabase: SupabaseClient, decision
     const recorded = await recordedEntries(supabase, decision.companyId, decision.operation.id, !!decision.grant)
     const entries = posted.filter((id) => !recorded.has(id))
     if (entries.length === 0) return 0
-    const rows = buildOperationDecisionRows(decision, entries, posted)
-    const { error } = await supabase.from('suggestion_log').insert(rows)
+    const { error } = await writeWithAgentReason(decision.operation.agent_reason, (agentReason) =>
+      supabase.from('suggestion_log').insert(buildOperationDecisionRows(decision, entries, posted, agentReason)),
+    )
     if (error) throw new Error(error.message)
-    return rows.length
+    return entries.length
   } catch (err) {
     log.error('failed to record the staged operation decision (commit unaffected)', {
       companyId: decision.companyId,

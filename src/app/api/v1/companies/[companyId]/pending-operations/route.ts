@@ -5,7 +5,8 @@
  * one company, newest first, with cursor pagination on (created_at DESC,
  * id DESC). The same rows the app's review list (Att göra > Agentförslag)
  * and gnubok_list_pending_operations show; each carries task_state beside
- * its status (lib/pending-operations/task-state.ts).
+ * its status (lib/pending-operations/task-state.ts), and agent_reason, why
+ * its stager proposes it.
  *
  * Defaults to status=pending like both of those doors; status=all lists
  * every status. `params` (the raw staged input) is never returned.
@@ -19,6 +20,7 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ValidationError } from '@/lib/api/v1/errors'
 import {
   PENDING_OPERATION_STATUSES,
+  readPendingOperationView,
   selectPendingOperationView,
   PENDING_OPERATION_VIEW_EXAMPLE,
   PendingOperationView,
@@ -84,20 +86,21 @@ export const GET = withApiV1<{ params: Promise<{ companyId: string }> }>(
     if (!filters.success) return v1ValidationError(ctx, filters.error)
     const { status = 'pending', risk_level, operation_type, batch_id } = filters.data
 
-    let query = selectPendingOperationView(ctx.supabase)
-      .eq('company_id', ctx.companyId!)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(limit + 1)
-    if (status !== 'all') query = query.eq('status', status)
-    if (risk_level) query = query.eq('risk_level', risk_level)
-    if (operation_type) query = query.eq('operation_type', operation_type)
-    if (batch_id) query = query.eq('batch_id', batch_id)
-    if (decoded) {
-      query = query.or(`created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.lt.${decoded.id})`)
-    }
-
-    const { data, error } = await query
+    const { data, error } = await readPendingOperationView((options) => {
+      let query = selectPendingOperationView(ctx.supabase, options)
+        .eq('company_id', ctx.companyId!)
+        .order('created_at', { ascending: false })
+        .order('id', { ascending: false })
+        .limit(limit + 1)
+      if (status !== 'all') query = query.eq('status', status)
+      if (risk_level) query = query.eq('risk_level', risk_level)
+      if (operation_type) query = query.eq('operation_type', operation_type)
+      if (batch_id) query = query.eq('batch_id', batch_id)
+      if (decoded) {
+        query = query.or(`created_at.lt.${decoded.ts},and(created_at.eq.${decoded.ts},id.lt.${decoded.id})`)
+      }
+      return query
+    })
     if (error) return v1ErrorResponse(error, ctx.log, { requestId: ctx.requestId })
 
     const rows = (data ?? []) as unknown as PendingOperationViewRow[]

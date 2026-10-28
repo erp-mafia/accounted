@@ -3,7 +3,8 @@ import { BANK_LINE_SUGGESTIONS } from '@/lib/composition/bank-line-suggestions'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
-import { committingOperationId } from '@/lib/pending-operations/commit-scope'
+import { agentReasonColumn, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
+import { committingAgentReason, committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { createLogger } from '@/lib/logger'
 import type { BookingProposal, ProposalBooking } from '@/lib/bookkeeping/proposal'
 import type { AssistantRead } from '@/lib/agent/categorize/read-shape'
@@ -31,7 +32,7 @@ import { bankLineInputHash, reasoningSha256, withProgramVersion } from './proven
  *   2. recordDecisions() AFTER the booking succeeded: one row per bank line,
  *      with the guards the door ran, the band the acted-on suggestion fell
  *      in under the direct-booking policy, and the pending operation whose
- *      approval carried it (when an agent staged it).
+ *      approval carried it (when an agent staged it) with its agent_reason.
  *
  * Neither step can fail a booking: a failed snapshot records an empty list,
  * a failed write is logged and dropped. The log describes bookkeeping, it is
@@ -170,7 +171,7 @@ export async function recordDecisions(
   try {
     const actorType = getActor()?.type ?? 'user'
     const pendingOperationId = committingOperationId()
-    const rows = decisions.map((d) => {
+    const rowsWith = (agentReason: string | null) => decisions.map((d) => {
       const taken = snapshot.byTransaction.get(d.transactionId)
       const classified = classifyBankLineDecision({
         proposals: taken?.proposals ?? [],
@@ -198,9 +199,13 @@ export async function recordDecisions(
         confidence_band: classified.confidence_band,
         checks: d.checks ?? null,
         pending_operation_id: pendingOperationId,
+        ...agentReasonColumn(agentReason),
       }
     })
-    const { error } = await supabase.from('suggestion_log').insert(rows)
+    // The approved operation's reason, when an agent staged it with one.
+    const { error } = await writeWithAgentReason(committingAgentReason(), (agentReason) =>
+      supabase.from('suggestion_log').insert(rowsWith(agentReason)),
+    )
     if (error) throw new Error(error.message)
   } catch (err) {
     log.error('failed to record booking decisions (booking unaffected)', {

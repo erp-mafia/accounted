@@ -35,7 +35,7 @@ Returns the company's pending operations newest first: writes staged for approva
 Response `200`:
 ```ts
 {
-  data: { pending_operation_id: string, handle?: string, company_id: string, operation_type: string, title: string, status: "pending" | "committing" | "committed" | "rejected" | "failed_partial", task_state: "working" | "completed" | "failed" | "cancelled", risk_level: "low" | "medium" | "high", preview: Record<string, unknown>, result: Record<string, unknown> | null, rejection_category: string | null, rejection_reason: string | null, actor_type: string, actor_id: string | null, actor_label: string | null, batch_id: string | null, created_at: string, resolved_at: string | null, links: { self: string, approve: string, reject: string } }[],
+  data: { pending_operation_id: string, handle?: string, company_id: string, operation_type: string, title: string, status: "pending" | "committing" | "committed" | "rejected" | "failed_partial", task_state: "working" | "completed" | "failed" | "cancelled", risk_level: "low" | "medium" | "high", preview: Record<string, unknown>, result: Record<string, unknown> | null, agent_reason: string | null, rejection_category: string | null, rejection_reason: string | null, actor_type: string, actor_id: string | null, actor_label: string | null, batch_id: string | null, created_at: string, resolved_at: string | null, links: { self: string, approve: string, reject: string } }[],
   meta: {
     request_id: string,
     api_version: string,
@@ -65,6 +65,7 @@ Example response `200`:
         "supplier_type": "swedish_business"
       },
       "result": null,
+      "agent_reason": "Clas Ohlson AB is on three supplier invoices in the inbox and is not in the supplier register yet.",
       "rejection_category": null,
       "rejection_reason": null,
       "actor_type": "api_key",
@@ -123,6 +124,7 @@ Response `200`:
     risk_level: "low" | "medium" | "high",
     preview: Record<string, unknown>,
     result: Record<string, unknown> | null,
+    agent_reason: string | null,
     rejection_category: string | null,
     rejection_reason: string | null,
     actor_type: string,
@@ -161,6 +163,7 @@ Example response `200`:
       "supplier_type": "swedish_business"
     },
     "result": null,
+    "agent_reason": "Clas Ohlson AB is on three supplier invoices in the inbox and is not in the supplier register yet.",
     "rejection_category": null,
     "rejection_reason": null,
     "actor_type": "api_key",
@@ -231,6 +234,7 @@ Response `200`:
     risk_level: "low" | "medium" | "high",
     preview: Record<string, unknown>,
     result: Record<string, unknown> | null,
+    agent_reason: string | null,
     rejection_category: string | null,
     rejection_reason: string | null,
     actor_type: string,
@@ -271,6 +275,7 @@ Example response `200`:
     "result": {
       "supplier_id": "2c4e…"
     },
+    "agent_reason": "Clas Ohlson AB is on three supplier invoices in the inbox and is not in the supplier register yet.",
     "rejection_category": null,
     "rejection_reason": null,
     "actor_type": "api_key",
@@ -344,6 +349,7 @@ Response `200`:
     risk_level: "low" | "medium" | "high",
     preview: Record<string, unknown>,
     result: Record<string, unknown> | null,
+    agent_reason: string | null,
     rejection_category: string | null,
     rejection_reason: string | null,
     actor_type: string,
@@ -382,6 +388,7 @@ Example response `200`:
       "supplier_type": "swedish_business"
     },
     "result": null,
+    "agent_reason": "Clas Ohlson AB is on three supplier invoices in the inbox and is not in the supplier register yet.",
     "rejection_category": "wrong_amount",
     "rejection_reason": "Beloppet stämmer inte med fakturan.",
     "actor_type": "api_key",

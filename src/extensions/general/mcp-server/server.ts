@@ -395,6 +395,17 @@ import {
   highRiskInBatchError,
   runWithStagingBatch,
 } from '@/lib/pending-operations/batch-context'
+import {
+  AGENT_REASON_ARG,
+  AGENT_REASON_PROPERTY,
+  agentReasonColumn,
+  currentAgentReason,
+  isMissingColumnError,
+  runWithAgentReason,
+  splitAgentReason,
+  writeWithAgentReason,
+  type AgentReasonArg,
+} from '@/lib/pending-operations/agent-reason'
 import { runAcrossCompanies, summarizeCompanyResult } from '@/lib/portfolio/runner'
 import { fetchPortfolioOverview, portfolioRowToWire, type DeadlineKindFilter } from '@/lib/portfolio/overview'
 import { getByraMembership } from '@/lib/clients/fetch-client-overview'
@@ -1446,6 +1457,10 @@ export interface McpTool {
   // idempotency_key. Read by __tests__/direct-write-retry.test.ts. Not
   // serialized into tools/list.
   retryKey?: true
+  // Set by withAgentReasonArg on every staging tool: how it takes the
+  // agent's reason (lib/pending-operations/agent-reason.ts). Every caller of
+  // execute() splits it off with splitAgentReason first. Not serialized.
+  agentReason?: AgentReasonArg
   execute: (
     args: Record<string, unknown>,
     companyId: string,
@@ -2305,28 +2320,34 @@ async function stagePendingOperation(
     }
   }
 
-  const { data, error } = await supabase
-    .from('pending_operations')
-    .insert({
-      company_id: companyId,
-      user_id: userId,
-      operation_type: operationType,
-      title,
-      params,
-      preview_data: previewData,
-      // A service account's key stages as the service account (its label is
-      // the account's name); every other connection as its own type.
-      actor_type: stagedActorType,
-      actor_id: actor.id ?? null,
-      actor_label: actor.label ?? null,
-      agent_metadata: await loadSkillProvenance(supabase, companyId, userId, actor),
-      risk_level: riskLevel,
-      // Set only inside gnubok_stage_across_companies (request-local async
-      // context); NULL for every other staging path.
-      batch_id: currentStagingBatchId(),
-    })
-    .select('*')
-    .single()
+  const agentMetadata = await loadSkillProvenance(supabase, companyId, userId, actor)
+  // The tool call's `reason`, split off before the tool ran (request-local,
+  // like the batch id).
+  const { data, error } = await writeWithAgentReason(currentAgentReason(), (agentReason) =>
+    supabase
+      .from('pending_operations')
+      .insert({
+        company_id: companyId,
+        user_id: userId,
+        operation_type: operationType,
+        title,
+        params,
+        preview_data: previewData,
+        // A service account's key stages as the service account (its label is
+        // the account's name); every other connection as its own type.
+        actor_type: stagedActorType,
+        actor_id: actor.id ?? null,
+        actor_label: actor.label ?? null,
+        agent_metadata: agentMetadata,
+        risk_level: riskLevel,
+        // Set only inside gnubok_stage_across_companies (request-local async
+        // context); NULL for every other staging path.
+        batch_id: currentStagingBatchId(),
+        ...agentReasonColumn(agentReason),
+      })
+      .select('*')
+      .single(),
+  )
 
   if (error) throw new Error(`Failed to stage operation: ${error.message}`)
 
@@ -4570,8 +4591,10 @@ async function runInnerTool(params: {
         })
       }
     }
+    // The agent's reason, split off as the dispatcher splits a direct call's.
+    const { args, reason } = splitAgentReason(inner, { ...innerArgs })
     const result = await withSIEExternalReport(supabase, companyId, inner.name, () =>
-      inner.execute({ ...innerArgs }, companyId, userId, supabase, actor)
+      runWithAgentReason(reason, () => inner.execute(args, companyId, userId, supabase, actor))
     )
     emitToolCallTelemetry({
       tool: inner.name,
@@ -26210,21 +26233,34 @@ export const tools: McpTool[] = [
       // satisfy data-minimisation (GDPR Art. 5(1)(b)). Use preview_data for
       // a redacted, human-readable summary, or call the underlying entity
       // endpoint when the agent needs the full payload.
-      let query = supabase
-        .from('pending_operations')
-        .select(
-          'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data, rejection_category',
-          { count: 'exact' }
-        )
-        .eq('status', status)
-      query = acrossCompanies ? query.in('company_id', accessibleIds) : query.eq('company_id', companyId)
-      if (batchId) query = query.eq('batch_id', batchId)
-      if (args.risk_level) query = query.eq('risk_level', args.risk_level as string)
-      if (args.operation_type) query = query.eq('operation_type', args.operation_type as string)
-
-      const { data, error, count } = await query
-        .order('created_at', { ascending: false })
-        .range(offset, offset + limit - 1)
+      // agent_reason: why the stager proposes it. Read without it while the
+      // column is not there yet (the migration runs after the deploy).
+      const selectWithReason = () =>
+        supabase
+          .from('pending_operations')
+          .select(
+            'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, agent_reason, created_at, resolved_at, result_data, rejection_category',
+            { count: 'exact' }
+          )
+      const listQuery = (withAgentReason: boolean) => {
+        let query = withAgentReason
+          ? selectWithReason()
+          : (supabase
+              .from('pending_operations')
+              .select(
+                'id, company_id, batch_id, operation_type, title, preview_data, status, risk_level, actor_type, actor_id, actor_label, created_at, resolved_at, result_data, rejection_category',
+                { count: 'exact' }
+              ) as unknown as ReturnType<typeof selectWithReason>)
+        query = query.eq('status', status)
+        query = acrossCompanies ? query.in('company_id', accessibleIds) : query.eq('company_id', companyId)
+        if (batchId) query = query.eq('batch_id', batchId)
+        if (args.risk_level) query = query.eq('risk_level', args.risk_level as string)
+        if (args.operation_type) query = query.eq('operation_type', args.operation_type as string)
+        return query.order('created_at', { ascending: false }).range(offset, offset + limit - 1)
+      }
+      let listed = await listQuery(true)
+      if (isMissingColumnError(listed.error)) listed = await listQuery(false)
+      const { data, error, count } = listed
       if (error) throw new Error(`Failed to list pending operations: ${error.message}`)
 
       // task_state: the status in the MCP Tasks / A2A vocabulary, as the v1
@@ -27544,6 +27580,29 @@ export const tools: McpTool[] = [
   }),
 ]
 
+/**
+ * Every staging tool takes the agent's reason (lib/pending-operations/
+ * agent-reason.ts): the optional `reason` property is added here, once,
+ * rather than tool by tool. A tool whose own input already has `reason`
+ * keeps its own (agentReason 'own'). execute() is left as written: its
+ * source is what staging-behaviour.test.ts reads. Replaced in place, before
+ * anything below reads the list.
+ */
+export function withAgentReasonArg(t: McpTool): McpTool {
+  if (!isStagingTool(t)) return t
+  const properties = (t.inputSchema.properties ?? {}) as Record<string, unknown>
+  if (AGENT_REASON_ARG in properties) return { ...t, agentReason: 'own' }
+  return {
+    ...t,
+    agentReason: 'added',
+    inputSchema: { ...t.inputSchema, properties: { ...properties, [AGENT_REASON_ARG]: AGENT_REASON_PROPERTY } },
+  }
+}
+
+tools.forEach((t, i) => {
+  tools[i] = withAgentReasonArg(t)
+})
+
 // Drift guard for the gnubok_get_agent_briefing recommended_tools loadouts:
 // every referenced tool must exist in the registry above and every referenced
 // skill must be a real workflow skill. Runs at module init so a rename or
@@ -28824,6 +28883,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       }
 
       let toolArgs: Record<string, unknown>
+      // The staging tool's `reason`, split off its arguments below.
+      let agentReason: string | null = null
       // null only for the company-independent tools on a key whose user has
       // no company yet (issue #1814): resolveMcpCompanyContext refuses every
       // company-dependent tool with NO_COMPANY_YET before it gets here.
@@ -28883,6 +28944,13 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
               (example ? ` A working call looks like: ${example}` : ''),
           )
         }
+
+        // A staging tool's `reason` is the agent's note to the approver, not
+        // an input of the tool: split off here, after the guard accepted it,
+        // and handed to the staging helper through the call's context.
+        const split = splitAgentReason(tool, toolArgs)
+        toolArgs = split.args
+        agentReason = split.reason
 
 
         // Pinned connection: the company is fixed by the URL. A call that
@@ -29204,7 +29272,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
             // A staged write a company grant matches exactly is booked at once
             // (./grant-door.ts); the tool itself only staged it.
             const rawResult = await applyGrantDoor(
-              await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor)),
+              await withSIEExternalReport(supabase,tenantId,toolName,()=>runWithAgentReason(agentReason,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))),
               { toolName, toolArgs: toolArgs as Record<string, unknown>, supabase, companyId: tenantId, userId, actor, log },
             )
             const canonicalResult = effectiveCompanyId
@@ -29329,7 +29397,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         // A staged write a company grant matches exactly is booked at once
             // (./grant-door.ts); the tool itself only staged it.
             const rawResult = await applyGrantDoor(
-              await withSIEExternalReport(supabase,tenantId,toolName,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor)),
+              await withSIEExternalReport(supabase,tenantId,toolName,()=>runWithAgentReason(agentReason,()=>tool.execute(toolArgs,tenantId,userId,supabase,actor))),
               { toolName, toolArgs: toolArgs as Record<string, unknown>, supabase, companyId: tenantId, userId, actor, log },
             )
         const canonicalResult = effectiveCompanyId

@@ -267,6 +267,44 @@ describe('recordDecisions', () => {
     expect(inserts[0].rows).toEqual([expect.objectContaining({ pending_operation_id: 'op-1' })])
   })
 
+  it("copies the approved operation's agent_reason, and names no such column outside one", async () => {
+    const { client, inserts } = fakeClient()
+
+    await runInOperationCommit(
+      'op-1',
+      () => recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', final: booked }], 'user-1'),
+      'Telia every month on 6212; this one has the same OCR series.',
+    )
+    await recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', final: booked }], 'user-1')
+
+    expect(inserts[0].rows).toEqual([
+      expect.objectContaining({ pending_operation_id: 'op-1', agent_reason: 'Telia every month on 6212; this one has the same OCR series.' }),
+    ])
+    expect((inserts[1].rows as Array<Record<string, unknown>>)[0]).not.toHaveProperty('agent_reason')
+  })
+
+  it('records the decision without the reason while the agent_reason column is not there yet', async () => {
+    const inserts: Array<Array<Record<string, unknown>>> = []
+    const client = {
+      from: () => ({
+        insert: async (rows: Array<Record<string, unknown>>) => {
+          inserts.push(rows)
+          return rows.some((row) => 'agent_reason' in row) ? { error: { code: 'PGRST204', message: 'no agent_reason' } } : { error: null }
+        },
+      }),
+    }
+
+    await runInOperationCommit(
+      'op-1',
+      () => recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', final: booked }], 'user-1'),
+      'why',
+    )
+
+    expect(inserts).toHaveLength(2)
+    expect(inserts[1][0]).toMatchObject({ pending_operation_id: 'op-1' })
+    expect(inserts[1][0]).not.toHaveProperty('agent_reason')
+  })
+
   it('keeps the assistant read on its suggestion, the reasoning as a hash', async () => {
     const withRead: SuggestionSnapshot = {
       ...snapshot,

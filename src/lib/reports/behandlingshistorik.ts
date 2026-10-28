@@ -2351,6 +2351,8 @@ export function decisionDetails(r: DecisionReceipt): string[] {
     )
     details.push(`Föreslaget av: ${proposer}`)
   }
+  // The agent's own words, as the approver saw them.
+  if (r.agent_reason) details.push(`Agentens motivering: ${r.agent_reason}`)
   const grant = r.subject_kind === 'operation' ? parseGrantPolicyVersion(r.policy_version) : null
   if (grant) {
     details.push(`Bokfört utan godkännande av en person, enligt regel ${grant.grantId} version ${grant.grantVersion}`)
@@ -2419,6 +2421,8 @@ export function decisionEvents(receipts: DecisionReceipt[]): RawBehandlingshisto
         `${sorted.length} ${DECISION_SUBJECT_LABELS[first.subject_kind].many} i en verifikation`,
         ...[...counts.entries()].map(([label, n]) => `${label}: ${n}`),
         ...(proposer ? [proposer] : []),
+        // One approval, one staged operation: the rows share its reason.
+        ...(first.agent_reason ? [`Agentens motivering: ${first.agent_reason}`] : []),
         // One insert, one snapshot: the rows share their rules version.
         ...(first.rule_version ? [`Regelversion: ${first.rule_version}`] : []),
       ],

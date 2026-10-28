@@ -7399,9 +7399,14 @@ export async function commitPendingOperation(
   pendingOp: PendingOperation,
   opts: CommitOptions = {}
 ): Promise<CommitResult> {
-  // The operation id rides along for suggestion_log.pending_operation_id.
+  // The operation id rides along for suggestion_log.pending_operation_id,
+  // its agent_reason for the receipt's copy.
   const run = () =>
-    runInOperationCommit(pendingOp.id, () => commitPendingOperationInner(supabase, userId, companyId, pendingOp, opts))
+    runInOperationCommit(
+      pendingOp.id,
+      () => commitPendingOperationInner(supabase, userId, companyId, pendingOp, opts),
+      pendingOp.agent_reason ?? null,
+    )
   return opts.actor ? runWithActor(opts.actor, run) : run()
 }
 

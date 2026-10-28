@@ -251,6 +251,13 @@ describe('POST .../pending-operations/:id/approve', () => {
     )
   })
 
+  it("answers the committed operation with the stager's agent_reason", async () => {
+    client(operationRow({ agent_reason: 'Duplicate of the line booked on the 3rd.' }))
+    const res = await POST(request(), params)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ status: 'committed', agent_reason: 'Duplicate of the line booked on the 3rd.' })
+  })
+
   it('approving twice commits once: the second answers 409 with the committed operation', async () => {
     const { state } = client(operationRow())
 

@@ -1413,6 +1413,19 @@ export default function PendingOperationsPage() {
                 <div className="rounded-lg border border-border p-4">
                   <OperationPreview op={detailOp} detail />
                 </div>
+                {/* Why the agent proposes it, in its own words (the `reason`
+                    it staged with): secondary to what it does, so no box.
+                    data-ph-mask: free text, may name people. */}
+                {detailOp.agent_reason && (
+                  <div data-ph-mask="">
+                    <p className="text-[11px] uppercase tracking-wider text-muted-foreground">
+                      {t('agent_reason_label')}
+                    </p>
+                    <p className="mt-0.5 whitespace-pre-wrap break-words text-[12.5px] leading-snug text-muted-foreground">
+                      {detailOp.agent_reason}
+                    </p>
+                  </div>
+                )}
                 {/* The agent's audit-trail note for this operation (the
                     `notes` tool input): the approver should read why, not
                     only what. */}

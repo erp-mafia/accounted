@@ -16,7 +16,9 @@
  *     (./preview-token.ts: a sent token that no longer matches refuses with
  *     PREVIEW_STALE and stages nothing), and the insert.
  */
+import { z } from 'zod'
 import type { PeriodStatusForDate } from '@/lib/core/bookkeeping/period-status'
+import { AGENT_REASON_ARG, splitAgentReason } from '@/lib/pending-operations/agent-reason'
 import { insertStagedOperation, stagedRiskLevel } from '@/lib/pending-operations/stage'
 import {
   checkTransactionClaims,
@@ -57,6 +59,33 @@ export function planStagedOperation(
   }
 }
 
+/** The top-level keys an operation's input declares, read once per operation. */
+const declaredInputKeys = new WeakMap<object, ReadonlySet<string>>()
+
+function inputKeys(op: AnyOperation): ReadonlySet<string> {
+  const known = declaredInputKeys.get(op)
+  if (known) return known
+  const schema = z.toJSONSchema(op.input as unknown as z.ZodTypeAny, { io: 'input', unrepresentable: 'any' }) as {
+    properties?: Record<string, unknown>
+  }
+  const keys = new Set(Object.keys(schema.properties ?? {}))
+  declaredInputKeys.set(op, keys)
+  return keys
+}
+
+/**
+ * The stage-mode body without the stager's `reason`, and the reason
+ * (lib/pending-operations/agent-reason.ts). An operation whose own input has
+ * a `reason` keeps it in the body and gives it as the reason too.
+ */
+export function splitStagedAgentReason(
+  op: AnyOperation,
+  body: Record<string, unknown>,
+): { body: Record<string, unknown>; agentReason: string | null } {
+  const { args, reason } = splitAgentReason({ agentReason: inputKeys(op).has(AGENT_REASON_ARG) ? 'own' : 'added' }, body)
+  return { body: args, agentReason: reason }
+}
+
 export type StageOperationResult =
   | { ok: false; outcome: Extract<OperationOutcome<unknown>, { ok: false }> }
   | {
@@ -94,7 +123,7 @@ export async function stageOperation(
   ctx: OperationContext,
   input: Record<string, unknown>,
   actor: { type: PendingOperationActorType; id?: string | null; label?: string | null },
-  options: { dryRun: boolean; previewToken?: string | null },
+  options: { dryRun: boolean; previewToken?: string | null; agentReason?: string | null },
 ): Promise<StageOperationResult> {
   const stage = op.mcp?.stage
   if (op.kind !== 'write' || !stage) throw new Error(`operation ${op.id} has no staging binding`)
@@ -141,6 +170,7 @@ export async function stageOperation(
       actor,
       ...(plan.extras.periodDate ? { dateForPeriodCheck: plan.extras.periodDate } : {}),
       ...(plan.extras.complianceNote ? { complianceNote: plan.extras.complianceNote } : {}),
+      agentReason: options.agentReason ?? null,
     },
     ctx.log,
   )

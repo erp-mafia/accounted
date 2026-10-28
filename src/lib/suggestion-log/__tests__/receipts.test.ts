@@ -269,6 +269,28 @@ describe('getDecisionReceipts', () => {
     expect(mock.findCalls('suggestion_log', 'eq')).toContainEqual(['document_id', DOC])
   })
 
+  it("reads the agent's reason the receipt recorded", async () => {
+    mock.enqueue({ data: [bankRow({ pending_operation_id: OP, agent_reason: 'Zapier books Telia on 6212 every month.' })] })
+    mock.enqueue({ data: [op] })
+    mock.enqueue({ data: [entry] })
+    const receipts = await getDecisionReceipts(supabase, CO, { journalEntryId: JE })
+    expect(receipts[0].agent_reason).toBe('Zapier books Telia on 6212 every month.')
+    expect(String(mock.findCalls('suggestion_log', 'select')[0]?.[0])).toContain('agent_reason')
+  })
+
+  it('reads the receipts without agent_reason while that column is not there yet', async () => {
+    mock.enqueue({ error: { message: 'column suggestion_log.agent_reason does not exist', code: '42703' } })
+    mock.enqueue({ data: [bankRow({ pending_operation_id: OP })] })
+    mock.enqueue({ data: [op] })
+    mock.enqueue({ data: [entry] })
+    const receipts = await getDecisionReceipts(supabase, CO, { journalEntryId: JE })
+    expect(receipts).toHaveLength(1)
+    expect(receipts[0].agent_reason).toBeNull()
+    const selects = mock.findCalls('suggestion_log', 'select').map((args) => String(args[0]))
+    expect(selects).toHaveLength(2)
+    expect(selects[1]).not.toContain('agent_reason')
+  })
+
   it('returns an empty list and reads nothing else when no decision was recorded', async () => {
     mock.enqueue({ data: [] })
     expect(await getDecisionReceipts(supabase, CO, { journalEntryId: JE })).toEqual([])

@@ -74,7 +74,7 @@ describe('gnubok_attach_document_to_transaction: registration', () => {
     expect(tool.catalogVisibility).toBe('default')
     expect(tool.annotations).toMatchObject({ readOnlyHint: false, idempotentHint: true, destructiveHint: false })
     const schema = tool.inputSchema as { properties: Record<string, unknown>; required?: string[] }
-    expect(Object.keys(schema.properties).sort()).toEqual(['document_id', 'dry_run', 'idempotency_key', 'transaction_id'])
+    expect(Object.keys(schema.properties).sort()).toEqual(['document_id', 'dry_run', 'idempotency_key', 'reason', 'transaction_id'])
     // Accepted, not listed: only a DOC_ROW_MISMATCH refusal asks for it, and says how (crm#1479).
     expect(tool.undeclaredArgs).toContain('mismatch_reason')
     expect([...(schema.required ?? [])].sort()).toEqual(['document_id', 'transaction_id'])

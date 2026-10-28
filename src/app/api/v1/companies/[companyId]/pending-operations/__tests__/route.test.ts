@@ -63,7 +63,7 @@ function row(n: number, overrides: Record<string, unknown> = {}) {
   }
 }
 
-function client(pendingOperations: TableMockResult) {
+function client(pendingOperations: TableMockResult | TableMockResult[]) {
   const mock = createTableMockSupabase({ company_members: OWNER, pending_operations: pendingOperations })
   mockServiceClient.mockReturnValue(mock.supabase)
   return mock
@@ -146,6 +146,33 @@ describe('GET .../pending-operations', () => {
     expect(mock.payloads('pending_operations', 'select')[0]).not.toContain('params')
   })
 
+  it("answers each operation's agent_reason, null when its stager gave none", async () => {
+    const mock = client({ data: [row(2, { agent_reason: 'Acme AB is on three invoices in the inbox.' }), row(1, { agent_reason: null })] })
+    const body = await (await LIST(get(BASE), listParams)).json()
+    expect(body.data.map((op: { agent_reason: string | null }) => op.agent_reason)).toEqual([
+      'Acme AB is on three invoices in the inbox.',
+      null,
+    ])
+    expect(mock.payloads('pending_operations', 'select')[0]).toContain('agent_reason')
+  })
+
+  it('lists without agent_reason while that column is not there yet', async () => {
+    const mock = client([
+      { data: null, error: { code: '42703', message: 'column pending_operations.agent_reason does not exist' } },
+      { data: [row(1)] },
+    ])
+    const res = await LIST(get(BASE), listParams)
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data).toHaveLength(1)
+    expect(body.data[0].agent_reason).toBeNull()
+    const selects = mock.payloads('pending_operations', 'select') as string[]
+    expect(selects).toHaveLength(2)
+    expect(selects[1]).not.toContain('agent_reason')
+    // The retry keeps every filter of the first read.
+    expect(mock.findCalls('pending_operations', 'eq').filter(([column]) => column === 'status')).toHaveLength(2)
+  })
+
   it('status=all drops the status filter, a cursor continues below it, and the last page has no next_cursor', async () => {
     const mock = client({
       data: [row(1, { status: 'committed', result_data: { supplier_id: 's-1' } }), row(2, { status: 'rejected', rejection_category: 'expired' })],
@@ -186,6 +213,17 @@ describe('GET .../pending-operations/:id', () => {
     expect(res.status).toBe(404)
     expect((await res.json()).error.code).toBe('PENDING_OPERATION_NOT_FOUND')
     expect(mock.findCalls('pending_operations', 'eq')).toEqual(expect.arrayContaining([['company_id', COMPANY_ID]]))
+  })
+
+  it('200 with agent_reason, read without it while the column is not there yet', async () => {
+    client({ data: row(1, { agent_reason: 'Same supplier as the last eleven.' }) })
+    expect((await (await DETAIL(get(`${BASE}/${id}`), detailParams)).json()).data.agent_reason).toBe('Same supplier as the last eleven.')
+
+    const mock = client([{ data: null, error: { code: '42703', message: 'no agent_reason' } }, { data: row(1) }])
+    const res = await DETAIL(get(`${BASE}/${id}`), detailParams)
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ pending_operation_id: id, agent_reason: null })
+    expect(mock.payloads('pending_operations', 'select')).toHaveLength(2)
   })
 
   it('200 with the operation and its outcome', async () => {

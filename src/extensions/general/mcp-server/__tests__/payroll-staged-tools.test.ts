@@ -947,8 +947,11 @@ describe('gnubok_create_employee', () => {
     // missing from the writable set would be dropped without a word.
     const { EMPLOYEE_CREATE_COLUMNS } = await import('@/lib/salary/employee-commands')
     const advertised = Object.keys((createEmployee.inputSchema as { properties: object }).properties)
-    // personnummer is encrypted at staging and stored as its own pair.
-    const dropped = advertised.filter((field) => field !== 'personnummer' && !EMPLOYEE_CREATE_COLUMNS.has(field))
+    // personnummer is encrypted at staging and stored as its own pair;
+    // reason is the agent's note to the approver, never a column.
+    const dropped = advertised.filter(
+      (field) => field !== 'personnummer' && field !== 'reason' && !EMPLOYEE_CREATE_COLUMNS.has(field),
+    )
     expect(dropped).toEqual([])
     // A new employee is active: the flag is an update-only key.
     expect(advertised).not.toContain('is_active')
@@ -1226,8 +1229,9 @@ describe('gnubok_update_employee', () => {
     // it as "not part of the update schema" (crm#1133).
     const dropped: string[] = []
     for (const [field, prop] of Object.entries(properties)) {
-      // employee_id is the target of the update, not a column.
-      if (field === 'employee_id') continue
+      // employee_id is the target of the update, not a column; reason is
+      // the agent's note to the approver.
+      if (field === 'employee_id' || field === 'reason') continue
       const zodField = UpdateEmployeeSchema.shape[field as keyof typeof UpdateEmployeeSchema.shape]
       // A request-only key is read by the update itself, not written.
       if (!zodField || !(EMPLOYEE_UPDATE_COLUMNS.has(field) || EMPLOYEE_UPDATE_REQUEST_ONLY_KEYS.has(field))) {

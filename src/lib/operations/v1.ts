@@ -19,7 +19,9 @@
  * (pending_operation_id, status pending, task_state working). Nothing is
  * committed until someone approves it: POST /pending-operations/{id}/approve,
  * the MCP approve tool or the app. withApiV1 refuses stage=true on every
- * endpoint registered without `stageSupported`.
+ * endpoint registered without `stageSupported`. A `reason` in the body is
+ * the stager's note to the approver, stored on the pending operation and
+ * never passed to the operation (lib/pending-operations/agent-reason.ts).
  *
  * Stage required: a write whose staged type only a person may approve in the
  * app (risk-tiers.ts requiresWebApproval, for this input) is never committed
@@ -50,7 +52,7 @@ import { moduleForOperationId } from '@/lib/modules/resolve'
 import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
 import { toPendingOperationView } from '@/lib/pending-operations/view'
 import { operationPreviewToken, previewStaleFailure } from './preview-token'
-import { stageOperation } from './stage'
+import { splitStagedAgentReason, stageOperation } from './stage'
 import type { AnyOperation, OperationContext, OperationOutcome } from './types'
 
 type RouteParams = { params: Promise<Record<string, string>> }
@@ -144,6 +146,15 @@ export function v1OperationHandler(op: AnyOperation) {
         }
       }
 
+      // Stage mode: the body's `reason` is the stager's note to the approver,
+      // not an input of the write (lib/pending-operations/agent-reason.ts).
+      let agentReason: string | null = null
+      if (ctx.stage && isWrite) {
+        const split = splitStagedAgentReason(op, raw)
+        raw = split.body
+        agentReason = split.agentReason
+      }
+
       const parsed = (op.input as unknown as z.ZodTypeAny).safeParse({ ...raw, ...pathInput(op, params) })
       if (!parsed.success) return v1ValidationError(ctx, parsed.error)
 
@@ -154,7 +165,7 @@ export function v1OperationHandler(op: AnyOperation) {
         log: ctx.log,
       }
       const input = parsed.data as Record<string, unknown>
-      if (ctx.stage) return v1StageResponse(op, opCtx, input, ctx)
+      if (ctx.stage) return v1StageResponse(op, opCtx, input, ctx, agentReason)
       // A Preview-Token commit is a commit too: only the dry run passes.
       if (!ctx.dryRun && needsPersonApproval(op, input)) {
         return v1ErrorResponseFromCode('STAGE_REQUIRED', ctx.log, {
@@ -227,6 +238,7 @@ async function v1StageResponse(
   opCtx: OperationContext,
   input: Record<string, unknown>,
   ctx: Pick<ApiV1Context, 'requestId' | 'log' | 'dryRun' | 'previewToken' | 'apiKeyId' | 'apiKeyName' | 'serviceAccount'>,
+  agentReason: string | null = null,
 ): Promise<NextResponse> {
   // withApiV1 already refused stage=true here; kept so the handler never
   // commits a request sent to be staged, whatever the registration says.
@@ -242,7 +254,7 @@ async function v1StageResponse(
     ctx.serviceAccount
       ? { type: 'service_account', id: ctx.apiKeyId ?? null, label: ctx.serviceAccount.name }
       : { type: 'api_key', id: ctx.apiKeyId ?? null, label: ctx.apiKeyName ?? null },
-    { dryRun: ctx.dryRun, previewToken: ctx.previewToken },
+    { dryRun: ctx.dryRun, previewToken: ctx.previewToken, agentReason },
   )
   if (!staged.ok) return v1OutcomeResponse(staged.outcome, ctx)
   if (staged.dryRun) {

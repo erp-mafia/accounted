@@ -174,6 +174,47 @@ describe('POST .../pending-operations/:id/reject', () => {
     )
   })
 
+  it("keeps the stager's agent_reason on the rejected operation: the rejection is the decision it is kept with", async () => {
+    const reason = 'Acme AB is on three supplier invoices in the inbox.'
+    const { state, findCalls } = client(operationRow({ agent_reason: reason }))
+    const res = await POST(request({ category: 'wrong_amount', reason: 'Fel leverantör.' }), params)
+
+    expect(res.status).toBe(200)
+    const { data } = await res.json()
+    // The approver's reason and the agent's stay apart.
+    expect(data).toMatchObject({ status: 'rejected', rejection_reason: 'Fel leverantör.', agent_reason: reason })
+    expect(state.row?.agent_reason).toBe(reason)
+    // The rejection never writes agent_reason.
+    for (const [payload] of findCalls('pending_operations', 'update')) expect(payload).not.toHaveProperty('agent_reason')
+  })
+
+  it('answers the rejected operation without agent_reason while that column is not there yet', async () => {
+    const state = { row: operationRow() as Row }
+    let viewReads = 0
+    const mock = createTableMockSupabase({
+      company_members: OWNER,
+      pending_operations: (calls) => {
+        const update = calls.find((c) => c.method === 'update')
+        if (update) {
+          state.row = { ...state.row, ...(update.args[0] as Row) }
+          return { data: [{ id: OP_ID }] }
+        }
+        if (calls.some((c) => c.method === 'in')) return { data: [{ ...state.row }] }
+        viewReads += 1
+        const select = calls.find((c) => c.method === 'select')?.args[0] as string
+        if (select.includes('agent_reason')) return { data: null, error: { code: '42703', message: 'no agent_reason' } }
+        return { data: { ...state.row } }
+      },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
+
+    const res = await POST(request({ category: 'wrong_amount' }), params)
+
+    expect(res.status).toBe(200)
+    expect((await res.json()).data).toMatchObject({ status: 'rejected', agent_reason: null })
+    expect(viewReads).toBe(2)
+  })
+
   it('an empty body rejects without a category', async () => {
     const { state } = client(operationRow())
     const res = await POST(request(), params)
