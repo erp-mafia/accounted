@@ -68,6 +68,8 @@ export interface TeamMembersPayload<M, I> {
   teamKind: string | null
   isOwner: boolean
   canInvite: boolean
+  /** The team's client companies, for choosing which ones a member reaches. */
+  companies: { id: string; name: string }[]
 }
 
 export function parseTeamMembersPayload<M, I>(body: unknown): TeamMembersPayload<M, I> | null {
@@ -82,6 +84,7 @@ export function parseTeamMembersPayload<M, I>(body: unknown): TeamMembersPayload
     teamKind?: unknown
     isOwner?: unknown
     canInvite?: unknown
+    companies?: unknown
   }
   if (!Array.isArray(d.members)) return null
   return {
@@ -95,5 +98,16 @@ export function parseTeamMembersPayload<M, I>(body: unknown): TeamMembersPayload
     // Only explicit boolean true unlocks management affordances.
     isOwner: d.isOwner === true,
     canInvite: d.canInvite === true,
+    // Management-only extra like invitations: a missing list hides the
+    // access choice instead of failing the roster.
+    companies: Array.isArray(d.companies)
+      ? (d.companies as unknown[]).filter(
+          (c): c is { id: string; name: string } =>
+            typeof c === 'object' &&
+            c !== null &&
+            typeof (c as { id?: unknown }).id === 'string' &&
+            typeof (c as { name?: unknown }).name === 'string',
+        )
+      : [],
   }
 }

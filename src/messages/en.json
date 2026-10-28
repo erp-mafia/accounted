@@ -3531,7 +3531,19 @@
     "invite_link_not_sent": "The email to {email} could not be sent. The invitation is still valid; share the link directly.",
     "invite_link_copy_action": "Copy invitation link",
     "invite_link_copied_toast": "The invitation link was copied.",
-    "invite_link_copy_failed": "The link could not be copied."
+    "invite_link_copy_failed": "The link could not be copied.",
+    "access_all": "All companies",
+    "access_some": "{count} of {total} companies",
+    "access_aria": "{access}: change which companies {email} can reach",
+    "invite_access_aria": "{access}: choose which companies the invitee can reach",
+    "access_dialog_title": "Access to companies",
+    "access_dialog_description": "Choose which of the firm's companies {email} can reach.",
+    "access_dialog_description_invite": "Choose which of the firm's companies the invitee can reach.",
+    "access_all_switch": "All companies, including new ones",
+    "access_direct_hint": "Added directly to the company",
+    "access_none_selected": "Choose at least one company.",
+    "access_saved_toast": "Access was updated.",
+    "access_save_failed": "Access could not be changed."
   },
   "settings_booking_templates": {
     "title": "Bookkeeping templates",

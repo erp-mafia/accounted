@@ -1,5 +1,6 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { hashInviteToken } from '@/lib/auth/invite-tokens'
+import { filterTeamClientCompanyIds } from '@/lib/company/member-company-access'
 
 /**
  * Invite-recovery helpers for the onboarding surfaces.
@@ -121,8 +122,9 @@ export type TeamInviteAcceptOutcome =
  * Mirrors the company-invite acceptance above: requires a pending, unexpired
  * invitation on a team whose `kind='byra'`, whose email matches the
  * authenticated user. Inserts `team_members` with the capped role (invites
- * never mint owners), points a company-less user at the team's first
- * non-archived company, and marks the invite accepted. Never throws.
+ * never mint owners), grants the invitation's chosen companies when it names
+ * some, points a company-less user at the first company they can reach, and
+ * marks the invite accepted. Never throws.
  */
 export async function acceptPendingTeamInviteByToken(
   user: AuthUserLike,
@@ -136,7 +138,7 @@ export async function acceptPendingTeamInviteByToken(
 
     const { data: inviteRaw } = await serviceClient
       .from('team_invitations')
-      .select('id, team_id, email, role, status, expires_at, teams:team_id(name, kind)')
+      .select('id, team_id, email, role, status, expires_at, company_ids, teams:team_id(name, kind)')
       .eq('token_hash', tokenHash)
       .single()
 
@@ -147,6 +149,7 @@ export async function acceptPendingTeamInviteByToken(
       role: string
       status: string
       expires_at: string
+      company_ids: string[] | null
       teams: { name: string; kind: string } | null
     } | null
 
@@ -172,12 +175,23 @@ export async function acceptPendingTeamInviteByToken(
     // Invitations never mint team owners (the invite route's schema forbids it;
     // re-checked here against hand-edited rows).
     const memberRole = invite.role === 'admin' ? 'admin' : 'member'
+    // Chosen companies apply to members only (owners and admins always have
+    // every company); NULL means all, as before.
+    const chosenIds =
+      memberRole === 'member' && invite.company_ids && invite.company_ids.length > 0
+        ? invite.company_ids
+        : null
 
-    const { error: memberError } = await serviceClient.from('team_members').insert({
-      team_id: invite.team_id,
-      user_id: user.id,
-      role: memberRole,
-    })
+    const { data: memberRow, error: memberError } = await serviceClient
+      .from('team_members')
+      .insert({
+        team_id: invite.team_id,
+        user_id: user.id,
+        role: memberRole,
+        all_companies: chosenIds === null,
+      })
+      .select('id')
+      .single()
 
     if (memberError) {
       // 23505 = already a member. Left unsettled to preserve the route's
@@ -188,21 +202,49 @@ export async function acceptPendingTeamInviteByToken(
       return { status: 'error' }
     }
 
-    // Point a company-less user at one of the team's companies so their first
-    // dashboard load resolves. A consultant with their own firma keeps their
-    // active company untouched: joining a byrå must never hijack the context.
+    // The chosen companies still on the team: one archived or moved since the
+    // invitation was sent is dropped rather than failing the acceptance. A
+    // failed grant leaves the member in the byrå without companies, which the
+    // byrå sees and can fix: it never falls back to every company.
+    let grantedIds: string[] | null = null
+    if (chosenIds) {
+      grantedIds = []
+      try {
+        const stillOnTeam = await filterTeamClientCompanyIds(serviceClient, invite.team_id, chosenIds)
+        const memberId = (memberRow as { id: string } | null)?.id
+        if (!memberId) throw new Error('team membership insert returned no id')
+        if (stillOnTeam.length > 0) {
+          const { error: grantError } = await serviceClient.rpc('set_team_member_companies', {
+            p_team_member_id: memberId,
+            p_company_ids: stillOnTeam,
+          })
+          if (grantError) throw grantError
+          grantedIds = stillOnTeam
+        }
+      } catch (err) {
+        console.error('[pending-invites] granting the chosen companies failed', err)
+      }
+    }
+
+    // Point a company-less user at one of the companies they can reach so
+    // their first dashboard load resolves. A consultant with their own firma
+    // keeps their active company untouched: joining a byrå must never hijack
+    // the context.
     const { data: prefs } = await serviceClient
       .from('user_preferences')
       .select('active_company_id')
       .eq('user_id', user.id)
       .maybeSingle()
 
-    if (!(prefs as { active_company_id: string | null } | null)?.active_company_id) {
-      const { data: firstCompany } = await serviceClient
+    const hasActiveCompany = !!(prefs as { active_company_id: string | null } | null)?.active_company_id
+    if (!hasActiveCompany && grantedIds?.length !== 0) {
+      let firstCompanyQuery = serviceClient
         .from('companies')
         .select('id')
         .eq('team_id', invite.team_id)
         .is('archived_at', null)
+      if (grantedIds) firstCompanyQuery = firstCompanyQuery.in('id', grantedIds)
+      const { data: firstCompany } = await firstCompanyQuery
         .order('created_at', { ascending: true })
         .limit(1)
         .maybeSingle()

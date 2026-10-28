@@ -3531,7 +3531,19 @@
     "invite_link_not_sent": "Mejlet till {email} kunde inte skickas. Inbjudan gäller ändå, dela länken direkt.",
     "invite_link_copy_action": "Kopiera inbjudningslänk",
     "invite_link_copied_toast": "Inbjudningslänken kopierades.",
-    "invite_link_copy_failed": "Länken kunde inte kopieras."
+    "invite_link_copy_failed": "Länken kunde inte kopieras.",
+    "access_all": "Alla bolag",
+    "access_some": "{count} av {total} bolag",
+    "access_aria": "{access}: ändra vilka bolag {email} når",
+    "invite_access_aria": "{access}: välj vilka bolag den inbjudna når",
+    "access_dialog_title": "Tillgång till bolag",
+    "access_dialog_description": "Välj vilka av byråns bolag {email} når.",
+    "access_dialog_description_invite": "Välj vilka av byråns bolag den inbjudna når.",
+    "access_all_switch": "Alla bolag, även nya",
+    "access_direct_hint": "Tillagd direkt på bolaget",
+    "access_none_selected": "Välj minst ett bolag.",
+    "access_saved_toast": "Tillgången uppdaterades.",
+    "access_save_failed": "Tillgången kunde inte ändras."
   },
   "settings_booking_templates": {
     "title": "Bokföringsmallar",

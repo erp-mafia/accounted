@@ -1,0 +1,1 @@
+[2026-10-27] A byrå member can be limited to chosen client companies (team_members.all_companies, default true); owners and admins always reach all, and a limited member gets no new clients automatically. company_members stays the only access boundary, so RLS, cockpit, API and MCP follow.

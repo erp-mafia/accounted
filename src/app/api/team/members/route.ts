@@ -1,6 +1,7 @@
 import { createServiceClient } from '@/lib/supabase/server'
 import { NextResponse, type NextRequest } from 'next/server'
 import { requireAuth } from '@/lib/auth/require-auth'
+import { fetchAllRows } from '@/lib/supabase/fetch-all'
 
 /**
  * GET /api/team/members
@@ -104,7 +105,7 @@ export async function GET(request: NextRequest) {
   // Fetch all team members (owner is a real row now)
   const { data: members, error: membersError } = await serviceClient
     .from('team_members')
-    .select('id, team_id, user_id, role, joined_at')
+    .select('id, team_id, user_id, role, joined_at, all_companies')
     .eq('team_id', teamId)
     .order('joined_at', { ascending: true })
 
@@ -133,15 +134,57 @@ export async function GET(request: NextRequest) {
     status: string
     created_at: string
     expires_at: string
+    company_ids: string[] | null
   }[] = []
   if (canInvite) {
     const { data: inviteRows } = await serviceClient
       .from('team_invitations')
-      .select('id, email, role, status, created_at, expires_at')
+      .select('id, email, role, status, created_at, expires_at, company_ids')
       .eq('team_id', teamId)
       .eq('status', 'pending')
       .order('created_at', { ascending: true })
     invitations = (inviteRows ?? []) as typeof invitations
+  }
+
+  // Which client companies each member reaches, for the managers who choose
+  // it: the team's clients, and for every member limited to chosen companies
+  // the ones they have. A membership added directly on a company
+  // (source='direct') is listed apart: the team choice cannot remove it.
+  let companies: { id: string; name: string }[] = []
+  const reach = new Map<string, { team: string[]; direct: string[] }>()
+  if (canInvite) {
+    companies = await fetchAllRows<{ id: string; name: string }>(({ from, to }) =>
+      serviceClient
+        .from('companies')
+        .select('id, name')
+        .eq('team_id', teamId)
+        .is('archived_at', null)
+        .order('name', { ascending: true })
+        .order('id', { ascending: true })
+        .range(from, to),
+    )
+    const limitedUserIds = (members || [])
+      .filter((m) => m.all_companies === false)
+      .map((m) => m.user_id)
+    if (limitedUserIds.length > 0 && companies.length > 0) {
+      const teamCompanyIds = new Set(companies.map((c) => c.id))
+      const rows = await fetchAllRows<{ company_id: string; user_id: string; source: string }>(
+        ({ from, to }) =>
+          serviceClient
+            .from('company_members')
+            .select('company_id, user_id, source')
+            .in('user_id', limitedUserIds)
+            .order('id', { ascending: true })
+            .range(from, to),
+      )
+      for (const row of rows) {
+        if (!teamCompanyIds.has(row.company_id)) continue
+        const entry = reach.get(row.user_id) ?? { team: [], direct: [] }
+        if (row.source === 'direct') entry.direct.push(row.company_id)
+        else entry.team.push(row.company_id)
+        reach.set(row.user_id, entry)
+      }
+    }
   }
 
   return NextResponse.json({
@@ -153,8 +196,13 @@ export async function GET(request: NextRequest) {
         role: m.role,
         joined_at: m.joined_at,
         is_current_user: m.user_id === user.id,
+        all_companies: m.all_companies !== false,
+        company_ids: reach.get(m.user_id)?.team ?? [],
+        direct_company_ids: reach.get(m.user_id)?.direct ?? [],
       })),
       invitations,
+      // The team's client companies, for the access choice (managers only).
+      companies,
       teamName,
       teamId,
       teamKind,

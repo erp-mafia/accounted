@@ -183,8 +183,33 @@ describe('POST /api/team/accept (byrå-team invitations)', () => {
       team_id: 'team-byra',
       user_id: 'user-1',
       role: 'member',
+      all_companies: true,
     })
     expect(findCalls('user_preferences', 'upsert')).toHaveLength(1)
+  })
+
+  it('grants only the companies the invitation chose', async () => {
+    enqueue({ data: null, error: { code: 'PGRST116' } }) // no company invite
+    enqueue({ data: teamInvite({ company_ids: ['company-2', 'company-3'] }) })
+    enqueue({ data: { id: 'tm-1' } }) // team_members insert
+    enqueue({ data: [{ id: 'company-2' }, { id: 'company-3' }] }) // still on the team
+    enqueue({ error: null }) // set_team_member_companies
+    enqueue({ data: null }) // user_preferences read: no active company
+    enqueue({ data: { id: 'company-2' } }) // first chosen company
+    enqueue({ error: null }) // user_preferences upsert
+    enqueue({ error: null }) // invitation -> accepted
+
+    const res = await POST(makeReq({ token: 'abc' }))
+    const { status } = await parseJsonResponse(res)
+    expect(status).toBe(200)
+
+    expect(findCalls('team_members', 'insert')[0]![0]).toMatchObject({ all_companies: false })
+    expect(serviceSupabase.rpc).toHaveBeenCalledWith('set_team_member_companies', {
+      p_team_member_id: 'tm-1',
+      p_company_ids: ['company-2', 'company-3'],
+    })
+    // The active company is picked among the chosen ones only.
+    expect(findCalls('companies', 'in').at(-1)).toEqual(['id', ['company-2', 'company-3']])
   })
 
   it('never hijacks an existing active company', async () => {
