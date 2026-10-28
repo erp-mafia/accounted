@@ -305,6 +305,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_suppliers:                  'suppliers:read',
   gnubok_get_supplier:                    'suppliers:read',
   gnubok_list_supplier_invoices:          'suppliers:read',
+  gnubok_get_supplier_invoice:            'suppliers:read',
   // Reports
   gnubok_get_trial_balance:               'reports:read',
   gnubok_get_vat_report:                  'reports:read',

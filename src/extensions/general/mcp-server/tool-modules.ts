@@ -127,6 +127,7 @@ export const HAND_WRITTEN_TOOL_MODULES: Readonly<Partial<Record<ModuleId, readon
   ],
   'supplier-invoices': [
     'gnubok_list_supplier_invoices',
+    'gnubok_get_supplier_invoice',
     'gnubok_approve_supplier_invoice',
     'gnubok_credit_supplier_invoice',
     'gnubok_register_booked_supplier_invoice',

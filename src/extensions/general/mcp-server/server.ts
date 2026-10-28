@@ -1029,6 +1029,17 @@ const ANNOTATIONS_READ_ONLY = {
   idempotentHint: true,
   openWorldHint: false,
 } as const satisfies McpToolAnnotations
+/** A verifikat a supplier invoice points at, as gnubok_get_supplier_invoice returns it. */
+const SUPPLIER_INVOICE_VOUCHER_REF_SCHEMA = {
+  type: ['object', 'null'],
+  description: 'null when not booked. voucher is null while a draft; labels repeat per fiscal year, entry_date tells them apart',
+  properties: {
+    journal_entry_id: { type: 'string' },
+    voucher: { type: ['string', 'null'] },
+    entry_date: { type: 'string' },
+    status: { type: 'string' },
+  },
+} as const
 // dry_run and idempotency_key: the staging arguments every write tool takes
 // (stagingOptions turns them into staging options).
 const STAGING_ARGS_PROPERTIES = {
@@ -11835,6 +11846,189 @@ export const tools: McpTool[] = [
         count: invoices.length,
         total_count: totalCount,
         has_more: totalCount > invoices.length,
+      }
+    },
+  },
+
+  {
+    name: 'gnubok_get_supplier_invoice',
+    keywords: ['leverantörsfaktura', 'inköpsfaktura', 'ankomstnummer'],
+    title: 'Get Supplier Invoice',
+    description: 'One supplier invoice: header, every line with account and VAT, its payments, and the verifikat that registered and paid it (voucher label and date). Use it to check what an invoice booked or paid; ids come from gnubok_list_supplier_invoices.',
+    inputSchema: {
+      type: 'object',
+      additionalProperties: false,
+      properties: {
+        supplier_invoice_id: { type: 'string', description: 'UUID from gnubok_list_supplier_invoices' },
+      },
+      required: ['supplier_invoice_id'],
+    },
+    outputSchema: {
+      type: 'object',
+      properties: {
+        supplier_invoice_id: { type: 'string' },
+        arrival_number: { type: 'number' },
+        supplier_invoice_number: { type: ['string', 'null'] },
+        supplier_id: { type: 'string' },
+        supplier_name: { type: ['string', 'null'] },
+        status: { type: 'string' },
+        invoice_date: { type: 'string' },
+        due_date: { type: 'string' },
+        currency: { type: 'string' },
+        exchange_rate: { type: ['number', 'null'] },
+        total: { type: 'number' },
+        total_sek: { type: ['number', 'null'] },
+        vat_amount: { type: 'number' },
+        paid_amount: { type: 'number' },
+        remaining_amount: { type: 'number' },
+        approved_at: { type: ['string', 'null'], description: 'Attest time; status alone cannot tell (an attested invoice past due reads overdue)' },
+        auto_debit: { type: 'boolean', description: 'true: the supplier debits it (autogiro), nothing to pay' },
+        is_credit_note: { type: 'boolean' },
+        credited_invoice_id: { type: ['string', 'null'] },
+        document_id: { type: ['string', 'null'], description: 'The invoice document; read it with gnubok_get_document_content' },
+        registration_journal_entry_id: { type: ['string', 'null'] },
+        registration_voucher: SUPPLIER_INVOICE_VOUCHER_REF_SCHEMA,
+        payment_journal_entry_id: { type: ['string', 'null'] },
+        payment_voucher: SUPPLIER_INVOICE_VOUCHER_REF_SCHEMA,
+        items: {
+          type: 'array',
+          description: 'Lines in display order',
+          items: {
+            type: 'object',
+            properties: {
+              supplier_invoice_item_id: { type: 'string' },
+              description: { type: 'string' },
+              quantity: { type: 'number' },
+              unit: { type: ['string', 'null'] },
+              unit_price: { type: 'number' },
+              line_total: { type: 'number' },
+              account_number: { type: 'string' },
+              vat_code: { type: ['string', 'null'] },
+              vat_rate: { type: 'number' },
+              vat_amount: { type: ['number', 'null'] },
+              dimensions: { type: ['object', 'null'], additionalProperties: { type: 'string' } },
+            },
+            required: ['supplier_invoice_item_id', 'description', 'line_total', 'account_number', 'vat_rate'],
+          },
+        },
+        item_count: { type: 'number' },
+        payments: {
+          type: 'array',
+          description: 'Payments in date order, each with the verifikat that booked it',
+          items: {
+            type: 'object',
+            properties: {
+              supplier_invoice_payment_id: { type: 'string' },
+              payment_date: { type: 'string' },
+              amount: { type: 'number' },
+              currency: { type: ['string', 'null'] },
+              exchange_rate: { type: ['number', 'null'] },
+              exchange_rate_difference: { type: ['number', 'null'] },
+              journal_entry_id: { type: ['string', 'null'] },
+              voucher: SUPPLIER_INVOICE_VOUCHER_REF_SCHEMA,
+              transaction_id: { type: ['string', 'null'], description: 'The bank transaction it was matched to' },
+            },
+            required: ['supplier_invoice_payment_id', 'payment_date', 'amount'],
+          },
+        },
+      },
+      required: ['supplier_invoice_id', 'status', 'currency', 'items', 'item_count', 'payments'],
+    },
+    annotations: ANNOTATIONS_READ_ONLY,
+    // The supplier twin of gnubok_get_invoice. Agents of every client guessed
+    // this name and then pieced the invoice together from the list and the
+    // journal, which cannot tell two payments of the same amount apart.
+    // Search-only like its twin: payload-size.bench.test.ts sits at its
+    // ceiling, and tools/call resolves every registered name, so a direct
+    // call by this name still reaches it.
+    catalogVisibility: 'search',
+    async execute(args, companyId, _userId, supabase) {
+      const supplierInvoiceId = args.supplier_invoice_id
+      if (typeof supplierInvoiceId !== 'string' || !UUID_RE.test(supplierInvoiceId)) {
+        throw badArgument(
+          'supplier_invoice_id',
+          'supplier_invoice_id must be a supplier invoice UUID. Use gnubok_list_supplier_invoices to find it.',
+        )
+      }
+
+      // The v1 detail read's columns plus auto_debit, which says whether there
+      // is anything to pay at all. One literal string, so the schema guard
+      // (no-phantom-columns) checks every column. The stated payee bank
+      // details (payee_*) stay out, as on the v1 read.
+      const { data, error } = await supabase
+        .from('supplier_invoices')
+        .select(
+          'id, supplier_id, arrival_number, supplier_invoice_number, invoice_date, due_date, received_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, reverse_charge, reverse_charge_kind, payment_reference, paid_at, paid_amount, remaining_amount, is_credit_note, credited_invoice_id, is_self_billed, self_billing_number, self_billing_agreement_ref, registration_journal_entry_id, payment_journal_entry_id, transaction_id, document_id, notes, default_dimensions, reversed_at, approved_at, bank_entered_at, auto_debit, created_at, updated_at, supplier:suppliers(name), items:supplier_invoice_items(id, sort_order, description, quantity, unit, unit_price, line_total, account_number, vat_code, vat_rate, vat_amount, reverse_charge_rate, apply_slp, dimensions), payments:supplier_invoice_payments(id, payment_date, amount, currency, exchange_rate, exchange_rate_difference, journal_entry_id, transaction_id, notes, created_at)',
+        )
+        .eq('id', supplierInvoiceId)
+        .eq('company_id', companyId)
+        .maybeSingle()
+
+      if (error) throw dbError(error)
+      if (!data) {
+        throw codedRefusal('NOT_FOUND', 'Supplier invoice not found. Use gnubok_list_supplier_invoices to find valid IDs.')
+      }
+
+      type ItemRow = { id: string; sort_order: number | null } & Record<string, unknown>
+      type PaymentRow = { id: string; payment_date: string; created_at: string; journal_entry_id: string | null } & Record<string, unknown>
+      const { id, supplier, items, payments, ...header } = data as unknown as {
+        id: string
+        supplier: { name: string | null } | null
+        items: ItemRow[] | null
+        payments: PaymentRow[] | null
+        registration_journal_entry_id: string | null
+        payment_journal_entry_id: string | null
+      } & Record<string, unknown>
+
+      // PostgREST returns embedded rows unordered: sort here.
+      const itemRows = (items ?? []).slice().sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0))
+      const paymentRows = (payments ?? []).slice().sort((a, b) =>
+        a.payment_date === b.payment_date ? a.created_at.localeCompare(b.created_at) : a.payment_date.localeCompare(b.payment_date),
+      )
+
+      // Voucher labels repeat across fiscal years (D-20 in 2025 and in 2026),
+      // so each reference carries the entry date beside the label.
+      const journalEntryIds = [
+        ...new Set(
+          [header.registration_journal_entry_id, header.payment_journal_entry_id, ...paymentRows.map((p) => p.journal_entry_id)]
+            .filter((value): value is string => typeof value === 'string'),
+        ),
+      ]
+      const vouchers = new Map<string, { voucher: string | null; entry_date: string; status: string }>()
+      if (journalEntryIds.length > 0) {
+        const { data: entries, error: entriesError } = await supabase
+          .from('journal_entries')
+          .select('id, voucher_series, voucher_number, entry_date, status')
+          .eq('company_id', companyId)
+          .in('id', journalEntryIds)
+        if (entriesError) throw dbError(entriesError)
+        for (const entry of (entries ?? []) as Array<{ id: string; voucher_series: string | null; voucher_number: number | null; entry_date: string; status: string }>) {
+          vouchers.set(entry.id, {
+            voucher: entry.voucher_number ? formatVoucher(entry) : null,
+            entry_date: entry.entry_date,
+            status: entry.status,
+          })
+        }
+      }
+      const voucherRef = (journalEntryId: string | null) => {
+        if (!journalEntryId) return null
+        const entry = vouchers.get(journalEntryId)
+        return entry ? { journal_entry_id: journalEntryId, ...entry } : null
+      }
+
+      return {
+        supplier_invoice_id: id,
+        supplier_name: supplier?.name ?? null,
+        ...header,
+        registration_voucher: voucherRef(header.registration_journal_entry_id),
+        payment_voucher: voucherRef(header.payment_journal_entry_id),
+        items: itemRows.map(({ id: itemId, sort_order: _sortOrder, ...item }) => ({ supplier_invoice_item_id: itemId, ...item })),
+        item_count: itemRows.length,
+        payments: paymentRows.map(({ id: paymentId, created_at: _createdAt, ...payment }) => ({
+          supplier_invoice_payment_id: paymentId,
+          ...payment,
+          voucher: voucherRef(payment.journal_entry_id),
+        })),
       }
     },
   },
