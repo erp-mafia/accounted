@@ -432,7 +432,7 @@ import {
   vatFilingVerdictWithReviews,
 } from '@/lib/reports/vat-close-check'
 import { describeAliasConflicts, describeArgHint, normalizeReportArgAliases } from './report-arg-aliases'
-import { decodeToolArgs } from './unicode-escape-guard'
+import { decodeLiteralUnicodeEscapes, decodeToolArgs } from './unicode-escape-guard'
 import { findSupplierCandidates, type SupplierRow } from './supplier-candidates'
 import { creditNoteHandoff } from './inbox-credit-note'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
@@ -6778,6 +6778,14 @@ export const tools: McpTool[] = [
     async execute(args, companyId, userId, supabase, actor) {
       const slug = (args.slug as string | undefined)?.trim()
       if (!slug) throw badArgument('slug', 'slug is required')
+      // Checked again on the slug as it is loaded, after the dispatcher's
+      // rewrites, so no spelling of own/ reaches a private skill from a key
+      // without agent:read. The in-app chat passes no __keyScopes: it runs as
+      // the signed-in member, not as a key.
+      const keyScopes = args.__keyScopes
+      if (slug.startsWith('own/') && Array.isArray(keyScopes) && !hasScope(keyScopes as ApiKeyScope[], 'agent:read')) {
+        throw codedRefusal('INSUFFICIENT_SCOPE', 'Insufficient scope: this API key does not have the "agent:read" scope')
+      }
       const skill = await findSkill(slug, supabase, companyId)
       if (!skill) {
         if (actor) emitSkillNotFound({ slug, actor, userId, companyId })
@@ -28412,6 +28420,15 @@ function emitWorkflowStarted(payload: {
 }
 
 /**
+ * Does a load_skill call name a private own/ skill? Read with literal \u
+ * escapes decoded, as the dispatcher decodes them before the tool runs: on the
+ * slug as sent, an escaped "own/" passed the agent:read check and then loaded.
+ */
+function namesOwnSkill(toolName: string, args: Record<string, unknown>): boolean {
+  return toolName === 'gnubok_load_skill' && typeof args.slug === 'string' && decodeLiteralUnicodeEscapes(args.slug).trim().startsWith('own/')
+}
+
+/**
  * Handle an MCP JSON-RPC request.
  * Auth is done via Bearer API key (extension route has skipAuth: true).
  */
@@ -29051,7 +29068,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // that, because all three public tools are in the default catalog and
       // an anonymous caller never needs the bridge to name them.
       if (isAnonymous && !isPublicTool(toolName)) return unauthorized()
-      if (isAnonymous && toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')) return unauthorized()
+      if (isAnonymous && namesOwnSkill(toolName, rawToolArgs)) return unauthorized()
 
       // Which targets each bridge may name lives in bridgeRefusalReason:
       // gnubok_call_tool carries reads, gnubok_stage_tool carries unlisted
@@ -29152,9 +29169,7 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
       // Enforce scope: surface structured error so the agent can dispatch.
       // A tool in neither TOOL_SCOPE_MAP nor UNSCOPED_TOOLS is refused: a new
       // tool nobody gave a scope fails closed instead of opening to every key.
-      const requiredScope = toolName === 'gnubok_load_skill' && typeof rawToolArgs.slug === 'string' && rawToolArgs.slug.trim().startsWith('own/')
-        ? 'agent:read'
-        : TOOL_SCOPE_MAP[toolName]
+      const requiredScope = namesOwnSkill(toolName, rawToolArgs) ? 'agent:read' : TOOL_SCOPE_MAP[toolName]
       const missingScope = [requiredScope, argumentScopeFor(toolName, rawToolArgs)].find(
         (scope): scope is ApiKeyScope => scope !== undefined && scope !== null && !hasScope(keyScopes, scope)
       )
@@ -29670,6 +29685,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           toolName === 'gnubok_search_tools' ||
           toolName === 'gnubok_get_agent_briefing' ||
           toolName === 'gnubok_list_skills' ||
+          // Re-checks agent:read for an own/ slug as it is loaded.
+          toolName === 'gnubok_load_skill' ||
           // Its already-explained refusal names the link tool this key can call.
           toolName === 'gnubok_match_batch_allocate' ||
           // Says whether this key can approve, so the widget can hide its buttons.

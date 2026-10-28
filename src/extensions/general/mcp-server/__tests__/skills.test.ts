@@ -528,6 +528,15 @@ describe('gnubok_load_skill tool', () => {
     ).rejects.toThrow(/slug is required/)
   })
 
+  it('refuses an own/ slug to a key without agent:read, however the dispatcher read it', async () => {
+    const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
+    const supabase = makeSupabaseWithEmptyAtomRegistry()
+    await expect(
+      tool.execute({ slug: ' own/aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', __keyScopes: ['reports:read'] }, 'company-1', 'user-1', supabase as never, { type: 'api_key' })
+    ).rejects.toMatchObject({ code: 'INSUFFICIENT_SCOPE', message: expect.stringContaining('agent:read') })
+    expect(supabase.from).not.toHaveBeenCalled()
+  })
+
   it('resolves an atom slug from the registry and returns its DB body', async () => {
     const tool = tools.find((t) => t.name === 'gnubok_load_skill')!
     const supabase = makeSupabaseWithEmptyAtomRegistry([
