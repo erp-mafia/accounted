@@ -42,6 +42,11 @@ const INTERNAL_PERSISTED_EVENT_TYPES: CoreEventType[] = [
   // actually load. Joined against mcp.tool_called error rates to measure
   // whether a loaded atom helps or hurts.
   'mcp.skill_loaded',
+  // gnubok_load_skill calls whose slug matched nothing, and every
+  // gnubok_search_tools query with its top hits: what agents asked for, found
+  // or not.
+  'mcp.skill_not_found',
+  'mcp.tool_searched',
   // Agent self-reported feedback: surfaces "this tool was missing", "this
   // description was wrong", etc. Reviewed weekly (matches the gnubok_feedback
   // reply copy).

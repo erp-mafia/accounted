@@ -24,6 +24,12 @@ import {
   type McpTaskRow,
 } from './tasks'
 import {
+  clientInfoNameFromMeta,
+  clientTelemetryFields,
+  resolveClientLabel,
+  type ClientSource,
+} from './client-label'
+import {
   extractBearerToken,
   validateApiKey,
   createServiceClientNoCookies,
@@ -930,11 +936,16 @@ export interface ActorContext {
   unattendedCommitLimit?: number | null
   /**
    * Distribution-channel marker from `X-Accounted-Client`, the legacy
-   * `X-Gnubok-Client`, or the `client` query param (e.g. 'openclaw').
-   * Telemetry-only: same trust level as Mcp-Session-Id, never used for auth or
-   * behavior.
+   * `X-Gnubok-Client`, or the `client` query param (e.g. 'openclaw'); without
+   * one, a label derived from the OAuth provider, the MCP clientInfo name or
+   * the User-Agent (client-label.ts). Telemetry-only: same trust level as
+   * Mcp-Session-Id, never used for auth or behavior.
    */
   client?: string | null
+  /** Sanitized raw client name when the derived label is 'other'. Telemetry-only. */
+  clientName?: string | null
+  /** Which fallback produced `client`; null when it came from the marker. Telemetry-only. */
+  clientSource?: ClientSource | null
   /**
    * Per-key company allowlist (validateApiKey().allowedCompanyIds): null
    * when the key reaches every membership. An authorization input, not
@@ -4984,7 +4995,7 @@ export const tools: McpTool[] = [
       required: ['tools', 'count', 'total_matched', 'detail'],
     },
     annotations: ANNOTATIONS_READ_ONLY,
-    async execute(args, _companyId, _userId, _supabase, _actor) {
+    async execute(args, companyId, userId, _supabase, actor) {
       const namespace: McpToolNamespace =
         args.__toolNamespace === 'accounted' ? 'accounted' : 'gnubok'
       const query = canonicalizeToolReferencesInText(
@@ -5129,6 +5140,19 @@ export const tools: McpTool[] = [
       const vias = detail === 'name' ? [] : sliced.map((t) => callableViaFor(t, viewer))
       const anyListedHit = vias.includes('tools_list')
       const anyBridgedHit = vias.includes('call_tool') || vias.includes('stage_tool')
+      // The query as sent (not the lowercased, canonicalized match string) and
+      // the canonical ids of what ranked first, whichever alias was searched.
+      if (actor) {
+        emitToolSearchedTelemetry({
+          query: typeof args.query === 'string' ? args.query : '',
+          detail: detail === 'name' || detail === 'full' ? detail : 'summary',
+          rankedTools: candidates.slice(0, SEARCH_TELEMETRY_TOP_HITS).map((t) => t.name),
+          hitCount: totalMatched,
+          actor,
+          userId,
+          companyId,
+        })
+      }
       return {
         tools: projected,
         count: projected.length,
@@ -6722,6 +6746,7 @@ export const tools: McpTool[] = [
       if (!slug) throw badArgument('slug', 'slug is required')
       const skill = await findSkill(slug, supabase, companyId)
       if (!skill) {
+        if (actor) emitSkillNotFound({ slug, actor, userId, companyId })
         const all = await loadAllSkills(supabase)
         const available = all.map((s) => s.slug).join(', ')
         throw new Error(`Skill not found: "${slug}". Available skills: ${available}`)
@@ -27839,7 +27864,7 @@ function emitToolCallTelemetry(payload: {
         userId: payload.userId,
         companyId,
         sessionId: payload.actor.sessionId ?? null,
-        client: payload.actor.client ?? null,
+        ...clientTelemetryFields(payload.actor),
       },
     })
     .catch((err) => {
@@ -27873,7 +27898,7 @@ function emitToolsListTelemetry(payload: {
         userId: payload.userId,
         companyId,
         sessionId: payload.actor.sessionId ?? null,
-        client: payload.actor.client ?? null,
+        ...clientTelemetryFields(payload.actor),
       },
     })
     .catch((err) => {
@@ -27911,7 +27936,7 @@ function emitResourceReadTelemetry(payload: {
         userId: payload.userId,
         companyId,
         sessionId: payload.actor.sessionId ?? null,
-        client: payload.actor.client ?? null,
+        ...clientTelemetryFields(payload.actor),
       },
     })
     .catch((err) => {
@@ -28007,15 +28032,92 @@ async function emitSkillLoaded(payload: {
         tier: payload.tier,
         bodyHash: payload.bodyHash,
         version: payload.version,
+        found: true,
         sessionId: payload.actor.sessionId ?? null,
         actorType: payload.actor.type,
         actorId: payload.actor.id ?? null,
         actorLabel: payload.actor.label ?? null,
         userId: payload.userId,
         companyId,
+        ...clientTelemetryFields(payload.actor),
       },
     })
     .catch((err) => console.error('[mcp] skill_loaded emit failed:', err))
+}
+
+/** Longest requested skill slug or search query kept on a telemetry row. */
+const TELEMETRY_TEXT_MAX = 200
+
+/**
+ * Fire-and-forget telemetry for a gnubok_load_skill call whose slug matched
+ * no skill. Its own event type, not mcp.skill_loaded with found=false: the
+ * skill_loaded rows are read back as evidence that a body was retrieved
+ * (skill provenance on staged operations, the Skills page usage counts, the
+ * community load counts), and a miss retrieved nothing.
+ */
+function emitSkillNotFound(payload: {
+  slug: string
+  actor: ActorContext
+  userId: string
+  companyId: string | null
+}): void {
+  if (!payload.companyId) return
+  const companyId = payload.companyId
+  emitAfterResponse(() => eventBus
+    .emit({
+      type: 'mcp.skill_not_found',
+      payload: {
+        slug: payload.slug.slice(0, TELEMETRY_TEXT_MAX),
+        found: false,
+        sessionId: payload.actor.sessionId ?? null,
+        actorType: payload.actor.type,
+        actorId: payload.actor.id ?? null,
+        actorLabel: payload.actor.label ?? null,
+        userId: payload.userId,
+        companyId,
+        ...clientTelemetryFields(payload.actor),
+      },
+    })
+    .catch((err) => console.error('[mcp] skill_not_found emit failed:', err)))
+}
+
+/** How many ranked hits a mcp.tool_searched row keeps. */
+const SEARCH_TELEMETRY_TOP_HITS = 5
+
+/**
+ * Fire-and-forget telemetry for one gnubok_search_tools call: what was asked
+ * and what ranked first. The only tool whose argument text is recorded; every
+ * other tool's telemetry carries metadata only (mcp.tool_called).
+ */
+function emitToolSearchedTelemetry(payload: {
+  query: string
+  detail: 'name' | 'summary' | 'full'
+  rankedTools: readonly string[]
+  hitCount: number
+  actor: ActorContext
+  userId: string
+  companyId: string | null
+}): void {
+  if (!payload.companyId) return
+  const companyId = payload.companyId
+  emitAfterResponse(() => eventBus
+    .emit({
+      type: 'mcp.tool_searched',
+      payload: {
+        query: payload.query.trim().slice(0, TELEMETRY_TEXT_MAX),
+        detail: payload.detail,
+        topHits: payload.rankedTools.slice(0, SEARCH_TELEMETRY_TOP_HITS),
+        hitCount: payload.hitCount,
+        sessionId: payload.actor.sessionId ?? null,
+        actorType: payload.actor.type,
+        actorId: payload.actor.id ?? null,
+        actorLabel: payload.actor.label ?? null,
+        userId: payload.userId,
+        companyId,
+        ...clientTelemetryFields(payload.actor),
+      },
+    })
+    .catch((err) => console.error('[mcp] tool_searched emit failed:', err)))
 }
 
 /**
@@ -28223,8 +28325,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   const oauthKey = Boolean(apiKeyId) && !serviceAccountId && apiKeyName === OAUTH_MCP_KEY_NAME
   // Keep the OAuth key's classification name stable: onboarding depends on it.
   // Display identity comes from the server-stored provider, never a client header.
+  // The same provider labels telemetry for a connector URL without ?client=.
+  let oauthProvider: string | null = null
   if (oauthKey && apiKeyId && apiKeyName) {
     const { data: key } = await supabase.from('api_keys').select('client').eq('id', apiKeyId).maybeSingle()
+    oauthProvider = typeof key?.client === 'string' ? key.client : null
     apiKeyName = oauthActorLabel(key?.client, apiKeyName)
     if (typeof key?.client === 'string' && /^registered:[0-9a-f-]{36}$/i.test(key.client)) {
       const { data: registration } = await supabase.from('oauth_client_registrations')
@@ -28289,14 +28394,21 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
   const sessionId = rawSessionId && /^[A-Za-z0-9_-]{1,128}$/.test(rawSessionId) ? rawSessionId : null
   // Distribution-channel marker: the Accounted bridge sends
   // `X-Accounted-Client`; the legacy bridge keeps `X-Gnubok-Client`. Both are
-  // telemetry-only and share the same validation and storage path.
+  // telemetry-only and share the same validation and storage path. Without a
+  // marker the label falls back to the OAuth provider, the stateless
+  // clientInfo name, then the User-Agent (client-label.ts).
   const rawClient =
     request.headers.get('x-accounted-client') ??
     request.headers.get('x-gnubok-client') ??
     new URL(request.url).searchParams.get('client')
-  const client = rawClient && /^[A-Za-z0-9._-]{1,64}$/.test(rawClient) ? rawClient.toLowerCase() : null
+  const { client, clientName, clientSource } = resolveClientLabel({
+    marker: rawClient,
+    oauthProvider,
+    clientInfoName: clientInfoNameFromMeta(body.params?._meta),
+    userAgent: request.headers.get('user-agent'),
+  })
   const actor: ActorContext = isAnonymous
-    ? { type: 'anonymous', label: 'Not connected', sessionId, client }
+    ? { type: 'anonymous', label: 'Not connected', sessionId, client, clientName, clientSource }
     : {
         type: 'api_key',
         id: apiKeyId,
@@ -28304,6 +28416,8 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
         unattendedCommitLimit,
         sessionId,
         client,
+        clientName,
+        clientSource,
         allowedCompanyIds,
         readOnlyCompanyIds,
         pinnedCompanyId,

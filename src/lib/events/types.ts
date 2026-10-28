@@ -25,6 +25,14 @@ import type {
  */
 export type DocumentExtractionOwner = 'invoice-inbox' | 'none'
 
+/**
+ * Where an MCP event's `client` label came from when the request carried no
+ * client marker: the provider stored on an OAuth key, the clientInfo name of
+ * a stateless request, the User-Agent, or nothing at all (label 'other').
+ * Absent on rows labelled by the marker.
+ */
+export type McpClientSource = 'oauth' | 'client_info' | 'user_agent' | 'none'
+
 export type CoreEvent =
   // Bookkeeping
   | { type: 'journal_entry.drafted'; payload: { entry: JournalEntry; userId: string; companyId: string } }
@@ -271,6 +279,9 @@ export type CoreEvent =
       sessionId: string | null                      // from Mcp-Session-Id header; null if absent
       client: string | null                         // distribution marker (X-Accounted-Client, legacy X-Gnubok-Client, or ?client=).
                                                     // Client-supplied (allow-list-sanitized): telemetry only, never identity or authz.
+                                                    // Without a marker: derived from the OAuth provider, clientInfo or User-Agent.
+      clientName?: string                           // sanitized raw client name when the derived label is 'other' (<= 64 chars)
+      clientSource?: McpClientSource                // which fallback derived `client`; absent when the marker set it
     }}
   // tools/list: informs us whether agents are using progressive discovery
   // (gnubok_search_tools) or pulling the full list. Tool counts vary with
@@ -285,7 +296,9 @@ export type CoreEvent =
       userId: string
       companyId: string
       sessionId: string | null                      // from Mcp-Session-Id header; null if absent
-      client: string | null                         // distribution-channel marker; null if absent
+      client: string | null                         // distribution-channel marker, else the derived label
+      clientName?: string
+      clientSource?: McpClientSource
     }}
   // resources/read: informs us which skills/widgets/data resources actually
   // get loaded by agents. `kind` discriminates by URI scheme so we can
@@ -303,7 +316,9 @@ export type CoreEvent =
       userId: string
       companyId: string
       sessionId: string | null                      // from Mcp-Session-Id header; null if absent
-      client: string | null                         // distribution-channel marker; null if absent
+      client: string | null                         // distribution-channel marker, else the derived label
+      clientName?: string
+      clientSource?: McpClientSource
     }}
   // Workflow lifecycle: agents declare "I'm starting month-end-close" via
   // gnubok_load_skill (or implicitly by following a skill's recommended tool
@@ -328,12 +343,50 @@ export type CoreEvent =
       tier: 'workflow' | 'horizontal' | 'vertical' | 'modifier' | 'community' | 'own'
       bodyHash?: string
       version?: number
+      found?: true                                  // always true here; misses are mcp.skill_not_found. Optional: older rows lack it
       sessionId: string | null
       actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
       actorId: string | null
       actorLabel: string | null
       userId: string
       companyId: string
+      client?: string | null                        // as on mcp.tool_called; optional: older rows lack it
+      clientName?: string
+      clientSource?: McpClientSource
+    }}
+  // A gnubok_load_skill call whose slug matched no skill. Kept apart from
+  // mcp.skill_loaded, whose rows are read back as retrieval evidence (skill
+  // provenance, usage counts): a miss retrieved nothing.
+  | { type: 'mcp.skill_not_found'; payload: {
+      slug: string                                  // the requested slug, trimmed, <= 200 chars
+      found: false
+      sessionId: string | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
+      actorId: string | null
+      actorLabel: string | null
+      userId: string
+      companyId: string
+      client: string | null
+      clientName?: string
+      clientSource?: McpClientSource
+    }}
+  // One gnubok_search_tools call (either alias, direct or bridged): the query
+  // and what ranked first, so a capability agents look for and do not find
+  // shows up. The only tool whose argument text is recorded.
+  | { type: 'mcp.tool_searched'; payload: {
+      query: string                                 // as sent, trimmed, <= 200 chars; '' lists every tool
+      detail: 'name' | 'summary' | 'full'
+      topHits: string[]                             // canonical tool ids in rank order, <= 5
+      hitCount: number                              // every tool that matched (total_matched), not just the returned page
+      sessionId: string | null
+      actorType: 'user' | 'api_key' | 'mcp_oauth' | 'cron' | 'anonymous'
+      actorId: string | null
+      actorLabel: string | null
+      userId: string
+      companyId: string
+      client: string | null
+      clientName?: string
+      clientSource?: McpClientSource
     }}
   // Fires when the agent's next tool call matches the previous response's
   // nextHint.tool: measures whether `next` hints are actually followed.

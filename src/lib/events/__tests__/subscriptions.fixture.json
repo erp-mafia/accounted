@@ -102,7 +102,13 @@
   "mcp.skill_loaded": [
     "event-log"
   ],
+  "mcp.skill_not_found": [
+    "event-log"
+  ],
   "mcp.tool_called": [
+    "event-log"
+  ],
+  "mcp.tool_searched": [
     "event-log"
   ],
   "mcp.tools_list_called": [
