@@ -11,6 +11,9 @@ import { CAPABILITY } from '@/lib/entitlements/keys'
 import type { EntityType, Transaction } from '@/types'
 import { readIsFresh, firstSentence, type AssistantRead } from './read-shape'
 import { underlagKeyFor } from '@/lib/transactions/underlag-key'
+import { createLogger } from '@/lib/logger'
+
+const log = createLogger('agent/categorize/read')
 
 /**
  * The assistant's read of one transaction, done before anyone opens it.
@@ -200,7 +203,10 @@ const TX_COLUMNS =
 export async function planAssistantReads(supabase: SupabaseClient, opts: PlanOptions): Promise<PlannedRead[]> {
   const now = opts.now ?? new Date()
   const since = new Date(now.getTime() - opts.windowDays * 86_400_000).toISOString().slice(0, 10)
-  const { data: rows } = await supabase
+  // A failed read is a failed run, never an empty plan: this one query spans
+  // every company, so its timeout would otherwise answer "nothing to read"
+  // every ten minutes.
+  const { data: rows, error: rowsError } = await supabase
     .from('transactions')
     .select(TX_COLUMNS)
     .is('is_business', null)
@@ -209,13 +215,15 @@ export async function planAssistantReads(supabase: SupabaseClient, opts: PlanOpt
     .gte('date', since)
     .order('date', { ascending: false })
     .limit(Math.max(opts.perRun * 8, 50))
+  if (rowsError) throw new Error(`assistant read candidates failed: ${rowsError.message}`)
   const txs = ((rows ?? []) as unknown as Transaction[]).filter((t) => t.amount !== 0)
   if (txs.length === 0) return []
 
-  const { data: readRows } = await supabase
+  const { data: readRows, error: readsError } = await supabase
     .from('transaction_assistant_reads')
     .select('transaction_id, underlag_key')
     .in('transaction_id', txs.map((t) => t.id))
+  if (readsError) throw new Error(`assistant read freshness failed: ${readsError.message}`)
   const fresh = new Set<string>()
   for (const r of (readRows ?? []) as Array<{ transaction_id: string; underlag_key: string | null }>) {
     const tx = txs.find((t) => t.id === r.transaction_id)
@@ -236,10 +244,20 @@ export async function planAssistantReads(supabase: SupabaseClient, opts: PlanOpt
     if (planned.length >= opts.perRun) break
     if (await isSandboxCompany(supabase, companyId)) continue
     if (!(await hasCapability(supabase, companyId, CAPABILITY.ai))) continue
-    const [{ data: company }, { data: settings }] = await Promise.all([
+    const [{ data: company, error: companyError }, { data: settings, error: settingsError }] = await Promise.all([
       supabase.from('companies').select('entity_type').eq('id', companyId).maybeSingle(),
       supabase.from('company_settings').select('vat_registered').eq('company_id', companyId).maybeSingle(),
     ])
+    // Never guess the legal form or the VAT status: a read made as an
+    // unregistered enskild firma is stored as fresh, and a sure one with a
+    // receipt behind it books with one click. The company waits for the next run.
+    if (companyError || settingsError) {
+      log.error('assistant reads skipped a company: its legal form or VAT status could not be read', {
+        companyId,
+        message: (companyError ?? settingsError)?.message,
+      })
+      continue
+    }
     const entityType = ((company?.entity_type as EntityType | undefined) ?? 'enskild_firma')
     const vatRegistered = settings?.vat_registered ?? false
     for (const tx of list) {

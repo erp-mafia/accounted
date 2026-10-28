@@ -451,6 +451,15 @@ describe('executeRecurringSchedule auto-send', () => {
     mockUploadDocument.mockResolvedValue({})
   })
 
+  it('refuses to spawn when the VAT registration cannot be read, instead of taking the company for registered', async () => {
+    enqueue({ data: customer, error: null }) // customers select
+    enqueue({ data: null, error: { message: 'canceling statement due to statement timeout' } }) // company_settings VAT gate
+
+    await expect(executeRecurringSchedule(client, makeSchedule(), today)).rejects.toThrow('VAT registration read failed')
+    expect(findCalls('invoices', 'insert')).toHaveLength(0)
+    expect(mockSendEmail).not.toHaveBeenCalled()
+  })
+
   it('stores öre-exact line and header amounts for a three-decimal unit price', async () => {
     // The same rule as buildInvoiceWriteData: the line net is whole öre and
     // the header sums are rounded (agent feedback seq 965009).

@@ -297,11 +297,14 @@ export async function executeRecurringSchedule(
   // VAT on the cron-generated invoice even though momskrysset is off. Zero
   // every line at spawn time; 0% is a permitted rate for every customer type,
   // so the allowedRates gate below still passes.
-  const { data: vatSettings } = await supabase
+  const { data: vatSettings, error: vatSettingsError } = await supabase
     .from('company_settings')
     .select('vat_registered')
     .eq('company_id', schedule.company_id)
     .maybeSingle()
+  // A failed read must not read as "registered": the invoice would carry VAT
+  // the company may not charge, and with auto_send it is issued and mailed.
+  if (vatSettingsError) throw new Error(`VAT registration read failed: ${vatSettingsError.message}`)
   const notVatRegistered = vatSettings?.vat_registered === false
   if (notVatRegistered) {
     for (const item of items) item.vat_rate = 0
