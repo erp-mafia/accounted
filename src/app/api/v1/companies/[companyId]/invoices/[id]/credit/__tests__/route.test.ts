@@ -181,8 +181,26 @@ function draftOf(original: Original, status = 'draft') {
   }
 }
 
+/**
+ * A SEK invoice of 4,38 with öre to round (crm#1480): the öresavrundning
+ * choice decides whether it asks for 4,38 or 4,00.
+ */
+function oreOriginal(oreRounding: boolean) {
+  return {
+    ...ORIGINAL_SENT_INVOICE,
+    subtotal: 3.5,
+    subtotal_sek: 3.5,
+    vat_amount: 0.88,
+    vat_amount_sek: 0.88,
+    total: 4.38,
+    total_sek: 4.38,
+    ore_rounding: oreRounding as boolean | null,
+    items: [{ ...ITEM, unit_price: 3.5, line_total: 3.5, vat_amount: 0.88 } as unknown as InvoiceItem],
+  }
+}
+
 /** The table mock for a credit that goes through, in query order. */
-function creditSupabase(original: Original, accountingMethod = 'accrual') {
+function creditSupabase(original: Original, accountingMethod = 'accrual', companyOreRounding?: boolean) {
   const draft = draftOf(original)
   return createTableMockSupabase({
     company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
@@ -201,7 +219,12 @@ function creditSupabase(original: Original, accountingMethod = 'accrual') {
     invoice_items: { data: null },
     journal_entries: { data: null },
     company_settings: {
-      data: { company_name: 'Test AB', accounting_method: accountingMethod, entity_type: 'enskild_firma' },
+      data: {
+        company_name: 'Test AB',
+        accounting_method: accountingMethod,
+        entity_type: 'enskild_firma',
+        ...(companyOreRounding === undefined ? {} : { ore_rounding: companyOreRounding }),
+      },
     },
   })
 }
@@ -243,10 +266,42 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     expect(body.data.credited_invoice_id).toBe(INVOICE_ID)
     expect(body.data.status).toBe('sent')
     expect(body.data.total).toBe(-12500)
+    expect(body.data.amount_to_pay).toBe(-12500)
+    expect(body.data.ore_rounding_amount).toBe(0)
     expect(body.data.journal_entry_id).toBe(JE_ID)
     expect(mocks.createJournalEntry).toHaveBeenCalledTimes(1)
     const insert = calls.find((c) => c.table === 'invoices' && c.method === 'insert')
     expect(insert?.args[0]).toMatchObject({ notes: 'Felaktig kund', status: 'draft' })
+  })
+
+  it("gives back what the invoice asked for under its own rounding choice, not the company's (crm#1480)", async () => {
+    // Company rounds, the invoice did not: it asked for 4,38, so the credit gives back 4,38.
+    const { supabase } = creditSupabase(oreOriginal(false), 'accrual', true)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await creditInvoice(makeRequest(url()), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.total).toBe(-4.38)
+    expect(body.data.ore_rounding).toBe(false)
+    expect(body.data.amount_to_pay).toBe(-4.38)
+    expect(body.data.ore_rounding_amount).toBe(0)
+  })
+
+  it('rounds the credit as the invoice was rounded when the company no longer rounds (crm#1480)', async () => {
+    // The invoice asked for 4,00 (0,38 rounded off); the credit mirrors it: -4,00 with +0,38.
+    const { supabase } = creditSupabase(oreOriginal(true), 'accrual', false)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await creditInvoice(makeRequest(url()), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(201)
+    const body = await res.json()
+    expect(body.data.total).toBe(-4.38)
+    expect(body.data.ore_rounding).toBe(true)
+    expect(body.data.amount_to_pay).toBe(-4)
+    expect(body.data.ore_rounding_amount).toBe(0.38)
   })
 
   it('mirrors a ROT invoice: Cr 1513 for Skatteverket, Cr 1510 for the customer, the override account', async () => {
@@ -381,8 +436,24 @@ describe('POST /api/v1/companies/:companyId/invoices/:id/credit', () => {
     expect(body.data.preview.invoice_number).toBe('KR-2026-0042')
     expect(body.data.preview.credited_invoice_id).toBe(INVOICE_ID)
     expect(body.data.preview.would_create_journal_entry).toBe(true)
+    expect(body.data.preview.amount_to_pay).toBe(-12500)
+    expect(body.data.preview.ore_rounding_amount).toBe(0)
     expect(writes(calls)).toEqual([])
     expect(mocks.createJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it("dry-run previews the credit's amount to pay under the original's rounding choice", async () => {
+    const { supabase, calls } = creditSupabase(oreOriginal(true), 'accrual', false)
+    mockServiceClient.mockReturnValue(supabase)
+
+    const res = await creditInvoice(makeRequest(url('?dry_run=true')), detailParams(COMPANY_ID, INVOICE_ID))
+
+    expect(res.status).toBe(200)
+    const body = await res.json()
+    expect(body.data.preview.ore_rounding).toBe(true)
+    expect(body.data.preview.amount_to_pay).toBe(-4)
+    expect(body.data.preview.ore_rounding_amount).toBe(0.38)
+    expect(writes(calls)).toEqual([])
   })
 
   it('books the reversal under kontantmetoden when the original was paid (#2552)', async () => {

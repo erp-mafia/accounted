@@ -28,13 +28,14 @@ import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { creditInvoice } from '@/lib/invoices/credit-invoice'
+import { withAmountToPay, type AmountToPayRow } from '@/lib/invoices/amount-to-pay-fields'
 
 const CreditNoteRequest = z.object({
   reason: z.string().max(2000).optional(),
 })
 
 const CREDIT_NOTE_RESPONSE_COLUMNS =
-  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, vat_treatment, vat_rate, moms_ruta, vat_treatment_override, delivery_country, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
+  'id, invoice_number, customer_id, invoice_date, due_date, delivery_date, status, currency, exchange_rate, exchange_rate_date, subtotal, subtotal_sek, vat_amount, vat_amount_sek, total, total_sek, ore_rounding, vat_treatment, vat_rate, moms_ruta, vat_treatment_override, delivery_country, your_reference, our_reference, notes, reverse_charge_text, credited_invoice_id, document_type, paid_at, paid_amount, remaining_amount, default_dimensions, created_at, updated_at'
 
 // The issue step's follow-up failures, as response warning codes.
 const PARTIAL_FAILURE_WARNING_CODES: Record<string, string> = {
@@ -47,6 +48,12 @@ const CreditNoteCreated = z.object({
   credited_invoice_id: z.string().uuid(),
   status: z.literal('sent'),
   total: z.number(),
+  // What the credit note gives back after öresavrundning, as its PDF prints
+  // it (crm#1480, crm#1487): the mirror of the original's amount_to_pay.
+  amount_to_pay: z.number(),
+  ore_rounding_amount: z.number(),
+  // The credited invoice's own rounding choice, frozen at issue.
+  ore_rounding: z.boolean().nullable(),
   journal_entry_id: z.string().uuid().nullable(),
   original_journal_entry_id: z.string().uuid().optional(),
   warnings: z
@@ -60,7 +67,7 @@ registerEndpoint({
   path: '/api/v1/companies/:companyId/invoices/:id/credit',
   summary: 'Issue a credit note (kreditfaktura) against an invoice.',
   description:
-    'Creates and issues a credit note referencing the original invoice. The credit note mirrors the original line for line with reversed-sign amounts (the same VAT, revenue accounts, ROT/RUT and periodisering fields, and payee) and gets invoice_number=KR-<original> (a self-billed original: KR-<its external number>). Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510; on ROT/RUT Credit 1513 for Skatteverket\'s share and 1510 for the customer\'s; Debit 29xx where revenue is still deferred, and the accrual schedule stops) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. Under deferred booking (defer_invoice_booking) an original that was never booked is booked first on its own invoice date, exactly as POST /invoices/{id}/book does (original_journal_entry_id), then credited; when that booking is refused the credit is refused before anything is written (400 INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED or INVOICE_CREDIT_ORIGINAL_BOOK_FAILED). The original transitions to status=credited once the entry exists. The credit note is dated today (Europe/Stockholm); a locked or closed period, or no fiscal period for today, returns 400 INVOICE_CREDIT_PERIOD_LOCKED before anything is written. Idempotent and dry-runnable. Emits credit_note.created.',
+    'Creates and issues a credit note referencing the original invoice. The credit note mirrors the original line for line with reversed-sign amounts (the same VAT, revenue accounts, ROT/RUT and periodisering fields, and payee) and gets invoice_number=KR-<original> (a self-billed original: KR-<its external number>). Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510; on ROT/RUT Credit 1513 for Skatteverket\'s share and 1510 for the customer\'s; Debit 29xx where revenue is still deferred, and the accrual schedule stops) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. Under deferred booking (defer_invoice_booking) an original that was never booked is booked first on its own invoice date, exactly as POST /invoices/{id}/book does (original_journal_entry_id), then credited; when that booking is refused the credit is refused before anything is written (400 INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED or INVOICE_CREDIT_ORIGINAL_BOOK_FAILED). The original transitions to status=credited once the entry exists. The credit note keeps the credited invoice\'s öresavrundning choice (ore_rounding), so its amount_to_pay and ore_rounding_amount mirror the original\'s with the opposite sign whatever the company setting is today. The credit note is dated today (Europe/Stockholm); a locked or closed period, or no fiscal period for today, returns 400 INVOICE_CREDIT_PERIOD_LOCKED before anything is written. Idempotent and dry-runnable. Emits credit_note.created.',
   useWhen:
     'You need to legally cancel an issued invoice (ML 17 kap 22-23§). The original invoice cannot be edited once issued: credit it and reissue corrected.',
   doNotUseFor:
@@ -81,6 +88,9 @@ registerEndpoint({
         credited_invoice_id: '0e9c…',
         status: 'sent',
         total: -12500,
+        amount_to_pay: -12500,
+        ore_rounding_amount: 0,
+        ore_rounding: true,
         journal_entry_id: '8b4b…',
       },
       meta: { request_id: 'req_…', api_version: '2026-05-12' },
@@ -161,7 +171,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     }
 
     if (result.dryRun) {
-      return dryRunPreview(result.preview, { requestId: ctx.requestId, log: ctx.log })
+      const [preview] = await withAmountToPay(ctx.supabase, ctx.companyId!, [
+        result.preview as unknown as AmountToPayRow,
+      ])
+      return dryRunPreview(preview, { requestId: ctx.requestId, log: ctx.log })
     }
 
     const { data: creditNote, error: readErr } = await ctx.supabase
@@ -175,6 +188,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         requestId: ctx.requestId,
       })
     }
+
+    const [withAmounts] = await withAmountToPay(ctx.supabase, ctx.companyId!, [
+      creditNote as unknown as AmountToPayRow,
+    ])
 
     const warnings = result.partialFailures.map((failure) => ({
       code: PARTIAL_FAILURE_WARNING_CODES[failure.step] ?? 'ISSUE_FOLLOW_UP_FAILED',
@@ -192,7 +209,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
 
     return created(
       {
-        ...(creditNote as object),
+        ...withAmounts,
         journal_entry_id: result.journalEntryId,
         ...(result.originalJournalEntryId ? { original_journal_entry_id: result.originalJournalEntryId } : {}),
         ...(warnings.length > 0 ? { warnings } : {}),

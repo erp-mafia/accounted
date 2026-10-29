@@ -1,0 +1,1 @@
+[2026-10-30] A credit note takes its original's öresavrundning in the app (buildCreditNoteFields), not via the freeze trigger, and issued rows still null are not backfilled: each is whole-krona SEK or foreign currency, where no setting changes the amount (crm#1480).
