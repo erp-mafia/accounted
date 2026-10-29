@@ -7,6 +7,7 @@ import { preparePaymentOrders } from '@/lib/payments/orders/prepare'
 import { isBankConfirming, isSignableAgain, PAYMENT_ORDER_STATUSES } from '@/lib/payments/orders/status'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { INVOICE_DOCUMENT_COLUMNS } from '@/lib/payments/orders/invoice-document'
+import { secondSignatureHere, secondSignatureViaApi } from '@/lib/payments/orders/second-signature'
 
 const PrepareSchema = z.object({
   supplier_invoice_ids: z.array(z.uuid()).min(1).max(100),
@@ -23,6 +24,9 @@ const PrepareSchema = z.object({
  * ?salary_run_id=... one salary run's payments.
  * bank_confirming: signed, and the bank has not confirmed the payment yet.
  * sign_again: unsigned at the bank in a signing nobody is in (isSignableAgain).
+ * sign_second: the bank waits for another signatory and takes that signature
+ * through the API, so they sign here: decided per signing, as Kontrasignera
+ * signs the whole basket (second-signature.ts).
  */
 export const GET = withRouteContext('payment_orders.list', async (request, { supabase, companyId }) => {
   const url = new URL(request.url)
@@ -75,11 +79,22 @@ export const GET = withRouteContext('payment_orders.list', async (request, { sup
     if (batchError) throw batchError
     for (const b of (batches ?? []) as Array<{ id: string; status: string }>) signingStatus.set(b.id, b.status)
   }
+  const waitingForSecond = new Map<string, string[]>()
+  for (const r of rows) {
+    if (r.status === 'awaiting_second_signer' && r.batch_id) waitingForSecond.set(r.batch_id, [...(waitingForSecond.get(r.batch_id) ?? []), r.id])
+  }
+  const viaApi = await secondSignatureViaApi(supabase, companyId, [...waitingForSecond.values()].flat())
+  const secondHere = new Set([...waitingForSecond].filter(([, ids]) => secondSignatureHere(ids, viaApi)).map(([batchId]) => batchId))
   return NextResponse.json({
     data: rows.map((row) => {
       const { provider_payment_id: _bankPaymentId, ...r } = row
       const signing = row.batch_id ? signingStatus.get(row.batch_id) : null
-      return { ...r, bank_confirming: isBankConfirming(row, signing), sign_again: isSignableAgain(row, signing) }
+      return {
+        ...r,
+        bank_confirming: isBankConfirming(row, signing),
+        sign_again: isSignableAgain(row, signing),
+        sign_second: row.status === 'awaiting_second_signer' && row.batch_id !== null && secondHere.has(row.batch_id),
+      }
     }),
   })
 })

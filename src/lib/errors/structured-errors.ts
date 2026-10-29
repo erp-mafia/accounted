@@ -10680,6 +10680,21 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_sv: 'Det finns inga betalningar kvar att signera i den här signeringen.',
     message_en: 'There are no payments left to sign in this signing.',
   },
+  // The bank waits for another signatory (startSecondSignature in
+  // lib/payments/orders/signing.ts): the number given is the one the first
+  // signature was made with.
+  PAYMENT_SECOND_SIGNER_SAME_PERSON: {
+    httpStatus: 409,
+    message_sv: 'Banken väntar på en annan firmatecknare än den som redan har signerat. Ange den andra firmatecknarens personnummer.',
+    message_en: 'The bank waits for another signatory than the one who already signed. Enter the other signatory\'s personal identity number.',
+  },
+  // A signing link for the second signature (lib/payments/orders/signing-links.ts)
+  // at a bank that takes that signature in its online bank, not through the API.
+  PAYMENT_SECOND_SIGNATURE_IN_ONLINE_BANK: {
+    httpStatus: 409,
+    message_sv: 'Banken tar emot den andra signeringen i sin internetbank. Den andra firmatecknaren signerar där före betalningsdagen.',
+    message_en: 'The bank takes the second signature in its online bank. The other signatory signs there before the payment date.',
+  },
   PAYMENT_SIGNING_BASKET_UNSUPPORTED: {
     httpStatus: 409,
     message_sv: 'Banken kan inte signera flera betalningar med ett BankID. Signera en betalning i taget.',

@@ -40,7 +40,9 @@ export interface PaymentSigningLinkPageProps {
  * never stored. A bank that signs on its own page sends the browser back to
  * this link with the signing named (?signing=<batch>&result=ok|error), and
  * the flow resumes at its poll. When an order left 'approved' another way the
- * page says so and offers nothing to sign.
+ * page says so and offers nothing to sign. A link that asks for the second
+ * signature (state second_signature) signs the link's signing as the other
+ * signatory.
  */
 export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPageProps) {
   const t = useTranslations('payment_signing_page')
@@ -75,10 +77,11 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
 
   // A signing of this link waits at the bank: poll it (BankID may be open, or
   // the bank's page just answered), or sign it again after an abandoned try.
+  // A link for the second signature signs its signing as the other signatory.
   const signing = data.signing
   const waitingSigning = data.state === 'in_signing' && signing?.status === 'awaiting_signature'
   const resume: PaymentSigningReturn | null =
-    data.state !== 'in_signing' || !signing
+    (data.state !== 'in_signing' && data.state !== 'second_signature') || !signing
       ? null
       : returned && returned.batchId === signing.batch_id
         ? returned
@@ -86,6 +89,7 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
           ? { batchId: signing.batch_id, result: 'ok', code: null }
           : null
   const pendingBatchId = data.state === 'in_signing' && signing && !resume ? signing.batch_id : null
+  const secondSignatureBatchId = data.state === 'second_signature' && signing && !resume ? signing.batch_id : null
   const resumeNeedsNumber = resume !== null && recalled !== undefined && !recalled && !resumeNumber
 
   const header = (
@@ -151,11 +155,18 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
       </section>
     )
   } else if (data.state === 'done') {
-    const key = signing?.status === 'awaiting_second_signer' ? 'done_second_signer_body' : signing?.status === 'rejected' ? 'done_rejected_body' : 'done_body'
+    const key =
+      signing?.status === 'awaiting_second_signer'
+        ? data.second_signature_here
+          ? 'done_second_signer_here_body'
+          : 'done_second_signer_body'
+        : signing?.status === 'rejected'
+          ? 'done_rejected_body'
+          : 'done_body'
     body = (
       <section className="space-y-2 rounded-lg border border-border p-6">
         <h2 className="font-display text-xl tracking-tight">{t('done_title')}</h2>
-        <p className="text-[13px] text-muted-foreground">{t(key)}</p>
+        <p className="text-[13px] text-muted-foreground">{t(key, { requester: data.requester })}</p>
       </section>
     )
   } else if (resume && recalled === undefined) {
@@ -206,6 +217,8 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
           client={client}
           resume={resume}
           pendingBatchId={pendingBatchId}
+          secondSignatureBatchId={secondSignatureBatchId}
+          offerSecondSignature={data.state === 'second_signature'}
           initialPersonalNumber={resumeNumber ?? recalled ?? null}
           onStageChange={setStage}
         />
@@ -220,7 +233,9 @@ export function PaymentSigningLinkPage({ token, initial }: PaymentSigningLinkPag
         {data.state !== 'done' && basket}
         {body}
         <p className="text-[12.5px] text-muted-foreground">
-          {(data.state === 'ready' || data.state === 'in_signing') && stage !== 'done' ? `${t('expires', { date: formatSigningLinkExpiry(data.expires_at) })} ` : ''}
+          {(data.state === 'ready' || data.state === 'in_signing' || data.state === 'second_signature') && stage !== 'done'
+            ? `${t('expires', { date: formatSigningLinkExpiry(data.expires_at) })} `
+            : ''}
           {t('footer_provider')}
         </p>
       </div>

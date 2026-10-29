@@ -31,6 +31,7 @@ import {
   signingOfRefusedStart,
   fetchCompanyVerification,
   startCompanyVerification,
+  startSecondSignature,
   startSigning,
   type BankPaymentsAllowanceRefusal,
   type BankPaymentsUsage,
@@ -74,6 +75,8 @@ export interface SigningClient {
   /** `psuAuthoriserId`: the Nordea Corporate Netbank logon id, when typed (Nordea only; never stored). */
   start(input: { orderIds: string[]; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView>
   restart(input: { batchId: string; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView>
+  /** The other signatory's BankID for a signing the bank holds for them; the poll follows it. */
+  secondSignature(input: { batchId: string; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView>
   poll(input: { batchId: string; personalNumber: string | null; psuAuthoriserId?: string | null }, signal?: AbortSignal): Promise<SigningView>
   verification?: boolean
   /**
@@ -88,6 +91,7 @@ export interface SigningClient {
 const SESSION_SIGNING_CLIENT: SigningClient = {
   start: startSigning,
   restart: restartSigning,
+  secondSignature: startSecondSignature,
   poll: pollSigning,
   verification: true,
   usage: () => fetchBankPaymentsUsage(),
@@ -124,6 +128,16 @@ interface BankIdSigningFlowProps {
   pendingBatchId?: string | null
   /** A personnummer typed before the page reloaded (the bank's own page in between). */
   initialPersonalNumber?: string | null
+  /**
+   * A signing the bank holds for another signatory, at a bank that takes that
+   * signature here: the method step signs it as that signatory, whose
+   * personnummer is typed.
+   */
+  secondSignatureBatchId?: string | null
+  /** The result offers Kontrasignera when the bank waits for another signatory here; false where the link that signed is spent. */
+  offerSecondSignature?: boolean
+  /** Under the other signatory's number on the method step: another way to reach them (a signing link). */
+  secondSignatureAside?: React.ReactNode
 }
 
 /** The signing is over, one way or the other: show where each payment stands. */
@@ -168,6 +182,9 @@ export function BankIdSigningFlow({
   client = SESSION_SIGNING_CLIENT,
   pendingBatchId = null,
   initialPersonalNumber = null,
+  secondSignatureBatchId = null,
+  offerSecondSignature = true,
+  secondSignatureAside = null,
 }: BankIdSigningFlowProps) {
   const t = useTranslations('bank_payments')
   const locale = useLocale() as ErrorLocale
@@ -193,6 +210,8 @@ export function BankIdSigningFlow({
   const [returned, setReturned] = useState<PaymentSigningReturn | null>(resume)
   /** A refused start that left its payments where no start can reach them (crm#1357): the sentence that says where, in place of the start buttons. */
   const [stopped, setStopped] = useState<string | null>(null)
+  /** The signing this flow gives the second signature to, as the other signatory; null for a first signature. */
+  const [second, setSecond] = useState<string | null>(secondSignatureBatchId)
   const sentToBank = useRef(false)
   // The bank's step, when it signs in several: which one, since when, and
   // which ones this signing has been through (a new one means a new QR).
@@ -235,7 +254,8 @@ export function BankIdSigningFlow({
 
   const total = useMemo(() => orders.reduce((sum, o) => sum + Number(o.amount), 0), [orders])
   const currency = orders[0]?.currency ?? 'SEK'
-  const needsPersonalNumber = !signerKnown
+  // The other signatory is named by their own number, whoever holds the screen.
+  const needsPersonalNumber = !signerKnown || second !== null
   const typedNumber = personalNumber.trim() || null
   // The paying account's bank is known by name here: Nordea gets the optional
   // Corporate Netbank logon id, sent with each call of this signing, never kept.
@@ -293,9 +313,12 @@ export function BankIdSigningFlow({
     resetSteps()
     setBusy(true)
     try {
-      const view = pendingBatchId
-        ? await client.restart({ batchId: pendingBatchId, method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser })
-        : await client.start({ orderIds: orders.map((o) => o.id), method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser })
+      const signer = { method: chosen, personalNumber: typedNumber, psuAuthoriserId: typedAuthoriser }
+      const view = second
+        ? await client.secondSignature({ batchId: second, ...signer })
+        : pendingBatchId
+          ? await client.restart({ batchId: pendingBatchId, ...signer })
+          : await client.start({ orderIds: orders.map((o) => o.id), ...signer })
       markSentToBank()
       setSigning(view)
       adoptMethod(chosen, view)
@@ -332,6 +355,13 @@ export function BankIdSigningFlow({
     } finally {
       setBusy(false)
     }
+  }
+
+  /** The bank waits for another signatory who signs here: the method step again, as that signatory. */
+  function signSecond(batchId: string) {
+    setSecond(batchId)
+    setPersonalNumber('')
+    setStage('method')
   }
 
   /** The first time payments reached the bank, or may have, whatever it answered: the parent reloads its list on close. */
@@ -373,7 +403,7 @@ export function BankIdSigningFlow({
   // where the person chooses again.
   const autoStarted = useRef(false)
   useEffect(() => {
-    if (!autoStart || !signerKnown || autoStarted.current || orders.length === 0) return
+    if (!autoStart || needsPersonalNumber || autoStarted.current || orders.length === 0) return
     autoStarted.current = true
     void begin('qr')
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -549,12 +579,13 @@ export function BankIdSigningFlow({
     return (
       <div className="space-y-4">
         {bankLine}
+        {second && <p className="text-[13px] leading-relaxed">{t('second_signature_intro')}</p>}
         <p className="text-[13px] text-muted-foreground">
           {t('sign_summary', { count: orders.length, total: formatCurrency(total, currency) })}
         </p>
         {needsPersonalNumber && (
           <label className="block space-y-2 text-[13px]">
-            <span className="text-muted-foreground">{t('personal_number_label')}</span>
+            <span className="text-muted-foreground">{t(second ? 'second_signer_personal_number_label' : 'personal_number_label')}</span>
             <Input
               inputMode="numeric"
               autoComplete="off"
@@ -566,6 +597,7 @@ export function BankIdSigningFlow({
           </label>
         )}
         {psuAuthoriserField}
+        {second && secondSignatureAside}
         {refusal === 'verification' && (
           <AttnLine action={client.verification === false ? undefined : verificationAction}>
             {verification && verification.state !== 'not_started' && verification.state !== 'valid' ? (
@@ -698,6 +730,13 @@ export function BankIdSigningFlow({
   }
 
   const doneFailure = signing?.failure_code ?? null
+  // A second signature that failed (a cancelled or expired BankID) ends here too: it can be given again.
+  const retryableSecond = signing?.status === 'awaiting_second_signer' && doneFailure !== null && !PERMANENT_SIGNING_FAILURES.has(doneFailure)
+  const doneFailureText = doneFailure
+    ? (providerCodeText(t, doneFailure) ?? (retryableSecond ? t('signing_failed') : t('signing_failed_permanent', { code: doneFailure })))
+    : null
+  // The bank waits for another signatory who signs here with BankID, not in its online bank.
+  const secondHere = signing?.status === 'awaiting_second_signer' && signing.second_signature_here === true
   const anyWithBank = (signing?.orders ?? []).some((o) =>
     ['submitted', 'awaiting_signature', 'awaiting_second_signer', 'accepted', 'executed'].includes(o.status),
   )
@@ -705,7 +744,7 @@ export function BankIdSigningFlow({
   const confirming = (signing?.orders ?? []).filter((o) => o.bank_confirming).length
   return (
     <div className="space-y-4">
-      {doneFailure && <AttnLine>{providerCodeText(t, doneFailure) ?? t('signing_failed_permanent', { code: doneFailure })}</AttnLine>}
+      {doneFailureText && <AttnLine>{doneFailureText}</AttnLine>}
       <ul className="space-y-2 text-[13px]">
         {(signing?.orders ?? []).map((o) => {
           const order = orders.find((p) => p.id === o.id)
@@ -720,7 +759,7 @@ export function BankIdSigningFlow({
                 ) : o.bank_confirming ? (
                   <Badge variant="outline">{t('status_bank_confirming')}</Badge>
                 ) : variant ? (
-                  <Badge variant={variant}>{statusLabel(o.status)}</Badge>
+                  <Badge variant={variant}>{secondHere && o.status === 'awaiting_second_signer' ? t('status_awaiting_second_signer_here') : statusLabel(o.status)}</Badge>
                 ) : (
                   <span className="text-muted-foreground">{statusLabel(o.status)}</span>
                 )}
@@ -736,10 +775,13 @@ export function BankIdSigningFlow({
       )}
       {anyWithBank && (
         <p className="text-[12.5px] text-muted-foreground">
-          {signing?.status === 'awaiting_second_signer' ? t('result_second_signer') : t('result_hint')}
+          {secondHere ? t('result_second_signer_here') : signing?.status === 'awaiting_second_signer' ? t('result_second_signer') : t('result_hint')}
         </p>
       )}
-      <DialogFooter>{closeButton}</DialogFooter>
+      <DialogFooter>
+        {closeButton}
+        {secondHere && offerSecondSignature && signing && <Button onClick={() => signSecond(signing.batch_id)}>{t('sign_second')}</Button>}
+      </DialogFooter>
     </div>
   )
 }

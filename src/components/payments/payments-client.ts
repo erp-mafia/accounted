@@ -107,6 +107,8 @@ export interface PaymentOrder {
   bank_confirming?: boolean
   /** Unsigned at the bank in a signing nobody is in (an abandoned or expired BankID): Signera igen restarts it (isSignableAgain). Absent from servers before it. */
   sign_again?: boolean
+  /** The bank waits for another signatory and takes that signature through the API: Kontrasignera signs it here (lib/payments/orders/second-signature). Absent from servers before it. */
+  sign_second?: boolean
   /** The invoice paid, with what its document states (lib/payments/orders/invoice-document). */
   supplier_invoice: (InvoiceDocumentSource & {
     id: string
@@ -190,6 +192,8 @@ export interface SigningView {
   step: SigningStep | null
   /** The signing is over and the bank is still confirming a payment of it: ask again (with a growing pause). Absent from servers before it. */
   follow_up?: boolean
+  /** The bank waits for another signatory (awaiting_second_signer) who signs here with BankID, not in its online bank. Absent from servers before it. */
+  second_signature_here?: boolean
   /** bank_confirming: signed, the bank has not confirmed it yet; nothing is left to sign. Absent from servers before it. */
   orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean; bank_confirming?: boolean }>
 }
@@ -632,6 +636,14 @@ export function startSigning(input: { orderIds: string[]; method: SigningMethod;
 
 export function restartSigning(input: { batchId: string; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView> {
   return send<SigningView>(`/api/payments/signing/${input.batchId}/restart`, {
+    method: 'POST',
+    body: JSON.stringify({ method: input.method, personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
+  })
+}
+
+/** The other signatory's BankID for a signing the bank holds for them: the poll follows it as any signing. */
+export function startSecondSignature(input: { batchId: string; method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }): Promise<SigningView> {
+  return send<SigningView>(`/api/payments/signing/${input.batchId}/second-signature`, {
     method: 'POST',
     body: JSON.stringify({ method: input.method, personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
   })

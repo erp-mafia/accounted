@@ -9,7 +9,7 @@
  */
 
 import type { SigningClient } from './BankIdSigningFlow'
-import { PaymentsClientError, psuAuthoriserBody, type PaymentOrderStatus, type SigningBatchStatus, type SigningView } from './payments-client'
+import { PaymentsClientError, psuAuthoriserBody, type PaymentOrderStatus, type SigningBatchStatus, type SigningMethod, type SigningView } from './payments-client'
 
 async function send<T>(input: string, init?: RequestInit): Promise<T> {
   const res = await fetch(input, {
@@ -77,7 +77,7 @@ export function openLinksByOrder(links: readonly OpenSigningLink[]): Map<string,
 // Token: the page at /betala/<token>
 // ---------------------------------------------------------------------------
 
-export type SigningLinkState = 'ready' | 'in_signing' | 'done' | 'changed'
+export type SigningLinkState = 'ready' | 'in_signing' | 'second_signature' | 'done' | 'changed'
 
 /** GET /api/betala/:token, and what the page is rendered with on the server. */
 export interface SigningLinkPageData {
@@ -103,6 +103,8 @@ export interface SigningLinkPageData {
     status: PaymentOrderStatus
   }>
   signing: { batch_id: string; status: SigningBatchStatus } | null
+  /** The bank waits for another signatory and takes that signature through the API, not in its online bank. Absent from servers before it. */
+  second_signature_here?: boolean
 }
 
 export function signingLinkBase(token: string): string {
@@ -148,15 +150,18 @@ export function forgetSigningLinkPersonalNumber(token: string): void {
 /** The BankIdSigningFlow's calls through the link's token routes. The link names the orders; the body never does. */
 export function createSigningLinkClient(token: string): SigningClient {
   const base = signingLinkBase(token)
+  // The link names its orders and its signing: the start route signs them, as the other signatory when the link asks for that.
+  const sign = (input: { method: SigningMethod; personalNumber: string | null; psuAuthoriserId?: string | null }) => {
+    keepSigningLinkPersonalNumber(token, input.personalNumber)
+    return send<SigningView>(`${base}/signing`, {
+      method: 'POST',
+      body: JSON.stringify({ method: input.method, personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
+    })
+  }
   return {
     verification: false,
-    start(input) {
-      keepSigningLinkPersonalNumber(token, input.personalNumber)
-      return send<SigningView>(`${base}/signing`, {
-        method: 'POST',
-        body: JSON.stringify({ method: input.method, personal_number: input.personalNumber, ...psuAuthoriserBody(input.psuAuthoriserId) }),
-      })
-    },
+    start: sign,
+    secondSignature: sign,
     restart(input) {
       keepSigningLinkPersonalNumber(token, input.personalNumber)
       return send<SigningView>(`${base}/signing/${input.batchId}/restart`, {

@@ -1424,14 +1424,15 @@ Example response `200`:
 **Ask someone without an Accounted login to sign approved bank payments with BankID: a signing link.**
 `scope:suppliers:write · risk:medium · idempotent · dry-run`
 
-Creates a link, valid 72 hours, to a page at /betala/<token> where the company's firmatecknare sees the basket (payee, amount, date and reference per payment, the account paying, who asked, the note) and signs it with BankID at their bank, without logging in to Accounted. The orders must be approved, from one account and in one currency; if any of them leaves approved before the signing (cancelled, signed or un-approved elsewhere) the page says so and signs nothing. The link is consumed when the signing finalises. With recipient_email it is mailed (template payment_signing_request); the url is answered either way. Owners and admins, or the person who prepared every order. Dry-runnable: ?dry_run=true answers the basket and mints nothing.
+Creates a link, valid 72 hours, to a page at /betala/<token> where the company's firmatecknare sees the basket (payee, amount, date and reference per payment, the account paying, who asked, the note) and signs it with BankID at their bank, without logging in to Accounted. The orders must be approved, from one account and in one currency; if any of them leaves approved before the signing (cancelled, signed or un-approved elsewhere) the page says so and signs nothing. The link can instead ask for the second signature: every order of one signing the bank holds for another signatory (awaiting_second_signer) at a bank that takes that signature through the API (SEB); the page signs as that signatory. The link is consumed when the signing finalises. With recipient_email it is mailed (template payment_signing_request); the url is answered either way. Owners and admins, or the person who prepared every order. Dry-runnable: ?dry_run=true answers the basket and mints nothing.
 
 **Use when:** A byrå or an agent prepared supplier payments and a person approved them, but the client's firmatecknare signs at the bank.
 **Do not use for:** Signing in person (the Betalningar page), approving drafts (POST /payment-orders/approve) or payment files.
 
 **Pitfalls:**
 - The url carries the credential: hand it to the signer only, once, and do not store it.
-- PAYMENT_ORDERS_WRONG_STATUS: an order is not approved (details.orders); approve it first.
+- PAYMENT_ORDERS_WRONG_STATUS: an order is not approved (details.orders); approve it first. For the second signature, name every order of the signing that waits (details.missing).
+- PAYMENT_SECOND_SIGNATURE_IN_ONLINE_BANK: the bank takes the second signature in its online bank; nothing to sign on a page.
 - PAYMENT_SIGNING_LINK_ALREADY_OPEN: another open link covers an order (details.signing_link_ids); it is cancelled on the Betalningar page.
 - PAYMENT_ORDERS_MIXED_ACCOUNTS / PAYMENT_ORDERS_MIXED_CURRENCY: one link is one signing, from one account in one currency.
 

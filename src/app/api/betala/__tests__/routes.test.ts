@@ -18,6 +18,7 @@ const signing = vi.hoisted(() => ({
   startPaymentSigning: vi.fn(),
   pollPaymentSigning: vi.fn(),
   restartPaymentSigning: vi.fn(),
+  startSecondSignature: vi.fn(),
 }))
 vi.mock('@/lib/payments/orders/signing', () => signing)
 
@@ -107,6 +108,7 @@ beforeEach(() => {
   signing.startPaymentSigning.mockResolvedValue({ ok: true, data: view('awaiting_signature') })
   signing.pollPaymentSigning.mockResolvedValue({ ok: true, data: view('awaiting_signature') })
   signing.restartPaymentSigning.mockResolvedValue({ ok: true, data: view('awaiting_signature') })
+  signing.startSecondSignature.mockResolvedValue({ ok: true, data: view('awaiting_signature') })
 })
 
 describe('the payment signing token routes refuse what is not a live link', () => {
@@ -224,6 +226,26 @@ describe('POST /api/betala/:token/signing', () => {
     expect(signing.startPaymentSigning).not.toHaveBeenCalled()
   })
 
+  it("signs a link for the second signature as the other signatory, on the link's own signing", async () => {
+    const token = freshToken()
+    db.setTable('payment_signing_links', { data: link({ batch_id: BATCH }) })
+    db.setTable('payment_orders', { data: [orderRow(O1, { status: 'awaiting_second_signer', batch_id: BATCH }), orderRow(O2, { status: 'awaiting_second_signer', batch_id: BATCH })] })
+    db.setTable('payment_order_batches', { data: { id: BATCH, status: 'awaiting_second_signer' } })
+
+    const { status } = await parseJsonResponse<{ data: { batch_id: string } }>(await start(post(`/api/betala/${token}/signing`, { method: 'qr', personal_number: PN }), tokenParams(token)))
+
+    expect(status).toBe(200)
+    expect(signing.startPaymentSigning).not.toHaveBeenCalled()
+    expect(signing.startSecondSignature).toHaveBeenCalledWith(expect.objectContaining({ companyId: COMPANY, userId: SENDER }), {
+      batchId: BATCH,
+      method: 'qr',
+      signer: { personalNumber: PN, ipAddress: '203.0.113.9', userAgent: 'Browser/1.0', lookupOnFile: false },
+      returnOrigin: 'https://app.accounted.se',
+      returnPath: `/betala/${token}`,
+    })
+    expect(db.payloads('payment_signing_links', 'update')).toEqual([])
+  })
+
   it('passes a refusal of the signing service through in its own envelope', async () => {
     const token = freshToken()
     db.setTable('payment_signing_links', { data: link() })
@@ -276,6 +298,14 @@ describe('POST /api/betala/:token/signing/:id/poll', () => {
     signing.pollPaymentSigning.mockResolvedValue({ ok: true, data: view('awaiting_second_signer') })
     await poll(post(`/api/betala/${token}/signing/${BATCH}/poll`, { personal_number: PN }), idParams(token, BATCH))
     expect(db.payloads('payment_signing_links', 'update')).toEqual([{ consumed_at: expect.any(String) }])
+  })
+
+  it('keeps the link open when the second signature failed, for another try', async () => {
+    const token = freshToken()
+    db.setTable('payment_signing_links', [{ data: link({ batch_id: BATCH }) }, { data: null }])
+    signing.pollPaymentSigning.mockResolvedValue({ ok: true, data: { ...view('awaiting_second_signer'), failure_code: 'USER_CANCEL' } })
+    expect((await poll(post(`/api/betala/${token}/signing/${BATCH}/poll`, { personal_number: PN }), idParams(token, BATCH))).status).toBe(200)
+    expect(db.payloads('payment_signing_links', 'update')).toEqual([])
   })
 })
 

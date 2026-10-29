@@ -545,6 +545,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/payments/signing': uiOnly(PAYMENT_SIGNING),
   'POST /api/payments/signing/:id/poll': uiOnly(PAYMENT_SIGNING),
   'POST /api/payments/signing/:id/restart': uiOnly(PAYMENT_SIGNING),
+  'POST /api/payments/signing/:id/second-signature': uiOnly(PAYMENT_SIGNING),
   'POST /api/payments/allowance-requests': uiOnly('asking the founders for more included bank payments a month: a support request from a person, answered by hand'),
   'POST /api/payments/verification': covered([`POST ${V}/payment-orders/verification/start`], 'answers the provider\'s know-your-customer form link, which a signatory fills in and signs'),
   'POST /api/payments/orders/status/cron': machine(CRON),

@@ -21,6 +21,12 @@
  *            FORMAT_ERROR): it is cancelled at the bank, its order claimed
  *            again, and a new payment created under a new idempotency key
  *            (recreateAfterExpiredSigning).
+ *   second:  a bank that waits for another signatory and takes that signature
+ *            through the API (second-signature.ts) gets it as a new
+ *            authorisation on the same basket or payment, under the other
+ *            signatory's PSU-ID (startSecondSignature); the poll follows it.
+ *            Nothing is created or cancelled for it: the first signature
+ *            stands whatever the second one does.
  *
  * What may never happen, and how (the payment_orders migration, rules 1, 2, 5):
  *   - A second payment for one order. Payment APIs may have no idempotency
@@ -74,7 +80,8 @@ import { recordVerificationCheck } from './verification-record'
 import { verificationRequiredFor } from './readiness'
 import { buildPartyContext, type SignerInput } from './party'
 import { cancelAndRelease, cancelForClosedInvoice, releasePaymentOrder, unpayableOrders } from './release'
-import { logPaymentOrderEvents, sanitizedProviderMessage, type PaymentOrderBatchRow, type PaymentOrderRow } from './types'
+import { secondSignatureHere, secondSignatureViaApi } from './second-signature'
+import { logPaymentOrderEvents, sanitizedProviderMessage, type PaymentOrderBatchRow, type PaymentOrderBatchStatus, type PaymentOrderRow } from './types'
 
 /** BankID in our screen (same_device, qr) or on the bank's own page (redirect). */
 export type SigningMethod = 'same_device' | 'qr' | 'redirect'
@@ -94,6 +101,11 @@ const RETURN_ORIGIN_REQUIRED: OperationOutcome<never> = { ok: false, code: 'VALI
 
 export interface SigningView {
   batch_id: string
+  /**
+   * Where the signing stands for the screen: the batch's status, except that
+   * a second signature waiting for its BankID reads awaiting_signature while
+   * the batch stays awaiting_second_signer (secondSignatureView).
+   */
   status: PaymentOrderBatchRow['status']
   /** Only for the person signing: a QR or autostart token is theirs alone. */
   challenge: SigningChallenge | null
@@ -107,6 +119,12 @@ export interface SigningView {
    * (the status sync follows them from there).
    */
   follow_up: boolean
+  /**
+   * The bank waits for another signatory (awaiting_second_signer) and takes
+   * that signature through the API: they sign here with their own BankID
+   * (startSecondSignature). False when the bank takes it in its online bank.
+   */
+  second_signature_here: boolean
   /** bank_confirming: signed, and the bank has not confirmed it yet (isBankConfirming). Nothing is left to sign. */
   orders: Array<{ id: string; status: string; provider_status: string | null; outcome_unknown: boolean; bank_confirming: boolean }>
 }
@@ -255,6 +273,30 @@ function isCreateUnfinished(order: PaymentOrderRow): boolean {
   return order.status === 'submitted' && !order.provider_payment_id && !order.outcome_unknown_at
 }
 
+/** A payment the bank holds for another signatory, in its signing. */
+function awaitsSecondSigner(order: PaymentOrderRow): boolean {
+  return order.status === 'awaiting_second_signer' && Boolean(order.provider_payment_id)
+}
+
+/**
+ * A second signature started since the signing's last BankID finalised
+ * (startSecondSignature): the batch's current authorisation is the other
+ * signatory's, and the poll follows it. The batch stays
+ * awaiting_second_signer throughout; a finalised poll sets signed_at, a
+ * failed one clears signing_started_at (no BankID runs any more).
+ */
+function secondSignatureOpen(batch: PaymentOrderBatchRow): boolean {
+  if (batch.status !== 'awaiting_second_signer' || !batch.provider_authorisation_id || !batch.signing_started_at) return false
+  const signedAt = batch.signed_at ? Date.parse(batch.signed_at) : Number.NEGATIVE_INFINITY
+  return Date.parse(batch.signing_started_at) > signedAt
+}
+
+/** The batch status a finalised BankID leaves, from where the signing's payments stand at the bank. */
+function finishedSigningStatus(statuses: readonly string[]): PaymentOrderBatchStatus {
+  if (statuses.some((s) => s === 'awaiting_second_signer')) return 'awaiting_second_signer'
+  return statuses.length > 0 && statuses.every((s) => s === 'rejected') ? 'rejected' : 'signed'
+}
+
 async function loadBatch(writer: SupabaseClient, companyId: string, batchId: string): Promise<{ batch: PaymentOrderBatchRow; orders: PaymentOrderRow[] } | null> {
   const { data: batch } = await writer
     .from('payment_order_batches')
@@ -288,6 +330,7 @@ function view(
     failure_code: failure,
     step,
     follow_up: followUp,
+    second_signature_here: false,
     orders: orders.map((o) => ({
       id: o.id,
       status: o.status,
@@ -295,6 +338,34 @@ function view(
       outcome_unknown: Boolean(o.outcome_unknown_at),
       bank_confirming: isBankConfirming(o, batch.status),
     })),
+  }
+}
+
+/**
+ * A second signature in progress, as the screen follows it: a signing that
+ * waits for a BankID (the person's challenge, polled), though the batch stays
+ * awaiting_second_signer until it finalises (secondSignatureOpen).
+ */
+function secondSignatureView(
+  batch: PaymentOrderBatchRow,
+  orders: PaymentOrderRow[],
+  challenge: SigningChallenge | null,
+  step: SigningStep | null,
+): SigningView {
+  return { ...view(batch, orders, challenge, null, step), status: 'awaiting_signature' }
+}
+
+/** The view, with where the bank takes the second signature when it waits for one (second-signature.ts). */
+async function withSecondSignature(ctx: OperationContext, signing: SigningView): Promise<SigningView> {
+  if (signing.status !== 'awaiting_second_signer') return signing
+  const waiting = signing.orders.filter((o) => o.status === 'awaiting_second_signer').map((o) => o.id)
+  try {
+    const viaApi = await secondSignatureViaApi(createServiceClient(), ctx.companyId, waiting)
+    return { ...signing, second_signature_here: secondSignatureHere(waiting, viaApi) }
+  } catch (error) {
+    // Without the bank's word the screen names the online bank, as it did before.
+    ctx.log.warn('where the bank takes the second signature could not be read', { batchId: signing.batch_id, error: error instanceof Error ? error.message : String(error) })
+    return signing
   }
 }
 
@@ -558,6 +629,17 @@ async function stopSigning(
 // BankID
 // ---------------------------------------------------------------------------
 
+/**
+ * The bank's own page needs a way back: Betalningar on the app origin (or the
+ * signing link's page), the batch named, the batch id as the state the bank
+ * echoes. Null for a signing in our screen.
+ */
+function signingRedirect(method: SigningMethod, ret: SigningReturnOrigin | null, batchId: string): SigningRedirectReturn | null {
+  if (method !== 'redirect' || !ret) return null
+  // Connect takes returns on the canonical origin only: a brand host's return goes through the hop there.
+  return { returnUrl: viaCanonicalOrigin(paymentSigningReturnUrl(ret.origin, batchId, ret.path ?? undefined), getCanonicalAppOrigin()), returnState: batchId }
+}
+
 async function beginSca(
   ctx: OperationContext,
   provider: PaymentInitiationProvider,
@@ -566,14 +648,8 @@ async function beginSca(
   method: SigningMethod,
   ret: SigningReturnOrigin | null,
 ): Promise<OperationOutcome<SigningView>> {
-  // The bank's own page needs a way back: Betalningar on the app origin, the
-  // batch named, the batch id as the state the bank echoes.
   if (method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
-  const redirect: SigningRedirectReturn | null =
-    method === 'redirect' && ret
-      ? // Connect takes returns on the canonical origin only: a brand host's return goes through the hop there.
-        { returnUrl: viaCanonicalOrigin(paymentSigningReturnUrl(ret.origin, batch.id, ret.path ?? undefined), getCanonicalAppOrigin()), returnState: batch.id }
-      : null
+  const redirect = signingRedirect(method, ret, batch.id)
   const writer = createServiceClient()
   // Every order of this signing must still be waiting at the bank in it: a
   // late answer must never start BankID over an order that moved on.
@@ -1151,6 +1227,108 @@ async function recreateAfterExpiredSigning(
 }
 
 /**
+ * The second signature at a bank that takes it through the API
+ * (second-signature.ts): the first BankID left the payments waiting for
+ * another signatory, who signs the same basket (or payment) through a new
+ * authorisation under their own PSU-ID. Each payment is read at the bank
+ * first (signed in the online bank meanwhile, or refused); BankID starts only
+ * while one still waits. The batch stays awaiting_second_signer and its
+ * current-signing columns name this attempt (secondSignatureOpen), so the
+ * poll follows it. Nothing is created or cancelled here, and a refusal leaves
+ * the payments where they were: the first signature stands, and this or
+ * another signatory signs again.
+ */
+export async function startSecondSignature(
+  ctx: OperationContext,
+  input: { batchId: string; method: SigningMethod; signer: SignerInput; returnOrigin?: string | null; returnPath?: string | null },
+): Promise<OperationOutcome<SigningView>> {
+  const provider = await getPaymentInitiationProvider(ctx.companyId)
+  if (!provider) return { ok: false, code: 'PAYMENTS_UNAVAILABLE' }
+  const writer = createServiceClient()
+  const loaded = await loadBatch(writer, ctx.companyId, input.batchId)
+  if (!loaded) return { ok: false, code: 'PAYMENT_ORDER_NOT_FOUND' }
+  const { batch } = loaded
+  if (batch.status !== 'awaiting_second_signer') return { ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE' }
+  const waiting = loaded.orders.filter(awaitsSecondSigner)
+  if (waiting.length === 0) return { ok: false, code: 'PAYMENT_SIGNING_NOTHING_TO_SIGN' }
+  const waitingIds = waiting.map((o) => o.id)
+  if (!secondSignatureHere(waitingIds, await secondSignatureViaApi(writer, ctx.companyId, waitingIds))) {
+    return { ok: false, code: 'PAYMENT_SECOND_SIGNATURE_IN_ONLINE_BANK' }
+  }
+
+  // The other signatory signs with their own number, typed or on file; the
+  // payments' own calls keep the PSU-ID they were created with.
+  const signing = await buildPartyContext(ctx, waiting[0]!, input.signer, { requireSigner: true })
+  if (!signing.ok) return signing.outcome
+  const owner = await buildPartyContext(ctx, waiting[0]!, input.signer, { batchId: batch.id })
+  if (!owner.ok) return owner.outcome
+  // That kept number names the first signatory, and the bank waits for another
+  // (both are 12 digits: every source goes through normalizeSignerPersonalNumber).
+  if (owner.storedPsu && owner.ctx.signerPersonalNumber === signing.ctx.signerPersonalNumber) {
+    return { ok: false, code: 'PAYMENT_SECOND_SIGNER_SAME_PERSON' }
+  }
+  const plan = await planSigning(provider, signing.ctx, batch.order_count, input.method)
+  if (!plan.ok) return plan.outcome
+  const ret: SigningReturnOrigin | null = input.returnOrigin ? { origin: input.returnOrigin, path: input.returnPath ?? null } : null
+  if (plan.method === 'redirect' && !ret) return RETURN_ORIGIN_REQUIRED
+
+  // Where each payment stands now.
+  for (const order of waiting) {
+    try {
+      const state = await provider.getPaymentState(owner.ctx, order.provider_payment_id as string, order.provider_payment_product ?? 'domestic')
+      await applyProviderState(writer, order, state, ctx.userId, ctx.log)
+    } catch (error) {
+      // Not knowing where a payment stands holds the signature.
+      return { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error), payment_order_id: order.id } }
+    }
+  }
+  const current = (await loadBatch(writer, ctx.companyId, batch.id)) ?? loaded
+  if (!current.orders.some(awaitsSecondSigner)) {
+    // Signed in the online bank meanwhile, or refused: the signing is over.
+    const statuses = current.orders.filter((o) => o.provider_payment_id).map((o) => o.status)
+    return { ok: true, data: await endSecondSignature(writer, ctx, current, statuses, null) }
+  }
+  const target = targetOf(current.batch, current.orders)
+  if (!target) return { ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE' }
+
+  let started
+  try {
+    started = await provider.startSigning(planParty(signing.ctx, plan), target, plan.method, signingRedirect(plan.method, ret, batch.id))
+  } catch (error) {
+    const code = errorCodeOf(error)
+    ctx.log.warn('second signature did not start', { batchId: batch.id, code })
+    if (error instanceof PaymentProviderError && error.outcomeUnknown) {
+      // A BankID request may already be on the signatory's phone; the status sync reads what the bank decides.
+      return { ok: false, code: 'PAYMENT_PROVIDER_UNAVAILABLE', details: { provider_code: code, outcome_unknown: true } }
+    }
+    const answer = code === 'SCA_REDIRECT_UNSUPPORTED' ? 'PAYMENT_SIGNING_REDIRECT_UNSUPPORTED' : readFailure(error)
+    return { ok: false, code: answer, details: { provider_code: code, http_status: httpStatusOf(error) } }
+  }
+
+  // This attempt is the signing's current one; a start that raced it wins or loses as a whole.
+  let claimSigning = writer
+    .from('payment_order_batches')
+    .update({
+      provider_authorisation_id: started.providerAuthorisationId,
+      signing_method: started.method,
+      signer_user_id: ctx.userId,
+      signing_started_at: new Date().toISOString(),
+    })
+    .eq('id', batch.id)
+    .eq('company_id', ctx.companyId)
+    .eq('status', 'awaiting_second_signer')
+  claimSigning = current.batch.provider_authorisation_id
+    ? claimSigning.eq('provider_authorisation_id', current.batch.provider_authorisation_id)
+    : claimSigning.is('provider_authorisation_id', null)
+  const { data: updated } = await claimSigning.select('*').maybeSingle()
+  if (!updated) return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' }
+  await logPaymentOrderEvents(writer, [
+    { company_id: ctx.companyId, batch_id: batch.id, event_type: 'signing_started', actor_user_id: ctx.userId, detail: { method: started.method, second_signature: true } },
+  ], ctx.log)
+  return { ok: true, data: secondSignatureView(updated as PaymentOrderBatchRow, current.orders, started.challenge, started.step) }
+}
+
+/**
  * What a poll has to show. The bank's own page is linked once, by the start,
  * under a state of its own; a poll never carries that link, so a redirect
  * challenge without one is no challenge: the screen keeps the link it has.
@@ -1166,6 +1344,14 @@ export async function pollPaymentSigning(
   ctx: OperationContext,
   input: { batchId: string; signer: SignerInput },
 ): Promise<OperationOutcome<SigningView>> {
+  const outcome = await pollSigningAsItStands(ctx, input)
+  return outcome.ok && !outcome.dryRun ? { ...outcome, data: await withSecondSignature(ctx, outcome.data) } : outcome
+}
+
+async function pollSigningAsItStands(
+  ctx: OperationContext,
+  input: { batchId: string; signer: SignerInput },
+): Promise<OperationOutcome<SigningView>> {
   const provider = await getPaymentInitiationProvider(ctx.companyId)
   if (!provider) return { ok: false, code: 'PAYMENTS_UNAVAILABLE' }
   const writer = createServiceClient()
@@ -1177,6 +1363,7 @@ export async function pollPaymentSigning(
   if (batch.signer_user_id && batch.signer_user_id !== ctx.userId) {
     return { ok: true, data: view(batch, orders, null, null) }
   }
+  if (secondSignatureOpen(batch)) return pollSecondSignature(ctx, provider, writer, loaded, input.signer)
   if (batch.status !== 'awaiting_signature' || !batch.provider_authorisation_id) {
     const confirming = confirmingAtBank(batch, orders)
     if (confirming.length === 0) return { ok: true, data: view(batch, orders, null, null) }
@@ -1234,14 +1421,9 @@ export async function pollPaymentSigning(
       statuses.push(order.status)
     }
   }
-  const batchStatus = statuses.some((s) => s === 'awaiting_second_signer')
-    ? 'awaiting_second_signer'
-    : statuses.length > 0 && statuses.every((s) => s === 'rejected')
-      ? 'rejected'
-      : 'signed'
   await writer
     .from('payment_order_batches')
-    .update({ status: batchStatus, signed_at: new Date().toISOString() })
+    .update({ status: finishedSigningStatus(statuses), signed_at: new Date().toISOString() })
     .eq('id', batch.id)
     .eq('company_id', ctx.companyId)
     .eq('status', 'awaiting_signature')
@@ -1252,6 +1434,102 @@ export async function pollPaymentSigning(
   // A payment the bank still answers RCVD for is signed all the same: the
   // poll keeps reading it for a while (followBankConfirmation).
   return { ok: true, data: view(finished, current, null, null, null, confirmingAtBank(finished, current).length > 0) }
+}
+
+/**
+ * The poll of a second signature (secondSignatureOpen). The authorisation is
+ * the other signatory's, asked with their number; once it finalised, each
+ * payment that waited is read with the PSU-ID it was created with and the
+ * signing ends where they stand (finishedSigningStatus: still waiting while
+ * the bank wants yet another signatory). Pending reads as a signing in
+ * progress. A failed one leaves everything where it was, the first signature
+ * included: this or another signatory signs again.
+ */
+async function pollSecondSignature(
+  ctx: OperationContext,
+  provider: PaymentInitiationProvider,
+  writer: SupabaseClient,
+  loaded: { batch: PaymentOrderBatchRow; orders: PaymentOrderRow[] },
+  signer: SignerInput,
+): Promise<OperationOutcome<SigningView>> {
+  const { batch, orders } = loaded
+  const authorisationId = batch.provider_authorisation_id as string
+  const target = targetOf(batch, orders)
+  if (!target) return { ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE' }
+  const signing = await buildPartyContext(ctx, orders[0]!, signer)
+  if (!signing.ok) return signing.outcome
+
+  let progress
+  try {
+    progress = await provider.pollSigning(signing.ctx, target, authorisationId, batch.signing_method ?? 'qr')
+  } catch (error) {
+    return { ok: false, code: readFailure(error), details: { provider_code: errorCodeOf(error) } }
+  }
+  if (progress.state === 'pending') return { ok: true, data: secondSignatureView(batch, orders, polledChallenge(progress.challenge), progress.step) }
+  if (progress.state === 'failed') {
+    const code = progress.failureCode ?? 'SCA_FAILED'
+    // The attempt is over and the bank is not asked about it again. Only this attempt, never a newer one.
+    const { data: closed } = await writer
+      .from('payment_order_batches')
+      .update({ signing_started_at: null })
+      .eq('id', batch.id)
+      .eq('company_id', ctx.companyId)
+      .eq('status', 'awaiting_second_signer')
+      .eq('provider_authorisation_id', authorisationId)
+      .select('id')
+    if ((closed ?? []).length === 1) {
+      await logPaymentOrderEvents(writer, [
+        { company_id: ctx.companyId, batch_id: batch.id, event_type: 'error', actor_user_id: ctx.userId, detail: { code, stage: 'second_signature' } },
+      ], ctx.log)
+    }
+    return { ok: true, data: view(batch, orders, null, code) }
+  }
+
+  const owner = await buildPartyContext(ctx, orders[0]!, signer, { batchId: batch.id })
+  if (!owner.ok) return owner.outcome
+  const statuses: string[] = []
+  for (const order of orders) {
+    if (!order.provider_payment_id) continue
+    if (!awaitsSecondSigner(order)) {
+      statuses.push(order.status)
+      continue
+    }
+    try {
+      const state = await provider.getPaymentState(owner.ctx, order.provider_payment_id, order.provider_payment_product ?? 'domestic')
+      statuses.push(await applyProviderState(writer, order, state, ctx.userId, ctx.log))
+    } catch (error) {
+      ctx.log.warn('payment status after the second signature could not be read', { orderId: order.id, code: errorCodeOf(error) })
+      statuses.push(order.status)
+    }
+  }
+  return { ok: true, data: await endSecondSignature(writer, ctx, loaded, statuses, authorisationId) }
+}
+
+/**
+ * A signing that waited for another signatory, ended where its payments stand
+ * (finishedSigningStatus: still waiting while the bank wants yet another), and
+ * read back for the screen. With an authorisation, only while that is still
+ * the signing's current one.
+ */
+async function endSecondSignature(
+  writer: SupabaseClient,
+  ctx: OperationContext,
+  loaded: { batch: PaymentOrderBatchRow; orders: PaymentOrderRow[] },
+  statuses: readonly string[],
+  authorisationId: string | null,
+): Promise<SigningView> {
+  let end = writer
+    .from('payment_order_batches')
+    .update({ status: finishedSigningStatus(statuses), signed_at: new Date().toISOString() })
+    .eq('id', loaded.batch.id)
+    .eq('company_id', ctx.companyId)
+    .eq('status', 'awaiting_second_signer')
+  if (authorisationId) end = end.eq('provider_authorisation_id', authorisationId)
+  const { error } = await end
+  // The read back below shows where the batch really stands; the status sync reads the payments again.
+  if (error) ctx.log.error('second signature could not end its signing', error, { batchId: loaded.batch.id })
+  const after = (await loadBatch(writer, ctx.companyId, loaded.batch.id)) ?? loaded
+  return view(after.batch, after.orders, null, null)
 }
 
 /**

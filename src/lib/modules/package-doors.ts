@@ -386,6 +386,7 @@ const SUPPLIER_INVOICES_AND_PAYMENTS: PackageDoors = {
     'DELETE /api/payments/signing-links/:id',
     'POST /api/payments/signing/:id/poll',
     'POST /api/payments/signing/:id/restart',
+    'POST /api/payments/signing/:id/second-signature',
     'POST /api/payments/verification',
     'DELETE /api/supplier-invoices/:id',
     'PUT /api/supplier-invoices/:id',

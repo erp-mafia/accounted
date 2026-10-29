@@ -56,8 +56,10 @@ const STATUS = z
   .enum(PAYMENT_ORDER_STATUSES)
   .describe(
     'draft: prepared, not attested. approved: attested, waiting for a BankID signing. submitted, awaiting_signature, ' +
-      'awaiting_second_signer, accepted: at the bank. executed: paid by the bank; the order closes when its debit is matched ' +
-      'to the invoice. rejected, cancelled, failed: closed without a payment.',
+      'awaiting_second_signer, accepted: at the bank. awaiting_second_signer: signed once, the bank waits for another ' +
+      'signatory; where the bank takes that signature through the API (SEB) they sign in Accounted (Kontrasignera on ' +
+      'Betalningar, or a signing link over those orders), elsewhere in the online bank. executed: paid by the bank; the ' +
+      'order closes when its debit is matched to the invoice. rejected, cancelled, failed: closed without a payment.',
   )
 
 const Payee = z.object({

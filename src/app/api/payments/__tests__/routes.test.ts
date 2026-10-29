@@ -37,6 +37,7 @@ import { POST as resolveOrder } from '../orders/[id]/resolve/route'
 import { POST as startSigning } from '../signing/route'
 import { POST as pollSigning } from '../signing/[id]/poll/route'
 import { POST as restartSigning } from '../signing/[id]/restart/route'
+import { POST as secondSignature } from '../signing/[id]/second-signature/route'
 import { GET as verificationStatus, POST as startVerification } from '../verification/route'
 
 const ORDER = '11111111-1111-4111-8111-111111111111'
@@ -127,6 +128,7 @@ describe('payments routes with no provider registered (dark installation)', () =
     ['POST /api/payments/signing', () => startSigning(post('/api/payments/signing', { order_ids: [ORDER], method: 'qr' }), { params: Promise.resolve({}) })],
     ['POST /api/payments/signing/:id/poll', () => pollSigning(post(`/api/payments/signing/${BATCH}/poll`, {}), params(BATCH))],
     ['POST /api/payments/signing/:id/restart', () => restartSigning(post(`/api/payments/signing/${BATCH}/restart`, { method: 'qr' }), params(BATCH))],
+    ['POST /api/payments/signing/:id/second-signature', () => secondSignature(post(`/api/payments/signing/${BATCH}/second-signature`, { method: 'qr' }), params(BATCH))],
     ['GET /api/payments/verification', () => verificationStatus(createMockRequest('/api/payments/verification'), { params: Promise.resolve({}) })],
     ['POST /api/payments/verification', () => startVerification(post('/api/payments/verification', {}), { params: Promise.resolve({}) })],
   ])('%s answers 403 PAYMENTS_UNAVAILABLE before touching the database', async (_name, call) => {
@@ -191,6 +193,31 @@ describe('payment orders before the bank has them', () => {
     expect(body.data[0]!.bank_confirming).toBe(false)
     expect(body.data[0]!.sign_again).toBe(false)
     expect(findCall('payment_order_batches', 'select')).toBeUndefined()
+  })
+
+  it('offers Kontrasignera where the bank takes the second signature through the API, and leaves it to the online bank otherwise', async () => {
+    const OTHER_BATCH = '55555555-5555-4555-8555-555555555555'
+    enqueue({
+      data: [
+        draftOrder({ id: 'seb', status: 'awaiting_second_signer', batch_id: BATCH, provider_payment_id: 'pay-1' }),
+        draftOrder({ id: 'online-bank', status: 'awaiting_second_signer', batch_id: OTHER_BATCH, provider_payment_id: 'pay-2' }),
+        draftOrder({ id: 'planned', status: 'accepted', batch_id: OTHER_BATCH, provider_payment_id: 'pay-3' }),
+      ],
+    })
+    // The bank's message with each move to awaiting_second_signer (second-signature.ts).
+    enqueue({ data: [{ payment_order_id: 'seb', detail: { second_signature_via_api: true } }, { payment_order_id: 'online-bank', detail: {} }] })
+
+    const { status, body } = await parseJsonResponse<{ data: Array<{ id: string; sign_second: boolean }> }>(
+      await listOrders(createMockRequest('/api/payments/orders'), { params: Promise.resolve({}) }),
+    )
+
+    expect(status).toBe(200)
+    expect(body.data.map((o) => [o.id, o.sign_second])).toEqual([
+      ['seb', true],
+      ['online-bank', false],
+      ['planned', false],
+    ])
+    expect(findCall('payment_order_events', 'in')).toEqual(['payment_order_id', ['seb', 'online-bank']])
   })
 
   it('offers to sign again a payment waiting unsigned at the bank after its BankID was abandoned (crm#1282)', async () => {

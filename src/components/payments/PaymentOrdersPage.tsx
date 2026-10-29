@@ -96,6 +96,8 @@ export function PaymentOrdersPage() {
   const [resume, setResume] = useState<PaymentSigningReturn | null>(null)
   /** Signera igen: the signing whose payments wait unsigned at the bank, restarted instead of a new one. */
   const [signAgainBatch, setSignAgainBatch] = useState<string | null>(null)
+  /** Kontrasignera: the signing the bank holds for another signatory, who signs it here. */
+  const [secondSignatureBatch, setSecondSignatureBatch] = useState<string | null>(null)
   const [resolving, setResolving] = useState<PaymentOrder | null>(null)
   /** Be någon annan signera: the approved orders a signing link is being made for. */
   const [requesting, setRequesting] = useState<PaymentOrder[] | null>(null)
@@ -251,6 +253,15 @@ export function PaymentOrdersPage() {
     if (again.length === 0 || !order.batch_id) return
     setSignAgainBatch(order.batch_id)
     setSigning(again)
+  }
+
+  // The bank holds the payments for another signatory and takes that
+  // signature here (sign_second): the whole signing is signed as them, so
+  // the dialog shows every payment of it that waits.
+  function signSecond(order: PaymentOrder) {
+    if (!order.batch_id) return
+    setSecondSignatureBatch(order.batch_id)
+    setSigning((orders ?? []).filter((o) => o.batch_id === order.batch_id && o.status === 'awaiting_second_signer'))
   }
 
   async function cancel(order: PaymentOrder) {
@@ -520,7 +531,7 @@ export function PaymentOrdersPage() {
                                 </Badge>
                               ) : variant ? (
                                 <Badge variant={variant} className="font-normal">
-                                  {statusLabel(order.status)}
+                                  {order.sign_second ? tStatus('status_awaiting_second_signer_here') : statusLabel(order.status)}
                                 </Badge>
                               ) : (
                                 <span className="text-muted-foreground">{statusLabel(order.status)}</span>
@@ -570,6 +581,11 @@ export function PaymentOrdersPage() {
                                 {order.sign_again && available && (
                                   <button type="button" className={QUIET_LINK_CLASS} onClick={() => signAgain(order)} disabled={busyId !== null}>
                                     {t('sign_again')}
+                                  </button>
+                                )}
+                                {order.sign_second && available && (
+                                  <button type="button" className={QUIET_LINK_CLASS} onClick={() => signSecond(order)} disabled={busyId !== null}>
+                                    {t('sign_second')}
                                   </button>
                                 )}
                                 {held && available && (
@@ -624,11 +640,14 @@ export function PaymentOrdersPage() {
           bankName={availability.accounts.find((a) => a.id === signing[0]?.cash_account_id)?.bank_name ?? null}
           resume={resume}
           pendingBatchId={signAgainBatch}
+          secondSignatureBatchId={secondSignatureBatch}
+          onRequestLink={() => setRequesting(signing)}
           onOpenChange={(open) => {
             if (!open) {
               setSigning(null)
               setResume(null)
               setSignAgainBatch(null)
+              setSecondSignatureBatch(null)
             }
           }}
           onDone={refresh}

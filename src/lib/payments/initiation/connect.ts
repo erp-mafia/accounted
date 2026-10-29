@@ -36,6 +36,7 @@ import {
   type PaymentInitiationProvider,
   type PaymentInstruction,
   type PaymentPartyContext,
+  type ProviderPaymentState,
   type SigningChallenge,
   type SigningTarget, type SigningStep } from './provider'
 
@@ -134,6 +135,23 @@ export function cancelIdempotencyKey(providerPaymentId: string): string {
  * other status is signed, final or not known to be unsigned.
  */
 const UNSIGNED_PROVIDER_STATUSES: ReadonlySet<string> = new Set(['RCVD', 'PDNG'])
+
+/**
+ * Open Payments' message, with PATC, that the bank takes the second signature
+ * through the API (a new authorisation under the other signatory's PSU-ID)
+ * rather than in its online bank: SEB (written answer, 2026-10-28).
+ */
+const SECOND_SIGNATURE_VIA_API = 'AUTHORISATION_PENDING_API'
+
+/** The port's state of a payment: the provider's messages, and what they say about a second signature. */
+function paymentState(state: { providerStatus: string; status: ProviderPaymentState['status']; messages: string[] }): ProviderPaymentState {
+  return {
+    providerStatus: state.providerStatus,
+    status: state.status,
+    messages: state.messages,
+    ...(state.messages.includes(SECOND_SIGNATURE_VIA_API) ? { secondSignatureViaApi: true } : {}),
+  }
+}
 
 /** Whether the bank's status for a payment says it is not signed (UNSIGNED_PROVIDER_STATUSES). */
 export function isUnsignedProviderStatus(providerStatus: string | null | undefined): boolean {
@@ -260,18 +278,11 @@ export function createConnectPaymentsProvider(upstream: ConnectorUpstream, deps:
         party: toConnectorParty(ctx),
         instruction: wire,
       })
-      return {
-        providerPaymentId: created.providerPaymentId,
-        product: created.product,
-        providerStatus: created.providerStatus,
-        status: created.status,
-        messages: created.messages,
-      }
+      return { providerPaymentId: created.providerPaymentId, product: created.product, ...paymentState(created) }
     },
 
     async getPaymentState(ctx, providerPaymentId, product) {
-      const state = await call('paymentStatus', ctx.companyId, { party: toConnectorParty(ctx), providerPaymentId, product })
-      return { providerStatus: state.providerStatus, status: state.status, messages: state.messages }
+      return paymentState(await call('paymentStatus', ctx.companyId, { party: toConnectorParty(ctx), providerPaymentId, product }))
     },
 
     async createSigningBasket(ctx, providerPaymentIds, signingId) {
