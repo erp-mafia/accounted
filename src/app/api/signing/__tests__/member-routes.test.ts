@@ -31,6 +31,7 @@ const COMPANY = '33333333-3333-4333-8333-333333333333'
 const MEMBER = '55555555-5555-4555-8555-555555555555'
 const REQ = '77777777-7777-4777-8777-777777777777'
 const SIGNER = '88888888-8888-4888-8888-888888888888'
+const SENT = new Date(Date.now() - 86_400_000).toISOString()
 const params = (signerId: string) => ({ params: Promise.resolve({ signerId }) })
 
 type ErrorBody = { error: { code: string } }
@@ -60,7 +61,7 @@ beforeEach(() => {
     last_error_code: null,
   }
   db.setTable('signing_request_signers', (calls) =>
-    calls.some((c) => c.method === 'order') ? { data: [{ position: 1, name: 'Erik Eriksson', role_label: 'Styrelseledamot', status: 'pending' }] } : { data: signer },
+    calls.some((c) => c.method === 'order') ? { data: [{ position: 1, name: 'Erik Eriksson', role_label: 'Styrelseledamot', status: 'pending', signed_at: null }] } : { data: signer },
   )
   db.setTable('signing_requests', {
     data: {
@@ -73,11 +74,13 @@ beforeEach(() => {
       message: null,
       status: 'open',
       expires_at: new Date(Date.now() + 86_400_000).toISOString(),
+      created_at: SENT,
     },
   })
   db.setTable('companies', { data: { name: 'Bolaget AB', team_id: null, archived_at: null } })
   db.setTable('profiles', { data: { full_name: 'Karin Byråsson' } })
   db.setTable('document_attachments', { data: { file_name: 'arsredovisning.pdf' } })
+  db.setTable('company_settings', { data: { logo_url: null } })
   ceremony.startSignature.mockResolvedValue({ ok: true, data: { auto_start_token: 'auto', qr_start_token: 'qr', qr_start_secret: 'secret', expires_at: 'x' } })
 })
 
@@ -103,12 +106,12 @@ describe('the member door of the signer\'s side', () => {
     expect(ceremony.startSignature).not.toHaveBeenCalled()
   })
 
-  it('shows the member their own signing, whatever company is active', async () => {
-    const { status, body } = await parseJsonResponse<{ data: { request: { title: string; company_name: string }; signer: { locked: boolean } } }>(
+  it('shows the member their own signing, whatever company is active, with the sender as the public page shows it', async () => {
+    const { status, body } = await parseJsonResponse<{ data: { request: Record<string, unknown>; signer: { locked: boolean } } }>(
       await describeRoute(createMockRequest(`/api/signing/me/${SIGNER}`), params(SIGNER)),
     )
     expect(status).toBe(200)
-    expect(body.data.request).toMatchObject({ title: 'Årsredovisning 2025', company_name: 'Bolaget AB' })
+    expect(body.data.request).toMatchObject({ title: 'Årsredovisning 2025', company_name: 'Bolaget AB', logo_url: null, platform_name: 'Accounted', sent_at: SENT })
     expect(body.data.signer.locked).toBe(true)
     expect(db.findCall('signing_request_signers', 'eq')).toEqual(['id', SIGNER])
     expect(db.findCalls('companies', 'eq')).toEqual(expect.arrayContaining([['id', COMPANY]]))

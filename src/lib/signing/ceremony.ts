@@ -25,6 +25,7 @@ import { eventBus } from '@/lib/events/bus'
 import type { Logger } from '@/lib/logger'
 import type { OperationOutcome } from '@/lib/operations/types'
 import { resolveBankIdSigning, type BankIdSigningFailure, type CollectedBankIdSignature } from './bankid-provider'
+import { signingSenderBrand } from './brand'
 import { describeRequester } from './requests'
 import { sealSigningRequest } from './seal'
 import { bankIdNameMatchesSlot, subjectForSigning, subjectStatement } from './subjects'
@@ -84,7 +85,13 @@ export interface SignerPageData {
     title: string
     message: string | null
     company_name: string
+    /** The company's own logo (signingSenderBrand), or null: the page draws its initials. */
+    logo_url: string | null
+    /** The platform the request went out through, for "via Accounted": the brand's app name under a white label. */
+    platform_name: string
     requester: string
+    /** When the request went out. */
+    sent_at: string
     file_name: string
     sha256: string
     state: SigningRequestState
@@ -104,16 +111,17 @@ export interface SignerPageData {
     locked: boolean
     last_error_code: string | null
   }
-  /** Everyone asked to sign, without their addresses. */
-  signers: Array<{ position: number; name: string; role_label: string | null; status: SigningSignerRow['status'] }>
+  /** Everyone asked to sign, without their addresses, and when each signed. */
+  signers: Array<{ position: number; name: string; role_label: string | null; status: SigningSignerRow['status']; signed_at: string | null }>
 }
 
 export async function describeForSigner(scope: SignerScope, now: number = Date.now()): Promise<SignerPageData> {
   const { service, request, signer } = scope
-  const [{ data: doc }, { data: others }, sender] = await Promise.all([
+  const [{ data: doc }, { data: others }, sender, brand] = await Promise.all([
     service.from('document_attachments').select('file_name').eq('id', request.document_id).maybeSingle(),
-    service.from('signing_request_signers').select('position, name, role_label, status').eq('signing_request_id', request.id).order('position'),
+    service.from('signing_request_signers').select('position, name, role_label, status, signed_at').eq('signing_request_id', request.id).order('position'),
     describeRequester(service, request.company_id, request.created_by),
+    signingSenderBrand(service, request.company_id),
   ])
   const bankidName = [signer.bankid_given_name, signer.bankid_surname].filter(Boolean).join(' ').trim()
   return {
@@ -121,7 +129,10 @@ export async function describeForSigner(scope: SignerScope, now: number = Date.n
       title: request.title,
       message: request.message,
       company_name: sender.companyName,
+      logo_url: brand.logoUrl,
+      platform_name: brand.platformName,
       requester: sender.requester,
+      sent_at: request.created_at,
       file_name: (doc as { file_name?: string } | null)?.file_name ?? 'dokument.pdf',
       sha256: request.document_sha256,
       state: requestState(request, now),
@@ -138,7 +149,7 @@ export async function describeForSigner(scope: SignerScope, now: number = Date.n
       locked: signer.lock_kind !== 'none',
       last_error_code: signer.last_error_code,
     },
-    signers: ((others ?? []) as Array<{ position: number; name: string; role_label: string | null; status: SigningSignerRow['status'] }>),
+    signers: (others ?? []) as SignerPageData['signers'],
   }
 }
 
