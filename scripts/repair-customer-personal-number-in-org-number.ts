@@ -13,7 +13,7 @@
  * check is added (that migration refuses any UPDATE of a row it would reject).
  *
  * Per row (customer_type='individual' with a non-blank org_number), decided by
- * scripts/lib/customer-org-number-repair.ts:
+ * src/lib/customers/org-number-repair.ts:
  *   move                      personal_number empty: encrypt org_number into it, clear org_number
  *   clear_same                personal_number holds the same personnummer: clear org_number
  *   clear_differ              personal_number holds a different one: the stored one wins, clear org_number
@@ -40,22 +40,13 @@
  * never double-applies; a row that changed underneath is counted as skipped.
  * Safe to re-run.
  *
- * Never run by a loop: the founder decides when it runs.
+ * Never run by a loop: the founder decides when it runs. Production's key
+ * exists only in the deployed app, so production runs the same repair through
+ * the one-off cron /api/customers/personal-number-repair/cron.
  */
 import { config } from 'dotenv'
 import { createClient } from '@supabase/supabase-js'
-import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import {
-  encryptCustomerPersonalNumber,
-  revealStoredCustomerPersonalNumber,
-} from '@/lib/customers/protect-personal-number'
-import { normalizeReroutedPersonalNumber } from '@/lib/invariants/personal-number-shape'
-import {
-  countOrgNumberRepairActions,
-  isWritingAction,
-  planOrgNumberRepair,
-  type OrgNumberRepairAction,
-} from './lib/customer-org-number-repair'
+import { repairIndividualOrgNumbers } from '@/lib/customers/org-number-repair'
 
 /**
  * The value after --name; undefined when the option is absent. An option
@@ -119,118 +110,35 @@ const supabase = createClient(supabaseUrl, serviceRoleKey, {
   auth: { persistSession: false, autoRefreshToken: false },
 })
 
-type Row = {
-  id: string
-  company_id: string
-  user_id: string
-  customer_type: string
-  org_number: string
-  personal_number: string | null
-}
-
 async function main(): Promise<void> {
   console.log(
     `Target: ${target.host} (${ENV_FILE})   mode: ${APPLY ? 'APPLY' : 'DRY RUN (read-only)'}`
     + (COMPANY_ID ? '   scope: one company' : '   scope: all companies'),
   )
 
-  const rows = await fetchAllRows<Row>(({ from, to }) => {
-    let query = supabase
-      .from('customers')
-      .select('id, company_id, user_id, customer_type, org_number, personal_number')
-      .eq('customer_type', 'individual')
-      .not('org_number', 'is', null)
-      .order('id', { ascending: true })
-      .range(from, to)
-    if (COMPANY_ID) query = query.eq('company_id', COMPANY_ID)
-    return query
+  const run = await repairIndividualOrgNumbers(supabase, {
+    apply: APPLY,
+    companyId: COMPANY_ID,
+    actorLabel: 'script repair-customer-personal-number-in-org-number',
   })
-
-  const planned: { row: Row; action: OrgNumberRepairAction }[] = []
-  for (const row of rows) {
-    const action = planOrgNumberRepair(row, (stored) => revealStoredCustomerPersonalNumber(stored) ?? '')
-    if (action) planned.push({ row, action })
-  }
-
-  const counts = countOrgNumberRepairActions(planned.map((p) => p.action))
-  const companies = new Set(planned.map((p) => p.row.company_id)).size
-  console.log(`Individuals with a non-blank org_number: ${planned.length}, in ${companies} companies.`)
-  for (const [action, count] of Object.entries(counts)) console.log(`  ${action.padEnd(26)} ${count}`)
+  console.log(`Individuals with a non-blank org_number: ${run.individuals}, in ${run.companies} companies.`)
+  for (const [action, count] of Object.entries(run.counts)) console.log(`  ${action.padEnd(26)} ${count}`)
 
   if (!APPLY) {
     console.log('Dry run: nothing written. Re-run with --apply to write.')
     return
   }
-
-  let written = 0
-  let changedUnderneath = 0
-  const failures = new Map<string, number>()
-  for (const { row, action } of planned) {
-    if (!isWritingAction(action)) continue
-    // Guarded on the values the decision was made on. Two literal payloads
-    // so the no-phantom-columns scanner can resolve both.
-    const result = action === 'move'
-      ? await supabase
-          .from('customers')
-          .update({
-            org_number: null,
-            personal_number: encryptCustomerPersonalNumber(normalizeReroutedPersonalNumber(row.org_number)),
-          })
-          .eq('id', row.id)
-          .eq('company_id', row.company_id)
-          .eq('customer_type', 'individual')
-          .eq('org_number', row.org_number)
-          .is('personal_number', null)
-          .select('id')
-      : await supabase
-          .from('customers')
-          .update({ org_number: null })
-          .eq('id', row.id)
-          .eq('company_id', row.company_id)
-          .eq('customer_type', 'individual')
-          .eq('org_number', row.org_number)
-          .eq('personal_number', row.personal_number!)
-          .select('id')
-    if (result.error) {
-      // The code only: a message or detail could quote the row.
-      const code = result.error.code || 'unknown'
-      failures.set(code, (failures.get(code) ?? 0) + 1)
-    } else if (!result.data || result.data.length === 0) {
-      changedUnderneath += 1
-    } else {
-      written += 1
-      // The per-row trace (BFNAR 2013:2 p. 9.16): ids and the action only, no
-      // personnummer and no ciphertext. actor_type 'system' so it never reads
-      // as something the company's user did. Written after the change, as the
-      // app's other audit writers do. Not one transaction with the update, so
-      // a failed audit row stops the run at once: at most one repaired row is
-      // left without its trace, and the operator hears about it.
-      // A literal payload so the no-phantom-columns scanner checks it.
-      const audit = await supabase.from('audit_log').insert({
-        user_id: row.user_id,
-        company_id: row.company_id,
-        action: 'UPDATE',
-        table_name: 'customers',
-        record_id: row.id,
-        actor_id: null,
-        actor_type: 'system',
-        actor_label: 'script repair-customer-personal-number-in-org-number',
-        old_state: { org_number_set: true },
-        new_state: { org_number: null, personal_number_set: true, repair_action: action },
-        description: `Individual customer: org_number cleared (${action}); the personnummer is held encrypted in personal_number`,
-      })
-      if (audit.error) {
-        console.error(
-          `Stopped: the audit_log row for the last repaired customer failed (${audit.error.code || 'unknown'}). `
-          + `written so far: ${written}; that last one has no audit row. Nothing further was written.`,
-        )
-        process.exit(1)
-      }
-    }
+  if (run.stopped === 'audit_failed') {
+    console.error(
+      `Stopped: the audit_log row for the last repaired customer failed (${run.auditError}). `
+      + `written so far: ${run.written}; that last one has no audit row. Nothing further was written.`,
+    )
+    process.exit(1)
   }
 
-  console.log(`Done. written: ${written}, changed underneath (skipped): ${changedUnderneath}, failed: ${[...failures.values()].reduce((a, b) => a + b, 0)}`)
-  for (const [code, count] of failures) console.log(`  failed with ${code}: ${count}`)
+  const failed = Object.values(run.failed).reduce((a, b) => a + b, 0)
+  console.log(`Done. written: ${run.written}, changed underneath (skipped): ${run.changedUnderneath}, failed: ${failed}`)
+  for (const [code, count] of Object.entries(run.failed)) console.log(`  failed with ${code}: ${count}`)
 }
 
 main().catch((err) => {
