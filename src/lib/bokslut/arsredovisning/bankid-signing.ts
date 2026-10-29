@@ -20,6 +20,11 @@
  *     bankIdNameMatchesSlot in lib/signing/subjects.ts.
  *   - The fastställelseintyg is signed at Bolagsverket after the årsstämma,
  *     never here.
+ *   - The revisor's slot is not part of the board's request: the revisor
+ *     makes the påteckning (ABL 9 kap. 28 §) once the revisionsberättelse is
+ *     given, weeks after the board signed and on what the revisor decided,
+ *     so it is recorded on its own (evidence by hand) and never counts
+ *     towards the board's track.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { uploadDocument } from '@/lib/core/documents/document-service'
@@ -27,6 +32,7 @@ import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { checkSigners, createSigningRequest, signingStartRefusal, type CreatedSigningRequest } from '@/lib/signing/requests'
 import { createServiceClient } from '@/lib/supabase/server'
 import { getArsredovisningESigningPdf } from './file-service'
+import { isAuditorRole } from './workflow-schemas'
 
 type Failure = Extract<OperationOutcome<never>, { ok: false }>
 
@@ -132,7 +138,8 @@ async function checkVersion(
     .eq('annual_report_version_id', input.versionId)
     .order('created_at', { ascending: true })
   if (slotError) throw new Error(`Failed to load signature slots: ${slotError.message}`)
-  const slots = (slotData ?? []) as SlotRow[]
+  // The board's slots only: the revisor's påteckning is recorded on its own.
+  const slots = ((slotData ?? []) as SlotRow[]).filter((slot) => !isAuditorRole(slot.role))
   if (slots.length === 0) return { ok: false, code: 'ARSREDOVISNING_VERSION_NOT_SIGNABLE' }
   // One track per version: evidence recorded by hand on any slot keeps the
   // whole version on that track, and a declined slot cannot be signed.

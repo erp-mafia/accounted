@@ -1,37 +1,34 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
-import { arsredovisningDatering } from './datering'
 import { formatPdfKronor } from './pdf-format'
 import { formatOrgNumber } from '@/lib/utils'
+import { EquitySpecificationTable } from './equity-specification-pdf'
 import {
   CERTIFICATE_SIGNER,
   CERTIFICATE_SIGNER_LINE,
-  DRAFT_NO_SIGNERS,
-  DRAFT_SIGNATURES_NOTE,
-  E_SIGNING_SIGNATURES_NOTE,
   draftCertificateNote,
   eSigningCertificateNote,
-  signatureDate,
   type ArsredovisningPdfMode,
 } from './signature-pages'
+import { SignaturesPdf } from './signatures-pdf'
 
 /**
  * K3 årsredovisning PDF template (BFNAR 2012:1).
  *
- * Layout extends the K2 template with two additional statements required
- * for K3:
- *   - Kassaflödesanalys (K3 ch.7)
- *   - Förändring av eget kapital (K3 ch.6: separate statement, not a
- *     förvaltningsberättelse table).
+ * Layout extends the K2 template with:
+ *   - Kassaflödesanalys (K3 ch.7), when the report carries one
+ *   - Förändring av eget kapital (ÅRL 6 kap. 2 § andra stycket, K3 6.3):
+ *     in förvaltningsberättelsen by default, or as a statement of its own
+ *     (K3 3.10 allows both) when the specification's placement says so.
  *
  * Page order:
  *   1. Cover
- *   2. Förvaltningsberättelse (+ flerårsöversikt + förslag till
- *      resultatdisposition)
+ *   2. Förvaltningsberättelse (+ flerårsöversikt + förändring av eget
+ *      kapital + förslag till resultatdisposition)
  *   3. Resultaträkning
  *   4. Balansräkning
  *   5. Kassaflödesanalys
- *   6. Förändring av eget kapital
+ *   6. Förändring av eget kapital, when chosen as a statement of its own
  *   7+ Noter (paginates automatically: the richer K3 note set rarely fits
  *      on one page so we let @react-pdf wrap)
  *   last. Underskrifter + Fastställelseintyg
@@ -171,11 +168,12 @@ const styles = StyleSheet.create({
     borderWidth: 0.5,
     borderColor: '#888',
   },
-  // Draft watermark: completeness.ts classifies every K3 report as
-  // AR-K3-DRAFT-ONLY (it can never be finalized), so the rendered PDF must
-  // say so on every page, not just in a cover banner. Rendered with the
-  // `fixed` prop inside PageChrome so it repeats on wrap-generated
-  // continuation pages too.
+  // Draft watermark: while the K3 release flag is off (k3-release.ts)
+  // completeness.ts classifies every K3 report as AR-K3-DRAFT-ONLY, so the
+  // rendered PDF must say so on every page, not just in a cover banner.
+  // Rendered with the `fixed` prop inside PageChrome so it repeats on
+  // wrap-generated continuation pages too. A released document
+  // (k3_release 'final') carries none.
   draftWatermark: {
     position: 'absolute',
     top: '45%',
@@ -257,17 +255,19 @@ function PageChrome({
       <Text style={styles.pageFooter} fixed>
         {pageLabel ?? ''}
       </Text>
-      <Text style={styles.draftWatermark} fixed>
-        GRANSKNINGSUTKAST
-      </Text>
+      {data.k3_release !== 'final' && (
+        <Text style={styles.draftWatermark} fixed>
+          GRANSKNINGSUTKAST
+        </Text>
+      )}
     </>
   )
 }
 
 /**
  * @param mode 'signing' for a version locked for signature (blank lines to
- *   fill in by hand), 'draft' otherwise: see signature-pages.ts. Every K3
- *   document is a granskningsutkast today, so in practice this is 'draft'.
+ *   fill in by hand), 'draft' otherwise: see signature-pages.ts. A K3
+ *   document can be locked only once K3 is released (k3-release.ts).
  */
 export function ArsredovisningK3PDF({
   data,
@@ -276,9 +276,6 @@ export function ArsredovisningK3PDF({
   data: ArsredovisningData
   mode?: ArsredovisningPdfMode
 }) {
-  const reportSignatureDate = arsredovisningDatering(
-    data.signatures.map((signature) => signature.signed_at),
-  )
   const agmDispositionDecision =
     data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
       ? `Årsstämman beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
@@ -315,7 +312,15 @@ export function ArsredovisningK3PDF({
         <Text style={styles.sectionTitle}>Väsentliga händelser under räkenskapsåret</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.important_events}</Text>
 
-        {data.forvaltningsberattelse.kontrollbalans_required && (
+        {(data.k3_forvaltningsberattelse ?? []).map((item) => (
+          <View key={item.concept ?? item.heading}>
+            <Text style={styles.sectionTitle}>{item.heading}</Text>
+            <Text style={styles.paragraph}>{item.text}</Text>
+          </View>
+        ))}
+
+        {data.forvaltningsberattelse.kontrollbalans_required
+          && !data.k3_forvaltningsberattelse?.some((item) => item.concept === 'Kontrollbalansrakning') && (
           <>
             <Text style={styles.sectionTitle}>Kontrollbalansräkning</Text>
             <Text style={styles.paragraph}>
@@ -341,6 +346,13 @@ export function ArsredovisningK3PDF({
             </Text>
           </View>
         ))}
+
+        {data.equity_specification?.placement === 'management_report' && (
+          <>
+            <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
+            <EquitySpecificationTable year={data.equity_specification.current} />
+          </>
+        )}
 
         <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
@@ -573,8 +585,26 @@ export function ArsredovisningK3PDF({
         </Page>
       )}
 
-      {/* Förändring av eget kapital: K3 separate statement */}
-      {data.equity_changes_statement && (
+      {/* Förändring av eget kapital as a statement of its own: both years. */}
+      {data.equity_specification?.placement === 'separate_statement' && (
+        <Page size="A4" style={styles.page}>
+          <PageChrome data={data} pageLabel="Förändring av eget kapital" />
+          <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
+          {data.equity_specification.previous && (
+            <EquitySpecificationTable
+              year={data.equity_specification.previous}
+              caption={data.equity_specification.previous.name}
+            />
+          )}
+          <EquitySpecificationTable
+            year={data.equity_specification.current}
+            caption={data.equity_specification.current.name}
+          />
+        </Page>
+      )}
+
+      {/* A version saved before the specification: its statement as stored. */}
+      {!data.equity_specification && data.equity_changes_statement && (
         <Page size="A4" style={styles.page}>
           <PageChrome data={data} pageLabel="Förändring av eget kapital" />
           <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
@@ -616,67 +646,7 @@ export function ArsredovisningK3PDF({
       <Page size="A4" style={styles.page}>
         <PageChrome data={data} pageLabel="Underskrifter" />
         <Text style={styles.sectionTitle}>Underskrifter</Text>
-        {mode === 'draft' ? (
-          <>
-            <Text style={styles.draftNote}>{DRAFT_SIGNATURES_NOTE}</Text>
-            {reportSignatureDate && (
-              <Text style={styles.paragraph}>
-                {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
-                {reportSignatureDate}
-              </Text>
-            )}
-            {data.signatures.length === 0 ? (
-              <Text style={styles.paragraph}>{DRAFT_NO_SIGNERS}</Text>
-            ) : (
-              data.signatures.map((sig, i) => {
-                const date = signatureDate(sig.signed_at)
-                return (
-                  <View key={i} style={styles.draftSigner}>
-                    <Text style={styles.colLabel}>{sig.name}</Text>
-                    <Text style={styles.signatureRole}>{sig.role}</Text>
-                    <Text style={styles.signatureDate}>{date ? `Undertecknad ${date}` : ''}</Text>
-                  </View>
-                )
-              })
-            )}
-          </>
-        ) : mode === 'e_signing' ? (
-          <>
-            <Text style={styles.paragraph}>{E_SIGNING_SIGNATURES_NOTE}</Text>
-            {data.company.registered_office && <Text style={styles.paragraph}>{data.company.registered_office}</Text>}
-            {data.signatures.map((sig, i) => (
-              <View key={i} style={styles.draftSigner}>
-                <Text style={styles.colLabel}>{sig.name}</Text>
-                <Text style={styles.signatureRole}>{sig.role}</Text>
-              </View>
-            ))}
-          </>
-        ) : (
-          <>
-            <Text style={styles.paragraph}>
-              {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
-              {reportSignatureDate ?? '____________________'}
-            </Text>
-            {(data.signatures.length > 0
-              ? data.signatures
-              : [
-                  { role: 'Styrelseledamot', name: '', signed_at: null },
-                  { role: 'Styrelseledamot', name: '', signed_at: null },
-                ]
-            ).map((sig, i) => (
-              <View key={i} style={styles.signatureLine}>
-                <View style={styles.signatureSlot}>
-                  <Text>{sig.name || ' '}</Text>
-                </View>
-                <Text style={styles.signatureRole}>{sig.role}</Text>
-                {/* Each signer states the date of their signature (ÅRL 2 kap. 7 §). */}
-                <Text style={styles.signatureDate}>
-                  Datum: {signatureDate(sig.signed_at) ?? '____________'}
-                </Text>
-              </View>
-            ))}
-          </>
-        )}
+        <SignaturesPdf data={data} mode={mode} styles={styles} />
       </Page>
 
       {/*

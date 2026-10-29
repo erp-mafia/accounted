@@ -14,7 +14,8 @@
  */
 
 import { mapTrialBalancesToK2, type TrialBalancePair, type TrialBalanceRowLike } from '../k2-mapper'
-import type { IxbrlArsredovisningInput } from '../types'
+import type { IxbrlArsredovisningInput, K3EquityPost } from '../types'
+import { k3CashFlowFromStatement, k3EquityFromSpecification } from '../k3-adapters'
 
 const row = (
   account: string,
@@ -246,4 +247,106 @@ export function makeInput(): IxbrlArsredovisningInput {
     entryPointId: 'k2-ab-risbs-2024-09-12',
     warnings: [],
   }
+}
+
+/**
+ * The same company under K3 (entry point K3 AB risbs 2021-10-31): one K3
+ * post of its own (a 5 000 kr uppskjuten skattefordran carved out of the
+ * kundfordringar, totals adjusted), the equity specification from the
+ * ledger (last year's result carried forward, this year's result) and a
+ * chapter 7 kassaflödesanalys that ties to likvida medel (185 000 → 270 000).
+ */
+export function makeK3Input(): IxbrlArsredovisningInput {
+  const input = makeInput()
+  input.entryPointId = 'k3-ab-risbs-2021-10-31'
+  input.br = {
+    ...input.br,
+    Kundfordringar: { current: 45_000, previous: 0 },
+    UppskjutenSkattefordran: { current: 5_000, previous: 0 },
+  }
+  const shift = (key: keyof typeof input.totals, delta: number) => {
+    input.totals = { ...input.totals, [key]: { ...input.totals[key], current: input.totals[key].current + delta } }
+  }
+  shift('finansiellaAnlaggningstillgangar', 5_000)
+  shift('anlaggningstillgangar', 5_000)
+  shift('kortfristigaFordringar', -5_000)
+  shift('omsattningstillgangar', -5_000)
+  input.noter = input.noter.map((note) =>
+    note.number === 1
+      ? { ...note, body: 'Årsredovisningen är upprättad i enlighet med årsredovisningslagen och BFNAR 2012:1 Årsredovisning och koncernredovisning (K3).' }
+      : note,
+  )
+  const amounts: Record<string, number> = {
+    rorelseresultat: 154_340,
+    justeringar_ej_kassaflode: 20_000,
+    erhallen_utdelning: 0,
+    erhallen_ranta: 1_000,
+    erlagd_ranta: -4_000,
+    ovriga_finansiella_poster: 0,
+    betald_inkomstskatt: -1_340,
+    koncernbidrag: 0,
+    kassaflode_fore_rorelsekapital: 170_000,
+    forandring_varulager: 0,
+    forandring_rorelsefordringar: -50_000,
+    forandring_rorelseskulder: -35_000,
+    ovriga_poster: 0,
+    kassaflode_lopande: 85_000,
+    kassaflode_investering: 0,
+    kassaflode_finansiering: 0,
+    arets_kassaflode: 85_000,
+    likvida_medel_ib: 185_000,
+    kursdifferens_likvida_medel: 0,
+    likvida_medel_ub: 270_000,
+  }
+  input.k3 = {
+    forvaltningsberattelse: [
+      {
+        concept: 'UppgiftAgareMerAnTioProcentAndelarRoster',
+        heading: 'Ägarförhållanden',
+        text: 'Bolaget ägs till 100 procent av Moderbolaget AB.',
+      },
+    ],
+    equity: k3EquityFromSpecification(
+      {
+        kinds: ['resultatdisposition', 'utdelning', 'arets_resultat'],
+        current: {
+          posts: [
+            { concept: 'Aktiekapital', label: 'Aktiekapital', bound: true, opening: 25_000, closing: 25_000, movements: {} },
+            { concept: 'BalanseratResultat', label: 'Balanserat resultat', bound: false, opening: 60_000, closing: 100_000, movements: { resultatdisposition: 40_000 } },
+            {
+              concept: 'AretsResultatEgetKapital',
+              label: 'Årets resultat',
+              bound: false,
+              opening: 40_000,
+              closing: 120_000,
+              movements: { resultatdisposition: -40_000, arets_resultat: 120_000 },
+            },
+          ],
+        },
+      },
+      input.br,
+    ),
+    cashFlow: k3CashFlowFromStatement({
+      current: { amounts, reconciliation: { is_reconciled: true } },
+      previous: null,
+    }),
+    balanceSheetSource: 'k3_presentation',
+  }
+  return input
+}
+
+/** The jämförelseår of the K3 fixture's equity specification (2024: last year's 25 000 kr result carried forward). */
+export const K3_EQUITY_PREVIOUS_YEAR: { posts: K3EquityPost[] } = {
+  posts: [
+    { concept: 'Aktiekapital', label: 'Aktiekapital', bound: true, opening: 25_000, closing: 25_000, movements: {} },
+    { concept: 'BalanseratResultat', label: 'Balanserat resultat', bound: false, opening: 35_000, closing: 60_000, movements: { resultatdisposition: 25_000 } },
+    {
+      concept: 'AretsResultatEgetKapital',
+      label: 'Årets resultat',
+      bound: false,
+      opening: 25_000,
+      closing: 40_000,
+      movements: { resultatdisposition: -25_000, arets_resultat: 40_000 },
+    },
+  ],
 }

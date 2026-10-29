@@ -166,13 +166,17 @@ describe('applyCashFlowOmission', () => {
     expect(report.warnings).toContain(k3ContentsNotice(true))
   })
 
-  it('keeps the statement until the user confirms an undeterminable size', () => {
-    const report = makeReport('k3', true, false)
+  it('withholds the statement from a mindre företag, chosen or not, until it meets K3 kapitel 7', () => {
+    const report = makeReport('k3', false, false)
     applyCashFlowOmission(report, eligibility('smaller'), oneYear, unlistedProfile)
-    expect(report.kassaflodesanalys).toBeDefined()
-    const confirmed = makeReport('k3', true, true)
-    applyCashFlowOmission(confirmed, eligibility('smaller'), oneYear, unlistedProfile)
-    expect(confirmed.kassaflodesanalys).toBeUndefined()
+    expect(report.kassaflodesanalys).toBeUndefined()
+    expect(report.kassaflodesanalys_omission).toMatchObject({
+      rule: 'requires_confirmation',
+      requested: false,
+      omitted: true,
+      withheld: true,
+    })
+    expect(report.warnings).toContain(k3ContentsNotice(false))
   })
 
   it('leaves K2 untouched', () => {

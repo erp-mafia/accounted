@@ -38,11 +38,13 @@ import { ArsredovisningBankIdSigning, useVersionSigningRequests } from '@/compon
 import { useSigningAvailability } from '@/components/signing/use-signing-availability'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { deriveArsredovisningSigningTrack } from '@/lib/bokslut/arsredovisning/signing-track'
+import { isAuditorRole } from '@/lib/bokslut/arsredovisning/workflow-schemas'
 import {
   AnnualReportStudio,
   type AnnualReportComplianceSummary,
 } from '@/components/bokslut/AnnualReportStudio'
 import { StepRail } from '@/components/bokslut/StepRail'
+import { K3DisclosureEditor } from '@/components/bokslut/K3DisclosureEditor'
 import { StepSectionHeader, annualReportStepAnchor } from '@/components/bokslut/StepSectionHeader'
 import {
   deriveAnnualReportWorkflow,
@@ -173,6 +175,7 @@ export default function ArsredovisningPage() {
   const [cashFlowOmissionConfirmed, setCashFlowOmissionConfirmed] = useState(false)
   const [savedCashFlowOmissionConfirmed, setSavedCashFlowOmissionConfirmed] = useState(false)
   const [savingNarrative, setSavingNarrative] = useState(false)
+  const [k3DisclosuresDirty, setK3DisclosuresDirty] = useState(false)
   const [narrativeRevision, setNarrativeRevision] = useState<string | null>(null)
 
   // Add-signer form
@@ -376,7 +379,22 @@ export default function ArsredovisningPage() {
     !sameNoteOverrides(noteOverrides, savedNoteOverrides) ||
     omitCashFlow !== savedOmitCashFlow ||
     cashFlowOmissionConfirmed !== savedCashFlowOmissionConfirmed
-  const hasUnsavedNarrative = hasUnsavedContent || hasUnsavedAgm
+  const hasUnsavedNarrative = hasUnsavedContent || hasUnsavedAgm || k3DisclosuresDirty
+
+  // The K3 disclosure answers save on their own; the document and the check
+  // are decided server-side, so refresh both quietly after a save.
+  const handleK3DisclosuresSaved = useCallback(
+    (updatedAt: string | null) => {
+      fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning`)
+        .then((r) => r.json())
+        .then((refreshed) => {
+          if (refreshed?.data) setData(refreshed.data as ArsredovisningData)
+        })
+        .catch(() => undefined) // a refresh: the save stands, the next load shows it
+      setNarrativeRevision(updatedAt)
+    },
+    [periodId],
+  )
 
   const handleSaveNarrative = useCallback(async () => {
     if (!periodId) return
@@ -874,7 +892,11 @@ export default function ArsredovisningPage() {
   // One track per version: a BankID request open, or a BankID signature
   // made, closes recording by hand; while both ways are open and BankID is
   // available, recording by hand is the secondary way, folded away.
-  const manualBlocked = signingTrack.kind === 'bankid'
+  // The revisor's påteckning is recorded by hand whichever way the board
+  // signs (bankid-signing.ts): on the BankID track only those slots stay open.
+  const boardSigningSlots = signingSlots.filter((sig) => !isAuditorRole(sig.role))
+  const revisorPending = signingSlots.some((sig) => isAuditorRole(sig.role) && sig.status === 'pending')
+  const manualBlocked = signingTrack.kind === 'bankid' && !revisorPending
   const manualFolded = signingAvailable && signingTrack.kind === 'none' && !manualOpen
   const signReadinessHint = !selectedSignatureVersionId
     ? 'Välj en låst version ovan, sedan går det att markera underskrifter.'
@@ -1346,7 +1368,29 @@ export default function ArsredovisningPage() {
                 </div>
               )}
 
-              {data.accounting_framework === 'k3' && data.kassaflodesanalys_omission && (
+              {data.accounting_framework === 'k3' && data.k3_disclosures && (
+                <K3DisclosureEditor
+                  periodId={periodId}
+                  evaluations={data.k3_disclosures}
+                  answers={data.disclosures.disclosure_answers ?? {}}
+                  equityYear={data.equity_specification?.current ?? null}
+                  equityOverrides={data.disclosures.equity_movement_overrides ?? {}}
+                  equityStatementSeparate={data.disclosures.equity_statement_separate ?? false}
+                  onSaved={handleK3DisclosuresSaved}
+                  onDirtyChange={setK3DisclosuresDirty}
+                />
+              )}
+
+              {data.accounting_framework === 'k3' && data.kassaflodesanalys_omission?.withheld && (
+                <div className="pt-4 border-t border-border space-y-3">
+                  <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    {tNotes('cashflow_title')}
+                  </h3>
+                  <p className="text-sm text-muted-foreground">{tNotes('cashflow_withheld')}</p>
+                </div>
+              )}
+
+              {data.accounting_framework === 'k3' && data.kassaflodesanalys_omission && !data.kassaflodesanalys_omission.withheld && (
                 <div className="pt-4 border-t border-border space-y-3">
                   <div className="flex items-center gap-2">
                     <h3 className="font-sans text-xs font-medium uppercase tracking-wider text-muted-foreground">
@@ -1509,6 +1553,10 @@ export default function ArsredovisningPage() {
                     <SelectItem value="Styrelseordförande">Styrelseordförande</SelectItem>
                     <SelectItem value="VD">VD</SelectItem>
                     <SelectItem value="Verkställande direktör">Verkställande direktör</SelectItem>
+                    {/* The revisor's slot holds the revisorspåteckning (ABL 9 kap. 28 §). */}
+                    <SelectItem value="Auktoriserad revisor">Auktoriserad revisor</SelectItem>
+                    <SelectItem value="Godkänd revisor">Godkänd revisor</SelectItem>
+                    <SelectItem value="Huvudansvarig revisor">Huvudansvarig revisor</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1586,7 +1634,7 @@ export default function ArsredovisningPage() {
             <ArsredovisningBankIdSigning
               fiscalPeriodId={periodId}
               versionId={signingVersionId}
-              slots={signingSlots}
+              slots={boardSigningSlots}
               requests={versionSigningRequests}
               track={signingTrack}
               available={signingAvailable}
@@ -1700,7 +1748,7 @@ export default function ArsredovisningPage() {
           {pendingSignatureCount > 0 && signReadinessHint && (
             <p className="text-xs leading-5 text-muted-foreground">{signReadinessHint}</p>
           )}
-          {signatures.map((sig) => (
+          {signatures.filter((sig) => signingTrack.kind !== 'bankid' || isAuditorRole(sig.role)).map((sig) => (
             <div
               key={sig.id}
               className="flex flex-col gap-3 border-b border-border pb-3 last:border-b-0 last:pb-0 sm:flex-row sm:items-center sm:justify-between"

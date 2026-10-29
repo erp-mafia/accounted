@@ -1,0 +1,1 @@
+[2026-10-26] The per-year framework change has no v1 or MCP write door in this change: a new pending operation type re-declares the shared op-type CHECK, which five parallel K3 agents would race on; the dashboard door suffices until the K3 work merges, then an operation can follow.

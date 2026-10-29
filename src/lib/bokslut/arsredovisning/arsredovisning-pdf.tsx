@@ -1,19 +1,16 @@
 import { Document, Page, Text, View, StyleSheet } from '@react-pdf/renderer'
 import type { ArsredovisningData, StatementRow } from './types'
-import { arsredovisningDatering } from './datering'
 import { formatPdfKronor } from './pdf-format'
 import { formatOrgNumber } from '@/lib/utils'
+import { EquitySpecificationTable } from './equity-specification-pdf'
 import {
   CERTIFICATE_SIGNER,
   CERTIFICATE_SIGNER_LINE,
-  DRAFT_NO_SIGNERS,
-  DRAFT_SIGNATURES_NOTE,
-  E_SIGNING_SIGNATURES_NOTE,
   draftCertificateNote,
   eSigningCertificateNote,
-  signatureDate,
   type ArsredovisningPdfMode,
 } from './signature-pages'
+import { SignaturesPdf } from './signatures-pdf'
 
 const styles = StyleSheet.create({
   page: {
@@ -239,9 +236,6 @@ export function ArsredovisningPDF({
   const hasForlagsinsatser =
     (data.balansrakning.equity_liabilities.find((row) => row.semantic_key === 'balance_sheet_forlagsinsatser')
       ?.current ?? 0) !== 0
-  const reportSignatureDate = arsredovisningDatering(
-    data.signatures.map((signature) => signature.signed_at),
-  )
   const agmDispositionDecision =
     data.forvaltningsberattelse.agm_disposition_outcome === 'proposal_approved'
       ? `${isForening ? 'Föreningsstämman' : 'Årsstämman'} beslutade att godkänna styrelsens förslag: ${data.forvaltningsberattelse.resultatdisposition}`
@@ -325,12 +319,19 @@ export function ArsredovisningPDF({
         )}
 
         <Text style={styles.sectionTitle}>Förändring av eget kapital (kr)</Text>
-        {data.forvaltningsberattelse.egen_kapital_changes.map((r) => (
-          <View key={r.label} style={styles.tableRow}>
-            <Text style={styles.colLabel}>{r.label}</Text>
-            <Text style={styles.colAmount}>{fmt(r.amount)}</Text>
-          </View>
-        ))}
+        {/* ÅRL 6 kap. 2 § andra stycket: the changes against last year's
+            balance sheet. A version saved before the specification keeps
+            its year-end list. */}
+        {data.equity_specification ? (
+          <EquitySpecificationTable year={data.equity_specification.current} />
+        ) : (
+          data.forvaltningsberattelse.egen_kapital_changes.map((r) => (
+            <View key={r.label} style={styles.tableRow}>
+              <Text style={styles.colLabel}>{r.label}</Text>
+              <Text style={styles.colAmount}>{fmt(r.amount)}</Text>
+            </View>
+          ))
+        )}
 
         <Text style={styles.sectionTitle}>Förslag till resultatdisposition</Text>
         <Text style={styles.paragraph}>{data.forvaltningsberattelse.resultatdisposition}</Text>
@@ -412,67 +413,7 @@ export function ArsredovisningPDF({
       <Page size="A4" style={styles.page}>
         <PageChrome data={data} mode={mode} pageLabel="Underskrifter" />
         <Text style={styles.sectionTitle}>Underskrifter</Text>
-        {mode === 'draft' ? (
-          <>
-            <Text style={styles.draftNote}>{DRAFT_SIGNATURES_NOTE}</Text>
-            {reportSignatureDate && (
-              <Text style={styles.paragraph}>
-                {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
-                {reportSignatureDate}
-              </Text>
-            )}
-            {data.signatures.length === 0 ? (
-              <Text style={styles.paragraph}>{DRAFT_NO_SIGNERS}</Text>
-            ) : (
-              data.signatures.map((sig, i) => {
-                const date = signatureDate(sig.signed_at)
-                return (
-                  <View key={i} style={styles.draftSigner}>
-                    <Text style={styles.colLabel}>{sig.name}</Text>
-                    <Text style={styles.signatureRole}>{sig.role}</Text>
-                    <Text style={styles.signatureDate}>{date ? `Undertecknad ${date}` : ''}</Text>
-                  </View>
-                )
-              })
-            )}
-          </>
-        ) : mode === 'e_signing' ? (
-          <>
-            <Text style={styles.paragraph}>{E_SIGNING_SIGNATURES_NOTE}</Text>
-            {data.company.registered_office && <Text style={styles.paragraph}>{data.company.registered_office}</Text>}
-            {data.signatures.map((sig, i) => (
-              <View key={i} style={styles.draftSigner}>
-                <Text style={styles.colLabel}>{sig.name}</Text>
-                <Text style={styles.signatureRole}>{sig.role}</Text>
-              </View>
-            ))}
-          </>
-        ) : (
-          <>
-            <Text style={styles.paragraph}>
-              {data.company.registered_office ? `${data.company.registered_office}, ` : ''}
-              {reportSignatureDate ?? '____________________'}
-            </Text>
-            {(data.signatures.length > 0
-              ? data.signatures
-              : [
-                  { role: 'Styrelseledamot', name: '', signed_at: null },
-                  { role: 'Styrelseledamot', name: '', signed_at: null },
-                ]
-            ).map((sig, i) => (
-              <View key={i} style={styles.signatureLine}>
-                <View style={styles.signatureSlot}>
-                  <Text>{sig.name || ' '}</Text>
-                </View>
-                <Text style={styles.signatureRole}>{sig.role}</Text>
-                {/* Each signer states the date of their signature (ÅRL 2 kap. 7 §). */}
-                <Text style={styles.signatureDate}>
-                  Datum: {signatureDate(sig.signed_at) ?? '____________'}
-                </Text>
-              </View>
-            ))}
-          </>
-        )}
+        <SignaturesPdf data={data} mode={mode} styles={styles} />
       </Page>
 
       {/*

@@ -1,0 +1,1 @@
+[2026-10-26] The K2/K3 framework is stored per räkenskapsår in a table of its own (fiscal_period_frameworks), not a fiscal_periods column: closed and locked years keep a value without any write to fiscal_periods and its guards, and BFNAR 2012:4 lives in one SECURITY DEFINER RPC.

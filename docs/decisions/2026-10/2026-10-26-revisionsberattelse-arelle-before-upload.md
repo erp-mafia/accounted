@@ -1,0 +1,1 @@
+[2026-10-26] The revisor's revisionsberättelse goes through the same Arelle service as the årsredovisning before upload and fails closed (error or validator unavailable); the run is kept on the årsredovisning version under the file's own hash. Our preflight rules still do not apply to it.

@@ -1,0 +1,1 @@
+[2026-10-26] K3 aktuell skattefordran (4.3 kommentar) is 1640-1649 in debit plus a 25xx net debit that the K2 mapper moves to Övriga fordringar; the 1630 skattekonto stays in Övriga fordringar. Open question for the reviewer: whether more belongs there.

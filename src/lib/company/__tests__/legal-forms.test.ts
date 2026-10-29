@@ -50,6 +50,7 @@ function leaves(profile: LegalFormProfile): Record<string, unknown> {
     'filings.ixbrl': profile.filings.ixbrl,
     'filings.auditorAlwaysRequired': profile.filings.auditorAlwaysRequired,
     'filings.forenklatArsbokslut': profile.filings.forenklatArsbokslut,
+    'filings.revisorspateckningLagrum': profile.filings.revisorspateckningLagrum,
     'filings.cashFlowStatement': profile.filings.cashFlowStatement,
     'filings.housingKeyRatios': profile.filings.housingKeyRatios,
   }

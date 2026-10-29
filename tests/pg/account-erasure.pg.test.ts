@@ -194,6 +194,7 @@ const RETAINED = new Set([
   'annual_report_validation_runs.user_id',
   'annual_report_versions.finalized_by',
   'annual_report_versions.user_id',
+  'fiscal_period_frameworks.user_id', // Who chose a räkenskapsår's K2/K3 framework (a change of accounting principle); the company keeps the record.
   'arsredovisning_narratives.user_id',
   'arsredovisning_signature_requests.evidence_recorded_by',
   'arsredovisning_signature_requests.user_id',

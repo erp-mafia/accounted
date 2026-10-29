@@ -65,6 +65,79 @@ describe('getVersionIxbrlInput', () => {
   })
 })
 
+describe("the revisor's påteckning on a locked version", () => {
+  it('splits the revisor off the board and renders the påteckning frozen on the signed revisor slot', async () => {
+    vi.mocked(getAnnualReportVersion).mockResolvedValue({
+      summary: { id: 'v-1', status: 'signed' },
+      ixbrl_data: makeInput(),
+    } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { signer_name: 'Karl Karlsson', role: 'Styrelseledamot', signed_at: '2026-02-20T10:00:00Z', pateckning_opinion: null, pateckning_firm_name: null },
+        {
+          signer_name: 'Rita Revisor',
+          role: 'Huvudansvarig revisor',
+          signed_at: '2026-02-24T10:00:00Z',
+          pateckning_opinion: 'unmodified',
+          pateckning_firm_name: 'Revisionsbyrån AB',
+        },
+      ],
+    })
+    enqueue({ data: null }) // no AGM recorded
+    // The profile was edited after the påteckning: the version does not follow.
+    enqueue({ data: { auditor_report_required: true, auditor_firm_name: 'Annan byrå AB', auditor_opinion: 'avstyrkt_br' } })
+
+    const input = await getVersionIxbrlInput(supabase as never, 'company-1', 'fp-1', 'v-1')
+
+    expect(input?.underskrifter.signers.map((signer) => signer.lastName)).toEqual(['Karlsson'])
+    expect(input?.underskrifter.dateringsdatum).toBe('2026-02-20')
+    expect(input?.revisorspateckning).toEqual({
+      required: true,
+      revisionsbolag: 'Revisionsbyrån AB',
+      opinion: 'unmodified',
+      revisorer: [
+        { firstName: 'Rita', lastName: 'Revisor', titel: 'Huvudansvarig revisor', huvudansvarig: true, signedDate: '2026-02-24' },
+      ],
+    })
+  })
+
+  it('reads the profile while the revisor slot is still pending', async () => {
+    vi.mocked(getAnnualReportVersion).mockResolvedValue({
+      summary: { id: 'v-1', status: 'ready_for_signature' },
+      ixbrl_data: makeInput(),
+    } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({
+      data: [
+        { signer_name: 'Karl Karlsson', role: 'Styrelseledamot', signed_at: '2026-02-20T10:00:00Z' },
+        { signer_name: 'Rita Revisor', role: 'Godkänd revisor', signed_at: null },
+      ],
+    })
+    enqueue({ data: null })
+    enqueue({ data: { auditor_report_required: true, auditor_firm_name: null, auditor_opinion: 'modified' } })
+
+    const input = await getVersionIxbrlInput(supabase as never, 'company-1', 'fp-1', 'v-1')
+
+    expect(input?.revisorspateckning).toMatchObject({ required: true, revisionsbolag: null, opinion: 'modified' })
+  })
+
+  it('takes nothing from the profile for a version without a revisor slot', async () => {
+    vi.mocked(getAnnualReportVersion).mockResolvedValue({
+      summary: { id: 'v-1', status: 'filed' },
+      ixbrl_data: makeInput(),
+    } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ signer_name: 'Karl Karlsson', role: 'Styrelseledamot', signed_at: '2026-02-20T10:00:00Z' }] })
+    enqueue({ data: null })
+    enqueue({ data: { auditor_report_required: false, auditor_firm_name: 'Revisionsbyrån AB', auditor_opinion: 'unmodified' } })
+
+    const input = await getVersionIxbrlInput(supabase as never, 'company-1', 'fp-1', 'v-1')
+
+    expect(input?.revisorspateckning).toBeNull()
+  })
+})
+
 describe('overlayVersionSignatures', () => {
   it('dates the report by the earliest signature and detects a VD', () => {
     const input = makeInput()

@@ -1,4 +1,18 @@
 import type { KassaflodesanalysReport } from '@/lib/reports/kassaflodesanalys'
+import type { EquitySpecification } from './equity-specification'
+import type { EquityMovementKind } from './equity-kinds'
+import type { DisclosureAnswers, DisclosureEvaluation, K3FirstYearStatus } from './disclosures/types'
+
+/**
+ * A förvaltningsberättelse text the K3 disclosure matrix adds, with the K3
+ * taxonomy (fdr) concept it is tagged with in iXBRL (the K3 iXBRL adapter,
+ * ixbrl/k3-adapters.ts, reads this shape).
+ */
+export interface K3ForvaltningsberattelseItem {
+  concept: string | null
+  heading: string
+  text: string
+}
 
 /**
  * Structured data for a K2 årsredovisning. Generated server-side from
@@ -48,6 +62,9 @@ export interface CashFlowOmissionState {
   confirmed: boolean
   /** Final outcome: the statement is left out of this document. */
   omitted: boolean
+  /** K3 mindre företag: left out by the product whatever the choice, until
+   *  the statement meets K3 kapitel 7 (model.ts applyCashFlowOmission). */
+  withheld?: boolean
 }
 
 /**
@@ -137,7 +154,8 @@ export interface ArsredovisningData {
     /** Har kontrollbalansräkning upprättats? */
     kontrollbalans_required: boolean
     flerarsoversikt: FlerarsoversiktRow[]
-    /** Förändring av eget kapital. */
+    /** The equity posts at year end (kept for versions saved before the
+     *  specification; a new report prints `equity_specification`). */
     egen_kapital_changes: EgenKapitalRow[]
     /** Styrelsens förslag till resultatdisposition (manual input). */
     resultatdisposition: string
@@ -182,19 +200,47 @@ export interface ArsredovisningData {
    *  buildCanonicalAnnualReport once the size classification is known;
    *  when `omitted` is true, `kassaflodesanalys` is absent. */
   kassaflodesanalys_omission?: CashFlowOmissionState
-  /** K3-only: separate "Förändring av eget kapital" statement. K2 keeps the
-   *  egen_kapital_changes inside förvaltningsberättelsen; K3 lifts it out
-   *  into its own statement per ÅRL 6:5 + BFNAR 2012:1 ch.6. */
+  /** The specification of changes in equity (ÅRL 6 kap. 2 § andra stycket,
+   *  K3 6.3), from the year's equity movements in the ledger: both
+   *  frameworks, printed in förvaltningsberättelsen or, when chosen, as a
+   *  statement of its own (equity-specification.ts). Absent only on
+   *  versions saved before it existed. */
+  equity_specification?: EquitySpecification
+  /** Versions saved before the specification: the K3 statement derived from
+   *  closing balances. No longer produced; the PDF still renders a stored one. */
   equity_changes_statement?: {
     rows: EgenKapitalRow[]
     closing_total: number
   }
-  /** Underskrifter: names of board members + VD. Filled by signature flow. */
+  /** K3 only: the förvaltningsberättelse texts the disclosure matrix adds
+   *  (K3 3.7 c-g, 3.11, ÅRL 6 kap. 1 §), in document order, printed after
+   *  the väsentliga händelser. */
+  k3_forvaltningsberattelse?: K3ForvaltningsberattelseItem[]
+  /** K3 only: the disclosure matrix evaluated for this report (what each
+   *  requirement asks, its status and what the document prints). Set by
+   *  buildCanonicalAnnualReport once the size class is known. */
+  k3_disclosures?: DisclosureEvaluation[]
+  /** K3 only: whether the K3 document is a granskningsutkast or released
+   *  (k3-release.ts). Absent on versions saved before the release flag: a
+   *  granskningsutkast. */
+  k3_release?: 'review_draft' | 'final'
+  /** K3 only: whether this is the company's first K3 year (K3 35.3). */
+  k3_first_year?: K3FirstYearStatus
+  /** Underskrifter: names of board members + VD, and the revisor's slots
+   *  (revisor roles, the revisorspåteckning). Filled by signature flow. */
   signatures: {
     role: string
     name: string
     signed_at: string | null
   }[]
+  /** The profile's revisorspåteckning facts, read live when a file is
+   *  rendered (the revisor gives them after the board signed). Absent on
+   *  versions and drafts made before the revisor package. */
+  auditor_pateckning?: {
+    required: boolean
+    firm_name: string | null
+    opinion: import('./workflow-schemas').AuditorOpinion | null
+  } | null
   /** Pre-download blockers / warnings the UI surfaces so the user knows the
    *  PDF is not yet Bolagsverket-fileable as-is. Examples: aktiekapital
    *  uppgifter saknas, AGM-datum saknas, K3 entity. Never an error: the
@@ -225,6 +271,14 @@ export interface ArsredovisningData {
      *  honoured when the law permits (cash-flow-omission.ts). */
     omit_kassaflodesanalys: boolean
     kassaflodesanalys_omission_confirmed: boolean
+    /** K3 only: the answers to the disclosure matrix, keyed by requirement id. */
+    disclosure_answers?: DisclosureAnswers
+    /** K3 only: the user's classification of equity verifikat the ledger
+     *  cannot classify (journal entry id to kind, K3 6.3). */
+    equity_movement_overrides?: Record<string, EquityMovementKind>
+    /** K3 only: print the specification of changes in equity as a statement
+     *  of its own instead of in förvaltningsberättelsen. */
+    equity_statement_separate?: boolean
     confirmations: {
       long_term_debt_over_five_years: boolean
       securities_pledged: boolean

@@ -37,6 +37,7 @@ export const SE_ENSKILD_FIRMA: LegalFormProfile = {
     ixbrl: false,
     auditorAlwaysRequired: false,
     forenklatArsbokslut: null,
+    revisorspateckningLagrum: null,
     cashFlowStatement: null,
     housingKeyRatios: false,
   },

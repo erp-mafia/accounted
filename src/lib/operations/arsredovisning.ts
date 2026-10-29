@@ -45,6 +45,7 @@ import {
   signatoryShape,
   versionShape,
 } from '@/lib/bokslut/arsredovisning/workflow-schemas'
+import { k3IxbrlEnabled } from '@/lib/bokslut/ixbrl/k3-release'
 import { defineOperation, type OperationOutcome } from './types'
 import { SigningRequestCreatedOut } from './signing-requests'
 
@@ -226,7 +227,7 @@ export const arsredovisningUpdateNarrative = defineOperation({
   docs: {
     summary: 'Edit the årsredovisning texts: förvaltningsberättelse, resultatdisposition, disclosure notes and K3 note texts.',
     description:
-      'Saves the narrative overrides for a räkenskapsår\'s årsredovisning, as the dashboard\'s text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object) and the K3 kassaflödesanalys omission. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.',
+      'Saves the narrative overrides for a räkenskapsår\'s årsredovisning, as the dashboard\'s text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object), the K3 kassaflödesanalys omission, the K3 disclosure answers (disclosure_answers by requirement id: {applies, text, choice, confirmed}; read the open ones from the validation issues and the k3_disclosures of the report), the kind of each equity verifikat the ledger cannot classify (equity_movement_overrides by journal_entry_id) and whether the K3 equity specification is its own statement (equity_statement_separate). disclosure_answers and equity_movement_overrides merge: only the keys sent change and null removes one. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.',
     useWhen: 'Writing or correcting the texts of the årsredovisning before a version is frozen for signing.',
     doNotUseFor:
       'The compliance profile answers (PATCH .../arsredovisning/compliance), the figures (they come from the books), or freezing the document (POST .../arsredovisning/versions).',
@@ -236,6 +237,7 @@ export const arsredovisningUpdateNarrative = defineOperation({
       'parent_company_org_number is an organisationsnummer or a foreign registration id; a personnummer is refused.',
       'Registered at Bolagsverket: 409 ARSREDOVISNING_REGISTERED.',
       'Saving clears narrative_confirmed: confirm again with PATCH .../compliance {"narrative_confirmed": true}.',
+      'A disclosure_answers key must be a requirement id of the K3 disclosure matrix (for example not.handelser_efter_balansdagen); an unknown id is 400 VALIDATION_ERROR.',
     ],
     example: {
       request: { description: 'Bolaget bedriver konsultverksamhet inom IT.', agm_date: '2027-05-20' },
@@ -267,7 +269,7 @@ export const arsredovisningUpdateNarrative = defineOperation({
     name: 'gnubok_update_arsredovisning_narrative',
     title: 'Update Annual Report Narrative',
     description:
-      'Stage an edit of the årsredovisning texts: förvaltningsberättelse, resultatdisposition and proposed dividend, AGM date and decision, ÅRL 5 kap. disclosures, K3 note texts. Only sent fields change; null resets to the generated text.',
+      'Stage an edit of the årsredovisning texts: förvaltningsberättelse, resultatdisposition, AGM date and decision, ÅRL 5 kap. disclosures, K3 note texts and K3 disclosure answers. Only sent fields change; null resets to the generated text.',
     keywords: ['förvaltningsberättelse', 'årsredovisning text', 'resultatdisposition', 'noter', 'årsstämma', 'ställda säkerheter', 'eventualförpliktelser'],
     stage: { pendingType: 'update_arsredovisning_narrative', title: () => 'Ändra årsredovisningens texter' },
   },
@@ -291,7 +293,7 @@ export const arsredovisningUpdateCompliance = defineOperation({
   docs: {
     summary: 'Answer the årsredovisning compliance questions and record the confirmations.',
     description:
-      'Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user\'s confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.',
+      'Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, the K3 scope questions (previous_year_framework: the framework of the previous årsredovisning, none for the first one; has_other_temporary_differences), reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user\'s confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.',
     useWhen: 'The validation (gnubok_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.',
     doNotUseFor: 'The document texts (POST .../arsredovisning/narrative) or the signer roster itself (POST .../arsredovisning/signatures).',
     pitfalls: [
@@ -510,6 +512,7 @@ export const arsredovisningRecordSignature = defineOperation({
       'Recorded signatures cannot be undone: finalize a new version instead.',
       'signing_method bankid answers 422 SIGNING_METHOD_RESERVED: it is set only when the board signs with BankID in Accounted. A BankID signature made in another service is advanced_e_signature.',
       'A slot covered by an open or partly signed BankID signing request answers 409 ARSREDOVISNING_SIGNING_TRACK_MIXED: a version is signed one way.',
+      "A revisor's slot (the revisorspåteckning) is recorded only after every board slot of the version is signed (409 ARSREDOVISNING_PATECKNING_BEFORE_BOARD), in the board's medium: advanced_e_signature when the board signed electronically, paper_original when it signed on paper (409 ARSREDOVISNING_PATECKNING_MEDIUM_MIXED), and once the profile's auditor_opinion is answered (409 ARSREDOVISNING_PATECKNING_OPINION_MISSING). The opinion and auditor_firm_name are frozen on the slot as it is signed.",
     ],
     example: {
       request: {
@@ -559,6 +562,9 @@ export const arsredovisningRecordSignature = defineOperation({
     'ARSREDOVISNING_SIGNATURE_DATE_INVALID',
     'SIGNING_METHOD_RESERVED',
     'ARSREDOVISNING_SIGNING_TRACK_MIXED',
+    'ARSREDOVISNING_PATECKNING_BEFORE_BOARD',
+    'ARSREDOVISNING_PATECKNING_MEDIUM_MIXED',
+    'ARSREDOVISNING_PATECKNING_OPINION_MISSING',
   ],
   http: {
     method: 'PATCH',
@@ -731,7 +737,10 @@ export const arsredovisningValidateIxbrl = defineOperation({
     doNotUseFor:
       'The ÅRL/K2 completeness checks per stage (gnubok_validate_arsredovisning), or the document itself (GET .../arsredovisning/ixbrl, v1 only).',
     pitfalls: [
-      'K2 aktiebolag only: the iXBRL generator does not produce K3 documents.',
+      // K3 documents exist only behind NEXT_PUBLIC_K3_IXBRL_ENABLED (default off).
+      k3IxbrlEnabled()
+        ? 'K2 and K3 aktiebolag: a K3 year is checked with the K3 rules (ACC-K3-*), and a K3 document built from fallbacks (equity from closing balances, the summary cash flow) does not pass.'
+        : 'K2 aktiebolag only: the iXBRL generator does not produce K3 documents.',
       'A validation with issues still answers 200; read ok and error_count.',
       'An unknown version_id answers 404 NOT_FOUND.',
     ],

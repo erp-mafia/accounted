@@ -15,8 +15,10 @@ import {
   applyHandelse,
   BolagsverketSubmissionError,
   handleWebhook,
+  MAX_HANDLING_BYTES,
   normalizeOrgnr,
   submitArsredovisning,
+  submitRevisionsberattelse,
 } from './lib/submission-service'
 import type { BolagsverketEnvironment, HandelseMeddelande } from './types'
 
@@ -225,9 +227,53 @@ const SubmitSchema = z.object({
     epost: z.string().email(),
   }),
   kvittens_epost: z.array(z.string().email()).max(5).optional(),
+  // notifieringEpostadresser (API 2.1): the revisor, told that a
+  // revisionsberättelse is expected when the årsredovisning is kompletteras.
+  notifiering_epost: z.array(z.string().email().min(6).max(250)).max(5).optional(),
   accepted_avtalstext_andrad: z.string().optional(),
   ignore_warnings: z.boolean().optional(),
 })
+
+/**
+ * The revisionsberättelse as its own handling (API 2.1). `fil` is the
+ * revisor's iXBRL file, base64 (the API's Handling.fil format); the revisor
+ * is the undertecknare who signs it at Bolagsverket.
+ */
+const RevisionsberattelseSchema = z.object({
+  fiscal_period_id: z.string().uuid(),
+  avsandare_pnr: PersonnummerSchema,
+  undertecknare: z.object({
+    pnr: PersonnummerSchema,
+    fornamn: z.string().min(1).max(100),
+    efternamn: z.string().min(1).max(100),
+    epost: z.string().email(),
+  }),
+  // base64 of at most MAX_HANDLING_BYTES bytes.
+  fil: z
+    .string()
+    .min(1)
+    .max(Math.ceil(MAX_HANDLING_BYTES / 3) * 4)
+    .regex(/^[A-Za-z0-9+/]+={0,2}$/, 'Filen ska vara base64-kodad'),
+  kvittens_epost: z.array(z.string().email()).max(5).optional(),
+  notifiering_epost: z.array(z.string().email().min(6).max(250)).max(5).optional(),
+  accepted_avtalstext_andrad: z.string().optional(),
+  ignore_warnings: z.boolean().optional(),
+})
+
+function validationResponse(err: unknown, ctx: ExtensionContext): NextResponse {
+  const message =
+    err instanceof z.ZodError ? err.issues.map((issue) => issue.message).join('; ') : 'Ogiltig begäran'
+  return errorResponseFromCode('VALIDATION_ERROR', ctx.log, {
+    requestId: ctx.requestId,
+    reason: message,
+    details: { message },
+  })
+}
+
+function appUrlOrNull(): string | null {
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? ''
+  return /^https?:\/\//.test(appUrl) ? appUrl : null
+}
 
 const PollSchema = z.object({
   fromtidpunkt: z.string().optional(),
@@ -357,6 +403,7 @@ export const bolagsverketExtension: Extension = {
               avsandarePnr: parsed.avsandare_pnr,
               undertecknare: parsed.undertecknare,
               kvittensEpost: parsed.kvittens_epost,
+              notifieringEpost: parsed.notifiering_epost,
               acceptedAvtalstextAndrad: parsed.accepted_avtalstext_andrad,
               ignoreWarnings: parsed.ignore_warnings,
             },
@@ -371,6 +418,61 @@ export const bolagsverketExtension: Extension = {
           return NextResponse.json({ data: result })
         } catch (err) {
           ctx.log.error('bolagsverket submission failed', err)
+          return apiErrorResponse(err, ctx)
+        }
+      },
+    },
+    {
+      // The revisionsberättelse after an årsredovisning filed kompletteras.
+      method: 'POST',
+      path: '/revisionsberattelse',
+      handler: async (request, ctx) => {
+        if (!filingReleaseEnabled()) {
+          return errorResponseFromCode('BOLAGSVERKET_NOT_RELEASED', ctx.log, {
+            requestId: ctx.requestId,
+          })
+        }
+        const forbidden = await requireWriteRole(ctx)
+        if (forbidden) return forbidden
+        let parsed: z.infer<typeof RevisionsberattelseSchema>
+        try {
+          parsed = RevisionsberattelseSchema.parse(await request.json())
+        } catch (err) {
+          return validationResponse(err, ctx)
+        }
+        const appUrl = appUrlOrNull()
+        if (!appUrl) {
+          return errorResponseFromCode('BOLAGSVERKET_CONFIG_MISSING', ctx.log, {
+            requestId: ctx.requestId,
+            reason: 'NEXT_PUBLIC_APP_URL is missing or not an absolute URL',
+            details: { missing: 'NEXT_PUBLIC_APP_URL' },
+          })
+        }
+        try {
+          const client = await clientFor(ctx)
+          const result = await submitRevisionsberattelse(
+            { supabase: ctx.supabase, client, appUrl, log: ctx.log },
+            {
+              companyId: ctx.companyId,
+              userId: ctx.userId,
+              fiscalPeriodId: parsed.fiscal_period_id,
+              avsandarePnr: parsed.avsandare_pnr,
+              undertecknare: parsed.undertecknare,
+              xhtml: Buffer.from(parsed.fil, 'base64').toString('utf8'),
+              kvittensEpost: parsed.kvittens_epost,
+              notifieringEpost: parsed.notifiering_epost,
+              acceptedAvtalstextAndrad: parsed.accepted_avtalstext_andrad,
+              ignoreWarnings: parsed.ignore_warnings,
+            },
+          )
+          // idnummer is a technical correlation value: never shown to users.
+          if (result.outcome === 'uploaded' || result.outcome === 'state_unknown') {
+            const { idnummer: _idnummer, ...publicResult } = result
+            return NextResponse.json({ data: publicResult })
+          }
+          return NextResponse.json({ data: result })
+        } catch (err) {
+          ctx.log.error('bolagsverket revisionsberattelse submission failed', err)
           return apiErrorResponse(err, ctx)
         }
       },

@@ -140,6 +140,38 @@ describe('requestArsredovisningSignatures', () => {
   })
 })
 
+describe("the revisor's påteckning and the board's BankID request", () => {
+  const REVISOR = { id: 'slot-r', role: 'Auktoriserad revisor', signer_name: 'Rita Revisor', status: 'pending', signing_method: null }
+
+  it('leaves the revisor out of the request: the påteckning is recorded on its own', async () => {
+    const { ctx: c, mock } = ctx()
+    mock.enqueueMany([{ data: VERSION }, { data: PERIOD }, { data: [SLOT_A, REVISOR, SLOT_B] }, { data: [] }])
+    await requestArsredovisningSignatures(c, input, { dryRun: false })
+    const sent = signing.createSigningRequest.mock.calls[0][1] as { signers: Array<{ annualReportSignatureId: string }> }
+    expect(sent.signers.map((signer) => signer.annualReportSignatureId)).toEqual(['slot-a', 'slot-b'])
+  })
+
+  it('does not count a påteckning recorded by hand as the board signing on paper', async () => {
+    const { ctx: c, mock } = ctx()
+    mock.enqueueMany([
+      { data: VERSION },
+      { data: PERIOD },
+      { data: [SLOT_A, { ...REVISOR, status: 'signed', signing_method: 'paper_original' }, SLOT_B] },
+      { data: [] },
+    ])
+    expect(await requestArsredovisningSignatures(c, input, { dryRun: false })).toMatchObject({ ok: true })
+  })
+
+  it('refuses a request for the revisor slot', async () => {
+    const { ctx: c, mock } = ctx()
+    mock.enqueueMany([{ data: VERSION }, { data: PERIOD }, { data: [SLOT_A, REVISOR] }, { data: [] }])
+    expect(await requestArsredovisningSignatures(c, { ...input, signers: [{ signatureId: 'slot-r' }] }, { dryRun: false })).toMatchObject({
+      ok: false,
+      code: 'SIGNING_SIGNERS_INVALID',
+    })
+  })
+})
+
 describe('slotCoveredByBankIdSigning', () => {
   it('is covered by a signature, or by an open request, and free otherwise', async () => {
     const signed = ctx()

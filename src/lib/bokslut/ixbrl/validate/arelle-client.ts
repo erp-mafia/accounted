@@ -31,6 +31,8 @@ export async function validateIxbrlWithArelle(
     url?: string
     token?: string
     timeoutMs?: number
+    /** The file name the validator is told (its logs name the document by it). */
+    filename?: string
   } = {},
 ): Promise<ArelleValidationResult> {
   const url = options.url ?? process.env.BOLAGSVERKET_ARELLE_VALIDATOR_URL
@@ -57,7 +59,7 @@ export async function validateIxbrlWithArelle(
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
       body: JSON.stringify({
-        filename: 'arsredovisning.xhtml',
+        filename: options.filename ?? 'arsredovisning.xhtml',
         content_base64: Buffer.from(xhtml, 'utf8').toString('base64'),
       }),
       signal: AbortSignal.timeout(options.timeoutMs ?? 60_000),

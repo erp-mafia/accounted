@@ -11,6 +11,8 @@ import type {
   AnnualReportValidationStage,
 } from './compliance-types'
 import { cashFlowOmissionIssues } from './cash-flow-omission'
+import { disclosureIssues } from './disclosures'
+import { k3ArsredovisningEnabled } from './k3-release'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { isEntityType, requiresAuditorRegardlessOfSize } from '@/lib/company/entity-type'
 
@@ -60,6 +62,44 @@ function statementRowsEqual(
       (row.indent ?? 0) === (other.indent ?? 0)
     )
   })
+}
+
+/**
+ * The specification of changes in equity must tie to the balance sheet it
+ * sits next to (ÅRL 6 kap. 2 § andra stycket: "jämfört med föregående års
+ * balansräkning"): the books against the balance sheet (integrity_issues,
+ * found when it was built), the closing total against Summa eget kapital,
+ * and every column from opening to closing. A version saved before the
+ * specification existed carries none and is not checked.
+ */
+function equitySpecificationIntegrity(report: ArsredovisningData): AnnualReportComplianceIssue[] {
+  const spec = report.equity_specification
+  if (!spec) return []
+  const problems = [...(spec.integrity_issues ?? [])]
+  const equityTotal = report.balansrakning.equity_liabilities.find(
+    (row) => row.semantic_key === 'balance_sheet_equity_total',
+  )?.current
+  if (equityTotal !== null && equityTotal !== undefined && Math.round(equityTotal) !== spec.current.totals.closing) {
+    problems.push(`Utgående eget kapital ${spec.current.totals.closing} kr, balansräkningen ${Math.round(equityTotal)} kr.`)
+  }
+  for (const year of [spec.current, spec.previous]) {
+    if (!year) continue
+    for (const post of year.posts) {
+      const explained = post.opening + Object.values(post.movements).reduce((sum, amount) => sum + (amount ?? 0), 0)
+      if (explained !== post.closing) problems.push(`${post.label} ${year.name} summerar inte.`)
+    }
+  }
+  if (problems.length === 0) return []
+  const issues: AnnualReportComplianceIssue[] = []
+  push(
+    issues,
+    'AR-EQUITY-SPECIFICATION-MISMATCH',
+    'error',
+    'statements',
+    `Specifikationen av förändringar i eget kapital stämmer inte med balansräkningen: ${problems.join(' ')}`,
+    'Kontrollera bokföringen av eget kapital och skapa om årsredovisningen.',
+  )
+  return issues
 }
 
 export function validateStatementIntegrity(
@@ -120,6 +160,8 @@ export function validateStatementIntegrity(
     )
   }
 
+  issues.push(...equitySpecificationIntegrity(report))
+
   if (
     report.resultatrakning.length === 0 ||
     report.balansrakning.assets.length === 0 ||
@@ -138,11 +180,15 @@ export function validateStatementIntegrity(
     // Rendered in the company's equity layout, as the PDF rows were: the
     // aktiebolag layout would put an Aktiekapital row against a förening's
     // Medlemsinsatser and fail every K2 förening.
+    // A K3 report's rows carry K3's own posts (k3-presentation.ts): the
+    // iXBRL rows are rebuilt the same way, or a K3 document would be checked
+    // against K2-shaped rows.
     const ixbrlMapping = {
       rr: ixbrl.rr,
       br: ixbrl.br,
       totals: ixbrl.totals,
       legalForm: k2LegalFormOf(report.company.entity_type),
+      ...(report.accounting_framework === 'k3' ? { presentation: 'k3' as const } : {}),
     }
     const ixbrlIncomeRows = buildRrRows(ixbrlMapping)
     const ixbrlBalanceRows = buildBrRows(ixbrlMapping)
@@ -377,14 +423,30 @@ export function validateAnnualReportCompleteness(
   }
 
   if (report.accounting_framework === 'k3') {
-    push(
-      issues,
-      'AR-K3-DRAFT-ONLY',
-      'error',
-      'scope',
-      'Accounteds K3-dokument är ännu ett granskningsutkast och kan inte låsas som en komplett K3-årsredovisning.',
-      'Slutför K3:s upplysningsmatris och oberoende regelverksgranskning innan versionen låses.',
-    )
+    // The disclosure matrix (disclosures/) evaluated by the model: one error
+    // per requirement that is unanswered or outside what Accounted supports.
+    if (report.k3_disclosures) {
+      issues.push(...disclosureIssues(report.k3_disclosures))
+    } else {
+      push(
+        issues,
+        'AR-K3-DISCLOSURES-NOT-EVALUATED',
+        'error',
+        'notes',
+        'K3-upplysningarna har inte kontrollerats för den här årsredovisningen.',
+        'Skapa om årsredovisningen.',
+      )
+    }
+    if (!k3ArsredovisningEnabled()) {
+      push(
+        issues,
+        'AR-K3-DRAFT-ONLY',
+        'error',
+        'scope',
+        'Accounteds K3-dokument är ännu ett granskningsutkast och kan inte låsas som en komplett K3-årsredovisning.',
+        'K3-årsredovisningen släpps när den har granskats av en redovisningskonsult. Upprätta den slutliga årsredovisningen med redovisningskonsult eller revisor tills dess.',
+      )
+    }
   }
   issues.push(...cashFlowOmissionIssues(report.kassaflodesanalys_omission))
 

@@ -37,6 +37,8 @@ import {
   type AnnualReportStepKey,
 } from '@/lib/bokslut/arsredovisning/workflow-steps'
 import { StepSectionHeader, annualReportStepAnchor } from '@/components/bokslut/StepSectionHeader'
+import { k3ArsredovisningEnabled } from '@/lib/bokslut/arsredovisning/k3-release'
+import { AUDITOR_OPINIONS } from '@/lib/bokslut/arsredovisning/workflow-schemas'
 
 interface ComplianceResponse {
   profile: AnnualReportProfile
@@ -259,9 +261,17 @@ export function AnnualReportStudio({
           has_convertible_debt: profile.has_convertible_debt,
           building_revenue_share_pct: profile.building_revenue_share_pct,
           has_material_deferred_tax: profile.has_material_deferred_tax,
+          ...(framework === 'k3'
+            ? {
+                previous_year_framework: profile.previous_year_framework,
+                has_other_temporary_differences: profile.has_other_temporary_differences,
+              }
+            : {}),
           reporting_currency: profile.reporting_currency,
           auditor_report_required: profile.auditor_report_required,
           auditor_report_included: profile.auditor_report_included,
+          auditor_firm_name: profile.auditor_firm_name,
+          auditor_opinion: profile.auditor_opinion,
           dividend_prudence_confirmed: profile.dividend_prudence_confirmed,
           k2_assessment_confirmed: true,
         }),
@@ -387,7 +397,7 @@ export function AnnualReportStudio({
 
   return (
     <div className="space-y-8">
-      {framework === 'k3' && (
+      {framework === 'k3' && !k3ArsredovisningEnabled() && (
         <div className="px-1">
           <AttnLine>{t('k3_draft_notice')}</AttnLine>
         </div>
@@ -460,6 +470,43 @@ export function AnnualReportStudio({
                     onChange={(value) => updateProfile('auditor_report_included', Boolean(value))}
                   />
                 )}
+                {/* The revisorspåteckning (ABL 9 kap. 28 §): the revisor sits in
+                    the signer roster; the firm and what the revisionsberättelse
+                    says belong to the year. */}
+                {profile.auditor_report_required && (
+                  <div className="space-y-2">
+                    <Label htmlFor="ar-auditor-firm">{t('auditor_firm_name')}</Label>
+                    <Input
+                      id="ar-auditor-firm"
+                      value={profile.auditor_firm_name ?? ''}
+                      maxLength={200}
+                      placeholder={t('auditor_firm_name_placeholder')}
+                      onChange={(event) => updateProfile('auditor_firm_name', event.target.value || null)}
+                    />
+                  </div>
+                )}
+                {profile.auditor_report_required && (
+                  <div className="space-y-2">
+                    <Label htmlFor="ar-auditor-opinion">{t('auditor_opinion')}</Label>
+                    <Select
+                      value={profile.auditor_opinion ?? ''}
+                      onValueChange={(next) =>
+                        updateProfile('auditor_opinion', (next || null) as AnnualReportProfile['auditor_opinion'])
+                      }
+                    >
+                      <SelectTrigger id="ar-auditor-opinion">
+                        <SelectValue placeholder={t('auditor_opinion_unanswered')} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {AUDITOR_OPINIONS.map((opinion) => (
+                          <SelectItem key={opinion} value={opinion}>
+                            {t(`auditor_opinion_options.${opinion}`)}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
               </div>
 
               {profile.is_parent_company && (
@@ -490,6 +537,41 @@ export function AnnualReportStudio({
                     value={profile.prepares_consolidated_accounts}
                     onChange={(value) => updateProfile('prepares_consolidated_accounts', value)}
                   />
+                </div>
+              )}
+
+              {framework === 'k3' && (
+                <div className="space-y-4 border-t border-border pt-4">
+                  <p className="text-sm font-medium">{t('k3_scope_title')}</p>
+                  <div className="grid gap-4 md:grid-cols-2">
+                    <div className="space-y-2">
+                      <Label htmlFor="ar-previous-framework">{t('previous_year_framework')}</Label>
+                      <Select
+                        value={profile.previous_year_framework ?? ''}
+                        onValueChange={(next) =>
+                          updateProfile(
+                            'previous_year_framework',
+                            next as AnnualReportProfile['previous_year_framework'],
+                          )
+                        }
+                      >
+                        <SelectTrigger id="ar-previous-framework">
+                          <SelectValue placeholder={t('choose')} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="k3">{t('previous_year_k3')}</SelectItem>
+                          <SelectItem value="k2">{t('previous_year_k2')}</SelectItem>
+                          <SelectItem value="none">{t('previous_year_none')}</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <BooleanQuestion
+                      id="ar-other-temporary-differences"
+                      label={t('other_temporary_differences')}
+                      value={profile.has_other_temporary_differences}
+                      onChange={(value) => updateProfile('has_other_temporary_differences', value)}
+                    />
+                  </div>
                 </div>
               )}
 

@@ -1,0 +1,1 @@
+[2026-10-26] Existing years were backfilled with the company's framework as source company_default, so no document changes; such a value is not trusted as the framework a year was prepared under, and the K3 first-year check asks the user instead (fail closed).

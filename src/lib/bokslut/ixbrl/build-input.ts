@@ -15,9 +15,19 @@ import {
   type ArsredovisningBuild,
 } from '@/lib/bokslut/arsredovisning/build-data'
 import { listSignatureRequests } from '@/lib/bokslut/arsredovisning/signature-service'
+import { getAnnualReportProfile } from '@/lib/bokslut/arsredovisning/profile-service'
+import type { AnnualReportProfile } from '@/lib/bokslut/arsredovisning/compliance-types'
+import { buildRevisorspateckning, splitRoster } from './revisorspateckning'
 import { resolveMedelantalAnstallda } from '@/lib/salary/medelantal'
 import { getMedelantalOverride } from '@/lib/bokslut/arsredovisning/narrative-service'
 import { resolveEntryPoint } from './taxonomy/entry-points'
+import { k3IxbrlEnabled } from './k3-release'
+import {
+  k3BalanceSheetSource,
+  k3CashFlowInput,
+  k3EquityInput,
+  k3ForvaltningsberattelseItems,
+} from './k3-adapters'
 import type {
   EgetKapitalForandring,
   FlerarsRow,
@@ -28,6 +38,7 @@ import type {
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { arsredovisningDatering } from '@/lib/bokslut/arsredovisning/datering'
 import { signatureDate } from '@/lib/bokslut/arsredovisning/signature-pages'
+import { k2EquityTableInput } from '@/lib/bokslut/arsredovisning/equity-specification'
 import {
   AGM_DATE_MISSING_WARNING,
   AGM_DECISION_MISSING_WARNING,
@@ -60,6 +71,8 @@ export interface BuildIxbrlOptions {
   report?: ArsredovisningBuild
   /** Reuse the version-bound signer roster when a canonical model is built. */
   signatureRequests?: Awaited<ReturnType<typeof listSignatureRequests>>
+  /** Reuse the compliance profile when a canonical model is built. */
+  profile?: AnnualReportProfile
 }
 
 function splitName(fullName: string): { firstName: string; lastName: string } {
@@ -79,7 +92,7 @@ export async function buildIxbrlInput(
   // The statements come from the report: its TrialBalancePair per year (the
   // FULL trial balance drives the BR, the PRE-CLOSING one the RR) mapped once
   // with the company's equity table, previous year included.
-  const [built, periodRow, signatureRequests] = await Promise.all([
+  const [built, periodRow, signatureRequests, profile] = await Promise.all([
     options.report ?? buildArsredovisningReport(supabase, companyId, fiscalPeriodId),
     supabase
       .from('fiscal_periods')
@@ -88,6 +101,7 @@ export async function buildIxbrlInput(
       .eq('company_id', companyId)
       .single(),
     options.signatureRequests ?? listSignatureRequests(supabase, companyId, fiscalPeriodId),
+    options.profile ?? getAnnualReportProfile(supabase, companyId, fiscalPeriodId),
   ])
   const pdfData = built.data
   const { mapping, comparison } = built.statements
@@ -95,12 +109,11 @@ export async function buildIxbrlInput(
   if (periodRow.error || !periodRow.data) throw new Error('Fiscal period not found')
   const period = periodRow.data
 
-  if (pdfData.accounting_framework !== 'k2') {
-    throw new Error(
-      'Digital inlämning stöds ännu inte för K3: generera PDF eller vänta på K3-stödet.',
-    )
-  }
-  const entryPoint = resolveEntryPoint('k2')
+  // K2 resolves to K2 AB risbs; K3 to K3 AB risbs only while the K3 iXBRL
+  // document is switched on (k3-release.ts), else a message that says what
+  // is and is not possible.
+  const framework = pdfData.accounting_framework
+  const entryPoint = resolveEntryPoint(framework, { k3Enabled: k3IxbrlEnabled() })
 
   // Previous period: jämförelsesiffror, when its trial balances loaded.
   let previousPeriod: { start: string; end: string } | null = null
@@ -188,42 +201,15 @@ export async function buildIxbrlInput(
   }
 
   // ---- eget kapital-förändring ---------------------------------------------
-  const br = mapping.br
-  const at = (concept: string): { ib: number; ub: number } => ({
-    ib: br[concept]?.previous ?? 0,
-    ub: br[concept]?.current ?? 0,
-  })
-  const aktiekapital = at('Aktiekapital')
-  const balanserat = at('BalanseratResultat')
-  const aretsRes = at('AretsResultatEgetKapital')
-  const totalt = {
-    ib: mapping.totals.egetKapital.previous ?? 0,
-    ub: mapping.totals.egetKapital.current,
+  // From the report's specification of changes in equity, which reads the
+  // year's equity verifikat and ties every post to this mapping
+  // (lib/bokslut/arsredovisning/equity-specification.ts). It replaces a
+  // derivation from closing balances that called every fall in balanserat
+  // resultat beyond last year's result a dividend.
+  if (!pdfData.equity_specification) {
+    throw new Error('The annual report carries no equity specification: build it with buildArsredovisningReport.')
   }
-  const ovrigaPoster = {
-    ib:
-      totalt.ib - aktiekapital.ib - balanserat.ib - aretsRes.ib,
-    ub:
-      totalt.ub - aktiekapital.ub - balanserat.ub - aretsRes.ub,
-  }
-  // Movement derivation: föregående års resultat balanseras; vad som därutöver
-  // lämnat balanserat resultat antas vara utdelning (vanligaste fallet).
-  const balanserasINyRakning = aretsRes.ib
-  const balanseratResidual = balanserat.ub - (balanserat.ib + balanserasINyRakning)
-  const utdelning = balanseratResidual < 0 ? -balanseratResidual : 0
-  const ovrigForandringBalanserat = balanseratResidual > 0 ? balanseratResidual : 0
-  const egetKapital: EgetKapitalForandring = {
-    aktiekapital,
-    balanseratResultat: balanserat,
-    aretsResultat: aretsRes,
-    totalt,
-    ovrigaPoster,
-    balanserasINyRakning,
-    utdelning,
-    forandringAktiekapital: aktiekapital.ub - aktiekapital.ib,
-    ovrigForandringBalanserat,
-    aretsResultatRorelse: aretsRes.ub,
-  }
+  const egetKapital: EgetKapitalForandring = k2EquityTableInput(pdfData.equity_specification)
 
   // ---- resultatdisposition --------------------------------------------------
   // BalanseratResultat is tagged in BR and the eget kapital-table for the
@@ -264,9 +250,10 @@ export async function buildIxbrlInput(
   // request keeps signedDate null. Legal dates are never fabricated: the
   // missing date renders as an omitted fact in the preview and preflight 1214
   // blocks the submission path until everyone has signed.
-  const activeSignatureRequests = signatureRequests.filter(
-    (request) => request.status !== 'declined',
-  )
+  // The revisor's slots hold the revisorspåteckning, not a signature of the
+  // årsredovisning (ABL 9 kap. 28 §): they are split off here and never count
+  // as board signers (ÅRL 2 kap. 7 §), for the datering or the intyg signer.
+  const { board: activeSignatureRequests, revisorer: revisorRequests } = splitRoster(signatureRequests)
   const signedRequests = activeSignatureRequests.filter((request) => request.status === 'signed')
   const today = options.todayIso ?? todayIsoStockholm()
   const signers: IxbrlSigner[] = activeSignatureRequests.map((request) => {
@@ -286,6 +273,7 @@ export async function buildIxbrlInput(
   }
   const harVd = signers.some((signer) => /verkställande direktör|^vd$/i.test(signer.role ?? ''))
   const dateringsdatum = arsredovisningDatering(signers.map((signer) => signer.signedDate))
+  const revisorspateckning = buildRevisorspateckning(revisorRequests, profile)
 
   // ---- fastställelseintyg ----------------------------------------------------
   // A missing AGM date is NEVER replaced with today's date: it stays null,
@@ -408,6 +396,22 @@ export async function buildIxbrlInput(
       signers,
       harVd,
     },
+    // Only when there is a påteckning: an unaudited company's input keeps
+    // the shape (and the content hash) it had before the revisor package.
+    ...(revisorspateckning ? { revisorspateckning } : {}),
+    // K3's own parts, through the seams to the other phases' builders
+    // (k3-adapters.ts): equity specification, kassaflödesanalys, K3
+    // förvaltningsberättelse items and K3 balance sheet posts.
+    ...(framework === 'k3'
+      ? {
+          k3: {
+            forvaltningsberattelse: k3ForvaltningsberattelseItems(pdfData),
+            equity: k3EquityInput(pdfData, mapping.br),
+            cashFlow: k3CashFlowInput(pdfData),
+            balanceSheetSource: k3BalanceSheetSource(mapping),
+          },
+        }
+      : {}),
     faststallelseintyg: {
       arsstammaDatum: agmDate ?? null,
       resultatdispositionOutcome: agmDispositionOutcome,

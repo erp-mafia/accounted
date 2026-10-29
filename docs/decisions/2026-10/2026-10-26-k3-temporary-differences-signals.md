@@ -1,0 +1,1 @@
+[2026-10-26] Booked deferred tax (1370, 2240, 8940) blocks K3 whatever the profile says; buildings and component assets only hint at the profile question has_other_temporary_differences, which must be answered: blocking every building owner would block on a guess.

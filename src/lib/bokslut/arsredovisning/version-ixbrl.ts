@@ -4,6 +4,8 @@ import { withoutAgmWarnings, withoutSignatureWarnings } from '@/lib/bokslut/ixbr
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { arsredovisningDatering } from './datering'
 import { getAgmDecision } from './narrative-service'
+import { getAnnualReportProfile } from './profile-service'
+import { buildRevisorspateckning, splitRoster, versionPateckningFacts } from '@/lib/bokslut/ixbrl/revisorspateckning'
 import { signatureDate } from './signature-pages'
 import { getAnnualReportVersion } from './version-service'
 
@@ -15,6 +17,9 @@ export interface VersionSignatureRow {
   signer_name: string
   role: string
   signed_at: string | null
+  /** The påteckning frozen on a signed revisor slot; null on every other row. */
+  pateckning_opinion?: string | null
+  pateckning_firm_name?: string | null
 }
 
 /**
@@ -30,7 +35,10 @@ export function overlayVersionSignatures(
   rows: VersionSignatureRow[],
   options: { complete: boolean },
 ): void {
-  input.underskrifter.signers = rows.map((signature) => {
+  // The revisor's slots carry the revisorspåteckning, not a board signature
+  // (ABL 9 kap. 28 §): overlayRevisorspateckning reads them instead.
+  const { board } = splitRoster(rows)
+  input.underskrifter.signers = board.map((signature) => {
     const parts = signature.signer_name.trim().split(/\s+/)
     return {
       firstName: parts.length > 1 ? parts.slice(0, -1).join(' ') : parts[0],
@@ -46,6 +54,32 @@ export function overlayVersionSignatures(
     input.underskrifter.signers.map((signer) => signer.signedDate),
   )
   if (options.complete) input.warnings = withoutSignatureWarnings(input.warnings)
+}
+
+/**
+ * The revisorspåteckning is given after the board signed, so the version's
+ * content did not freeze it at lock time: the version's revisor slots
+ * (`rows`, the same version-bound rows overlayVersionSignatures reads) are
+ * put on top, with the opinion and revisionsbolag frozen on them when the
+ * påteckning was given (versionPateckningFacts; the profile only while a
+ * revisor slot is pending). Whether a revisionsberättelse is required is read
+ * from the profile: it renders nothing without a revisor slot, but a required
+ * one with no slot then fails preflight instead of filing without one.
+ */
+export async function overlayRevisorspateckning(
+  supabase: SupabaseClient,
+  companyId: string,
+  fiscalPeriodId: string,
+  input: IxbrlArsredovisningInput,
+  rows: VersionSignatureRow[],
+): Promise<void> {
+  const profile = await getAnnualReportProfile(supabase, companyId, fiscalPeriodId)
+  const facts = versionPateckningFacts(rows, profile)
+  input.revisorspateckning = buildRevisorspateckning(splitRoster(rows).revisorer, {
+    auditor_report_required: profile.auditor_report_required,
+    auditor_firm_name: facts?.firmName ?? null,
+    auditor_opinion: facts?.opinion ?? null,
+  })
 }
 
 /**
@@ -89,7 +123,7 @@ export async function getVersionIxbrlInput(
   const input = structuredClone(version.ixbrl_data)
   const { data, error } = await supabase
     .from('arsredovisning_signature_requests')
-    .select('signer_name, role, signed_at')
+    .select('signer_name, role, signed_at, pateckning_opinion, pateckning_firm_name')
     .eq('company_id', companyId)
     .eq('fiscal_period_id', fiscalPeriodId)
     .eq('annual_report_version_id', versionId)
@@ -100,5 +134,6 @@ export async function getVersionIxbrlInput(
     overlayVersionSignatures(input, rows, { complete: FULLY_SIGNED_STATUSES.has(version.summary.status) })
   }
   await overlayFaststallelseintyg(supabase, companyId, fiscalPeriodId, input)
+  await overlayRevisorspateckning(supabase, companyId, fiscalPeriodId, input, rows)
   return input
 }

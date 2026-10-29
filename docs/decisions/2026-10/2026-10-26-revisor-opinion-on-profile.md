@@ -1,0 +1,1 @@
+[2026-10-26] The revisionsbolag and what the revisionsberättelse says (auditor_opinion, ten values mapped to the fsign vallista) live on the annual report profile and are overlaid live at render and filing, like the AGM: they are known only after the board signed, so a version never freezes them.

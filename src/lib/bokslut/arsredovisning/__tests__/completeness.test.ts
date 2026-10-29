@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { ArsredovisningData } from '../types'
 import {
   emptyAnnualReportProfile,
@@ -12,6 +12,7 @@ import {
 import { mapTrialBalancesToK2 } from '../../ixbrl/k2-mapper'
 import { buildBrRows, buildRrRows } from '../statement-rows'
 import { K3_CASH_FLOW_TAX_ALLOCATION_WARNING } from '../build-data'
+import { toK3Presentation } from '../k3-presentation'
 
 const eligibility: AnnualReportEligibilityResult = {
   k2_eligible: true,
@@ -184,6 +185,62 @@ describe('validateAnnualReportCompleteness', () => {
     expect(result.issues.some((issue) => issue.code === 'AR-K3-DRAFT-ONLY')).toBe(true)
   })
 
+  describe('with K3 released (NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED)', () => {
+    afterEach(() => vi.unstubAllEnvs())
+
+    const k3Value = () => {
+      const value = input('signing')
+      value.report.accounting_framework = 'k3'
+      value.report.k3_disclosures = []
+      return value
+    }
+
+    it('drops the draft-only blocker once the flag is on', () => {
+      vi.stubEnv('NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED', 'true')
+      const result = validateAnnualReportCompleteness(k3Value())
+      expect(result.issues.map((issue) => issue.code)).not.toContain('AR-K3-DRAFT-ONLY')
+      expect(result.ok).toBe(true)
+    })
+
+    it('keeps it while the flag is off', () => {
+      vi.stubEnv('NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED', '')
+      expect(validateAnnualReportCompleteness(k3Value()).issues.map((issue) => issue.code)).toContain('AR-K3-DRAFT-ONLY')
+    })
+
+    it('blocks an open disclosure requirement and a report the matrix never saw', () => {
+      vi.stubEnv('NEXT_PUBLIC_K3_ARSREDOVISNING_ENABLED', 'true')
+      const value = k3Value()
+      value.report.k3_disclosures = [
+        {
+          id: 'not.handelser_efter_balansdagen',
+          code: 'AR-K3-NOTE-EVENTS-AFTER',
+          title: 'Väsentliga händelser efter balansdagen',
+          concept: 'NotVasentligaHandelserRakenskapsaretsSlut',
+          sources: ['ÅRL 5 kap. 22 §'],
+          placement: 'note',
+          producer: 'typed',
+          applicability: 'ask',
+          status: 'missing',
+          content: null,
+          message: 'Ange om väsentliga händelser har inträffat efter räkenskapsårets slut (ÅRL 5 kap. 22 §).',
+          question: null,
+          text_label: null,
+          confirmation: null,
+          choices: [],
+          hint: null,
+          existing: null,
+        },
+      ]
+      expect(validateAnnualReportCompleteness(value).issues).toContainEqual(
+        expect.objectContaining({ code: 'AR-K3-NOTE-EVENTS-AFTER', severity: 'error', section: 'notes' }),
+      )
+      delete value.report.k3_disclosures
+      expect(validateAnnualReportCompleteness(value).issues.map((issue) => issue.code)).toContain(
+        'AR-K3-DISCLOSURES-NOT-EVALUATED',
+      )
+    })
+  })
+
   it.each(['signing', 'filing'] as const)('blocks %s after a tax-allocation failure for a larger K3 company', (stage) => {
     const value = input(stage)
     value.report.accounting_framework = 'k3'
@@ -351,6 +408,37 @@ describe('validateAnnualReportCompleteness', () => {
         expect.objectContaining({ code: 'AR-IXBRL-STATEMENT-MISMATCH' }),
       ]),
     )
+  })
+
+  it('rebuilds a K3 report\'s iXBRL rows with K3\'s own posts before comparing them', () => {
+    const value = input('draft')
+    value.report.accounting_framework = 'k3'
+    const full = [
+      { account_number: '1930', account_name: 'Bank', closing_debit: 160, closing_credit: 0 },
+      { account_number: '2081', account_name: 'Share capital', closing_debit: 0, closing_credit: 80 },
+      { account_number: '2099', account_name: 'Current result', closing_debit: 0, closing_credit: 20 },
+      { account_number: '2240', account_name: 'Uppskjuten skatteskuld', closing_debit: 0, closing_credit: 60 },
+      { account_number: '3010', account_name: 'Revenue', closing_debit: 20, closing_credit: 20 },
+    ]
+    const preClosing = [
+      { account_number: '1930', account_name: 'Bank', closing_debit: 160, closing_credit: 0 },
+      { account_number: '2081', account_name: 'Share capital', closing_debit: 0, closing_credit: 80 },
+      { account_number: '2240', account_name: 'Uppskjuten skatteskuld', closing_debit: 0, closing_credit: 60 },
+      { account_number: '3010', account_name: 'Revenue', closing_debit: 0, closing_credit: 20 },
+    ]
+    const mapping = toK3Presentation(mapTrialBalancesToK2({ full, preClosing }, null), full as never, null)
+    const balanceRows = buildBrRows(mapping)
+    value.report.resultatrakning = buildRrRows(mapping)
+    value.report.balansrakning.assets = balanceRows.assets
+    value.report.balansrakning.equity_liabilities = balanceRows.equityLiabilities
+    value.report.balansrakning.total_assets = mapping.totals.tillgangar.current
+    value.report.balansrakning.total_equity_liabilities = mapping.totals.egetKapitalSkulder.current
+    expect(balanceRows.equityLiabilities.some((row) => row.label === 'Uppskjuten skatteskuld')).toBe(true)
+
+    const ixbrl = { rr: mapping.rr, br: mapping.br, totals: mapping.totals }
+    expect(
+      validateStatementIntegrity(value.report, ixbrl as never).map((issue) => issue.code),
+    ).not.toContain('AR-IXBRL-STATEMENT-MISMATCH')
   })
 
   it('requires a documented prudence assessment for a positive dividend', () => {

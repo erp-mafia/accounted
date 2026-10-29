@@ -48,7 +48,12 @@ describe('report query counts', () => {
       chart_of_accounts: 1,
       'rpc:get_trial_balance_aggregates': 6,
     })
-    expect(db.total()).toBe(41)
+    // 43: the year's framework record (fiscal_period_frameworks, BFNAR
+    // 2012:4) and, for a year without one (these books), the company default.
+    // 46: the specification of changes in equity reads each year's equity
+    // verifikat (one get_entries_with_account_lines per year) and the years'
+    // ingående balans verifikat ids (fiscal_periods).
+    expect(db.total()).toBe(46)
   })
 
   it('one SIE export reads the previous year as sums per account, whatever its size', async () => {

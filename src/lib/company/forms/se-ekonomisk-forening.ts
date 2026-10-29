@@ -47,6 +47,7 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     ixbrl: false,
     auditorAlwaysRequired: true,
     forenklatArsbokslut: null,
+    revisorspateckningLagrum: '8 kap. 32 § lagen om ekonomiska föreningar',
     cashFlowStatement: 'larger',
     housingKeyRatios: false,
   },

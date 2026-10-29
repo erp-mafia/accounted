@@ -583,6 +583,11 @@ const LEDGER_SCAN_SANCTIONED = new Set([
   'lib/reports/avgifter-basis.ts',
   'lib/reports/salary-journal.ts',
   'lib/reports/vacation-liability.ts',
+  // Classifies each equity verifikat by its counter-accounts (the kind of
+  // movement is not in any balance); the balances it opens and closes on come
+  // from generateTrialBalance, and the resultatavslut is read on purpose as
+  // the year's result (ÅRL 6 kap. 2 §, K3 6.3).
+  'lib/bokslut/arsredovisning/equity-specification.ts',
 ])
 
 const LEDGER_SCAN_RE =

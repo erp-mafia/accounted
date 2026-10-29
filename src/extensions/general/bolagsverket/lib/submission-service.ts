@@ -16,13 +16,16 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events/bus'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { uploadDocument } from '@/lib/core/documents/document-service'
-import { generateK2IxbrlDocument, embedKontrollsumma } from '@/lib/bokslut/ixbrl/document/k2-document'
+import { generateIxbrlDocument, embedKontrollsumma } from '@/lib/bokslut/ixbrl/document/generate'
+import { k3IxbrlEnabled } from '@/lib/bokslut/ixbrl/k3-release'
+import { K3_AB_RISBS_2021_10_31 } from '@/lib/bokslut/ixbrl/taxonomy/entry-points'
 import { runPreflightChecks } from '@/lib/bokslut/ixbrl/validate/rules'
 import { validateIxbrlWithArelle } from '@/lib/bokslut/ixbrl/validate/arelle-client'
 import type { IxbrlArsredovisningInput } from '@/lib/bokslut/ixbrl/types'
 import { certificateRole } from '@/lib/bokslut/ixbrl/certificate-role'
 import {
   overlayFaststallelseintyg,
+  overlayRevisorspateckning,
   overlayVersionSignatures,
 } from '@/lib/bokslut/arsredovisning/version-ixbrl'
 import { BolagsverketClient } from './client'
@@ -30,6 +33,7 @@ import type { ExtensionLogger } from '@/lib/extensions/types'
 import type {
   ArsredovisningSubmission,
   HandelseMeddelande,
+  HandlingTyp,
   KontrolleraUtfall,
   SubmissionStatus,
 } from '../types'
@@ -97,15 +101,19 @@ export interface SubmitParams {
     epost: string
   }
   kvittensEpost?: string[]
+  /**
+   * notifieringEpostadresser (API 2.1): told that a handling was uploaded.
+   * For an årsredovisning whose revisionsberättelse is kompletteras, the
+   * revisor's address, so the revisor knows a revisionsberättelse is expected.
+   */
+  notifieringEpost?: string[]
   /** User accepted the current avtalstext (avtalstextAndrad value). */
   acceptedAvtalstextAndrad?: string
   /** Upload even when kontrollera returns warn-level utfall (GUIDE §4.2.2). */
   ignoreWarnings?: boolean
 }
 
-export type SubmitResult =
-  | { outcome: 'avtal_required'; avtalstext: string; avtalstextAndrad: string }
-  | { outcome: 'preflight_failed'; issues: ReturnType<typeof runPreflightChecks>['issues'] }
+type UploadOutcome =
   | {
       outcome: 'kontrollera_stopped'
       submissionId: string
@@ -114,6 +122,7 @@ export type SubmitResult =
   | {
       outcome: 'uploaded'
       submissionId: string
+      handlingTyp: HandlingTyp
       idnummer: string
       sha256: string
       url: string
@@ -126,6 +135,36 @@ export type SubmitResult =
       url: string | null
       message: string
     }
+
+type AvtalRequired = { outcome: 'avtal_required'; avtalstext: string; avtalstextAndrad: string }
+
+export type SubmitResult =
+  | AvtalRequired
+  | { outcome: 'preflight_failed'; issues: ReturnType<typeof runPreflightChecks>['issues'] }
+  | UploadOutcome
+
+export type SubmitRevisionsberattelseResult = AvtalRequired | UploadOutcome
+
+/** The two handling types an årsredovisning goes up as (API 2.1 Handling.typ). */
+export const ARSREDOVISNING_HANDLING_TYPES = ['arsredovisning_komplett', 'arsredovisning_kompletteras'] as const
+
+/**
+ * Which handling the årsredovisning is uploaded as (Bolagsverket API 2.1,
+ * Handling.typ): `arsredovisning_komplett` when the revisionsberättelse is in
+ * the same file or none is required, `arsredovisning_kompletteras` when a
+ * revisionsberättelse follows as its own file. Accounted never puts the
+ * revisionsberättelse in the årsredovisning's file (the revisor writes it), so
+ * a company with a revisionsberättelse (required, or a revisor in the roster)
+ * always files kompletteras.
+ */
+export function arsredovisningHandlingTyp(
+  input: Pick<IxbrlArsredovisningInput, 'revisorspateckning'>,
+): (typeof ARSREDOVISNING_HANDLING_TYPES)[number] {
+  const pateckning = input.revisorspateckning
+  return pateckning && (pateckning.required || pateckning.revisorer.length > 0)
+    ? 'arsredovisning_kompletteras'
+    : 'arsredovisning_komplett'
+}
 
 interface ServiceDeps {
   supabase: SupabaseClient
@@ -169,6 +208,47 @@ async function getOrgnr(supabase: SupabaseClient, companyId: string): Promise<st
   return normalizeOrgnr(orgNumber)
 }
 
+/**
+ * Avtalstext gate (GUIDE §4.2): the user must have accepted THIS version of
+ * the text for THIS company before kontrollera/inlämning may run. Returns
+ * the text to show when it is not accepted yet, null when the call may go on.
+ */
+async function avtalGate(
+  supabase: SupabaseClient,
+  params: { companyId: string; userId: string; acceptedAvtalstextAndrad?: string },
+  token: { avtalstext: string; avtalstextAndrad: string },
+): Promise<AvtalRequired | null> {
+  const { data: acceptance, error: acceptanceError } = await supabase
+    .from('bolagsverket_avtal_acceptances')
+    .select('id')
+    .eq('company_id', params.companyId)
+    .eq('user_id', params.userId)
+    .eq('avtalstext_andrad', token.avtalstextAndrad)
+    .maybeSingle()
+  if (acceptanceError) {
+    throw new Error(`Kunde inte kontrollera avtalsgodkännandet: ${acceptanceError.message}`)
+  }
+  const acceptedNow = params.acceptedAvtalstextAndrad === token.avtalstextAndrad
+  if (!acceptance && !acceptedNow) {
+    return {
+      outcome: 'avtal_required',
+      avtalstext: token.avtalstext,
+      avtalstextAndrad: token.avtalstextAndrad,
+    }
+  }
+  if (!acceptance && acceptedNow) {
+    const { error: acceptanceInsertError } = await supabase.from('bolagsverket_avtal_acceptances').insert({
+      company_id: params.companyId,
+      user_id: params.userId,
+      avtalstext_andrad: token.avtalstextAndrad,
+    })
+    if (acceptanceInsertError) {
+      throw new Error(`Kunde inte spara avtalsgodkännandet: ${acceptanceInsertError.message}`)
+    }
+  }
+  return null
+}
+
 export async function submitArsredovisning(
   deps: ServiceDeps,
   params: SubmitParams,
@@ -209,17 +289,28 @@ export async function submitArsredovisning(
       { issues: validationSnapshot.digital_issues ?? [] },
     )
   }
+  // The K3 flag is a kill switch: a K3 version locked while it was on is
+  // not filed once it is off.
+  if (versionRow.entry_point === K3_AB_RISBS_2021_10_31.id && !k3IxbrlEnabled()) {
+    throw new BolagsverketSubmissionError(
+      'BOLAGSVERKET_K3_FILING_CLOSED',
+      'Connected filing of K3 annual reports is switched off (NEXT_PUBLIC_K3_IXBRL_ENABLED).',
+      { annual_report_version_id: versionRow.id },
+    )
+  }
 
   // 0. Double-submission guard: once an upload reached Bolagsverket, a retry
   //    would file a second handling (and store a second audit document).
-  //    Refuse while a submission for this period is still open with the
+  //    Refuse while an årsredovisning for this period is still open with the
   //    authority. Rows in draft/kontrollerad/error/registrerad/avslutad do
-  //    not block. A pre-upload retry reuses its idempotency row.
+  //    not block, nor does the separate revisionsberättelse. A pre-upload
+  //    retry reuses its idempotency row.
   const { data: activeRows, error: activeSubmissionError } = await supabase
     .from('arsredovisning_submissions')
     .select('id, status')
     .eq('company_id', params.companyId)
     .eq('fiscal_period_id', params.fiscalPeriodId)
+    .in('handling_typ', [...ARSREDOVISNING_HANDLING_TYPES])
     .in('status', [...ACTIVE_SUBMISSION_STATUSES])
     .limit(1)
   if (activeSubmissionError) {
@@ -237,43 +328,16 @@ export async function submitArsredovisning(
   // 1. Token (also carries the avtalstext we must gate on).
   const token = await client.createInlamningToken(params.avsandarePnr, orgnr)
 
-  // 2. Avtalstext gate (GUIDE §4.2): the user must have accepted THIS version
-  //    of the text for THIS company before kontrollera/inlämning may run.
-  const { data: acceptance, error: acceptanceError } = await supabase
-    .from('bolagsverket_avtal_acceptances')
-    .select('id')
-    .eq('company_id', params.companyId)
-    .eq('user_id', params.userId)
-    .eq('avtalstext_andrad', token.avtalstextAndrad)
-    .maybeSingle()
-  if (acceptanceError) {
-    throw new Error(`Kunde inte kontrollera avtalsgodkännandet: ${acceptanceError.message}`)
-  }
-  const acceptedNow = params.acceptedAvtalstextAndrad === token.avtalstextAndrad
-  if (!acceptance && !acceptedNow) {
-    return {
-      outcome: 'avtal_required',
-      avtalstext: token.avtalstext,
-      avtalstextAndrad: token.avtalstextAndrad,
-    }
-  }
-  if (!acceptance && acceptedNow) {
-    const { error: acceptanceInsertError } = await supabase.from('bolagsverket_avtal_acceptances').insert({
-      company_id: params.companyId,
-      user_id: params.userId,
-      avtalstext_andrad: token.avtalstextAndrad,
-    })
-    if (acceptanceInsertError) {
-      throw new Error(`Kunde inte spara avtalsgodkännandet: ${acceptanceInsertError.message}`)
-    }
-  }
+  // 2. Avtalstext gate.
+  const avtal = await avtalGate(supabase, params, token)
+  if (avtal) return avtal
 
   // 3. Render from the immutable, signed version. Signature evidence is
   //    stored separately from the content snapshot and overlaid here.
   const input = structuredClone(versionRow.ixbrl_data) as IxbrlArsredovisningInput
   const { data: signatureRows, error: signatureError } = await supabase
     .from('arsredovisning_signature_requests')
-    .select('signer_name, role, signed_at, status, signing_method, evidence_reference')
+    .select('signer_name, role, signed_at, status, signing_method, evidence_reference, pateckning_opinion, pateckning_firm_name')
     .eq('company_id', params.companyId)
     .eq('fiscal_period_id', params.fiscalPeriodId)
     .eq('annual_report_version_id', params.annualReportVersionId)
@@ -288,6 +352,9 @@ export async function submitArsredovisning(
     signing_method: string | null
     evidence_reference: string | null
   }>
+  // Every slot, the revisor's påteckning included, must carry evidence: the
+  // version is signed only when all of them are (trigger
+  // complete_annual_report_version_signing).
   if (
     signatures.length === 0 ||
     signatures.some(
@@ -331,11 +398,14 @@ export async function submitArsredovisning(
     input,
     todayIsoStockholm(),
   )
+  // The revisorspåteckning (ABL 9 kap. 28 §) is given after the board
+  // signed: put the revisor slots and the profile's opinion on top.
+  await overlayRevisorspateckning(supabase, params.companyId, params.fiscalPeriodId, input, signatures)
   const preflight = runPreflightChecks(input)
   if (!preflight.ok) {
     return { outcome: 'preflight_failed', issues: preflight.issues }
   }
-  let { xhtml } = generateK2IxbrlDocument(input)
+  let { xhtml } = generateIxbrlDocument(input)
 
   // 4. Kontrollsumma (TA §4.5, recommended): tag the checksum into <head> so
   //    the kvittens email carries a verifiable hash. Non-fatal on failure.
@@ -410,16 +480,261 @@ export async function submitArsredovisning(
     )
   }
 
-  const fileBase64 = Buffer.from(xhtml, 'utf8').toString('base64')
-  const requestKey = createHash('sha256')
-    .update(
-      `${params.companyId}:${params.annualReportVersionId}:${client.environment}:arsredovisning_komplett`,
+  const handlingTyp = arsredovisningHandlingTyp(input)
+  const result = await uploadHandling(deps, {
+    companyId: params.companyId,
+    userId: params.userId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    annualReportVersionId: params.annualReportVersionId,
+    // The komplett key is unchanged from before kompletteras existed, so a
+    // pre-upload retry of an older attempt still finds its row.
+    requestKeySeed: `${params.companyId}:${params.annualReportVersionId}:${client.environment}:${handlingTyp}`,
+    handlingTyp,
+    taxonomyVersion: versionRow.taxonomy_version,
+    entryPoint: input.entryPointId,
+    xhtml,
+    documentName: `arsredovisning-${input.period.end}-inlamnad.xhtml`,
+    token: token.token,
+    undertecknare: {
+      pnr: params.undertecknare.pnr,
+      namn: `${params.undertecknare.fornamn} ${params.undertecknare.efternamn}`,
+      epost: params.undertecknare.epost,
+    },
+    kvittensEpost: params.kvittensEpost,
+    notifieringEpost: params.notifieringEpost,
+    kontrollsumma,
+    ignoreWarnings: params.ignoreWarnings,
+  })
+  if (result.outcome === 'uploaded') {
+    await afterUpload(deps, params, orgnr, result)
+  }
+  return result
+}
+
+/**
+ * The revisionsberättelse as its own handling (API 2.1 Handling.typ
+ * `revisionsberattelse`), after the årsredovisning went up as
+ * `arsredovisning_kompletteras`. The file is the revisor's: their software
+ * produces the revisionsberättelse in iXBRL against Bolagsverket's
+ * revisionsberättelse taxonomy, and the revisor signs it at Bolagsverket
+ * (`undertecknare` is the revisor). Accounted checks that it is such a file,
+ * validates the exact bytes against the taxonomy with Arelle (the same path
+ * as the årsredovisning, failing closed), archives them, runs kontrollera and
+ * uploads it. The content is the revisor's responsibility, so Accounted's own
+ * preflight rules do not apply to it.
+ */
+export interface SubmitRevisionsberattelseParams {
+  companyId: string
+  userId: string
+  fiscalPeriodId: string
+  /** Avsändarens personnummer (12 siffror): whose eget utrymme the file lands in. */
+  avsandarePnr: string
+  /** The revisor, who signs the revisionsberättelse at Bolagsverket. */
+  undertecknare: {
+    pnr: string
+    fornamn: string
+    efternamn: string
+    epost: string
+  }
+  /** The revisionsberättelse, iXBRL XHTML in UTF-8, as the revisor delivered it. */
+  xhtml: string
+  kvittensEpost?: string[]
+  /** Told that the revisionsberättelse was uploaded (e.g. the company's contact). */
+  notifieringEpost?: string[]
+  acceptedAvtalstextAndrad?: string
+  ignoreWarnings?: boolean
+}
+
+/** Bolagsverket's maximum document size (felkod 5006). */
+export const MAX_HANDLING_BYTES = 5 * 1024 * 1024
+
+/**
+ * What a revisionsberättelse file must look like before it is sent: XHTML
+ * with an ix:header that references a revisionsberättelse taxonomy
+ * (xbrl.taxonomier.se/se/fr/ar/<rapport>/<version>/<entry>.xsd, e.g. rar or
+ * rarc), within the size limit. Returns the entry point and version for the
+ * submission row.
+ */
+export function inspectRevisionsberattelse(xhtml: string): { entryPoint: string; taxonomyVersion: string } {
+  const bytes = Buffer.byteLength(xhtml, 'utf8')
+  const ref = xhtml.match(
+    /<link:schemaRef[^>]*xlink:href="https?:\/\/xbrl\.taxonomier\.se\/se\/fr\/ar\/[a-z]+\/(\d{4}-\d{2}-\d{2})\/([a-z0-9-]+)\.xsd"/i,
+  )
+  if (
+    bytes === 0 ||
+    bytes >= MAX_HANDLING_BYTES ||
+    !/<html[\s>]/i.test(xhtml) ||
+    !/<ix:header[\s>]/i.test(xhtml) ||
+    !ref
+  ) {
+    throw new BolagsverketSubmissionError(
+      'BOLAGSVERKET_RB_INVALID_FILE',
+      'The file is not an iXBRL audit report referencing the Bolagsverket audit report taxonomy.',
+      { bytes },
     )
-    .digest('hex')
-  const { data: existingRequest, error: existingRequestError } = await supabase
+  }
+  return { entryPoint: ref[2], taxonomyVersion: ref[1] }
+}
+
+export async function submitRevisionsberattelse(
+  deps: ServiceDeps,
+  params: SubmitRevisionsberattelseParams,
+): Promise<SubmitRevisionsberattelseResult> {
+  const { supabase, client } = deps
+  const { entryPoint, taxonomyVersion } = inspectRevisionsberattelse(params.xhtml)
+  const orgnr = await getOrgnr(supabase, params.companyId)
+
+  // The årsredovisning it completes: uploaded as kompletteras and still open
+  // with Bolagsverket (an uncertain upload is reconciled first).
+  const { data: arRows, error: arError } = await supabase
+    .from('arsredovisning_submissions')
+    .select('id, annual_report_version_id, status')
+    .eq('company_id', params.companyId)
+    .eq('fiscal_period_id', params.fiscalPeriodId)
+    .eq('environment', client.environment)
+    .eq('handling_typ', 'arsredovisning_kompletteras')
+    .in('status', ['uploaded', 'inkommen', 'forelagd', 'komplettering'])
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (arError) throw new Error(`Kunde inte läsa årsredovisningens inlämning: ${arError.message}`)
+  const arsredovisning = (
+    arRows as Array<{ id: string; annual_report_version_id: string | null; status: string }> | null
+  )?.[0]
+  if (!arsredovisning) {
+    throw new BolagsverketSubmissionError(
+      'BOLAGSVERKET_RB_NO_ARSREDOVISNING',
+      'No annual report uploaded as arsredovisning_kompletteras is open for this fiscal period.',
+    )
+  }
+
+  const { data: activeRows, error: activeError } = await supabase
     .from('arsredovisning_submissions')
     .select('id, status')
     .eq('company_id', params.companyId)
+    .eq('fiscal_period_id', params.fiscalPeriodId)
+    .eq('handling_typ', 'revisionsberattelse')
+    .in('status', [...ACTIVE_SUBMISSION_STATUSES])
+    .limit(1)
+  if (activeError) throw new Error(`Kunde inte kontrollera tidigare inlämningar: ${activeError.message}`)
+  const active = (activeRows as Array<{ id: string; status: string }> | null)?.[0]
+  if (active) {
+    throw new BolagsverketSubmissionError(
+      'BOLAGSVERKET_SUBMISSION_EXISTS',
+      `An active audit report submission (${active.status}) already exists for this fiscal period.`,
+      { submission_id: active.id, status: active.status },
+    )
+  }
+
+  // Taxonomy validation before anything reaches Bolagsverket, as for the
+  // årsredovisning: an error or an unavailable validator stops the upload.
+  // The run is kept with the årsredovisning version it completes; its
+  // artifact_hash is the revisionsberättelse's own.
+  const fileHash = createHash('sha256').update(params.xhtml).digest('hex')
+  const arelle = await validateIxbrlWithArelle(params.xhtml, { filename: 'revisionsberattelse.xhtml' })
+  if (arsredovisning.annual_report_version_id) {
+    const { error: runError } = await supabase.from('annual_report_validation_runs').insert({
+      company_id: params.companyId,
+      fiscal_period_id: params.fiscalPeriodId,
+      version_id: arsredovisning.annual_report_version_id,
+      user_id: params.userId,
+      validation_layer: 'arelle',
+      status: arelle.status,
+      validator_version: arelle.validator_version,
+      artifact_hash: fileHash,
+      issues: arelle.issues,
+    })
+    if (runError) throw new Error(`Kunde inte spara Arelle-validering: ${runError.message}`)
+  }
+  if (arelle.status === 'unavailable') {
+    throw new BolagsverketSubmissionError(
+      'BOLAGSVERKET_ARELLE_UNAVAILABLE',
+      'Arelle validation is unavailable. Filing the audit report is blocked.',
+      { issues: arelle.issues },
+    )
+  }
+  if (arelle.status === 'failed') {
+    throw new BolagsverketSubmissionError(
+      'BOLAGSVERKET_RB_ARELLE_FAILED',
+      'Arelle found blocking taxonomy validation errors in the audit report.',
+      { issues: arelle.issues },
+    )
+  }
+
+  const token = await client.createInlamningToken(params.avsandarePnr, orgnr)
+  const avtal = await avtalGate(supabase, params, token)
+  if (avtal) return avtal
+
+  const { data: period, error: periodError } = await supabase
+    .from('fiscal_periods')
+    .select('period_end')
+    .eq('id', params.fiscalPeriodId)
+    .eq('company_id', params.companyId)
+    .maybeSingle()
+  if (periodError || !period) throw new Error('Räkenskapsåret hittades inte.')
+
+  const result = await uploadHandling(deps, {
+    companyId: params.companyId,
+    userId: params.userId,
+    fiscalPeriodId: params.fiscalPeriodId,
+    annualReportVersionId: arsredovisning.annual_report_version_id,
+    requestKeySeed: `${params.companyId}:${params.fiscalPeriodId}:${client.environment}:revisionsberattelse:${fileHash}`,
+    handlingTyp: 'revisionsberattelse',
+    taxonomyVersion,
+    entryPoint,
+    xhtml: params.xhtml,
+    documentName: `revisionsberattelse-${(period as { period_end: string }).period_end}-inlamnad.xhtml`,
+    token: token.token,
+    undertecknare: {
+      pnr: params.undertecknare.pnr,
+      namn: `${params.undertecknare.fornamn} ${params.undertecknare.efternamn}`,
+      epost: params.undertecknare.epost,
+    },
+    kvittensEpost: params.kvittensEpost,
+    notifieringEpost: params.notifieringEpost,
+    kontrollsumma: null,
+    ignoreWarnings: params.ignoreWarnings,
+  })
+  if (result.outcome === 'uploaded') {
+    await afterUpload(deps, params, orgnr, result)
+  }
+  return result
+}
+
+interface UploadHandlingArgs {
+  companyId: string
+  userId: string
+  fiscalPeriodId: string
+  annualReportVersionId: string | null
+  /** Hashed into request_key: one idempotency row per identical attempt. */
+  requestKeySeed: string
+  handlingTyp: HandlingTyp
+  taxonomyVersion: string
+  entryPoint: string
+  xhtml: string
+  documentName: string
+  token: string
+  undertecknare: { pnr: string; namn: string; epost: string }
+  kvittensEpost?: string[]
+  notifieringEpost?: string[]
+  kontrollsumma: string | null
+  ignoreWarnings?: boolean
+}
+
+/**
+ * Steps 5-8, shared by the årsredovisning and the revisionsberättelse:
+ * persist the attempt, kontrollera, archive the exact bytes, upload to eget
+ * utrymme, record the receipt. Failures before the upload become error; once
+ * the upload started, an uncertain outcome becomes unknown and a retry is
+ * blocked until it is reconciled.
+ */
+async function uploadHandling(deps: ServiceDeps, args: UploadHandlingArgs): Promise<UploadOutcome> {
+  const { supabase, client, log } = deps
+  const fileBase64 = Buffer.from(args.xhtml, 'utf8').toString('base64')
+  const requestKey = createHash('sha256').update(args.requestKeySeed).digest('hex')
+  const { data: existingRequest, error: existingRequestError } = await supabase
+    .from('arsredovisning_submissions')
+    .select('id, status')
+    .eq('company_id', args.companyId)
     .eq('environment', client.environment)
     .eq('request_key', requestKey)
     .maybeSingle()
@@ -427,23 +742,23 @@ export async function submitArsredovisning(
     throw new Error(`Kunde inte kontrollera inlämningens idempotensnyckel: ${existingRequestError.message}`)
   }
   const submissionPayload = {
-      company_id: params.companyId,
-      user_id: params.userId,
-      fiscal_period_id: params.fiscalPeriodId,
-      annual_report_version_id: params.annualReportVersionId,
-      request_key: requestKey,
-      handling_typ: 'arsredovisning_komplett',
-      taxonomy_version: versionRow.taxonomy_version,
-      entry_point: input.entryPointId,
-      environment: client.environment,
-      status: 'draft',
-      undertecknare_namn: `${params.undertecknare.fornamn} ${params.undertecknare.efternamn}`,
-      undertecknare_epost: params.undertecknare.epost,
-      undertecknare_pnr_hash: null,
-      avsandare_pnr_hash: null,
-      kontrollsumma,
-      error_message: null,
-    }
+    company_id: args.companyId,
+    user_id: args.userId,
+    fiscal_period_id: args.fiscalPeriodId,
+    annual_report_version_id: args.annualReportVersionId,
+    request_key: requestKey,
+    handling_typ: args.handlingTyp,
+    taxonomy_version: args.taxonomyVersion,
+    entry_point: args.entryPoint,
+    environment: client.environment,
+    status: 'draft',
+    undertecknare_namn: args.undertecknare.namn,
+    undertecknare_epost: args.undertecknare.epost,
+    undertecknare_pnr_hash: null,
+    avsandare_pnr_hash: null,
+    kontrollsumma: args.kontrollsumma,
+    error_message: null,
+  }
 
   // 5. Persist before talking to Bolagsverket. A stopped kontrollera or a
   //    pre-upload error reuses the same idempotency row, which makes the
@@ -454,7 +769,7 @@ export async function submitArsredovisning(
     if (!['draft', 'kontrollerad', 'error'].includes(existingRequest.status)) {
       throw new BolagsverketSubmissionError(
         'BOLAGSVERKET_SUBMISSION_EXISTS',
-        'This exact annual report version already has a submission attempt.',
+        'This exact document already has a submission attempt.',
         { submission_id: existingRequest.id, status: existingRequest.status },
       )
     }
@@ -462,7 +777,7 @@ export async function submitArsredovisning(
       .from('arsredovisning_submissions')
       .update({ ...submissionPayload, status: 'draft' })
       .eq('id', existingRequest.id)
-      .eq('company_id', params.companyId)
+      .eq('company_id', args.companyId)
       .select('id')
       .single()
     if (error || !data) {
@@ -482,15 +797,12 @@ export async function submitArsredovisning(
   }
   const submissionId = submissionRow.id
 
-  // Steps 6-8 talk to Bolagsverket with a persisted row in play. Failures
-  // before the external upload become error. Once upload starts, uncertain
-  // outcomes become unknown and retries are blocked until reconciled.
   let svar: Awaited<ReturnType<BolagsverketClient['lamnaIn']>>
   let utfall: KontrolleraUtfall[]
   let remoteUploadStarted = false
   try {
     // 6. Kontrollera (layer 3): always run; surface utfall to the user.
-    const kontrollSvar = await client.kontrollera(token.token, fileBase64, 'arsredovisning_komplett')
+    const kontrollSvar = await client.kontrollera(args.token, fileBase64, args.handlingTyp)
     utfall = kontrollSvar.utfall ?? []
     const { error: kontrollUpdateError } = await supabase
       .from('arsredovisning_submissions')
@@ -500,21 +812,21 @@ export async function submitArsredovisning(
       throw new Error(`Kunde inte spara Bolagsverkets kontrollresultat: ${kontrollUpdateError.message}`)
     }
     const hasBlocking = utfall.some((item) => item.typ?.toLowerCase() === 'error')
-    if (utfall.length > 0 && (hasBlocking || !params.ignoreWarnings)) {
+    if (utfall.length > 0 && (hasBlocking || !args.ignoreWarnings)) {
       return { outcome: 'kontrollera_stopped', submissionId, utfall }
     }
 
     // 7. Store the exact uploaded bytes as räkenskapsinformation (7-year
     //    retention, Accounting Guard Rail #7) BEFORE upload.
-    const buffer = Buffer.from(xhtml, 'utf8')
+    const buffer = Buffer.from(args.xhtml, 'utf8')
     let doc: Awaited<ReturnType<typeof uploadDocument>>
     try {
       doc = await uploadDocument(
         supabase,
-        params.userId,
-        params.companyId,
+        args.userId,
+        args.companyId,
         {
-          name: `arsredovisning-${input.period.end}-inlamnad.xhtml`,
+          name: args.documentName,
           buffer: buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength) as ArrayBuffer,
           type: 'application/xhtml+xml',
         },
@@ -548,12 +860,13 @@ export async function submitArsredovisning(
     }
     remoteUploadStarted = true
     try {
-      svar = await client.lamnaIn(token.token, {
-        undertecknare: params.undertecknare.pnr,
-        epostadresser: [params.undertecknare.epost],
-        kvittensepostadresser: params.kvittensEpost,
+      svar = await client.lamnaIn(args.token, {
+        undertecknare: args.undertecknare.pnr,
+        epostadresser: [args.undertecknare.epost],
+        kvittensepostadresser: args.kvittensEpost,
+        notifieringEpostadresser: args.notifieringEpost,
         fileBase64,
-        typ: 'arsredovisning_komplett',
+        typ: args.handlingTyp,
       })
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
@@ -563,7 +876,7 @@ export async function submitArsredovisning(
         .eq('id', submissionId)
       log.error('Bolagsverket upload outcome is unknown: retry blocked', {
         submissionId,
-        companyId: params.companyId,
+        companyId: args.companyId,
         error: message,
       })
       return {
@@ -630,31 +943,53 @@ export async function submitArsredovisning(
           'Bolagsverket tog emot dokumentet men Accounted kunde inte bekräfta lokal status. Skicka inte igen.',
       }
     }
-    const { error: versionStatusError } = await supabase
-      .from('annual_report_versions')
-      .update({ status: 'filed' })
-      .eq('id', params.annualReportVersionId)
-      .eq('company_id', params.companyId)
-      .eq('status', 'signed')
-    if (versionStatusError) {
-      log.error('failed to mark annual report version as filed', {
-        submissionId,
-        annualReportVersionId: params.annualReportVersionId,
-        dbError: versionStatusError.message,
-      })
+    // The årsredovisning's version is filed; the revisionsberättelse only
+    // completes it.
+    if (args.handlingTyp !== 'revisionsberattelse' && args.annualReportVersionId) {
+      const { error: versionStatusError } = await supabase
+        .from('annual_report_versions')
+        .update({ status: 'filed' })
+        .eq('id', args.annualReportVersionId)
+        .eq('company_id', args.companyId)
+        .eq('status', 'signed')
+      if (versionStatusError) {
+        log.error('failed to mark annual report version as filed', {
+          submissionId,
+          annualReportVersionId: args.annualReportVersionId,
+          dbError: versionStatusError.message,
+        })
+      }
     }
   } catch (err) {
     await markSubmissionError(supabase, log, submissionId, err, remoteUploadStarted)
     throw err // preserved for the route's error mapping (5xx / upstream status)
   }
 
+  return {
+    outcome: 'uploaded',
+    submissionId,
+    handlingTyp: args.handlingTyp,
+    idnummer: svar.handlingsinfo.idnummer,
+    sha256: svar.handlingsinfo.sha256checksumma,
+    url: svar.url,
+    utfall,
+  }
+}
+
+/** Event + händelseprenumeration after a confirmed upload. */
+async function afterUpload(
+  deps: ServiceDeps,
+  params: { companyId: string; userId: string; fiscalPeriodId: string },
+  orgnr: string,
+  result: Extract<UploadOutcome, { outcome: 'uploaded' }>,
+): Promise<void> {
   await eventBus.emit({
     type: 'arsredovisning.uploaded',
     payload: {
-      submissionId,
+      submissionId: result.submissionId,
       fiscalPeriodId: params.fiscalPeriodId,
-      idnummer: svar.handlingsinfo.idnummer,
-      environment: client.environment,
+      idnummer: result.idnummer,
+      environment: deps.client.environment,
       userId: params.userId,
       companyId: params.companyId,
     },
@@ -665,20 +1000,11 @@ export async function submitArsredovisning(
     await ensureSubscription(deps, params.companyId, params.userId, orgnr)
   } catch (err) {
     // Non-fatal: polling fallback (hamta-handelser) covers missed webhooks.
-    log.warn('handelseprenumeration could not be created/renewed: relying on polling fallback', {
-      submissionId,
+    deps.log.warn('handelseprenumeration could not be created/renewed: relying on polling fallback', {
+      submissionId: result.submissionId,
       companyId: params.companyId,
       error: err instanceof Error ? err.message : String(err),
     })
-  }
-
-  return {
-    outcome: 'uploaded',
-    submissionId,
-    idnummer: svar.handlingsinfo.idnummer,
-    sha256: svar.handlingsinfo.sha256checksumma,
-    url: svar.url,
-    utfall,
   }
 }
 
@@ -773,6 +1099,12 @@ export interface WebhookHandlingResult {
  * Apply one händelsemeddelande to the submission rows. Used by both the
  * webhook receiver and the polling fallback. `serviceClient` is the
  * cookieless service-role client: all queries still filter by company.
+ *
+ * The ärende status covers the årsredovisning and, when it was filed
+ * kompletteras, its separate revisionsberättelse: a message names the
+ * handlings it concerns by idnummer, and every matching row moves. The
+ * version and the registered/förelagd events follow the årsredovisning only,
+ * so a case with two handlings notifies once.
  */
 export async function applyHandelse(
   serviceClient: SupabaseClient,
@@ -784,103 +1116,108 @@ export async function applyHandelse(
   if (!mapped) return // 'test' or future statuses: nothing to apply
 
   const idnummerList = (message.data.handlingsinfo ?? [])
-    .filter((info) => info.handling === 'arsredovisning')
+    .filter((info) => info.handling === 'arsredovisning' || info.handling === 'revisionsberattelse')
     .map((info) => info.idnummer)
 
   for (const companyId of matchedCompanyIds) {
     // Correlate by document idnummer when the message carries one (it does
     // for arsredovisning events); otherwise fall back to the latest active
-    // submission for the company.
+    // årsredovisning for the company.
     const base = serviceClient
       .from('arsredovisning_submissions')
-      .select('id, status, fiscal_period_id, user_id, company_id, annual_report_version_id')
+      .select('id, status, fiscal_period_id, user_id, company_id, annual_report_version_id, handling_typ')
       .eq('company_id', companyId)
     const filtered =
       idnummerList.length > 0
         ? base.in('idnummer', idnummerList)
-        : base.in('status', ['unknown', 'uploaded', 'inkommen', 'forelagd', 'komplettering'])
-    const { data: rows } = await filtered.order('created_at', { ascending: false }).limit(1)
-    const submission = (rows as Pick<
-      ArsredovisningSubmission,
-      | 'id'
-      | 'status'
-      | 'fiscal_period_id'
-      | 'user_id'
-      | 'company_id'
-      | 'annual_report_version_id'
-    >[] | null)?.[0]
-    if (!submission) continue
-    if (submission.status === mapped) continue
+        : base
+            .in('handling_typ', [...ARSREDOVISNING_HANDLING_TYPES])
+            .in('status', ['unknown', 'uploaded', 'inkommen', 'forelagd', 'komplettering'])
+    const { data: rows } = await filtered
+      .order('created_at', { ascending: false })
+      .limit(idnummerList.length > 0 ? idnummerList.length : 1)
+    const submissions = (rows as Array<
+      Pick<
+        ArsredovisningSubmission,
+        'id' | 'status' | 'fiscal_period_id' | 'user_id' | 'company_id' | 'annual_report_version_id'
+      > & { handling_typ?: HandlingTyp }
+    > | null) ?? []
 
-    const update: Record<string, unknown> = { status: mapped }
-    if (mapped === 'registrerad') update.registered_at = new Date().toISOString()
-    const { error } = await serviceClient
-      .from('arsredovisning_submissions')
-      .update(update)
-      .eq('id', submission.id)
-    if (error) {
-      // Transition rejected by the DB state machine (or other write failure).
-      // Don't apply, but never silently: a divergence between our status and
-      // Bolagsverket's must be investigable.
-      log?.warn('handelse rejected: submission status not updated', {
-        submissionId: submission.id,
-        companyId,
-        fromStatus: submission.status,
-        toStatus: mapped,
-        bolagsverketStatus: message.data.status,
-        dbError: error.message,
-      })
-      continue
-    }
+    for (const submission of submissions) {
+      if (submission.status === mapped) continue
+      const isArsredovisning = submission.handling_typ !== 'revisionsberattelse'
 
-    await eventBus.emit({
-      type: 'arsredovisning.status_changed',
-      payload: {
-        submissionId: submission.id,
-        fiscalPeriodId: submission.fiscal_period_id,
-        previousStatus: submission.status,
-        status: mapped,
-        bolagsverketStatus: message.data.status,
-        userId: submission.user_id,
-        companyId: submission.company_id,
-      },
-    })
-    if (mapped === 'registrerad') {
-      if (submission.annual_report_version_id) {
-        const { error: versionError } = await serviceClient
-          .from('annual_report_versions')
-          .update({ status: 'registered' })
-          .eq('id', submission.annual_report_version_id)
-          .eq('company_id', companyId)
-          .eq('status', 'filed')
-        if (versionError) {
-          log?.warn('registered submission did not update annual report version', {
-            submissionId: submission.id,
-            versionId: submission.annual_report_version_id,
-            dbError: versionError.message,
-          })
-        }
+      const update: Record<string, unknown> = { status: mapped }
+      if (mapped === 'registrerad') update.registered_at = new Date().toISOString()
+      const { error } = await serviceClient
+        .from('arsredovisning_submissions')
+        .update(update)
+        .eq('id', submission.id)
+      if (error) {
+        // Transition rejected by the DB state machine (or other write failure).
+        // Don't apply, but never silently: a divergence between our status and
+        // Bolagsverket's must be investigable.
+        log?.warn('handelse rejected: submission status not updated', {
+          submissionId: submission.id,
+          companyId,
+          fromStatus: submission.status,
+          toStatus: mapped,
+          bolagsverketStatus: message.data.status,
+          dbError: error.message,
+        })
+        continue
       }
+
       await eventBus.emit({
-        type: 'arsredovisning.registered',
+        type: 'arsredovisning.status_changed',
         payload: {
           submissionId: submission.id,
           fiscalPeriodId: submission.fiscal_period_id,
+          previousStatus: submission.status,
+          status: mapped,
+          bolagsverketStatus: message.data.status,
           userId: submission.user_id,
           companyId: submission.company_id,
         },
       })
-    }
-    if (mapped === 'forelagd') {
-      await eventBus.emit({
-        type: 'arsredovisning.forelagd',
-        payload: {
-          submissionId: submission.id,
-          fiscalPeriodId: submission.fiscal_period_id,
-          userId: submission.user_id,
-          companyId: submission.company_id,
-        },
-      })
+      if (!isArsredovisning) continue
+      if (mapped === 'registrerad') {
+        if (submission.annual_report_version_id) {
+          const { error: versionError } = await serviceClient
+            .from('annual_report_versions')
+            .update({ status: 'registered' })
+            .eq('id', submission.annual_report_version_id)
+            .eq('company_id', companyId)
+            .eq('status', 'filed')
+          if (versionError) {
+            log?.warn('registered submission did not update annual report version', {
+              submissionId: submission.id,
+              versionId: submission.annual_report_version_id,
+              dbError: versionError.message,
+            })
+          }
+        }
+        await eventBus.emit({
+          type: 'arsredovisning.registered',
+          payload: {
+            submissionId: submission.id,
+            fiscalPeriodId: submission.fiscal_period_id,
+            userId: submission.user_id,
+            companyId: submission.company_id,
+          },
+        })
+      }
+      if (mapped === 'forelagd') {
+        await eventBus.emit({
+          type: 'arsredovisning.forelagd',
+          payload: {
+            submissionId: submission.id,
+            fiscalPeriodId: submission.fiscal_period_id,
+            userId: submission.user_id,
+            companyId: submission.company_id,
+          },
+        })
+      }
     }
   }
 }

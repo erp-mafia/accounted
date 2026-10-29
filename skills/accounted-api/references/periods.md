@@ -1972,7 +1972,7 @@ Example response `200`:
 **Answer the årsredovisning compliance questions and record the confirmations.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user's confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.
+Sparse update of the compliance profile the ÅRL, K2 and K3 checks read: publikt bolag, likvidation, listed securities, moderföretag and group size, foreign branch, crypto, share-based payments, convertibles, building revenue share, deferred tax, the K3 scope questions (previous_year_framework: the framework of the previous årsredovisning, none for the first one; has_other_temporary_differences), reporting currency, revisionsberättelse, dividend prudence. narrative_confirmed, k2_assessment_confirmed and signer_roster_confirmed record (true) or withdraw (false) the user's confirmations with a timestamp. Answers the recomputed eligibility, validation and capabilities. Idempotent. Dry-runnable.
 
 **Use when:** The validation (gnubok_validate_arsredovisning) reports an unanswered compliance question or a missing confirmation.
 **Do not use for:** The document texts (POST .../arsredovisning/narrative) or the signer roster itself (POST .../arsredovisning/signatures).
@@ -2005,9 +2005,13 @@ Request body:
   has_convertible_debt?: boolean | null,
   building_revenue_share_pct?: number | null,
   has_material_deferred_tax?: boolean | null,
+  previous_year_framework?: "k2" | "k3" | "none" | null,
+  has_other_temporary_differences?: boolean | null,
   reporting_currency?: "SEK" | "EUR",
   auditor_report_required?: boolean | null,
   auditor_report_included?: boolean,
+  auditor_firm_name?: string | null,
+  auditor_opinion?: "unmodified" | "modified" | "avstyrkt_rr_br" | "avstyrkt_rr" | "avstyrkt_br" | "avstyrkt_rr_varken_br" | "avstyrkt_br_varken_rr" | "varken_rr_br" | "varken_rr" | "varken_br" | null,
   dividend_prudence_confirmed?: boolean | null,
   narrative_confirmed?: boolean,
   k2_assessment_confirmed?: boolean,
@@ -2184,7 +2188,7 @@ Example response `200`:
 **Edit the årsredovisning texts: förvaltningsberättelse, resultatdisposition, disclosure notes and K3 note texts.**
 `scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
 
-Saves the narrative overrides for a räkenskapsår's årsredovisning, as the dashboard's text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object) and the K3 kassaflödesanalys omission. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.
+Saves the narrative overrides for a räkenskapsår's årsredovisning, as the dashboard's text step does. Only the fields sent change; null clears a field back to the generated text. Covers the förvaltningsberättelse (description, important_events), the resultatdisposition text and proposed_dividend, the årsstämma date and decision, the ÅRL 5 kap. disclosures (long-term debt, ställda säkerheter, eventualförpliktelser), koncernförhållanden, a manual medelantal anställda, K3 note texts (note_overrides replaces the whole object), the K3 kassaflödesanalys omission, the K3 disclosure answers (disclosure_answers by requirement id: {applies, text, choice, confirmed}; read the open ones from the validation issues and the k3_disclosures of the report), the kind of each equity verifikat the ledger cannot classify (equity_movement_overrides by journal_entry_id) and whether the K3 equity specification is its own statement (equity_statement_separate). disclosure_answers and equity_movement_overrides merge: only the keys sent change and null removes one. A save clears the narrative confirmation in the compliance profile. Allowed after the period is closed; refused once a Bolagsverket submission is registrerad. Idempotent. Dry-runnable.
 
 **Use when:** Writing or correcting the texts of the årsredovisning before a version is frozen for signing.
 **Do not use for:** The compliance profile answers (PATCH .../arsredovisning/compliance), the figures (they come from the books), or freezing the document (POST .../arsredovisning/versions).
@@ -2195,6 +2199,7 @@ Saves the narrative overrides for a räkenskapsår's årsredovisning, as the das
 - parent_company_org_number is an organisationsnummer or a foreign registration id; a personnummer is refused.
 - Registered at Bolagsverket: 409 ARSREDOVISNING_REGISTERED.
 - Saving clears narrative_confirmed: confirm again with PATCH .../compliance {"narrative_confirmed": true}.
+- A disclosure_answers key must be a requirement id of the K3 disclosure matrix (for example not.handelser_efter_balansdagen); an unknown id is 400 VALIDATION_ERROR.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -2230,7 +2235,10 @@ Request body:
   agm_disposition_decision?: string | null,
   note_overrides?: Record<string, string | null>,
   omit_kassaflodesanalys?: boolean,
-  kassaflodesanalys_omission_confirmed?: boolean
+  kassaflodesanalys_omission_confirmed?: boolean,
+  disclosure_answers?: Record<string, { applies?: boolean | null, text?: string | null, choice?: string | null, confirmed?: boolean } | null>,
+  equity_movement_overrides?: Record<string, "rattelse_av_fel" | "andrad_redovisningsprincip" | "uppskrivning" | "verkligt_varde" | "ovriga_direkt_mot_eget_kapital" | "utdelning" | "aktieagartillskott" | "aterbetalt_tillskott" | "nyemission" | "andra_vardeoverforingar" | "omforing" | null>,
+  equity_statement_separate?: boolean
 }
 ```
 
@@ -2411,7 +2419,7 @@ Adds a pending signer slot (role and name) to the roster for the räkenskapsår.
 Request body:
 ```ts
 {
-  role: "Styrelseledamot" | "Styrelseordförande" | "VD" | "Verkställande direktör",
+  role: "Styrelseledamot" | "Styrelseordförande" | "VD" | "Verkställande direktör" | "Auktoriserad revisor" | "Godkänd revisor" | "Huvudansvarig revisor",
   signer_name: string
 }
 ```
@@ -2495,6 +2503,7 @@ status signed records the evidence of a signature made outside the product (a pa
 - Recorded signatures cannot be undone: finalize a new version instead.
 - signing_method bankid answers 422 SIGNING_METHOD_RESERVED: it is set only when the board signs with BankID in Accounted. A BankID signature made in another service is advanced_e_signature.
 - A slot covered by an open or partly signed BankID signing request answers 409 ARSREDOVISNING_SIGNING_TRACK_MIXED: a version is signed one way.
+- A revisor's slot (the revisorspåteckning) is recorded only after every board slot of the version is signed (409 ARSREDOVISNING_PATECKNING_BEFORE_BOARD), in the board's medium: advanced_e_signature when the board signed electronically, paper_original when it signed on paper (409 ARSREDOVISNING_PATECKNING_MEDIUM_MIXED), and once the profile's auditor_opinion is answered (409 ARSREDOVISNING_PATECKNING_OPINION_MISSING). The opinion and auditor_firm_name are frozen on the slot as it is signed.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

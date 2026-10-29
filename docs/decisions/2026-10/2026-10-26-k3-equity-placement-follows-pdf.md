@@ -1,0 +1,1 @@
+[2026-10-26] The K3 iXBRL document follows the equity specification's placement like the PDF: in the förvaltningsberättelse the year only, as a statement of its own both years after the kassaflödesanalys (jämförelseår from balans2), so the filed document and the signed PDF show the same thing.

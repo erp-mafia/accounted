@@ -1,0 +1,1 @@
+[2026-10-26] K3 iXBRL sits behind its own default-off flag NEXT_PUBLIC_K3_IXBRL_ENABLED on top of the Bolagsverket release gate: K2 filing can open without K3, and K3 opens only after the accountant review and Bolagsverket's test review of a K3 file.
