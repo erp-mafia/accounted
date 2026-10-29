@@ -1,0 +1,1 @@
+[2026-10-28] A provider migration claim that runs out of time without moving the job is a stall (MIGRATION_STALLED), counted like a failure and parked after five in a row; out of time after a checkpoint or commit stays a free deferral. A step that always overran looped as running forever (#115).

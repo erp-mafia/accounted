@@ -79,12 +79,15 @@ vi.mock('@/lib/entitlements/has-capability', () => ({
 
 // The real connection-store hits the DB via its own service client. The
 // route itself no longer touches it; resolve-auth reads the ombud grant from
-// here when system auth is on, and markGrantRevoked stays mocked so a test can
-// prove an AGI run never downgrades a grant.
+// here when system auth is on, and recordGrantRefusal stays mocked so a test
+// can prove an AGI run never downgrades a grant.
 vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
   getConnection: vi.fn().mockResolvedValue(null),
   keepRowsOnCurrentOrgNumber: vi.fn(async (rows: unknown[]) => rows),
-  markGrantRevoked: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/extensions/general/skatteverket/lib/grant-probe', () => ({
+  recordGrantRefusal: vi.fn().mockResolvedValue('withdrawn'),
 }))
 
 vi.mock('@/lib/deadlines/complete-tax-deadline', () => ({
@@ -101,7 +104,8 @@ import { verifyCronSecret } from '@/lib/auth/cron'
 import { agiGetKvittenser } from '@/extensions/general/skatteverket/lib/agi-client'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 import { markNeedsReconsent } from '@/extensions/general/skatteverket/lib/token-store'
-import { getConnection, markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { getConnection } from '@/extensions/general/skatteverket/lib/connection-store'
+import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
 
@@ -110,7 +114,7 @@ const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
 const mockAgiGetKvittenser = vi.mocked(agiGetKvittenser)
 const mockMarkNeedsReconsent = vi.mocked(markNeedsReconsent)
 const mockGetConnection = vi.mocked(getConnection)
-const mockMarkGrantRevoked = vi.mocked(markGrantRevoked)
+const mockRecordGrantRefusal = vi.mocked(recordGrantRefusal)
 const mockCompleteTaxDeadline = vi.mocked(completeTaxDeadline)
 const mockSendKvittensNotification = vi.mocked(sendKvittensNotification)
 
@@ -355,7 +359,7 @@ describe('AGI kvittenser cron', () => {
 
       expect(body.processed).toBe(1)
       expect(body.results[0].status).toBe('error')
-      expect(mockMarkGrantRevoked).not.toHaveBeenCalled()
+      expect(mockRecordGrantRefusal).not.toHaveBeenCalled()
     })
   })
 
@@ -405,7 +409,7 @@ describe('AGI kvittenser cron', () => {
     expect(warnRecorder.mock.calls[0][1]).toMatchObject({ issue: '#2226', route: 'direct', pending: 3 })
     // Nothing about the connection is wrong: no reconsent flag, no grant downgrade.
     expect(mockMarkNeedsReconsent).not.toHaveBeenCalled()
-    expect(mockMarkGrantRevoked).not.toHaveBeenCalled()
+    expect(mockRecordGrantRefusal).not.toHaveBeenCalled()
 
     const summaryLine = logSpy.mock.calls
       .map((c: unknown[]) => String(c[0]))

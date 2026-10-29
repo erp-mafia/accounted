@@ -16,7 +16,8 @@ import { SkatteverketAuthError, type SkvAuth } from '@/extensions/general/skatte
 import { SkatteverketSkattekontoError } from '@/extensions/general/skatteverket/lib/skattekonto-client'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
-import { listVerifiedCompanies, markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { listVerifiedCompanies } from '@/extensions/general/skatteverket/lib/connection-store'
+import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { currentSkvEnvironment, hasVerifiedGrant } from '@/extensions/general/skatteverket/lib/resolve-auth'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
@@ -243,7 +244,8 @@ export async function GET(request: Request) {
       | 'skipped_cooldown'
       | 'unavailable'
       | 'expired'
-      | 'grant_revoked'
+      | 'grant_withdrawn'
+      | 'grant_refused'
       | 'system_auth_failed'
       | 'error'
     booked?: number
@@ -335,11 +337,12 @@ export async function GET(request: Request) {
           return { userId, companyId, source, status: 'system_auth_failed', error: err.code }
         }
         if (err.code === 'OMBUD_GRANT_MISSING') {
-          // The company withdrew the behorighet: downgrade the connection
-          // row so the next run falls back to the user token (if any). The
-          // sync cron doubles as the ongoing grant liveness probe.
-          await markGrantRevoked(companyId, currentSkvEnvironment(), 'lasombud', err.code)
-          return { userId, companyId, source, status: 'grant_revoked', error: err.code }
+          // The ombudsregister decides whether the company withdrew the
+          // behorighet: then the row is downgraded and the next run falls
+          // back to the user token (if any). The sync cron doubles as the
+          // ongoing grant liveness probe.
+          const grant = await recordGrantRefusal(companyId, 'lasombud')
+          return { userId, companyId, source, status: grant === 'withdrawn' ? 'grant_withdrawn' : 'grant_refused', error: err.code }
         }
       }
 
@@ -402,12 +405,13 @@ export async function GET(request: Request) {
   const skipped = results.filter(r => r.status === 'skipped_cooldown').length
   const unavailable = results.filter(r => r.status === 'unavailable').length
   const expired = results.filter(r => r.status === 'expired').length
-  const grantRevoked = results.filter(r => r.status === 'grant_revoked').length
+  const grantWithdrawn = results.filter(r => r.status === 'grant_withdrawn').length
+  const grantRefused = results.filter(r => r.status === 'grant_refused').length
   const systemAuthFailures = results.filter(r => r.status === 'system_auth_failed').length
   const errors = results.filter(r => r.status === 'error').length
 
   console.log(
-    `[skattekonto-sync-cron] Processed ${results.length}: ${synced} synced, ${skipped} cooldown, ${unavailable} unavailable at Skatteverket, ${expired} expired, ${grantRevoked} grant revoked, ${systemAuthFailures} system-auth failures, ${errors} errors`,
+    `[skattekonto-sync-cron] Processed ${results.length}: ${synced} synced, ${skipped} cooldown, ${unavailable} unavailable at Skatteverket, ${expired} expired, ${grantWithdrawn} grant withdrawn, ${grantRefused} grant refused, ${systemAuthFailures} system-auth failures, ${errors} errors`,
   )
 
   return NextResponse.json({
@@ -416,7 +420,8 @@ export async function GET(request: Request) {
     skipped,
     unavailable,
     expired,
-    grantRevoked,
+    grantWithdrawn,
+    grantRefused,
     systemAuthFailures,
     errors,
     results,

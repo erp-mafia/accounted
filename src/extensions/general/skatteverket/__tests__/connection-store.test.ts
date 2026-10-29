@@ -64,6 +64,29 @@ describe('recordProbeResult', () => {
     expect(payload).not.toHaveProperty('created_at')
   })
 
+  it('a behorighet the probe did not ask about keeps its status and its detail; losing the last grant leaves the row pending, never revoked (#115)', async () => {
+    const mine = { status: 'denied', detail: 'ombudsregister: moms_ombud signerad 2026-06-01, före kopplingen 2026-07-01', reason: 'predates_opt_in' }
+    queued.enqueue({ data: storedRow({ status: 'partial', moms_ombud_status: 'denied', last_probe_detail: { lasombud: null, moms_ombud: mine } }) })
+    queued.enqueue({ data: UPSERTED })
+
+    await recordProbeResult({
+      companyId: 'company-1',
+      environment: 'production',
+      orgNumber: ORG,
+      lasombud: { status: 'denied', detail: 'ombudsregister: lasombud saknas' },
+      error: 'OMBUD_GRANT_MISSING',
+    })
+
+    expect(upsertPayload()).toMatchObject({
+      lasombud_status: 'denied',
+      moms_ombud_status: 'denied',
+      status: 'pending',
+      last_error: 'OMBUD_GRANT_MISSING',
+      last_probe_detail: { lasombud: { status: 'denied', detail: 'ombudsregister: lasombud saknas' }, moms_ombud: mine },
+    })
+    expect(upsertPayload()).not.toHaveProperty('moms_ombud_checked_at')
+  })
+
   it('a failed connection read records nothing instead of writing over a granted row', async () => {
     queued.enqueue({ error: { message: 'timeout' } })
     vi.spyOn(console, 'error').mockImplementation(() => {})

@@ -33,6 +33,11 @@ const job = (over: Partial<ClaimedJob> = {}): ClaimedJob => ({ id: 'job-1', comp
 const DOCUMENT = { id: 'doc-1', company_id: 'co-1', storage_path: 'documents/co-1/a.pdf', mime_type: 'application/pdf' }
 const lastJobUpdate = () => findCalls('document_jobs', 'update').at(-1)?.[0]
 const run = (over: Partial<Parameters<typeof runDocumentJobs>[1]> = {}) => runDocumentJobs(supabase, { limit: 8, worker: 'test', budgetMs: 60_000, ...over })
+/** A run first fails abandoned jobs (none here), then claims these. */
+const claim = (...jobs: ClaimedJob[]) => {
+  enqueue({ data: [] })
+  enqueue({ data: jobs })
+}
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -79,7 +84,7 @@ describe('enqueueMissingExtractions', () => {
 
 describe('runDocumentJobs', () => {
   it('reads a document, queues its classification and records the outcome', async () => {
-    enqueue({ data: [job()] })
+    claim(job())
     enqueue({ data: DOCUMENT })
     mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'read', pages: 3, reader: 'pdf_text' } })
     enqueue({ data: true })
@@ -94,7 +99,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('queues the extraction after the second read pass of a capped acting document, and stops when the lane is done', async () => {
-    enqueue({ data: [job()] })
+    claim(job())
     enqueue({ data: { ...DOCUMENT, doc_type: 'agreement.loan', read_error: 'partial:budget', admission_state: 'admitted' } })
     mocked(readDocumentByPlan).mockResolvedValueOnce({ plan: { lane: 'history_loose', allowModel: true, maxModelPages: null }, outcome: { status: 'read', pages: 6, reader: 'claude_vision' } })
     enqueue({ data: true })
@@ -104,7 +109,7 @@ describe('runDocumentJobs', () => {
     expect(lastJobUpdate()).toMatchObject({ status: 'done', result: 'read 6 pages (claude_vision, history_loose)' })
 
     reset()
-    enqueue({ data: [job()] })
+    claim(job())
     enqueue({ data: { ...DOCUMENT, doc_type: 'receipt', read_error: 'partial:budget', admission_state: 'admitted' } })
     mocked(readDocumentByPlan).mockResolvedValueOnce({ plan: null, outcome: null })
     enqueue({})
@@ -114,7 +119,7 @@ describe('runDocumentJobs', () => {
 
   it('reads and classifies for every company, but extracts only in the brain rollout', async () => {
     process.env.ARKIV_BRAIN_COMPANY_IDS = 'someone-else'
-    enqueue({ data: [job(), job({ id: 'job-2', kind: 'extract' })] })
+    claim(job(), job({ id: 'job-2', kind: 'extract' }))
     enqueue({ data: DOCUMENT })
     mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'read', pages: 1, reader: 'pdf_text' } })
     enqueue({ data: true })
@@ -127,7 +132,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('queues extraction for an admitted document and fails a broken extraction with backoff', async () => {
-    enqueue({ data: [job({ kind: 'classify' }), job({ id: 'job-2', kind: 'extract', attempts: 3 })] })
+    claim(job({ kind: 'classify' }), job({ id: 'job-2', kind: 'extract', attempts: 3 }))
     mocked(classifyDocument).mockResolvedValue({ status: 'classified', admission: 'admitted', classification: { doc_type: 'agreement.loan' } })
     enqueue({ data: { read_error: null } })
     enqueue({ data: true })
@@ -145,7 +150,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('settles a job the period-lock trigger refuses as skipped instead of retrying it five times', async () => {
-    enqueue({ data: [job({ kind: 'classify' })] })
+    claim(job({ kind: 'classify' }))
     mocked(classifyDocument).mockResolvedValue({ status: 'error', reason: 'document update failed: Cannot attach documents to entries in a locked/closed fiscal period' })
     enqueue({})
     await expect(run()).resolves.toEqual({ claimed: 1, done: 1, failed: 0, returned: 0 })
@@ -154,7 +159,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('reads the rest of a capped loose-history document before extracting it when it is an acting type', async () => {
-    enqueue({ data: [job({ kind: 'classify' })] })
+    claim(job({ kind: 'classify' }))
     mocked(classifyDocument).mockResolvedValue({ status: 'classified', admission: 'admitted', classification: { doc_type: 'agreement.loan' } })
     enqueue({ data: { read_error: 'partial:budget' } })
     enqueue({ data: true })
@@ -169,7 +174,7 @@ describe('runDocumentJobs', () => {
     const t0 = Date.parse('2026-10-26T08:00:00Z')
     for (const [attempts, minutes] of [[1, 30], [2, 60], [3, 120], [4, 240]] as const) {
       reset()
-      enqueue({ data: [job({ kind: 'classify', attempts })] })
+      claim(job({ kind: 'classify', attempts }))
       mocked(classifyDocument).mockResolvedValue({ status: 'error', reason: 'provider_unavailable: 503 Bedrock is unable to process your request.' })
       enqueue({})
       await expect(run({ now: () => t0 })).resolves.toMatchObject({ failed: 1 })
@@ -178,7 +183,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('treats a missing reader like a provider outage', async () => {
-    enqueue({ data: [job({ kind: 'read', attempts: 2 })] })
+    claim(job({ kind: 'read', attempts: 2 }))
     enqueue({ data: DOCUMENT })
     mocked(readDocumentByPlan).mockResolvedValue({ plan: { lane: 'live', allowModel: true, maxModelPages: null }, outcome: { status: 'error', reason: 'reader_unavailable: 503 Bedrock is unable to process your request.' } })
     enqueue({})
@@ -188,7 +193,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('reports the attempt that gives up as an error and a retry as a warning', async () => {
-    enqueue({ data: [job({ kind: 'extract', attempts: 4 }), job({ id: 'job-2', kind: 'extract', attempts: 5 })] })
+    claim(job({ kind: 'extract', attempts: 4 }), job({ id: 'job-2', kind: 'extract', attempts: 5 }))
     mocked(extractDocument).mockResolvedValue({ status: 'error', reason: 'model timeout' })
     enqueue({})
     enqueue({})
@@ -199,7 +204,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('keeps retrying while no model is configured instead of finishing the job', async () => {
-    enqueue({ data: [job({ kind: 'extract' })] })
+    claim(job({ kind: 'extract' }))
     mocked(extractDocument).mockResolvedValue({ status: 'skipped', reason: 'ai_unconfigured' })
     enqueue({})
     await expect(run()).resolves.toMatchObject({ failed: 1 })
@@ -207,7 +212,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('hands unstarted jobs back without counting the attempt when the budget is spent', async () => {
-    enqueue({ data: [job({ kind: 'extract' }), job({ id: 'job-2', kind: 'extract', attempts: 2 })] })
+    claim(job({ kind: 'extract' }), job({ id: 'job-2', kind: 'extract', attempts: 2 }))
     mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'agreement.loan', reviewFields: [] })
     enqueue({})
     enqueue({})
@@ -219,7 +224,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('queues a derivation after extracting an agreement, and runs it', async () => {
-    enqueue({ data: [job({ kind: 'extract' }), job({ id: 'job-2', kind: 'derive', document_id: 'doc-2' })] })
+    claim(job({ kind: 'extract' }), job({ id: 'job-2', kind: 'derive', document_id: 'doc-2' }))
     mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'agreement.loan', reviewFields: [] })
     enqueue({ data: true }) // enqueue derive for doc-1
     enqueue({}) // job-1 done
@@ -236,7 +241,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('queues a derivation for a registration too (facts), and records facts even when no agreement is derived', async () => {
-    enqueue({ data: [job({ kind: 'extract' }), job({ id: 'job-2', kind: 'derive', document_id: 'doc-2' })] })
+    claim(job({ kind: 'extract' }), job({ id: 'job-2', kind: 'derive', document_id: 'doc-2' }))
     mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'registration.bolagsverket', reviewFields: [] })
     enqueue({ data: true })
     enqueue({})
@@ -249,7 +254,7 @@ describe('runDocumentJobs', () => {
   })
 
   it('does not queue a derivation for a record without facts or an agreement', async () => {
-    enqueue({ data: [job({ kind: 'extract' })] })
+    claim(job({ kind: 'extract' }))
     mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'generic', reviewFields: [] })
     enqueue({})
     await expect(run()).resolves.toMatchObject({ done: 1 })
@@ -257,8 +262,35 @@ describe('runDocumentJobs', () => {
   })
 
   it('throws when the claim fails', async () => {
+    enqueue({ data: [] })
     enqueue({ error: { message: 'boom' } })
     await expect(run()).rejects.toThrow('claim failed: boom')
+  })
+
+  it('fails jobs abandoned on their last attempt before claiming, and reports them as an error', async () => {
+    enqueue({ data: [job({ id: 'dead-1', attempts: 5 }), job({ id: 'dead-2', company_id: 'co-2', attempts: 5 })] })
+    enqueue({ data: [] })
+    await expect(run()).resolves.toEqual({ claimed: 0, done: 0, failed: 0, returned: 0 })
+    expect(rpc.mock.calls.map(([name]) => name)).toEqual(['fail_abandoned_document_jobs', 'claim_document_jobs'])
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith('document jobs abandoned on their last attempt', {
+      count: 2, jobs: ['dead-1', 'dead-2'], companies: ['co-1', 'co-2'],
+    })
+  })
+
+  it('reports nothing when no job was abandoned', async () => {
+    claim()
+    await run()
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('still claims and runs jobs when the sweep fails', async () => {
+    enqueue({ error: { message: 'function fail_abandoned_document_jobs does not exist' } })
+    enqueue({ data: [job({ kind: 'extract' })] })
+    mocked(extractDocument).mockResolvedValue({ status: 'extracted', schemaType: 'generic', reviewFields: [] })
+    enqueue({})
+    await expect(run()).resolves.toMatchObject({ claimed: 1, done: 1 })
+    expect(log.error).toHaveBeenCalledWith('abandoned document job sweep failed', { reason: 'function fail_abandoned_document_jobs does not exist' })
   })
 })
 

@@ -33,7 +33,10 @@ vi.mock('@/extensions/general/skatteverket/lib/api-client', () => {
 
 vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
   getConnection: vi.fn().mockResolvedValue(null),
-  markGrantRevoked: vi.fn().mockResolvedValue(undefined),
+}))
+
+vi.mock('@/extensions/general/skatteverket/lib/grant-probe', () => ({
+  recordGrantRefusal: vi.fn().mockResolvedValue('withdrawn'),
 }))
 
 vi.mock('@/extensions/general/skatteverket/lib/token-store', () => ({
@@ -70,7 +73,7 @@ import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/
 import { completeTaxDeadline } from '@/lib/deadlines/complete-tax-deadline'
 import { recordVatFilingConfirmed } from '@/lib/vat/filing-record-store'
 import { markNeedsReconsent } from '@/extensions/general/skatteverket/lib/token-store'
-import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 
 const mockCreateClient = vi.mocked(createClient)
 const mockVerifyCronSecret = vi.mocked(verifyCronSecret)
@@ -79,7 +82,7 @@ const mockSendKvittensNotification = vi.mocked(sendKvittensNotification)
 const mockCompleteTaxDeadline = vi.mocked(completeTaxDeadline)
 const mockRecordVatFilingConfirmed = vi.mocked(recordVatFilingConfirmed)
 const mockMarkNeedsReconsent = vi.mocked(markNeedsReconsent)
-const mockMarkGrantRevoked = vi.mocked(markGrantRevoked)
+const mockRecordGrantRefusal = vi.mocked(recordGrantRefusal)
 
 function makeRequest() {
   return new Request('http://localhost/api/extensions/skatteverket/vat/kvittenser/cron', {
@@ -143,7 +146,7 @@ describe('VAT kvittenser cron', () => {
     process.env.SUPABASE_SERVICE_ROLE_KEY = 'service-key'
     mockVerifyCronSecret.mockReturnValue(null)
     mockMarkNeedsReconsent.mockResolvedValue(undefined)
-    mockMarkGrantRevoked.mockResolvedValue(undefined)
+    mockRecordGrantRefusal.mockResolvedValue('withdrawn')
     errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {})
     logSpy = vi.spyOn(console, 'log').mockImplementation(() => {})
     warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
@@ -420,7 +423,20 @@ describe('VAT kvittenser cron', () => {
     })
   }
 
-  it('a throwing markGrantRevoked does not abort the remaining companies', async () => {
+  it('a refused moms read asks the register about the grant instead of revoking it (#115)', async () => {
+    mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
+    mockSkvRequest
+      .mockRejectedValueOnce(new SkatteverketAuthError('Ombud saknas.', 'OMBUD_GRANT_MISSING'))
+      .mockResolvedValueOnce({ ok: true, status: 200, json: async () => ({ kvittensnummer: 'KV-123' }) } as any)
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(mockRecordGrantRefusal).toHaveBeenCalledTimes(1)
+    expect(mockRecordGrantRefusal).toHaveBeenCalledWith('comp-1', 'moms_ombud')
+    expect(body.results[0]).toMatchObject({ companyId: 'comp-1', status: 'error', error: 'OMBUD_GRANT_MISSING' })
+  })
+
+  it('a throwing recordGrantRefusal does not abort the remaining companies', async () => {
     mockCreateClient.mockReturnValueOnce(stubTwoCompanyTables())
     mockSkvRequest
       .mockRejectedValueOnce(new SkatteverketAuthError('Ombud saknas.', 'OMBUD_GRANT_MISSING'))
@@ -429,7 +445,7 @@ describe('VAT kvittenser cron', () => {
         status: 200,
         json: async () => ({ kvittensnummer: 'KV-123' }),
       } as any)
-    mockMarkGrantRevoked.mockRejectedValueOnce(new Error('db outage'))
+    mockRecordGrantRefusal.mockRejectedValueOnce(new Error('db outage'))
 
     const res = await GET(makeRequest())
     const body = await res.json()
@@ -441,7 +457,7 @@ describe('VAT kvittenser cron', () => {
       error: 'OMBUD_GRANT_MISSING',
     })
     expect(body.results[1]).toMatchObject({ companyId: 'comp-2', status: 'signed' })
-    expect(mockMarkGrantRevoked).toHaveBeenCalledTimes(1)
+    expect(mockRecordGrantRefusal).toHaveBeenCalledTimes(1)
     expect(warnSpy).toHaveBeenCalledTimes(1)
   })
 

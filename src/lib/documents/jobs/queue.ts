@@ -63,6 +63,7 @@ export async function enqueueMissingExtractions(supabase: SupabaseClient, limit:
 export async function runDocumentJobs(supabase: SupabaseClient, opts: { limit: number; worker: string; budgetMs: number; now?: () => number }): Promise<RunSummary> {
   const now = opts.now ?? Date.now
   const deadline = now() + opts.budgetMs
+  await failAbandonedJobs(supabase)
   const { data, error } = await supabase.rpc('claim_document_jobs', { p_batch_size: opts.limit, p_worker: opts.worker })
   if (error) throw new Error(`claim failed: ${error.message}`)
   const jobs = (data ?? []) as ClaimedJob[]
@@ -80,6 +81,28 @@ export async function runDocumentJobs(supabase: SupabaseClient, opts: { limit: n
     else summary.done++
   }
   return summary
+}
+
+/**
+ * A worker that died during a job's last attempt never reaches the catch that
+ * reports giving up, and no claim takes the job over, so it stayed 'running'
+ * and its document unread (#115). The database fails such jobs; this reports
+ * them. A failed sweep never stops the run: the next tick sweeps again.
+ */
+async function failAbandonedJobs(supabase: SupabaseClient): Promise<void> {
+  const { data, error } = await supabase.rpc('fail_abandoned_document_jobs')
+  if (error) {
+    log.error('abandoned document job sweep failed', { reason: error.message })
+    return
+  }
+  const jobs = (data ?? []) as ClaimedJob[]
+  if (jobs.length > 0) {
+    log.error('document jobs abandoned on their last attempt', {
+      count: jobs.length,
+      jobs: jobs.map(job => job.id),
+      companies: [...new Set(jobs.map(job => job.company_id))],
+    })
+  }
 }
 
 /** One claimed job: run its step, settle it done or failed with backoff. */
