@@ -2799,6 +2799,35 @@ describe('MatchBatchSchema', () => {
     expect(result.success).toBe(false)
     expect(result.error?.issues[0].message).toBe(`At most ${MAX_BANK_ROW_SPLIT} allocations per batch`)
   })
+
+  // Issue #131: a payment service's fee on the row.
+  describe('fees', () => {
+    const fee = (account: string, amount: number, description?: string) => ({ account, amount, ...(description ? { description } : {}) })
+
+    it('takes up to five class 6 rows with an optional text', () => {
+      const fees = [fee('6570', 15, 'Stripe'), fee('6040', 1), fee('6064', 1), fee('6570', 1), fee('6590', 1)]
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees }).success).toBe(true)
+    })
+
+    it('refuses a sixth row, an account outside class 6, a number account and a zero amount', () => {
+      const six = Array.from({ length: 6 }, () => fee('6570', 1))
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: six }).success).toBe(false)
+      for (const account of ['4535', '1930', '657']) {
+        const result = MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee(account, 1)] })
+        expect(result.success).toBe(false)
+      }
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [{ account: 6570, amount: 1 }] }).success).toBe(false)
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee('6570', 0)] }).success).toBe(false)
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [{ account: '6570', amount: 1, description: 'x'.repeat(101) }] }).success).toBe(false)
+    })
+
+    it('refuses fees as large as the invoices they settle', () => {
+      const result = MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee('6570', 200)] })
+      expect(result.success).toBe(false)
+      expect(result.error?.issues[0].path).toEqual(['fees'])
+      expect(MatchBatchSchema.safeParse({ allocations: allocations(2), fees: [fee('6570', 199.99)] }).success).toBe(true)
+    })
+  })
 })
 
 // ============================================================

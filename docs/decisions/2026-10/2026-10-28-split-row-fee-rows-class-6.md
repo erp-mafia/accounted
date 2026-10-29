@@ -1,0 +1,1 @@
+[2026-10-28] Fee rows on a split bank row (#131 step 1) book only on active class 6 accounts, not any cost account: they carry no VAT, and class 4 holds the reverse-charge bases (4415 to 4547) the momsdeklaration reads. Cap: fees smaller than the invoices, not 10 %.

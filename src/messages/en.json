@@ -5053,7 +5053,22 @@
     "picked_summary": "{count, plural, one {# picked invoice} other {# picked invoices}}, {amount}",
     "picked_clear": "Remove all",
     "picked_count": "{count} of {max} invoices",
-    "over_limit_warning": "One bank row can pay at most {max} invoices. Remove {excess} to confirm."
+    "over_limit_warning": "One bank row can pay at most {max} invoices. Remove {excess} to confirm.",
+    "fees_label": "Fees",
+    "fee_add": "Add fee row",
+    "fee_offer_customer": "The invoices are {amount} more than the payout. Did the payment service withhold a fee?",
+    "fee_offer_supplier": "The payment is {amount} more than the invoices. Did the bank charge a fee?",
+    "fee_account_aria": "Account for fee row {n}",
+    "fee_description_aria": "Text for fee row {n}",
+    "fee_description_placeholder": "Text (default: Avgift betaltjänst)",
+    "fee_amount_aria": "Amount for fee row {n}",
+    "fee_remove_aria": "Remove fee row {n}",
+    "fee_account_invalid": "Pick an active class 6 account, for example 6570 Bankkostnader.",
+    "fee_too_large": "The fees must be smaller than the invoices they settle.",
+    "fee_vat_note": "Booked without VAT: a payment service's fee for moving money is exempt (ML 10 kap. 33 §). A platform's commission is taxable and is booked from the platform's invoice.",
+    "invoices_label": "Invoices",
+    "net_label": "Against the bank row",
+    "preview_title": "The verifikat"
   },
   "tx_skattekonto_card": {
     "category_pick": "Pick a category",

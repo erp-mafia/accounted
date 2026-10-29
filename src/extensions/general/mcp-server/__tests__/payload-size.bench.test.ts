@@ -780,6 +780,11 @@ describe('tools/list payload size guard', () => {
     //     (single-company 61 812). The ceiling moves by that cost, rounded
     //     up, so the headroom other branches count on stays where it was.
     //     A founder call, as the 61 600 bump was.
+    //   * Fee rows on gnubok_match_batch_allocate (issue #131, 2026-10-28):
+    //     fees (account, amount, description; at most five) as bare
+    //     properties, the rule in the tool description, which lost
+    //     "samlingsbetalning" and two "the"s to stay under 280. +81, measured
+    //     66 322 (single-company 61 892). Ceiling unchanged.
     expect(approxTokens).toBeLessThan(67_600)
   })
 
@@ -920,6 +925,8 @@ describe('tools/list payload size guard', () => {
     // 2026-10-28. Ceiling unchanged.
     // 2026-10-28, the agent's reason on staged writes: 61 600 → 63 100, the
     // same +1 431 as the full catalog (see the case above). Measured 61 812.
+    // 2026-10-28, fee rows on gnubok_match_batch_allocate (issue #131): +80,
+    // measured 61 892. Ceiling unchanged.
     expect(simple).toBeLessThan(SIMPLE_CATALOG_CEILING)
   })
 

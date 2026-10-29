@@ -878,22 +878,27 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     common: true,
   },
   {
-    // Stripe Payments Europe Ltd (Ireland) invoices its fees without VAT and
-    // the Swedish buyer reports them under reverse charge, the same way the
-    // Stripe extension books fees inside a payout (extensions/general/stripe/
-    // lib/payouts.ts): ruta 21 basis, 25 % fictitious VAT on 2614 and 2645.
+    // Stripe's processing fee is a payment service, exempt under ML 10 kap.
+    // 33 § even from Stripe Payments Europe in Ireland: no reverse charge,
+    // nothing in rutor 21, 30 or 48 (swedish-daily-bookkeeping, payment
+    // providers §6-7), the model the single-invoice fee (crm#1364) and the
+    // split row's fee rows (issue #131) book with. Stripe's software
+    // (Billing, Radar, Tax) is a taxable service on its own invoice lines,
+    // not this template. The id stays: mapping rules and inbox suggestions
+    // store it.
     id: 'payment_fees_eu',
-    name_sv: 'Stripe-avgifter (omvänd moms)',
-    name_en: 'Stripe fees (reverse charge)',
+    name_sv: 'Stripe-avgifter',
+    name_en: 'Stripe fees',
     group: 'bank_finance',
     direction: 'expense',
     entity_applicability: 'all',
     debit_account: '6570',
     credit_account: '1930',
-    vat_treatment: 'reverse_charge',
+    vat_treatment: 'exempt',
     vat_rate: 0,
     deductibility: 'full',
-    special_rules_sv: 'Fakturerat utan moms från Irland; köparen redovisar omvänd moms (ruta 21, 30 och 48).',
+    special_rules_sv:
+      'Transaktionsavgifter är en momsfri betaltjänst (ML 10 kap. 33 §), även från Irland: ingen omvänd moms och inget i momsdeklarationen. Stripes programvara (Billing, Radar, Tax) är momspliktig och bokförs separat.',
     mcc_codes: [],
     keywords: ['stripe'],
     risk_level: 'LOW',
@@ -902,9 +907,8 @@ export const BOOKING_TEMPLATES: readonly BookingTemplate[] = [
     auto_match_confidence: 0.85,
     default_private: false,
     fallback_category: 'expense_bank_fees',
-    description_sv: 'Avgifter från Stripe (EU-leverantör) med omvänd skattskyldighet',
+    description_sv: 'Transaktionsavgifter från Stripe, momsfria',
     common: true,
-    requires_vat_registration_data: true,
   },
   {
     id: 'bank_interest_income',

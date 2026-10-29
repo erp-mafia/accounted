@@ -51,11 +51,22 @@ import {
   type PasteSkipReason,
 } from '@/lib/invoices/invoice-number-paste'
 import { beslutFileIsForCompany, readBeslutFile } from '@/lib/invoices/rot-rut-beslut-file'
-import { useCompanySettings } from '@/lib/reference-data/hooks'
+import { useAccounts, useCompanySettings } from '@/lib/reference-data/hooks'
 import { ID_READ_CHUNK, MAX_BANK_ROW_SPLIT } from '@/lib/reconciliation/limits'
 import type { TransactionWithInvoice } from './transaction-types'
 import type { BatchAllocationPrefill } from '@/lib/transactions/parts-read'
-import { parseAmountInput, formatAmountInput, roundOre } from '@/lib/money'
+import { parseAmountInput, formatAmountInput, roundOre, sumOre, ORE_ROUNDING_SETTLEMENT_MAX } from '@/lib/money'
+import AccountCombobox from '@/components/bookkeeping/AccountCombobox'
+import { VoucherLinesTable } from '@/components/bookkeeping/VoucherLinesTable'
+import { voucherLineViews, type PostingLineLike } from '@/lib/bookkeeping/voucher-line-view'
+import { PAYMENT_FEE_ACCOUNT } from '@/lib/bookkeeping/payment-fee'
+import {
+  MAX_PAYOUT_FEES,
+  PAYOUT_FEE_DESCRIPTION_MAX,
+  isPayoutFeeAccount,
+  payoutBankAmount,
+  payoutFeesWithinInvoices,
+} from '@/lib/bookkeeping/payout-fee-lines'
 
 /** Pause after the last keystroke before the search goes to the database. */
 const SEARCH_DEBOUNCE_MS = 250
@@ -170,11 +181,38 @@ type AllocationDraft = {
   amount: string
 }
 
+/** A fee row as typed: the payment service's fee on the row (lib/bookkeeping/payout-fee-lines.ts). */
+type FeeDraft = {
+  key: number
+  account: string
+  amount: string
+  description: string
+}
+
+/** The voucher preview of a split with fee rows: the route's dry run of `body`, or why it refused. */
+type VoucherPreview = { body: string } & (
+  | { state: 'ready'; lines: PostingLineLike[] }
+  | { state: 'failed'; message: string }
+)
+
+/** Pause after the last edit before the voucher preview is asked for. */
+const PREVIEW_DEBOUNCE_MS = 300
+
 type CustomerInvoiceRow = Invoice & { customer?: Customer | null }
 type SupplierInvoiceRow = SupplierInvoice & { supplier?: Supplier | null }
 
 function parseAmount(s: string): number {
   return parseAmountInput(s) ?? 0
+}
+
+/**
+ * What an invoice owes in the bank row's currency: its remaining, or the
+ * booked SEK of a foreign invoice with a usable rate (the dialog's own
+ * default); null when there is no rate to say it with.
+ */
+function owedInRowCurrency(candidate: AllocationCandidate, rowCurrency: string): number | null {
+  if (candidate.currency === rowCurrency) return roundOre(candidate.remaining)
+  return isValidExchangeRate(candidate.exchangeRate) ? roundOre(candidate.remaining * candidate.exchangeRate) : null
 }
 
 /** A pasted invoice as a dialog row: the same shape a click adds. */
@@ -239,6 +277,13 @@ export default function MatchAllocationDialog({
   // is checked against the company's org number.
   const beslutInputRef = useRef<HTMLInputElement>(null)
   const { settings: companySettings, isLoading: settingsLoading } = useCompanySettings()
+  // Fee rows (issue #131): a payout net of the provider's fee, or a payment
+  // the bank charged a fee on top of. Class 6 accounts of the active chart.
+  const [fees, setFees] = useState<FeeDraft[]>([])
+  const feeKey = useRef(0)
+  const [voucherPreview, setVoucherPreview] = useState<VoucherPreview | null>(null)
+  const { accounts, isLoading: accountsLoading } = useAccounts()
+  const feeAccounts = useMemo(() => accounts.filter((a) => isPayoutFeeAccount(a.account_number)), [accounts])
 
   useEffect(() => {
     const handle = setTimeout(() => setAppliedSearch(search.trim()), SEARCH_DEBOUNCE_MS)
@@ -397,6 +442,8 @@ export default function MatchAllocationDialog({
       setPasteText('')
       setPasteResult(null)
       setPickedExpanded(false)
+      setFees([])
+      setVoucherPreview(null)
       prefillApplied.current = false
     }
   }, [open])
@@ -420,7 +467,66 @@ export default function MatchAllocationDialog({
     return Object.values(drafts).reduce((sum, d) => sum + parseAmount(d.amount), 0)
   }, [drafts])
 
-  const leftover = roundOre(txAmountAbs - allocated)
+  // The fee rows: a customer's payout is the invoices less the fees, a
+  // supplier payment the invoices plus the fees. The tally below compares
+  // that net with the row.
+  const feeTotal = useMemo(() => sumOre(fees.map((f) => parseAmount(f.amount))), [fees])
+  const settled = payoutBankAmount(kind, allocated, feeTotal)
+  const feeAccountOk = (account: string) =>
+    isPayoutFeeAccount(account) && (accountsLoading || feeAccounts.some((a) => a.account_number === account))
+  const feesValid =
+    fees.every((f) => feeAccountOk(f.account) && parseAmount(f.amount) > 0) &&
+    (fees.length === 0 || payoutFeesWithinInvoices(allocated, feeTotal))
+
+  // "Lägg till avgiftsrad": the gap a fee would close, a krona or more (under
+  // that it is öresavrundning). Customer: every picked invoice paid in full,
+  // less the row and the fees already there. Supplier: the row less the
+  // invoices and the fees.
+  const owedTotal = useMemo(
+    () =>
+      sumOre(
+        Object.values(drafts).map((d) => owedInRowCurrency(d.candidate, txCurrency) ?? parseAmount(d.amount)),
+      ),
+    [drafts, txCurrency],
+  )
+  const feeGap =
+    kind === 'customer_invoice'
+      ? roundOre(owedTotal - feeTotal - txAmountAbs)
+      : roundOre(txAmountAbs - allocated - feeTotal)
+  const offerFee =
+    Object.keys(drafts).length > 0 &&
+    fees.length < MAX_PAYOUT_FEES &&
+    feeGap >= ORE_ROUNDING_SETTLEMENT_MAX &&
+    feeGap < (kind === 'customer_invoice' ? owedTotal : allocated)
+
+  function addFeeRow() {
+    if (!offerFee) return
+    if (kind === 'customer_invoice') {
+      // The fee is the gap only once every invoice is allocated what it owed.
+      setDrafts((prev) => {
+        const next: Record<string, AllocationDraft> = {}
+        for (const [id, draft] of Object.entries(prev)) {
+          const owed = owedInRowCurrency(draft.candidate, txCurrency)
+          next[id] = owed === null ? draft : { ...draft, amount: formatAmountInput(owed) }
+        }
+        return next
+      })
+    }
+    setFees((prev) => [
+      ...prev,
+      { key: feeKey.current++, account: PAYMENT_FEE_ACCOUNT, amount: formatAmountInput(feeGap), description: '' },
+    ])
+  }
+
+  function updateFee(key: number, patch: Partial<Omit<FeeDraft, 'key'>>) {
+    setFees((prev) => prev.map((f) => (f.key === key ? { ...f, ...patch } : f)))
+  }
+
+  function removeFee(key: number) {
+    setFees((prev) => prev.filter((f) => f.key !== key))
+  }
+
+  const leftover = roundOre(txAmountAbs - settled)
   // 0.005 SEK matches the RPC's BATCH_AMOUNT_EXCEEDS_TX guard so the
   // "balanced ✓" indicator never lies to the user about what the server
   // will accept.
@@ -580,27 +686,91 @@ export default function MatchAllocationDialog({
     return t(PASTE_REASON_KEYS[skip.reason])
   }
 
+  // The request the confirm sends and the voucher preview dry-runs.
+  const requestBody = useMemo(() => {
+    const allocations = Object.values(drafts)
+      .map((d) => {
+        const cand = d.candidate
+        const amount = parseAmount(d.amount)
+        if (amount <= 0) return null
+        return cand.kind === 'customer_invoice'
+          ? { kind: 'customer_invoice' as const, invoice_id: cand.id, amount }
+          : { kind: 'supplier_invoice' as const, supplier_invoice_id: cand.id, amount }
+      })
+      .filter((a): a is NonNullable<typeof a> => a !== null)
+    if (allocations.length === 0) return null
+    return {
+      allocations,
+      ...(fees.length > 0
+        ? {
+            fees: fees.map((f) => ({
+              account: f.account,
+              amount: parseAmount(f.amount),
+              ...(f.description.trim() ? { description: f.description.trim() } : {}),
+            })),
+          }
+        : {}),
+      // Acknowledged set: echo its ids so the route can verify that what
+      // the user overrode is what it still detects.
+      ...(explaining && explainingAcknowledged
+        ? {
+            force: true,
+            expected_journal_entry_ids: explaining.vouchers.map((v) => v.journal_entry_id),
+          }
+        : {}),
+    }
+  }, [drafts, fees, explaining, explainingAcknowledged])
+
+  // Fee rows: the verifikat the confirm would post, from the route's dry run
+  // (the bank leg on the row's own account), once the row balances.
+  const previewBody =
+    transaction && requestBody && fees.length > 0 && balanced && feesValid && !overLimit && !explainingBlocks
+      ? JSON.stringify(requestBody)
+      : null
+  const transactionId = transaction?.id
+  useEffect(() => {
+    if (!previewBody || !transactionId) return
+    let cancelled = false
+    const context = kind === 'customer_invoice' ? 'invoice' : 'supplier_invoice'
+    const handle = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/transactions/${transactionId}/match-batch?dry_run=true`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: previewBody,
+        })
+        const json = await res.json().catch(() => null)
+        if (cancelled) return
+        const lines = (json as { data?: { expected_lines?: PostingLineLike[] } } | null)?.data?.expected_lines
+        setVoucherPreview(
+          res.ok && lines
+            ? { body: previewBody, state: 'ready', lines }
+            : { body: previewBody, state: 'failed', message: getErrorMessage(json, { context, statusCode: res.status }) },
+        )
+      } catch (err) {
+        if (!cancelled) setVoucherPreview({ body: previewBody, state: 'failed', message: getErrorMessage(err, { context }) })
+      }
+    }, PREVIEW_DEBOUNCE_MS)
+    return () => {
+      cancelled = true
+      clearTimeout(handle)
+    }
+  }, [previewBody, transactionId, kind])
+  const shownPreview = previewBody && voucherPreview?.body === previewBody ? voucherPreview : null
+
   async function handleConfirm() {
     if (!transaction) return
     // PR #607 round-1 review: require balanced. Undershoot is no longer
     // allowed because it leaves the bank line short of tx_abs and breaks
     // reconciliation.
     if (!balanced || overshoot || overLimit) return
+    // A fee row the route would refuse (account, amount, fees as large as
+    // the invoices) holds the confirm too, as its disabled state says.
+    if (!feesValid) return
 
     setSubmitting(true)
     try {
-      const allocations = Object.values(drafts)
-        .map((d) => {
-          const cand = d.candidate
-          const amount = parseAmount(d.amount)
-          if (amount <= 0) return null
-          return cand.kind === 'customer_invoice'
-            ? { kind: 'customer_invoice' as const, invoice_id: cand.id, amount }
-            : { kind: 'supplier_invoice' as const, supplier_invoice_id: cand.id, amount }
-        })
-        .filter((a): a is NonNullable<typeof a> => a !== null)
-
-      if (allocations.length === 0) {
+      if (!requestBody) {
         toast({
           title: t('error_no_allocations_title'),
           description: t('error_no_allocations_description'),
@@ -609,21 +779,12 @@ export default function MatchAllocationDialog({
         setSubmitting(false)
         return
       }
+      const allocations = requestBody.allocations
 
       const response = await fetch(`/api/transactions/${transaction.id}/match-batch`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          allocations,
-          // Acknowledged set: echo its ids so the route can verify that what
-          // the user overrode is what it still detects.
-          ...(explaining && explainingAcknowledged
-            ? {
-                force: true,
-                expected_journal_entry_ids: explaining.vouchers.map((v) => v.journal_entry_id),
-              }
-            : {}),
-        }),
+        body: JSON.stringify(requestBody),
       })
 
       if (!response.ok) {
@@ -1146,11 +1307,111 @@ export default function MatchAllocationDialog({
             </ul>
           )}
 
+          {/* Fee rows (issue #131): the payment service's fee on the row,
+              booked without VAT on a class 6 account. Offered once the
+              invoices and the row are a krona or more apart in the fee's
+              direction, prefilled with that gap. */}
+          {(offerFee || fees.length > 0) && (
+            <div className="space-y-3 rounded-lg border p-3" data-testid="fee-rows">
+              {fees.length > 0 && (
+                <>
+                  <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                    {t('fees_label')}
+                  </p>
+                  <ul className="space-y-2">
+                    {fees.map((fee, index) => {
+                      const n = index + 1
+                      const accountId = `match-allocation-fee-account-${fee.key}`
+                      const accountInvalid = fee.account.length >= 4 && !feeAccountOk(fee.account)
+                      return (
+                        <li key={fee.key} className="space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <div className="min-w-0 flex-1 sm:w-32 sm:flex-none">
+                              <label htmlFor={accountId} className="sr-only">
+                                {t('fee_account_aria', { n })}
+                              </label>
+                              <AccountCombobox
+                                id={accountId}
+                                value={fee.account}
+                                accounts={feeAccounts}
+                                onChange={(value) => updateFee(fee.key, { account: value.trim() })}
+                                placeholder={PAYMENT_FEE_ACCOUNT}
+                                className="h-9"
+                              />
+                            </div>
+                            <Input
+                              value={fee.description}
+                              onChange={(e) => updateFee(fee.key, { description: e.target.value })}
+                              placeholder={t('fee_description_placeholder')}
+                              maxLength={PAYOUT_FEE_DESCRIPTION_MAX}
+                              aria-label={t('fee_description_aria', { n })}
+                              className="order-last h-9 basis-full sm:order-none sm:basis-0 sm:flex-1"
+                            />
+                            <Input
+                              type="text"
+                              inputMode="decimal"
+                              value={fee.amount}
+                              onChange={(e) => updateFee(fee.key, { amount: e.target.value })}
+                              aria-label={t('fee_amount_aria', { n })}
+                              className="h-9 w-28 font-mono text-right tabular-nums"
+                            />
+                            <Button
+                              type="button"
+                              size="icon"
+                              variant="ghost"
+                              onClick={() => removeFee(fee.key)}
+                              aria-label={t('fee_remove_aria', { n })}
+                            >
+                              <XMarkIcon className="h-4 w-4" />
+                            </Button>
+                          </div>
+                          {accountInvalid && <p className="text-xs text-destructive">{t('fee_account_invalid')}</p>}
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  {!payoutFeesWithinInvoices(allocated, feeTotal) && (
+                    <p className="text-xs text-destructive">{t('fee_too_large')}</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">{t('fee_vat_note')}</p>
+                </>
+              )}
+              {offerFee && (
+                <div className="flex flex-col gap-2 text-sm sm:flex-row sm:items-center sm:justify-between">
+                  <p className="tabular-nums text-muted-foreground">
+                    {t(kind === 'customer_invoice' ? 'fee_offer_customer' : 'fee_offer_supplier', {
+                      amount: formatCurrency(feeGap, txCurrency),
+                    })}
+                  </p>
+                  <Button type="button" size="sm" variant="outline" onClick={addFeeRow} className="shrink-0">
+                    <PlusIcon className="mr-1 h-3.5 w-3.5" />
+                    {t('fee_add')}
+                  </Button>
+                </div>
+              )}
+            </div>
+          )}
+
           {/* Tally */}
           <div className="space-y-2 border-t pt-3">
+            {fees.length > 0 && (
+              <>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">{t('invoices_label')}</span>
+                  <span className="font-mono tabular-nums">{formatCurrency(allocated, transaction.currency)}</span>
+                </div>
+                <div className="flex items-center justify-between text-sm">
+                  <span className="text-muted-foreground">{t('fees_label')}</span>
+                  <span className="font-mono tabular-nums">
+                    {kind === 'customer_invoice' ? '' : '+'}
+                    {formatCurrency(kind === 'customer_invoice' ? -feeTotal : feeTotal, transaction.currency)}
+                  </span>
+                </div>
+              </>
+            )}
             <div className="flex items-center justify-between text-sm">
               <span className="text-muted-foreground">
-                {t('allocated_label')}
+                {fees.length > 0 ? t('net_label') : t('allocated_label')}
                 {collapsePicked && (
                   <span className={cn('ml-2 tabular-nums', overLimit && 'text-destructive')}>
                     {t('picked_count', { count: pickedCount, max: MAX_BANK_ROW_SPLIT })}
@@ -1164,7 +1425,7 @@ export default function MatchAllocationDialog({
                   balanced && 'text-success',
                 )}
               >
-                {formatCurrency(allocated, transaction.currency)} /{' '}
+                {formatCurrency(fees.length > 0 ? settled : allocated, transaction.currency)} /{' '}
                 {formatCurrency(txAmountAbs, transaction.currency)}
               </span>
             </div>
@@ -1204,6 +1465,25 @@ export default function MatchAllocationDialog({
                 </p>
               </div>
             ) : null}
+            {previewBody && (
+              <div className="space-y-2 pt-1" data-testid="fee-voucher-preview">
+                <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
+                  {t('preview_title')}
+                </p>
+                {shownPreview?.state === 'ready' ? (
+                  <VoucherLinesTable
+                    lines={voucherLineViews(shownPreview.lines)}
+                    showTotals
+                    withCurrency
+                    aria-label={t('preview_title')}
+                  />
+                ) : shownPreview?.state === 'failed' ? (
+                  <p className="text-xs text-attn">{shownPreview.message}</p>
+                ) : (
+                  <Skeleton className="h-24 w-full" />
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1216,7 +1496,7 @@ export default function MatchAllocationDialog({
             // Confirm requires sum == tx_abs exactly (within rounding).
             // Anything else lets the JE diverge from the bank line and
             // breaks reconciliation. PR #607 round-1 review fix.
-            disabled={linking || !balanced || overshoot || overLimit || explainingBlocks}
+            disabled={linking || !balanced || overshoot || overLimit || explainingBlocks || !feesValid}
             loading={submitting}
           >
             {t('confirm')}

@@ -21,6 +21,10 @@ export const maxDuration = 300
  * the RPC, the per-allocation events and suggestion cleanup) live in
  * lib/transactions/match-batch.ts, shared with
  * POST /api/v1/companies/{companyId}/transactions/{id}/match-batch.
+ *
+ * ?dry_run=true answers the verifikat the request would post (expected_lines,
+ * the bank leg on the row's own account) and writes nothing, as v1's dry run
+ * does: the dialog's voucher preview for fee rows.
  */
 export const POST = withRouteContext(
   'transaction.match_batch',
@@ -34,11 +38,12 @@ export const POST = withRouteContext(
     })
     if (!validation.success) return validation.response
 
+    const dryRun = new URL(request.url).searchParams.get('dry_run') === 'true'
     const outcome = await matchTransactionBatch(
       { supabase, companyId: companyId!, userId: user.id, log },
       transactionId,
       validation.data,
-      { via: 'dashboard_force' },
+      { via: 'dashboard_force', dryRun },
     )
     if (!outcome.ok) return sessionFailureResponse(outcome, log.child({ transactionId }), requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })

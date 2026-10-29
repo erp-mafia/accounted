@@ -52,6 +52,7 @@ import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { linkBusinessEventToDraft, type BusinessEventLink, type SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { callWithBusinessEvents } from '@/lib/bookkeeping/business-event-rpc'
+import type { PayoutFeeLine } from '@/lib/bookkeeping/payout-fee-lines'
 import {
   findKontantmetodCarry,
   kontantmetodCarryHasSettlements,
@@ -1690,6 +1691,13 @@ export interface MatchBatchAllocationInput {
   /** The allocations exactly as match_batch_allocate takes them. */
   allocations: unknown[]
   /**
+   * The payment service's fees on the row (payoutFeeLines,
+   * lib/bookkeeping/payout-fee-lines.ts), sent as p_fee_lines
+   * (migration 20261028231700). Empty or omitted: the parameter is not sent,
+   * so a database without it answers as before.
+   */
+  feeLines?: PayoutFeeLine[]
+  /**
    * The posting port's events, one per allocation (sale.payment_received or
    * purchase.paid), linked to the samlingsverifikat before its number is
    * drawn. Omitted: the RPC is called as before.
@@ -1727,6 +1735,7 @@ export async function commitMatchBatchAllocation(
       // doors); a session caller resolves from its own auth.uid()
       // (migration 20260824120000).
       p_user_id: userId,
+      ...(input.feeLines?.length ? { p_fee_lines: input.feeLines } : {}),
       ...events,
     }),
   )

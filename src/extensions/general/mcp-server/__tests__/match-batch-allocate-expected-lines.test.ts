@@ -185,6 +185,73 @@ describe('gnubok_match_batch_allocate: expected_lines in the staged preview', ()
     )
   })
 
+  // Issue #131: a payout net of the provider's fee. The approver sees the fee
+  // line among the rows approval posts, and the fee total beside the invoices.
+  it('fee rows: the fee on 6570 in expected_lines and total_fees, the invoices settled in full', async () => {
+    const { supabase, enqueue, findCall, findCalls } = createQueuedMockSupabase()
+    enqueue({ data: [{ id: INV_A, document_type: 'invoice' }, { id: INV_B, document_type: 'invoice' }], error: null })
+    enqueue({
+      data: { id: TX_ID, description: 'STRIPE PAYOUT', merchant_name: null, amount: 8500, currency: 'SEK', date: '2026-06-30', journal_entry_id: null, cash_account_id: 'ca-1' },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { id: INV_A, currency: 'SEK', exchange_rate: null, remaining_amount: 6000, total: 6000 },
+        { id: INV_B, currency: 'SEK', exchange_rate: null, remaining_amount: 4000, total: 4000 },
+      ],
+      error: null,
+    })
+    enqueue({ data: [{ account_number: '6570' }], error: null }) // chart_of_accounts
+    enqueueBankAccount(enqueue, '1930')
+    enqueueStage(enqueue)
+
+    const result = (await allocate.execute(
+      {
+        transaction_id: TX_ID,
+        allocations: [
+          { kind: 'customer_invoice', invoice_id: INV_A, amount: 6000 },
+          { kind: 'customer_invoice', invoice_id: INV_B, amount: 4000 },
+        ],
+        fees: [{ account: '6570', amount: 1500, description: 'Stripe juni' }],
+      },
+      'company-1',
+      'user-1',
+      supabase as never,
+      { type: 'api_key' } as never,
+    )) as Staged
+
+    expect(result.staged).toBe(true)
+    expect(result.preview.expected_lines).toEqual([
+      { account_number: '1510', description: 'Kundfaktura 1 av 2', debit: 0, credit: 6000 },
+      { account_number: '1510', description: 'Kundfaktura 2 av 2', debit: 0, credit: 4000 },
+      { account_number: '6570', description: 'Stripe juni', debit: 1500, credit: 0 },
+      { account_number: '1930', description: 'Inbetalning 2026-06-30', debit: 8500, credit: 0 },
+    ])
+    expect(result.preview).toMatchObject({ total_allocated: 10000, total_fees: 1500, expected_lines_balanced: true })
+    expect(findCalls('chart_of_accounts', 'eq')).toEqual(expect.arrayContaining([['company_id', 'company-1'], ['is_active', true]]))
+    const inserted = findCall('pending_operations', 'insert')?.[0] as { params: Record<string, unknown> }
+    // Approval runs the same operation on the stored params: the fee rows travel with them.
+    expect(inserted.params).toMatchObject({ fees: [{ account: '6570', amount: 1500, description: 'Stripe juni' }] })
+  })
+
+  it('fee rows on a class 4 account never stage: a reverse-charge base would reach the momsdeklaration without its VAT', async () => {
+    const { supabase, findCall } = createQueuedMockSupabase()
+    await expect(
+      allocate.execute(
+        {
+          transaction_id: TX_ID,
+          allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount: 6000 }],
+          fees: [{ account: '4535', amount: 100 }],
+        },
+        'company-1',
+        'user-1',
+        supabase as never,
+        { type: 'api_key' } as never,
+      ),
+    ).rejects.toMatchObject({ code: 'VALIDATION_ERROR' })
+    expect(findCall('pending_operations', 'insert')).toBeUndefined()
+  })
+
   it('refuses to stage unbooked invoices under kontantmetoden and names the per-invoice route', async () => {
     mockFindCashUnbooked.mockResolvedValueOnce({
       ok: true,

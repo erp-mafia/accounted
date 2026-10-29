@@ -1,6 +1,7 @@
 import { roundOre } from '@/lib/money'
 import { FX_GAIN_ACCOUNT, FX_LOSS_ACCOUNT } from '@/lib/bookkeeping/ore-rounding'
 import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/account-roles'
+import { payoutBankAmount, payoutFeeLines, payoutFeeTotal, type PayoutFee } from '@/lib/bookkeeping/payout-fee-lines'
 
 /**
  * The verifikat `match_batch_allocate` will post, computed from the same
@@ -19,8 +20,10 @@ import { PINNED_JURISDICTION, resolveAccountRole } from '@/lib/bookkeeping/accou
  * the RPC no longer posts (issue #3097). Since 20260929015251 the RPC names a
  * single invoice in the header ("Utbetalning leverantörsfaktura <number>,
  * <supplier>", as the single-invoice match routes do) and keeps
- * "Samlingsbetalning <date>" for two or more. When the RPC changes, this file
- * changes with it; the pg-real suites (tests/pg/match-batch-allocate.pg.test.ts,
+ * "Samlingsbetalning <date>" for two or more. Since 20261028231700 the
+ * request's fee rows follow the invoices' lines as debits, before the bank
+ * leg, built by the RPC call's own builder (lib/bookkeeping/payout-fee-lines.ts).
+ * When the RPC changes, this file changes with it; the pg-real suites (tests/pg/match-batch-allocate.pg.test.ts,
  * tests/pg/match-batch-preview-parity.pg.test.ts,
  * tests/pg/match-batch-allocate-series-description.pg.test.ts) are the
  * authority.
@@ -108,6 +111,8 @@ export function buildBatchAllocationPreview(input: {
   allocations: readonly BatchAllocationPreviewAllocation[]
   /** Keyed by invoice id or supplier invoice id. */
   invoices: ReadonlyMap<string, BatchAllocationPreviewInvoice> | Record<string, BatchAllocationPreviewInvoice>
+  /** The payment service's fees on the row: one debit line each, no VAT. */
+  fees?: readonly PayoutFee[] | null
 }): BatchAllocationPreview {
   const { transaction, allocations, bankAccount } = input
   if (allocations.length === 0) throw new Error('allocations must not be empty')
@@ -120,10 +125,12 @@ export function buildBatchAllocationPreview(input: {
   }
   const txAbs = Math.abs(transaction.amount)
   const totalAllocated = roundOre(allocations.reduce((sum, a) => sum + a.amount, 0))
+  const fees = payoutFeeLines(input.fees)
+  const settled = payoutBankAmount(allocations[0].kind, totalAllocated, payoutFeeTotal(fees))
   // The RPC refuses BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX outside
   // this tolerance, so there is no verifikat to preview.
-  if (Math.abs(totalAllocated - txAbs) > 0.005) {
-    throw new Error(`allocations sum (${totalAllocated}) must equal the transaction amount (${txAbs})`)
+  if (Math.abs(settled - txAbs) > 0.005) {
+    throw new Error(`allocations net of fees (${settled}) must equal the transaction amount (${txAbs})`)
   }
 
   const entryDate = transaction.date.slice(0, 10)
@@ -198,6 +205,11 @@ export function buildBatchAllocationPreview(input: {
       )
     }
   })
+
+  // A fee is a cost on both sides: withheld from a payout, or added to a payment.
+  for (const fee of fees) {
+    lines.push({ account_number: fee.account, description: fee.description, debit: fee.amount, credit: 0 })
+  }
 
   lines.push(
     isCustomer

@@ -1,0 +1,1 @@
+[2026-10-28] Template payment_fees_eu books Stripe's fees as exempt (6570, ML 10 kap. 33 §), reversing 2026-09-10's reverse charge; kept, not removed, since mapping_rules and inbox suggestions store its id. Stripe Billing, Radar and Tax stay taxable.
