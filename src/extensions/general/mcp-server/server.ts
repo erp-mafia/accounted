@@ -23303,7 +23303,7 @@ export const tools: McpTool[] = [
     name: 'gnubok_approve_supplier_invoice',
     keywords: ['leverantörsfaktura', 'attestera', 'godkänn faktura'],
     title: 'Approve Supplier Invoice',
-    description: 'Stage attest of a registered or overdue supplier invoice. With an attest policy (gnubok_get_attest_policy) only its attesters may attest, in mode all every one. High-risk, always staged.',
+    description: 'Stage attest of a registered or overdue supplier invoice. With an attest policy (gnubok_get_attest_policy) only its attesters may attest (in mode all every one), within their limits, and two of them from its two-step amount. High-risk, always staged.',
     inputSchema: {
       type: 'object',
       additionalProperties: false,

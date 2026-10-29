@@ -18,10 +18,14 @@
  * past its due date: 'overdue' is derived state the daily cron owns, and
  * attesting a late payable does not make it on time (#1206).
  *
- * Strict-mode: the optimistic-lock UPDATE filters on the pre-approval state
- * (status in registered/overdue, approved_at IS NULL, the due date read) so
- * concurrent calls (or a same-key replay racing the first) yield a clean
- * refusal rather than a silent no-op.
+ * Strict-mode: the database's attest_supplier_invoice locks the invoice and
+ * re-reads its state under the lock, so concurrent calls (or a same-key
+ * replay racing the first) yield a clean refusal rather than a silent no-op.
+ *
+ * Levels (#135): an attester may have a limit, and the policy may ask for
+ * two attesters from an amount. Through an API key with levels on, the
+ * attest is capped by the lower of the key user's limit and the key's
+ * unattended ceiling (403 ATTEST_LIMIT_EXCEEDED, reason key_limit).
  */
 
 import { z } from 'zod'
@@ -65,6 +69,8 @@ registerEndpoint({
     'Idempotency-Key is mandatory.',
     'Returns 400 SI_APPROVE_NOT_REGISTERED when the invoice is already approved (approved_at set) or sits in a settled status. Use the detail endpoint to inspect status first if unsure.',
     'Returns 403 ATTEST_NOT_ALLOWED when the attest policy does not let this user attest the invoice (not an attester, or the registrant), and 409 ATTEST_ALREADY_GIVEN when the user already attested it in this round.',
+    'Returns 403 ATTEST_LIMIT_EXCEEDED when the user\'s attest limit does not cover the invoice and their approval cannot count (details.reason limit), or, with attest levels on, when the lower of the user\'s limit and the key\'s unattended ceiling does not cover it (details.reason key_limit). details.limit_sek and details.amount_sek say by how much.',
+    'From the policy\'s two_step_from_sek two different attesters must approve: the first approval keeps the status and attest.remaining_user_ids names who may give the second.',
     'A still-past-due invoice comes back with status "overdue", not "approved": approved_at is the attest marker, the status is derived from the due date.',
   ],
   example: {
@@ -107,7 +113,6 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         source: 'api',
         dryRun: ctx.dryRun,
         select: SI_RESPONSE_COLUMNS,
-        pinDueDate: true,
         writer: ctx.supabase,
       },
     )

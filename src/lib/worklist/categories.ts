@@ -46,8 +46,9 @@ import { deriveVerificationState, RENEWAL_DUE_STATES } from '@/lib/payments/orde
 import { readPaymentAccounts } from '@/lib/payments/orders/payment-accounts'
 import { paymentsReadiness } from '@/lib/payments/orders/readiness'
 import { companyAttestsSupplierInvoices } from '@/lib/supplier-invoices/lifecycle'
-import { currentRound, invoiceNeedsAttest, mayAttest } from '@/lib/supplier-invoices/attest-policy'
-import { loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
+import { invoiceNeedsAttest, mayAttest, ruleOnApproval, type AttestationRecord } from '@/lib/supplier-invoices/attest-policy'
+import { loadAttestLimits, loadAttestPolicy } from '@/lib/supplier-invoices/attest-policy-read'
+import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
 import { listSupplierPayeeAlerts } from '@/lib/payments/payee-alerts'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
 import type {
@@ -291,9 +292,13 @@ const ATTEST_DUE_SCAN_CAP = 200
  * göra row each, "Attestera {leverantör} {belopp}". Empty when the policy is
  * off, the company keeps kontantmetoden, or the user is not an attester.
  * Pending: registered or overdue, not attested (approved_at null), not a
- * credit note, the policy requires attest, the user may attest it and has
- * not approved it in the current round. Done: the user approves or rejects,
- * the policy is satisfied by others, or the invoice leaves attest.
+ * credit note, the policy requires attest, and the user's approval would
+ * count now (ruleOnApproval records it): they may attest it, have not
+ * approved it in the current round, and their limit covers it or the round
+ * still has room for an attester without a covering limit (#135). An
+ * invoice above the controller's limit is the CEO's row, not the
+ * controller's. Done: the user approves or rejects, the policy is satisfied
+ * by others, or the invoice leaves attest.
  * Soft-fails to an empty list, like every count here.
  */
 export async function listSupplierInvoiceAttestsDue(
@@ -304,17 +309,21 @@ export async function listSupplierInvoiceAttestsDue(
   try {
     const policy = await loadAttestPolicy(supabase, companyId)
     if (!policy.enabled || !policy.attesters.includes(userId)) return []
-    const [{ data: settings, error: settingsError }, { data: membership, error: memberError }] = await Promise.all([
+    const [{ data: settings, error: settingsError }, { data: memberRows, error: memberError }, limits] = await Promise.all([
       supabase.from('company_settings').select('accounting_method').eq('company_id', companyId).maybeSingle(),
-      supabase.from('company_members').select('role').eq('company_id', companyId).eq('user_id', userId).maybeSingle(),
+      supabase.from('company_members').select('user_id, role').eq('company_id', companyId),
+      loadAttestLimits(supabase, companyId),
     ])
     if (settingsError || memberError) {
       logAndZero('supplier_invoice_attest_due', companyId, settingsError ?? memberError)
       return []
     }
     const accountingMethod = (settings as { accounting_method?: string | null } | null)?.accounting_method
-    const role = (membership as { role?: string } | null)?.role
-    if (!role || role === 'viewer' || !companyAttestsSupplierInvoices(accountingMethod)) return []
+    // The company's members who keep the books: only their approvals count (attest-service's loadActiveAttestMembers).
+    const writers = new Set(
+      ((memberRows ?? []) as Array<{ user_id: string; role: string }>).filter((m) => isBookkeepingWriterRole(m.role)).map((m) => m.user_id),
+    )
+    if (!writers.has(userId) || !companyAttestsSupplierInvoices(accountingMethod)) return []
 
     const { data: invoices, error } = await supabase
       .from('supplier_invoices')
@@ -357,12 +366,16 @@ export async function listSupplierInvoiceAttestsDue(
       logAndZero('supplier_invoice_attest_due', companyId, decisionsError)
       return []
     }
-    const byInvoice = new Map<string, Array<{ user_id: string; decision: 'approved' | 'rejected'; decided_at: string }>>()
-    for (const d of (decisions ?? []) as Array<{ supplier_invoice_id: string; user_id: string; decision: 'approved' | 'rejected'; decided_at: string }>) {
+    const byInvoice = new Map<string, AttestationRecord[]>()
+    for (const d of (decisions ?? []) as Array<AttestationRecord & { supplier_invoice_id: string }>) {
       byInvoice.set(d.supplier_invoice_id, [...(byInvoice.get(d.supplier_invoice_id) ?? []), d])
     }
     return candidates
-      .filter((c) => !currentRound(byInvoice.get(c.id) ?? []).some((d) => d.decision === 'approved' && d.user_id === userId))
+      .filter(
+        (c) =>
+          ruleOnApproval(policy, accountingMethod, { ...c, total: Number(c.total) }, byInvoice.get(c.id) ?? [], userId, writers, { limits }).kind ===
+          'record',
+      )
       .map((c) => ({
         supplier_invoice_id: c.id,
         supplier_name: c.supplier?.name ?? null,

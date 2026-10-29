@@ -23,6 +23,13 @@ vi.mock('@/lib/entitlements/has-capability', async (importOriginal) => {
   return { ...actual, hasCapability: vi.fn().mockResolvedValue(true) }
 })
 
+// The person's attest limit, when attest levels govern the invoice (#135).
+const personalAttestCap = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/supplier-invoices/attest-service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/supplier-invoices/attest-service')>()),
+  personalAttestCap: (...args: unknown[]) => personalAttestCap(...args),
+}))
+
 // Pass-through spy: which actor the executor runs under.
 vi.mock('@/lib/bookkeeping/actor-context-node', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/bookkeeping/actor-context-node')>()
@@ -219,5 +226,59 @@ describe('commitPendingOperation: unattended commit limit', () => {
       expect(result.code).toBe('UNATTENDED_COMMIT_LIMIT_EXCEEDED')
       expect(result.operation_status).toBe('pending')
     }
+  })
+})
+
+describe('commitPendingOperation: an attest capped by the person\'s attest limit (#135)', () => {
+  const attest = (preview_data: Record<string, unknown>) =>
+    makePendingOp({ operation_type: 'approve_supplier_invoice', params: { supplier_invoice_id: 'si-1' }, preview_data })
+
+  it('caps a key by the lower of its ceiling and the person\'s limit, leaving the op pending', async () => {
+    for (const [ceiling, limit] of [
+      [null, 20000],
+      [10000, 10000],
+      [50000, 20000],
+    ] as const) {
+      personalAttestCap.mockResolvedValue(20000)
+      const { supabase } = createQueuedMockSupabase()
+      const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', attest({ total_sek: 30000 }), {
+        actor: { ...apiKeyActor, unattendedCommitLimit: ceiling },
+      })
+      expect(result, String(ceiling)).toMatchObject({
+        status: 'failed',
+        code: 'UNATTENDED_COMMIT_LIMIT_EXCEEDED',
+        operation_status: 'pending',
+        unattended_limit: { attempted: 30000, limit },
+      })
+      expect(personalAttestCap).toHaveBeenLastCalledWith(supabase, 'company-1', 'user-1', 'si-1')
+    }
+  })
+
+  it('asks nothing for a person approving it, and nothing for another operation', async () => {
+    personalAttestCap.mockResolvedValue(1)
+    const human = createQueuedMockSupabase()
+    human.enqueue({ data: null, error: null })
+    const byHuman = await commitPendingOperation(human.supabase as never, 'user-1', 'company-1', attest({ total_sek: 30000 }), {
+      actor: { type: 'user', label: 'Bo' },
+    })
+    expect(byHuman.code).not.toBe('UNATTENDED_COMMIT_LIMIT_EXCEEDED')
+
+    const other = createQueuedMockSupabase()
+    other.enqueue({ data: null, error: null })
+    const voucher = await commitPendingOperation(other.supabase as never, 'user-1', 'company-1', makePendingOp({ preview_data: { total_debit: 5 } }), {
+      actor: { ...apiKeyActor, unattendedCommitLimit: null },
+    })
+    expect(voucher.code).not.toBe('UNATTENDED_COMMIT_LIMIT_EXCEEDED')
+    expect(personalAttestCap).not.toHaveBeenCalled()
+  })
+
+  it('without levels the key\'s own ceiling is all there is', async () => {
+    personalAttestCap.mockResolvedValue(null)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: null, error: null })
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', attest({ total_sek: 30000 }), {
+      actor: { ...apiKeyActor, unattendedCommitLimit: null },
+    })
+    expect(result.code).not.toBe('UNATTENDED_COMMIT_LIMIT_EXCEEDED')
   })
 })

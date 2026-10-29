@@ -3397,6 +3397,29 @@ const SUPPLIER_INVOICE: Record<string, StructuredErrorEntry> = {
     message_sv: 'Du har redan attesterat fakturan. Den väntar på de andra attestanterna.',
     message_en: 'You have already attested this invoice. It waits for the other attesters.',
   },
+  // Attest levels (#135): a limit per person, two attesters from an amount.
+  ATTEST_LIMIT_EXCEEDED: {
+    httpStatus: 403,
+    message_sv:
+      'Din attestgräns räcker inte för fakturans belopp, och fakturan behöver nu attest av någon vars gräns gör det. Via en API-nyckel gäller den lägre av din gräns och nyckelns gräns för obevakade åtgärder.',
+    message_en:
+      'Your attest limit does not cover the invoice amount, and the invoice now needs attest by someone whose limit does. Through an API key, the lower of your limit and the key\'s unattended limit applies.',
+    remediation: {
+      description:
+        'Ask an attester whose limit covers the amount (GET /supplier-invoices/{id}/attestations names them under remaining), or attest it in the app if the key capped it.',
+      tool: 'gnubok_get_attest_policy',
+    },
+  },
+  ATTEST_POLICY_TWO_STEP_NEEDS_TWO: {
+    httpStatus: 400,
+    message_sv: 'Två attestanter från ett belopp kräver minst två attestanter.',
+    message_en: 'Two attesters from an amount needs at least two attesters.',
+  },
+  ATTEST_LIMIT_NOT_ATTESTER: {
+    httpStatus: 400,
+    message_sv: 'En attestgräns kan bara sättas för någon som är attestant.',
+    message_en: 'An attest limit can only be set for an attester.',
+  },
   ATTEST_NOT_PENDING: {
     httpStatus: 409,
     message_sv: 'Fakturan väntar inte på attest.',

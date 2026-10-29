@@ -1,14 +1,15 @@
 /**
  * What the settings section "Attest" reads and writes beside the policy: the
- * members who can be picked as attesters, whether the signed-in user may edit
- * the policy, and the user's own switch for the attest mail
+ * members who can be picked as attesters, their attest limits
+ * (company_attest_limits), whether the signed-in user may edit the policy,
+ * and the user's own switch for the attest mail
  * (notification_settings.attest_request_email_enabled, per person, default on).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { isCompanyAdmin } from '@/lib/auth/require-write'
 import { createServiceClient } from '@/lib/supabase/server'
-import { loadAttestPolicy } from './attest-policy-read'
+import { loadAttestLimits, loadAttestPolicy } from './attest-policy-read'
 import type { AttestPolicy } from './attest-policy'
 import { loadAttestPeople } from './attest-service'
 import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
@@ -24,6 +25,8 @@ export interface AttestSettingsView {
   policy: AttestPolicy
   /** Members who may be attesters: everyone who may write (viewers cannot attest). */
   candidates: AttestCandidate[]
+  /** The attest limit in SEK per person (null = no limit); someone missing has none. */
+  limits: Record<string, number | null>
   /** Owners and admins edit the policy; everyone else reads it. */
   can_edit: boolean
   /** The signed-in user's own switch for the attest mail. */
@@ -38,8 +41,9 @@ export async function loadAttestSettingsView(
   userId: string,
 ): Promise<AttestSettingsView> {
   const service = createServiceClient()
-  const [policy, canEdit, { data: members, error: membersError }, { data: prefs }, { data: settings }] = await Promise.all([
+  const [policy, limits, canEdit, { data: members, error: membersError }, { data: prefs }, { data: settings }] = await Promise.all([
     loadAttestPolicy(supabase, companyId),
+    loadAttestLimits(supabase, companyId),
     isCompanyAdmin(supabase, companyId),
     service.from('company_members').select('user_id, role').eq('company_id', companyId),
     supabase.from('notification_settings').select('attest_request_email_enabled').eq('user_id', userId).maybeSingle(),
@@ -54,6 +58,7 @@ export async function loadAttestSettingsView(
       ...(people.get(m.user_id) ?? { user_id: m.user_id, name: null, email: null }),
       role: m.role as AttestCandidate['role'],
     })),
+    limits: Object.fromEntries(limits),
     can_edit: canEdit,
     mail_enabled: (prefs as { attest_request_email_enabled?: boolean | null } | null)?.attest_request_email_enabled !== false,
     accounting_method: (settings as { accounting_method?: string | null } | null)?.accounting_method ?? null,

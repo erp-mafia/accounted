@@ -85,6 +85,45 @@ describe('/api/supplier-invoices/attest-policy', () => {
     expect(saveAttestPolicy).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user-1', companyId: 'company-1' }), BODY)
   })
 
+  it('PUT takes the levels (#135): two attesters from an amount and a limit per attester', async () => {
+    const ANNA = '0b8f3e9a-2b1c-4c47-9a39-3a0f6f4f1d11'
+    const BO = '6d2a1c3e-8f4b-4a5d-9e7f-1a2b3c4d5e6f'
+    const levels = {
+      ...BODY,
+      attesters: [ANNA, BO],
+      two_step_from_sek: 100000,
+      limits: [
+        { user_id: ANNA, max_amount_sek: 50000 },
+        { user_id: BO, max_amount_sek: null },
+      ],
+    }
+    for (const bad of [
+      { ...levels, limits: [{ user_id: ANNA, max_amount_sek: 0 }] },
+      // Rounds to 0 kr: refused here, not by the database's check.
+      { ...levels, limits: [{ user_id: ANNA, max_amount_sek: 0.001 }] },
+      { ...levels, limits: [{ user_id: ANNA, max_amount_sek: -5 }] },
+      { ...levels, limits: [{ user_id: 'anna', max_amount_sek: 5 }] },
+      { ...levels, two_step_from_sek: -1 },
+      { ...levels, two_step_from_sek: '100000' },
+    ]) {
+      const response = await PUT(createMockRequest('/api/supplier-invoices/attest-policy', { method: 'PUT', body: bad }), NO_PARAMS)
+      expect(response.status, JSON.stringify(bad)).toBe(400)
+    }
+    expect(saveAttestPolicy).not.toHaveBeenCalled()
+
+    saveAttestPolicy.mockResolvedValue({ ok: false, code: 'ATTEST_POLICY_TWO_STEP_NEEDS_TWO' })
+    const refused = await parseJsonResponse<{ error: { code: string } }>(
+      await PUT(createMockRequest('/api/supplier-invoices/attest-policy', { method: 'PUT', body: { ...levels, attesters: [ANNA] } }), NO_PARAMS),
+    )
+    expect(refused.status).toBe(400)
+    expect(refused.body.error.code).toBe('ATTEST_POLICY_TWO_STEP_NEEDS_TWO')
+
+    saveAttestPolicy.mockResolvedValue({ ok: true, data: VIEW.policy })
+    const saved = await PUT(createMockRequest('/api/supplier-invoices/attest-policy', { method: 'PUT', body: levels }), NO_PARAMS)
+    expect(saved.status).toBe(200)
+    expect(saveAttestPolicy).toHaveBeenLastCalledWith(expect.objectContaining({ userId: 'user-1', companyId: 'company-1' }), levels)
+  })
+
   it('mail: any member switches their own attest mail, with a boolean only', async () => {
     expect((await PUT_MAIL(createMockRequest('/api/supplier-invoices/attest-policy/mail', { method: 'PUT', body: { enabled: 'yes' } }), NO_PARAMS)).status).toBe(400)
     const { status, body } = await parseJsonResponse<{ data: unknown }>(

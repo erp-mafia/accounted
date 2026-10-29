@@ -82,6 +82,18 @@ describe('POST /api/supplier-invoices/[id]/approve', () => {
     expect(again.body.error.code).toBe('ATTEST_ALREADY_GIVEN')
   })
 
+  it('returns 403 ATTEST_LIMIT_EXCEEDED when the attester\'s limit cannot count toward the invoice (#135)', async () => {
+    approveSupplierInvoice.mockResolvedValue({
+      ok: false,
+      code: 'ATTEST_LIMIT_EXCEEDED',
+      details: { reason: 'limit', limit_sek: 50000, amount_sek: 80000 },
+    })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(await post())
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('ATTEST_LIMIT_EXCEEDED')
+    expect(body.error.message).toMatch(/attestgräns/i)
+  })
+
   it('attests as the signed-in user from the app and answers the invoice with where the attest stands', async () => {
     const invoice = makeSupplierInvoice({ id: 'inv-1', status: 'registered' })
     approveSupplierInvoice.mockResolvedValue({ ok: true, data: { invoice, approved: false, attest, attestation_id: 'att-1' } })

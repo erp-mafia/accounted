@@ -5,10 +5,10 @@
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
-import { NO_ATTEST_POLICY, paymentWaitsForAttest, type AttestInvoiceFacts, type AttestPolicy } from './attest-policy'
+import { NO_ATTEST_POLICY, paymentWaitsForAttest, type AttestInvoiceFacts, type AttestLimits, type AttestPolicy } from './attest-policy'
 import { companyAttestsSupplierInvoices } from './lifecycle'
 
-export const POLICY_COLUMNS = 'company_id, enabled, threshold_amount, mode, attesters, preparer_may_attest, updated_by, updated_at'
+export const POLICY_COLUMNS = 'company_id, enabled, threshold_amount, mode, attesters, preparer_may_attest, two_step_from_sek, updated_by, updated_at'
 
 export interface PolicyRow {
   company_id: string
@@ -17,18 +17,23 @@ export interface PolicyRow {
   mode: 'any' | 'all'
   attesters: string[] | null
   preparer_may_attest: boolean
+  two_step_from_sek?: number | string | null
   updated_by: string | null
   updated_at: string | null
 }
+
+const toAmount = (value: number | string | null | undefined): number | null =>
+  value === null || value === undefined ? null : Number(value)
 
 export function toPolicy(row: PolicyRow | null): AttestPolicy {
   if (!row) return NO_ATTEST_POLICY
   return {
     enabled: row.enabled === true,
-    threshold_amount: row.threshold_amount === null || row.threshold_amount === undefined ? null : Number(row.threshold_amount),
+    threshold_amount: toAmount(row.threshold_amount),
     mode: row.mode === 'all' ? 'all' : 'any',
     attesters: row.attesters ?? [],
     preparer_may_attest: row.preparer_may_attest === true,
+    two_step_from_sek: toAmount(row.two_step_from_sek),
     updated_by: row.updated_by,
     updated_at: row.updated_at,
   }
@@ -39,6 +44,26 @@ export async function loadAttestPolicy(supabase: SupabaseClient, companyId: stri
   const { data, error } = await supabase.from('company_attest_policies').select(POLICY_COLUMNS).eq('company_id', companyId).maybeSingle()
   if (error) throw error
   return toPolicy(data as PolicyRow | null)
+}
+
+/** What a limit row covers: supplier invoices now; booking_review is reserved for the review step of one-click booking. */
+export type AttestLimitScope = 'supplier_invoice' | 'booking_review'
+
+/**
+ * The attesters' limits for supplier invoices (company_attest_limits): user
+ * id to limit in SEK, null = no limit. Someone without a row has no limit.
+ * Throws on a failed read: a missing limit reads as no limit.
+ */
+export async function loadAttestLimits(supabase: SupabaseClient, companyId: string): Promise<AttestLimits> {
+  const { data, error } = await supabase
+    .from('company_attest_limits')
+    .select('user_id, max_amount_sek')
+    .eq('company_id', companyId)
+    .eq('scope', 'supplier_invoice' satisfies AttestLimitScope)
+  if (error) throw error
+  return new Map(
+    ((data ?? []) as Array<{ user_id: string; max_amount_sek: number | string | null }>).map((row) => [row.user_id, toAmount(row.max_amount_sek)]),
+  )
 }
 
 /**

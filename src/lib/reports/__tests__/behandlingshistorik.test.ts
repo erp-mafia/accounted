@@ -1788,6 +1788,40 @@ describe('auditRowToEvent: the attest policy for supplier invoices (#124)', () =
   })
 })
 
+describe('auditRowToEvent: attest levels (#135)', () => {
+  const limit = { id: 'limit-1', company_id: 'company-1', user_id: 'user-anna', scope: 'supplier_invoice', max_amount_sek: 50000, updated_by: 'user-1' }
+
+  it('states a limit set, changed and removed', () => {
+    expect(auditRowToEvent(auditRow({ table_name: 'company_attest_limits', action: 'INSERT', new_state: limit }))).toMatchObject({
+      category: 'installningar',
+      code: 'attest_limit.set',
+      event: 'Attestgräns satt för leverantörsfakturor',
+      object: 'Leverantörsfakturor',
+      details: ['Gräns: 50 000 kr'],
+    })
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'company_attest_limits', action: 'UPDATE', old_state: limit, new_state: { ...limit, max_amount_sek: null } })),
+    ).toMatchObject({ code: 'attest_limit.changed', details: ['Gräns: 50 000 kr → ingen gräns'] })
+    expect(auditRowToEvent(auditRow({ table_name: 'company_attest_limits', action: 'DELETE', old_state: limit, new_state: null }))).toMatchObject({
+      code: 'attest_limit.removed',
+      event: 'Attestgräns borttagen för leverantörsfakturor',
+      details: ['Gräns: 50 000 kr'],
+    })
+    expect(
+      auditRowToEvent(auditRow({ table_name: 'company_attest_limits', action: 'UPDATE', old_state: limit, new_state: { ...limit, updated_by: 'user-2' } })),
+    ).toBeNull()
+  })
+
+  it('names two attesters from an amount among the policy rules', () => {
+    const policy = { company_id: 'company-1', enabled: true, threshold_amount: null, mode: 'any', attesters: ['a', 'b'], preparer_may_attest: false, two_step_from_sek: null }
+    expect(
+      auditRowToEvent(
+        auditRow({ table_name: 'company_attest_policies', action: 'UPDATE', old_state: policy, new_state: { ...policy, two_step_from_sek: 100000 } }),
+      ),
+    ).toMatchObject({ code: 'attest_policy.updated', details: ['Två attestanter från: aldrig → 100 000 kr'] })
+  })
+})
+
 describe('decisionEvents', () => {
   const rule = {
     source: 'rule',

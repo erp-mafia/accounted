@@ -4,8 +4,10 @@
  * Two surfaces. The worklist row ("Attestera {leverantör} {belopp}" on Hem)
  * is derived from the policy and the trail on every read
  * (listSupplierInvoiceAttestsDue), so it needs nothing written here. The
- * mail is sent from here, once per registration, to each attester who may
- * attest the invoice and has not switched the mail off
+ * mail is sent from here, once per registration, to each attester whose
+ * approval would count (attestProgress.remaining: with limits, only those
+ * whose limit covers the invoice unless it needs two attesters) and who has
+ * not switched the mail off
  * (notification_settings.attest_request_email_enabled, default on), with
  * Godkänn / Neka links that work without a login (attest-links.ts).
  *
@@ -23,8 +25,8 @@ import type { EventPayload } from '@/lib/events/types'
 import { createLogger, type Logger } from '@/lib/logger'
 import { createServiceClient } from '@/lib/supabase/server'
 import { attestLinkUrl, markAttestLinkMailed, mintAttestLink } from './attest-links'
-import { eligibleAttesters, invoiceNeedsAttest } from './attest-policy'
-import { loadActiveAttestMembers, loadAttestPeople, loadAttestPolicy } from './attest-service'
+import { attestProgress, invoiceNeedsAttest } from './attest-policy'
+import { loadActiveAttestMembers, loadAttestLimits, loadAttestPeople, loadAttestPolicy } from './attest-service'
 
 const log = createLogger('supplier-invoices/attest-notify')
 
@@ -76,8 +78,8 @@ export async function notifyAttestersOfInvoice(
   const facts = { ...invoice, total: Number(invoice.total) }
   if (!invoiceNeedsAttest(policy, accountingMethod, facts)) return result
 
-  const members = await loadActiveAttestMembers(service, companyId)
-  const recipients = eligibleAttesters(policy, facts, members)
+  const [members, limits] = await Promise.all([loadActiveAttestMembers(service, companyId), loadAttestLimits(service, companyId)])
+  const recipients = attestProgress(policy, accountingMethod, facts, [], members, limits).remaining
   if (recipients.length === 0) return result
 
   const [people, { data: prefs }] = await Promise.all([
