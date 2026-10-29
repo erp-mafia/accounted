@@ -671,6 +671,7 @@ export async function detectLedgerDuplicateVoucher(
       voucher_number: number | null
       status: string
       source_type: string | null
+      source_id?: string | null
     }
   }
 
@@ -686,7 +687,7 @@ export async function detectLedgerDuplicateVoucher(
   try {
     lines = await fetchEntryLines<LineRow>({
       supabase,
-      entryColumns: 'id, entry_date, description, voucher_series, voucher_number, status, source_type, company_id',
+      entryColumns: 'id, entry_date, description, voucher_series, voucher_number, status, source_type, source_id, company_id',
       lineColumns: 'account_number, debit_amount, credit_amount',
       filterEntries: (q: EntryLinesQuery) =>
         q
@@ -808,6 +809,33 @@ export async function detectLedgerDuplicateVoucher(
       .in('id', ids)
     for (const r of (rows ?? []) as LinkedTxRow[]) bulkLinkedRows.set(r.id, r)
   }
+  // The bank row a bank_transaction verifikat was booked FROM (its source_id)
+  // is that verifikat's identity even while the row's pointer does not name
+  // it: a booking whose link has not landed yet (a parallel booking of the
+  // same batch, between its commit and its link) or a link that was lost. Such
+  // a verifikat books that row, so it is a twin of this one only when that
+  // row is (the test below); unread, it read as a ledger-only orphan and every
+  // same-amount row of the week was called its duplicate (2026-10-29: one
+  // unlinked Stripe-fee verifikat refused dozens of other fees, each with its
+  // own Stripe id). A verifikat booked from THIS row stays a candidate: the
+  // row is booked already.
+  const sourceRowIds = [
+    ...new Set(
+      candidates
+        .filter((l) => l.journal_entry.source_type === 'bank_transaction' && l.journal_entry.source_id && l.journal_entry.source_id !== target.id)
+        .map((l) => l.journal_entry.source_id as string),
+    ),
+  ]
+  const sourceRows = new Map<string, LinkedTxRow>()
+  for (const ids of chunk(sourceRowIds, 100)) {
+    const { data: rows } = await supabase
+      .from('transactions')
+      .select('id, date, amount, currency, cash_account_id, journal_entry_id, external_id, import_source, bank_connection_id, provider_transaction_id, bank_file_import_id')
+      .eq('company_id', companyId)
+      .in('id', ids)
+    for (const r of (rows ?? []) as LinkedTxRow[]) sourceRows.set(r.id, r)
+  }
+
   const linkedTxMatchesTarget = (r: LinkedTxRow): boolean => {
     if (r.id === target.id) return false
     // Same identity guard as the sibling scan: a voucher linked to ANOTHER
@@ -839,6 +867,14 @@ export async function detectLedgerDuplicateVoucher(
     addLinked(l.journal_entry_id, bulkLinkedRows.get(l.transaction_id) ?? {
       id: l.transaction_id, date: '', amount: 0, currency: null, cash_account_id: null, journal_entry_id: l.journal_entry_id,
     })
+  }
+  // A source row that could not be read adds nothing: the verifikat is then
+  // judged as before.
+  for (const l of candidates) {
+    const source = l.journal_entry.source_type === 'bank_transaction' && l.journal_entry.source_id
+      ? sourceRows.get(l.journal_entry.source_id)
+      : undefined
+    if (source) addLinked(l.journal_entry.id, source)
   }
   // Only a payment row that carries a bank transaction means "reconciled to
   // a bank line". A row with transaction_id NULL is a manual / Stripe

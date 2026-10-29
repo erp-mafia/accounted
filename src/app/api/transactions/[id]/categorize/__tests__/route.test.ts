@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import {
   createMockRequest,
   parseJsonResponse,
@@ -11,6 +11,7 @@ import { generateOcrReference } from '@/lib/bankgiro/luhn'
 import { eventBus } from '@/lib/events'
 import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
+import { CASH_ACCOUNT_BUSY_RETRY } from '@/lib/bookkeeping/cash-account-busy'
 import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { buildCounterpartySuggestion } from '@/lib/transactions/category-suggestions'
 import type { BookingProposal } from '@/lib/bookkeeping/proposal'
@@ -1191,6 +1192,64 @@ describe('POST /api/transactions/[id]/categorize', () => {
       'je-1',
       expect.any(String),
     )
+  })
+
+  describe('the bank-row link refused by a busy bank-account lock (CASH_ACCOUNT_OPERATION_BUSY)', () => {
+    // Live 2026-10-29: a batch of five parallel bookings had the link refused
+    // whenever another booking of the company was being numbered; each such
+    // row answered 500 and its verifikat was stornoed (or, when the storno
+    // hit the same lock, left posted beside a row booked again later).
+    const realDelays = CASH_ACCOUNT_BUSY_RETRY.delaysMs
+    beforeEach(() => {
+      CASH_ACCOUNT_BUSY_RETRY.delaysMs = [0, 0, 0, 0]
+    })
+    afterEach(() => {
+      CASH_ACCOUNT_BUSY_RETRY.delaysMs = realDelays
+    })
+    const busy = { code: 'PT409', message: 'CASH_ACCOUNT_OPERATION_BUSY', details: null, hint: null }
+    const enqueueUpToLink = () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', journal_entry_id: null, merchant_name: null }), error: null })
+      enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null })
+      enqueue({ data: [], error: null }) // resolveSettlementAccount: no enabled cash accounts -> 1930
+      enqueue({ data: [{ id: 'period-1' }], error: null })
+      mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+    }
+
+    it('links the row on a retry and keeps the verifikat', async () => {
+      enqueueUpToLink()
+      enqueue({ data: null, error: busy }) // link refused: another booking is being numbered
+      enqueue({ data: [makeTransaction({ id: 'tx-1', journal_entry_id: 'je-1' })], error: null }) // link retried
+
+      const request = createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(response)
+
+      expect(status, JSON.stringify(body)).toBe(200)
+      expect(body.journal_entry_id).toBe('je-1')
+      expect(findCalls('transactions', 'update')).toHaveLength(2)
+      expect(mockReverseOrphanedJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('answers the retryable 409 in Swedish, not a 500, when the lock outlasts the retries, and stornos the verifikat', async () => {
+      enqueueUpToLink()
+      for (let i = 0; i < 5; i++) enqueue({ data: null, error: busy })
+
+      const request = createMockRequest('/api/transactions/tx-1/categorize', {
+        method: 'POST',
+        body: { is_business: true, category: 'expense_software' },
+      })
+      const response = await POST(request, createMockRouteParams({ id: 'tx-1' }))
+      const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(response)
+
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('CASH_ACCOUNT_OPERATION_BUSY')
+      expect(body.error.message).toMatch(/försök igen/)
+      expect(findCalls('transactions', 'update')).toHaveLength(5)
+      expect(mockReverseOrphanedJournalEntry).toHaveBeenCalledWith(expect.anything(), 'company-1', 'user-1', 'je-1', expect.any(String))
+    })
   })
 
   it('maps an ignored-row constraint to a typed conflict and stornos the posted orphan', async () => {

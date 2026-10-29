@@ -1,0 +1,1 @@
+[2026-10-29] A bank file import is undone by naming one of its transactions (transaction_id on imports.bank.undo, staged pinned to the resolved import id) instead of a new list-imports tool: agents already see transaction ids, and the catalog stays net smaller (crm#1528).

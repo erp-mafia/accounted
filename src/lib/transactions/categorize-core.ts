@@ -54,6 +54,7 @@ import { bookedTotals } from '@/lib/suggestion-log/inbox-classify'
 import { duplicateCheck, passed, warned, type DecisionCheck, type DuplicateVerdict } from '@/lib/suggestion-log/checks'
 import { reviewReason } from './direct-booking'
 import { reverseOrphanedJournalEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { isCashAccountBusy, retryWhileCashAccountBusy } from '@/lib/bookkeeping/cash-account-busy'
 import { getEarliestFiscalPeriodStart } from '@/lib/core/bookkeeping/period-service'
 import {
   upsertCounterpartyTemplate,
@@ -1116,26 +1117,44 @@ export async function categorizeTransaction(
   // Compare-and-set on the pointer as read: a concurrent booking of the same
   // row must not be overwritten. A stale pointer at a reversed verifikat is
   // replaced only if nobody changed it meanwhile.
-  const updateQuery = supabase
-    .from('transactions')
-    .update({
-      is_business: isBusiness,
-      category: finalCategory,
-      is_ignored: false,
-      journal_entry_id: bookedEntry.id,
-      // The verifikat was booked from this bank line. The request scope says
-      // who: a person, an approval of an agent's proposal, or a client.
-      ...linkBasisColumns('user_created'),
-    })
-    .eq('id', txId)
-    .eq('company_id', companyId)
-  const guardedUpdate = transaction.journal_entry_id
-    ? updateQuery.eq('journal_entry_id', transaction.journal_entry_id)
-    : updateQuery.is('journal_entry_id', null)
-  const { data: updated, error: updateError } = await guardedUpdate.select('*')
+  const linkTransaction = async () => {
+    const updateQuery = supabase
+      .from('transactions')
+      .update({
+        is_business: isBusiness,
+        category: finalCategory,
+        is_ignored: false,
+        journal_entry_id: bookedEntry.id,
+        // The verifikat was booked from this bank line. The request scope says
+        // who: a person, an approval of an agent's proposal, or a client.
+        ...linkBasisColumns('user_created'),
+      })
+      .eq('id', txId)
+      .eq('company_id', companyId)
+    const guardedUpdate = transaction.journal_entry_id
+      ? updateQuery.eq('journal_entry_id', transaction.journal_entry_id)
+      : updateQuery.is('journal_entry_id', null)
+    return await guardedUpdate.select('*')
+  }
+  // The link's guard refuses with CASH_ACCOUNT_OPERATION_BUSY while another
+  // booking of the company is being numbered (cash-account-busy.ts). Nothing
+  // was written then and the verifikat is already posted, so the link is
+  // tried again before the verifikat is given up: giving it up costs a storno,
+  // and a storno that hits the same lock left the verifikat posted beside an
+  // unbooked row that was then booked a second time.
+  const { data: updated, error: updateError } = await retryWhileCashAccountBusy(
+    linkTransaction,
+    (outcome) => isCashAccountBusy(outcome.error),
+  )
   if (updateError || !updated || updated.length === 0) {
     await reverseOrphanedJournalEntry(supabase, companyId, userId, bookedEntry.id, ORPHAN_REVERSAL_NOTE)
     if (updateError) {
+      // Still busy after the retries: the retryable 409 the person can act
+      // on ("vänta en stund och försök igen"), not a failure of ours.
+      if (isCashAccountBusy(updateError)) {
+        txLog.warn('failed to update transaction: bank accounts busy', updateError)
+        return refuseFor('CASH_ACCOUNT_OPERATION_BUSY', undefined, { cause: updateError })
+      }
       txLog.error('failed to update transaction', updateError)
       return refuseFor(
         getStructuredError(updateError).code === 'TX_CATEGORIZE_IGNORED_CONFLICT' ? 'TX_CATEGORIZE_IGNORED_CONFLICT' : 'INTERNAL_ERROR',

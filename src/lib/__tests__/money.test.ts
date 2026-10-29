@@ -15,6 +15,8 @@ import {
   isZeroOre,
   sumOre,
   multiplyOre,
+  parseSwedishAmount,
+  inferDecimalMark,
 } from '@/lib/money'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
@@ -442,5 +444,49 @@ describe('formatAmountInput', () => {
       expect(parseAmountInput(formatAmountInput(n))).toBe(n)
       expect(parseAmountInput(formatAmountInput(n, '.'))).toBe(n)
     }
+  })
+})
+
+describe('inferDecimalMark (crm#1528)', () => {
+  it('reads the mark from any cell that cannot be a thousands grouping', () => {
+    expect(inferDecimalMark(['-349.000', '1422.190'])).toBe('.')
+    expect(inferDecimalMark(['349.000', '12.5'])).toBe('.')
+    expect(inferDecimalMark(['-349,00', '1 234,56'])).toBe(',')
+    expect(inferDecimalMark(['1.234,56'])).toBe(',')
+    expect(inferDecimalMark(['1,234.56'])).toBe('.')
+  })
+
+  it('decides nothing from ambiguous, empty or non-numeric cells alone', () => {
+    expect(inferDecimalMark(['349.000', '1.234', '12'])).toBeNull()
+    expect(inferDecimalMark(['', null, undefined, 'abc', '-'])).toBeNull()
+  })
+
+  it('decides nothing when the cells contradict each other', () => {
+    expect(inferDecimalMark(['12.50', '12,50'])).toBeNull()
+  })
+})
+
+describe('parseSwedishAmount with a known decimal mark (crm#1528)', () => {
+  it('without a mark keeps the per-cell reading: a dot-grouped cell is thousands', () => {
+    expect(parseSwedishAmount('349.000')).toBe(349000)
+    expect(parseSwedishAmount('1.234')).toBe(1234)
+  })
+
+  it('with a dot mark reads the dot as the decimal and a comma only as grouping', () => {
+    expect(parseSwedishAmount('349.000', '.')).toBe(349)
+    expect(parseSwedishAmount('-5000.000', '.')).toBe(-5000)
+    expect(parseSwedishAmount('0.500', '.')).toBe(0.5)
+    expect(parseSwedishAmount('1,234.56', '.')).toBe(1234.56)
+    expect(parseSwedishAmount('1,234', '.')).toBe(1234)
+    expect(parseSwedishAmount('\u2212349.000 kr', '.')).toBe(-349)
+    expect(parseSwedishAmount('1.234.567', '.')).toBeNull()
+    expect(parseSwedishAmount('12,50', '.')).toBeNull()
+  })
+
+  it('with a comma mark reads the dot only as grouping', () => {
+    expect(parseSwedishAmount('1.234', ',')).toBe(1234)
+    expect(parseSwedishAmount('1.234,56', ',')).toBe(1234.56)
+    expect(parseSwedishAmount('-349,00', ',')).toBe(-349)
+    expect(parseSwedishAmount('12.50', ',')).toBeNull()
   })
 })

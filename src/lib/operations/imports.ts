@@ -44,17 +44,25 @@ export const importsBankUndo = defineOperation({
       'Owner or admin only: a member key gets 403 BANK_FILE_UNDO_FORBIDDEN.',
       'Booked rows survive the undo (skipped_booked > 0): to remove them, reverse their verifikat first, then delete or ignore the rows.',
       'Imports made before rows were stamped with their import id delete nothing (deleted_transactions 0).',
+      'transaction_id (any row the import created) stands in for the import id over MCP, where import ids are not listed; the staged undo is pinned to the import it resolved to. Over v1 the path names the import: a body transaction_id is refused.',
     ],
     example: {
+      // v1 sends no body: the path names the import.
+      request: {},
       response: {
         data: { bank_file_import_id: '9a8b…', deleted_transactions: 212, skipped_booked: 3, skipped_match_history: 0 },
         meta: META,
       },
     },
   },
-  input: z.object({
-    bank_file_import_id: z.string().uuid().describe('The bank file import id (from GET /imports/bank or the import response).'),
-  }),
+  input: z
+    .object({
+      bank_file_import_id: z.string().uuid().optional().describe('Or transaction_id of any row it created.'),
+      transaction_id: z.string().uuid().optional(),
+    })
+    .refine((v) => Boolean(v.bank_file_import_id) !== Boolean(v.transaction_id), {
+      message: 'Send bank_file_import_id or transaction_id, not both.',
+    }),
   output: z.object({
     bank_file_import_id: z.string().uuid(),
     deleted_transactions: z.number(),
@@ -76,11 +84,20 @@ export const importsBankUndo = defineOperation({
     name: 'gnubok_undo_bank_import',
     title: 'Undo Bank Import',
     description:
-      'Stage undoing a bank file import: deletes its still-unbooked rows and marks it undone so the file can be re-imported. Booked rows and their verifikat are never touched (reported as skipped). Owner/admin only.',
+      'Stage undoing a bank file import: deletes its still-unbooked rows and marks it undone for re-import. Booked rows and their verifikat stay (counted as skipped). Owner/admin only.',
     keywords: ['ångra bankimport', 'ångra import', 'bankfil', 'fel fil importerad', 'ta bort importerade transaktioner'],
-    stage: { pendingType: 'undo_bank_import', title: () => 'Ångra bankfilsimport' },
+    stage: {
+      pendingType: 'undo_bank_import',
+      title: () => 'Ångra bankfilsimport',
+      // An agent sees transaction ids, not import ids (crm#1528): the
+      // approval commits the import the dry run resolved, never a re-lookup.
+      pinParams: (input, preview) => ({
+        bank_file_import_id: (preview.bank_file_import_id as string | undefined) ?? input.bank_file_import_id,
+      }),
+    },
   },
-  run: (ctx, { bank_file_import_id }, { dryRun }) => undoBankImport(ctx, bank_file_import_id, { dryRun }),
+  run: (ctx, { bank_file_import_id, transaction_id }, { dryRun }) =>
+    undoBankImport(ctx, bank_file_import_id ?? { transactionId: transaction_id! }, { dryRun }),
 })
 
 // ---------------------------------------------------------------------------
