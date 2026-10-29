@@ -363,6 +363,7 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_webshop_orders: 'transactions:read',
   gnubok_get_webshop_order: 'transactions:read',
   gnubok_book_webshop_order: 'bookkeeping:write',
+  gnubok_book_webshop_day: 'bookkeeping:write',
   gnubok_get_oss_underlag: 'reports:read',
   // Dröjsmålsränta per customer invoice (lib/operations/late-payment-interest.ts).
   gnubok_get_late_payment_interest: 'invoices:read',

@@ -1316,6 +1316,39 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       },
     },
   },
+  // One paid, unbooked SEK order at 25 % on the day and an open, unlocked
+  // 2026: the preview derives and sums the lines and never reaches the engine.
+  gnubok_book_webshop_day: {
+    args: { platform: 'shopify', store_scope: 'butik.myshopify.com', date: '2026-01-15', payment_method: 'shopify_payments' },
+    rows: {
+      webshop_orders: {
+        platform: 'shopify',
+        store_scope: 'butik.myshopify.com',
+        store_label: 'Butiken',
+        row_type: 'order',
+        parent_order_id: null,
+        order_number: '1001',
+        is_paid: true,
+        order_date: '2026-01-15',
+        paid_date: '2026-01-15',
+        currency: 'SEK',
+        total: 125,
+        total_tax: 25,
+        total_sek: 125,
+        exchange_rate: 1,
+        vat_breakdown: [{ rate: 25, net: 100, tax: 25 }],
+        customer_country: 'SE',
+        payment_method: 'shopify_payments',
+        journal_entry_id: null,
+        invoice_id: null,
+        manually_booked_at: null,
+        legacy_transaction_id: null,
+        created_at: '2026-01-15T10:00:00Z',
+      },
+      fiscal_periods: { ...FISCAL_YEAR_2026, locked_at: null },
+      company_settings: { bookkeeping_locked_through: null },
+    },
+  },
 }
 
 describe('a tool that declares the staged envelope only stages', () => {

@@ -9739,6 +9739,31 @@ const WEBSHOP_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en:
       'The order total does not match its VAT breakdown (the difference is larger than öre rounding). Book the order individually and review the lines.',
   },
+  WEBSHOP_DAY_EMPTY: {
+    httpStatus: 400,
+    message_sv: 'Det finns inga obokförda, betalda ordrar med det betalsättet den dagen: inget att bokföra.',
+    message_en: 'There are no unbooked, paid orders with that payment method on that day: nothing to book.',
+  },
+  WEBSHOP_DAY_NOTHING_BOOKABLE: {
+    httpStatus: 422,
+    message_sv: 'Ingen av dagens ordrar kan bokföras automatiskt. Se skälet för varje order och bokför dem en och en.',
+    message_en: 'None of the day\'s orders can be booked automatically. See the reason for each order and book them one by one.',
+  },
+  WEBSHOP_DAY_CHANGED: {
+    httpStatus: 409,
+    message_sv: 'Dagens ordrar har ändrats sedan förslaget skapades (en order har bokförts, markerats eller ändrats). Inget bokfördes; skapa ett nytt förslag för dagen.',
+    message_en: 'The day\'s orders changed since the proposal was made (an order was booked, marked or changed). Nothing was booked; make a new proposal for the day.',
+  },
+  WEBSHOP_DAY_TOO_MANY_ROWS: {
+    httpStatus: 422,
+    message_sv: 'Dagen har fler ordrar än vad som kan bokföras på ett verifikat. Kontakta supporten.',
+    message_en: 'The day has more orders than one journal entry can book. Contact support.',
+  },
+  WEBSHOP_DAY_BOOKING_FAILED: {
+    httpStatus: 500,
+    message_sv: 'Dagen kunde inte bokföras. Inget verifikat skapades och inga ordrar markerades.',
+    message_en: 'The day could not be booked. No journal entry was created and no orders were marked.',
+  },
   WEBSHOP_ORDER_CREATE_INVOICE_CUSTOMER_FAILED: {
     httpStatus: 500,
     message_sv: 'Kunden kunde inte skapas från orderns uppgifter.',

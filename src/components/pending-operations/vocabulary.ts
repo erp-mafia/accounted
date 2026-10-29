@@ -66,6 +66,7 @@ export const SINGLE_ACTION_WARNING_KEYS: Readonly<Record<string, string>> = {
   delete_asset: 'warning_delete_asset',
   delete_fiscal_period: 'warning_delete_fiscal_period',
   save_tax_loss_carryforward: 'warning_save_tax_loss_carryforward',
+  book_webshop_day: 'warning_book_webshop_day',
 }
 
 // Full-sentence warning for the single-op confirmation dialog AND the inline

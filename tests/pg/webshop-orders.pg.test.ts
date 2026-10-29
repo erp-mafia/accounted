@@ -250,6 +250,54 @@ describe('webshop_orders financial freeze', () => {
     expect(thawed.rowCount).toBe(1)
   })
 
+  it('lets many rows share one verifikat, each frozen once posted (day booking, crm#1032)', async () => {
+    const { userId, companyId, fiscalPeriodId } = await seedCompany()
+    const draftId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      sourceType: 'webshop_order',
+    })
+    const first = await insertOrderRow({ companyId, userId })
+    const second = await insertOrderRow({ companyId, userId })
+
+    // The day booking's claim: every row of the day onto the one draft.
+    const claimed = await getPool().query(
+      `UPDATE public.webshop_orders SET journal_entry_id = $1
+        WHERE id = ANY($2::uuid[]) AND journal_entry_id IS NULL`,
+      [draftId, [first, second]],
+    )
+    expect(claimed.rowCount).toBe(2)
+
+    // A lost race releases every claim in one statement while still a draft.
+    const released = await getPool().query(
+      `UPDATE public.webshop_orders SET journal_entry_id = NULL WHERE journal_entry_id = $1`,
+      [draftId],
+    )
+    expect(released.rowCount).toBe(2)
+
+    const postedId = await insertDraftJournalEntry({
+      userId,
+      companyId,
+      fiscalPeriodId,
+      sourceType: 'webshop_order',
+      status: 'posted',
+      voucherNumber: 4712,
+    })
+    await getPool().query(
+      `UPDATE public.webshop_orders SET journal_entry_id = $1 WHERE id = ANY($2::uuid[])`,
+      [postedId, [first, second]],
+    )
+    for (const rowId of [first, second]) {
+      await expect(
+        getPool().query(`UPDATE public.webshop_orders SET total = 600.00 WHERE id = $1`, [rowId]),
+      ).rejects.toThrow(/financial fields are frozen/i)
+      await expect(
+        getPool().query(`UPDATE public.webshop_orders SET journal_entry_id = NULL WHERE id = $1`, [rowId]),
+      ).rejects.toThrow(/journal link is immutable/i)
+    }
+  })
+
   it('rejects clearing the journal link once the entry is posted', async () => {
     const { userId, companyId, fiscalPeriodId } = await seedCompany()
     const postedId = await insertDraftJournalEntry({

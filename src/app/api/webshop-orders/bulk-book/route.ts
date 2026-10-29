@@ -7,27 +7,18 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import {
-  buildOrderBookingLines,
   orderBookingDescription,
-  resolvePaymentAccount,
-  routeOrder,
-  unsupportedSwedishRates,
   DEFAULT_REVENUE_ACCOUNT_BY_RATE,
-  ROUNDING_ACCOUNT,
   WEBSHOP_PREFILL_ACCOUNTS,
 } from '@/lib/webshop-orders/booking-lines'
-import { usesRevenueTemplate } from '@/lib/webshop-orders/country-routing'
+import { deriveUnattendedOrderLines } from '@/lib/webshop-orders/unattended-lines'
 import {
   resolveEffectiveVatRate,
   resolveRevenueVatBox,
 } from '@/lib/reports/vat-revenue-accounts'
 import { getBoxForAccount, type MomsBox } from '@/lib/vat/moms-box-mapping'
 import { isEuMemberCountry } from '@/lib/vat/eu-countries'
-import {
-  assertOrderBookable,
-  bookOrderThroughEngine,
-  resolveOrderFx,
-} from '@/lib/webshop-orders/book-order'
+import { bookOrderThroughEngine } from '@/lib/webshop-orders/book-order'
 import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 
 // Up to 50 sequential draft -> claim -> commit round trips against the
@@ -35,15 +26,6 @@ import type { WebshopOrder, WebshopStoreSettings } from '@/types'
 // kill between claim and commit would leave an order pointing at an
 // uncommitted draft (skeptic finding). Same budget as the other batch routes.
 export const maxDuration = 300
-
-/**
- * A residual on 3740 above this magnitude (SEK) is not öresavrundning: it
- * means the order's gross total does not match its VAT breakdown (gift
- * cards, plugin-mangled orders). Legitimate per-bucket öre rounding and FX
- * drift stay well below this; anything above needs the single-order dialog
- * where the user sees the line.
- */
-const MAX_RESIDUAL_SEK = 1
 
 interface BulkBookFailure {
   code: string
@@ -103,21 +85,21 @@ function failureFromError(err: unknown): BulkBookFailure {
  * (the "bokföringsmall") routes the revenue side per rate to a chosen class 3
  * account instead of the standard 3001-series; VAT accounts stay derived.
  *
- * Deliberately NOT a samlingsverifikation: every order books as its OWN
- * verifikat through the exact same flow as POST /api/webshop-orders/[id]/book
+ * Not a samlingsverifikation: every order books as its OWN verifikat through
+ * the exact same flow as POST /api/webshop-orders/[id]/book
  * (lib/webshop-orders/book-order.ts): state guards, booking-time FX retry,
  * chart repair, race-free draft -> claim -> commit through the engine. So
  * period locks, balance, voucher numbering and anything later added to the
  * single-order path (e.g. underlag anchoring) apply per order automatically.
+ * One verifikat per day and payment method is the day booking
+ * (lib/webshop-orders/book-day.ts).
  *
  * The sweep has no reviewing user, so it only books orders whose lines are
- * DERIVED, never guessed: rows with an empty vat_breakdown (ratio-inferred
- * fallback), invoice-mode payment methods, or a 3740 residual above öre
- * scale are refused per order and pointed at the single-order dialog. So is
- * a Shopify order shipped outside Sweden that the store's country rules do
- * not fully cover (lib/webshop-orders/country-routing.ts): its buckets would
- * otherwise book as Swedish sales and Swedish output VAT. So is a Shopify
- * order without a destination country in a store that has country rules.
+ * DERIVED, never guessed (lib/webshop-orders/unattended-lines.ts, shared
+ * with the day booking): an empty vat_breakdown, an invoice-mode payment
+ * method, a 3740 residual above öre scale, a destination the store's country
+ * rules do not cover and the rest are refused per order and pointed at the
+ * single-order dialog.
  *
  * Partial failure is expected and reported per order: one refused row (period
  * locked, raced booking, unresolved FX, review-needed) never aborts the rest
@@ -354,133 +336,37 @@ export const POST = withRouteContext(
         continue
       }
 
-      const guardFailure = await assertOrderBookable(supabase, companyId, order)
-      if (guardFailure) {
+      const derived = await deriveUnattendedOrderLines({
+        supabase,
+        companyId,
+        order,
+        settings: settingsFor(order),
+        log,
+        paymentAccount: payment_account,
+        revenueAccounts: revenueAccountByRate,
+        ...(zeroRateAccount
+          ? {
+              zeroRate: {
+                account: zeroRateAccount,
+                box: zeroRateBox,
+                contradicted: zeroRateContextContradicted,
+              },
+            }
+          : {}),
+      })
+      if (!derived.ok) {
         results.push({
           order_id: id,
           order_number: order.order_number,
           success: false,
-          error: failureFromCode(guardFailure.code, guardFailure.details),
+          error:
+            derived.code === null
+              ? failureFromError(derived.error)
+              : failureFromCode(derived.code, derived.details),
         })
         continue
       }
-
-      // No VAT breakdown from the store: buildOrderBookingLines would fall
-      // back to a ratio-INFERRED single bucket, which the single-order dialog
-      // shows as an editable guess for the user to correct. There is no
-      // reviewing user in a sweep, so a guessed rate split must never become
-      // an immutable verifikat here (skeptic finding: a 25%+6% mixed sale
-      // classified as 12% books wrong revenue/VAT accounts and rutor, and an
-      // amount-only refund would reverse zero moms via 3004).
-      if (order.vat_breakdown.length === 0) {
-        results.push({
-          order_id: id,
-          order_number: order.order_number,
-          success: false,
-          error: failureFromCode('WEBSHOP_ORDER_VAT_BREAKDOWN_MISSING'),
-        })
-        continue
-      }
-
-      // Destination outside Sweden (crm#1032): the store's country rules
-      // must cover every VAT bucket. A Danish or Norwegian order at 25 % used
-      // to pass the rate guard below and book as Swedish sales on 3001 and
-      // Swedish output VAT on 2611 (rutor 05 and 10); now it waits for a rule
-      // or the single dialog, where the user sees the lines.
-      const settings = settingsFor(order)
-      const routing = routeOrder(order, settings)
-      if (routing.unroutedRates.length > 0) {
-        results.push({
-          order_id: id,
-          order_number: order.order_number,
-          success: false,
-          error: failureFromCode('WEBSHOP_ORDER_COUNTRY_NOT_ROUTED', {
-            customer_country: routing.country,
-            rates: routing.unroutedRates,
-          }),
-        })
-        continue
-      }
-
-      // No destination country on a Shopify order whose store has country
-      // rules (withheld addresses, local pickup, rows synced before the
-      // country was stored). The store sells abroad, so the missing country
-      // is unknown, not Sweden: booking it on 3001/2611 would be a guess.
-      if (routing.destinationUnknown) {
-        results.push({
-          order_id: id,
-          order_number: order.order_number,
-          success: false,
-          error: failureFromCode('WEBSHOP_ORDER_COUNTRY_UNKNOWN'),
-        })
-        continue
-      }
-
-      // A bucket on the Swedish accounts with a non-Swedish rate (e.g. a
-      // German 19% OSS bucket no country rule books) would silently fall back
-      // to the 25% accounts and book foreign VAT as Swedish utgaende moms.
-      // Only the single dialog may show that as an editable prefill (skeptic
-      // finding). A bucket a country rule books may carry any rate.
-      const badRates = unsupportedSwedishRates(routing)
-      if (badRates.length > 0) {
-        results.push({
-          order_id: id,
-          order_number: order.order_number,
-          success: false,
-          error: failureFromCode('WEBSHOP_ORDER_UNSUPPORTED_VAT_RATE', {
-            rates: badRates,
-          }),
-        })
-        continue
-      }
-
-      if (zeroRateAccount && order.customer_country) {
-        const country = order.customer_country.toUpperCase()
-        // Only the buckets the template books: a 0 % bucket a country rule
-        // routes (export on 3105) never reaches the 0 % template account.
-        const hasZeroRateAmount = routing.buckets
-          .filter(usesRevenueTemplate)
-          .some(({ bucket }) => bucket.rate === 0 && bucket.net !== 0)
-        if (hasZeroRateAmount && zeroRateContextContradicted(country)) {
-          results.push({
-            order_id: id,
-            order_number: order.order_number,
-            success: false,
-            error: failureFromCode('WEBSHOP_ORDER_ZERO_RATE_CONTEXT_MISMATCH', {
-              account: zeroRateAccount,
-              box: zeroRateBox,
-              customer_country: country,
-            }),
-          })
-          continue
-        }
-      }
-
-      // The store's own mapping routes this payment method through the
-      // invoice flow. Booking it directly would both post a wrong clearing
-      // leg and permanently foreclose Skapa faktura for the order (the claim
-      // sets journal_entry_id). The override does not bypass this: it
-      // changes the account, not the flow the merchant configured.
-      if (resolvePaymentAccount(order, settings).invoiceMode) {
-        results.push({
-          order_id: id,
-          order_number: order.order_number,
-          success: false,
-          error: failureFromCode('WEBSHOP_ORDER_INVOICE_MODE_METHOD'),
-        })
-        continue
-      }
-
-      const resolvedOrder = await resolveOrderFx(supabase, companyId, order, log)
-      if (!resolvedOrder) {
-        results.push({
-          order_id: id,
-          order_number: order.order_number,
-          success: false,
-          error: failureFromCode('WEBSHOP_ORDER_FX_UNRESOLVED'),
-        })
-        continue
-      }
+      const { order: resolvedOrder, lines } = derived
 
       const entryDate = resolvedOrder.paid_date ?? resolvedOrder.order_date
       const fiscalPeriodId = await findFiscalPeriod(supabase, companyId, entryDate)
@@ -490,55 +376,6 @@ export const POST = withRouteContext(
           order_number: order.order_number,
           success: false,
           error: failureFromCode('NO_OPEN_PERIOD_FOR_DATE'),
-        })
-        continue
-      }
-
-      let lines
-      try {
-        lines = buildOrderBookingLines({
-          order: resolvedOrder,
-          settings,
-          paymentAccount: payment_account,
-          revenueAccounts: revenueAccountByRate,
-        })
-      } catch (err) {
-        // buildOrderBookingLines throws only on an unresolved SEK amount,
-        // which resolveOrderFx already excluded; belt-and-braces per order.
-        results.push({
-          order_id: id,
-          order_number: order.order_number,
-          success: false,
-          error: failureFromError(err),
-        })
-        continue
-      }
-
-      // Residual bound: the 3740 line exists to absorb öre rounding and FX
-      // drift, both bounded by a few öre per bucket. A residual above
-      // MAX_RESIDUAL_SEK means the gross total and the VAT breakdown
-      // disagree (gift-card redemptions, mangled orders); in the single
-      // dialog the user sees the fat 3740 line and stops, so the sweep must
-      // refuse instead of booking the gap as "öresavrundning". The residual
-      // is identified structurally as the LAST line: the builder appends it
-      // after every bucket line, and find-by-account would read the wrong
-      // line whenever an earlier line also sits on 3740 (e.g. a 3740
-      // payment_account, or historically a 3740 template account before the
-      // schema banned it), silently disarming this guard (skeptic finding).
-      const lastLine = lines[lines.length - 1]
-      const residualLine =
-        lastLine.account_number === ROUNDING_ACCOUNT ? lastLine : undefined
-      const residualAbs = residualLine
-        ? Math.max(residualLine.debit_amount || 0, residualLine.credit_amount || 0)
-        : 0
-      if (residualAbs > MAX_RESIDUAL_SEK) {
-        results.push({
-          order_id: id,
-          order_number: order.order_number,
-          success: false,
-          error: failureFromCode('WEBSHOP_ORDER_RESIDUAL_TOO_LARGE', {
-            residual: residualAbs,
-          }),
         })
         continue
       }

@@ -93,6 +93,7 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   // in SEK; ops staged before it carried only total (the invoice currency,
   // SEK for most), read so they are not left unpriced.
   approve_supplier_invoice: ['total_sek', 'total'],
+  book_webshop_day: ['journal_entry.total_debit'],
 }
 
 /**

@@ -242,7 +242,7 @@ import {
   posSalesUpdateSettings,
   posSalesVenuesList,
 } from './pos-sales'
-import { webshopOrdersBook, webshopOrdersGet, webshopOrdersList, webshopOrdersOssUnderlag } from './webshop-orders'
+import { webshopOrdersBook, webshopOrdersBookDay, webshopOrdersGet, webshopOrdersList, webshopOrdersOssUnderlag } from './webshop-orders'
 import { COLLECTIONS_OPERATION_LIST } from './collections'
 import { PACKAGE_OPERATIONS } from './packages'
 import { BANK_FEED_OPERATIONS } from './bank-feed'
@@ -492,10 +492,11 @@ const CORE_OPERATIONS: readonly AnyOperation[] = [
   posSalesClearingBalance,
   posSalesFetch,
   // webshop-orders (Shopify, WooCommerce, Zettle): read the synced rows, book one with the caller's lines,
-  // and the OSS underlag the booked orders add up to
+  // book a day and payment method as one verifikat, and the OSS underlag the booked orders add up to
   webshopOrdersList,
   webshopOrdersGet,
   webshopOrdersBook,
+  webshopOrdersBookDay,
   webshopOrdersOssUnderlag,
   // bank-feed (reading a bank with BankID through Open Payments): the reads and the signatory link bind v1 + MCP;
   // start, poll, restart, select and disconnect have no door (a person's BankID and a person's choice), and sync
