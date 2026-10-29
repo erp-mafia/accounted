@@ -31,6 +31,9 @@
   "bank_connection.sync_failed": [
     "event-log"
   ],
+  "company.accounting_framework_changed": [
+    "event-log"
+  ],
   "credit_note.created": [
     "event-log",
     "webhooks",

@@ -31,6 +31,15 @@ describe('deriveArsredovisningSigningTrack', () => {
   })
 })
 
+describe("the revisor's påteckning on the track", () => {
+  it("never decides the board's track", () => {
+    const revisor = { ...slot('r', 'signed', 'paper_original'), role: 'Huvudansvarig revisor' }
+    expect(deriveArsredovisningSigningTrack([slot('a', 'pending'), revisor], [])).toEqual({ kind: 'none' })
+    expect(deriveArsredovisningSigningTrack([slot('a', 'signed', 'bankid'), revisor], [])).toEqual({ kind: 'bankid', open: null })
+    expect(deriveArsredovisningSigningTrack([{ ...slot('a', 'signed', 'paper_original'), role: 'Styrelseledamot' }, revisor], [])).toEqual({ kind: 'manual' })
+  })
+})
+
 describe('expiredBlockingRequests', () => {
   it('names the requests past their expiry that a new sending must cancel first', () => {
     expect(expiredBlockingRequests([request('r1', 'expired'), request('r2', 'cancelled'), request('r3', 'open')]).map((r) => r.signing_request_id)).toEqual(['r1'])

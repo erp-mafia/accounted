@@ -1,0 +1,1 @@
+[2026-10-26] When a year's IB already carries last year's result on balanserat resultat (same total, other posts than the balance sheet closed on), the equity specification shows the reallocation as the stämma's disposition rather than as an unexplained difference.

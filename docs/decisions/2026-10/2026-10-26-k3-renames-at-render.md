@@ -1,0 +1,1 @@
+[2026-10-26] K3 renames (AndraBokslutsdispositioner, AndraObeskattadeReserver, PagaendeUtvecklingsarbeten...) happen when the K3 document tags, not in the mapper: the PDF rows and statement-integrity check keep reading the mapper's keys, and K2 output stays byte-identical.

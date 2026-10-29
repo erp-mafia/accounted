@@ -66,6 +66,9 @@ const INTERNAL_PERSISTED_EVENT_TYPES: CoreEventType[] = [
   // Every failed bank sync (cron, manual, agent): the server log line was
   // the only trace and it expires (feedback seq 340107).
   'bank_connection.sync_failed',
+  // A räkenskapsår's K2/K3 framework changed (BFNAR 2012:4 punkt 3: a change
+  // of accounting principle). The audit_log row holds the old and new value.
+  'company.accounting_framework_changed',
 ]
 
 /**

@@ -1,0 +1,1 @@
+[2026-10-26] An audited årsredovisning goes up as arsredovisning_kompletteras with notifieringEpostadresser to the revisor: Accounted never puts the revisionsberättelse in its own file; the separate revisionsberattelse upload takes the revisor's iXBRL file, checked by kontrollera, not our preflight.

@@ -9,6 +9,7 @@
  */
 import type { SigningRequestView } from '@/lib/signing/requests'
 import type { SignatureRequest } from './signature-service'
+import { isAuditorRole } from './workflow-schemas'
 
 export type ArsredovisningSigningTrack =
   /** Nothing signed and nothing open: either way is still open. */
@@ -18,9 +19,17 @@ export type ArsredovisningSigningTrack =
   /** A slot carries evidence recorded by hand (paper, another e-signature service). */
   | { kind: 'manual' }
 
-type Slot = Pick<SignatureRequest, 'id' | 'status' | 'signing_method' | 'annual_report_version_id'>
+type Slot = Pick<SignatureRequest, 'id' | 'status' | 'signing_method' | 'annual_report_version_id'> & {
+  role?: string
+}
 
-export function deriveArsredovisningSigningTrack(slots: readonly Slot[], requests: readonly SigningRequestView[]): ArsredovisningSigningTrack {
+/**
+ * The board's track. The revisor's påteckning (a slot with a revisor role)
+ * is recorded on its own whatever way the board signs, so it never decides
+ * the track.
+ */
+export function deriveArsredovisningSigningTrack(allSlots: readonly Slot[], requests: readonly SigningRequestView[]): ArsredovisningSigningTrack {
+  const slots = allSlots.filter((s) => !isAuditorRole(s.role))
   if (slots.some((s) => s.status === 'signed' && s.signing_method !== 'bankid')) return { kind: 'manual' }
   const open = requests.find((r) => r.state === 'open') ?? null
   if (open || slots.some((s) => s.status === 'signed' && s.signing_method === 'bankid')) return { kind: 'bankid', open }

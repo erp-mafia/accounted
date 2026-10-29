@@ -1,7 +1,4 @@
-import type {
-  EgenKapitalRow,
-  NoteEntry,
-} from './types'
+import type { NoteEntry } from './types'
 import { formatPdfKronor } from './pdf-format'
 
 /**
@@ -12,8 +9,8 @@ import { formatPdfKronor } from './pdf-format'
  *     uppskjuten skatt, intäktsredovisning, leasing och finansiella instrument.
  *   - A separate "Uppskjutna skatter" note showing the latent-tax balance
  *     movement (2240 ingående/utgående saldo + årets förändring posted to 8940).
- *   - "Förändring av eget kapital" presented as a SEPARATE statement (not just
- *     a förvaltningsberättelse line: see ÅRL 6:5 + BFNAR 2012:1 ch.6).
+ *   - (Förändring av eget kapital is no longer built here: the one
+ *     specification for K2 and K3 is equity-specification.ts.)
  *   - When component depreciation is used, the materiella anläggnings-not must
  *     break out anskaffningsvärden, avskrivningar och bokfört värde per
  *     huvudkomponent.
@@ -176,88 +173,6 @@ export function buildUppskjutenSkattNot(params: {
     title: 'Uppskjutna skatter',
     body: lines.join('\n'),
   }
-}
-
-// ─── Förändring av eget kapital ──────────────────────────────────────────
-
-export interface EquityChangesSummary {
-  /** Opening balances per equity component. */
-  opening: {
-    aktiekapital: number
-    /** Övriga bundna reserver: reservfond, uppskrivningsfond. */
-    bundna_reserver: number
-    balanserade_vinstmedel: number
-  }
-  /** Year movements. */
-  changes: {
-    nyemission: number
-    utdelning: number
-    /** Årets resultat: added to balanserade vinstmedel next year, shown on
-     *  its own line in the change statement. */
-    arets_resultat: number
-  }
-}
-
-export interface EquityChangesStatement {
-  rows: EgenKapitalRow[]
-  /** Closing total: derived from opening + changes for invariant testing. */
-  closing_total: number
-}
-
-/**
- * Build a "Förändring av eget kapital" statement. K3 requires this as a
- * separate financial statement (not buried in the förvaltningsberättelse,
- * BFNAR 2012:1 ch.6 + ÅRL 6:5). Each component is shown with its opening
- * balance, year movements, and closing balance.
- *
- * Note: returns an EgenKapitalRow[] sequence rather than a structured table:
- * the PDF renderer in arsredovisning-k3-pdf.tsx draws the rows in order.
- * Keeping the shape compatible with the existing EgenKapitalRow type avoids
- * touching the PDF template for additional row variants.
- */
-export function buildEquityChangesNote(
-  summary: EquityChangesSummary,
-): EquityChangesStatement {
-  const { opening, changes } = summary
-  const rows: EgenKapitalRow[] = []
-
-  // Opening balances
-  rows.push({ label: 'Ingående aktiekapital', amount: opening.aktiekapital })
-  rows.push({
-    label: 'Ingående övriga bundna reserver',
-    amount: opening.bundna_reserver,
-  })
-  rows.push({
-    label: 'Ingående balanserade vinstmedel',
-    amount: opening.balanserade_vinstmedel,
-  })
-  const openingTotal =
-    opening.aktiekapital + opening.bundna_reserver + opening.balanserade_vinstmedel
-  rows.push({ label: 'Summa ingående eget kapital', amount: openingTotal })
-
-  // Year movements
-  if (changes.nyemission !== 0) {
-    rows.push({ label: 'Nyemission', amount: changes.nyemission })
-  }
-  if (changes.utdelning !== 0) {
-    // Utdelning typically posted as a negative (reduction). The caller is
-    // free to pass either sign; we just render what we got.
-    rows.push({ label: 'Utdelning', amount: changes.utdelning })
-  }
-  rows.push({ label: 'Årets resultat', amount: changes.arets_resultat })
-
-  // Closing balance: uses standard accounting roll-forward.
-  const closingTotal =
-    openingTotal +
-    changes.nyemission +
-    changes.utdelning +
-    changes.arets_resultat
-  rows.push({
-    label: 'Summa utgående eget kapital',
-    amount: Math.round(closingTotal * 100) / 100,
-  })
-
-  return { rows, closing_total: Math.round(closingTotal * 100) / 100 }
 }
 
 // ─── Materiella anläggningstillgångar ────────────────────────────────────

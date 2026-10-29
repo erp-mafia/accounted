@@ -13,6 +13,8 @@ import { renderToBuffer } from '@react-pdf/renderer'
 import { ArsredovisningPDF } from '../arsredovisning-pdf'
 import { ArsredovisningK3PDF } from '../arsredovisning-k3-pdf'
 import type { ArsredovisningData } from '../types'
+import { draftPateckningNote, eSigningPateckningNote } from '../signatures-pdf'
+import { revisorspateckningLagrum } from '@/lib/company/entity-type'
 import { pdfTextStrings } from '@/tests/pdf-text'
 
 const RENDER_TIMEOUT = 30_000
@@ -157,3 +159,66 @@ describe('årsredovisning PDF keeps the sign of a loss (issue #1982)', () => {
     expectSignedLoss(pdfTextStrings(buffer))
   }, RENDER_TIMEOUT)
 })
+
+/**
+ * The revisorspåteckning (ABL 9 kap. 28 §): the revisor's slot prints below
+ * the board's signatures as the hänvisning to the revisionsberättelse, never
+ * as one of the board's signatures.
+ */
+describe('the revisorspåteckning on the Underskrifter page', () => {
+  function audited(framework: 'k2' | 'k3'): ArsredovisningData {
+    return {
+      ...makeLossYearData(framework),
+      signatures: [
+        { role: 'Styrelseledamot', name: 'Karl Karlsson', signed_at: '2026-02-20T10:00:00Z' },
+        { role: 'Huvudansvarig revisor', name: 'Rita Revisor', signed_at: '2026-02-24T10:00:00Z' },
+      ],
+      auditor_pateckning: { required: true, firm_name: 'Revisionsbyran AB', opinion: 'avstyrkt_br' },
+    }
+  }
+
+  it.each(['k2', 'k3'] as const)('%s: prints the dated påteckning, the sentence and the firm on the signing copy', async (framework) => {
+    const render = framework === 'k2' ? ArsredovisningPDF : ArsredovisningK3PDF
+    const text = pdfTextStrings(await renderToBuffer(render({ data: audited(framework), mode: 'signing' }))).join('\n')
+    expect(text).toContain('Vår revisionsber')
+    expect(text).toContain('2026-02-24')
+    expect(text).toContain('avstyrkt att balansr')
+    expect(text).toContain('Revisionsbyran AB')
+    expect(text).toContain('Huvudansvarig revisor')
+    // The board's datering is the board's signature, not the revisor's.
+    expect(text).toContain('2026-02-20')
+  }, RENDER_TIMEOUT)
+
+  // The påteckning's provision is the form's own: ABL for an aktiebolag,
+  // lagen om ekonomiska föreningar for a förening, none where no statute has
+  // the revisor make one.
+  it.each([
+    ['aktiebolag', 'ABL 9 kap. 28 §'],
+    ['ekonomisk_forening', '8 kap. 32 § lagen om ekonomiska föreningar'],
+  ] as const)('cites the påteckning provision of the form (%s)', (form, lagrum) => {
+    expect(revisorspateckningLagrum(form)).toBe(lagrum)
+    expect(draftPateckningNote(revisorspateckningLagrum(form))).toContain(`(${lagrum})`)
+    expect(eSigningPateckningNote(revisorspateckningLagrum(form))).toContain(`(${lagrum})`)
+  })
+
+  it.each(['enskild_firma', 'ideell_forening'] as const)('cites no provision for a form without one (%s)', (form) => {
+    expect(revisorspateckningLagrum(form)).toBeNull()
+    expect(draftPateckningNote(null)).not.toContain('§')
+    expect(eSigningPateckningNote(null)).not.toContain('§')
+  })
+
+  it('prints the förening\'s own provision on its draft, never ABL', async () => {
+    const data = audited('k2')
+    data.company = { ...data.company, name: 'Testföreningen ek. för.', entity_type: 'ekonomisk_forening' }
+    const text = pdfTextStrings(await renderToBuffer(ArsredovisningPDF({ data, mode: 'draft' }))).join('\n')
+    expect(text).toContain('8 kap. 32')
+    expect(text).toContain('ekonomiska f')
+    expect(text).not.toContain('ABL')
+  }, RENDER_TIMEOUT)
+
+  it('prints nothing for a company without revisor', async () => {
+    const text = pdfTextStrings(await renderToBuffer(ArsredovisningPDF({ data: makeLossYearData('k2'), mode: 'signing' }))).join('\n')
+    expect(text).not.toContain('Revisorsp')
+  }, RENDER_TIMEOUT)
+})
+

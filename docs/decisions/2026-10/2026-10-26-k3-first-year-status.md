@@ -1,0 +1,1 @@
+[2026-10-26] First K3 year: a reliable per-year record (election or followed year) wins, else the profile answer (k2/k3/none); none with a known earlier year, or no answer, is unknown and blocks. A new company is supported with a generated 35.31 note; after K2 is blocked.

@@ -8947,6 +8947,38 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
       'Arelle found blocking errors in the iXBRL document. Correct them and create a new version.',
     retryable: false,
   },
+  BOLAGSVERKET_K3_FILING_CLOSED: {
+    httpStatus: 409,
+    message_sv:
+      'Digital inlämning av K3-årsredovisningar är inte öppnad. Den låsta versionen finns kvar och kan lämnas in när K3-inlämningen öppnas.',
+    message_en:
+      'Connected filing of K3 annual reports is not open. The locked version is kept and can be filed once K3 filing opens.',
+    retryable: false,
+  },
+  BOLAGSVERKET_RB_NO_ARSREDOVISNING: {
+    httpStatus: 409,
+    message_sv:
+      'Revisionsberättelsen kan lämnas in först när årsredovisningen har laddats upp till Bolagsverket med en revisionsberättelse som kompletteras.',
+    message_en:
+      'The audit report can be filed only after the annual report was uploaded to Bolagsverket as one whose audit report follows separately.',
+    retryable: false,
+  },
+  BOLAGSVERKET_RB_ARELLE_FAILED: {
+    httpStatus: 409,
+    message_sv:
+      'Arelle hittade blockerande fel i revisionsberättelsen. Revisorn behöver rätta filen och lämna en ny innan den kan lämnas in.',
+    message_en:
+      'Arelle found blocking errors in the audit report. The auditor needs to correct the file and provide a new one before it can be filed.',
+    retryable: false,
+  },
+  BOLAGSVERKET_RB_INVALID_FILE: {
+    httpStatus: 400,
+    message_sv:
+      'Filen är inte en revisionsberättelse i iXBRL-format (XHTML med Bolagsverkets taxonomi för revisionsberättelse, högst 5 MB).',
+    message_en:
+      'The file is not an audit report in iXBRL (XHTML referencing the Bolagsverket audit report taxonomy, at most 5 MB).',
+    retryable: false,
+  },
   ARSREDOVISNING_INCOMPLETE: {
     httpStatus: 409,
     message_sv: 'Årsredovisningen har blockerande kontrollfel och kan inte versionssparas ännu.',
@@ -9003,6 +9035,82 @@ const BOLAGSVERKET: Record<string, StructuredErrorEntry> = {
       'Årsredovisningens innehåll har ändrats sedan förhandsgranskningen. Granska den nya förhandsgranskningen och försök igen.',
     message_en:
       'The annual report content has changed since it was previewed (content hash mismatch). Review a new dry run and retry.',
+    retryable: false,
+  },
+  // K2/K3 framework per räkenskapsår (BFNAR 2012:4), lib/company/accounting-framework-change.ts.
+  ACCOUNTING_FRAMEWORK_FORBIDDEN: {
+    httpStatus: 403,
+    message_sv: 'Endast företagets ägare eller administratör kan byta regelverk.',
+    message_en: 'Only an owner or admin of the company can change its accounting framework.',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_FORM_UNSUPPORTED: {
+    httpStatus: 400,
+    message_sv:
+      'K3 (BFNAR 2012:1) kan inte väljas för den här företagsformen: en ekonomisk förening upprättar årsredovisningen enligt K2 och övriga företagsformer upprättar årsbokslut.',
+    message_en: 'K3 (BFNAR 2012:1) is not offered for this legal form.',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_K2_NOT_ALLOWED: {
+    httpStatus: 400,
+    message_sv:
+      'En bostadsrättsförening får inte tillämpa K2 för räkenskapsår som inleds efter 2025-12-31; den ska tillämpa K3 (BFNAR 2016:10 punkt 1.1 A e, BFNAR 2025:2).',
+    message_en:
+      'A bostadsrättsförening may not apply K2 for fiscal years starting after 2025-12-31; it applies K3 (BFNAR 2016:10 point 1.1 A e, BFNAR 2025:2).',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_PERIOD_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Räkenskapsåret kunde inte hittas.',
+    message_en: 'The fiscal year was not found for this company.',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_PERIOD_CLOSED: {
+    httpStatus: 409,
+    message_sv:
+      'Regelverket kan inte bytas för ett räkenskapsår som är stängt, låst eller vars bokföring är låst till och med årets sista dag.',
+    message_en:
+      'The framework cannot change for a fiscal year that is closed, locked, or whose bookkeeping is locked through its last day.',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_REPORT_LOCKED: {
+    httpStatus: 409,
+    message_sv:
+      'Regelverket kan inte bytas: årets årsredovisning är redan låst för underskrift, undertecknad eller inlämnad.',
+    message_en:
+      'The framework cannot change: the year\'s annual report version is already locked for signing, signed or filed.',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_PREVIOUS_YEAR_UNKNOWN: {
+    httpStatus: 400,
+    message_sv:
+      'Ange enligt vilket regelverk föregående årsredovisning upprättades. Accounted har inget säkert underlag för det, och ett byte från K3 till K2 ska motiveras i not (BFNAR 2012:4 punkt 3).',
+    message_en:
+      'State the framework the previous annual report was prepared under (previous_year_framework: k2, k3 or none): Accounted holds no reliable record of it, and a switch from K3 to K2 is explained in a note (BFNAR 2012:4 point 3).',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_REASON_REQUIRED: {
+    httpStatus: 400,
+    message_sv:
+      'Ange skälen till bytet från K3 till K2. De lämnas i not i årsredovisningen (BFNAR 2012:4 punkt 3).',
+    message_en:
+      'State the reasons for switching from K3 to K2 (change_reason); they are disclosed in a note (BFNAR 2012:4 point 3).',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_PREVIOUS_K2_UNKNOWN: {
+    httpStatus: 400,
+    message_sv:
+      'Ange om företaget tidigare har tillämpat K2. Då krävs särskilda skäl för att byta från K3 till K2 (BFNAR 2012:4 punkt 2).',
+    message_en:
+      'State whether the company applied K2 before (previously_applied_k2): a switch from K3 to K2 then needs special reasons (BFNAR 2012:4 point 2).',
+    retryable: false,
+  },
+  ACCOUNTING_FRAMEWORK_SPECIAL_REASONS_REQUIRED: {
+    httpStatus: 400,
+    message_sv:
+      'Företaget har tillämpat K2 tidigare, så bytet från K3 till K2 kräver särskilda skäl. Skatteskäl är inte särskilda skäl (BFNAR 2012:4 punkt 2).',
+    message_en:
+      'The company applied K2 before: switching from K3 to K2 needs special reasons, confirmed with special_reasons_confirmed. Tax reasons are not special reasons (BFNAR 2012:4 point 2).',
     retryable: false,
   },
   // Förenklat årsbokslut (BFNAR 2010:1), lib/bokslut/forenklat-arsbokslut.
@@ -11218,6 +11326,27 @@ const SIGNING: Record<string, StructuredErrorEntry> = {
     httpStatus: 409,
     message_sv: 'Namnet i ditt BankID stämmer inte med namnet i årsredovisningen, så underskriften sparades inte. Den som skickade signeringen behöver rätta namnet och låsa en ny version.',
     message_en: 'The name in your BankID does not match the name in the annual report, so the signature was not saved. The sender needs to correct the name and lock a new version.',
+  },
+  ARSREDOVISNING_PATECKNING_BEFORE_BOARD: {
+    httpStatus: 409,
+    message_sv:
+      'Revisorns påteckning registreras när hela styrelsen har skrivit under den här versionen: påteckningen hänvisar till revisionsberättelsen om den undertecknade årsredovisningen.',
+    message_en:
+      "The auditor's endorsement is recorded once the whole board has signed this version: it refers to the audit report on the signed annual report.",
+  },
+  ARSREDOVISNING_PATECKNING_MEDIUM_MIXED: {
+    httpStatus: 409,
+    message_sv:
+      'Revisorns påteckning görs på samma sätt som styrelsens underskrifter: elektroniskt (avancerad e-signatur) om styrelsen skrev under elektroniskt, på papper om styrelsen skrev under på papper. En årsredovisning är antingen på papper eller elektronisk (ÅRL 2 kap. 5 och 7 §§).',
+    message_en:
+      "The auditor's endorsement is made the same way as the board's signatures: electronically (advanced e-signature) when the board signed electronically, on paper when it signed on paper. An annual report is either on paper or electronic (ÅRL 2:5 and 2:7).",
+  },
+  ARSREDOVISNING_PATECKNING_OPINION_MISSING: {
+    httpStatus: 409,
+    message_sv:
+      'Ange vad revisionsberättelsen säger (revisorns uttalande) innan revisorns påteckning registreras: uttalandet låses med påteckningen.',
+    message_en:
+      "State what the audit report says (the auditor's opinion) before the auditor's endorsement is recorded: the opinion is locked with the endorsement.",
   },
   ARSREDOVISNING_SIGNING_TRACK_MIXED: {
     httpStatus: 409,

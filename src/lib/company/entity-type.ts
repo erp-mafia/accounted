@@ -279,6 +279,15 @@ export function requiresAuditorRegardlessOfSize(entityType: EntityType): boolean
   return legalFormProfile(entityType).filings.auditorAlwaysRequired
 }
 
+/**
+ * The provision behind the revisorspåteckning (the revisor's hänvisning to
+ * the revisionsberättelse on the årsredovisning) for the form, as the PDF
+ * cites it; null when no statute has the form's revisor make one.
+ */
+export function revisorspateckningLagrum(entityType: EntityType): string | null {
+  return legalFormProfile(entityType).filings.revisorspateckningLagrum
+}
+
 /** Bound equity is member capital (2083/2084) rather than aktiekapital (2081). */
 export function supportsMemberCapital(entityType: EntityType): boolean {
   return legalFormProfile(entityType).equity.memberCapital

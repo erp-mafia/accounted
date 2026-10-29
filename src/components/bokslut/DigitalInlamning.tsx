@@ -77,6 +77,7 @@ interface KontrolleraUtfall {
 interface SubmissionRow {
   id: string
   status: string
+  handling_typ?: 'arsredovisning_komplett' | 'arsredovisning_kompletteras' | 'revisionsberattelse'
   environment: string
   kontrollsumma: string | null
   sha256_checksumma: string | null
@@ -176,7 +177,19 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
   const [efternamn, setEfternamn] = useState('')
   const [roll, setRoll] = useState('Styrelseledamot')
   const [epost, setEpost] = useState('')
+  // notifieringEpostadresser (API 2.1): the revisor, told that a
+  // revisionsberättelse is expected when the årsredovisning is kompletteras.
+  const [revisorEpost, setRevisorEpost] = useState('')
   const [submitting, setSubmitting] = useState(false)
+  // The revisionsberättelse, uploaded as its own handling after the
+  // årsredovisning went up as kompletteras.
+  const [rbFile, setRbFile] = useState<File | null>(null)
+  const [rbPnr, setRbPnr] = useState('')
+  const [rbFornamn, setRbFornamn] = useState('')
+  const [rbEfternamn, setRbEfternamn] = useState('')
+  const [rbEpost, setRbEpost] = useState('')
+  const [rbSubmitting, setRbSubmitting] = useState(false)
+  const [rbKvittens, setRbKvittens] = useState<{ url: string } | null>(null)
   const [avtal, setAvtal] = useState<{ text: string; andrad: string; accepted: boolean } | null>(null)
   const [utfall, setUtfall] = useState<KontrolleraUtfall[] | null>(null)
   const [kvittens, setKvittens] = useState<{ url: string } | null>(null)
@@ -344,6 +357,7 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
             roll,
             epost: epost.trim(),
           },
+          ...(revisorEpost.trim() ? { notifiering_epost: [revisorEpost.trim()] } : {}),
           ...(avtal?.accepted ? { accepted_avtalstext_andrad: avtal.andrad } : {}),
           ...(opts.ignoreWarnings ? { ignore_warnings: true } : {}),
         }),
@@ -398,6 +412,75 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
       toast({ title: 'Inlämningen misslyckades', variant: 'destructive' })
     } finally {
       setSubmitting(false)
+    }
+  }
+
+  const handleSubmitRevisionsberattelse = async (opts: { ignoreWarnings?: boolean } = {}) => {
+    const normalizedAvsandare = normalizePnr(avsandarePnr)
+    const normalizedRevisor = normalizePnr(rbPnr)
+    if (!normalizedAvsandare || !normalizedRevisor) {
+      toast({ title: tStudio('revisor_filing.pnr_invalid'), variant: 'destructive' })
+      return
+    }
+    if (!rbFile || !rbFornamn.trim() || !rbEfternamn.trim() || !rbEpost.trim()) {
+      toast({ title: tStudio('revisor_filing.missing_fields'), variant: 'destructive' })
+      return
+    }
+    setRbSubmitting(true)
+    setUtfall(null)
+    try {
+      const bytes = new Uint8Array(await rbFile.arrayBuffer())
+      let binary = ''
+      for (let index = 0; index < bytes.length; index += 0x8000) {
+        binary += String.fromCharCode(...bytes.subarray(index, index + 0x8000))
+      }
+      const res = await fetch('/api/extensions/ext/bolagsverket/revisionsberattelse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fiscal_period_id: periodId,
+          avsandare_pnr: normalizedAvsandare,
+          undertecknare: {
+            pnr: normalizedRevisor,
+            fornamn: rbFornamn.trim(),
+            efternamn: rbEfternamn.trim(),
+            epost: rbEpost.trim(),
+          },
+          fil: btoa(binary),
+          ...(avtal?.accepted ? { accepted_avtalstext_andrad: avtal.andrad } : {}),
+          ...(opts.ignoreWarnings ? { ignore_warnings: true } : {}),
+        }),
+      })
+      const body = await res.json()
+      if (body?.error) {
+        toast({ title: tStudio('revisor_filing.failed'), description: getUserErrorMessage(body.error), variant: 'destructive' })
+        return
+      }
+      const result = body.data as SubmitOutcome
+      if (result.outcome === 'avtal_required') {
+        setAvtal({ text: result.avtalstext, andrad: result.avtalstextAndrad, accepted: false })
+        return
+      }
+      if (result.outcome === 'kontrollera_stopped') {
+        setUtfall(result.utfall)
+        void loadSubmissions()
+        return
+      }
+      if (result.outcome === 'state_unknown') {
+        void loadSubmissions()
+        toast({ title: tStudio('revisor_filing.state_unknown'), description: result.message, variant: 'destructive' })
+        return
+      }
+      if (result.outcome === 'uploaded') {
+        setRbKvittens({ url: result.url })
+        setAvtal(null)
+        void loadSubmissions()
+        toast({ title: tStudio('revisor_filing.uploaded') })
+      }
+    } catch {
+      toast({ title: tStudio('revisor_filing.failed'), variant: 'destructive' })
+    } finally {
+      setRbSubmitting(false)
     }
   }
 
@@ -678,7 +761,18 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                     onChange={(event) => setEpost(event.target.value)}
                   />
                 </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="di-revisor-epost">{tStudio('revisor_filing.revisor_email_label')}</Label>
+                  <Input
+                    id="di-revisor-epost"
+                    type="email"
+                    placeholder="revisor@byra.se"
+                    value={revisorEpost}
+                    onChange={(event) => setRevisorEpost(event.target.value)}
+                  />
+                </div>
               </div>
+              <p className="text-xs text-muted-foreground">{tStudio('revisor_filing.revisor_email_help')}</p>
               <p className="text-xs text-muted-foreground">
                 Personnumren skickas till Bolagsverket för att skapa eget utrymme och bjuda
                 in undertecknaren. De sparas inte i Accounted och skrivs inte till loggar.
@@ -798,6 +892,87 @@ export function DigitalInlamning({ periodId }: { periodId: string }) {
                       <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> Signera hos Bolagsverket
                     </a>
                   </Button>
+                </div>
+              )}
+
+              {/* The revisionsberättelse as its own handling (API 2.1), once the
+                  årsredovisning is uploaded as kompletteras. The revisor can
+                  also file it from their own software; this is for a file the
+                  revisor handed over. */}
+              {submissions.some(
+                (row) =>
+                  row.handling_typ === 'arsredovisning_kompletteras' &&
+                  ['uploaded', 'inkommen', 'forelagd', 'komplettering'].includes(row.status),
+              ) && (
+                <div className="space-y-3 border-t border-border pt-4">
+                  <p className="font-medium">{tStudio('revisor_filing.title')}</p>
+                  <p className="text-xs text-muted-foreground">{tStudio('revisor_filing.intro')}</p>
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-fil">{tStudio('revisor_filing.file_label')}</Label>
+                      <Input
+                        id="di-rb-fil"
+                        type="file"
+                        accept=".xhtml,.html,application/xhtml+xml"
+                        onChange={(event) => setRbFile(event.target.files?.[0] ?? null)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-pnr">{tStudio('revisor_filing.pnr_label')}</Label>
+                      <Input
+                        id="di-rb-pnr"
+                        inputMode="numeric"
+                        placeholder="ÅÅÅÅMMDDNNNN eller ÅÅMMDD-NNNN"
+                        value={rbPnr}
+                        onChange={(event) => setRbPnr(event.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-fornamn">{tStudio('revisor_filing.first_name_label')}</Label>
+                      <Input id="di-rb-fornamn" value={rbFornamn} onChange={(event) => setRbFornamn(event.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-efternamn">{tStudio('revisor_filing.last_name_label')}</Label>
+                      <Input id="di-rb-efternamn" value={rbEfternamn} onChange={(event) => setRbEfternamn(event.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="di-rb-epost">{tStudio('revisor_filing.email_label')}</Label>
+                      <Input
+                        id="di-rb-epost"
+                        type="email"
+                        placeholder="revisor@byra.se"
+                        value={rbEpost}
+                        onChange={(event) => setRbEpost(event.target.value)}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-3">
+                    <Button
+                      variant="outline"
+                      onClick={() => void handleSubmitRevisionsberattelse()}
+                      disabled={avtal !== null && !avtal.accepted}
+                      loading={rbSubmitting}
+                    >
+                      {!rbSubmitting && <PaperAirplaneIcon className="mr-2 h-4 w-4" />}
+                      {tStudio('revisor_filing.submit')}
+                    </Button>
+                    {utfall && utfall.length > 0 && !utfallHasErrors && (
+                      <Button
+                        variant="outline"
+                        onClick={() => void handleSubmitRevisionsberattelse({ ignoreWarnings: true })}
+                        disabled={rbSubmitting}
+                      >
+                        {tStudio('revisor_filing.submit_despite_warnings')}
+                      </Button>
+                    )}
+                  </div>
+                  {rbKvittens && (
+                    <Button variant="outline" size="sm" asChild>
+                      <a href={rbKvittens.url} target="_blank" rel="noopener noreferrer">
+                        <ArrowTopRightOnSquareIcon className="mr-2 h-4 w-4" /> {tStudio('revisor_filing.open_at_bolagsverket')}
+                      </a>
+                    </Button>
+                  )}
                 </div>
               )}
             </>

@@ -1,0 +1,1 @@
+[2026-10-26] The K3 kassaflödesanalys repeats the RR figure on its result line (duplicate facts must be value-identical, TA 2.7.3), and preflight adds ACC-K3-KFA-RESULT and -SUM: K3 has no calculation linkbase, so kontrollera cannot be trusted to catch a statement that does not add up.

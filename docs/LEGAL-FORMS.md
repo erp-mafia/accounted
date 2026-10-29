@@ -70,6 +70,8 @@ export interface LegalFormProfile {
     auditorAlwaysRequired: boolean
     /** The förenklat årsbokslut the product prepares, by its BFN allmänt råd; null when none (ideell förening: BFNAR 2010:1). */
     forenklatArsbokslut: 'BFNAR 2010:1' | null
+    /** Where the revisorspåteckning comes from, as the PDF cites it (ABL 9 kap. 28 §, 8 kap. 32 § lagen om ekonomiska föreningar); null when no statute requires one. */
+    revisorspateckningLagrum: string | null
   }
   /** Swedish words that differ by law. Everything else in copy stays form-neutral. */
   glossary: { entity: string; owner: string; meeting: string }

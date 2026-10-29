@@ -238,6 +238,11 @@ export type CoreEvent =
   | { type: 'skattekonto.connection.expired'; payload: { reason: 'REFRESH_EXHAUSTED' | 'SESSION_EXPIRED' | 'TOKEN_CORRUPTED'; userId: string; companyId: string } }
   // Company & account lifecycle
   | { type: 'company.deleted'; payload: { companyId: string; userId: string; archivedAt: string } }
+  // The K2/K3 framework of a räkenskapsår changed (lib/company/accounting-framework-change.ts,
+  // BFNAR 2012:4): a change of accounting principle. fiscalPeriodId is null when
+  // the company had no fiscal year and only its default changed. Internal:
+  // persisted to event_log, not a public webhook.
+  | { type: 'company.accounting_framework_changed'; payload: { companyId: string; userId: string; fiscalPeriodId: string | null; framework: 'k2' | 'k3'; previousFramework: 'k2' | 'k3' | null; cascadedPeriodIds: string[]; k3ToK2: boolean } }
   | { type: 'account.deleted'; payload: { userId: string; deletedAt: string } }
   // MCP telemetry: fired from the MCP dispatcher.
   // Persisted to event_log (180-day TTL for mcp.*/agent.* rows, vs 30 days for

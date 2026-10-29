@@ -1392,6 +1392,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'tax_assessment_notices', file: 'tax_assessment_notices.json', orderBy: 'created_at' },
   { name: 'arsredovisning_narratives', file: 'arsredovisning_narratives.json' },
   { name: 'annual_report_profiles', file: 'annual_report_profiles.json', orderBy: 'created_at' },
+  // The K2/K3 framework each räkenskapsår was prepared under, with who chose it
+  // and, for a switch from K3 to K2, the stated reasons (BFNAR 2012:4).
+  { name: 'fiscal_period_frameworks', file: 'fiscal_period_frameworks.json', orderBy: 'created_at' },
   { name: 'annual_report_versions', file: 'annual_report_versions.json', orderBy: 'created_at' },
   { name: 'annual_report_validation_runs', file: 'annual_report_validation_runs.json', orderBy: 'created_at' },
   { name: 'arsredovisning_signature_requests', file: 'arsredovisning_signature_requests.json', orderBy: 'created_at' },

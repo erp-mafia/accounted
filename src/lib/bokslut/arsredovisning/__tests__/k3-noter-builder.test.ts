@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import {
   anyAssetHasComponents,
-  buildEquityChangesNote,
   buildK3RedovisningsPrinciper,
   buildMateriellaAnlaggningsNot,
   buildUppskjutenSkattNot,
@@ -229,97 +228,6 @@ describe('buildUppskjutenSkattNot', () => {
     // Same for provenance: 2240 is K3's account for every temporary
     // difference (k2-vs-k3.md:11-13), and the caller reads only the balance.
     expect(note.body).not.toContain('obeskattade reserver')
-  })
-})
-
-describe('buildEquityChangesNote', () => {
-  it('reconciles opening + changes to closing total', () => {
-    const result = buildEquityChangesNote({
-      opening: {
-        aktiekapital: 50_000,
-        bundna_reserver: 10_000,
-        balanserade_vinstmedel: 100_000,
-      },
-      changes: {
-        nyemission: 25_000,
-        utdelning: -15_000,
-        arets_resultat: 80_000,
-      },
-    })
-    // 50 000 + 10 000 + 100 000 + 25 000 - 15 000 + 80 000 = 250 000
-    expect(result.closing_total).toBe(250_000)
-  })
-
-  it('emits rows for each opening component plus changes plus closing', () => {
-    const result = buildEquityChangesNote({
-      opening: {
-        aktiekapital: 50_000,
-        bundna_reserver: 0,
-        balanserade_vinstmedel: 100_000,
-      },
-      changes: {
-        nyemission: 25_000,
-        utdelning: -15_000,
-        arets_resultat: 80_000,
-      },
-    })
-    const labels = result.rows.map((r) => r.label)
-    expect(labels).toContain('Ingående aktiekapital')
-    expect(labels).toContain('Ingående balanserade vinstmedel')
-    expect(labels).toContain('Nyemission')
-    expect(labels).toContain('Utdelning')
-    expect(labels).toContain('Årets resultat')
-    expect(labels).toContain('Summa utgående eget kapital')
-  })
-
-  it('OMITS the nyemission row when no nyemission happened (cleaner statement)', () => {
-    const result = buildEquityChangesNote({
-      opening: {
-        aktiekapital: 50_000,
-        bundna_reserver: 0,
-        balanserade_vinstmedel: 100_000,
-      },
-      changes: {
-        nyemission: 0,
-        utdelning: -15_000,
-        arets_resultat: 80_000,
-      },
-    })
-    const labels = result.rows.map((r) => r.label)
-    expect(labels).not.toContain('Nyemission')
-    // Utdelning + årets resultat still present
-    expect(labels).toContain('Utdelning')
-    expect(labels).toContain('Årets resultat')
-  })
-
-  it('OMITS the utdelning row when no utdelning happened', () => {
-    const result = buildEquityChangesNote({
-      opening: {
-        aktiekapital: 50_000,
-        bundna_reserver: 0,
-        balanserade_vinstmedel: 100_000,
-      },
-      changes: {
-        nyemission: 0,
-        utdelning: 0,
-        arets_resultat: 80_000,
-      },
-    })
-    const labels = result.rows.map((r) => r.label)
-    expect(labels).not.toContain('Nyemission')
-    expect(labels).not.toContain('Utdelning')
-    // Årets resultat always shown: even when zero: so the year-end
-    // disposition is visible in the statement.
-    expect(labels).toContain('Årets resultat')
-  })
-
-  it('handles all-zero opening + changes without crashing', () => {
-    const result = buildEquityChangesNote({
-      opening: { aktiekapital: 0, bundna_reserver: 0, balanserade_vinstmedel: 0 },
-      changes: { nyemission: 0, utdelning: 0, arets_resultat: 0 },
-    })
-    expect(result.closing_total).toBe(0)
-    expect(result.rows.length).toBeGreaterThan(0)
   })
 })
 

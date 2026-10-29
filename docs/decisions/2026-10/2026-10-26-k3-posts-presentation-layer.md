@@ -1,0 +1,1 @@
+[2026-10-26] K3 posts are carved out of the K2 mapping in a presentation layer (k3-presentation.ts) rather than a K3 mapper: totals, the resultatdisposition and the K2 iXBRL keep reading the one K2 mapping, so K2 output cannot change; concept keys are the K3 taxonomy names.

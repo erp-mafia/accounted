@@ -33,6 +33,7 @@ const INDEX: Partial<Record<CoreEventType, readonly string[]>> = {
   'bank_connection.revoked': ['event-log'],
   'bank_connection.superseded': ['event-log'],
   'bank_connection.sync_failed': ['event-log'],
+  'company.accounting_framework_changed': ['event-log'],
   'credit_note.created': ['event-log', 'webhooks', 'ext:stripe'],
   'customer.created': ['event-log', 'webhooks'],
   'document.accessed': ['event-log'],

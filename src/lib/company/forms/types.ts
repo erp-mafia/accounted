@@ -104,6 +104,15 @@ export interface LegalFormProfile {
      */
     forenklatArsbokslut: 'BFNAR 2010:1' | null
     /**
+     * The provision that has the revisor make a hänvisning to the
+     * revisionsberättelse on the årsredovisning (the revisorspåteckning), as
+     * the PDF cites it: ABL 9 kap. 28 § for an aktiebolag, 8 kap. 32 § lagen
+     * (2018:672) om ekonomiska föreningar for an ekonomisk förening. Null when
+     * no statute has the form's revisor make one: the PDF then cites nothing
+     * rather than another form's law.
+     */
+    revisorspateckningLagrum: string | null
+    /**
      * When the årsredovisning must hold a kassaflödesanalys (ÅRL 2 kap. 1 §
      * andra stycket): 'always' for a bostadsrättsförening, 'larger' for a
      * form that needs one only as a större företag, null when the product

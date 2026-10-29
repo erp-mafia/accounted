@@ -231,6 +231,10 @@ describe('who signs the fastställelseintyg', () => {
 
   it('refuses a role that may not sign it', () => {
     expect(finalize('Revisor').success).toBe(false)
+    // The revisor is in the roster for the påteckning, never for the intyg.
+    for (const role of ['Auktoriserad revisor', 'Godkänd revisor', 'Huvudansvarig revisor']) {
+      expect(finalize(role).success).toBe(false)
+    }
     expect(finalize('Ekonomiansvarig').success).toBe(false)
   })
 

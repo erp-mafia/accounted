@@ -21,7 +21,11 @@ import type { K2MappingResult } from '@/lib/bokslut/ixbrl/k2-mapper'
 import type { StatementRow } from './types'
 
 const ZERO: ConceptAmount = { current: 0, previous: null }
-type StatementMapping = Pick<K2MappingResult, 'rr' | 'br' | 'totals'> & Partial<Pick<K2MappingResult, 'legalForm'>>
+type StatementMapping = Pick<K2MappingResult, 'rr' | 'br' | 'totals'> &
+  Partial<Pick<K2MappingResult, 'legalForm'>> & {
+    /** 'k3': the mapping carries K3's own posts (k3-presentation.ts). Absent for K2. */
+    presentation?: 'k3'
+  }
 
 function hasValue(amount: ConceptAmount): boolean {
   return amount.current !== 0 || (amount.previous ?? 0) !== 0
@@ -193,12 +197,22 @@ export function buildBrRows(mapping: StatementMapping): {
 } {
   const { br, totals } = mapping
   const hasPrevious = mappingHasPrevious(mapping)
+  // K3's own posts (K3 4.3, ÅRL bilaga 1), only in a K3 report: a K2 mapping
+  // has none of these concepts and its rows are exactly as before.
+  const k3 = mapping.presentation === 'k3'
 
   const a = new RowBuilder(hasPrevious)
   a.post('Tecknat men ej inbetalt kapital', br['TecknatEjInbetaltKapital'])
   a.heading('Anläggningstillgångar')
   if (hasValue(totals.immateriellaAnlaggningstillgangar)) {
     a.heading('Immateriella anläggningstillgångar', 1)
+    if (k3) {
+      a.post(
+        'Balanserade utgifter för utvecklingsarbeten och liknande arbeten',
+        br['BalanseradeUtgifterUtvecklingsarbetenLiknandeArbeten'],
+        { indent: 2 },
+      )
+    }
     a.post(
       'Koncessioner, patent, licenser, varumärken samt liknande rättigheter',
       br['KoncessionerPatentLicenserVarumarkenLiknandeRattigheter'],
@@ -280,6 +294,7 @@ export function buildBrRows(mapping: StatementMapping): {
     )
     a.post('Lån till delägare eller närstående', br['LanDelagareNarstaende'], { indent: 2 })
     a.post('Andra långfristiga fordringar', br['AndraLangfristigaFordringar'], { indent: 2 })
+    if (k3) a.post('Uppskjuten skattefordran', br['UppskjutenSkattefordran'], { indent: 2 })
     a.total(
       'Summa finansiella anläggningstillgångar',
       totals.finansiellaAnlaggningstillgangar,
@@ -318,6 +333,7 @@ export function buildBrRows(mapping: StatementMapping): {
     br['FordringarOvrigaforetagAgarintresseKortfristiga'],
     { indent: 2 },
   )
+  if (k3) a.post('Aktuell skattefordran', br['AktuellSkattefodran'], { indent: 2 })
   a.post('Övriga fordringar', br['OvrigaFordringarKortfristiga'], {
     indent: 2,
     alwaysShow: true,
@@ -375,12 +391,14 @@ export function buildBrRows(mapping: StatementMapping): {
     e.post('Bunden överkursfond', br['OverkursfondBunden'], { indent: 2 })
     e.post('Uppskrivningsfond', br['Uppskrivningsfond'], { indent: 2 })
     e.post('Reservfond', br['Reservfond'], { indent: 2 })
+    if (k3) e.post('Fond för utvecklingsutgifter', br['FondUtvecklingsutgifter'], { indent: 2 })
   }
   e.total('Summa bundet eget kapital', totals.bundetEgetKapital, { indent: 1 })
   e.heading('Fritt eget kapital', 1)
   if (mapping.legalForm !== 'ekonomisk_forening') {
     e.post('Överkursfond', br['Overkursfond'], { indent: 2 })
   }
+  if (k3) e.post('Fond för verkligt värde', br['FondVerkligtVarde'], { indent: 2 })
   e.post('Balanserat resultat', br['BalanseratResultat'], { indent: 2, alwaysShow: true })
   e.post('Årets resultat', br['AretsResultatEgetKapital'], {
     indent: 2,
@@ -408,6 +426,10 @@ export function buildBrRows(mapping: StatementMapping): {
       br['OvrigaAvsattningarPensionerLiknandeForpliktelser'],
       { indent: 1 },
     )
+    if (k3) {
+      e.post('Uppskjuten skatteskuld', br['UppskjutenSkatteskuld'], { indent: 1 })
+      e.post('Övriga avsättningar för skatter', br['AvsattningarOvrigSkatt'], { indent: 1 })
+    }
     e.post('Övriga avsättningar', br['OvrigaAvsattningar'], { indent: 1 })
     e.total('Summa avsättningar', totals.avsattningar)
   }

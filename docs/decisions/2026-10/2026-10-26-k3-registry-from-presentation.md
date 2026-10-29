@@ -1,0 +1,1 @@
+[2026-10-26] K3 registry membership is the presentation linkbases of the eight forms se-k3-risbs imports, with attributes from the concept schemas: the K3 forms have no calculation linkbases, so the registry is what keeps K2-only or other-form concepts out of a K3 document.

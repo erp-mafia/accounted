@@ -1,0 +1,1 @@
+[2026-10-27] Existing years take the framework of their locked årsredovisning version (source annual_report); others stay company_default, and a move from K3 to K2 asks the user the previous report's framework instead of trusting a default: no false switch note (BFNAR 2012:4 p. 3).

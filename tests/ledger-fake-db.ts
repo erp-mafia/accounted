@@ -7,7 +7,8 @@
  * filters instead: it implements the slice of PostgREST the reports use over
  * plain arrays, plus JS ports of the ledger RPCs the reports call
  * (get_trial_balance_aggregates, result_closing_entry_ids,
- * year_end_chain_entry_ids, compute_prior_opening_balances), so one set of
+ * year_end_chain_entry_ids, compute_prior_opening_balances,
+ * get_entries_with_account_lines), so one set of
  * books can be read by any
  * implementation and the outputs compared byte for byte.
  *
@@ -359,6 +360,51 @@ export function createLedgerFakeDb(seed: LedgerFakeDbSeed) {
     return { data: [...sums.values()].sort((a, b) => compare(a.account_number, b.account_number)), error: null }
   }
 
+  /** Port of get_entries_with_account_lines (migration 20261023094040). */
+  function entriesWithAccountLines(args: Record<string, unknown>) {
+    const accounts = new Set((args.p_accounts as string[]) ?? [])
+    const statuses = new Set((args.p_statuses as string[]) ?? [])
+    const start = String(args.p_start)
+    const end = String(args.p_end)
+    const allLines = args.p_all_lines === true
+    const lines = rowsOf('journal_entry_lines')
+    const entries = rowsOf('journal_entries')
+      .filter(
+        (entry) =>
+          entry.company_id === args.p_company_id &&
+          (entry.status === 'posted' || entry.status === 'reversed') &&
+          statuses.has(String(entry.status)) &&
+          String(entry.entry_date) >= start &&
+          String(entry.entry_date) <= end &&
+          lines.some((line) => line.journal_entry_id === entry.id && accounts.has(String(line.account_number))),
+      )
+      .sort((a, b) => compare(a.id, b.id))
+    return {
+      data: entries.map((entry) => ({
+        id: entry.id,
+        voucher_series: entry.voucher_series ?? null,
+        voucher_number: entry.voucher_number ?? null,
+        entry_date: entry.entry_date,
+        description: entry.description ?? null,
+        status: entry.status,
+        source_type: entry.source_type ?? null,
+        source_id: entry.source_id ?? null,
+        reverses_id: entry.reverses_id ?? null,
+        correction_of_id: entry.correction_of_id ?? null,
+        lines: lines
+          .filter((line) => line.journal_entry_id === entry.id && (allLines || accounts.has(String(line.account_number))))
+          .sort((a, b) => compare(a.account_number, b.account_number) || compare(a.sort_order, b.sort_order) || compare(a.id, b.id))
+          .map((line) => ({
+            id: line.id,
+            account_number: line.account_number,
+            debit_amount: line.debit_amount,
+            credit_amount: line.credit_amount,
+          })),
+      })),
+      error: null,
+    }
+  }
+
   const rpc = (name: string, args: Record<string, unknown> = {}) => {
     count(`rpc:${name}`)
     return Promise.resolve(read(`rpc:${name}`, answer(name, args)))
@@ -378,6 +424,8 @@ export function createLedgerFakeDb(seed: LedgerFakeDbSeed) {
         return { data: yearEndChainEntryIds(args.p_company_id, args.p_fiscal_period_id), error: null }
       case 'compute_prior_opening_balances':
         return priorOpeningBalances(args)
+      case 'get_entries_with_account_lines':
+        return entriesWithAccountLines(args)
       default:
         throw new Error(`ledger-fake-db: unsupported rpc ${name}`)
     }

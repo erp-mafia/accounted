@@ -1,0 +1,1 @@
+[2026-10-26] K3 document data comes through one adapter per seam (k3-adapters.ts); today's fallbacks (equity from closing balances, summary cash flow, K2 mapping posts) render for preview but are preflight errors (ACC-K3-*-SOURCE), so nothing filed rests on a guess.

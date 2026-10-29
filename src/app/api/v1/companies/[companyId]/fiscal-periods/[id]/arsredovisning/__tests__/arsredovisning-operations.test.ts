@@ -312,6 +312,47 @@ describe('POST .../arsredovisning/narrative', () => {
     const cleared = client.calls.find((c) => c.table === 'annual_report_profiles' && c.method === 'update')
     expect(cleared?.args[0]).toEqual({ narrative_confirmed_at: null })
   })
+
+  it('merges the K3 disclosure answers and equity classifications: only the keys sent change, null removes one', async () => {
+    const stored = {
+      id: 'narr-1',
+      company_id: COMPANY_ID,
+      fiscal_period_id: PERIOD_ID,
+      note_overrides: {},
+      disclosure_answers: { 'fb.agare': { applies: false }, 'not.rattelse': { applies: false } },
+      equity_movement_overrides: { 'cccccccc-cccc-4ccc-8ccc-cccccccccccc': 'utdelning' },
+      updated_at: 'x',
+    }
+    const client = use({
+      fiscal_periods: PERIOD,
+      arsredovisning_submissions: NONE,
+      arsredovisning_narratives: { data: stored, error: null },
+    })
+    const res = await post({
+      disclosure_answers: { 'not.rattelse': null, 'not.handelser_efter_balansdagen': { applies: false } },
+      equity_movement_overrides: { 'dddddddd-dddd-4ddd-8ddd-dddddddddddd': 'rattelse_av_fel' },
+    })
+    expect(res.status).toBe(200)
+    const upsert = client.calls.find((c) => c.table === 'arsredovisning_narratives' && c.method === 'upsert')
+    const row = upsert?.args[0] as Record<string, unknown>
+    expect(row.disclosure_answers).toEqual({
+      'fb.agare': { applies: false },
+      'not.handelser_efter_balansdagen': { applies: false },
+    })
+    expect(row.equity_movement_overrides).toEqual({
+      'cccccccc-cccc-4ccc-8ccc-cccccccccccc': 'utdelning',
+      'dddddddd-dddd-4ddd-8ddd-dddddddddddd': 'rattelse_av_fel',
+    })
+  })
+
+  it('400 on an unknown disclosure id or an equity kind a user may not assign', async () => {
+    const client = use({ fiscal_periods: PERIOD, arsredovisning_submissions: NONE })
+    expect((await post({ disclosure_answers: { 'okand.fraga': { applies: true } } })).status).toBe(400)
+    expect(
+      (await post({ equity_movement_overrides: { 'dddddddd-dddd-4ddd-8ddd-dddddddddddd': 'arets_resultat' } })).status,
+    ).toBe(400)
+    expect(wrote(client)).toBe(false)
+  })
 })
 
 // ─────────────────────────────────────────────────────────────────

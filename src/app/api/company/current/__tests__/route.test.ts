@@ -30,6 +30,12 @@ vi.mock('@/lib/auth/require-write', async (importOriginal) => {
   }
 })
 
+const changeFrameworkMock = vi.fn()
+vi.mock('@/lib/company/accounting-framework-change', () => ({
+  changeAccountingFramework: (...args: unknown[]) => changeFrameworkMock(...args),
+}))
+
+import { codedRefusal } from '@/lib/errors/refusal'
 import { GET, PATCH } from '../route'
 
 const routeParams = { params: Promise.resolve({}) }
@@ -229,19 +235,138 @@ describe('PATCH /api/company/current', () => {
     expect(supabase.rpc).not.toHaveBeenCalled()
   })
 
-  it('updates the framework for an aktiebolag', async () => {
+  it('changes the framework of a räkenskapsår through the BFNAR 2012:4 service, never by a direct update', async () => {
     enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k2' } }) // entity check
-    enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'aktiebolag' } }) // update
+    enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'aktiebolag' } }) // re-read
+    const fiscalYear = {
+      fiscal_period_id: '11111111-1111-4111-8111-111111111111',
+      framework: 'k3',
+      previous_framework: 'k2',
+      changed: true,
+      k3_to_k2: false,
+      cascaded_period_ids: [],
+      company_framework: 'k3',
+      dry_run: false,
+    }
+    changeFrameworkMock.mockResolvedValue(fiscalYear)
 
     const req = createMockRequest('/api/company/current', {
       method: 'PATCH',
-      body: { accounting_framework: 'k3' },
+      body: { accounting_framework: 'k3', fiscal_period_id: '11111111-1111-4111-8111-111111111111' },
     })
     const { status, body } = await parseJsonResponse<{
-      data: { accounting_framework: string }
+      data: { accounting_framework: string; fiscal_year: typeof fiscalYear }
     }>(await PATCH(req, routeParams))
 
     expect(status).toBe(200)
     expect(body.data.accounting_framework).toBe('k3')
+    expect(body.data.fiscal_year).toEqual(fiscalYear)
+    expect(changeFrameworkMock).toHaveBeenCalledWith(
+      { supabase, companyId: 'company-1', userId: 'user-1' },
+      {
+        framework: 'k3',
+        fiscal_period_id: '11111111-1111-4111-8111-111111111111',
+        change_reason: null,
+        previously_applied_k2: null,
+        special_reasons_confirmed: null,
+        previous_year_framework: null,
+      },
+    )
+    expect(supabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('passes the K3 to K2 reasons on to the service', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k3' } }) // entity check
+    enqueue({ data: { id: 'company-1', accounting_framework: 'k2', entity_type: 'aktiebolag' } }) // re-read
+    changeFrameworkMock.mockResolvedValue({ framework: 'k2', changed: true })
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: {
+        accounting_framework: 'k2',
+        framework_change_reason: 'Verksamheten har minskat\u0007 kraftigt.',
+        previously_applied_k2: true,
+        special_reasons_confirmed: true,
+        previous_year_framework: 'k3',
+      },
+    })
+    const { status } = await parseJsonResponse(await PATCH(req, routeParams))
+    expect(status).toBe(200)
+    expect(changeFrameworkMock.mock.calls[0][1]).toMatchObject({
+      framework: 'k2',
+      // Control characters never reach the note in the årsredovisning.
+      change_reason: 'Verksamheten har minskat kraftigt.',
+      previously_applied_k2: true,
+      special_reasons_confirmed: true,
+      previous_year_framework: 'k3',
+    })
+  })
+
+  it('rejects a stated previous framework that is not k2, k3 or none with 400', async () => {
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { accounting_framework: 'k2', previous_year_framework: 'k1' },
+    })
+    const { status } = await parseJsonResponse(await PATCH(req, routeParams))
+    expect(status).toBe(400)
+    expect(changeFrameworkMock).not.toHaveBeenCalled()
+  })
+
+  it('answers an unknown previous årsredovisning with its own 400 code', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k3' } }) // entity check
+    changeFrameworkMock.mockRejectedValue(
+      codedRefusal('ACCOUNTING_FRAMEWORK_PREVIOUS_YEAR_UNKNOWN', 'The framework change was refused (FRAMEWORK_PREVIOUS_YEAR_UNKNOWN).'),
+    )
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { accounting_framework: 'k2' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await PATCH(req, routeParams),
+    )
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('ACCOUNTING_FRAMEWORK_PREVIOUS_YEAR_UNKNOWN')
+    expect(body.error.message).toContain('föregående årsredovisning')
+  })
+
+  it('answers a refused change (closed year) with the canonical 409 envelope', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k2' } }) // entity check
+    changeFrameworkMock.mockRejectedValue(
+      codedRefusal('ACCOUNTING_FRAMEWORK_PERIOD_CLOSED', 'The framework change was refused (FRAMEWORK_PERIOD_CLOSED).'),
+    )
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { accounting_framework: 'k3' },
+    })
+    const { status, body } = await parseJsonResponse<{ error: { code: string; message: string } }>(
+      await PATCH(req, routeParams),
+    )
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('ACCOUNTING_FRAMEWORK_PERIOD_CLOSED')
+    expect(body.error.message).toContain('stängt')
+  })
+
+  it('rejects a malformed fiscal_period_id with 400 before touching the database', async () => {
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { accounting_framework: 'k3', fiscal_period_id: 'not-a-uuid' },
+    })
+    const { status } = await parseJsonResponse(await PATCH(req, routeParams))
+    expect(status).toBe(400)
+    expect(supabase.from).not.toHaveBeenCalled()
+    expect(changeFrameworkMock).not.toHaveBeenCalled()
+  })
+
+  it('applies the framework to the year when a legal-form correction leaves the form unchanged', async () => {
+    enqueue({ data: { entity_type: 'aktiebolag', accounting_framework: 'k2' } }) // current row
+    enqueue({ data: { ok: true, changed: false, entity_type: 'aktiebolag' } }) // rpc: same form
+    enqueue({ data: { id: 'company-1', accounting_framework: 'k3', entity_type: 'aktiebolag' } }) // re-read
+    changeFrameworkMock.mockResolvedValue({ framework: 'k3', changed: true })
+    const req = createMockRequest('/api/company/current', {
+      method: 'PATCH',
+      body: { entity_type: 'aktiebolag', accounting_framework: 'k3' },
+    })
+    const { status } = await parseJsonResponse(await PATCH(req, routeParams))
+    expect(status).toBe(200)
+    expect(changeFrameworkMock).toHaveBeenCalledTimes(1)
   })
 })

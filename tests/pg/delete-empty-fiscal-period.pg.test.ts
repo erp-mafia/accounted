@@ -118,6 +118,16 @@ describe('delete_empty_fiscal_period', () => {
     expect(audit.map((a) => a.actor_id)).toContain(book.userId)
   })
 
+  it('removes an empty first year together with the framework row seeded with it', async () => {
+    const book = await seedBook()
+    const framework = `SELECT 1 FROM public.fiscal_period_frameworks WHERE fiscal_period_id = $1`
+    expect((await getPool().query(framework, [book.ghostId])).rowCount).toBe(1)
+    expect(await remove(book, book.ghostId, { dryRun: true })).toMatchObject({ ok: true })
+    expect(await remove(book, book.ghostId)).toMatchObject({ ok: true })
+    expect(await periodExists(book.ghostId)).toBe(false)
+    expect((await getPool().query(framework, [book.ghostId])).rowCount).toBe(0)
+  })
+
   it('lets the real first year start on the registration day once the empty year is gone', async () => {
     const book = await seedBook()
     const redate = () =>
