@@ -17971,5 +17971,55 @@
     "booked_voucher": "Booked as voucher",
     "open_voucher": "View the voucher",
     "earlier_counts": "More stock counts for the year"
+  },
+  "permissions": {
+    "bookkeeping_read": {
+      "label": "Read the books and reports",
+      "description": "See vouchers, registers and reports, and ask the assistant."
+    },
+    "bookkeeping_write": {
+      "label": "Bookkeeping",
+      "description": "Book transactions and vouchers, and keep documents, accounts and registers in order."
+    },
+    "invoicing": {
+      "label": "Invoicing",
+      "description": "Create and send quotes, orders and invoices, and manage customers and articles."
+    },
+    "payments_prepare": {
+      "label": "Prepare payments",
+      "description": "Prepare and approve payments from the company's account. Payments are always signed with BankID."
+    },
+    "payroll_read": {
+      "label": "See payroll",
+      "description": "See employees, pay runs and payslips. Salary totals in the books stay visible to anyone who reads the books."
+    },
+    "payroll_write": {
+      "label": "Manage payroll",
+      "description": "Set up employees, run payroll and book it."
+    },
+    "tax_prepare": {
+      "label": "VAT and declarations",
+      "description": "Prepare and file the VAT return and the employer declaration."
+    },
+    "periods": {
+      "label": "Periods and year-end",
+      "description": "Lock and close periods, and prepare the year-end closing and the annual report."
+    },
+    "agents_connect": {
+      "label": "Connect agents",
+      "description": "Connect Claude and other agents to the company. An agent never gets more than the person it acts for."
+    },
+    "agents_autonomy": {
+      "label": "Let agents act on their own",
+      "description": "Let an agent act on its own, without a person approving each proposal."
+    },
+    "members": {
+      "label": "Invite people and change permissions",
+      "description": "Invite people, change roles and permissions, and create API keys."
+    },
+    "settings": {
+      "label": "Company settings",
+      "description": "Change company details, packages and settings that apply to the whole company."
+    }
   }
 }
