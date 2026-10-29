@@ -10969,6 +10969,32 @@ const PAYMENT_ORDERS: Record<string, StructuredErrorEntry> = {
     message_en: 'The request could not be sent right now. Try again in a moment.',
     retryable: true,
   },
+  // Bank payment packs on the subscription (lib/stripe/payment-packs.ts, issue #132).
+  PAYMENT_PACKS_NOT_OFFERED: {
+    httpStatus: 409,
+    message_sv: 'Fler betalningar går inte att köpa här. Begär fler under Inställningar, Kopplingar, Betalningar via banken.',
+    message_en: 'More payments cannot be bought here. Ask for more under Settings, Connections, Bank payments.',
+  },
+  PAYMENT_PACKS_SUBSCRIPTION_NOT_ACTIVE: {
+    httpStatus: 409,
+    message_sv: 'Fler betalningar köps på ett aktivt abonnemang. Under en provperiod, eller när abonnemanget är uppsagt eller obetalt, begär ni fler i stället.',
+    message_en: 'More payments are bought on an active subscription. During a trial, or when the subscription is cancelled or unpaid, ask for more instead.',
+  },
+  PAYMENT_PACKS_PLAN_CHANGE_PENDING: {
+    httpStatus: 409,
+    message_sv: 'Abonnemanget har en planändring som väntar. Köp fler betalningar när den har gått igenom.',
+    message_en: 'The subscription has a plan change waiting. Buy more payments once it has taken effect.',
+  },
+  PAYMENT_PACKS_PLAN_INTERVAL: {
+    httpStatus: 409,
+    message_sv: 'Abonnemanget debiteras med ett annat intervall än paketen, så fler betalningar går inte att köpa på det än. Begär fler under Inställningar, Kopplingar, Betalningar via banken.',
+    message_en: 'The subscription is billed on another interval than the packs, so more payments cannot be bought on it yet. Ask for more under Settings, Connections, Bank payments.',
+  },
+  PAYMENT_PACKS_PAYMENT_FAILED: {
+    httpStatus: 402,
+    message_sv: 'Kortet kunde inte debiteras, så inga betalningar lades till. Byt kort under Abonnemang och försök igen.',
+    message_en: 'The card could not be charged, so no payments were added. Change card under Subscription and try again.',
+  },
   PAYMENT_SIGNING_REDIRECT_UNSUPPORTED: {
     httpStatus: 409,
     message_sv: 'Banken kräver signering på sin egen webbsida, vilket inte stöds här ännu. Betala fakturorna med en betalfil i stället.',

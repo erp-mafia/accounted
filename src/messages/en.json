@@ -3130,7 +3130,15 @@
     "receipt_pdf_aria": "Open the receipt from {date} as PDF",
     "receipts_empty": "No receipts yet.",
     "receipts_load_failed": "The receipts could not be loaded.",
-    "receipts_manage": "Change card or cancel"
+    "receipts_manage": "Change card or cancel",
+    "packs_row_label": "Extra bank payments",
+    "packs_row_help": "A pack adds {size} bank payments a month on top of the {base} included. More packs take effect now and the rest of the period is charged then. Fewer packs take effect from the next period.",
+    "packs_row_value": "{packs, plural, one {# pack} other {# packs}}, {payments} payments a month",
+    "packs_row_none": "None",
+    "packs_row_change": "Change",
+    "packs_row_buy": "Buy",
+    "packs_row_price": "{price} per pack and month excl. VAT, {size} payments per pack.",
+    "packs_row_scheduled": "Goes down to {packs, plural, one {# pack} other {# packs}} on {date}."
   },
   "settings_invoice_form": {
     "default_our_reference_label": "Default \"Our reference\"",
@@ -15972,7 +15980,26 @@
     "none_left": "All {included} bank payments included in {month} are used.",
     "refused": "You have used {used} of the {included} payments included in {month}. Choose at most {remaining, plural, one {# payment} other {# payments}}.",
     "refused_none_left": "You have used {used} of the {included} payments included in {month}.",
-    "refused_link": "The company has used {used} of the {included} payments included in {month}. The person who sent the link can ask for more under Settings, Connections, Bank payments."
+    "refused_link": "The company has used {used} of the {included} payments included in {month}. The person who sent the link can ask for more under Settings, Connections, Bank payments.",
+    "buy_more": "Buy more payments",
+    "buy_title": "Buy more payments",
+    "buy_description": "{base} bank payments a month are included. A pack adds {size} a month and costs {price} a month excl. VAT.",
+    "buy_description_plain": "Buy packs of more bank payments a month on the subscription.",
+    "buy_packs_label": "Number of packs",
+    "buy_current": "You have {packs, plural, one {# pack} other {# packs}} today.",
+    "buy_scheduled": "It goes down to {packs, plural, one {# pack} other {# packs}} on {date}.",
+    "buy_total": "{total} bank payments a month in total.",
+    "buy_effect_now": "Takes effect now. The rest of the period is charged now, then {amount} a month excl. VAT for the packs.",
+    "buy_effect_later": "Takes effect on {date}. Until then you keep {packs, plural, one {# pack} other {# packs}}.",
+    "buy_effect_later_plain": "Takes effect from the next period. Until then you keep {packs, plural, one {# pack} other {# packs}}.",
+    "buy_effect_keep": "The decrease to {packs, plural, one {# pack} other {# packs}} is withdrawn.",
+    "buy_confirm": "Buy",
+    "buy_confirm_lower": "Decrease",
+    "buy_confirm_keep": "Keep",
+    "buy_done_now": "Done. You can now send {included} bank payments a month.",
+    "buy_done_later": "Done. From {date} you have {packs, plural, one {# pack} other {# packs}}.",
+    "buy_unavailable": "More payments cannot be bought here right now. Ask for more instead.",
+    "buy_failed": "The purchase did not go through. Try again."
   },
   "payments_page": {
     "title": "Payments",
@@ -16060,7 +16087,10 @@
     "account_reason_not_sek": "Krona accounts only",
     "account_reason_iban_missing": "IBAN missing",
     "account_reason_bank_unknown": "The bank could not be identified",
-    "account_reason_bank_not_supported": "This bank does not take payments through Accounted yet"
+    "account_reason_bank_not_supported": "This bank does not take payments through Accounted yet",
+    "buy_more": "Buy more payments",
+    "usage_of_with_packs": "{used} of {included} ({base} included + {bought} bought)",
+    "packs_scheduled": "The bought payments go down to {packs, plural, one {# pack} other {# packs}} on {date}."
   },
   "bank_ledger_suggestion": {
     "move_transactions": "Bank account {account} is booked on {from}, but {hits, plural, one {# of its bank transactions is already booked} other {# of its bank transactions are already booked}} on {to}. Switch to {toNumber} and the transactions are linked to their vouchers.",

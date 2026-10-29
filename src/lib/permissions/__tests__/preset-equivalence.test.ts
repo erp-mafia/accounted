@@ -52,6 +52,8 @@ const HAND_ROLLED_GATES: Readonly<Record<string, Gate>> = {
   'POST /api/agent/profile/verify': 'write',
   // The handler refuses everyone but the owner.
   'POST /api/company/:id/delete': 'owner',
+  // Bank payment packs charge the company's card: the handler refuses everyone but the owner.
+  'POST /api/billing/payment-packs': 'owner',
   // requireWrite at the route; reset_company_for_migration refuses everyone but the owner.
   'POST /api/company/:id/migration-reset': 'owner',
   // requireWrite at the route; the handler (or loadInviteForManagement) asks for owner or admin.
@@ -238,6 +240,7 @@ const EXTENSION_ROUTE_WITHOUT_ROLE_GATE: readonly string[] = [
 
 /** Owner-only today; no preset tells the owner from an admin, who holds every permission. */
 const OWNER_ONLY: readonly string[] = [
+  'POST /api/billing/payment-packs',
   'POST /api/company/:id/delete',
   'POST /api/company/:id/migration-reset',
 ]

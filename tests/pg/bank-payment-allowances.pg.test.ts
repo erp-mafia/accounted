@@ -109,6 +109,96 @@ describe('bank_payment_allowances.pg: the cap is read by members and raised only
     }
   })
 
+  // Bank payment packs (migration *_bank_payment_packs.sql, issue #132):
+  // purchased_packs is bought on the Stripe subscription and mirrored by the
+  // server alone. A browser session must not raise it any way it can reach.
+  it('lets a member read the packs but no browser session write them, the owner\'s included', async () => {
+    const { userId, companyId } = await companyWithOwner()
+    await getPool().query(`INSERT INTO public.company_bank_payment_allowances (company_id, purchased_packs) VALUES ($1, 2)`, [companyId])
+    const fresh = await companyWithOwner()
+
+    await withUserContext(userId, async (client) => {
+      const own = await client.query<{ monthly_payments: number | null; purchased_packs: number }>(
+        `SELECT monthly_payments, purchased_packs FROM public.company_bank_payment_allowances`,
+      )
+      expect(own.rows).toEqual([{ monthly_payments: null, purchased_packs: 2 }])
+    })
+    await withUserContext(userId, async (client) => {
+      await expect(client.query(`UPDATE public.company_bank_payment_allowances SET purchased_packs = 100 WHERE company_id = $1`, [companyId])).rejects.toThrow(
+        /permission denied/i,
+      )
+    })
+    await withUserContext(userId, async (client) => {
+      await expect(
+        client.query(
+          `INSERT INTO public.company_bank_payment_allowances (company_id, purchased_packs) VALUES ($1, 5)
+           ON CONFLICT (company_id) DO UPDATE SET purchased_packs = excluded.purchased_packs`,
+          [companyId],
+        ),
+      ).rejects.toThrow(/permission denied/i)
+    })
+    await withUserContext(fresh.userId, async (client) => {
+      await expect(client.query(`INSERT INTO public.company_bank_payment_allowances (company_id, purchased_packs) VALUES ($1, 5)`, [fresh.companyId])).rejects.toThrow(
+        /permission denied/i,
+      )
+    })
+    const anon = await getClient()
+    try {
+      await anon.query('BEGIN')
+      await anon.query('SET LOCAL ROLE anon')
+      await expect(anon.query(`UPDATE public.company_bank_payment_allowances SET purchased_packs = 100`)).rejects.toThrow(/permission denied/i)
+    } finally {
+      await anon.query('ROLLBACK').catch(() => {})
+      anon.release()
+    }
+    const { rows } = await getPool().query<{ purchased_packs: number }>(
+      `SELECT purchased_packs FROM public.company_bank_payment_allowances WHERE company_id = $1`,
+      [companyId],
+    )
+    expect(rows).toEqual([{ purchased_packs: 2 }])
+  })
+
+  it('lets the server write packs as the webhook does: a packs-only row, an update that keeps the founder\'s base, never below 0', async () => {
+    const { companyId } = await companyWithOwner()
+    const founderSet = await companyWithOwner()
+    await grantAllowance(founderSet.companyId, 40)
+    await runAsServiceRole(async (service) => {
+      // A company without an override gets a row that holds only its packs: the base stays NULL (the default).
+      await service.query(
+        `INSERT INTO public.company_bank_payment_allowances (company_id, purchased_packs) VALUES ($1, 1)
+         ON CONFLICT (company_id) DO UPDATE SET purchased_packs = excluded.purchased_packs`,
+        [companyId],
+      )
+      // An existing override is untouched by the packs write (PostgREST's merge upsert sets only the columns it is given).
+      await service.query(
+        `INSERT INTO public.company_bank_payment_allowances (company_id, purchased_packs) VALUES ($1, 3)
+         ON CONFLICT (company_id) DO UPDATE SET purchased_packs = excluded.purchased_packs`,
+        [founderSet.companyId],
+      )
+      const lapsed = await service.query(`UPDATE public.company_bank_payment_allowances SET purchased_packs = 0 WHERE company_id = $1`, [companyId])
+      expect(lapsed.rowCount).toBe(1)
+    })
+    const { rows } = await getPool().query<{ company_id: string; monthly_payments: number | null; purchased_packs: number }>(
+      `SELECT company_id, monthly_payments, purchased_packs FROM public.company_bank_payment_allowances WHERE company_id = ANY($1) ORDER BY monthly_payments NULLS FIRST`,
+      [[companyId, founderSet.companyId]],
+    )
+    expect(rows).toEqual([
+      { company_id: companyId, monthly_payments: null, purchased_packs: 0 },
+      { company_id: founderSet.companyId, monthly_payments: 40, purchased_packs: 3 },
+    ])
+    await expect(
+      getPool().query(`UPDATE public.company_bank_payment_allowances SET purchased_packs = -1 WHERE company_id = $1`, [companyId]),
+    ).rejects.toThrow(/check constraint/i)
+    // A row written before packs existed reads 0 packs: the column's default.
+    const old = await companyWithOwner()
+    await grantAllowance(old.companyId, 20)
+    const { rows: oldRows } = await getPool().query<{ purchased_packs: number }>(
+      `SELECT purchased_packs FROM public.company_bank_payment_allowances WHERE company_id = $1`,
+      [old.companyId],
+    )
+    expect(oldRows).toEqual([{ purchased_packs: 0 }])
+  })
+
   it('lets the server raise a cap, record a request and mark it handled, within the shapes', async () => {
     const { userId, companyId } = await companyWithOwner()
     await runAsServiceRole(async (service) => {

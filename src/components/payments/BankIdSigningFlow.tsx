@@ -33,6 +33,8 @@ import {
   startCompanyVerification,
   startSecondSignature,
   startSigning,
+  withIncludedPayments,
+  withIncludedRefusal,
   type BankPaymentsAllowanceRefusal,
   type BankPaymentsUsage,
   type CompanyVerification,
@@ -252,6 +254,12 @@ export function BankIdSigningFlow({
     }
   }, [client])
 
+  // Packs bought from the allowance line raise the cap now: the counter and a
+  // refusal on screen show the new numbers, and the next start is not refused.
+  const raiseIncluded = useCallback((included: number) => {
+    setUsage((current) => withIncludedPayments(current, included))
+    setAllowance((current) => withIncludedRefusal(current, included))
+  }, [])
   const total = useMemo(() => orders.reduce((sum, o) => sum + Number(o.amount), 0), [orders])
   const currency = orders[0]?.currency ?? 'SEK'
   // The other signatory is named by their own number, whoever holds the screen.
@@ -608,7 +616,7 @@ export function BankIdSigningFlow({
           </AttnLine>
         )}
         {refusal === 'redirect' && <AttnLine>{t('signing_redirect_unsupported')}</AttnLine>}
-        <BankPaymentsAllowanceLine usage={usage} count={orders.length} refusal={allowance} canRequest={Boolean(client.usage)} />
+        <BankPaymentsAllowanceLine usage={usage} count={orders.length} refusal={allowance} canRequest={Boolean(client.usage)} onIncluded={raiseIncluded} />
         <DialogFooter>
           {closeButton}
           <Button variant="secondary" onClick={() => begin('same_device')} loading={busy && method === 'same_device'} disabled={disabled}>
@@ -694,7 +702,7 @@ export function BankIdSigningFlow({
         {!waiting && (failure || signing.status === 'created') && (
           <div className="space-y-3">
             {allowance ? (
-              <BankPaymentsAllowanceLine usage={usage} count={signing.orders.length} refusal={allowance} canRequest={Boolean(client.usage)} />
+              <BankPaymentsAllowanceLine usage={usage} count={signing.orders.length} refusal={allowance} canRequest={Boolean(client.usage)} onIncluded={raiseIncluded} />
             ) : (
               <AttnLine>
                 {permanent && failure ? (providerCodeText(t, failure) ?? t('signing_failed_permanent', { code: failure })) : (providerCodeText(t, failure) ?? t('signing_failed'))}

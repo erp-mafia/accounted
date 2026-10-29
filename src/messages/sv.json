@@ -3130,7 +3130,15 @@
     "receipt_pdf_aria": "Öppna kvittot från {date} som PDF",
     "receipts_empty": "Inga kvitton ännu.",
     "receipts_load_failed": "Kvittona kunde inte läsas in.",
-    "receipts_manage": "Byt kort eller säg upp"
+    "receipts_manage": "Byt kort eller säg upp",
+    "packs_row_label": "Extra bankbetalningar",
+    "packs_row_help": "Ett paket ger {size} bankbetalningar till i månaden, utöver de {base} som ingår. Fler paket gäller direkt och det som är kvar av perioden debiteras då. Färre paket gäller från nästa period.",
+    "packs_row_value": "{packs} paket, {payments} betalningar i månaden",
+    "packs_row_none": "Inga",
+    "packs_row_change": "Ändra",
+    "packs_row_buy": "Köp",
+    "packs_row_price": "{price} per paket och månad exkl. moms, {size} betalningar per paket.",
+    "packs_row_scheduled": "Minskar till {packs} paket den {date}."
   },
   "settings_invoice_form": {
     "default_our_reference_label": "Standard för Vår referens",
@@ -15972,7 +15980,26 @@
     "none_left": "Alla {included} bankbetalningar som ingår i {month} är använda.",
     "refused": "Ni har använt {used} av {included} betalningar som ingår i {month}. Välj högst {remaining, plural, one {# betalning} other {# betalningar}}.",
     "refused_none_left": "Ni har använt {used} av {included} betalningar som ingår i {month}.",
-    "refused_link": "Företaget har använt {used} av {included} betalningar som ingår i {month}. Den som skickade länken kan begära fler under Inställningar, Kopplingar, Betalningar via banken."
+    "refused_link": "Företaget har använt {used} av {included} betalningar som ingår i {month}. Den som skickade länken kan begära fler under Inställningar, Kopplingar, Betalningar via banken.",
+    "buy_more": "Köp fler betalningar",
+    "buy_title": "Köp fler betalningar",
+    "buy_description": "{base} bankbetalningar i månaden ingår. Ett paket ger {size} till i månaden och kostar {price} i månaden exkl. moms.",
+    "buy_description_plain": "Köp paket med fler bankbetalningar i månaden på abonnemanget.",
+    "buy_packs_label": "Antal paket",
+    "buy_current": "Ni har {packs} paket i dag.",
+    "buy_scheduled": "Det minskar till {packs} paket den {date}.",
+    "buy_total": "Totalt {total} bankbetalningar i månaden.",
+    "buy_effect_now": "Gäller direkt. Det som är kvar av perioden debiteras nu, sedan {amount} i månaden exkl. moms för paketen.",
+    "buy_effect_later": "Gäller från {date}. Till dess har ni kvar {packs} paket.",
+    "buy_effect_later_plain": "Gäller från nästa period. Till dess har ni kvar {packs} paket.",
+    "buy_effect_keep": "Minskningen till {packs} paket tas bort.",
+    "buy_confirm": "Köp",
+    "buy_confirm_lower": "Minska",
+    "buy_confirm_keep": "Behåll",
+    "buy_done_now": "Klart. Ni kan nu skicka {included} bankbetalningar i månaden.",
+    "buy_done_later": "Klart. Från {date} har ni {packs} paket.",
+    "buy_unavailable": "Fler betalningar går inte att köpa här just nu. Begär fler i stället.",
+    "buy_failed": "Köpet gick inte igenom. Försök igen."
   },
   "payments_page": {
     "title": "Betalningar",
@@ -16060,7 +16087,10 @@
     "account_reason_not_sek": "Bara kronkonton",
     "account_reason_iban_missing": "IBAN saknas",
     "account_reason_bank_unknown": "Banken kunde inte identifieras",
-    "account_reason_bank_not_supported": "Banken tar inte emot betalningar via Accounted än"
+    "account_reason_bank_not_supported": "Banken tar inte emot betalningar via Accounted än",
+    "buy_more": "Köp fler betalningar",
+    "usage_of_with_packs": "{used} av {included} ({base} ingår + {bought} köpta)",
+    "packs_scheduled": "De köpta betalningarna minskar till {packs} paket den {date}."
   },
   "bank_ledger_suggestion": {
     "move_transactions": "Bankkontot {account} bokförs på {from}, men {hits, plural, one {# av dess banktransaktioner är redan bokförd} other {# av dess banktransaktioner är redan bokförda}} på {to}. Byt till {toNumber} så kopplas transaktionerna till verifikaten.",

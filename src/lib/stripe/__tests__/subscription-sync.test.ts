@@ -139,6 +139,121 @@ describe('subscriptionToState', () => {
   })
 })
 
+// Issue #132: a subscription carries a bank payment pack item beside the
+// plan, and Stripe lists items in no promised order.
+describe('subscriptionToState: a pack item beside the plan', () => {
+  const PLAN_END = Math.floor(Date.UTC(2027, 9, 1) / 1000)
+  const PACK_END = Math.floor(Date.UTC(2026, 10, 1) / 1000)
+
+  function withPack(packs: number): Stripe.Subscription {
+    return {
+      id: 'sub_123',
+      customer: 'cus_123',
+      status: 'active',
+      metadata: {},
+      items: {
+        data: [
+          // The pack first: what items.data[0] read as the plan.
+          { price: { id: 'price_pack', recurring: { interval: 'month' } }, quantity: packs, current_period_end: PACK_END },
+          { price: { id: 'price_year', recurring: { interval: 'year' } }, quantity: 1, current_period_end: PLAN_END },
+        ],
+      },
+    } as unknown as Stripe.Subscription
+  }
+
+  it('finds the plan item by its price id even when the pack item comes first', () => {
+    vi.stubEnv('STRIPE_PRICE_YEARLY', 'price_year')
+    vi.stubEnv('STRIPE_PRICE_MONTHLY', 'price_month')
+    vi.stubEnv('STRIPE_PRICE_PAYMENTS_PACK', 'price_pack')
+    const state = subscriptionToState(withPack(2), 'co_1')
+    expect(state.plan).toBe('yearly')
+    // The plan's own period, not the monthly pack's.
+    expect(state.currentPeriodEnd).toBe(new Date(PLAN_END * 1000).toISOString())
+    expect(state.paymentPacks).toBe(2)
+  })
+
+  it('never reads the pack item as the plan when the env plan ids are not wired', () => {
+    vi.stubEnv('STRIPE_PRICE_PAYMENTS_PACK', 'price_pack')
+    expect(subscriptionToState(withPack(1), 'co_1').plan).toBe('yearly')
+  })
+
+  it('leaves packs out (null) while this installation sells none', () => {
+    vi.stubEnv('STRIPE_PRICE_YEARLY', 'price_year')
+    expect(subscriptionToState(withPack(2), 'co_1').paymentPacks).toBeNull()
+  })
+})
+
+describe('applySubscriptionState: bank payment packs into the cap', () => {
+  const base = {
+    companyId: 'co_1',
+    stripeCustomerId: 'cus_1',
+    stripeSubscriptionId: 'sub_1',
+    plan: 'monthly' as const,
+    currentPeriodEnd: new Date().toISOString(),
+  }
+
+  it('writes the packs of a paying subscription to purchased_packs', async () => {
+    const { supabase, calls } = recordingSupabase()
+    await applySubscriptionState(supabase, { ...base, status: 'active', paymentPacks: 3 })
+    const write = calls.find((c) => c.table === 'company_bank_payment_allowances')
+    expect(write).toMatchObject({ op: 'upsert', payload: { company_id: 'co_1', purchased_packs: 3 }, conflict: 'company_id' })
+  })
+
+  it('drops the packs of a lapsed plan, whatever quantity the dead subscription lists', async () => {
+    const { supabase, calls } = recordingSupabase()
+    await applySubscriptionState(supabase, { ...base, status: 'canceled', paymentPacks: 3 })
+    const write = calls.find((c) => c.table === 'company_bank_payment_allowances')
+    expect(write).toMatchObject({ op: 'update', payload: { purchased_packs: 0 } })
+    expect(write?.filters).toContainEqual(['company_id', 'co_1'])
+  })
+
+  it('creates no allowance row for a company without packs, and leaves it alone where packs are not sold', async () => {
+    const none = recordingSupabase()
+    await applySubscriptionState(none.supabase, { ...base, status: 'active', paymentPacks: 0 })
+    expect(none.calls.filter((c) => c.table === 'company_bank_payment_allowances').map((c) => c.op)).toEqual(['update'])
+
+    const unsold = recordingSupabase()
+    await applySubscriptionState(unsold.supabase, { ...base, status: 'active', paymentPacks: null })
+    expect(unsold.calls.some((c) => c.table === 'company_bank_payment_allowances')).toBe(false)
+  })
+
+  it('carries a pack change from the webhook event to the column', async () => {
+    vi.stubEnv('STRIPE_PRICE_MONTHLY', 'price_month')
+    vi.stubEnv('STRIPE_PRICE_PAYMENTS_PACK', 'price_pack')
+    const { supabase, calls } = recordingSupabase()
+    const sub = {
+      ...fakeSub({ status: 'active', priceId: 'price_month' }),
+      metadata: { company_id: 'co_1' },
+      items: {
+        data: [
+          { price: { id: 'price_pack', recurring: { interval: 'month' } }, quantity: 2, current_period_end: Math.floor(Date.now() / 1000) + 86400 },
+          { price: { id: 'price_month', recurring: { interval: 'month' } }, quantity: 1, current_period_end: Math.floor(Date.now() / 1000) + 86400 },
+        ],
+      },
+    } as unknown as Stripe.Subscription
+    syncIdentityMock.mockResolvedValue(null)
+
+    await handleStripeEvent(supabase, {} as Stripe, { id: 'evt_1', type: 'customer.subscription.updated', data: { object: sub } } as unknown as Stripe.Event)
+
+    expect(calls.find((c) => c.table === 'company_bank_payment_allowances')).toMatchObject({
+      op: 'upsert',
+      payload: { company_id: 'co_1', purchased_packs: 2 },
+    })
+    expect(calls.find((c) => c.table === 'company_subscriptions' && c.op === 'upsert')?.payload).toMatchObject({ plan: 'monthly' })
+  })
+
+  it('throws when the cap cannot be written, so Stripe delivers the event again', async () => {
+    const { supabase } = recordingSupabase()
+    const failing = {
+      from(table: string) {
+        if (table !== 'company_bank_payment_allowances') return supabase.from(table)
+        return { upsert: () => Promise.resolve({ data: null, error: { message: 'boom' } }) }
+      },
+    } as unknown as SupabaseClient
+    await expect(applySubscriptionState(failing, { ...base, status: 'active', paymentPacks: 1 })).rejects.toThrow(/boom/)
+  })
+})
+
 describe('applySubscriptionState', () => {
   it('grants the PAID keys when the subscription is active', async () => {
     const { supabase, calls } = recordingSupabase()

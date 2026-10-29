@@ -26,6 +26,7 @@ import { PLAN_PRICES, planPrice } from '@/components/settings/billing-plans'
 import type { BillingPlan } from '@/lib/stripe/client'
 import { useBranding } from '@/lib/branding/brand-context'
 import { useSigningAvailability } from '@/components/signing/use-signing-availability'
+import { BuyPaymentPacksDialog, usePaymentPacks } from '@/components/payments/BankPaymentsAllowance'
 
 // What the paid tier unlocks: the external connections. One item per PAID
 // capability in lib/entitlements/keys.ts (bank_sync, skatteverket,
@@ -540,6 +541,7 @@ function BillingCoreContent() {
           </SettingsRowNote>
         )}
       </SettingsRow>
+      <PaymentPacksRow />
       <button
         type="button"
         onClick={() => setComparing((v) => !v)}
@@ -597,6 +599,47 @@ function BillingCoreContent() {
         </div>
       )}
     </div>
+  )
+}
+
+/**
+ * The bank payments add-on under the plan (issue #132): the packs the
+ * company holds and, for the owner, Köp fler / Ändra. Rendered only where
+ * packs are sold and bank payments are open to the company; until a founder
+ * sets the pack price nothing shows.
+ */
+function PaymentPacksRow() {
+  const t = useTranslations('settings_billing')
+  const { formatDateLong } = useFormat()
+  const [buying, setBuying] = useState(false)
+  // The add-on row is extra: without the read the plan row stands alone.
+  const { view, reload } = usePaymentPacks(true)
+  const packs = view !== null && view !== 'failed' ? view : null
+
+  if (!packs?.offered) return null
+  const payments = packs.packs * packs.pack_size
+  return (
+    <SettingsRow label={t('packs_row_label')} help={t('packs_row_help', { size: packs.pack_size, base: packs.base_payments })}>
+      <span className="tabular-nums">{packs.packs > 0 ? t('packs_row_value', { packs: packs.packs, payments }) : t('packs_row_none')}</span>
+      {packs.can_buy && (
+        <SettingsRowEnd>
+          <Button variant="outline" size="sm" onClick={() => setBuying(true)}>
+            {packs.packs > 0 ? t('packs_row_change') : t('packs_row_buy')}
+          </Button>
+        </SettingsRowEnd>
+      )}
+      {packs.can_buy && packs.pack_price_ex_vat !== null && (
+        <SettingsRowNote className="basis-full tabular-nums">
+          {t('packs_row_price', { price: formatCurrency(packs.pack_price_ex_vat), size: packs.pack_size })}
+        </SettingsRowNote>
+      )}
+      {packs.scheduled && (
+        <SettingsRowNote className="basis-full">
+          {t('packs_row_scheduled', { packs: packs.scheduled.packs, date: formatDateLong(packs.scheduled.at) })}
+        </SettingsRowNote>
+      )}
+      {buying && packs.can_buy && <BuyPaymentPacksDialog view={packs} onOpenChange={setBuying} onChanged={reload} />}
+    </SettingsRow>
   )
 }
 

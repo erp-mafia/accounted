@@ -11,8 +11,9 @@ import type { PaymentOrderStatus } from '@/lib/payments/orders/status'
 import type { VerificationState } from '@/lib/payments/orders/verification-state'
 import { paymentsReadiness, type PaymentAccountContext, type PaymentsReadiness } from '@/lib/payments/orders/readiness'
 import type { DocumentChecks, InvoiceDocumentFacts, InvoiceDocumentSource } from '@/lib/payments/orders/invoice-document'
+import type { PaymentPacksView, ScheduledPacks } from '@/lib/stripe/payment-packs'
 
-export type { PaymentOrderStatus, VerificationState, PaymentsReadiness }
+export type { PaymentOrderStatus, VerificationState, PaymentsReadiness, PaymentPacksView, ScheduledPacks }
 
 export interface PayableAccount {
   id: string
@@ -276,6 +277,22 @@ export function remainingBankPayments(usage: BankPaymentsUsage): number {
   return usage.remaining_payments ?? Math.max(0, usage.included_payments - usage.payments_sent)
 }
 
+/** A usage read before packs were bought, with the cap they raised it to (null stays null). */
+export function withIncludedPayments(usage: BankPaymentsUsage | null, included: number): BankPaymentsUsage | null {
+  if (!usage) return null
+  return {
+    ...usage,
+    included_payments: included,
+    remaining_payments: Math.max(0, included - usage.payments_sent),
+    extra_payments: Math.max(0, usage.payments_sent - included),
+  }
+}
+
+/** A refusal at the cap, with the cap packs bought since raised it to (null stays null). */
+export function withIncludedRefusal(refusal: BankPaymentsAllowanceRefusal | null, included: number): BankPaymentsAllowanceRefusal | null {
+  return refusal ? { ...refusal, included, remaining: Math.max(0, included - refusal.used) } : null
+}
+
 /** A signing refused at the monthly cap (BANK_PAYMENTS_ALLOWANCE_EXCEEDED): the numbers the refusal carries. */
 export interface BankPaymentsAllowanceRefusal {
   period: string
@@ -311,6 +328,22 @@ export function signingOfRefusedStart(error: unknown): SigningView | null {
   const signing = (error.body as { error?: { details?: { signing?: Partial<SigningView> | null } } } | null)?.error?.details?.signing
   if (!signing || typeof signing.batch_id !== 'string' || typeof signing.status !== 'string' || !Array.isArray(signing.orders)) return null
   return signing as SigningView
+}
+
+/** The company's bank payment packs and whether this person may buy more (GET /api/billing/payment-packs). */
+export function fetchPaymentPacks(): Promise<PaymentPacksView> {
+  return send<PaymentPacksView>('/api/billing/payment-packs')
+}
+
+/** What POST /api/billing/payment-packs answers: the cap now, and a decrease waiting for the period end. */
+export interface PaymentPacksSet {
+  included_payments: number
+  scheduled: ScheduledPacks | null
+}
+
+/** Set the packs (the total wanted). More take effect now and are charged now; fewer at the period end. Owner only. */
+export function setPaymentPacks(packs: number): Promise<PaymentPacksSet> {
+  return send<PaymentPacksSet>('/api/billing/payment-packs', { method: 'POST', body: JSON.stringify({ packs }) })
 }
 
 /** Begär fler betalningar (POST /api/payments/allowance-requests): support is mailed, a founder answers. */

@@ -9,8 +9,9 @@ import {
   invoiceMetadataCompanyId,
   invoiceSubscriptionId,
 } from './billing-invoice-inbox'
-import type { BillingPlan } from './client'
+import { paymentPackPriceId, type BillingPlan } from './client'
 import { syncCompanyStripeIdentity } from './customer-identity'
+import { paymentPacksOn, periodEndOf, planItemOf } from './subscription-items'
 
 const log = createLogger('stripe/subscription-sync')
 
@@ -38,10 +39,18 @@ export interface SubscriptionState {
   status: string | null
   plan: BillingPlan | null
   currentPeriodEnd: string | null // ISO
+  /**
+   * Bank payment packs on the subscription (issue #132). Absent or null when
+   * this installation sells no packs (STRIPE_PRICE_PAYMENTS_PACK unset): the
+   * allowance row is then left as it is.
+   */
+  paymentPacks?: number | null
 }
 
+// The plan is read off the plan item, found by its price id: a pack item
+// can come first in the list.
 function planFromSubscription(sub: Stripe.Subscription): BillingPlan | null {
-  const price = sub.items.data[0]?.price
+  const price = planItemOf(sub)?.price
   const priceId = price?.id
   if (priceId && priceId === process.env.STRIPE_PRICE_YEARLY) return 'yearly'
   if (priceId && priceId === process.env.STRIPE_PRICE_MONTHLY) return 'monthly'
@@ -52,15 +61,10 @@ function planFromSubscription(sub: Stripe.Subscription): BillingPlan | null {
   return null
 }
 
-// current_period_end lives on the Subscription in older API versions and on the
-// subscription item in newer ones: read defensively so SDK/API drift can't
-// break the build or the expiry calc.
+// The plan item's own period: with a monthly pack on a yearly plan, the
+// subscription-level date is the pack's.
 function periodEndIso(sub: Stripe.Subscription): string | null {
-  const s = sub as unknown as {
-    current_period_end?: number
-    items?: { data?: Array<{ current_period_end?: number }> }
-  }
-  const unix = s.current_period_end ?? s.items?.data?.[0]?.current_period_end ?? null
+  const unix = periodEndOf(sub, planItemOf(sub))
   return unix ? new Date(unix * 1000).toISOString() : null
 }
 
@@ -72,13 +76,31 @@ export function subscriptionToState(sub: Stripe.Subscription, companyId: string)
     status: sub.status,
     plan: planFromSubscription(sub),
     currentPeriodEnd: periodEndIso(sub),
+    paymentPacks: paymentPackPriceId() ? paymentPacksOn(sub) : null,
   }
+}
+
+/**
+ * Mirror the company's packs into company_bank_payment_allowances, the one
+ * writer of purchased_packs (the webhook, and the purchase route with the
+ * subscription Stripe returned). A company without packs gets no row: 0 only
+ * clears a row that exists. Throws on a failed write, so the webhook answers
+ * 500 and Stripe delivers the event again.
+ */
+export async function applyPaymentPacks(supabase: SupabaseClient, companyId: string, packs: number): Promise<void> {
+  const table = supabase.from('company_bank_payment_allowances')
+  const { error } =
+    packs > 0
+      ? await table.upsert({ company_id: companyId, purchased_packs: packs }, { onConflict: 'company_id' })
+      : await table.update({ purchased_packs: 0 }).eq('company_id', companyId)
+  if (error) throw new Error(`company_bank_payment_allowances write failed: ${error.message}`)
 }
 
 /**
  * Reconcile a company's subscription state into the DB: upsert
  * company_subscriptions, then either grant or remove the stripe capability
- * grants. Idempotent: safe to run on duplicate/retried events.
+ * grants, then mirror the bank payment packs. Idempotent: safe to run on
+ * duplicate/retried events.
  */
 export async function applySubscriptionState(
   supabase: SupabaseClient,
@@ -139,6 +161,12 @@ export async function applySubscriptionState(
       .eq('source', 'stripe')
       .eq('capability_key', CAPABILITY.multi_user)
       .or(`expires_at.is.null,expires_at.gt.${new Date().toISOString()}`)
+  }
+
+  // A lapsed plan takes its packs with it: the cap falls back to the base
+  // the moment access ends, whatever quantity the dead subscription lists.
+  if (typeof state.paymentPacks === 'number') {
+    await applyPaymentPacks(supabase, state.companyId, statusGrantsAccess(state.status) ? state.paymentPacks : 0)
   }
 }
 
