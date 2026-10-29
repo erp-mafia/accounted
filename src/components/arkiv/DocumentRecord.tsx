@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation'
 import { useLocale, useTranslations } from 'next-intl'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { EllipsisHorizontalIcon, TrashIcon } from '@/components/icons'
 import { PageHeader } from '@/components/ui/page-header'
 import { Skeleton } from '@/components/ui/skeleton'
 import { QUIET_LINK_CLASS, TD_CLASS, TH_CLASS } from '@/components/ui/dry-table'
@@ -170,16 +172,12 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
         meta={<span data-ph-mask="">{meta}</span>}
         action={
           // The viewer below has its own "open in a new tab" link, so the header asks the document's one open question,
-          // with a quiet delete beside it for a document nothing is booked on (crm#230).
+          // beside signing where it is open, and keeps the delete for a document nothing is booked on (crm#230) in the
+          // menu after them: a text button between two pills read as a third, odd action.
           <div className="flex items-center gap-2">
             {signing.available && view.mime_type === 'application/pdf' ? (
               <Button size="sm" variant="outline" onClick={() => setRequestingSignature(true)}>
                 {t('record_request_signature')}
-              </Button>
-            ) : null}
-            {view.deletable ? (
-              <Button size="sm" variant="ghost" onClick={() => void handleDelete(view.file_name, view.agreement?.title ?? null)}>
-                {t('record_delete')}
               </Button>
             ) : null}
             {view.admission_state === 'held' ? (
@@ -192,6 +190,24 @@ export function DocumentRecord({ documentId, initialPage = null }: { documentId:
                 {(view.doc_type && view.doc_type !== 'other') || view.journal_entry ? t('record_change_type') : t('linked_say_what')}
               </Button>
             )}
+            {view.deletable ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="icon-sm" variant="ghost" aria-label={t('record_more_actions')}>
+                    <EllipsisHorizontalIcon className="h-4 w-4" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem
+                    onSelect={() => void handleDelete(view.file_name, view.agreement?.title ?? null)}
+                    className="text-destructive focus:text-destructive"
+                  >
+                    <TrashIcon className="h-4 w-4" />
+                    {t('record_delete')}
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : null}
           </div>
         }
       />

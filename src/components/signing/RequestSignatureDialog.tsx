@@ -5,7 +5,7 @@ import { useLocale, useTranslations } from 'next-intl'
 import { PlusIcon, XMarkIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuLabel, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { AttnLine } from '@/components/ui/attn-line'
@@ -244,30 +244,34 @@ export function RequestSignatureDialog({ documentId, fileName, onOpenChange, onC
                   </div>
                 )
               })}
-              {rows.length < SIGNING_MAX_SIGNERS && (
-                <div className="flex flex-wrap gap-2">
+              {/* One way to add a signer: the company's members to pick from, then anyone else by name and
+                  address. Two buttons side by side ("person", "medlem") left the difference to guess. */}
+              {rows.length < SIGNING_MAX_SIGNERS &&
+                (pickable.length > 0 ? (
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button type="button" variant="secondary" size="sm">
+                        <PlusIcon className="h-4 w-4" />
+                        {t('signer_add')}
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="start" className="min-w-[260px]">
+                      <DropdownMenuLabel className="text-[12.5px] font-normal text-muted-foreground">{t('signer_add_members_label')}</DropdownMenuLabel>
+                      {pickable.map((m) => (
+                        <DropdownMenuItem key={m.user_id} onSelect={() => addRow({ userId: m.user_id, email: m.email })}>
+                          <span data-ph-mask="">{m.is_current_user ? t('member_you', { email: m.email }) : m.email}</span>
+                        </DropdownMenuItem>
+                      ))}
+                      <DropdownMenuSeparator />
+                      <DropdownMenuItem onSelect={() => addRow()}>{t('signer_add_other')}</DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                ) : (
                   <Button type="button" variant="secondary" size="sm" onClick={() => addRow()}>
                     <PlusIcon className="h-4 w-4" />
                     {t('signer_add')}
                   </Button>
-                  {pickable.length > 0 && (
-                    <DropdownMenu>
-                      <DropdownMenuTrigger asChild>
-                        <Button type="button" variant="secondary" size="sm">
-                          {t('signer_add_member')}
-                        </Button>
-                      </DropdownMenuTrigger>
-                      <DropdownMenuContent align="start">
-                        {pickable.map((m) => (
-                          <DropdownMenuItem key={m.user_id} onSelect={() => addRow({ userId: m.user_id, email: m.email })}>
-                            <span data-ph-mask="">{m.is_current_user ? t('member_you', { email: m.email }) : m.email}</span>
-                          </DropdownMenuItem>
-                        ))}
-                      </DropdownMenuContent>
-                    </DropdownMenu>
-                  )}
-                </div>
-              )}
+                ))}
             </fieldset>
 
             <label className="block space-y-2 text-[13px]">
