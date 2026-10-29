@@ -281,15 +281,15 @@ const nextConfig: NextConfig = {
     ]
   },
   async headers() {
-    // The catch-all excludes /api/documents/:id/inline so the strict
-    // X-Frame-Options: DENY doesn't conflict with the embeddable override
-    // below (the proxy likewise leaves that route's CSP alone, so its
+    // The catch-all excludes the embeddable document routes so the strict
+    // X-Frame-Options: DENY doesn't conflict with their override below (the
+    // proxy likewise leaves those routes' CSP alone, so their
     // frame-ancestors 'self' is the only one): Next.js applies every
     // matching header rule, and duplicate X-Frame-Options/CSP values
     // trigger "Det här innehållet har blockerats" in Chromium browsers.
     return [
       {
-        source: "/((?!api/documents/[^/]+/inline$).*)",
+        source: "/((?!api/documents/[^/]+/inline$|api/signera/[^/]+/document$|api/signing/me/[^/]+/document$).*)",
         headers: [
           {
             key: "Strict-Transport-Security",
@@ -327,9 +327,10 @@ const nextConfig: NextConfig = {
         ],
       },
       // Document inline-preview proxy must be embeddable in same-origin
-      // iframes (used by the verifikat document preview Sheet). Excluded
-      // from the catch-all above so these values aren't shadowed by the
-      // stricter defaults.
+      // iframes (used by the verifikat document preview Sheet), and so must
+      // the PDF a signer reads on /signera/:token and in the app's signing
+      // step (<object> on the signing page). Excluded from the catch-all
+      // above so these values aren't shadowed by the stricter defaults.
       //
       // CSP is intentionally minimal: only `frame-ancestors 'self'`
       // prevents cross-origin clickjacking on the user's documents.
@@ -341,8 +342,12 @@ const nextConfig: NextConfig = {
       // this. See crbug.com/271452. X-Content-Type-Options: nosniff plus
       // the explicit Content-Type from the route handler already prevent
       // MIME-confusion abuse.
-      {
-        source: "/api/documents/:id/inline",
+      ...[
+        "/api/documents/:id/inline",
+        "/api/signera/:token/document",
+        "/api/signing/me/:signerId/document",
+      ].map((source) => ({
+        source,
         headers: [
           {
             key: "Strict-Transport-Security",
@@ -369,7 +374,7 @@ const nextConfig: NextConfig = {
             value: "frame-ancestors 'self'",
           },
         ],
-      },
+      })),
     ];
   },
 };

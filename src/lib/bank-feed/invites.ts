@@ -17,6 +17,7 @@
 import { createHash, randomBytes } from 'crypto'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { aggregatorOf } from '@/lib/bank-sync/aggregator'
+import { actingByraName } from '@/lib/attribution/acting-byra'
 import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { sendBankConnectInviteMail } from '@/lib/email/send-bank-connect-invite'
 import { requireCompanyAdmin } from '@/lib/operations/access'
@@ -320,18 +321,7 @@ export async function describeInvite(
   const company = (companyRow as { name: string | null; team_id: string | null } | null) ?? null
   const companyName = company?.name?.trim() || 'Företaget'
 
-  let requester = companyName
-  if (company?.team_id) {
-    const { data: membership } = await service
-      .from('team_members')
-      .select('team_id, teams(name)')
-      .eq('team_id', company.team_id)
-      .eq('user_id', invite.created_by)
-      .maybeSingle()
-    const team = (membership as { teams?: { name?: string | null } | { name?: string | null }[] | null } | null)?.teams
-    const teamName = (Array.isArray(team) ? team[0]?.name : team?.name)?.trim()
-    if (teamName) requester = teamName
-  }
+  const requester = (await actingByraName(service, company?.team_id, invite.created_by)) ?? companyName
 
   let replaced: InviteDescription['replaced'] = null
   if (invite.replace_connection_id) {
