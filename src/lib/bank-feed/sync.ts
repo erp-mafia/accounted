@@ -130,14 +130,16 @@ export function accountDedupScope(account: Pick<BankFeedAccount, 'dedup_scope' |
  * The service's rows as ingest rows. External ids come from the same function
  * and the same 'eb' prefix as Enable Banking's, so an account that moves
  * between the two aggregators keeps its stored keys and nothing is imported
- * twice.
+ * twice. `rowsWithoutPage` counts the rows whose raw_page_index names no
+ * page of the response (missing, or past the last page): those rows can
+ * never be linked to the bank's answer, whatever the archive did.
  */
 export function mapBankFeedRows(input: {
   rows: readonly NormalizedBankTransaction[]
   account: Pick<BankFeedAccount, 'uid' | 'iban' | 'currency' | 'dedup_scope'>
   connectionId: string
   archivedPageIds: ReadonlyArray<string | null>
-}): { rows: RawTransaction[]; scope: string; minBookingDate?: string; maxBookingDate?: string; repeatsDropped: number } {
+}): { rows: RawTransaction[]; scope: string; minBookingDate?: string; maxBookingDate?: string; repeatsDropped: number; rowsWithoutPage: number } {
   const scope = accountDedupScope(input.account)
   // A bank entry the response served more than once is one transaction
   // (crm#1295): dropped before the ids are built, exactly as Enable Banking does.
@@ -150,13 +152,17 @@ export function mapBankFeedRows(input: {
   const ids = buildStableExternalIds('eb', scope, unique.map((tx) => ({ date: tx.booking_date, amount: tx.amount })))
   let minBookingDate: string | undefined
   let maxBookingDate: string | undefined
+  let rowsWithoutPage = 0
   const accountCurrency = input.account.currency.toUpperCase()
   const rows = unique.map((tx, i): RawTransaction => {
     if (!minBookingDate || tx.booking_date < minBookingDate) minBookingDate = tx.booking_date
     if (!maxBookingDate || tx.booking_date > maxBookingDate) maxBookingDate = tx.booking_date
     const cpAccount = tx.counterparty_account ?? null
     const cpIban = normalizeIban(tx.counterparty_iban) ?? (looksLikeIban(cpAccount) ? normalizeIban(cpAccount) : null)
-    const page = tx.raw_page_index ?? undefined
+    // The archived page's document: undefined when the row names no page of
+    // the response, null when that page failed to archive (the sync logs that).
+    const archivedPage: string | null | undefined = tx.raw_page_index == null ? undefined : input.archivedPageIds[tx.raw_page_index]
+    if (archivedPage === undefined) rowsWithoutPage++
     const rowCurrency = (tx.currency || accountCurrency).toUpperCase()
     const instructedCurrency = tx.instructed_currency?.toUpperCase() || null
     const foreignPurchase = tx.instructed_amount != null && instructedCurrency !== null && instructedCurrency !== rowCurrency
@@ -177,7 +183,7 @@ export function mapBankFeedRows(input: {
       value_date: tx.value_date || null,
       end_to_end_id: tx.end_to_end_id || null,
       provider_transaction_id: tx.provider_transaction_id || null,
-      raw_document_id: page === undefined ? null : input.archivedPageIds[page] ?? null,
+      raw_document_id: archivedPage ?? null,
       bank_connection_id: input.connectionId,
       import_source: OPEN_PAYMENTS_AGGREGATOR,
       counterparty_iban: cpIban,
@@ -197,7 +203,7 @@ export function mapBankFeedRows(input: {
       parts,
     }
   })
-  return { rows, scope, minBookingDate, maxBookingDate, repeatsDropped: input.rows.length - unique.length }
+  return { rows, scope, minBookingDate, maxBookingDate, repeatsDropped: input.rows.length - unique.length, rowsWithoutPage }
 }
 
 /** The sync response's enrichment in the result's shape; null when the service reported nothing. */
@@ -252,6 +258,20 @@ export async function syncOpenPaymentsAccount(supabase: SupabaseClient, input: B
 
   const mapped = mapBankFeedRows({ rows: remote.transactions, account, connectionId, archivedPageIds })
   if (!account.dedup_scope) account.dedup_scope = mapped.scope
+  if (mapped.rowsWithoutPage > 0) {
+    // The contract keeps raw_page_index optional so an older service still
+    // parses, so a service that leaves it out passes every check and its rows
+    // are stored with no link to the bank's answer (BFL 7 kap, #87). Said
+    // once per sync so it reaches error tracking the same day.
+    archiveLog.error('bank rows name no page of the response: stored without a link to the raw bank page', {
+      connectionId,
+      companyId,
+      accountUid: account.uid,
+      rowsWithoutPage: mapped.rowsWithoutPage,
+      rows: mapped.rows.length,
+      pages: remote.raw_pages.length,
+    })
+  }
   if (mapped.repeatsDropped > 0) {
     console.warn('[bank-feed] Dropped bank rows the response repeated', {
       connectionId,

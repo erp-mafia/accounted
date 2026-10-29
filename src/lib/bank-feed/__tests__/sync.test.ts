@@ -114,6 +114,15 @@ describe('mapBankFeedRows', () => {
     expect(mapped.raw_document_id).toBeNull()
     expect(mapped.end_to_end_id).toBeNull()
   })
+
+  it('counts the rows that name no page of the response, and not a row whose page the archive lost', () => {
+    const mapped = mapBankFeedRows({
+      rows: [row({ raw_page_index: 0 }), row({ booking_date: '2026-10-02' }), row({ booking_date: '2026-10-03', raw_page_index: 2 }), row({ booking_date: '2026-10-04', raw_page_index: 1 })],
+      account, connectionId: 'conn-1', archivedPageIds: ['doc-1', null],
+    })
+    expect(mapped.rows.map((r) => r.raw_document_id)).toEqual(['doc-1', null, null, null])
+    expect(mapped.rowsWithoutPage).toBe(2)
+  })
 })
 
 describe('syncOpenPaymentsAccount', () => {
@@ -155,6 +164,22 @@ describe('syncOpenPaymentsAccount', () => {
     expect(rows[0].raw_document_id).toBeNull()
     // Those rows keep no BFL 7 kap evidence, for good: an error that reaches error tracking.
     expect(mocks.log.error).toHaveBeenCalledWith('raw bank response page not archived', expect.any(Error), expect.objectContaining({ connectionId: 'conn-1', companyId: 'co-1', page: 1 }))
+  })
+
+  // #87: Connect sent Open Payments rows without raw_page_index; the field is
+  // optional on the wire, so every row was stored unlinked without a word.
+  it('logs one error when the service sends rows that name no page of the response, and none when every row names its page', async () => {
+    const unpaged = fakeConnect({ syncTransactions: vi.fn().mockResolvedValue(page([row(), row({ booking_date: '2026-10-02' }), row({ booking_date: '2026-10-03', raw_page_index: 0 })])) })
+    await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect: unpaged })
+    expect(mocks.log.error).toHaveBeenCalledTimes(1)
+    expect(mocks.log.error).toHaveBeenCalledWith(expect.stringContaining('without a link to the raw bank page'), { connectionId: 'conn-1', companyId: 'co-1', accountUid: 'ACC003', rowsWithoutPage: 2, rows: 3, pages: 1 })
+    // The sync itself goes on: the rows are booked, only the link is missing.
+    expect(mocks.ingest).toHaveBeenCalledTimes(1)
+
+    mocks.log.error.mockClear()
+    const paged = fakeConnect({ syncTransactions: vi.fn().mockResolvedValue(page([row({ raw_page_index: 0 }), row({ booking_date: '2026-10-02', raw_page_index: 0 })])) })
+    await syncOpenPaymentsAccount({} as never, { companyId: 'co-1', userId: 'user-1', connectionId: 'conn-1', account: account(), fromDate: '2026-09-01', toDate: '2026-10-12', bankRoute: ROUTE, party: PARTY, connect: paged })
+    expect(mocks.log.error).not.toHaveBeenCalled()
   })
 
   it('keeps a fresh balance, forwards the ingest options, and reports a truncated or narrowed window', async () => {
