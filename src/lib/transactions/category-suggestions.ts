@@ -7,6 +7,7 @@ import {
 } from '@/lib/bookkeeping/counterparty-templates'
 import { BOOKING_TEMPLATES, findMatchingTemplates, getTemplateById, templateAppliesToForm, type BookingTemplate } from '@/lib/bookkeeping/booking-templates'
 import { proposalFromTemplate, type BookingProposal } from '@/lib/bookkeeping/proposal'
+import { ruleReviewFlags } from './direct-booking'
 import type {
   Transaction,
   TransactionCategory,
@@ -410,6 +411,7 @@ export function buildCounterpartySuggestion(
     booking: { kind: 'counterparty', counterparty_template_id: template.id },
     seen_count: template.occurrence_count,
     rule_mode: template.mode,
+    ...ruleReviewFlags(template),
     name_sv: formatCounterpartyName(template.counterparty_name),
     name_en: formatCounterpartyName(template.counterparty_name),
     group: 'counterparty',

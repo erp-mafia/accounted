@@ -4,6 +4,7 @@ import {
   parseJsonResponse,
   createMockRouteParams,
   createQueuedMockSupabase,
+  makeCategorizationTemplate,
   makeTransaction,
 } from '@/tests/helpers'
 import { generateOcrReference } from '@/lib/bankgiro/luhn'
@@ -11,6 +12,8 @@ import { eventBus } from '@/lib/events'
 import { recordDecisions, snapshotSuggestions } from '@/lib/suggestion-log/record'
 import { BookkeepingDatabaseError, JournalEntryNotBalancedError } from '@/lib/bookkeeping/errors'
 import { defaultCommitMethod, getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
+import { buildCounterpartySuggestion } from '@/lib/transactions/category-suggestions'
+import type { BookingProposal } from '@/lib/bookkeeping/proposal'
 
 const { supabase: mockSupabase, enqueue, reset, findCalls } = createQueuedMockSupabase()
 // suggestion_log is recorded around every booking; its own reads and writes
@@ -163,6 +166,116 @@ describe('POST /api/transactions/[id]/categorize', () => {
     // Default: no covering period at all. The closed-period test overrides this.
     mockCheckPeriodLock.mockResolvedValue({ locked: false, reason: 'no_fiscal_period' })
     mockAssertBookable.mockResolvedValue({ ok: true })
+  })
+
+  // accounted#130: the row's one click (review_shown false) books only what
+  // the direct-booking policy lets through without a review, judged on what
+  // is on offer now and the company's switch read with it.
+  describe('one click (review_shown false)', () => {
+    const settled = {
+      ...buildCounterpartySuggestion(
+        makeCategorizationTemplate({ id: 't-settled', counterparty_name: 'github', occurrence_count: 9, source: 'user_approved' }),
+        0.95,
+      ),
+    }
+    const imported = buildCounterpartySuggestion(
+      makeCategorizationTemplate({ id: 't-imported', counterparty_name: 'github', occurrence_count: 140, source: 'sie_import' }),
+      0.95,
+    )
+    const offer = (proposals: BookingProposal[], enabled = true) =>
+      vi.mocked(snapshotSuggestions).mockResolvedValueOnce({
+        companyId: 'company-1',
+        directBooking: { enabled },
+        byTransaction: new Map([['tx-1', { proposals, read: null, documentId: null, inputHash: null }]]),
+      })
+    const oneClick = (proposalId: string, reviewShown: boolean | string = false) =>
+      POST(
+        createMockRequest('/api/transactions/tx-1/categorize', {
+          method: 'POST',
+          body: { is_business: true, category: 'expense_software', proposal_id: proposalId, review_shown: reviewShown },
+        }),
+        createMockRouteParams({ id: 'tx-1' }),
+      )
+    const queueBooking = () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, merchant_name: 'GitHub', journal_entry_id: null }), error: null })
+      enqueue({ data: { entity_type: 'enskild_firma', fiscal_year_start_month: 1 }, error: null }) // settings
+      enqueue({ data: [], error: null }) // resolveSettlementAccount
+      enqueue({ data: [{ id: 'period-1' }], error: null }) // ensureFiscalPeriod
+      mockCreateTransactionJournalEntry.mockResolvedValue({ id: 'je-1' })
+      mockSaveUserMappingRule.mockResolvedValue(undefined)
+      enqueue({ data: [{ id: 'tx-1' }], error: null }) // CAS update
+    }
+
+    it('rejects a review_shown that is not a boolean with 400', async () => {
+      const response = await oneClick(settled.template_id, 'no')
+      expect((await parseJsonResponse(response)).status).toBe(400)
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses an imported rule nobody has confirmed here, before any guard runs, and books nothing', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([imported])
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(
+        await oneClick(imported.template_id),
+      )
+      expect(status).toBe(409)
+      expect(body.error.code).toBe('TX_CATEGORIZE_REVIEW_REQUIRED')
+      expect(body.error.details).toEqual({ proposal_id: imported.template_id, reason: 'rule_import_unconfirmed' })
+      expect(mockDetectDup).not.toHaveBeenCalled()
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+      expect(recordDecisions).not.toHaveBeenCalled()
+      expect(findCalls('transactions', 'update')).toEqual([])
+    })
+
+    it("refuses even a settled habit when the company switched one click off", async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([settled], false)
+      const { status, body } = await parseJsonResponse<{ error: { code: string; details: Record<string, unknown> } }>(
+        await oneClick(settled.template_id),
+      )
+      expect(status).toBe(409)
+      expect(body.error.details.reason).toBe('company_off')
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses a rule a person set to always ask', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([{ ...settled, rule_always_review: true }])
+      const { body } = await parseJsonResponse<{ error: { details: Record<string, unknown> } }>(await oneClick(settled.template_id))
+      expect(body.error.details.reason).toBe('rule_always_review')
+      expect(mockCreateTransactionJournalEntry).not.toHaveBeenCalled()
+    })
+
+    it('refuses a proposal that is not on offer now: the review opens, nothing is skipped on a guess', async () => {
+      enqueue({ data: makeTransaction({ id: 'tx-1', amount: -500, journal_entry_id: null }), error: null })
+      offer([settled])
+      const { status, body } = await parseJsonResponse<{ error: { details: Record<string, unknown> } }>(await oneClick('cp:gone'))
+      expect(status).toBe(409)
+      expect(body.error.details).toEqual({ proposal_id: 'cp:gone', reason: 'proposal_not_on_offer' })
+    })
+
+    it('books a settled habit, on the one snapshot it was judged on, and records that no review was shown', async () => {
+      queueBooking()
+      offer([settled])
+      const response = await oneClick(settled.template_id)
+      const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(response)
+      expect(status, JSON.stringify(body)).toBe(200)
+      expect(body.journal_entry_id).toBe('je-1')
+      expect(snapshotSuggestions).toHaveBeenCalledTimes(1)
+      expect(vi.mocked(recordDecisions).mock.calls[0][2]).toEqual([
+        expect.objectContaining({ actedOn: settled.template_id, reviewShown: false }),
+      ])
+    })
+
+    it('books an imported rule from its review, and records that the review was shown', async () => {
+      queueBooking()
+      const response = await oneClick(imported.template_id, true)
+      const { status, body } = await parseJsonResponse<unknown>(response)
+      expect(status, JSON.stringify(body)).toBe(200)
+      expect(vi.mocked(recordDecisions).mock.calls[0][2]).toEqual([
+        expect.objectContaining({ actedOn: imported.template_id, reviewShown: true }),
+      ])
+    })
   })
 
   it('returns 409 and books nothing for a row anchored only by a bank_line link (bulk-book, NULL pointer)', async () => {

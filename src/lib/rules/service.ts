@@ -33,7 +33,16 @@ function fromLegacyRow(row: Record<string, unknown>): RuleRow {
     mode: is_active === false ? 'paused' : 'propose',
     corrections: 0,
     paused_at: null,
+    always_review: false,
   } as unknown as RuleRow
+}
+
+/**
+ * Before migration 20261030131517 the table has no always_review (the code
+ * is live a few minutes before it runs): no rule asks on its own yet.
+ */
+function withoutAlwaysReview(row: Record<string, unknown>): RuleRow {
+  return { ...row, always_review: false } as unknown as RuleRow
 }
 
 /**
@@ -46,6 +55,20 @@ export async function listRules(supabase: SupabaseClient, companyId: string): Pr
     return await fetchAllRows<RuleRow>(({ from, to }) =>
       supabase
         .from('categorization_templates')
+        .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, always_review, created_at, updated_at')
+        .eq('company_id', companyId)
+        .order('occurrence_count', { ascending: false })
+        .order('updated_at', { ascending: false })
+        .order('id')
+        .range(from, to),
+    )
+  } catch (error) {
+    if ((error as { code?: string }).code !== UNDEFINED_COLUMN) throw error
+  }
+  try {
+    const ladder = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
+      supabase
+        .from('categorization_templates')
         .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
         .eq('company_id', companyId)
         .order('occurrence_count', { ascending: false })
@@ -53,6 +76,7 @@ export async function listRules(supabase: SupabaseClient, companyId: string): Pr
         .order('id')
         .range(from, to),
     )
+    return ladder.map(withoutAlwaysReview)
   } catch (error) {
     if ((error as { code?: string }).code !== UNDEFINED_COLUMN) throw error
     const legacy = await fetchAllRows<Record<string, unknown>>(({ from, to }) =>
@@ -72,11 +96,19 @@ export async function listRules(supabase: SupabaseClient, companyId: string): Pr
 export async function getRule(supabase: SupabaseClient, companyId: string, id: string): Promise<RuleRow | null> {
   const { data, error } = await supabase
     .from('categorization_templates')
-    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
+    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, always_review, created_at, updated_at')
     .eq('company_id', companyId)
     .eq('id', id)
     .maybeSingle()
   if (error && error.code === UNDEFINED_COLUMN) {
+    const ladder = await supabase
+      .from('categorization_templates')
+      .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
+      .eq('company_id', companyId)
+      .eq('id', id)
+      .maybeSingle()
+    if (!ladder.error) return ladder.data ? withoutAlwaysReview(ladder.data as Record<string, unknown>) : null
+    if (ladder.error.code !== UNDEFINED_COLUMN) throw ladder.error
     const legacy = await supabase
       .from('categorization_templates')
       .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, confidence, last_seen_date, source, is_active, created_at, updated_at')
@@ -119,22 +151,31 @@ export async function listRuleMatches(
   return (data ?? []) as RuleMatch[]
 }
 
+/** What a person may change on a rule: its ladder position, and whether it always asks. */
+export interface RuleChange {
+  mode?: RuleMode
+  always_review?: boolean
+}
+
 /**
- * Change the ladder position. The BEFORE trigger on the table keeps
- * is_active in step, so the booking engine sees the change immediately.
+ * Change a rule. The BEFORE trigger on the table keeps is_active in step
+ * with mode, so the booking engine sees the change immediately; the audit
+ * trigger logs both (always_review is a rule change in the
+ * behandlingshistorik, not a learning column).
  */
-export async function setRuleMode(
+export async function updateRule(
   supabase: SupabaseClient,
   companyId: string,
   id: string,
-  mode: RuleMode,
+  change: RuleChange,
 ): Promise<RuleRow | null> {
   const { data, error } = await supabase
     .from('categorization_templates')
-    .update({ mode })
+    // A key left undefined is not sent (the body is JSON), so only what changed is written.
+    .update({ mode: change.mode, always_review: change.always_review })
     .eq('company_id', companyId)
     .eq('id', id)
-    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, created_at, updated_at')
+    .select('id, counterparty_name, counterparty_aliases, debit_account, credit_account, vat_treatment, vat_account, category, occurrence_count, corrections, confidence, last_seen_date, source, mode, paused_at, always_review, created_at, updated_at')
     .maybeSingle()
   if (error) throw error
   return (data as unknown as RuleRow) ?? null

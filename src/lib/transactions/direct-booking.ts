@@ -1,4 +1,5 @@
 import type { SuggestedTemplate } from './category-suggestions'
+import type { CategorizationTemplate } from '@/types'
 
 /**
  * Which row suggestions book from the row's Bokför without a review: the
@@ -11,6 +12,15 @@ import type { SuggestedTemplate } from './category-suggestions'
  * So does any proposal the assistant's read puts in another reverse-charge
  * box (ruta 21 against ruta 22): the invoice decides that, not the history.
  * Every direct booking carries Ångra on its toast.
+ *
+ * Before the evidence, the company and the rule have their say
+ * (accounted#130): the company can switch one click off, a person can set a
+ * rule to always ask, and a rule learned from an imported history (a SIE
+ * file from Fortnox or another program) asks until one booking on it has
+ * been reviewed here. reviewReason is the one decision: the transactions
+ * page, MCP's books_without_review, the decision log's band and the
+ * categorize route's refusal all read it, and the Inkorg's one-click plan
+ * reads its company and rule half (askedForReview).
  */
 export const COUNTERPART_SEEN_FOR_DIRECT = 3
 /** Sure enough, with a receipt behind it, to book from the row without a review. */
@@ -19,12 +29,12 @@ export const ASSISTANT_SURE = 0.8
 export const ASSISTANT_LIKELY = 0.5
 
 /**
- * Bump by hand when booksWithoutReview decides differently for the same
- * proposal (the test beside it pins this file's content to the revision).
- * The thresholds are spelled into the version, so changing one changes the
- * version on its own.
+ * Bump by hand when reviewReason decides differently for the same proposal
+ * and settings (the test beside it pins this file's content to the
+ * revision). The thresholds are spelled into the version, so changing one
+ * changes the version on its own.
  */
-export const DIRECT_BOOKING_POLICY_REVISION = 1
+export const DIRECT_BOOKING_POLICY_REVISION = 2
 
 /**
  * The approval policy a decision's confidence band is evaluated under,
@@ -38,6 +48,68 @@ export const DIRECT_BOOKING_POLICY_VERSION =
 /** direct: the row's Bokför books it without a review. review: it opens Granska bokföring. */
 export type ConfidenceBand = 'direct' | 'review'
 
+/** The company's say: company_settings.direct_booking_enabled. */
+export interface DirectBookingSettings {
+  /** Off: every suggestion opens a review, whatever its evidence. */
+  enabled: boolean
+}
+
+/** What the column defaults to, and what a company that never touched it has. */
+export const DIRECT_BOOKING_ON: DirectBookingSettings = Object.freeze({ enabled: true })
+
+/** What the rule behind a proposal says about booking it without a review. */
+export type RuleReviewFlags = Pick<SuggestedTemplate, 'rule_always_review' | 'rule_import_unconfirmed'>
+
+/**
+ * The flags of a learned counterpart rule. An imported rule is unconfirmed
+ * while its source is still 'sie_import': a booking on it here, which only
+ * a review can make while it is unconfirmed, is learned as 'user_approved'
+ * (resolveSource ranks it above an import), and that lifts it. So every
+ * imported rule is covered, the ones learned before this policy too, and
+ * nothing extra is stored.
+ */
+export function ruleReviewFlags(template: Pick<CategorizationTemplate, 'source'> & { always_review?: boolean | null }): Required<RuleReviewFlags> {
+  return {
+    rule_always_review: template.always_review === true,
+    rule_import_unconfirmed: template.source === 'sie_import',
+  }
+}
+
+/** Why a proposal opens a review; null when one click may book it. */
+export type ReviewReason =
+  /** The company switched one click off (company_settings.direct_booking_enabled). */
+  | 'company_off'
+  /** A person set the rule to always ask (categorization_templates.always_review). */
+  | 'rule_always_review'
+  /** The rule was learned from an imported history and no booking on it has been reviewed here. */
+  | 'rule_import_unconfirmed'
+  /** The evidence is not settled enough (booksWithoutReview). */
+  | 'evidence'
+
+/** The company's and the rule's say, before any evidence is read. */
+export function askedForReview(rule: RuleReviewFlags, settings: DirectBookingSettings): ReviewReason | null {
+  if (!settings.enabled) return 'company_off'
+  if (rule.rule_always_review) return 'rule_always_review'
+  if (rule.rule_import_unconfirmed) return 'rule_import_unconfirmed'
+  return null
+}
+
+type PolicyEvidence = Pick<
+  SuggestedTemplate,
+  'source' | 'seen_count' | 'confidence' | 'has_underlag' | 'rule_mode' | 'rule_own' | 'rule_requires_review' | 'contested' | 'read_reverse_charge_kind'
+> &
+  RuleReviewFlags
+
+/** Why this proposal opens a review under these settings, or null: the one decision. */
+export function reviewReason(s: PolicyEvidence, settings: DirectBookingSettings): ReviewReason | null {
+  return askedForReview(s, settings) ?? (booksWithoutReview(s) ? null : 'evidence')
+}
+
+export function reviewRequired(s: PolicyEvidence, settings: DirectBookingSettings): boolean {
+  return reviewReason(s, settings) !== null
+}
+
+/** The evidence half: whether what is known about the proposal is settled enough to skip a review. */
 export function booksWithoutReview(
   s: Pick<
     SuggestedTemplate,
@@ -66,7 +138,7 @@ export function booksWithoutReview(
   return false
 }
 
-/** The band a proposal falls in under DIRECT_BOOKING_POLICY_VERSION. */
-export function confidenceBand(s: Parameters<typeof booksWithoutReview>[0]): ConfidenceBand {
-  return booksWithoutReview(s) ? 'direct' : 'review'
+/** The band a proposal falls in under DIRECT_BOOKING_POLICY_VERSION and the company's settings. */
+export function confidenceBand(s: PolicyEvidence, settings: DirectBookingSettings): ConfidenceBand {
+  return reviewRequired(s, settings) ? 'review' : 'direct'
 }

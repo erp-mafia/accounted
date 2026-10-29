@@ -120,7 +120,7 @@ import type { ReverseChargeKind } from '@/lib/bookkeeping/vat-entries'
 import { mutate as globalMutate } from 'swr'
 import { rowProposal, type SuggestedTemplate } from '@/lib/transactions/category-suggestions'
 import { readIsFresh, type AssistantRead } from '@/lib/agent/categorize/read-shape'
-import { booksWithoutReview } from '@/lib/transactions/direct-booking'
+import { reviewRequired, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
 import { activationFor, isPersonChoice, rememberReviewChoice, reviewChoiceFor, type ReviewChoice, type ReviewChoices } from '@/lib/transactions/review-choice'
 
 /**
@@ -495,6 +495,9 @@ export default function TransactionsPage() {
   const [isDialogOpen, setIsDialogOpen] = useState(false)
   const [isCreating, setIsCreating] = useState(false)
   const [templateSuggestions, setTemplateSuggestions] = useState<Record<string, SuggestedTemplate[]>>({})
+  // The company's one-click switch, read with the proposals. Until it has
+  // arrived no row books without its review.
+  const [directBooking, setDirectBooking] = useState<DirectBookingSettings | null>(null)
   // The assistant's reads for the loaded rows, so the review opens with one
   // instead of fetching it. A ref, not state: only the review reads them, and
   // it reads at open time, so a landing read has nothing to re-render.
@@ -1728,6 +1731,7 @@ export default function TransactionsPage() {
       if (data.template_suggestions) {
         setTemplateSuggestions(data.template_suggestions)
       }
+      if (data.direct_booking) setDirectBooking(data.direct_booking as DirectBookingSettings)
       if (data.assistant_reads) Object.assign(assistantReadsRef.current, data.assistant_reads)
     } catch {
       // Non-critical
@@ -2061,6 +2065,10 @@ export default function TransactionsPage() {
     counterpartyTemplateId?: string
     /** The suggestion the booking started from, recorded in suggestion_log. */
     proposalId?: string
+    /** false: the row's one click; true: booked from Granska bokföring. Sent as review_shown. */
+    reviewShown?: boolean
+    /** The server sent a one click to its review (TX_CATEGORIZE_REVIEW_REQUIRED): open it instead of a failure toast. */
+    onReviewRequired?: () => void
     inboxItemId?: string
     dimensions?: Record<string, string>
     /** The underlag's moms (transaction currency): sent as vat_amount. */
@@ -2088,7 +2096,7 @@ export default function TransactionsPage() {
     // state: a silent row the duplicate guard flagged, parked for the batch's
     // single confirmation and therefore neither booked nor failed.
   }): Promise<BatchCategorizeOutcome> {
-    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
+    const { id, isBusiness, category, vatTreatment, reverseChargeKind, accountOverride, templateId, counterpartyTemplateId, proposalId, reviewShown, onReviewRequired, inboxItemId, dimensions, vatAmount, confirmNoMatch, force, expectedDuplicateJournalEntryId, silent, narration } = args
     try {
       setProcessingId(id)
       const response = await fetch(`/api/transactions/${id}/categorize`, {
@@ -2103,6 +2111,7 @@ export default function TransactionsPage() {
           template_id: templateId,
           ...(counterpartyTemplateId ? { counterparty_template_id: counterpartyTemplateId } : {}),
           ...(proposalId ? { proposal_id: proposalId } : {}),
+          ...(reviewShown !== undefined ? { review_shown: reviewShown } : {}),
           inbox_item_id: inboxItemId,
           ...(dimensions && Object.keys(dimensions).length > 0 ? { dimensions } : {}),
           ...(vatAmount != null ? { vat_amount: vatAmount } : {}),
@@ -2115,6 +2124,14 @@ export default function TransactionsPage() {
 
       const result = await response.json()
       if (!response.ok) {
+        if (result?.error?.code === 'TX_CATEGORIZE_REVIEW_REQUIRED' && onReviewRequired) {
+          // The company or the rule asks for a review the page did not know
+          // of yet (a setting changed in another tab): nothing was booked,
+          // so the review opens on the same proposal.
+          setProcessingId(null)
+          onReviewRequired()
+          return { ok: false, journalEntryId: null }
+        }
         if (
           result?.error?.code === 'TX_CATEGORIZE_SUGGEST_SI_MATCH' &&
           Array.isArray(result.error.details?.candidates)
@@ -4230,7 +4247,9 @@ export default function TransactionsPage() {
     if (!s) return openCategoryDialog(transaction)
     // A decision the company already made (a rule, a settled counterpart, a
     // sure read of a receipt) books from the row; Ångra sits on the toast.
-    if (booksWithoutReview(s)) return void bookDirect(transaction, s)
+    // The company's switch and the rule's own say come first
+    // (lib/transactions/direct-booking.ts), and the server judges it again.
+    if (directBooking && !reviewRequired(s, directBooking)) return void bookDirect(transaction, s)
     openReview(transaction, s, false)
   }
 
@@ -4239,7 +4258,13 @@ export default function TransactionsPage() {
   async function bookProposalNow(
     transaction: TransactionWithInvoice,
     proposal: BookingProposal,
-    extras: { dimensions?: Record<string, string>; vatAmount?: number; narration?: string } = {},
+    extras: {
+      dimensions?: Record<string, string>
+      vatAmount?: number
+      narration?: string
+      reviewShown: boolean
+      onReviewRequired?: () => void
+    },
   ): Promise<{ ok: boolean; journalEntryId: string | null }> {
     const body = categorizeBodyFor(proposal, { dimensions: extras.dimensions, vatAmount: extras.vatAmount })
     return runCategorize({
@@ -4252,6 +4277,8 @@ export default function TransactionsPage() {
       templateId: body.template_id,
       counterpartyTemplateId: body.counterparty_template_id,
       proposalId: body.proposal_id,
+      reviewShown: extras.reviewShown,
+      onReviewRequired: extras.onReviewRequired,
       dimensions: body.dimensions,
       vatAmount: body.vat_amount,
       confirmNoMatch: false,
@@ -4263,6 +4290,8 @@ export default function TransactionsPage() {
     await bookProposalNow(transaction, s, {
       dimensions: s.default_dimensions ?? undefined,
       narration: `${s.name_sv} · ${whyFor(s)}`,
+      reviewShown: false,
+      onReviewRequired: () => openReview(transaction, s, false),
     })
   }
 
@@ -4359,7 +4388,7 @@ export default function TransactionsPage() {
   ): Promise<string | null> {
     const tx = quickReview?.transaction
     const { journalEntryId } = tx && tx.id === id
-      ? await bookProposalNow(tx, proposal, extras)
+      ? await bookProposalNow(tx, proposal, { ...extras, reviewShown: true })
       : { journalEntryId: null }
     // Always close: whether the server created a verifikation, returned a
     // structured 4xx (ACCOUNTS_NOT_IN_CHART, INVALID_MAPPING, …), or hit a

@@ -133,17 +133,41 @@ describe('classifyBankLineDecision', () => {
   })
 
   it("bands the acted-on suggestion by the direct-booking policy, on the proposal as offered", () => {
+    const on = { enabled: true }
     const habit = { ...counterparty, seen_count: 3, rule_mode: 'propose' as const }
-    expect(classifyBankLineDecision({ proposals: [habit], actedOn: 'cp:abc', final: final({ account: '6230' }) }).confidence_band).toBe('direct')
+    expect(classifyBankLineDecision({ proposals: [habit], actedOn: 'cp:abc', final: final({ account: '6230' }), directBooking: on }).confidence_band).toBe('direct')
     // Contested by the read: never booked from the row, whatever the habit.
     expect(
-      classifyBankLineDecision({ proposals: [{ ...habit, contested: true }], actedOn: 'cp:abc', final: final({ account: '6230' }) }).confidence_band,
+      classifyBankLineDecision({ proposals: [{ ...habit, contested: true }], actedOn: 'cp:abc', final: final({ account: '6230' }), directBooking: on }).confidence_band,
     ).toBe('review')
     // The assistant's own 0.82 is backing-floored, but without a receipt behind it the row opens a review.
-    expect(classifyBankLineDecision({ proposals: [assistant], actedOn: 'assistant:tx-1', final: final() }).confidence_band).toBe('review')
+    expect(classifyBankLineDecision({ proposals: [assistant], actedOn: 'assistant:tx-1', final: final(), directBooking: on }).confidence_band).toBe('review')
     expect(
-      classifyBankLineDecision({ proposals: [{ ...assistant, has_underlag: true }], actedOn: 'assistant:tx-1', final: final() }).confidence_band,
+      classifyBankLineDecision({ proposals: [{ ...assistant, has_underlag: true }], actedOn: 'assistant:tx-1', final: final(), directBooking: on }).confidence_band,
     ).toBe('direct')
+  })
+
+  it('bands under the company switch and the rule flags, and keeps the flags as evidence (accounted#130)', () => {
+    const habit = { ...counterparty, seen_count: 9, rule_mode: 'propose' as const }
+    const decide = (p: typeof habit, directBooking: { enabled: boolean }) =>
+      classifyBankLineDecision({ proposals: [p], actedOn: 'cp:abc', final: final({ account: '6230' }), directBooking })
+    expect(decide(habit, { enabled: false }).confidence_band).toBe('review')
+    const imported = decide({ ...habit, rule_import_unconfirmed: true } as typeof habit, { enabled: true })
+    expect(imported.confidence_band).toBe('review')
+    expect(imported.suggestions[0].evidence).toMatchObject({ rule_import_unconfirmed: true })
+    const asks = decide({ ...habit, rule_always_review: true } as typeof habit, { enabled: true })
+    expect(asks.confidence_band).toBe('review')
+    expect(asks.suggestions[0].evidence).toMatchObject({ rule_always_review: true })
+    // A false flag is not written: the evidence keeps only what asked.
+    expect(decide({ ...habit, rule_always_review: false, rule_import_unconfirmed: false } as typeof habit, { enabled: true }).suggestions[0].evidence).toEqual({
+      seen_count: 9,
+      rule_mode: 'propose',
+    })
+  })
+
+  it('decides no band without the switch it is read under (a failed snapshot)', () => {
+    const habit = { ...counterparty, seen_count: 3, rule_mode: 'propose' as const }
+    expect(classifyBankLineDecision({ proposals: [habit], actedOn: 'cp:abc', final: final({ account: '6230' }) }).confidence_band).toBeNull()
   })
 
   it('has no band without an acted-on suggestion', () => {

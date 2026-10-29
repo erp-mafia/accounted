@@ -208,6 +208,12 @@ export const DecisionReceiptSchema = z.object({
     .describe(
       'Why the agent that staged the operation proposed it, in its own words, as the approver saw it (the reason given when staging, at most 500 characters). Null when none was given, for a decision no staged operation carried, and for decisions before 2026-10-28.',
     ),
+  review_shown: z
+    .boolean()
+    .nullable()
+    .describe(
+      "Whether the person saw the booking's review before it was booked: false for a bank row's one click (booked without a review), true when it was booked from the review. Null when the door does not say (API, MCP and approvals) and for decisions recorded before it was.",
+    ),
 })
 
 export type DecisionCandidate = z.infer<typeof DecisionCandidateSchema>
@@ -238,6 +244,8 @@ export interface SuggestionLogRow {
   pending_operation_id?: string | null
   // Copied from the approved operation from 2026-10-28 (migration 20261028210000).
   agent_reason?: string | null
+  // Said by the dashboard's categorize door (migration 20261030131517).
+  review_shown?: boolean | null
 }
 
 export interface ReceiptEntryRow {
@@ -434,6 +442,7 @@ export function buildDecisionReceipt(row: SuggestionLogRow, ctx: ReceiptContext)
     checks: checksFrom(row.checks),
     confidence_band: bandFrom(row.confidence_band),
     agent_reason: str(row.agent_reason),
+    review_shown: typeof row.review_shown === 'boolean' ? row.review_shown : null,
   }
 }
 
@@ -460,6 +469,7 @@ export interface CompactDecision {
   rule_version?: string
   confidence_band?: 'direct' | 'review'
   agent_reason?: string
+  review_shown?: boolean
 }
 
 const MAX_ALTERNATIVES = 3
@@ -506,6 +516,7 @@ export function toCompactDecision(receipts: DecisionReceipt[]): CompactDecision 
     ...(r.rule_version ? { rule_version: r.rule_version } : {}),
     ...(r.confidence_band ? { confidence_band: r.confidence_band } : {}),
     ...(r.agent_reason ? { agent_reason: r.agent_reason } : {}),
+    ...(typeof r.review_shown === 'boolean' ? { review_shown: r.review_shown } : {}),
   }
 }
 
@@ -523,20 +534,27 @@ export async function fetchDecisionRows(
   companyId: string,
   subject: DecisionSubject,
 ): Promise<SuggestionLogRow[]> {
-  const withReason = () =>
+  const current = () =>
     supabase
       .from('suggestion_log')
-      .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id, agent_reason')
+      .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id, agent_reason, review_shown')
       .eq('company_id', companyId)
-  const read = (withAgentReason: boolean) => {
-    // Without agent_reason while the column is not there yet: the code is
-    // live a few minutes before migration 20261028210000 runs.
-    const base = withAgentReason
-      ? withReason()
-      : (supabase
-          .from('suggestion_log')
-          .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id')
-          .eq('company_id', companyId) as unknown as ReturnType<typeof withReason>)
+  // Each step leaves out the newest column, while its migration has not run
+  // yet: the code is live a few minutes before it does (20261030131517
+  // review_shown, 20261028210000 agent_reason).
+  const read = (columns: 'current' | 'without_review_shown' | 'without_agent_reason') => {
+    const base =
+      columns === 'current'
+        ? current()
+        : columns === 'without_review_shown'
+          ? (supabase
+              .from('suggestion_log')
+              .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id, agent_reason')
+              .eq('company_id', companyId) as unknown as ReturnType<typeof current>)
+          : (supabase
+              .from('suggestion_log')
+              .select('id, kind, transaction_id, inbox_item_id, document_id, suggestions, acted_on, final, outcome, actor_type, resolved_by, created_at, rule_version, policy_version, input_hash, checks, confidence_band, pending_operation_id')
+              .eq('company_id', companyId) as unknown as ReturnType<typeof current>)
     const filtered =
       'journalEntryId' in subject
         ? base.eq('final->>journal_entry_id', subject.journalEntryId)
@@ -548,8 +566,9 @@ export async function fetchDecisionRows(
       .order('id', { ascending: false })
       .limit(MAX_RECEIPTS_PER_SUBJECT)
   }
-  let result = await read(true)
-  if (isMissingColumnError(result.error)) result = await read(false)
+  let result = await read('current')
+  if (isMissingColumnError(result.error)) result = await read('without_review_shown')
+  if (isMissingColumnError(result.error)) result = await read('without_agent_reason')
   const { data, error } = result
   if (error) throw dbError(error)
   return (data ?? []) as SuggestionLogRow[]

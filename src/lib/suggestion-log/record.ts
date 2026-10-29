@@ -3,7 +3,7 @@ import { BANK_LINE_SUGGESTIONS } from '@/lib/composition/bank-line-suggestions'
 import { resolveCompanyEntityType } from '@/lib/company/entity-type'
 import { getActor } from '@/lib/bookkeeping/actor-context'
 import { getTemplateById } from '@/lib/bookkeeping/booking-templates'
-import { agentReasonColumn, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
+import { agentReasonColumn, isMissingColumnError, writeWithAgentReason } from '@/lib/pending-operations/agent-reason'
 import { committingAgentReason, committingOperationId } from '@/lib/pending-operations/commit-scope'
 import { createLogger } from '@/lib/logger'
 import type { BookingProposal, ProposalBooking } from '@/lib/bookkeeping/proposal'
@@ -17,6 +17,7 @@ import {
   type LoggedRead,
 } from './classify'
 import type { DecisionCheck } from './checks'
+import type { DirectBookingSwitch } from './bank-line-suggestions'
 import { bankLineInputHash, reasoningSha256, withProgramVersion } from './provenance'
 
 /**
@@ -31,8 +32,11 @@ import { bankLineInputHash, reasoningSha256, withProgramVersion } from './proven
  *      the inputs (./provenance.ts).
  *   2. recordDecisions() AFTER the booking succeeded: one row per bank line,
  *      with the guards the door ran, the band the acted-on suggestion fell
- *      in under the direct-booking policy, and the pending operation whose
- *      approval carried it (when an agent staged it) with its agent_reason.
+ *      in under the direct-booking policy and the company's one-click switch
+ *      read with the snapshot, whether the person saw the review before it
+ *      was booked (review_shown, when the door says), and the pending
+ *      operation whose approval carried it (when an agent staged it) with
+ *      its agent_reason.
  *
  * Neither step can fail a booking: a failed snapshot records an empty list,
  * a failed write is logged and dropped. The log describes bookkeeping, it is
@@ -58,6 +62,8 @@ export interface SuggestionSnapshot {
   entityType?: EntityType
   /** The rules the suggestions came from; unset when the snapshot failed. */
   ruleVersion?: string
+  /** The company's one-click switch, read with the suggestions; unset when the snapshot failed. */
+  directBooking?: DirectBookingSwitch
   byTransaction: Map<string, SnapshotEntry>
 }
 
@@ -119,6 +125,7 @@ export async function snapshotSuggestions(
       BANK_LINE_SUGGESTIONS.propose(supabase, companyId, transactions),
     ])
     snapshot.entityType = entityType
+    snapshot.directBooking = proposed.direct_booking
     const hashes = await documentHashes(
       supabase,
       companyId,
@@ -159,6 +166,12 @@ export interface BankLineDecision {
   final: BankLineFinal | null
   /** The guards the door ran before this decision (./checks.ts); omitted when it does not report them. */
   checks?: DecisionCheck[] | null
+  /**
+   * Whether the person saw the booking's review before it was booked: false
+   * for the row's one click, true from Granska bokföring. Omitted when the
+   * door does not say (suggestion_log.review_shown stays null).
+   */
+  reviewShown?: boolean | null
 }
 
 export async function recordDecisions(
@@ -171,7 +184,7 @@ export async function recordDecisions(
   try {
     const actorType = getActor()?.type ?? 'user'
     const pendingOperationId = committingOperationId()
-    const rowsWith = (agentReason: string | null) => decisions.map((d) => {
+    const rowsWith = (agentReason: string | null, withReviewShown: boolean) => decisions.map((d) => {
       const taken = snapshot.byTransaction.get(d.transactionId)
       const classified = classifyBankLineDecision({
         proposals: taken?.proposals ?? [],
@@ -179,6 +192,7 @@ export async function recordDecisions(
         actedOn: d.actedOn,
         final: d.final,
         entityType: snapshot.entityType,
+        directBooking: snapshot.directBooking,
       })
       return {
         company_id: snapshot.companyId,
@@ -200,12 +214,18 @@ export async function recordDecisions(
         checks: d.checks ?? null,
         pending_operation_id: pendingOperationId,
         ...agentReasonColumn(agentReason),
+        ...(withReviewShown && typeof d.reviewShown === 'boolean' ? { review_shown: d.reviewShown } : {}),
       }
     })
     // The approved operation's reason, when an agent staged it with one.
-    const { error } = await writeWithAgentReason(committingAgentReason(), (agentReason) =>
-      supabase.from('suggestion_log').insert(rowsWith(agentReason)),
-    )
+    const insert = (withReviewShown: boolean) =>
+      writeWithAgentReason(committingAgentReason(), (agentReason) =>
+        supabase.from('suggestion_log').insert(rowsWith(agentReason, withReviewShown)),
+      )
+    let { error } = await insert(true)
+    // Without review_shown while the column is not there yet: the code is
+    // live a few minutes before its migration runs.
+    if (isMissingColumnError(error) && decisions.some((d) => typeof d.reviewShown === 'boolean')) ({ error } = await insert(false))
     if (error) throw new Error(error.message)
   } catch (err) {
     log.error('failed to record booking decisions (booking unaffected)', {

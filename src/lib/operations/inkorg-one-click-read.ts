@@ -20,6 +20,7 @@ import { readInboxBankMatch, type BankMatchItemRow } from '@/lib/documents/inbox
 import { resolveSekAmountOrNull } from '@/lib/bookkeeping/currency-utils'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { findCounterpartyTemplate } from '@/lib/bookkeeping/counterparty-templates'
+import { readDirectBookingSettings } from '@/lib/transactions/direct-booking-settings'
 import { resolveInboxPurchaseCategories, templatePurchaseAccount } from '@/lib/categories/inbox-purchase-category'
 import type { PurchaseCategoryCode } from '@/lib/categories/purchase-categories'
 import { loadCompanyCapabilities } from '@/lib/modules/capabilities'
@@ -183,9 +184,10 @@ export async function readOneClickInput(
     receiptDate = isoDate(receiptReading?.invoice?.invoiceDate)
   }
 
-  const [settingsRes, capabilities] = await Promise.all([
+  const [settingsRes, capabilities, directBooking] = await Promise.all([
     supabase.from('company_settings').select('vat_registered, accounting_method, entity_type').eq('company_id', companyId).maybeSingle(),
     hint(log, 'the package switches', () => loadCompanyCapabilities(supabase, companyId, { obligations: false }), null),
+    readDirectBookingSettings(supabase, companyId),
   ])
   if (settingsRes.error) throw settingsRes.error
   const settings = settingsRes.data as { vat_registered: boolean | null; accounting_method: string | null; entity_type: string | null } | null
@@ -211,10 +213,11 @@ export async function readOneClickInput(
 
   // The account the company has booked this counterparty on: by the bank row's own text, else the supplier's name.
   const supplierName = reading?.supplier?.name?.trim() || null
-  const counterpartyAccount = await hint(
+  // The same match says whether the counterpart's rule always asks for a review.
+  const counterpart = await hint(
     log,
     'the counterparty account',
-    async () => {
+    async (): Promise<{ account: string | null; alwaysReview: boolean } | null> => {
       const probe = transaction
         ? ({ ...transaction } as unknown as Transaction)
         : supplierName
@@ -224,7 +227,7 @@ export async function readOneClickInput(
       const match = await findCounterpartyTemplate(supabase, companyId, probe)
       // A system default is a guess the company never booked, not its history.
       if (!match || match.confidence < 0.5 || match.template.source === 'sni_default') return null
-      return templatePurchaseAccount(match.template)
+      return { account: templatePurchaseAccount(match.template), alwaysReview: match.template.always_review === true }
     },
     null,
   )
@@ -251,7 +254,9 @@ export async function readOneClickInput(
       },
       category,
       supplier,
-      counterpartyAccount,
+      counterpartyAccount: counterpart?.account ?? null,
+      counterpartyAlwaysReview: counterpart?.alwaysReview ?? false,
+      directBooking,
       sellerRegionAnswer: answers.sellerRegion ?? null,
       invoiceRate: null,
     },

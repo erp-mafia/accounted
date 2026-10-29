@@ -97,13 +97,15 @@ afterEach(() => {
 
 describe('snapshotSuggestions', () => {
   it('keeps what was on offer per transaction, with the assistant read, the row document and the inputs hash', async () => {
-    mockPropose.mockResolvedValue({ proposals: { 'tx-1': [assistant] }, assistant_reads: { 'tx-1': read } })
+    mockPropose.mockResolvedValue({ proposals: { 'tx-1': [assistant] }, assistant_reads: { 'tx-1': read }, direct_booking: { enabled: false } })
     const { client } = fakeClient({ transactions: [tx], documents: [{ id: 'doc-1', sha256_hash: 'd'.repeat(64) }] })
 
     const snapshot = await snapshotSuggestions(client as never, 'company-1', ['tx-1'])
 
     expect(snapshot.entityType).toBe('aktiebolag')
     expect(snapshot.ruleVersion).toBe('bank-proposals.1')
+    // The company's one-click switch as read with the offers: every band is decided under it.
+    expect(snapshot.directBooking).toEqual({ enabled: false })
     expect(snapshot.byTransaction.get('tx-1')).toEqual({
       proposals: [assistant],
       read,
@@ -183,6 +185,7 @@ describe('recordDecisions', () => {
     companyId: 'company-1',
     entityType: 'aktiebolag',
     ruleVersion: 'bank-proposals.1+a38016f12abc',
+    directBooking: { enabled: true },
     byTransaction: new Map([['tx-1', { proposals: [assistant], read: null, documentId: 'doc-1', inputHash: 'f'.repeat(64) }]]),
   }
   const booked = finalFromLines('je-1', [
@@ -281,6 +284,51 @@ describe('recordDecisions', () => {
       expect.objectContaining({ pending_operation_id: 'op-1', agent_reason: 'Telia every month on 6212; this one has the same OCR series.' }),
     ])
     expect((inserts[1].rows as Array<Record<string, unknown>>)[0]).not.toHaveProperty('agent_reason')
+  })
+
+  it('records whether the review was shown when the door says, and names no such column when it does not', async () => {
+    const { client, inserts } = fakeClient()
+
+    await recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', actedOn: 'assistant:tx-1', final: booked, reviewShown: false }], 'user-1')
+    await recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', actedOn: 'assistant:tx-1', final: booked, reviewShown: true }], 'user-1')
+    await recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', final: booked }], 'user-1')
+
+    expect(inserts[0].rows).toEqual([expect.objectContaining({ review_shown: false })])
+    expect(inserts[1].rows).toEqual([expect.objectContaining({ review_shown: true })])
+    expect((inserts[2].rows as Array<Record<string, unknown>>)[0]).not.toHaveProperty('review_shown')
+  })
+
+  it('records the band under the switch read with the snapshot: off, even a company rule asked for a review', async () => {
+    const off: SuggestionSnapshot = {
+      ...snapshot,
+      directBooking: { enabled: false },
+      byTransaction: new Map([['tx-1', { proposals: [ownRule], read: null, documentId: 'doc-1', inputHash: null }]]),
+    }
+    const { client, inserts } = fakeClient()
+
+    await recordDecisions(client as never, off, [
+      { transactionId: 'tx-1', actedOn: 'rule:r1', final: finalFromLines('je-1', [{ account: '5410', debit: 500, credit: 0 }, { account: '1930', debit: 0, credit: 500 }]) },
+    ], 'user-1')
+
+    expect(inserts[0].rows).toEqual([expect.objectContaining({ confidence_band: 'review', policy_version: DIRECT_BOOKING_POLICY_VERSION })])
+  })
+
+  it('records the decision without review_shown while that column is not there yet', async () => {
+    const inserts: Array<Array<Record<string, unknown>>> = []
+    const client = {
+      from: () => ({
+        insert: async (rows: Array<Record<string, unknown>>) => {
+          inserts.push(rows)
+          return rows.some((row) => 'review_shown' in row) ? { error: { code: 'PGRST204', message: 'no review_shown' } } : { error: null }
+        },
+      }),
+    }
+
+    await recordDecisions(client as never, snapshot, [{ transactionId: 'tx-1', actedOn: 'assistant:tx-1', final: booked, reviewShown: false }], 'user-1')
+
+    expect(inserts).toHaveLength(2)
+    expect(inserts[1][0]).toMatchObject({ outcome: 'accepted' })
+    expect(inserts[1][0]).not.toHaveProperty('review_shown')
   })
 
   it('records the decision without the reason while the agent_reason column is not there yet', async () => {

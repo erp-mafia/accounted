@@ -415,6 +415,8 @@ const SETTINGS_FIELDS: Record<string, string> = {
   punktskatt_enabled: 'Punktskatt',
   intrastat_enabled: 'Intrastat',
   dimensions_enabled: 'Dimensioner',
+  // accounted#130: off, every bank-row and Inkorg suggestion opens its review.
+  direct_booking_enabled: 'Bokföring med ett klick',
   invoice_payment_accounts: 'Betalkonton för kundfakturor',
   last_supplier_payment_account: 'Standardkonto för leverantörsbetalning',
   schablon_mileage_rate: 'Milersättning (schablon)',
@@ -532,6 +534,8 @@ const CATEGORIZATION_TEMPLATE_FIELDS: Record<string, string> = {
   line_pattern: 'Radmönster',
   default_dimensions: 'Dimensioner',
   is_active: 'Aktiv',
+  // accounted#130: the rule never books with one click.
+  always_review: 'Granskas alltid',
 }
 
 const BOOKING_TEMPLATE_FIELDS: Record<string, string> = {

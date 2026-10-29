@@ -21,10 +21,17 @@ import type { Transaction } from '@/types'
 /** direct: the row's Bokför books it without a review. review: it opens Granska bokföring. */
 export type ConfidenceBand = 'direct' | 'review'
 
+/** The company's one-click switch (company_settings.direct_booking_enabled), as the bank side read it. */
+export interface DirectBookingSwitch {
+  enabled: boolean
+}
+
 export interface BankLineOffers {
   proposals: Record<string, BookingProposal[]>
   /** The fresh stored assistant read behind each row, by transaction id. */
   assistant_reads: Record<string, AssistantRead>
+  /** The company's one-click switch, read with the offers; every band is decided under it. */
+  direct_booking: DirectBookingSwitch
 }
 
 export interface BankLineSuggestions {
@@ -36,6 +43,6 @@ export interface BankLineSuggestions {
   policyVersion(): string
   /** What the bank side offers for the rows right now, in its order. */
   propose(supabase: SupabaseClient, companyId: string, transactions: Transaction[]): Promise<BankLineOffers>
-  /** The band an offer falls in under policyVersion(). */
-  confidenceBand(proposal: BookingProposal): ConfidenceBand
+  /** The band an offer falls in under policyVersion() and the company's switch. */
+  confidenceBand(proposal: BookingProposal, directBooking: DirectBookingSwitch): ConfidenceBand
 }

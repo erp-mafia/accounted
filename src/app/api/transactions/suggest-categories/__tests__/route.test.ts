@@ -85,6 +85,7 @@ function enqueueBaseQueries() {
   enqueue({ data: [{ id: TX_ID, amount: 217.04, currency: 'SEK', description: 'Ränta' }] }) // transactions
   enqueue({ data: [] }) // mapping_rules (company)
   enqueue({ data: [] }) // mapping_rules (global defaults)
+  enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
   enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
 }
 
@@ -97,6 +98,7 @@ function request() {
 
 type Body = {
   template_suggestions: Record<string, Array<{ template_id: string; debit_account: string; credit_account: string }>>
+  direct_booking?: { enabled: boolean }
 }
 
 describe('POST /api/transactions/suggest-categories', () => {
@@ -115,6 +117,20 @@ describe('POST /api/transactions/suggest-categories', () => {
     })
     const response = await POST(request(), emptyParams)
     expect(response.status).toBe(401)
+  })
+
+  it("answers the company's one-click switch with the proposals, read once (accounted#130)", async () => {
+    enqueue({ data: [{ id: TX_ID, amount: -100, currency: 'SEK', description: 'Kontorsbolaget' }] }) // transactions
+    enqueue({ data: [] }) // mapping_rules (company)
+    enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { direct_booking_enabled: false } }) // company_settings: the one-click switch
+    enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
+    findCounterpartyTemplatesBatchMock.mockResolvedValue(new Map())
+
+    const { status, body } = await parseJsonResponse<Body>(await POST(request(), emptyParams))
+
+    expect(status).toBe(200)
+    expect(body.direct_booking).toEqual({ enabled: false })
   })
 
   it('withholds a counterparty suggestion whose learned accounts hit an orphaned ledger', async () => {
@@ -139,6 +155,7 @@ describe('POST /api/transactions/suggest-categories', () => {
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-live' }] })
     enqueue({ data: [] }) // mapping_rules (company)
     enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
     enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
@@ -200,6 +217,7 @@ describe('POST /api/transactions/suggest-categories', () => {
     enqueue({ data: [{ id: TX_ID, amount: -1200, currency: 'SEK', description: 'Hyra', cash_account_id: 'ca-orphan' }] })
     enqueue({ data: [] }) // mapping_rules (company)
     enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
     enqueue({ data: { entity_type: 'aktiebolag' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '5010', credit_account: '1931' }), confidence: 0.9 }]]),
@@ -222,6 +240,7 @@ describe('POST /api/transactions/suggest-categories', () => {
     enqueue({ data: [{ id: TX_ID, amount: -0.5, currency: 'EUR', description: 'Card fee', cash_account_id: 'ca-eur' }] })
     enqueue({ data: [] }) // mapping_rules (company)
     enqueue({ data: [] }) // mapping_rules (global defaults)
+    enqueue({ data: { direct_booking_enabled: true } }) // company_settings: the one-click switch
     enqueue({ data: { entity_type: 'enskild_firma' } }) // company_settings
     findCounterpartyTemplatesBatchMock.mockResolvedValue(
       new Map([[TX_ID, { template: makeTemplate({ debit_account: '6570', credit_account: '1934' }), confidence: 0.9 }]]),

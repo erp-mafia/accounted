@@ -29,6 +29,11 @@ vi.mock('@/lib/bookkeeping/counterparty-templates', async (importOriginal) => ({
   findCounterpartyTemplate: (...args: unknown[]) => templateMock(...args),
 }))
 
+const directBookingMock = vi.fn()
+vi.mock('@/lib/transactions/direct-booking-settings', () => ({
+  readDirectBookingSettings: (...args: unknown[]) => directBookingMock(...args),
+}))
+
 import { readOneClickInput } from '../inkorg-one-click-read'
 
 const { supabase, enqueueMany, findCalls, reset } = createQueuedMockSupabase()
@@ -72,6 +77,7 @@ beforeEach(() => {
   readBankMatchMock.mockResolvedValue({ transaction_id: 'tx-1', date: '2026-10-14', amount: -150, currency: 'SEK', counterparty: 'WISPR K3667', basis: 'rule_amount_date', evidence_level: 'stark' })
   pairingsMock.mockResolvedValue(new Map())
   capabilitiesMock.mockResolvedValue(null)
+  directBookingMock.mockResolvedValue({ enabled: true })
   matchSupplierMock.mockResolvedValue(null)
   categoriesMock.mockResolvedValue(new Map([['item-1', { code: 'expense.software.saas', source: 'lines', level: 'Trolig', version: 'pc-2026-10' }]]))
   templateMock.mockResolvedValue(null)
@@ -149,6 +155,23 @@ describe('readOneClickInput', () => {
     ])
     const result = await read()
     expect(result.ok && result.input.supplier).toEqual({ id: 'sup-1', supplierType: 'non_eu_business', defaultExpenseAccount: null, paymentTermsDays: 10 })
+    expect(result.ok && result.input.counterpartyAccount).toBe('6540')
+    expect(result.ok && result.input.counterpartyAlwaysReview).toBe(false)
+  })
+
+  it("reads the company's one-click switch and whether the counterpart's rule always asks (accounted#130)", async () => {
+    directBookingMock.mockResolvedValue({ enabled: false })
+    templateMock.mockResolvedValue({
+      confidence: 0.9,
+      matchMethod: 'exact_alias',
+      template: { debit_account: '6540', credit_account: '1930', line_pattern: null, source: 'sie_import', always_review: true },
+    })
+    enqueueMany([{ data: ITEM }, { data: TX }, { data: { vat_registered: true, accounting_method: 'accrual' } }])
+    const result = await read()
+    expect(directBookingMock).toHaveBeenCalledWith(supabase, 'company-1')
+    expect(result.ok && result.input.directBooking).toEqual({ enabled: false })
+    expect(result.ok && result.input.counterpartyAlwaysReview).toBe(true)
+    // An imported rule's account still informs the plan: the Inkorg never books on the history count.
     expect(result.ok && result.input.counterpartyAccount).toBe('6540')
   })
 

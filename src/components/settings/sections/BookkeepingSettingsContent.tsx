@@ -12,6 +12,7 @@ import { VoucherSeriesPerSourceTypeForm } from '@/components/settings/VoucherSer
 import { VoucherSeriesPerCashAccountForm } from '@/components/settings/VoucherSeriesPerCashAccountForm'
 import { applyDefaultSeriesToMap, voucherSeriesLabel } from '@/lib/bookkeeping/voucher-series-resolver'
 import { DimensionsToggle } from '@/components/settings/DimensionsToggle'
+import { DirectBookingToggle } from '@/components/settings/DirectBookingToggle'
 import { NavGateToggle } from '@/components/settings/NavGateToggle'
 import { AccountingFrameworkForm } from '@/components/settings/AccountingFrameworkForm'
 import { MonthlyFxRevaluationAction } from '@/components/settings/MonthlyFxRevaluationAction'
@@ -244,6 +245,8 @@ export function BookkeepingSettingsContent() {
       <VoucherSeriesManager settings={settings} onSettingsUpdated={updateSettings} />
 
       <SettingsGroup label={t('group_automation')}>
+        {/* accounted#130: whether a settled suggestion books with one click. */}
+        <DirectBookingToggle />
         {/* Periodisering is a review-gated wizard step, not an automation
             that can be switched on or off, so this row is a plain link. The
             old toggle here wrote a localStorage preference nothing read. */}

@@ -148,6 +148,21 @@ describe('bookingWhy summary', () => {
     expect(bookingWhy(data({ receipts: [r] }), opts('en')).summary?.text).toBe('Anna Svensson booked it as proposed')
   })
 
+  it('says a one click was booked without a review, as the door recorded it (accounted#130)', () => {
+    const oneClick = buildDecisionReceipt(bankRow({ review_shown: false }), ctx())
+    expect(bookingWhy(data({ receipts: [oneClick] }), opts()).summary?.text).toBe('Anna Svensson bokförde förslaget med ett klick, utan granskning')
+    expect(bookingWhy(data({ receipts: [oneClick] }), opts('en')).summary?.text).toBe('Anna Svensson booked the suggestion in one click, without a review')
+    expect(rowMap(bookingWhy(data({ receipts: [oneClick] }), opts())).review).toBe('Utan granskning, bokförd med ett klick')
+
+    const reviewed = buildDecisionReceipt(bankRow({ review_shown: true }), ctx())
+    expect(bookingWhy(data({ receipts: [reviewed] }), opts()).summary?.text).toBe('Anna Svensson bokförde enligt förslaget')
+    expect(rowMap(bookingWhy(data({ receipts: [reviewed] }), opts('en'))).review).toBe('Reviewed before it was booked')
+
+    // Not recorded (an API door, a decision before 2026-10-28): no row, never a guess.
+    const unknown = buildDecisionReceipt(bankRow(), ctx())
+    expect(rowMap(bookingWhy(data({ receipts: [unknown] }), opts())).review).toBeUndefined()
+  })
+
   it('says a person changed the proposal, and what changed', () => {
     const r = buildDecisionReceipt(
       bankRow({ outcome: 'changed', final: { journal_entry_id: JE, booking: null, account: '6110', vat_treatment: 'standard_25', lines: [] } }),

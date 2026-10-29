@@ -6,8 +6,9 @@ import type { Transaction } from '@/types'
 /**
  * POST /api/transactions/suggest-categories
  * The booking proposals for a batch of transactions (lib/transactions/propose.ts),
- * keyed by transaction id, plus the assistant's fresh stored reads.
- * Batch size limited to 50.
+ * keyed by transaction id, plus the assistant's fresh stored reads and the
+ * company's one-click switch the page decides a row's Bokför with
+ * (reviewRequired, lib/transactions/direct-booking.ts). Batch size limited to 50.
  */
 export const POST = withRouteContext(
   'transaction.suggest_categories',
@@ -30,7 +31,7 @@ export const POST = withRouteContext(
       return NextResponse.json({ error: 'Failed to fetch transactions' }, { status: 500 })
     }
 
-    const { proposals, assistant_reads } = await proposeForTransactions(supabase, companyId, transactions as Transaction[])
-    return NextResponse.json({ template_suggestions: proposals, assistant_reads })
+    const { proposals, assistant_reads, direct_booking } = await proposeForTransactions(supabase, companyId, transactions as Transaction[])
+    return NextResponse.json({ template_suggestions: proposals, assistant_reads, direct_booking })
   },
 )

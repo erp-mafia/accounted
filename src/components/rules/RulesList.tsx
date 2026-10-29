@@ -7,6 +7,7 @@ import { useTranslations } from 'next-intl'
 import { EllipsisHorizontalIcon } from '@/components/icons'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Switch } from '@/components/ui/switch'
 import { ToolbarSearch } from '@/components/ui/toolbar-search'
 import { TH_CLASS, TD_CLASS, HOVER_REVEAL_CLASS } from '@/components/ui/dry-table'
 import { Skeleton } from '@/components/ui/skeleton'
@@ -19,16 +20,80 @@ import {
 import { useToast } from '@/components/ui/use-toast'
 import { cn, formatDate } from '@/lib/utils'
 import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { ruleOrigin, type RuleMode, type RuleRow } from '@/lib/rules/model'
+import { useCanWrite } from '@/lib/hooks/use-can-write'
+import { ruleOneClick, ruleOrigin, type RuleMode, type RuleOneClick, type RuleRow } from '@/lib/rules/model'
+import { DIRECT_BOOKING_ON, type DirectBookingSettings } from '@/lib/transactions/direct-booking'
 import { ruleTitle } from './rule-text'
 
 const LADDER: RuleMode[] = ['proposed', 'propose', 'auto', 'paused']
 
-async function fetchRules(url: string): Promise<RuleRow[]> {
+interface RulesPayload {
+  rules: RuleRow[]
+  directBooking: DirectBookingSettings
+}
+
+async function fetchRules(url: string): Promise<RulesPayload> {
   const res = await fetch(url)
   if (!res.ok) throw new Error(`${url} ${res.status}`)
-  const json = (await res.json()) as { data?: RuleRow[] }
-  return json.data ?? []
+  const json = (await res.json()) as { data?: RuleRow[]; direct_booking?: DirectBookingSettings }
+  return { rules: json.data ?? [], directBooking: json.direct_booking ?? DIRECT_BOOKING_ON }
+}
+
+/** What the Ett klick cell says next to its switch. */
+export function oneClickText(t: (key: string, values?: Record<string, number>) => string, oneClick: RuleOneClick): string {
+  if (oneClick.kind === 'hits') return t('one_click_hits', { count: oneClick.remaining })
+  const keys: Record<Exclude<RuleOneClick['kind'], 'hits'>, string> = {
+    yes: 'one_click_yes',
+    company_off: 'one_click_company_off',
+    always_review: 'one_click_always_review',
+    import: 'one_click_import',
+    paused: 'one_click_paused',
+    proposed: 'one_click_proposed',
+  }
+  return t(keys[oneClick.kind])
+}
+
+/**
+ * Whether a rule's hit books with one click, and the switch that makes the
+ * rule always ask (categorization_templates.always_review). The switch is on
+ * while the rule may book with one click; the text says whether it does now.
+ */
+export function OneClickControl({
+  rule,
+  directBooking,
+  disabled,
+  onChange,
+}: {
+  rule: RuleRow
+  directBooking: DirectBookingSettings
+  disabled: boolean
+  onChange: (alwaysReview: boolean) => void
+}) {
+  const t = useTranslations('rules')
+  const oneClick = ruleOneClick(rule, directBooking)
+  return (
+    <span className="inline-flex items-center gap-2">
+      <Switch
+        checked={!rule.always_review}
+        onCheckedChange={(on) => onChange(!on)}
+        disabled={disabled}
+        aria-label={t('one_click_switch_label', { rule: ruleTitle(rule) })}
+      />
+      <span className={cn(oneClick.kind !== 'yes' && 'text-muted-foreground')}>{oneClickText(t, oneClick)}</span>
+    </span>
+  )
+}
+
+/** PATCH /api/rules/[id] with always_review; resolves true when it saved. */
+export async function saveAlwaysReview(ruleId: string, alwaysReview: boolean): Promise<{ ok: true } | { ok: false; status: number; body: unknown }> {
+  const res = await fetch(`/api/rules/${ruleId}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ always_review: alwaysReview }),
+  })
+  const body = await res.json().catch(() => ({}))
+  if (!res.ok || (body as { error?: unknown }).error) return { ok: false, status: res.status, body }
+  return { ok: true }
 }
 
 export function ModeChip({ mode }: { mode: RuleMode }) {
@@ -53,11 +118,17 @@ export function ModeChip({ mode }: { mode: RuleMode }) {
  * ladder. The bar at the top is the explanation: a rule starts as a
  * suggestion, proposes once confirmed, and (with the autopilot tier) books
  * on its own after five clean hits. A correction shows in the Rättad column.
+ * Ett klick (accounted#130) says whether a hit books from the row's Bokför
+ * without a review, by the same decision the transactions page makes, and
+ * its switch makes the rule always ask.
  */
 export default function RulesList() {
   const t = useTranslations('rules')
   const { toast } = useToast()
-  const { data, error, isLoading, mutate } = useSWR<RuleRow[]>('/api/rules', fetchRules)
+  const { canWrite } = useCanWrite()
+  const { data: payload, error, isLoading, mutate } = useSWR<RulesPayload>('/api/rules', fetchRules)
+  const data = payload?.rules
+  const directBooking = payload?.directBooking ?? DIRECT_BOOKING_ON
   const [search, setSearch] = useState('')
   const [step, setStep] = useState<RuleMode | null>(null)
   const [busyId, setBusyId] = useState<string | null>(null)
@@ -84,6 +155,21 @@ export default function RulesList() {
         return
       }
       toast({ title: mode === 'paused' ? t('toast_paused') : t('toast_resumed') })
+      await mutate()
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  async function setAlwaysReview(rule: RuleRow, alwaysReview: boolean) {
+    setBusyId(rule.id)
+    try {
+      const saved = await saveAlwaysReview(rule.id, alwaysReview)
+      if (!saved.ok) {
+        toast({ title: t('toast_failed'), description: getErrorMessage(saved.body, { statusCode: saved.status }), variant: 'destructive' })
+        return
+      }
+      toast({ title: alwaysReview ? t('toast_always_review_on') : t('toast_always_review_off') })
       await mutate()
     } finally {
       setBusyId(null)
@@ -130,6 +216,7 @@ export default function RulesList() {
               <th className={cn(TH_CLASS, 'text-right')}>{t('th_hits')}</th>
               <th className={cn(TH_CLASS, 'text-right')}>{t('th_corrections')}</th>
               <th className={TH_CLASS}>{t('th_mode')}</th>
+              <th className={TH_CLASS}>{t('th_one_click')}</th>
               <th className={TH_CLASS}>{t('th_last')}</th>
               <th className={cn(TH_CLASS, '!pr-0')} aria-hidden="true"></th>
             </tr>
@@ -138,20 +225,20 @@ export default function RulesList() {
             {isLoading ? (
               [1, 2, 3].map((i) => (
                 <tr key={i} aria-busy>
-                  <td colSpan={7} className={cn(TD_CLASS, '!pl-0')}>
+                  <td colSpan={8} className={cn(TD_CLASS, '!pl-0')}>
                     <Skeleton className="h-4 w-64" />
                   </td>
                 </tr>
               ))
             ) : error ? (
               <tr>
-                <td colSpan={7} className={cn(TD_CLASS, 'py-8 text-muted-foreground')}>
+                <td colSpan={8} className={cn(TD_CLASS, 'py-8 text-muted-foreground')}>
                   {t('load_failed')}
                 </td>
               </tr>
             ) : rows.length === 0 ? (
               <tr>
-                <td colSpan={7} className={cn(TD_CLASS, 'py-8 text-muted-foreground')}>
+                <td colSpan={8} className={cn(TD_CLASS, 'py-8 text-muted-foreground')}>
                   {t('empty')}
                 </td>
               </tr>
@@ -176,6 +263,14 @@ export default function RulesList() {
                     ) : (
                       <span className="text-muted-foreground">{t(`mode_${r.mode}`)}</span>
                     )}
+                  </td>
+                  <td className={cn(TD_CLASS, 'whitespace-nowrap')}>
+                    <OneClickControl
+                      rule={r}
+                      directBooking={directBooking}
+                      disabled={!canWrite || busyId === r.id}
+                      onChange={(alwaysReview) => void setAlwaysReview(r, alwaysReview)}
+                    />
                   </td>
                   <td className={cn(TD_CLASS, 'whitespace-nowrap text-muted-foreground')}>
                     {r.last_seen_date ? formatDate(r.last_seen_date) : '–'}

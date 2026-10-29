@@ -2671,6 +2671,17 @@ export const CategorizeTransactionSchema = z
   })
 
 /**
+ * POST /api/transactions/{id}/categorize, the dashboard's door: the v1 body
+ * plus whether the person saw the booking's review. false is the row's one
+ * click, booked only when the direct-booking policy lets proposal_id through
+ * without a review; true is Granska bokföring. Kept off the v1 body: the API
+ * and agent doors stage or book on their own terms.
+ */
+export const DashboardCategorizeSchema = CategorizeTransactionSchema.safeExtend({
+  review_shown: z.boolean().optional(),
+})
+
+/**
  * POST /api/bookkeeping/proposal-preview: the lines a proposal books. A bank
  * row's proposal is the categorize body its booking sends; a template applied
  * to a typed total names the catalog template, or one cost/liability pair
@@ -3930,6 +3941,11 @@ export const UpdateSettingsSchema = z.object({
   // Dimensions (kostnadsställe/projekt): UI-visibility toggle only, never
   // load-bearing for correctness.
   dimensions_enabled: z.boolean().optional(),
+  // One click on a bank row's or the Inkorg's suggestion books it without a
+  // review when the direct-booking policy allows it (accounted#130). Off:
+  // every suggestion opens its review. Dashboard only (owner/admin): no
+  // settings operation writes it, so a key cannot turn its own review off.
+  direct_booking_enabled: z.boolean().optional(),
   // Körjournal (mileage log): UI-visibility toggle only, never load-bearing
   // for correctness (trips created via API/MCP work regardless).
   mileage_enabled: z.boolean().optional(),
