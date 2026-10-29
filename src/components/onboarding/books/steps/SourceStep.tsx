@@ -38,7 +38,7 @@ export function SourceStep({ ctx }: { ctx: BooksCtx }) {
     <Question title={t('source_title')}>
       <div className="srclist">
         {providers.map((p, i) => (
-          <Pill key={p.id} index={i} logo={p.logo} onClick={() => dispatch({ type: 'PICK_PROVIDER', provider: p.id })}>
+          <Pill key={p.id} index={i} logo={p.logo} mark={p.mark} onClick={() => dispatch({ type: 'PICK_PROVIDER', provider: p.id })}>
             {p.name}
           </Pill>
         ))}

@@ -1970,7 +1970,7 @@ export default function ImportPage() {
                     chips={
                       <>
                         <LogoChip src="/logos/fortnox.svg" name="Fortnox" />
-                        <LogoChip src="/logos/visma.jpeg" name="Visma" />
+                        <LogoChip name="Visma" />
                         <LogoChip src="/logos/bokio.png" name="Bokio" />
                         <LogoChip src="/logos/bjornlunden.png" name="Björn Lundén" />
                         <LogoChip src="/logos/Briox_logo.png" name="Briox" />
@@ -2290,18 +2290,20 @@ function BetaChip({ label }: { label: string }) {
 // `mono` is for light-on-transparent marks (Enable Banking): the marketing
 // site's grayscale+brightness treatment makes them read on a light ground,
 // with the inverse lift in dark mode.
-function LogoChip({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
+function LogoChip({ src, name, mono = false }: { src?: string; name: string; mono?: boolean }) {
   return (
     <span className="flex items-center gap-2 rounded-sm border border-border bg-muted/30 px-2 py-1">
-      <img
-        src={src}
-        alt=""
-        className={cn(
-          'h-4 w-4 shrink-0 rounded-sm object-contain',
-          mono &&
-            'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
-        )}
-      />
+      {src && (
+        <img
+          src={src}
+          alt=""
+          className={cn(
+            'h-4 w-4 shrink-0 rounded-sm object-contain',
+            mono &&
+              'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
+          )}
+        />
+      )}
       <span className="text-[11px] font-medium text-muted-foreground">{name}</span>
     </span>
   )

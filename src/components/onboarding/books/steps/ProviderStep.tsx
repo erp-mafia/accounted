@@ -73,6 +73,7 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
   const providerId = state.provider
   const provName = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === providerId)?.name ?? t('provider_generic'), [providerId, t])
   const provLogo = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === providerId)?.logo ?? null, [providerId])
+  const provMark = useMemo(() => BRANCH_PROVIDERS.find((p) => p.id === providerId)?.mark ?? null, [providerId])
   // What the provider charges or requires before its login can succeed,
   // said before the click in the migration workspace's own words, so the
   // paid add-on is not first met on the provider's page.
@@ -490,6 +491,8 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={provLogo} alt="" />
               </span>
+            ) : provMark ? (
+              <span className="pmark" aria-hidden="true">{provMark}</span>
             ) : null}
             {t('provider_login', { provider: provName })}
           </Button>
@@ -543,6 +546,8 @@ export function ProviderStep({ ctx }: { ctx: BooksCtx }) {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img src={provLogo} alt="" />
               </span>
+            ) : provMark ? (
+              <span className="pmark" aria-hidden="true">{provMark}</span>
             ) : null}
             <span>{t('provider_connected', { provider: provName })}</span>
             {companyName ? <span style={{ color: 'hsl(var(--muted-foreground))' }}>· {companyName}</span> : null}

@@ -406,7 +406,7 @@ export default function NewUserChecklist({
           marks={
             <>
               <LogoMark src="/logos/fortnox.svg" name="Fortnox" />
-              <LogoMark src="/logos/visma.jpeg" name="Visma" />
+              <LogoMark name="Visma" />
               <LogoMark src="/logos/bokio.png" name="Bokio" />
               <span className="text-[11px] text-muted-foreground">{t('step_books_sie')}</span>
             </>
@@ -769,25 +769,31 @@ function Step({
 
 /** Tiny partner mark: real logo on a white chip; `mono` darkens a white
  *  source logo in light mode and lifts it in dark (Enable Banking). */
-function LogoMark({ src, name, mono = false }: { src: string; name: string; mono?: boolean }) {
+function LogoMark({ src, name, mono = false }: { src?: string; name: string; mono?: boolean }) {
   return (
     <span
       className={cn(
         'flex h-6 w-6 items-center justify-center overflow-hidden rounded-sm border border-border',
-        !mono && 'bg-white',
+        !mono && src && 'bg-white',
       )}
       title={name}
     >
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt={name}
-        className={cn(
-          'h-4 w-4 object-contain',
-          mono &&
-            'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
-        )}
-      />
+      {src ? (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+          src={src}
+          alt={name}
+          className={cn(
+            'h-4 w-4 object-contain',
+            mono &&
+              'opacity-90 [filter:grayscale(100%)_brightness(0.18)] dark:[filter:grayscale(100%)_brightness(1.5)]',
+          )}
+        />
+      ) : (
+        <span role="img" className="text-[11px] font-semibold text-foreground" aria-label={name}>
+          {name.charAt(0)}
+        </span>
+      )}
     </span>
   )
 }
