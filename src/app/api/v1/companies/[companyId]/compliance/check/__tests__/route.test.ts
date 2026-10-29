@@ -255,7 +255,18 @@ describe('GET /api/v1/companies/:companyId/compliance/check?type=vat_close', () 
       { kind: 'missing_high_value_receipts', severity: 'medium', count: 1, message: '1 underlag saknas', hint: 'ladda upp' },
     ],
     declaration_checks: [{ code: 'FK004', status: 'WARNING', message: 'Kontrollera ruta 30', rutor: ['30'] }],
-    sanity: { anomalies: [], ratios: { output_vat_ratio_25: 0.25, output_vat_ratio_12: 0, output_vat_ratio_6: 0, previous_period_compared: true } },
+    sanity: {
+      anomalies: [
+        { kind: 'rate_share_shift', rate: '25', current: 100, previous: 20, delta_pct: 80, current_base: 100000, previous_base: 20000, message: 'Andelen av försäljningen med 25 % moms steg' },
+      ],
+      ratios: {
+        rate_shares: { current: { '25': 100, '12': 0, '6': 0 }, previous: { '25': 20, '12': 80, '6': 0 } },
+        output_vat_ratio_25: 25,
+        output_vat_ratio_12: 0,
+        output_vat_ratio_6: 0,
+        previous_period_compared: true,
+      },
+    },
     ready_to_close: false,
     summary: 'Momsperioden kan inte stängas ännu.',
   }
@@ -280,6 +291,9 @@ describe('GET /api/v1/companies/:companyId/compliance/check?type=vat_close', () 
       params: { type: 'vat_close', period_type: 'quarterly', year: '2026', period: '3' },
       details: { period_label: 'Q3 2026', payment: { net_due: 21000, direction: 'pay' }, rutor: { ruta49: 21000 } },
     })
+    // The comparison rides along verbatim, deprecated ratios included; an
+    // anomaly is advisory and never becomes a finding.
+    expect((body.data.details as Record<string, unknown>).sanity).toEqual(closeCheck.sanity)
     expect(body.data.findings).toEqual([
       expect.objectContaining({ severity: 'blocker', code: 'VAT_CLOSE_UNCATEGORIZED_TRANSACTIONS', details: expect.objectContaining({ count: 3 }) }),
       expect.objectContaining({ severity: 'warning', code: 'VAT_CLOSE_MISSING_HIGH_VALUE_RECEIPTS' }),
