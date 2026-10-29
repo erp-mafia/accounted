@@ -151,6 +151,10 @@
       "schedule": "*/5 * * * *"
     },
     {
+      "path": "/api/customers/personal-number-repair/cron",
+      "schedule": "*/5 * * * *"
+    },
+    {
       "path": "/api/bookkeeping/accruals/post-due/cron",
       "schedule": "15 5 * * *"
     },
