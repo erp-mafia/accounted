@@ -5088,7 +5088,22 @@
     "picked_summary": "{count, plural, one {# vald faktura} other {# valda fakturor}}, {amount}",
     "picked_clear": "Ta bort alla",
     "picked_count": "{count} av {max} fakturor",
-    "over_limit_warning": "En bankrad kan betala högst {max} fakturor. Ta bort {excess} för att kunna bekräfta."
+    "over_limit_warning": "En bankrad kan betala högst {max} fakturor. Ta bort {excess} för att kunna bekräfta.",
+    "fees_label": "Avgifter",
+    "fee_add": "Lägg till avgiftsrad",
+    "fee_offer_customer": "Fakturorna är {amount} mer än utbetalningen. Har betaltjänsten dragit en avgift?",
+    "fee_offer_supplier": "Betalningen är {amount} mer än fakturorna. Har banken tagit en avgift?",
+    "fee_account_aria": "Konto för avgiftsrad {n}",
+    "fee_description_aria": "Text för avgiftsrad {n}",
+    "fee_description_placeholder": "Text (standard: Avgift betaltjänst)",
+    "fee_amount_aria": "Belopp för avgiftsrad {n}",
+    "fee_remove_aria": "Ta bort avgiftsrad {n}",
+    "fee_account_invalid": "Välj ett aktivt konto i klass 6, till exempel 6570 Bankkostnader.",
+    "fee_too_large": "Avgifterna måste vara mindre än fakturorna de reglerar.",
+    "fee_vat_note": "Bokförs utan moms: en betaltjänsts avgift för att flytta pengar är momsfri (ML 10 kap. 33 §). En plattforms provision är momspliktig och bokförs från plattformens faktura.",
+    "invoices_label": "Fakturor",
+    "net_label": "Mot bankraden",
+    "preview_title": "Verifikatet"
   },
   "tx_skattekonto_card": {
     "category_pick": "Välj kategori",

@@ -877,12 +877,14 @@ describe('new and split templates', () => {
     expect(t!.deductibility_note_sv).toContain('7631')
   })
 
-  it('routes Stripe fees to reverse charge, not to VAT-free bank fees', () => {
+  it("books Stripe's processing fees as an exempt payment service: 6570, no reverse charge (issue #131)", () => {
     const t = getTemplateById('payment_fees_eu')
     expect(t).toBeDefined()
     expect(t!.debit_account).toBe('6570')
-    expect(t!.vat_treatment).toBe('reverse_charge')
-    expect(getTemplateById('bank_fees')!.keywords).not.toContain('stripe')
+    expect(t!.vat_treatment).toBe('exempt')
+    expect(t!.requires_vat_registration_data).toBeUndefined()
+    expect(t!.special_rules_sv).toContain('ML 10 kap. 33 §')
+    expect(t!.keywords).toContain('stripe')
   })
 
   it('has shareholder_loan_received (AB, D:1930 K:2393)', () => {

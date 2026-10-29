@@ -600,3 +600,146 @@ describe('POST /api/transactions/[id]/match-batch: already-explained guard', () 
     expect(mockAppendProcessingHistory).not.toHaveBeenCalled()
   })
 })
+
+// Issue #131: a payment service's fee on the row, booked on a class 6 account
+// without VAT; the invoices less the fees equal a payout.
+describe('POST /api/transactions/[id]/match-batch with fee rows', () => {
+  const INV_B_UUID = '55555555-5555-4555-8555-555555555555'
+  const allocations = [
+    { kind: 'customer_invoice', invoice_id: INV_UUID, amount: 6000 },
+    { kind: 'customer_invoice', invoice_id: INV_B_UUID, amount: 4000 },
+  ]
+  const fees = [{ account: '6570', amount: 1500, description: 'Stripe juni' }]
+  const post = (body: unknown, query = '') =>
+    POST(
+      createMockRequest(`/api/transactions/${TX_UUID}/match-batch${query}`, { method: 'POST', body }),
+      createMockRouteParams({ id: TX_UUID }),
+    )
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    reset()
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: { id: 'user-1', email: 'test@test.se' } } })
+    mockDetectExplaining.mockResolvedValue(null)
+  })
+
+  it('401 without a session', async () => {
+    mockSupabase.auth.getUser.mockResolvedValue({ data: { user: null } })
+    expect((await post({ allocations, fees })).status).toBe(401)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('400 for a fee on a class 4 account, a sixth row, or fees as large as the invoices', async () => {
+    expect((await post({ allocations, fees: [{ account: '4535', amount: 1500 }] })).status).toBe(400)
+    expect((await post({ allocations, fees: Array.from({ length: 6 }, () => ({ account: '6570', amount: 1 })) })).status).toBe(400)
+    expect((await post({ allocations, fees: [{ account: '6570', amount: 10000 }] })).status).toBe(400)
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+  })
+
+  it('404 BATCH_TX_NOT_FOUND on a dry run for a row outside the company', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }, { id: INV_B_UUID, document_type: 'invoice' }], error: null })
+    enqueue({ data: null, error: null }) // transactions
+    const response = await post({ allocations, fees }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+    expect(status).toBe(404)
+    expect(body.error.code).toBe('BATCH_TX_NOT_FOUND')
+  })
+
+  it("dry run: the voucher with the fee line, on the row's own bank account, and nothing written", async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }, { id: INV_B_UUID, document_type: 'invoice' }], error: null })
+    enqueue({
+      data: { id: TX_UUID, description: 'STRIPE PAYOUT', merchant_name: null, amount: 8500, currency: 'SEK', date: '2026-06-30', journal_entry_id: null, cash_account_id: 'ca-1' },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { id: INV_UUID, currency: 'SEK', exchange_rate: null, remaining_amount: 6000, total: 6000 },
+        { id: INV_B_UUID, currency: 'SEK', exchange_rate: null, remaining_amount: 4000, total: 4000 },
+      ],
+      error: null,
+    })
+    enqueue({ data: [{ account_number: '6570' }], error: null }) // chart_of_accounts: the fee account is active
+    enqueue({ data: { ledger_account: '1931', currency: 'SEK' }, error: null }) // cash_accounts
+    const response = await post({ allocations, fees }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{
+      data: { total_allocated: number; total_fees: number; expected_lines: Array<{ account_number: string; debit: number; credit: number }>; expected_lines_balanced: boolean }
+    }>(response)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ total_allocated: 10000, total_fees: 1500, expected_lines_balanced: true })
+    expect(body.data.expected_lines.map((l) => `${l.account_number} D${l.debit} K${l.credit}`)).toEqual([
+      '1510 D0 K6000',
+      '1510 D0 K4000',
+      '6570 D1500 K0',
+      '1931 D8500 K0',
+    ])
+    expect(findCalls('chart_of_accounts', 'in')).toEqual([['account_number', ['6570']]])
+    expect(mockSupabase.rpc).not.toHaveBeenCalled()
+    expect(eventBus.emit).not.toHaveBeenCalled()
+  })
+
+  it('dry run refuses a fee account the chart does not have active: BATCH_FEE_ACCOUNT_INVALID', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }, { id: INV_B_UUID, document_type: 'invoice' }], error: null })
+    enqueue({
+      data: { id: TX_UUID, amount: 8500, currency: 'SEK', date: '2026-06-30', journal_entry_id: null, cash_account_id: null },
+      error: null,
+    })
+    enqueue({
+      data: [
+        { id: INV_UUID, currency: 'SEK', remaining_amount: 6000, total: 6000 },
+        { id: INV_B_UUID, currency: 'SEK', remaining_amount: 4000, total: 4000 },
+      ],
+      error: null,
+    })
+    enqueue({ data: [], error: null }) // chart_of_accounts: 6040 is not active
+    const response = await post({ allocations, fees: [{ account: '6040', amount: 1500 }] }, '?dry_run=true')
+    const { status, body } = await parseJsonResponse<{ error: { code: string; details: { account: string } } }>(response)
+    expect(status).toBe(400)
+    expect(body.error.code).toBe('BATCH_FEE_ACCOUNT_INVALID')
+    expect(body.error.details).toEqual({ account: '6040' })
+  })
+
+  it('200 books through the RPC with p_fee_lines as the builder makes them, and answers total_fees', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }, { id: INV_B_UUID, document_type: 'invoice' }], error: null })
+    enqueue({
+      data: {
+        ok: true,
+        journal_entry_id: 'je-fee-1',
+        voucher_series: 'A',
+        voucher_number: 21,
+        tx_id: TX_UUID,
+        allocations: [],
+        total_allocated: 10000,
+        total_fees: 1500,
+        leftover: 0,
+      },
+      error: null,
+    })
+    enqueue({ data: { id: 'je-fee-1', company_id: 'company-1', status: 'posted', lines: [] }, error: null }) // engine door reload
+    const response = await post({ allocations, fees: [{ account: '6570', amount: 1500, description: '  Stripe juni ' }] })
+    const { status, body } = await parseJsonResponse<{ data: { journal_entry_id: string; total_fees: number } }>(response)
+    expect(status).toBe(200)
+    expect(body.data).toMatchObject({ journal_entry_id: 'je-fee-1', total_fees: 1500 })
+    expect(mockSupabase.rpc).toHaveBeenCalledTimes(1)
+    expect(mockSupabase.rpc).toHaveBeenCalledWith(
+      'match_batch_allocate',
+      expect.objectContaining({
+        p_tx_id: TX_UUID,
+        p_allocations: allocations,
+        p_fee_lines: [{ account: '6570', amount: 1500, description: 'Stripe juni' }],
+      }),
+    )
+  })
+
+  it('without fee rows the RPC gets no p_fee_lines: a database before the migration answers as before', async () => {
+    enqueue({ data: [{ id: INV_UUID, document_type: 'invoice' }, { id: INV_B_UUID, document_type: 'invoice' }], error: null })
+    enqueue({
+      data: { ok: true, journal_entry_id: 'je-fee-2', voucher_series: 'A', voucher_number: 22, tx_id: TX_UUID, allocations: [], total_allocated: 10000, leftover: 0 },
+      error: null,
+    })
+    enqueue({ data: { id: 'je-fee-2', company_id: 'company-1', status: 'posted', lines: [] }, error: null })
+    const response = await post({ allocations })
+    expect(response.status).toBe(200)
+    expect((await parseJsonResponse<{ data: Record<string, unknown> }>(response)).body.data).not.toHaveProperty('total_fees')
+    expect(mockSupabase.rpc.mock.calls[0][1]).not.toHaveProperty('p_fee_lines')
+  })
+})

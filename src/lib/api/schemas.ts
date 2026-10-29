@@ -38,6 +38,13 @@ import { DimensionsBagSchema } from '@/lib/bookkeeping/dimension-resolver'
 import { CUSTOMER_ADVANCE_ACCOUNT } from '@/lib/bookkeeping/overpayment'
 import { PAYMENT_FEE_ACCOUNT } from '@/lib/bookkeeping/payment-fee'
 import {
+  MAX_PAYOUT_FEES,
+  PAYOUT_FEE_DESCRIPTION_MAX,
+  isPayoutFeeAccount,
+  payoutFeeTotal,
+  payoutFeesWithinInvoices,
+} from '@/lib/bookkeeping/payout-fee-lines'
+import {
   isAccruedCostAccount,
   periodEndsBeforeInvoiceMonth,
 } from '@/lib/bookkeeping/accruals/account-suggestions'
@@ -3233,6 +3240,18 @@ export const MatchBatchSchema = z
     // without ever consulting the vouchers (same binding as
     // MatchInvoiceSchema.expected_journal_entry_id).
     expected_journal_entry_ids: z.array(uuid).max(10).optional(),
+    // A payment service's fee on the row (lib/bookkeeping/payout-fee-lines.ts):
+    // a debit on a class 6 cost account, no VAT.
+    fees: z
+      .array(
+        z.object({
+          account: accountNumber.refine(isPayoutFeeAccount, 'Fee account must be a BAS class 6 cost account, e.g. 6570'),
+          amount: z.number().positive('Fee amount must be greater than 0'),
+          description: z.string().max(PAYOUT_FEE_DESCRIPTION_MAX).optional(),
+        }),
+      )
+      .max(MAX_PAYOUT_FEES)
+      .optional(),
   })
   .superRefine((data, ctx) => {
     if (data.force && !(data.expected_journal_entry_ids?.length)) {
@@ -3241,6 +3260,16 @@ export const MatchBatchSchema = z
         path: ['expected_journal_entry_ids'],
         message: 'expected_journal_entry_ids is required when force=true',
       })
+    }
+    if (data.fees?.length) {
+      const allocated = data.allocations.reduce((sum, a) => sum + a.amount, 0)
+      if (!payoutFeesWithinInvoices(allocated, payoutFeeTotal(data.fees))) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ['fees'],
+          message: 'The fees must be smaller than the invoices they settle',
+        })
+      }
     }
     // Reject mixed customer + supplier in a single batch: semantically a
     // single bank transfer settles invoices on one side. The RPC also guards

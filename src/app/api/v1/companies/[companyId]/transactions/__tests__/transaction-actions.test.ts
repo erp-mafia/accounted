@@ -580,6 +580,24 @@ describe('POST /transactions/:id/match-batch', () => {
     expect((await (await post({ allocations }, '?dry_run=true')).json()).error.code).toBe('BATCH_AMOUNT_EXCEEDS_TX')
   })
 
+  // Issue #131: a payout net of the provider's fee meets the row once the fee is a row of its own.
+  it('dry run with a fee row: the invoices less the fee meet the row, and the fee is a 6570 debit', async () => {
+    const client = makeClient({
+      company_members: OWNER,
+      invoices,
+      transactions: { data: { id: TX_ID, amount: 1200, currency: 'SEK', date: '2026-05-12', journal_entry_id: null }, error: null },
+      chart_of_accounts: { data: [{ account_number: '6570' }], error: null },
+    })
+    mockServiceClient.mockReturnValue(client)
+    const res = await post({ allocations, fees: [{ account: '6570', amount: 50 }] }, '?dry_run=true')
+    expect(res.status).toBe(200)
+    const preview = (await res.json()).data.preview
+    expect(preview).toMatchObject({ total_allocated: 1250, total_fees: 50, expected_lines_balanced: true })
+    expect(preview.expected_lines).toContainEqual({ account_number: '6570', description: 'Avgift betaltjänst', debit: 50, credit: 0 })
+    expect(wrote(client)).toBe(false)
+    expect((await post({ allocations, fees: [{ account: '4535', amount: 50 }] }, '?dry_run=true')).status).toBe(400)
+  })
+
   it('200 commits through the RPC with the API key user as actor', async () => {
     const posted = { id: JE_ID, company_id: COMPANY_ID, status: 'posted', voucher_series: 'A', voucher_number: 12, lines: [] }
     const client = makeClient({

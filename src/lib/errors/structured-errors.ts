@@ -8492,6 +8492,23 @@ const MATCH_BATCH: Record<string, StructuredErrorEntry> = {
     message_en:
       'The full transaction amount must be allocated. Add more invoices or raise an amount so the sum matches the bank movement.',
   },
+  BATCH_FEE_INVALID: {
+    httpStatus: 400,
+    message_sv: 'En avgiftsrad är ogiltig. Högst 5 rader, var och en med konto och ett belopp över noll i hela ören.',
+    message_en: 'A fee row is invalid. At most 5 rows, each with an account and an amount above zero in whole öre.',
+  },
+  BATCH_FEE_ACCOUNT_INVALID: {
+    httpStatus: 400,
+    message_sv:
+      'En avgift bokförs på ett aktivt kostnadskonto i klass 6, till exempel 6570 Bankkostnader. Aktivera kontot i kontoplanen eller välj ett annat.',
+    message_en:
+      'A fee is booked on an active class 6 cost account, for example 6570 Bankkostnader. Activate the account in the chart of accounts or choose another.',
+  },
+  BATCH_FEE_TOO_LARGE: {
+    httpStatus: 400,
+    message_sv: 'Avgifterna måste vara mindre än fakturorna de reglerar.',
+    message_en: 'The fees must be smaller than the invoices they settle.',
+  },
   BATCH_MIXED_KINDS_UNSUPPORTED: {
     httpStatus: 400,
     message_sv:

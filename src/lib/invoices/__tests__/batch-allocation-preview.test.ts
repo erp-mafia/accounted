@@ -231,4 +231,70 @@ describe('buildBatchAllocationPreview', () => {
     })
     expect(customer.lines.at(-1)).toEqual({ account_number: '1931', description: 'Inbetalning 2026-09-25', debit: 500, credit: 0 })
   })
+
+  // Issue #131 (migration 20261028231700): fee rows follow the invoices'
+  // lines as debits, before the bank leg, on both sides.
+  describe('fee rows', () => {
+    const invoices = {
+      [INV_A]: { currency: 'SEK', remaining_amount: 6000, total: 6000 },
+      [INV_B]: { currency: 'SEK', remaining_amount: 4000, total: 4000 },
+    }
+
+    it('a payout net of the fee: every invoice in full on 1510, the fee on 6570, the bank leg what arrived', () => {
+      const preview = buildBatchAllocationPreview({
+        transaction: { amount: 8500, currency: 'SEK', date: '2026-06-30' },
+        bankAccount: '1930',
+        allocations: [
+          { kind: 'customer_invoice', invoice_id: INV_A, amount: 6000 },
+          { kind: 'customer_invoice', invoice_id: INV_B, amount: 4000 },
+        ],
+        invoices,
+        fees: [{ account: '6570', amount: 1500, description: ' Booking-avgift juni ' }],
+      })
+      expect(preview.lines).toEqual([
+        { account_number: '1510', description: 'Kundfaktura 1 av 2', debit: 0, credit: 6000 },
+        { account_number: '1510', description: 'Kundfaktura 2 av 2', debit: 0, credit: 4000 },
+        { account_number: '6570', description: 'Booking-avgift juni', debit: 1500, credit: 0 },
+        { account_number: '1930', description: 'Inbetalning 2026-06-30', debit: 8500, credit: 0 },
+      ])
+      expect(preview.balanced).toBe(true)
+    })
+
+    it('a payment the bank added a fee to: Dr 2440, Dr the fee, Cr the bank for both; the default text', () => {
+      const preview = buildBatchAllocationPreview({
+        transaction: { amount: -10050, currency: 'SEK', date: '2026-06-30' },
+        bankAccount: '1930',
+        allocations: [
+          { kind: 'supplier_invoice', supplier_invoice_id: INV_A, amount: 6000 },
+          { kind: 'supplier_invoice', supplier_invoice_id: INV_B, amount: 4000 },
+        ],
+        invoices,
+        fees: [
+          { account: '6570', amount: 30 },
+          { account: '6570', amount: 20.004 },
+        ],
+      })
+      expect(preview.lines.slice(2)).toEqual([
+        { account_number: '6570', description: 'Avgift betaltjänst', debit: 30, credit: 0 },
+        { account_number: '6570', description: 'Avgift betaltjänst', debit: 20, credit: 0 },
+        { account_number: '1930', description: 'Utbetalning 2026-06-30', debit: 0, credit: 10050 },
+      ])
+      expect(preview.balanced).toBe(true)
+    })
+
+    it('refuses invoices that do not meet the row once the fees are counted, like the RPC does', () => {
+      const build = (amount: number) => () =>
+        buildBatchAllocationPreview({
+          transaction: { amount, currency: 'SEK', date: '2026-06-30' },
+          bankAccount: '1930',
+          allocations: [{ kind: 'customer_invoice', invoice_id: INV_A, amount: 6000 }],
+          invoices,
+          fees: [{ account: '6570', amount: 100 }],
+        })
+      expect(build(5900)).not.toThrow()
+      // The fee withheld from a payout never adds to it.
+      expect(build(6000)).toThrow(/must equal the transaction amount/)
+      expect(build(6100)).toThrow(/must equal the transaction amount/)
+    })
+  })
 })

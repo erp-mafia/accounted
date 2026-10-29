@@ -4030,13 +4030,14 @@ Example response `200`:
 **Book one bank payment against several customer invoices, or several supplier invoices, in one verifikat.**
 `scope:transactions:write · risk:high · idempotent · dry-run`
 
-Allocates the transaction across N invoices of one kind: one samlingsverifikation (bank against 1510 or 2440, kursdifferens on 3960/7960 for foreign invoices, öresavrundning on 3740) and one payment row per invoice, atomically. The allocations must sum to the transaction amount. The dry run answers the exact lines (expected_lines) the verifikat would carry. Idempotent. Dry-runnable.
+Allocates the transaction across N invoices of one kind: one samlingsverifikation (bank against 1510 or 2440, kursdifferens on 3960/7960 for foreign invoices, öresavrundning on 3740, a payment service's fees on their own cost lines) and one payment row per invoice, atomically. The allocations, less the fees for customer invoices or plus the fees for supplier invoices, must sum to the transaction amount. The dry run answers the exact lines (expected_lines) the verifikat would carry. Idempotent. Dry-runnable.
 
 **Use when:** One incoming payment covers several customer invoices, or one outgoing transfer pays several supplier invoices.
 **Do not use for:** One invoice (POST /transactions/{id}/match-invoice or match-supplier-invoice), mixing customer and supplier invoices, or invoices never booked under kontantmetoden.
 
 **Pitfalls:**
 - The allocation amounts must sum to |amount| of the transaction: BATCH_AMOUNT_EXCEEDS_TX / BATCH_AMOUNT_BELOW_TX otherwise.
+- fees books a payment service's fee on the row: a payout net of Stripe's or a card acquirer's fee (customer invoices: allocations - fees = |amount|) or a bank's charge added to a payment (supplier invoices: allocations + fees = |amount|). Each invoice is allocated what it owed. At most 5 rows, each a debit on an active BAS class 6 account (6570 Bankkostnader, 6040 Kontokortsavgifter) with no VAT, since a payment service is exempt (ML 10 kap. 33 §): BATCH_FEE_ACCOUNT_INVALID otherwise. The fees must be smaller than the invoices (BATCH_FEE_TOO_LARGE). A platform's commission is a taxable service, not a fee row: book it from the platform's invoice.
 - A row that posted vouchers already explain (each invoice marked paid by hand) returns 409 BATCH_TX_POSSIBLE_DUPLICATE with the vouchers: link the row to them instead. force=true needs expected_journal_entry_ids naming exactly that set.
 - Under kontantmetoden an invoice with no booking yet returns 400 BATCH_CASH_METHOD_UNBOOKED_INVOICE.
 - Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): each supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (dated on its invoice date), then the samlingsverifikation clears its 2440; registration_journal_entry_ids names them and the dry run shows them as registration_entries. A refusal of the book step (PERIOD_LOCKED on an invoice date, SI_BOOK_NO_FISCAL_PERIOD, SI_ACCRUED_COST_PERIOD_LOCKED, SI_BOOK_INVALID_STATUS for a partially paid invoice) refuses the batch with that code and details.registration_first, before anything is booked.
@@ -4055,7 +4056,8 @@ Request body:
 {
   allocations: { kind: "customer_invoice", invoice_id: string, amount: number } | { kind: "supplier_invoice", supplier_invoice_id: string, amount: number }[],
   force?: boolean,
-  expected_journal_entry_ids?: string[]
+  expected_journal_entry_ids?: string[],
+  fees?: { account: string, amount: number, description?: string }[]
 }
 ```
 
@@ -4087,6 +4089,7 @@ Response `200`:
     allocations: { kind: "customer_invoice" | "supplier_invoice", invoice_id?: string, supplier_invoice_id?: string, payment_id: string, status: "paid" | "partially_paid", paid_amount: number, remaining_amount: number, amount: number }[],
     total_allocated: number,
     leftover: number,
+    total_fees?: number,
     registration_journal_entry_ids?: Record<string, string>,
     sale_journal_entry_ids?: Record<string, string>
   },

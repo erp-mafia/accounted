@@ -28,10 +28,15 @@
  *      sent without its verifikat gets its sale booked first by the Bokför
  *      step, right before the RPC (lib/invoices/sale-first.ts); its dry run
  *      runs here, so a refusal refuses the batch before anything is written;
- *   4. the RPC: tenant scope, direction, sums, periods, locks.
+ *   4. the RPC: tenant scope, direction, sums, fee rows, periods, locks.
  *
  * A batch is all customer or all supplier invoices (the RPC refuses a mix),
  * so at most one of 3b and 3s books anything; both run, registrations first.
+ *
+ * Fee rows (input.fees, lib/bookkeeping/payout-fee-lines.ts): a payment
+ * service's fee on the row, a debit on a class 6 cost account with no VAT.
+ * The invoices less the fees (customer) or plus the fees (supplier) equal
+ * the row; every invoice still settles for what it owed.
  *
  * A dry run runs 1-3s, then reads the transaction and the invoices and
  * projects the verifikat the RPC would post (lib/invoices/batch-allocation-
@@ -67,6 +72,7 @@ import { linkBasisColumns } from '@/lib/links/stamp'
 import { postingPort } from '@/lib/posting/port'
 import type { BusinessEventDraft } from '@/lib/posting/types'
 import { roundOre } from '@/lib/money'
+import { payoutBankAmount, payoutFeeLines, payoutFeeTotal } from '@/lib/bookkeeping/payout-fee-lines'
 import { ID_READ_CHUNK } from '@/lib/reconciliation/limits'
 import { chunk } from '@/lib/utils'
 import { scheduleCollectionForwardDrain } from '@/lib/collections/forward-hook'
@@ -103,6 +109,8 @@ export interface MatchBatchResult {
   allocations: MatchBatchAllocationResult[]
   total_allocated: number
   leftover: number
+  /** The fee rows booked on the verifikat together; absent without fee rows. */
+  total_fees?: number
   /**
    * Supplier invoice id to the registration verifikat the batch booked first
    * (defer_invoice_booking); absent when it booked none.
@@ -325,12 +333,20 @@ export async function matchTransactionBatch(
   // 4. The RPC is the atomicity boundary, behind the engine door (through
   // the posting port) that also announces its verifikat with
   // journal_entry.committed.
+  const feeLines = payoutFeeLines(input.fees)
   const { data, error } = await postingPort.commitSqlPosting({
     supabase,
     companyId,
     userId,
     fn: 'match_batch_allocate',
-    args: [{ transactionId, allocations, ...(businessEvents ? { businessEvents } : {}) }],
+    args: [
+      {
+        transactionId,
+        allocations,
+        ...(feeLines.length > 0 ? { feeLines } : {}),
+        ...(businessEvents ? { businessEvents } : {}),
+      },
+    ],
   })
   if (error) {
     txLog.error('match_batch_allocate RPC error', error)
@@ -380,6 +396,7 @@ export async function matchTransactionBatch(
       allocations: result.allocations,
       total_allocated: result.total_allocated,
       leftover: result.leftover,
+      ...(feeLines.length > 0 ? { total_fees: result.total_fees ?? payoutFeeTotal(feeLines) } : {}),
       ...(Object.keys(booked.journalEntryIds).length > 0
         ? { registration_journal_entry_ids: booked.journalEntryIds }
         : {}),
@@ -539,8 +556,27 @@ async function previewMatchBatch(
 
   const totalAllocated = roundOre(allocations.reduce((sum, a) => sum + a.amount, 0))
   const txAbs = Math.abs(transaction.amount)
-  if (totalAllocated - txAbs > 0.005) return { ok: false, code: 'BATCH_AMOUNT_EXCEEDS_TX', details: { total_allocated: totalAllocated, transaction_amount: txAbs } }
-  if (txAbs - totalAllocated > 0.005) return { ok: false, code: 'BATCH_AMOUNT_BELOW_TX', details: { total_allocated: totalAllocated, transaction_amount: txAbs } }
+  const totalFees = payoutFeeTotal(input.fees)
+  const settled = payoutBankAmount(allocations[0]!.kind, totalAllocated, totalFees)
+  const sums = { total_allocated: totalAllocated, ...(totalFees > 0 ? { total_fees: totalFees } : {}), transaction_amount: txAbs }
+  if (settled - txAbs > 0.005) return { ok: false, code: 'BATCH_AMOUNT_EXCEEDS_TX', details: sums }
+  if (txAbs - settled > 0.005) return { ok: false, code: 'BATCH_AMOUNT_BELOW_TX', details: sums }
+
+  // A fee books on an active account of the company's chart, as the RPC
+  // checks at commit (BATCH_FEE_ACCOUNT_INVALID).
+  const feeAccounts = Array.from(new Set((input.fees ?? []).map((fee) => fee.account)))
+  if (feeAccounts.length > 0) {
+    const { data: chartRows, error: chartError } = await supabase
+      .from('chart_of_accounts')
+      .select('account_number')
+      .eq('company_id', companyId)
+      .eq('is_active', true)
+      .in('account_number', feeAccounts)
+    if (chartError) return failed(chartError)
+    const active = new Set(((chartRows ?? []) as { account_number: string }[]).map((row) => row.account_number))
+    const inactive = feeAccounts.find((account) => !active.has(account))
+    if (inactive) return { ok: false, code: 'BATCH_FEE_ACCOUNT_INVALID', details: { account: inactive } }
+  }
 
   // The bank leg the RPC posts: capture_bank_booking_context's account for
   // this row, which resolveSettlementAccount mirrors (issue #3097).
@@ -556,6 +592,7 @@ async function previewMatchBatch(
     bankAccount,
     allocations,
     invoices,
+    fees: input.fees,
   })
 
   return {
@@ -570,6 +607,7 @@ async function previewMatchBatch(
       allocations_count: allocations.length,
       allocations_kind: isCustomer ? 'customer_invoice' : 'supplier_invoice',
       total_allocated: totalAllocated,
+      ...(totalFees > 0 ? { total_fees: totalFees } : {}),
       expected_entry_date: expected.entry_date,
       expected_description: expected.description,
       expected_lines: expected.lines,

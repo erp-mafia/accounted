@@ -42,9 +42,12 @@ export interface PickedInvoice {
  *   partial       the invoices owe more than the row: the oldest are paid in
  *                 full and the last one in part;
  *   over          even the last invoice would get nothing: one too many ticked;
- *   short         the row is larger: the rest has no invoice. A batch has no
- *                 bank-fee or other line for it, so it cannot be booked until
- *                 more invoices cover the row.
+ *   short         the row is larger: the rest has no invoice. It cannot be
+ *                 booked until more invoices cover the row, or, on a supplier
+ *                 payment, a fee row (the bank's charge) takes the rest.
+ *                 A payout net of a fee is `partial` here: the dialog's
+ *                 "Lägg till avgiftsrad" settles every invoice in full and
+ *                 books the gap as the fee (lib/bookkeeping/payout-fee-lines.ts).
  */
 export type PickedAllocationOutcome = 'exact' | 'ore_rounding' | 'partial' | 'over' | 'short'
 
