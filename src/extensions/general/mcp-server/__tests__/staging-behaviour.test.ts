@@ -694,8 +694,10 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   // neither; this drives the row id, the common case.
   gnubok_reconcile_unmatch: { args: { external_id: SOME_UUID } },
   // Bank file undo: a completed import the owner undoes; the preview counts
-  // the batch rows it would delete and skip (reads only).
+  // the batch rows it would delete and skip (reads only). Exactly one of the
+  // import id and a transaction id (crm#1528): this drives the import id.
   gnubok_undo_bank_import: {
+    args: { bank_file_import_id: SOME_UUID },
     rows: { bank_file_imports: { status: 'completed' }, company_members: { role: 'owner' } },
   },
   // Inline rättelse and redate of a posted verifikat in an open, unlocked

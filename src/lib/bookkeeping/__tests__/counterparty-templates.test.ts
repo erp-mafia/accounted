@@ -1336,6 +1336,30 @@ describe('counterparty-templates', () => {
       expect(supabase.from).toHaveBeenCalledWith('categorization_templates')
     })
 
+    it('counts the approval on the row a parallel booking inserted first (23505)', async () => {
+      const { supabase, enqueue, findCalls } = createQueuedMockSupabase()
+      const raced = makeCategorizationTemplate({
+        counterparty_name: 'telia',
+        debit_account: '6200',
+        credit_account: '1930',
+        occurrence_count: 1,
+        source: 'user_approved',
+      })
+      enqueue({ data: null }) // lookup by name: nothing yet
+      enqueue({ data: null }) // lookup by alias: nothing yet
+      enqueue({ error: { code: '23505', message: 'duplicate key value violates unique constraint' } }) // insert lost the race
+      enqueue({ data: raced }) // lookup by name: the parallel booking's row
+      enqueue({ data: null }) // re-approval update
+
+      const written = await insertOrUpdateTemplate(supabase as never, 'company-1', { ...baseParams, source: 'user_approved' })
+
+      expect(written).toBe(true)
+      expect(findCalls('categorization_templates', 'insert')).toHaveLength(1)
+      const updates = findCalls('categorization_templates', 'update')
+      expect(updates).toHaveLength(1)
+      expect(updates[0][0]).toMatchObject({ occurrence_count: 2 })
+    })
+
     it('uses pre-fetched template without DB lookup', async () => {
       const { supabase, enqueue } = createQueuedMockSupabase()
       const existing = makeCategorizationTemplate({

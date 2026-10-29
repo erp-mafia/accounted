@@ -10,13 +10,16 @@
  *     Bokfört saldo (dot decimal separator, amount split across two columns
  *     where Uttag rows carry their own minus sign). The same page also
  *     exports one signed column, "Insättningar/uttag", in place of the pair
- *     (crm#1491).
+ *     (crm#1491). Some of these exports write three decimals ("349.000").
+ * Decimal mark: read from the file's own amount and balance cells
+ * (inferDecimalMark), else the layout's documented mark. One cell alone
+ * cannot tell "349.000" (349 kr) from 349 000 kr (crm#1528).
  * Date format: YYYY-MM-DD
  * Encoding: UTF-8 (optionally with BOM) or Windows-1252
  */
 
 import type { BankFileFormat, BankFileParseResult, ParsedBankTransaction, BankFileParseIssue } from '../types'
-import { roundOre, parseSwedishAmount } from '@/lib/money'
+import { roundOre, parseSwedishAmount, inferDecimalMark } from '@/lib/money'
 import { prepareContent } from '../../shared/encoding'
 import { normalizeDate } from '../date-utils'
 import { parseCSVLine } from './nordea'
@@ -112,6 +115,8 @@ export const sebFormat: BankFileFormat = {
       amountIdx === -1 ? headers.findIndex((h) => WITHDRAWAL_COLUMN_RE.test(h)) : -1
     const hasSplitAmount = depositIdx !== -1 && withdrawalIdx !== -1
     const balanceIdx = headers.findIndex((h) => h.includes('saldo'))
+    const isTransaktioner =
+      hasSplitAmount || (amountIdx !== -1 && COMBINED_AMOUNT_COLUMN_RE.test(headers[amountIdx]))
 
     if (dateIdx === -1 || (amountIdx === -1 && !hasSplitAmount)) {
       issues.push({
@@ -130,11 +135,24 @@ export const sebFormat: BankFileFormat = {
       }
     }
 
+    const rowFields = lines.map((line, i) =>
+      i === 0 ? [] : parseCSVLine(line.trim(), delimiter).map((f) => f.trim().replace(/^"|"$/g, '')),
+    )
+    // The file decides its decimal mark, never one cell: every amount and
+    // balance cell votes, and only when none can decide does the layout's
+    // documented mark apply (Transaktioner: dot; Kontoutdrag: the per-cell
+    // reading it always had).
+    const amountColumns = [amountIdx, depositIdx, withdrawalIdx, balanceIdx].filter((idx) => idx >= 0)
+    const decimalMark =
+      inferDecimalMark(rowFields.flatMap((f) => amountColumns.map((idx) => f[idx]))) ??
+      (isTransaktioner ? '.' : undefined)
+    const amountOf = (cell: string) => parseSwedishAmount(cell, decimalMark) ?? NaN
+
     for (let i = 1; i < lines.length; i++) {
       const line = lines[i].trim()
       if (!line) continue
 
-      const fields = parseCSVLine(line, delimiter).map((f) => f.trim().replace(/^"|"$/g, ''))
+      const fields = rowFields[i]
 
       const date = fields[dateIdx]
       const description = fields[descIdx >= 0 ? descIdx : dateIdx + 1] || 'Unknown'
@@ -151,14 +169,14 @@ export const sebFormat: BankFileFormat = {
 
       let amount: number
       if (hasSplitAmount) {
-        const deposit = fields[depositIdx] ? (parseSwedishAmount(fields[depositIdx]) ?? NaN) : 0
-        const rawWithdrawal = fields[withdrawalIdx] ? (parseSwedishAmount(fields[withdrawalIdx]) ?? NaN) : 0
+        const deposit = fields[depositIdx] ? amountOf(fields[depositIdx]) : 0
+        const rawWithdrawal = fields[withdrawalIdx] ? amountOf(fields[withdrawalIdx]) : 0
         // Uttag values carry their own minus sign in SEB's export; normalize
         // so a variant exporting magnitudes still lands as an expense.
         const withdrawal = rawWithdrawal > 0 ? -rawWithdrawal : rawWithdrawal
         amount = roundOre(deposit + withdrawal)
       } else {
-        amount = parseSwedishAmount(amountStr) ?? NaN
+        amount = amountOf(amountStr)
       }
       if (isNaN(amount)) {
         issues.push({ row: i + 1, message: `Ogiltigt belopp: ${amountStr}`, severity: 'warning' })
@@ -173,7 +191,7 @@ export const sebFormat: BankFileFormat = {
         continue
       }
 
-      const balance = balanceStr ? (parseSwedishAmount(balanceStr) ?? NaN) : null
+      const balance = balanceStr ? amountOf(balanceStr) : null
 
       transactions.push({
         date: normalizedDate,

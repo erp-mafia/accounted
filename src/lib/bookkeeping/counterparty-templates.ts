@@ -1387,6 +1387,14 @@ export async function insertOrUpdateTemplate(
         source: params.source,
       })
     if (error) {
+      // 23505 on (company_id, counterparty_name): a parallel booking of the
+      // same counterpart (a batch books five rows at once) inserted it
+      // between the lookup above and this insert. The row is there now, so
+      // this approval counts on it like any re-approval.
+      if (error.code === '23505') {
+        const raced = await findTemplateByKey(supabase, companyId, params.counterpartyName)
+        if (raced) return insertOrUpdateTemplate(supabase, companyId, params, raced, moneyLedgers)
+      }
       log.error('counterparty template insert failed', { ...logContext, error: error.message })
       return false
     }

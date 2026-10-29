@@ -393,6 +393,8 @@ type Jel = {
     voucher_number: number | null
     status: string
     source_type: string | null
+    /** The bank row a bank_transaction verifikat was booked from. */
+    source_id?: string | null
   }
 }
 
@@ -1254,5 +1256,60 @@ describe('bank-feed identity: detectBookingDuplicate (orchestrator)', () => {
       })],
     })
     expect(await detectBookingDuplicate(supabase, COMPANY, swishTarget())).toBeNull()
+  })
+})
+
+describe('a bank-row verifikat whose link has not landed: detectLedgerDuplicateVoucher', () => {
+  // 2026-10-29: one Stripe-fee verifikat booked from its own bank row, but not
+  // (yet) linked from it (a parallel booking between its commit and its link,
+  // or a link the busy bank-account lock refused), read as a ledger-only
+  // orphan, and every other fee of the same öre within the week was refused as
+  // its duplicate, each with its own Stripe id.
+  const STRIPE = { import_source: 'stripe', bank_connection_id: null, provider_transaction_id: null }
+  const feeTarget = {
+    id: 'fee-b', date: '2026-08-09', amount: -2.79, currency: 'SEK', cash_account_id: 'ca-stripe',
+    external_id: 'stripe_acct_1_txn_B', ...STRIPE,
+  }
+  const feeVoucher = (sourceId: string) =>
+    jel({
+      account_number: '1930',
+      debit_amount: 0,
+      credit_amount: 2.79,
+      journal_entry: {
+        id: 'je-fee-a', entry_date: '2026-08-09', description: 'Stripe-avgift',
+        voucher_series: 'A', voucher_number: 349, status: 'posted', source_type: 'bank_transaction', source_id: sourceId,
+      },
+    })
+  const sourceRow = (over: Partial<LedgerTxLink> = {}): LedgerTxLink => ({
+    id: 'fee-a', date: '2026-08-09', amount: -2.79, currency: 'SEK', cash_account_id: 'ca-stripe',
+    journal_entry_id: null, external_id: 'stripe_acct_1_txn_A', ...STRIPE, ...over,
+  })
+
+  it('does not call it a duplicate of another bank row its ids prove distinct', async () => {
+    const supabase = makeLedgerSupabase({ ledgerAccount: '1930', lines: [feeVoucher('fee-a')], txLinks: [sourceRow()] })
+    expect(await detectLedgerDuplicateVoucher(supabase, COMPANY, feeTarget)).toBeNull()
+  })
+
+  it('returns it as the twin when its bank row is the same movement from another channel', async () => {
+    const supabase = makeLedgerSupabase({
+      ledgerAccount: '1930', lines: [feeVoucher('fee-a')],
+      txLinks: [sourceRow({ import_source: 'csv_generic_csv', external_id: 'csv_1' })],
+    })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, feeTarget)
+    expect(result?.journal_entry_id).toBe('je-fee-a')
+    expect(result?.transaction_id).toBe('fee-a')
+  })
+
+  it('still flags a verifikat booked from this very row: the row is booked already', async () => {
+    const supabase = makeLedgerSupabase({ ledgerAccount: '1930', lines: [feeVoucher('fee-b')] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, feeTarget)
+    expect(result?.journal_entry_id).toBe('je-fee-a')
+    expect(result?.transaction_id).toBeNull()
+  })
+
+  it('judges it as before when its bank row cannot be read', async () => {
+    const supabase = makeLedgerSupabase({ ledgerAccount: '1930', lines: [feeVoucher('fee-gone')] })
+    const result = await detectLedgerDuplicateVoucher(supabase, COMPANY, feeTarget)
+    expect(result?.journal_entry_id).toBe('je-fee-a')
   })
 })

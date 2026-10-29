@@ -1,0 +1,1 @@
+[2026-10-29] Categorize under the busy bank-account lock: the link and the orphan storno retry CASH_ACCOUNT_OPERATION_BUSY in the app (under 2 s, storno only while the original still stands) instead of letting the NOWAIT anchor guards wait in the DB; that deeper change waits for pg-real tests.

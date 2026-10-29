@@ -1,7 +1,8 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
 import { cancelOrphanedEntry } from '@/lib/bookkeeping/engine'
-import { getUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
+import { EntryAlreadyReversedError, getUnusedVoucherAllocation } from '@/lib/bookkeeping/errors'
+import { CASH_ACCOUNT_BUSY_RETRY, isCashAccountBusy, waitBeforeBusyRetry } from '@/lib/bookkeeping/cash-account-busy'
 import { voucherStornoBusinessEvent } from '@/lib/bookkeeping/ledger-business-events'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -93,6 +94,14 @@ export async function recordVoucherGapExplanation(
  * could not link); without one (step 2i) the event is ledger.storno of the
  * verifikat reversed, system_derived: nobody chose this storno, the
  * compensation did. The engine gets the call it always did.
+ *
+ * A storno refused by the busy bank-account lock (cash-account-busy.ts: its
+ * lines insert, or the compare-and-set that marks the original reversed,
+ * which the engine reports as EntryAlreadyReversedError after cancelling its
+ * own reversal) changed nothing, so it is tried again while the original
+ * still stands: posted, with no posted storno pointing at it. Given up on the
+ * first refusal, the verifikat stayed posted beside a bank row that still
+ * read as unbooked, and the row was then booked a second time.
  */
 export async function reverseOrphanedJournalEntry(
   supabase: SupabaseClient,
@@ -102,42 +111,93 @@ export async function reverseOrphanedJournalEntry(
   gapExplanation: string,
   stornoEvent?: () => BusinessEventDraft,
 ): Promise<void> {
-  let unusedVoucher: ReturnType<typeof getUnusedVoucherAllocation> = null
-  try {
-    await postingPort.reverseJournalEntry({
-      supabase,
-      companyId,
-      userId,
-      entryId: journalEntryId,
-      event:
-        stornoEvent ??
-        (() =>
-          voucherStornoBusinessEvent({ entryId: journalEntryId, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('system_derived') })),
-      role: 'reversal',
-    })
-    return
-  } catch (reverseError) {
-    unusedVoucher = getUnusedVoucherAllocation(reverseError)
+  const retryDelays = CASH_ACCOUNT_BUSY_RETRY.delaysMs
+  for (let attempt = 0; ; attempt++) {
+    let reverseError: unknown
+    try {
+      await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        entryId: journalEntryId,
+        event:
+          stornoEvent ??
+          (() =>
+            voucherStornoBusinessEvent({ entryId: journalEntryId, occurredOn: todayIsoStockholm(), linkBasis: linkBasisColumns('system_derived') })),
+        role: 'reversal',
+      })
+      return
+    } catch (err) {
+      reverseError = err
+    }
+
+    const unusedVoucher = getUnusedVoucherAllocation(reverseError)
+    // The original posted voucher is live accounting evidence, never a gap.
+    // Only the engine can identify an exact reversal number that its durable
+    // sequence allocated before a reversal row existed.
+    if (unusedVoucher) {
+      await recordVoucherGapExplanation(supabase, {
+        companyId,
+        userId,
+        fiscalPeriodId: unusedVoucher.fiscalPeriodId,
+        voucherSeries: unusedVoucher.voucherSeries,
+        voucherNumber: unusedVoucher.voucherNumber,
+        explanation: gapExplanation,
+      })
+    }
+
+    const busyRefusal = isCashAccountBusy(reverseError) || reverseError instanceof EntryAlreadyReversedError
+    const delayMs = retryDelays[attempt]
+    if (busyRefusal && delayMs !== undefined && (await orphanStillStands(supabase, companyId, journalEntryId))) {
+      log.warn('storno of orphaned journal entry refused by a busy bank-account lock; retrying', {
+        companyId,
+        journalEntryId,
+        attempt: attempt + 1,
+      })
+      await waitBeforeBusyRetry(delayMs)
+      continue
+    }
+
     log.error('failed to storno orphaned journal entry', reverseError as Error, {
       companyId,
       journalEntryId,
       unusedVoucher,
     })
+    return
   }
+}
 
-  // The original posted voucher is live accounting evidence, never a gap.
-  // Only the engine can identify an exact reversal number that its durable
-  // sequence allocated before a reversal row existed.
-  if (!unusedVoucher) return
-
-  await recordVoucherGapExplanation(supabase, {
-    companyId,
-    userId,
-    fiscalPeriodId: unusedVoucher.fiscalPeriodId,
-    voucherSeries: unusedVoucher.voucherSeries,
-    voucherNumber: unusedVoucher.voucherNumber,
-    explanation: gapExplanation,
-  })
+/**
+ * The orphan still needs its storno: posted, and no posted storno points at
+ * it. Anything else (reversed meanwhile, a storno that landed but whose
+ * cleanup failed, an unreadable state) stops the retries: a second storno of
+ * an entry already netted would reverse it twice. Never throws.
+ */
+async function orphanStillStands(supabase: SupabaseClient, companyId: string, journalEntryId: string): Promise<boolean> {
+  try {
+    const { data: entry, error } = await supabase
+      .from('journal_entries')
+      .select('status')
+      .eq('company_id', companyId)
+      .eq('id', journalEntryId)
+      .maybeSingle()
+    if (error || (entry as { status?: string } | null)?.status !== 'posted') return false
+    const { data: stornos, error: stornoError } = await supabase
+      .from('journal_entries')
+      .select('id')
+      .eq('company_id', companyId)
+      .eq('reverses_id', journalEntryId)
+      .eq('status', 'posted')
+      .limit(1)
+    if (stornoError) return false
+    return (stornos ?? []).length === 0
+  } catch (err) {
+    log.warn('could not read whether the orphaned journal entry still stands; not retrying its storno', err as Error, {
+      companyId,
+      journalEntryId,
+    })
+    return false
+  }
 }
 
 /**

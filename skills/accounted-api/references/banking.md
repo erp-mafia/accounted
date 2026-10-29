@@ -1006,6 +1006,7 @@ Hard-deletes every transaction the import created that is still unbooked (ignore
 - Owner or admin only: a member key gets 403 BANK_FILE_UNDO_FORBIDDEN.
 - Booked rows survive the undo (skipped_booked > 0): to remove them, reverse their verifikat first, then delete or ignore the rows.
 - Imports made before rows were stamped with their import id delete nothing (deleted_transactions 0).
+- transaction_id (any row the import created) stands in for the import id over MCP, where import ids are not listed; the staged undo is pinned to the import it resolved to. Over v1 the path names the import: a body transaction_id is refused.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|
@@ -1013,6 +1014,16 @@ Hard-deletes every transaction the import created that is still unbooked (ignore
 | `id` | path | `string` | yes |  |
 | `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
 | `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ transaction_id?: string }
+```
+
+Example request:
+```json
+{}
+```
 
 Response `200`:
 ```ts

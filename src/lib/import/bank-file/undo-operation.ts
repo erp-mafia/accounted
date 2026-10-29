@@ -20,6 +20,9 @@
  * Owner/admin only: checked here up front (so a dry run and an MCP stage
  * are refused for a member), and again authoritatively inside the RPC.
  * A dry run counts what the undo would delete and skip; it writes nothing.
+ *
+ * The import is named by its id, or by one transaction it created: an agent
+ * lists transactions, never imports, so it can hand over a row id (crm#1528).
  */
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { requireCompanyAdmin } from '@/lib/operations/access'
@@ -40,10 +43,35 @@ const ID_CHUNK = 200
 
 export async function undoBankImport(
   ctx: OperationContext,
-  importId: string,
+  target: string | { transactionId: string },
   options: { dryRun?: boolean } = {},
 ): Promise<OperationOutcome<BankImportUndoResult>> {
   const { supabase, companyId, userId, log } = ctx
+
+  let importId: string
+  if (typeof target === 'string') {
+    importId = target
+  } else {
+    const { data: row, error } = await supabase
+      .from('transactions')
+      .select('bank_file_import_id')
+      .eq('id', target.transactionId)
+      .eq('company_id', companyId)
+      .maybeSingle()
+    if (error) return { ok: false, code: 'BANK_FILE_UNDO_FAILED', error }
+    const fromImport = (row as { bank_file_import_id: string | null } | null)?.bank_file_import_id
+    if (!fromImport) {
+      return {
+        ok: false,
+        code: 'BANK_FILE_UNDO_NOT_FOUND',
+        details: {
+          transaction_id: target.transactionId,
+          reason: row ? 'The transaction did not come from a bank file import.' : 'No transaction with this id in the company.',
+        },
+      }
+    }
+    importId = fromImport
+  }
 
   const { data: importRecord, error: lookupError } = await supabase
     .from('bank_file_imports')

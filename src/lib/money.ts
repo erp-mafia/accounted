@@ -255,6 +255,9 @@ export function parseDecimalInput(input: string | null | undefined): number | nu
   return parseAmountText(input.replace(/\s/g, '').replace(/−/g, '-'), false)
 }
 
+/** The character a file writes between kronor and öre. */
+export type DecimalMark = '.' | ','
+
 /**
  * Parse an amount from a bank statement, a Skatteverket skattekonto export or
  * an opening-balance sheet: the one parser every file importer reads amounts
@@ -265,23 +268,83 @@ export function parseDecimalInput(input: string | null | undefined): number | nu
  * a leading plus as the sign, a trailing "kr", and dot-grouped thousands
  * without a decimal ("1.234", "1.234.567"), which a Swedish export means as
  * thousands. A number (a spreadsheet cell) is rounded as is.
+ *
+ * One cell alone cannot tell "349.000" (349 kr at three decimals) from
+ * 349 000 kr. A caller that knows the file's decimal mark (from
+ * `inferDecimalMark` over the whole column, or the bank's documented
+ * format) passes it as `decimalMark`: that mark is then the only decimal and
+ * the other character may only group whole thousands (crm#1528).
  */
-export function parseSwedishAmount(value: string | number | null | undefined): number | null {
+export function parseSwedishAmount(
+  value: string | number | null | undefined,
+  decimalMark?: DecimalMark,
+): number | null {
   if (value == null) return null
   if (typeof value === 'number') {
     if (!Number.isFinite(value)) return null
     const rounded = roundOre(value)
     return rounded === 0 ? 0 : rounded
   }
-  const compact = value
+  const compact = compactAmountText(value)
+  const n = decimalMark ? parseWithDecimalMark(compact, decimalMark) : parseAmountText(compact, true)
+  if (n === null) return null
+  const rounded = roundOre(n)
+  return rounded === 0 ? 0 : rounded
+}
+
+/**
+ * The decimal mark a column of amount cells proves, or null when no cell
+ * decides it or the cells contradict each other. A cell decides when it
+ * carries both marks (the last one is the decimal) or one mark that cannot be
+ * a thousands grouping ("349.00", "1422.190", "0,5"). "1.234" and "349.000"
+ * decide nothing on their own: read the whole column (amounts and balances of
+ * one file share one convention) before parsing any cell of it.
+ */
+export function inferDecimalMark(cells: Iterable<string | null | undefined>): DecimalMark | null {
+  let found: DecimalMark | null = null
+  for (const cell of cells) {
+    if (!cell) continue
+    const mark = cellDecimalMark(compactAmountText(cell))
+    if (mark === null) continue
+    if (found !== null && found !== mark) return null
+    found = mark
+  }
+  return found
+}
+
+function compactAmountText(value: string): string {
+  return value
     .replace(/\s/g, '')
     .replace(/kr$/i, '')
     .replace(/^[\u2212\u2010-\u2013]/, '-')
     .replace(/^\+/, '')
-  const n = parseAmountText(compact, true)
-  if (n === null) return null
-  const rounded = roundOre(n)
-  return rounded === 0 ? 0 : rounded
+}
+
+const DOT_GROUPED = /^-?\d{1,3}(\.\d{3})+$/
+const COMMA_GROUPED = /^-?\d{1,3}(,\d{3})+$/
+
+function cellDecimalMark(compact: string): DecimalMark | null {
+  if (!/^-?[\d.,]+$/.test(compact)) return null
+  const lastComma = compact.lastIndexOf(',')
+  const lastDot = compact.lastIndexOf('.')
+  if (lastComma !== -1 && lastDot !== -1) return lastComma > lastDot ? ',' : '.'
+  if (lastDot !== -1) return DOT_GROUPED.test(compact) ? null : '.'
+  if (lastComma !== -1) return COMMA_GROUPED.test(compact) ? null : ','
+  return null
+}
+
+/** The amount grammar with a known decimal mark: at most one of it, and the other mark only as a thousands grouping. */
+function parseWithDecimalMark(compact: string, mark: DecimalMark): number | null {
+  const at = compact.indexOf(mark)
+  if (at !== compact.lastIndexOf(mark)) return null
+  let whole = at === -1 ? compact : compact.slice(0, at)
+  const fraction = at === -1 ? '' : compact.slice(at + 1)
+  const group = mark === '.' ? ',' : '.'
+  if (whole.includes(group)) {
+    if (!(group === '.' ? DOT_GROUPED : COMMA_GROUPED).test(whole)) return null
+    whole = whole.split(group).join('')
+  }
+  return finishAmount(whole, fraction)
 }
 
 /**
@@ -292,7 +355,7 @@ export function parseSwedishAmount(value: string | number | null | undefined): n
  * ("1.234") as thousands rather than as a decimal.
  */
 function parseAmountText(compact: string, dotThousands: boolean): number | null {
-  if (dotThousands && /^-?\d{1,3}(\.\d{3})+$/.test(compact)) {
+  if (dotThousands && DOT_GROUPED.test(compact)) {
     return finishAmount(compact.split('.').join(''), '')
   }
   const lastSep = Math.max(compact.lastIndexOf(','), compact.lastIndexOf('.'))
@@ -302,7 +365,7 @@ function parseAmountText(compact: string, dotThousands: boolean): number | null 
   if (lastSep !== -1) {
     const groupSep = compact[lastSep] === ',' ? '.' : ','
     if (whole.includes(groupSep)) {
-      const grouped = groupSep === '.' ? /^-?\d{1,3}(\.\d{3})+$/ : /^-?\d{1,3}(,\d{3})+$/
+      const grouped = groupSep === '.' ? DOT_GROUPED : COMMA_GROUPED
       if (!grouped.test(whole)) return null
       whole = whole.split(groupSep).join('')
     }

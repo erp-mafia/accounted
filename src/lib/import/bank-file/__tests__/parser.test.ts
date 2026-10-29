@@ -70,6 +70,15 @@ const SEB_TRANSAKTIONER_COMBINED_CSV =
   '2026-10-19;2026-10-18;BUTIKEN KORTKOP;Kortköp;-89.44;12450.00\r\n' +
   '2026-10-18;2026-10-18;KUNDINBETALNING;Insättning;1500.00;12539.44\r\n'
 
+// SEB "Transaktioner" export writing three decimals (crm#1528). Synthetic
+// rows: a 1-3 digit integer part ("349.000") used to read as thousands.
+const SEB_TRANSAKTIONER_THREE_DECIMALS_CSV =
+  '\uFEFFBokförd;Valutadatum;Text;Typ;Insättningar/uttag;Bokfört saldo\r\n' +
+  '2026-10-21;2026-10-21;KORTKOP KAFE;Kortköp;-349.000;7724.690\r\n' +
+  '2026-10-20;2026-10-20;KUNDINBETALNING;Insättning;1422.190;8073.690\r\n' +
+  '2026-10-19;2026-10-19;OVERFORING;Annan;-5000.000;6651.500\r\n' +
+  '2026-10-18;2026-10-18;RANTA;Annan;0.500;11651.500\r\n'
+
 const SWEDBANK_CSV = [
   'Kontouppgifter',
   'Clearingnummer,Kontonummer,Datum,Text,Belopp,Saldo',
@@ -930,6 +939,58 @@ describe('parseBankFile: SEB format', () => {
     expect(result.transactions).toHaveLength(1)
     expect(result.transactions[0].amount).toBe(-50)
     expect(result.stats.skipped_rows).toBe(1)
+  })
+})
+
+describe('SEB amounts with three decimals (crm#1528)', () => {
+  it('reads 349.000 as 349 kr: the file, not the cell, decides the decimal mark', () => {
+    const result = parseBankFile(SEB_TRANSAKTIONER_THREE_DECIMALS_CSV, 'transaktioner.csv')
+
+    expect(result.format).toBe('seb')
+    expect(result.issues).toHaveLength(0)
+    expect(result.transactions.map((t) => [t.amount, t.balance])).toEqual([
+      [-349, 7724.69],
+      [1422.19, 8073.69],
+      [-5000, 6651.5],
+      [0.5, 11651.5],
+    ])
+  })
+
+  it('reads the split Insättningar/Uttag columns at three decimals', () => {
+    const csv =
+      'Bokförd;Valutadatum;Text;Typ;Insättningar;Uttag;Bokfört saldo\n' +
+      '2026-10-21;2026-10-21;KORTKOP;Kortköp;;-349.000;651.000\n' +
+      '2026-10-20;2026-10-20;INSATTNING;Insättning;250.500;;1000.000'
+    const result = parseBankFile(csv, 'transaktioner.csv', 'seb')
+
+    expect(result.transactions.map((t) => [t.amount, t.balance])).toEqual([
+      [-349, 651],
+      [250.5, 1000],
+    ])
+  })
+
+  it('falls back to the Transaktioner layout\'s dot when no cell decides', () => {
+    // Every cell is a 1-3 digit integer part plus three digits: ambiguous one
+    // by one, so the layout's documented mark applies.
+    const csv =
+      'Bokförd;Valutadatum;Text;Typ;Insättningar/uttag;Bokfört saldo\n' +
+      '2026-10-21;2026-10-21;KORTKOP;Kortköp;-349.000;651.000'
+    const result = parseBankFile(csv, 'transaktioner.csv', 'seb')
+
+    expect(result.transactions.map((t) => [t.amount, t.balance])).toEqual([[-349, 651]])
+  })
+
+  it('keeps the Kontoutdrag layout\'s comma decimals and space-grouped thousands', () => {
+    const csv =
+      'Bokföringsdag;Valutadag;Verifikationsnummer;Text;Belopp;Saldo\n' +
+      '2026-10-21;2026-10-21;1;KORTKOP;-349,00;12 345,67\n' +
+      '2026-10-20;2026-10-20;2;LON;25 000,00;12 694,67'
+    const result = parseBankFile(csv, 'kontoutdrag.csv', 'seb')
+
+    expect(result.transactions.map((t) => [t.amount, t.balance])).toEqual([
+      [-349, 12345.67],
+      [25000, 12694.67],
+    ])
   })
 })
 
