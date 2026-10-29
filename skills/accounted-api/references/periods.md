@@ -2,7 +2,7 @@
 
 # Periods and registers endpoints
 
-Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, and reading filed VAT declarations (and beslut) from Skatteverket.
+Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, reading filed VAT declarations (and beslut) from Skatteverket, and the register of prior years' tax losses (underskott, IL 40 kap.) per fiscal year.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -4110,6 +4110,358 @@ Example response `200`:
       "mervardesskattTillfalle": "2026-04-10"
     },
     "decided": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/tax-loss-carryforwards`
+
+**The underskottsregister: prior years' tax losses per fiscal year (IL 40 kap.), oldest first.**
+`scope:reports:read · risk:low · idempotent`
+
+Each fiscal year with its deficit brought forward (INK2S 4.14 a), the spärrar (4.14 b beloppsspärr and similar, 4.14 c koncernbidragsspärr), the result before the deduction, and the deficit carried forward to the next year. Each year is checked against the one before it; warnings say when 4.14 a differs from what the previous year carries forward, when a spärr could not be computed, or when an earlier year changed. Read-only.
+
+**Use when:** Preparing the tax provision or INK2, or checking how a company's tax losses roll forward.
+**Do not use for:** The tax return itself (GET /reports/ink2) or booking anything (the register books nothing).
+
+**Pitfalls:**
+- LOSS_CARRYFORWARD_UNAVAILABLE: the register is not switched on for this company.
+- LOSS_CARRYFORWARD_FORM_UNSUPPORTED: only for companies that file INK2 (aktiebolag, ekonomisk förening).
+- Amounts are kronor and öre; INK2 takes whole kronor.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    tax_loss_carryforwards: { tax_loss_carryforward_id: string, fiscal_period_id: string, fiscal_period: { name: string, period_start: string, period_end: string }, fiscal_year: number, brought_forward: number, source: "manual" | "ink2_history" | "tax_assessment" | "computed", result_before_deficit: number | null, group_contributions_received: number, amount_block_reduction: number, amount_block_manual: boolean, group_block_reduction: number, group_block_manual: boolean, deductible: number, taxable_result: number | null, carried_forward: number | null, ownership_change: { date: string, source: "manual" | "aktiebok", amount_block: boolean, acquisition_cost: number | null, capital_contributions: number, amount_block_limit: number | null, group_block: boolean, group_block_last_year: number | null } | null, group_block_active: boolean, note: string | null, document_id: string | null, tax_assessment_notice_id: string | null, updated_at: string | null, warnings: { code: string, message_sv: string, message_en: string, amount?: number }[] }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "tax_loss_carryforwards": [
+      {
+        "tax_loss_carryforward_id": "5d1e…",
+        "fiscal_period_id": "7c2b…",
+        "fiscal_period": {
+          "name": "Räkenskapsår 2026",
+          "period_start": "2026-01-01",
+          "period_end": "2026-12-31"
+        },
+        "fiscal_year": 2026,
+        "brought_forward": 1000000,
+        "source": "tax_assessment",
+        "result_before_deficit": 100000,
+        "group_contributions_received": 0,
+        "amount_block_reduction": 400000,
+        "amount_block_manual": false,
+        "group_block_reduction": 0,
+        "group_block_manual": false,
+        "deductible": 600000,
+        "taxable_result": -500000,
+        "carried_forward": 500000,
+        "ownership_change": {
+          "date": "2026-06-01",
+          "source": "manual",
+          "amount_block": true,
+          "acquisition_cost": 250000,
+          "capital_contributions": 50000,
+          "amount_block_limit": 600000,
+          "group_block": false,
+          "group_block_last_year": null
+        },
+        "group_block_active": false,
+        "note": null,
+        "document_id": null,
+        "tax_assessment_notice_id": "9a4f…",
+        "updated_at": "2026-10-29T08:00:00.000Z",
+        "warnings": []
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/tax-loss-carryforwards`
+
+**Save one fiscal year of the underskottsregister: the deficit brought forward, an ownership change and the year's result.**
+`scope:bookkeeping:write · risk:medium · idempotent · dry-run · reversible`
+
+Inserts or replaces the year by fiscal_period_id. 4.14 b (beloppsspärr: what exceeds 300 % of the utgift less kapitaltillskott, IL 40 kap. 15-16 §§) and 4.14 c (koncernbidragsspärr: the old deficit capped at the year's överskott without koncernbidrag, 40:18) are computed unless stated, and the deficit carried forward follows. The year's tax adjustments then prefill 4.14 a from it (4.14 a less 4.14 b and c). Books nothing. Dry-runnable: ?dry_run=true answers what would be stored.
+
+**Use when:** Entering the deficit from the previous year's slutskattebesked or INK2, recording an ownership change, or closing a year's figures after bokslut.
+**Do not use for:** Booking tax (the year-end dispositions) or filing INK2 (upload the SRU files at skatteverket.se).
+
+**Pitfalls:**
+- LOSS_CARRYFORWARD_UNAVAILABLE: the register is not switched on for this company.
+- LOSS_CARRYFORWARD_FORM_UNSUPPORTED: only for companies that file INK2 (aktiebolag, ekonomisk förening).
+- FISCAL_PERIOD_NOT_FOUND: the fiscal_period_id is not this company's.
+- LOSS_CARRYFORWARD_CHANGE_OUTSIDE_YEAR: the ownership change must be inside the fiscal year it is saved on.
+- LOSS_CARRYFORWARD_REDUCTIONS_EXCEED: stated 4.14 b and 4.14 c together exceed 4.14 a.
+- Without acquisition_cost the beloppsspärr is not computed and nothing is cut; the answer warns (amount_block_missing_cost).
+- Ownership changes are entered by hand; the 40:17 a overriding-reason rule, ackord and konkurs go in as a stated 4.14 b.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  fiscal_period_id: string,
+  brought_forward: number,
+  source: "manual" | "ink2_history" | "tax_assessment" | "computed",
+  result_before_deficit?: number | null,
+  group_contributions_received?: number,
+  amount_block_reduction?: number | null,
+  group_block_reduction?: number | null,
+  ownership_change?: {
+    date: string,
+    amount_block: boolean,
+    acquisition_cost?: number | null,
+    capital_contributions?: number,
+    group_block: boolean,
+    group_block_last_year?: number | null
+  } | null,
+  note?: string | null,
+  document_id?: string | null,
+  tax_assessment_notice_id?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "fiscal_period_id": "7c2b…",
+  "brought_forward": 1000000,
+  "source": "tax_assessment",
+  "tax_assessment_notice_id": "9a4f…",
+  "result_before_deficit": 100000,
+  "ownership_change": {
+    "date": "2026-06-01",
+    "amount_block": true,
+    "acquisition_cost": 250000,
+    "capital_contributions": 50000,
+    "group_block": false
+  }
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    tax_loss_carryforward_id: string,
+    fiscal_period_id: string,
+    fiscal_period: { name: string, period_start: string, period_end: string },
+    fiscal_year: number,
+    brought_forward: number,
+    source: "manual" | "ink2_history" | "tax_assessment" | "computed",
+    result_before_deficit: number | null,
+    group_contributions_received: number,
+    amount_block_reduction: number,
+    amount_block_manual: boolean,
+    group_block_reduction: number,
+    group_block_manual: boolean,
+    deductible: number,
+    taxable_result: number | null,
+    carried_forward: number | null,
+    ownership_change: { date: string, source: "manual" | "aktiebok", amount_block: boolean, acquisition_cost: number | null, capital_contributions: number, amount_block_limit: number | null, group_block: boolean, group_block_last_year: number | null } | null,
+    group_block_active: boolean,
+    note: string | null,
+    document_id: string | null,
+    tax_assessment_notice_id: string | null,
+    updated_at: string | null,
+    warnings: { code: string, message_sv: string, message_en: string, amount?: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "tax_loss_carryforward_id": "5d1e…",
+    "fiscal_period_id": "7c2b…",
+    "fiscal_period": {
+      "name": "Räkenskapsår 2026",
+      "period_start": "2026-01-01",
+      "period_end": "2026-12-31"
+    },
+    "fiscal_year": 2026,
+    "brought_forward": 1000000,
+    "source": "tax_assessment",
+    "result_before_deficit": 100000,
+    "group_contributions_received": 0,
+    "amount_block_reduction": 400000,
+    "amount_block_manual": false,
+    "group_block_reduction": 0,
+    "group_block_manual": false,
+    "deductible": 600000,
+    "taxable_result": -500000,
+    "carried_forward": 500000,
+    "ownership_change": {
+      "date": "2026-06-01",
+      "source": "manual",
+      "amount_block": true,
+      "acquisition_cost": 250000,
+      "capital_contributions": 50000,
+      "amount_block_limit": 600000,
+      "group_block": false,
+      "group_block_last_year": null
+    },
+    "group_block_active": false,
+    "note": null,
+    "document_id": null,
+    "tax_assessment_notice_id": "9a4f…",
+    "updated_at": "2026-10-29T08:00:00.000Z",
+    "warnings": []
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/tax-loss-carryforwards/{id}`
+
+**One fiscal year of the underskottsregister, checked against the year before it.**
+`scope:reports:read · risk:low · idempotent`
+
+The same year as the list answers, by its tax_loss_carryforward_id. Read-only.
+
+**Use when:** You hold a tax_loss_carryforward_id and need its figures and warnings.
+**Do not use for:** Finding the year for a fiscal period (list the register instead).
+
+**Pitfalls:**
+- LOSS_CARRYFORWARD_UNAVAILABLE: the register is not switched on for this company.
+- LOSS_CARRYFORWARD_NOT_FOUND: the id is not this company's.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    tax_loss_carryforward_id: string,
+    fiscal_period_id: string,
+    fiscal_period: { name: string, period_start: string, period_end: string },
+    fiscal_year: number,
+    brought_forward: number,
+    source: "manual" | "ink2_history" | "tax_assessment" | "computed",
+    result_before_deficit: number | null,
+    group_contributions_received: number,
+    amount_block_reduction: number,
+    amount_block_manual: boolean,
+    group_block_reduction: number,
+    group_block_manual: boolean,
+    deductible: number,
+    taxable_result: number | null,
+    carried_forward: number | null,
+    ownership_change: { date: string, source: "manual" | "aktiebok", amount_block: boolean, acquisition_cost: number | null, capital_contributions: number, amount_block_limit: number | null, group_block: boolean, group_block_last_year: number | null } | null,
+    group_block_active: boolean,
+    note: string | null,
+    document_id: string | null,
+    tax_assessment_notice_id: string | null,
+    updated_at: string | null,
+    warnings: { code: string, message_sv: string, message_en: string, amount?: number }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "tax_loss_carryforward_id": "5d1e…",
+    "fiscal_period_id": "7c2b…",
+    "fiscal_period": {
+      "name": "Räkenskapsår 2026",
+      "period_start": "2026-01-01",
+      "period_end": "2026-12-31"
+    },
+    "fiscal_year": 2026,
+    "brought_forward": 1000000,
+    "source": "tax_assessment",
+    "result_before_deficit": 100000,
+    "group_contributions_received": 0,
+    "amount_block_reduction": 400000,
+    "amount_block_manual": false,
+    "group_block_reduction": 0,
+    "group_block_manual": false,
+    "deductible": 600000,
+    "taxable_result": -500000,
+    "carried_forward": 500000,
+    "ownership_change": {
+      "date": "2026-06-01",
+      "source": "manual",
+      "amount_block": true,
+      "acquisition_cost": 250000,
+      "capital_contributions": 50000,
+      "amount_block_limit": 600000,
+      "group_block": false,
+      "group_block_last_year": null
+    },
+    "group_block_active": false,
+    "note": null,
+    "document_id": null,
+    "tax_assessment_notice_id": "9a4f…",
+    "updated_at": "2026-10-29T08:00:00.000Z",
+    "warnings": []
   },
   "meta": {
     "request_id": "req_…",

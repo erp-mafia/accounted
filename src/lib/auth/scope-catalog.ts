@@ -677,6 +677,10 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_list_arsredovisning_versions:         'reports:read',
   gnubok_get_arsredovisning_filing_status:     'reports:read',
   gnubok_preview_ef_declaration:               'reports:read',
+  // The underskottsregister, IL 40 kap. (lib/operations/tax-loss-carryforwards.ts).
+  gnubok_list_tax_loss_carryforwards:          'reports:read',
+  gnubok_get_tax_loss_carryforward:            'reports:read',
+  gnubok_save_tax_loss_carryforward:           'bookkeeping:write',
 }
 
 /**

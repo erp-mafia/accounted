@@ -415,10 +415,11 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'composite',
     uses: ['import', 'parties', 'payroll', 'transactions'],
     libFolders: ['bokslut'],
+    // tax-loss-carryforwards: the underskottsregister (lib/bokslut/loss-carryforward).
     // inventory-counts: the year-end stock count (lib/bokslut/stock-count,
     // Bolaget, behind BOLAGET_COMPANY_IDS); session routes and MCP only.
-    operationPrefixes: ['arsredovisning', 'inventory-counts'],
-    v1Segments: ['fiscal-periods/:id/arsredovisning'],
+    operationPrefixes: ['arsredovisning', 'tax-loss-carryforwards', 'inventory-counts'],
+    v1Segments: ['fiscal-periods/:id/arsredovisning', 'tax-loss-carryforwards'],
     jurisdictions: SE,
   },
   {

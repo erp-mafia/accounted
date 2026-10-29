@@ -254,6 +254,8 @@ import { CUSTOMER_LOSS_OPERATION_LIST } from './customer-loss'
 import { COUNTERPARTY_SETOFF_OPERATION_LIST } from './counterparty-setoff'
 import { counterpartySetoffEnabled } from '@/lib/env/counterparty-setoff-switch'
 import { customerLossEnabled } from '@/lib/env/customer-loss-switch'
+import { TAX_LOSS_CARRYFORWARD_OPERATIONS } from './tax-loss-carryforwards'
+import { lossCarryforwardDiscoverable } from '@/lib/env/loss-carryforward-switch'
 import { STOCK_COUNT_OPERATION_LIST } from './inventory-counts'
 import { stockCountConfigured } from '@/lib/env/stock-count-switch'
 import type { AnyOperation } from './types'
@@ -518,6 +520,7 @@ export const ALL_OPERATIONS: readonly AnyOperation[] = [
   ...COLLECTIONS_OPERATION_LIST,
   ...CUSTOMER_LOSS_OPERATION_LIST,
   ...COUNTERPARTY_SETOFF_OPERATION_LIST,
+  ...TAX_LOSS_CARRYFORWARD_OPERATIONS,
   ...STOCK_COUNT_OPERATION_LIST,
 ]
 
@@ -534,6 +537,9 @@ export const OPERATIONS: readonly AnyOperation[] = [
   ...(customerLossEnabled() ? CUSTOMER_LOSS_OPERATION_LIST : []),
   // Kvittning likewise only while COUNTERPARTY_SETOFF_ENABLED is set.
   ...(counterpartySetoffEnabled() ? COUNTERPARTY_SETOFF_OPERATION_LIST : []),
+  // The underskottsregister only while BOLAGET_COMPANY_IDS opens it for some
+  // company; each run still checks the company (lib/bokslut/loss-carryforward).
+  ...(lossCarryforwardDiscoverable() ? TAX_LOSS_CARRYFORWARD_OPERATIONS : []),
   // The year-end stock count likewise only while BOLAGET_COMPANY_IDS names a company.
   ...(stockCountConfigured() ? STOCK_COUNT_OPERATION_LIST : []),
 ]

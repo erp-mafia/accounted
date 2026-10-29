@@ -1052,6 +1052,20 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
       },
     },
   },
+  // The underskottsregister (served while BOLAGET_COMPANY_IDS opens it): an
+  // aktiebolag's fiscal year with nothing in the register yet.
+  gnubok_save_tax_loss_carryforward: {
+    args: {
+      fiscal_period_id: SOME_UUID,
+      brought_forward: 100_000,
+      source: 'manual',
+      ownership_change: null,
+      document_id: null,
+      tax_assessment_notice_id: null,
+    },
+    rows: { companies: { entity_type: 'aktiebolag' }, fiscal_periods: { ...FISCAL_YEAR_2026, name: '2026' } },
+    empty: ['tax_loss_carryforwards'],
+  },
   gnubok_detach_document_from_transaction: {
     rows: { transactions: { document_id: SOME_UUID }, document_attachments: { journal_entry_id: null } },
   },

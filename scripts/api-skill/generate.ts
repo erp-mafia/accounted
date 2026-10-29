@@ -67,12 +67,13 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
   {
     file: 'periods.md',
     title: 'Periods and registers',
-    members: ['fiscal-periods', 'accrual-schedules', 'accounts', 'compliance', 'dimensions', 'skatteverket', 'skattekonto'],
+    members: ['fiscal-periods', 'accrual-schedules', 'accounts', 'compliance', 'dimensions', 'skatteverket', 'skattekonto', 'tax-loss-carryforwards'],
     blurb:
       'Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual ' +
       'schedules (periodiseringar: re-plan the months not yet posted), the BAS ' +
       'chart of accounts, cost-center/project dimensions, the compliance pre-flight check, ' +
-      'and reading filed VAT declarations (and beslut) from Skatteverket.',
+      'reading filed VAT declarations (and beslut) from Skatteverket, and the register of ' +
+      'prior years\' tax losses (underskott, IL 40 kap.) per fiscal year.',
   },
   {
     file: 'invoices.md',

@@ -1,0 +1,1 @@
+[2026-10-29] Underskottsregistret (IL 40 kap.) is a per-fiscal-year register behind BOLAGET_COMPANY_IDS that prefills INK2S 4.14 a net of 4.14 b and c (a differing saved figure overrides); ownership changes are typed by hand until the aktiebok fills them.
