@@ -674,13 +674,44 @@ export function offeredProviders(status: Pick<ConnectionStatus, 'enabledProvider
   return ARCIM_PROVIDERS.filter((provider) => (enabled ? enabled.includes(provider.id) : provider.id !== 'wint'))
 }
 
-const PROVIDER_LOGOS: Record<ArcimProvider, string> = {
+/** Visma has no logo on purpose (founder, 2026-10-29): ProviderMark shows its initial. */
+const PROVIDER_LOGOS: Partial<Record<ArcimProvider, string>> = {
   fortnox: '/logos/fortnox.svg',
-  visma: '/logos/visma.jpeg',
   bokio: '/logos/bokio.png',
   bjornlunden: '/logos/bjornlunden.png',
   briox: '/logos/Briox_logo.png',
   wint: '/logos/wint.png',
+}
+
+function ProviderMark({
+  provider,
+  name,
+  alt = '',
+  className,
+}: {
+  provider: ArcimProvider
+  name: string
+  alt?: string
+  className?: string
+}) {
+  const logo = PROVIDER_LOGOS[provider]
+  if (!logo) {
+    return (
+      <span
+        role={alt ? 'img' : undefined}
+        className={cn(
+          'flex h-8 w-8 shrink-0 items-center justify-center rounded-sm border border-border text-sm font-semibold',
+          className,
+        )}
+        aria-hidden={alt ? undefined : true}
+        aria-label={alt || undefined}
+      >
+        {name.charAt(0)}
+      </span>
+    )
+  }
+  // eslint-disable-next-line @next/next/no-img-element
+  return <img src={logo} alt={alt} className={cn('h-8 w-8 shrink-0 rounded-sm object-contain', className)} />
 }
 
 /** The latest underlag run under its connection: what came in, and what did not. */
@@ -795,12 +826,7 @@ export function ProviderStep({
           connections below, with the two ways forward. */}
       {!isLoadingStatus && unfinished && unfinishedInfo && (
         <div className="flex flex-wrap items-center gap-3 border-y border-border py-3 sm:flex-nowrap sm:gap-4">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img
-            src={PROVIDER_LOGOS[unfinishedInfo.id]}
-            alt=""
-            className="h-8 w-8 shrink-0 rounded-sm object-contain"
-          />
+          <ProviderMark provider={unfinishedInfo.id} name={unfinishedInfo.name} />
           <p className="min-w-0 flex-1 text-sm font-medium">
             {t('ext_arcim_unfinished_connect', { provider: unfinishedInfo.name })}
           </p>
@@ -831,10 +857,10 @@ export function ProviderStep({
 
               return (
                 <div key={consent.id} className="flex flex-wrap items-center gap-3 py-3 sm:flex-nowrap sm:gap-4">
-                  <img
-                    src={PROVIDER_LOGOS[consent.provider]}
+                  <ProviderMark
+                    provider={consent.provider}
+                    name={providerInfo?.name ?? consent.provider}
                     alt={providerInfo?.name ?? consent.provider}
-                    className="h-8 w-8 shrink-0 rounded-sm object-contain"
                   />
                   <div className="min-w-0 flex-1">
                     <p className="text-sm font-medium">{providerInfo?.name ?? consent.provider}</p>
@@ -994,11 +1020,7 @@ export function ProviderStep({
                 )}
                 onClick={() => !isDisabled && onSelect(provider.id)}
               >
-                <img
-                  src={PROVIDER_LOGOS[provider.id]}
-                  alt={provider.name}
-                  className="h-8 w-8 shrink-0 rounded-sm object-contain"
-                />
+                <ProviderMark provider={provider.id} name={provider.name} alt={provider.name} />
                 <div className="min-w-0 flex-1">
                   <div className="flex items-center gap-2">
                     <p className="text-sm font-medium">{provider.name}</p>
@@ -2819,16 +2841,14 @@ export function ResultStep({
     // the underlag flow is the whole page.
     const documentProvider =
       ARCIM_PROVIDERS.find(p => p.id === documentImportState.provider)?.name ?? documentImportState.provider ?? ''
-    const documentLogo = documentImportState.provider ? PROVIDER_LOGOS[documentImportState.provider] : null
     // One title, one short promise (the bookkeeping does not change), the
     // mechanics behind the "?": the page says what it does before the user
     // presses anything.
     return (
       <div className="stagger-enter space-y-8">
         <div className="flex items-start gap-4">
-          {documentLogo && (
-            // eslint-disable-next-line @next/next/no-img-element
-            <img src={documentLogo} alt="" className="mt-1 h-8 w-8 shrink-0 rounded-sm object-contain" />
+          {documentImportState.provider && (
+            <ProviderMark provider={documentImportState.provider} name={documentProvider} className="mt-1" />
           )}
           <div className="min-w-0">
             <div className="flex items-center gap-2">
