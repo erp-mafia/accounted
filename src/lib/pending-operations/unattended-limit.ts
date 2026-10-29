@@ -87,6 +87,12 @@ const PRICEABLE_OPERATIONS: Readonly<Record<string, readonly string[]>> = {
   split_opening_balances_per_project: ['changed_amount_sek'],
   book_pos_sales_day: ['journal_entry.total_debit'],
   book_webshop_order: ['journal_entry.total_debit'],
+  // Attest posts nothing, but it releases the invoice for payment, which is
+  // what create_supplier_payment_batch is priced for. The staging tool
+  // (gnubok_approve_supplier_invoice) writes total_sek, the invoice's total
+  // in SEK; ops staged before it carried only total (the invoice currency,
+  // SEK for most), read so they are not left unpriced.
+  approve_supplier_invoice: ['total_sek', 'total'],
 }
 
 /**

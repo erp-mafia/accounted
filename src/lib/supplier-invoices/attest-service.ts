@@ -12,9 +12,12 @@
  *
  * Writes: a decision goes to supplier_invoice_attestations as the service
  * role (the trail is append only and no session writes it), after the rules
- * here said yes. The invoice's approved_at/approved_by is set with the door's
- * own client, with the same optimistic guard as before the policy existed, so
- * two concurrent approvals set it once and emit supplier_invoice.approved once.
+ * here said yes. The invoice's approved_at/approved_by (the attest marker
+ * payments read) is set as the service role too: the database refuses it
+ * from a session (guard_supplier_invoice_attest_marker), so no member can set
+ * it past these rules. The same optimistic guard as before the policy
+ * existed makes two concurrent approvals set it once and emit
+ * supplier_invoice.approved once.
  * Under mode 'all' every approval is recorded first and the round is read
  * back afterwards: whichever approval lands last sees every other one, so a
  * satisfied policy is never missed.
@@ -196,7 +199,19 @@ export async function approveSupplierInvoice(
     loadAttestations(supabase, companyId, invoice.id),
   ])
   const service = serviceWriter(input.writer)
-  const members = policy.enabled ? await loadActiveAttestMembers(service, companyId) : undefined
+  // Only someone who keeps the books attests, policy or not. The marker is
+  // written as the service role (no RLS), so this is the check the session's
+  // own write used to get from current_user_can_write().
+  const writers = await loadActiveAttestMembers(service, companyId)
+  if (!writers.has(userId)) {
+    return {
+      ok: false,
+      code: 'FORBIDDEN',
+      messageSv: 'Bara den som för företagets bokföring (ägare, administratör eller medlem) kan attestera leverantörsfakturor.',
+      details: { reason: 'not_member' },
+    }
+  }
+  const members = policy.enabled ? writers : undefined
   const ruling = ruleOnApproval(policy, accountingMethod, invoice, attestations, userId, members)
   if (ruling.kind === 'refused') {
     return {
@@ -243,7 +258,10 @@ export async function approveSupplierInvoice(
   }
 
   const approvedAt = new Date().toISOString()
-  let update = supabase
+  // The service role, as the trail: a session may not write the marker. The
+  // door already proved the caller may write (requireWrite, the key's scope,
+  // the link's member check) and the rules above proved they may attest.
+  let update = service
     .from('supplier_invoices')
     .update({ status: resolveUnsettledStatus({ ...invoice, approved_at: approvedAt }, today), approved_at: approvedAt, approved_by: userId })
     .eq('company_id', companyId)

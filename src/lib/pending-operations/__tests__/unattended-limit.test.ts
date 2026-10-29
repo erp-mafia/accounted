@@ -183,3 +183,24 @@ describe('priceOperation: operation-registry writes that move money', () => {
     ).toEqual({ exceeded: true, attempted: 182500, limit: 10000 })
   })
 })
+
+describe('priceOperation: attest of a supplier invoice (#124)', () => {
+  it('prices the attest by the invoice total in SEK, which releases it for payment', () => {
+    // A EUR invoice: total_sek, not the EUR total, is what the ceiling compares.
+    const preview = { supplier_invoice_number: 'F-1', total: 1000, currency: 'EUR', total_sek: 11250 }
+    expect(priceOperation('approve_supplier_invoice', preview)).toBe(11250)
+    expect(
+      exceedsUnattendedLimit({ actorType: 'api_key', limit: 10000, operationType: 'approve_supplier_invoice', previewData: preview }),
+    ).toEqual({ exceeded: true, attempted: 11250, limit: 10000 })
+  })
+
+  it('falls back to total for an attest staged before total_sek, or when no SEK total exists', () => {
+    expect(priceOperation('approve_supplier_invoice', { total: 25000, currency: 'SEK' })).toBe(25000)
+    expect(priceOperation('approve_supplier_invoice', { total: 25000, currency: 'USD', total_sek: null })).toBe(25000)
+  })
+
+  it('never stops a person approving it in the app', () => {
+    const previewData = { total: 25000, currency: 'SEK', total_sek: 25000 }
+    expect(exceedsUnattendedLimit({ actorType: 'user', limit: 1000, operationType: 'approve_supplier_invoice', previewData }).exceeded).toBe(false)
+  })
+})
