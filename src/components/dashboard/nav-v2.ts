@@ -3,6 +3,7 @@ import {
   ArrowsRightLeftIcon,
   BanknotesIcon,
   BookOpenIcon,
+  BriefcaseIcon,
   BuildingLibraryIcon,
   ChartBarIcon,
   CheckCircleIcon,
@@ -51,6 +52,8 @@ export interface NavGateFlags {
   requiresArkiv?: boolean
   /** Signeringar: shown only where BankID document signing is switched on (lib/navigation/nav-rollouts.ts). */
   requiresSigning?: boolean
+  /** Avtal och åtaganden: shown only for companies in the Bolaget rollout (BOLAGET_COMPANY_IDS, lib/env/commitments-switch.ts). */
+  requiresCommitments?: boolean
   /** The Agenter page (/skills); hidden in production while it is finished (lib/agent-skills/flag.ts). */
   requiresAgents?: boolean
   /** The new Inkorg page (/inkorg): shown only for companies in the INKORG_V2_COMPANY_IDS rollout (lib/inkorg/flag.ts). */
@@ -273,6 +276,17 @@ export const NAV_V2_COMPANY: NavV2Item[] = [
       { href: '/bolaget/kapital', module: 'corporate', labelKey: 'bolaget_capital', entityOnly: ['aktiebolag'], requiresBolaget: true },
       { href: '/bolaget/agarskatt', module: 'corporate', labelKey: 'bolaget_owner_tax', entityOnly: ['aktiebolag'], requiresBolaget: true },
     ],
+  },
+  {
+    // Avtal och åtaganden (Bolaget): agreements with their payments and
+    // dates, ställda säkerheter and eventualförpliktelser, and the group
+    // structure the årsredovisning notes are written from. Per company
+    // while it rolls out.
+    href: '/commitments',
+    module: 'year-end',
+    labelKey: 'commitments',
+    icon: BriefcaseIcon,
+    requiresCommitments: true,
   },
 ]
 

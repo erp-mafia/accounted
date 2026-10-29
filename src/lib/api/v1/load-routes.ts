@@ -413,6 +413,16 @@ import '@/app/api/v1/companies/[companyId]/corporate-meetings/route'
 import '@/app/api/v1/companies/[companyId]/corporate-meetings/[id]/route'
 import '@/app/api/v1/companies/[companyId]/corporate-meetings/[id]/decisions/route'
 import '@/app/api/v1/companies/[companyId]/corporate-meetings/[id]/hold/route'
+// Commitments and holdings (Bolaget): agreements, their expected payments, ställda säkerheter and
+// eventualförpliktelser, the group structure (lib/operations/commitments.ts).
+import '@/app/api/v1/companies/[companyId]/agreements/route'
+import '@/app/api/v1/companies/[companyId]/agreements/[id]/route'
+import '@/app/api/v1/companies/[companyId]/agreements/[id]/end/route'
+import '@/app/api/v1/companies/[companyId]/agreement-obligations/route'
+import '@/app/api/v1/companies/[companyId]/securities/route'
+import '@/app/api/v1/companies/[companyId]/securities/[id]/route'
+import '@/app/api/v1/companies/[companyId]/group-links/route'
+import '@/app/api/v1/companies/[companyId]/group-links/[id]/route'
 // The underskottsregister: prior years' tax losses per fiscal year, IL 40 kap. (lib/operations/tax-loss-carryforwards.ts).
 import '@/app/api/v1/companies/[companyId]/tax-loss-carryforwards/route'
 import '@/app/api/v1/companies/[companyId]/tax-loss-carryforwards/[id]/route'

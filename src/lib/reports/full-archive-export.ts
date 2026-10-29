@@ -1360,6 +1360,11 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'owner_loans', file: 'owner_loans.json', orderBy: 'created_at' },
   { name: 'owner_loan_interest', file: 'owner_loan_interest.json', orderBy: 'created_at' },
   { name: 'ku20_specification_numbers', file: 'ku20_specification_numbers.json', orderBy: 'created_at' },
+  // Ställda säkerheter and eventualförpliktelser, and the group structure
+  // (Avtal och åtaganden): what the årsredovisning notes (ÅRL 5 kap. 14-16 §§)
+  // and the koncernförhållanden note were written from.
+  { name: 'securities_and_contingencies', file: 'securities_and_contingencies.json', orderBy: 'created_at' },
+  { name: 'company_group_links', file: 'company_group_links.json', orderBy: 'created_at' },
   // Year-end stock counts (LIV 1955:257): the inventeringslista, its rows and
   // its signature; underlag for the lagerförändring verifikat (BFL 7 kap. 1 §).
   { name: 'inventory_counts', file: 'inventory_counts.json', orderBy: 'created_at' },

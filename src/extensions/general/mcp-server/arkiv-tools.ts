@@ -306,7 +306,7 @@ async function agreementRecord(supabase: SupabaseClient, companyId: string, agre
     .maybeSingle()
   if (error) throw dbError(error)
   if (!data) return null
-  const a = data as Record<string, unknown> & { id: string; counterparty_party_id: string | null; source_document_id: string }
+  const a = data as Record<string, unknown> & { id: string; counterparty_party_id: string | null; source_document_id: string | null }
   const [obligations, deadlines, facts] = await Promise.all([
     supabase
       .from('agreement_obligations')
@@ -340,7 +340,8 @@ async function agreementRecord(supabase: SupabaseClient, companyId: string, agre
     period: a.period,
     principal: a.principal == null ? null : Number(a.principal),
     interest_rate: a.interest_rate == null ? null : Number(a.interest_rate),
-    source_document_ref: recordRef('document', a.source_document_id),
+    // A manual agreement (Avtal och åtaganden) has no source document.
+    source_document_ref: a.source_document_id ? recordRef('document', a.source_document_id) : null,
     sources: a.sources,
     obligations: ((obligations.data ?? []) as Array<Record<string, unknown>>).map((o) => ({
       obligation_id: o.id,

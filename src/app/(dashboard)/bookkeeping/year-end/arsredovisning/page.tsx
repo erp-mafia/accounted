@@ -104,6 +104,8 @@ export default function ArsredovisningPage() {
   const tHelp = useTranslations('annualReportHelp')
   const tSign = useTranslations('annualReportSigning')
   const tBoard = useTranslations('bolaget_roles')
+  // Avtal och åtaganden (Bolaget): what the registers write when a field is left empty.
+  const tCommitments = useTranslations('bolaget_commitments')
   const { appName } = useBranding()
   const { periods: fiscalPeriods, isLoading: periodsLoading } = useFiscalPeriods()
 
@@ -1275,8 +1277,11 @@ export default function ArsredovisningPage() {
                     value={securitiesPledged}
                     onChange={(e) => setSecuritiesPledged(e.target.value)}
                     rows={2}
-                    placeholder="t.ex. Företagsinteckning 500 000 kr som säkerhet för bankkredit."
+                    placeholder={data?.disclosures.from_registers?.securities_pledged ?? "t.ex. Företagsinteckning 500 000 kr som säkerhet för bankkredit."}
                   />
+                  {data?.disclosures.from_registers?.securities_pledged && (
+                    <p className="text-xs text-muted-foreground">{tCommitments('ar_register_hint')}</p>
+                  )}
                   <label className="flex cursor-pointer items-center gap-3 text-sm">
                     <Checkbox
                       id="ar-securities-confirmed"
@@ -1293,8 +1298,11 @@ export default function ArsredovisningPage() {
                     value={contingentLiabilities}
                     onChange={(e) => setContingentLiabilities(e.target.value)}
                     rows={2}
-                    placeholder="t.ex. Borgensåtagande för dotterbolags krediter 200 000 kr."
+                    placeholder={data?.disclosures.from_registers?.contingent_liabilities ?? "t.ex. Borgensåtagande för dotterbolags krediter 200 000 kr."}
                   />
+                  {data?.disclosures.from_registers?.contingent_liabilities && (
+                    <p className="text-xs text-muted-foreground">{tCommitments('ar_register_hint')}</p>
+                  )}
                   <label className="flex cursor-pointer items-center gap-3 text-sm">
                     <Checkbox
                       id="ar-contingent-confirmed"
@@ -1312,9 +1320,12 @@ export default function ArsredovisningPage() {
                     id="ar-parent-name"
                     value={parentName}
                     onChange={(e) => setParentName(e.target.value)}
-                    placeholder="t.ex. AB Koncernholding"
+                    placeholder={data?.disclosures.from_registers?.parent_company?.name ?? "t.ex. AB Koncernholding"}
                   />
                   <p className="text-xs text-muted-foreground">{tHelp('parent_name_hint')}</p>
+                  {data?.disclosures.from_registers?.parent_company && (
+                    <p className="text-xs text-muted-foreground">{tCommitments('ar_register_parent_hint')}</p>
+                  )}
                 </div>
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-2">

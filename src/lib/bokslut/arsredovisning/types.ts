@@ -256,6 +256,16 @@ export interface ArsredovisningData {
     parent_company_name: string | null
     parent_company_org_number: string | null
     parent_company_city: string | null
+    /** What the registers in Avtal och åtaganden say on the balance date
+     *  (lib/commitments): the säkerheter and eventualförpliktelser texts and
+     *  the parent company. The fields above override them when filled in
+     *  (register-disclosures.ts). Absent when no register has anything, so
+     *  the content hash of every other report is unchanged. */
+    from_registers?: {
+      securities_pledged: string | null
+      contingent_liabilities: string | null
+      parent_company: { name: string; org_number: string | null; city: string | null } | null
+    }
     /** ÅRL 5:20 §: manual medelantal anställda. Null means "computed from
      *  the employees table"; the note and the iXBRL fact already reflect
      *  whichever won. */

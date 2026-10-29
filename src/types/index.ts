@@ -4193,6 +4193,14 @@ export interface Asset {
    *  the type so rows read before the column existed stay valid. */
   opening_accumulated_depreciation?: number | string | null
   opening_depreciation_date?: string | null
+  /** Building: the property designation and the latest taxeringsvärde
+   *  (Bolaget, lib/bokslut/assets/identification.ts). Optional on the type
+   *  so rows read before the columns existed stay valid. */
+  fastighetsbeteckning?: string | null
+  taxeringsvarde?: number | string | null
+  /** Vehicle: the registration number and the bilförmån it is used for. */
+  registration_number?: string | null
+  employee_benefit_id?: string | null
   notes: string | null
   created_at: string
   updated_at: string

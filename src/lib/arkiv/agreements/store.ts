@@ -303,7 +303,7 @@ interface ObligationRow {
  * expected rows that changed are updated, expected rows the record no longer
  * implies are removed. Matched, missed and waived rows are never touched.
  */
-async function syncObligations(supabase: SupabaseClient, companyId: string, agreementId: string, drafts: ObligationDraft[], today: string): Promise<number> {
+export async function syncObligations(supabase: SupabaseClient, companyId: string, agreementId: string, drafts: ObligationDraft[], today: string): Promise<number> {
   const { data, error } = await supabase.from('agreement_obligations').select('id, kind, due_on, amount, amount_is_estimate, status').eq('agreement_id', agreementId)
   if (error) throw new Error(`obligations fetch failed: ${error.message}`)
   const existing = new Map(((data ?? []) as ObligationRow[]).map((o) => [`${o.kind}:${o.due_on}`, o]))
@@ -366,23 +366,46 @@ export function initialDeadlineStatus(dueOn: string, today: string): 'upcoming' 
 }
 
 async function syncDeadlines(supabase: SupabaseClient, doc: DocumentRow, agreementId: string, derivation: Derivation, today: string): Promise<number> {
+  return syncAgreementDeadlines(
+    supabase,
+    { companyId: doc.company_id, documentId: doc.id, noteFor: (draft) => noteFor(doc.file_name, derivation.agreement, draft) },
+    agreementId,
+    derivation.deadlines,
+    today,
+  )
+}
+
+/**
+ * The dates of an agreement in Viktiga datum, one row per key
+ * (agreement:<id>:<key>): new keys are inserted, moved dates updated, keys
+ * the agreement no longer implies removed. A person's opt-out or completion
+ * stands. Shared by the derived agreements (with their source document) and
+ * the manual ones (none).
+ */
+export async function syncAgreementDeadlines(
+  supabase: SupabaseClient,
+  target: { companyId: string; documentId: string | null; noteFor: (draft: DeadlineDraft) => string },
+  agreementId: string,
+  deadlines: DeadlineDraft[],
+  today: string,
+): Promise<number> {
   const prefix = `agreement:${agreementId}:`
   const { data, error } = await supabase
     .from('deadlines')
     .select('id, source_key, title, due_date, is_completed, dismissed_at, status')
-    .eq('company_id', doc.company_id)
+    .eq('company_id', target.companyId)
     .like('source_key', `${prefix}%`)
   if (error) throw new Error(`deadlines fetch failed: ${error.message}`)
   const existing = new Map(((data ?? []) as DeadlineRow[]).map((d) => [d.source_key, d]))
   const now = new Date().toISOString()
 
-  for (const draft of derivation.deadlines) {
+  for (const draft of deadlines) {
     const key = `${prefix}${draft.key}`
     const row = existing.get(key)
-    const notes = noteFor(doc.file_name, derivation.agreement, draft)
+    const notes = target.noteFor(draft)
     if (!row) {
       const { error: insertError } = await supabase.from('deadlines').insert({
-        company_id: doc.company_id,
+        company_id: target.companyId,
         user_id: null,
         title: draft.title,
         due_date: draft.dueOn,
@@ -395,7 +418,7 @@ async function syncDeadlines(supabase: SupabaseClient, doc: DocumentRow, agreeme
         notes,
         is_auto_generated: true,
         reminder_offsets: [14, 7, 1, 0],
-        source_document_id: doc.id,
+        source_document_id: target.documentId,
         source_key: key,
       })
       if (insertError) throw new Error(`deadline insert failed: ${insertError.message}`)
@@ -419,13 +442,13 @@ async function syncDeadlines(supabase: SupabaseClient, doc: DocumentRow, agreeme
       .eq('id', row.id)
     if (updateError) throw new Error(`deadline update failed: ${updateError.message}`)
   }
-  const wanted = new Set(derivation.deadlines.map((d) => `${prefix}${d.key}`))
+  const wanted = new Set(deadlines.map((d) => `${prefix}${d.key}`))
   for (const [key, row] of existing) {
     if (wanted.has(key) || row.dismissed_at || row.is_completed) continue
     const { error: deleteError } = await supabase.from('deadlines').delete().eq('id', row.id)
     if (deleteError) throw new Error(`deadline delete failed: ${deleteError.message}`)
   }
-  return derivation.deadlines.length
+  return deadlines.length
 }
 
 /** "Enligt hyresavtal.pdf, sida 2 (ends_on, notice_months)." */

@@ -31,6 +31,12 @@ const mockFetchAllRows = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/supabase/fetch-all', () => ({
   fetchAllRows: mockFetchAllRows,
 }))
+// The registers in Avtal och åtaganden (lib/commitments): nothing registered
+// unless a test plants it, so every other test reads the narrative alone.
+const mockRegisterNoteTexts = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/commitments/disclosures', () => ({
+  loadRegisterNoteTexts: mockRegisterNoteTexts,
+}))
 
 import {
   buildArsredovisningData, resolveMedelantalNote,
@@ -356,7 +362,41 @@ function plantStandardReports() {
 beforeEach(() => {
   vi.clearAllMocks()
   mockFetchAllRows.mockResolvedValue([])
+  mockRegisterNoteTexts.mockResolvedValue(null)
   plantStandardReports()
+})
+
+describe('buildArsredovisningData: the registers in Avtal och åtaganden', () => {
+  const registers = {
+    securities_pledged: 'Företagsinteckningar 500 000 kr.',
+    contingent_liabilities: 'Borgensförbindelser 300 000 kr.',
+    parent_company: { name: 'Ägarbolaget AB', org_number: '559000-0000', city: 'Stockholm' },
+  }
+
+  it.each(['k2', 'k3'] as const)('%s: writes the säkerheter, eventualförpliktelser and parent notes from the registers', async (framework) => {
+    mockRegisterNoteTexts.mockResolvedValue(registers)
+    const supabase = makeSupabase({ accountingFramework: framework })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(mockRegisterNoteTexts).toHaveBeenCalledWith(supabase, 'co1', '2025-12-31')
+    expect(data.noter.find((n) => n.title === 'Ställda säkerheter')?.body).toBe('Företagsinteckningar 500 000 kr.')
+    expect(data.noter.find((n) => n.title === 'Eventualförpliktelser')?.body).toBe('Borgensförbindelser 300 000 kr.')
+    expect(data.noter.find((n) => n.title === 'Koncernförhållanden')?.body).toBe(
+      'Moderföretag: Ägarbolaget AB. Organisationsnummer: 559000-0000. Säte: Stockholm.',
+    )
+    expect(data.disclosures.from_registers).toEqual(registers)
+    // The narrative fields stay what the person wrote (here nothing).
+    expect(data.disclosures.securities_pledged).toBeNull()
+  })
+
+  it('leaves the document as before when nothing is registered', async () => {
+    const supabase = makeSupabase({ accountingFramework: 'k2' })
+    // @ts-expect-error: chainable mock isn't fully typed as SupabaseClient
+    const data = await buildArsredovisningData(supabase, 'co1', 'fp1')
+    expect(data.noter.find((n) => n.title === 'Ställda säkerheter')?.body).toBe('Inga.')
+    expect(data.noter.find((n) => n.title === 'Koncernförhållanden')).toBeUndefined()
+    expect(data.disclosures).not.toHaveProperty('from_registers')
+  })
 })
 
 describe('buildArsredovisningData: medelantal anställda override (ÅRL 5:20 §)', () => {

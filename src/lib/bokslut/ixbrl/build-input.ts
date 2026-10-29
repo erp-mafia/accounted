@@ -38,6 +38,7 @@ import type {
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { arsredovisningDatering } from '@/lib/bokslut/arsredovisning/datering'
 import { signatureDate } from '@/lib/bokslut/arsredovisning/signature-pages'
+import { effectiveDisclosureTexts } from '@/lib/bokslut/arsredovisning/register-disclosures'
 import { k2EquityTableInput } from '@/lib/bokslut/arsredovisning/equity-specification'
 import {
   AGM_DATE_MISSING_WARNING,
@@ -105,6 +106,7 @@ export async function buildIxbrlInput(
   ])
   const pdfData = built.data
   const { mapping, comparison } = built.statements
+  const disclosed = effectiveDisclosureTexts(pdfData.disclosures, pdfData.disclosures.from_registers)
 
   if (periodRow.error || !periodRow.data) throw new Error('Fiscal period not found')
   const period = periodRow.data
@@ -371,17 +373,18 @@ export async function buildIxbrlInput(
     disclosures: {
       longTermDebtOverFiveYears:
         pdfData.disclosures.long_term_debt_over_five_years ?? 0,
-      securitiesPledged: pdfData.disclosures.securities_pledged?.trim() || 'Inga.',
-      contingentLiabilities:
-        pdfData.disclosures.contingent_liabilities?.trim() || 'Inga.',
-      parentCompany: pdfData.disclosures.parent_company_name
+      // The manual text, else what the registers in Avtal och åtaganden
+      // say, else "Inga.": the same resolution as the PDF notes.
+      securitiesPledged: disclosed.securities_pledged || 'Inga.',
+      contingentLiabilities: disclosed.contingent_liabilities || 'Inga.',
+      parentCompany: disclosed.parent_company_name
         ? [
-            `Moderföretag: ${pdfData.disclosures.parent_company_name}.`,
-            pdfData.disclosures.parent_company_org_number
-              ? `Organisationsnummer: ${pdfData.disclosures.parent_company_org_number}.`
+            `Moderföretag: ${disclosed.parent_company_name}.`,
+            disclosed.parent_company_org_number
+              ? `Organisationsnummer: ${disclosed.parent_company_org_number}.`
               : '',
-            pdfData.disclosures.parent_company_city
-              ? `Säte: ${pdfData.disclosures.parent_company_city}.`
+            disclosed.parent_company_city
+              ? `Säte: ${disclosed.parent_company_city}.`
               : '',
           ]
             .filter(Boolean)

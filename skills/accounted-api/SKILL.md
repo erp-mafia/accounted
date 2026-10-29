@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 423 endpoints.
+  pagination, scopes), and all 434 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 423 operations. Paths are shown without
+API version `2026-05-12`, 434 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -282,7 +282,7 @@ POST /companies/{companyId}/journal-entries/no-document-required : Mark many pos
 POST /companies/{companyId}/voucher-gap-explanations : Document a gap in the verifikationsserie (BFL 5 kap 6-7 §§) [scope:bookkeeping:write risk:low idempotent dry-run]
 ```
 
-### Periods and registers (55)
+### Periods and registers (66)
 
 Full detail: [references/periods.md](references/periods.md)
 
@@ -294,6 +294,11 @@ DELETE /companies/{companyId}/accounts/{number} : Delete an account nothing has 
 POST /companies/{companyId}/accounts/activate : Activate BAS accounts in bulk [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/accounts/deactivate : Deactivate accounts in bulk [scope:bookkeeping:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/accrual-schedules/{id}/replan : Re-plan the months of a periodisering that are not yet posted: a new period end and/or the day each month books on [scope:bookkeeping:write risk:low idempotent dry-run reversible]
+GET /companies/{companyId}/agreement-obligations : List the payments the agreements say fall due, oldest first, with whether each arrived in the bank [scope:companies:read risk:low idempotent]
+GET /companies/{companyId}/agreements : List the company's agreements (rent, leases, loans, subscriptions, insurance, permits, IP, domains, guarantees and more) with the next payment and the notice and end dates [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/agreements : Register an agreement by hand: what it is, the counterparty, the dates, notice and what it costs [scope:companies:write risk:low idempotent dry-run]
+PATCH /companies/{companyId}/agreements/{id} : Change a manual agreement; its expected payments and its dates follow [scope:companies:write risk:low idempotent dry-run reversible]
+POST /companies/{companyId}/agreements/{id}/end : End a manual agreement: no more expected payments after the day it ended, its dates leave Viktiga datum [scope:companies:write risk:low idempotent dry-run reversible]
 GET /companies/{companyId}/compliance/check : Run a structured compliance pre-flight check [scope:compliance:read risk:low idempotent]
 GET /companies/{companyId}/dimensions : List dimensions (kostnadsställe/projekt) with their values [scope:reports:read risk:low idempotent]
 POST /companies/{companyId}/dimensions : Create a custom dimension (e.g. Avdelning, Kund, Fordon) [scope:bookkeeping:write risk:low idempotent dry-run reversible]
@@ -335,6 +340,12 @@ POST /companies/{companyId}/fiscal-periods/{id}/opening-balances/split-per-proje
 POST /companies/{companyId}/fiscal-periods/{id}/reopen-external : Undo klarmarkera: reopen a year marked closed in the previous system [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/unlock : Unlock a locked (not closed) fiscal year [scope:bookkeeping:write risk:high idempotent dry-run reversible]
 POST /companies/{companyId}/fiscal-periods/{id}/year-end : Execute year-end closing (currency revaluation + closing entry) [scope:bookkeeping:write risk:high idempotent]
+GET /companies/{companyId}/group-links : List the company's group structure: its parent, subsidiaries and associates with ownership and votes over time [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/group-links : Register a parent, subsidiary or associate of the company [scope:companies:write risk:low idempotent dry-run]
+PATCH /companies/{companyId}/group-links/{id} : Change a group link, or end it with valid_to [scope:companies:write risk:low idempotent dry-run reversible]
+GET /companies/{companyId}/securities : List ställda säkerheter and eventualförpliktelser, with the årsredovisning note texts they give on a balance date [scope:companies:read risk:low idempotent]
+POST /companies/{companyId}/securities : Register a ställd säkerhet or an eventualförpliktelse [scope:companies:write risk:low idempotent dry-run]
+PATCH /companies/{companyId}/securities/{id} : Change a ställd säkerhet or an eventualförpliktelse, or release it with valid_to [scope:companies:write risk:low idempotent dry-run reversible]
 POST /companies/{companyId}/skattekonto/sync : Fetch the skattekonto from Skatteverket now instead of waiting for the hourly sync [scope:transactions:write risk:low idempotent dry-run]
 POST /companies/{companyId}/skatteverket/agi/validate-huvuduppgift : Pre-validate an AGI huvuduppgift at Skatteverket without filing anything [scope:compliance:read risk:low idempotent]
 POST /companies/{companyId}/skatteverket/agi/validate-individuppgift : Pre-validate one AGI individuppgift at Skatteverket without filing anything [scope:compliance:read risk:low idempotent]

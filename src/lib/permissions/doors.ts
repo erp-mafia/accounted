@@ -656,6 +656,9 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     'POST /api/digital-mailboxes/:provider/sync': BOOK_HOUSE,
     '/api/assets': BOOK_RECORD,
     'POST /api/assets/:id/dispose': BOOK,
+    // Agreements, ställda säkerheter, eventualförpliktelser and group links:
+    // registers, nothing posts to the ledger (requireWrite today).
+    '/api/commitments': BOOK_RECORD,
     '/api/expense-claims': BOOK,
     'POST /api/expense-claims/suggest-template': READ,
     '/api/pos-sales': BOOK_RECORD,

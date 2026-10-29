@@ -559,6 +559,19 @@ const RISK_TIERS = {
   record_corporate_decision: 'low',
   hold_corporate_meeting: 'medium',
 
+  // ── Commitments and holdings (Bolaget; lib/commitments) ────────────
+  // Registers beside the books: agreements with their expected payments and
+  // dates, ställda säkerheter and eventualförpliktelser, the group
+  // structure. Nothing is booked or sent, and each is changed again by its
+  // update: 'low', like create_customer. The årsredovisning reads the
+  // securities register only as note text the person still reviews.
+  create_agreement: 'low',
+  update_agreement: 'low',
+  end_agreement: 'low',
+  create_security: 'low',
+  update_security: 'low',
+  create_group_link: 'low',
+  update_group_link: 'low',
   // ── Underskottsregistret (IL 40 kap.) ──────────────────────────────
   // Saves a year of prior tax losses: no verifikat, re-saved to undo, but
   // its 4.14 a feeds the year's tax provision and INK2, so a person reviews.
