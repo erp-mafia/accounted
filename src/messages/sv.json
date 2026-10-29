@@ -10302,6 +10302,7 @@
     "missing_underlag_next_paper": "{count, plural, =1 {Ett är ett papperskvitto: fota det} other {# är papperskvitton: fota dem}}",
     "missing_underlag_next_portal": "{count, plural, =1 {Ett hämtas genom att logga in hos leverantören} other {# hämtas genom att logga in hos leverantören}}",
     "missing_underlag_next_not_mail": "{count, plural, =1 {Ett finns inte i mejlen: lönespec, skattekonto eller kontoutdrag} other {# finns inte i mejlen: lönespec, skattekonto eller kontoutdrag}}",
+    "missing_underlag_next_no_purchase": "{count, plural, =1 {Ett är inget inköp: kontoutdrag eller betalleverantörens rapport} other {# är inga inköp: kontoutdrag eller betalleverantörens rapport}}",
     "row_pending_ops": "Att granska",
     "row_overdue_invoices": "Förfallna kundfakturor",
     "row_overdue_invoices_group": "{count, plural, =1 {1 kundfaktura har förfallit} other {# kundfakturor har förfallit}}",

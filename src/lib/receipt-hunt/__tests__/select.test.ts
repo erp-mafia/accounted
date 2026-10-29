@@ -275,6 +275,27 @@ describe('canHaveEmailReceipt', () => {
   it('hunts a transaction with no description rather than silently dropping it', () => {
     expect(canHaveEmailReceipt(null)).toBe(true)
   })
+
+  it('reads a note on the VAT of a purchase as a purchase, not as tax (trial run 2026-10-28)', () => {
+    // Verifikat descriptions shaped like the trial run's: the bank row had no
+    // merchant name, so the bookkeeper's note was all the classifier read.
+    expect(canHaveEmailReceipt('ANTHROPIC* CLAUDE SUB SAN FRANCISCO · Anthropic Claude Max, prenumeration. Omvänd skattskyldighet.')).toBe(true)
+    expect(canHaveEmailReceipt('Flyg SF KLM · KLM flyg Stockholm-USA, tjänsteresa. Utrikes flyg 0% moms. Kvitto saknas i Accounted.')).toBe(true)
+    expect(canHaveEmailReceipt('Partners on Booking BV K3667 · Booking.com, logi. Utländsk logi, ingen avdragsgill moms.')).toBe(true)
+    expect(canHaveEmailReceipt('OPENAI *CHATGPT SUBSCR K3667 · ChatGPT Pro. 0% debiterad moms: omvänd skattskyldighet.')).toBe(true)
+    expect(canHaveEmailReceipt('sj.se K3667 · SJ, tågresa. Persontransport 6% moms.')).toBe(true)
+    expect(canHaveEmailReceipt('Hotel at Booking.com K3667 · Hotell, svenskt boende, 12 % moms')).toBe(true)
+    expect(canHaveEmailReceipt('VEVOR 2608110 - EU-varor, omvand moms, purchase')).toBe(true)
+    expect(canHaveEmailReceipt('Stripe fee. Ej moms')).toBe(true)
+    expect(canHaveEmailReceipt('Fortnox, 1 249 kr inkl. moms')).toBe(true)
+  })
+
+  it('still skips a payment of VAT or tax that also carries a VAT note', () => {
+    expect(canHaveEmailReceipt('Betalning moms')).toBe(false)
+    expect(canHaveEmailReceipt('Skattekonto: moms')).toBe(false)
+    expect(canHaveEmailReceipt('Moms 2026-09')).toBe(false)
+    expect(canHaveEmailReceipt('Skatteverket, omvänd skattskyldighet')).toBe(false)
+  })
 })
 
 /**

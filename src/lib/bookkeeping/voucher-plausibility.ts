@@ -104,6 +104,23 @@ function percent(part: number, whole: number): number {
   return Math.round((part / whole) * 1000) / 10
 }
 
+/**
+ * Whether a verifikat booked a purchase at all: a cost, an asset or a prepaid
+ * cost (what a purchase's VAT applies to), a supplier invoice, or input VAT on
+ * the debit side, where only a purchase puts it. A verifikat with none of them
+ * moved money without buying anything (a sale, a share issue, a transfer
+ * between the company's own accounts, a tax, loan or dividend settlement), so
+ * no receipt exists for it. Kvittojakten reads it (lib/receipt-hunt).
+ */
+export function booksPurchase(lines: readonly Pick<PlausibilityLine, 'account_number' | 'debit_amount'>[]): boolean {
+  return lines.some(
+    (l) =>
+      isCostBase(l.account_number) ||
+      isSupplierLiability(l.account_number) ||
+      (isInputVat(l.account_number) && Number(l.debit_amount) > 0),
+  )
+}
+
 export function checkVoucherPlausibility(lines: readonly PlausibilityLine[]): VoucherWarning[] {
   const warnings: VoucherWarning[] = []
 

@@ -118,7 +118,7 @@ Call \`gnubok_list_companies\`. One company: use it. Several: ask the user which
 - \`kind: "verifikat"\` with a \`journal_entry_id\` (already booked), or \`kind: "transaction"\` with a \`transaction_id\` (a bank purchase not booked yet)
 - \`counterparty\`, \`description\`, \`invoice_number\`, \`amount\` + \`currency\`, \`date\`
 - \`search_from\` / \`search_to\`: the date window worth searching
-- \`mail_searchable: false\`: salary, tax, bank fees. Skip the search and report it under "needs a human"
+- \`mail_searchable: false\`: salary, tax, bank fees, and verifikat that bought nothing (money in, a share issue, a transfer between the company's own accounts). Skip the search and report it under "needs a human"
 - \`portal\`: the vendor does not mail its invoices. Do not search mail. If "Your harness" has a portal section and you have its tools, handle the item there; otherwise give the user the \`portal.url\` in the final report
 - \`tip_possible: true\`: a restaurant or bar, where the card charge is the bill plus a tip
 - \`next_step\`: the one sentence to give the user for this item when you cannot bring the document in. Report it verbatim; do not invent your own wording
