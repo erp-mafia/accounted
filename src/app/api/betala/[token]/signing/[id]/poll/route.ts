@@ -5,7 +5,7 @@ import { isUuid } from '@/lib/invariants/uuid'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { pollPaymentSigning } from '@/lib/payments/orders/signing'
 import { typedPersonalNumber, withSigningLinkToken } from '@/lib/payments/orders/signing-link-route'
-import { consumePaymentSigningLink, signingBelongsToLink, SIGNING_LINK_FINAL_BATCH_STATUSES } from '@/lib/payments/orders/signing-links'
+import { consumePaymentSigningLink, signingBelongsToLink, signingLinkDone } from '@/lib/payments/orders/signing-links'
 
 // One status read per payment once the signing finalised (up to 100).
 export const maxDuration = 300
@@ -22,8 +22,9 @@ const PollSchema = z.object({
  * stands, once a second while it runs (fresh QR data while pending; each
  * payment's status once finalised). The same pollPaymentSigning as the
  * session poll; a POST, as there, so the personnummer never rides in a URL.
- * Only the link's own signing answers. A finalised signing consumes the link;
- * the poll keeps answering for the grace window after that. The poll has a
+ * Only the link's own signing answers. A finalised signing consumes the link
+ * (signingLinkDone: a failed second signature leaves it open for another
+ * try); the poll keeps answering for the grace window after that. The poll has a
  * budget of its own in the token limiter.
  */
 export const POST = withSigningLinkToken<{ token: string; id: string }>('payment_signing.poll', { stage: 'follow_up', limiter: 'poll' }, async (request, { link, service, op, log, requestId, signer, signerRequired }, { id }) => {
@@ -35,7 +36,7 @@ export const POST = withSigningLinkToken<{ token: string; id: string }>('payment
   const outcome = await pollPaymentSigning(op, { batchId: id, signer: signer(personalNumber, validation.data.psu_authoriser_id) })
   if (!outcome.ok) return sessionFailureResponse(outcome, log, requestId)
   if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })
-  if (!link.consumed_at && SIGNING_LINK_FINAL_BATCH_STATUSES.has(outcome.data.status)) {
+  if (!link.consumed_at && signingLinkDone(outcome.data)) {
     await consumePaymentSigningLink(service, link.id).catch((error) =>
       log.error('payment signing link not consumed after its signing finalised', error instanceof Error ? error : new Error(String(error))),
     )

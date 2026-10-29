@@ -3,7 +3,7 @@ import { z } from 'zod'
 import { validateBody } from '@/lib/api/validate'
 import { resolveRequestAppOrigin } from '@/lib/domains/trusted-app-origin'
 import { sessionFailureResponse } from '@/lib/operations/session'
-import { startPaymentSigning } from '@/lib/payments/orders/signing'
+import { startPaymentSigning, startSecondSignature } from '@/lib/payments/orders/signing'
 import { typedPersonalNumber, withSigningLinkToken } from '@/lib/payments/orders/signing-link-route'
 import { loadSigningLinkBasket, recordSigningLinkBatch } from '@/lib/payments/orders/signing-links'
 
@@ -30,8 +30,10 @@ const StartSchema = z.object({
  * start BankID for the firmatecknare, through the same startPaymentSigning as
  * POST /api/payments/signing, acting as the sender for the company of the
  * link. Refused with PAYMENT_SIGNING_LINK_ORDERS_CHANGED when any order left
- * 'approved' since the link was made: nothing is signed then. A bank that
- * signs on its own page sends the browser back to this link.
+ * 'approved' since the link was made: nothing is signed then. A link that
+ * asks for the second signature (state second_signature) starts the other
+ * signatory's BankID on its signing instead (startSecondSignature). A bank
+ * that signs on its own page sends the browser back to this link.
  */
 export const POST = withSigningLinkToken<{ token: string }>('payment_signing.start', { stage: 'open' }, async (request, { link, service, op, log, requestId, signer, signerRequired, returnPath }) => {
   const validation = await validateBody(request, StartSchema)
@@ -39,6 +41,18 @@ export const POST = withSigningLinkToken<{ token: string }>('payment_signing.sta
   const personalNumber = typedPersonalNumber(validation.data.personal_number)
   if (!personalNumber) return signerRequired()
   const basket = await loadSigningLinkBasket(service, link)
+  if (basket.state === 'second_signature' && link.batch_id) {
+    const second = await startSecondSignature(op, {
+      batchId: link.batch_id,
+      method: validation.data.method,
+      signer: signer(personalNumber, validation.data.psu_authoriser_id),
+      returnOrigin: await resolveRequestAppOrigin(request, { onLookupFailure: 'canonical' }),
+      returnPath,
+    })
+    if (!second.ok) return sessionFailureResponse(second, log, requestId)
+    if (second.dryRun) return NextResponse.json({ data: second.preview })
+    return NextResponse.json({ data: second.data })
+  }
   if (basket.state !== 'ready') {
     return sessionFailureResponse({ ok: false, code: 'PAYMENT_SIGNING_LINK_ORDERS_CHANGED', details: { state: basket.state } }, log, requestId)
   }

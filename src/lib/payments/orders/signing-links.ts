@@ -22,6 +22,11 @@
  * another way (cancelled, signed elsewhere, un-approved) the page says so and
  * nothing is signed: the claim under lock in claim_payment_orders_for_signing
  * is the last word, linkState() the page's first.
+ *
+ * A link may instead ask for the second signature: the orders of one signing
+ * the bank holds for another signatory, at a bank that takes that signature
+ * through the API (second-signature.ts). The link names that signing from the
+ * start, and the page signs it with startSecondSignature (signing.ts).
  */
 
 import type { SupabaseClient } from '@supabase/supabase-js'
@@ -37,6 +42,7 @@ import { createServiceClient } from '@/lib/supabase/server'
 import type { DebtorSnapshot } from './debtor'
 import type { PaymentOrderStatus } from './status'
 import { openPaymentsDoor } from './switched-on'
+import { secondSignatureHere, secondSignatureViaApi } from './second-signature'
 import type { PaymentOrderBatchRow, PaymentOrderRow } from './types'
 
 export const PAYMENT_SIGNING_LINK_TTL_HOURS = 72
@@ -174,13 +180,22 @@ interface CheckedBasket {
   orders: LinkOrderRow[]
   total: number
   currency: string
+  /** The signing whose second signature the link asks for; null for approved orders. */
+  secondSignatureBatchId: string | null
+}
+
+/** The one signing every order waits in for another signatory, or null. */
+function secondSignatureBatchOf(orders: readonly LinkOrderRow[]): string | null {
+  const batchId = orders[0]?.batch_id ?? null
+  return batchId && orders.every((o) => o.status === 'awaiting_second_signer' && o.batch_id === batchId && !o.outcome_unknown_at) ? batchId : null
 }
 
 /**
  * Every rule a link is made under, shared by the mint and its dry run:
  * bank payments switched on, the orders the company's, the sender allowed,
- * every order approved and from one account in one currency, no other open
- * link over any of them.
+ * every order approved (or all of one signing waiting for a second signatory
+ * the bank takes through the API) and from one account in one currency, no
+ * other open link over any of them.
  */
 async function checkBasket(ctx: OperationContext, input: IssuePaymentSigningLinkInput): Promise<{ ok: true; basket: CheckedBasket } | Failure> {
   const ids = [...new Set(input.orderIds)]
@@ -194,9 +209,23 @@ async function checkBasket(ctx: OperationContext, input: IssuePaymentSigningLink
   if (orders.length !== ids.length) return { ok: false, code: 'PAYMENT_ORDER_NOT_FOUND' }
   const refused = await senderRefusal(ctx, orders)
   if (refused) return refused
-  const notApproved = orders.filter((o) => o.status !== 'approved' || o.outcome_unknown_at)
-  if (notApproved.length > 0) {
-    return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS', details: { orders: notApproved.map((o) => ({ id: o.id, status: o.status })) } }
+  const secondSignatureBatchId = secondSignatureBatchOf(orders)
+  if (secondSignatureBatchId) {
+    const [inSigning, viaApi] = await Promise.all([
+      ctx.supabase.from('payment_orders').select('id, status').eq('company_id', ctx.companyId).eq('batch_id', secondSignatureBatchId),
+      secondSignatureViaApi(ctx.supabase, ctx.companyId, ids),
+    ])
+    if (inSigning.error) throw inSigning.error
+    // The second signature signs the whole basket: the page shows every payment in it that waits.
+    const missing = ((inSigning.data ?? []) as Array<{ id: string; status: string }>).filter((o) => o.status === 'awaiting_second_signer' && !ids.includes(o.id)).map((o) => o.id)
+    if (missing.length > 0) return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS', details: { reason: 'second_signature_names_every_payment', missing } }
+    // A bank that takes the second signature in its online bank has nothing to sign on the page.
+    if (!secondSignatureHere(ids, viaApi)) return { ok: false, code: 'PAYMENT_SECOND_SIGNATURE_IN_ONLINE_BANK' }
+  } else {
+    const notApproved = orders.filter((o) => o.status !== 'approved' || o.outcome_unknown_at)
+    if (notApproved.length > 0) {
+      return { ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS', details: { orders: notApproved.map((o) => ({ id: o.id, status: o.status })) } }
+    }
   }
   if (new Set(orders.map((o) => o.cash_account_id)).size > 1) return { ok: false, code: 'PAYMENT_ORDERS_MIXED_ACCOUNTS' }
   if (new Set(orders.map((o) => o.currency)).size > 1) return { ok: false, code: 'PAYMENT_ORDERS_MIXED_CURRENCY' }
@@ -204,7 +233,7 @@ async function checkBasket(ctx: OperationContext, input: IssuePaymentSigningLink
   if (open.length > 0) return { ok: false, code: 'PAYMENT_SIGNING_LINK_ALREADY_OPEN', details: { signing_link_ids: open.map((l) => l.id) } }
   return {
     ok: true,
-    basket: { ids, orders, total: sumOre(orders.map((o) => Number(o.amount))), currency: orders[0]!.currency },
+    basket: { ids, orders, total: sumOre(orders.map((o) => Number(o.amount))), currency: orders[0]!.currency, secondSignatureBatchId },
   }
 }
 
@@ -243,6 +272,8 @@ export async function issuePaymentSigningLink(ctx: OperationContext, input: Issu
       total_amount: basket.total,
       currency: basket.currency,
       expires_at: expiresAt,
+      // The signing whose second signature the link asks for; a link over approved orders records its own when it starts one.
+      batch_id: basket.secondSignatureBatchId,
     })
     .select('id')
     .single()
@@ -300,6 +331,7 @@ export async function previewPaymentSigningLink(ctx: OperationContext, input: Is
       total_amount: basket.total,
       currency: basket.currency,
       payees: basket.orders.map((o) => o.payee_name),
+      second_signature: basket.secondSignatureBatchId !== null,
       recipient_email: recipient,
       email_will_be_sent: recipient !== null,
       note: normalizedNote(input.note),
@@ -440,14 +472,16 @@ export async function listOpenPaymentSigningLinks(ctx: Pick<OperationContext, 's
 
 /**
  * Where the basket of a link stands, for the page and the start route:
- *   ready:      every order approved, nothing at the bank: sign.
- *   in_signing: the link started a signing and every order is still in it,
- *               unsigned: resume it (poll, or BankID again).
- *   done:       the link's signing finalised (or every order moved past it).
- *   changed:    an order left 'approved' another way (cancelled, signed or
- *               un-approved elsewhere): nothing is signed here.
+ *   ready:            every order approved, nothing at the bank: sign.
+ *   in_signing:       the link started a signing and every order is still in
+ *                     it, unsigned: resume it (poll, or BankID again).
+ *   second_signature: every order waits in the link's signing for another
+ *                     signatory: sign as that signatory (startSecondSignature).
+ *   done:             the link's signing finalised (or every order moved past it).
+ *   changed:          an order left 'approved' another way (cancelled, signed
+ *                     or un-approved elsewhere): nothing is signed here.
  */
-export type SigningLinkState = 'ready' | 'in_signing' | 'done' | 'changed'
+export type SigningLinkState = 'ready' | 'in_signing' | 'second_signature' | 'done' | 'changed'
 
 const WAITING_AT_BANK: ReadonlySet<PaymentOrderStatus> = new Set(['submitted', 'awaiting_signature'])
 const PAST_SIGNING: ReadonlySet<PaymentOrderStatus> = new Set(['awaiting_second_signer', 'accepted', 'executed', 'rejected'])
@@ -464,6 +498,7 @@ export function linkState(
   if (inLinkBatch && batch && (batch.status === 'created' || batch.status === 'awaiting_signature') && orders.every((o) => WAITING_AT_BANK.has(o.status))) {
     return 'in_signing'
   }
+  if (inLinkBatch && batch?.status === 'awaiting_second_signer' && orders.every((o) => o.status === 'awaiting_second_signer')) return 'second_signature'
   if (inLinkBatch && orders.every((o) => PAST_SIGNING.has(o.status))) return 'done'
   return 'changed'
 }
@@ -496,6 +531,8 @@ export interface SigningLinkPageData {
   orders: SigningLinkPageOrder[]
   /** The signing the link started, when it did: where it stands. */
   signing: { batch_id: string; status: PaymentOrderBatchRow['status'] } | null
+  /** The bank waits for another signatory and takes that signature through the API, not in its online bank (second-signature.ts). */
+  second_signature_here: boolean
 }
 
 function payeeLabelOf(order: LinkOrderRow): string {
@@ -547,6 +584,9 @@ export async function loadSigningLinkBasket(
 export async function describePaymentSigningLink(service: SupabaseClient, link: PaymentSigningLinkRow): Promise<SigningLinkPageData> {
   const [basket, sender] = await Promise.all([loadSigningLinkBasket(service, link), describeSender(service, link)])
   const { orders, batch, state } = basket
+  const waitingForSecond = batch?.status === 'awaiting_second_signer' ? orders.filter((o) => o.status === 'awaiting_second_signer').map((o) => o.id) : []
+  // Without the bank's recorded word the page names the online bank, as it did before.
+  const secondHere = secondSignatureHere(waitingForSecond, await secondSignatureViaApi(service, link.company_id, waitingForSecond).catch(() => new Set<string>()))
   const debtor = orders[0]?.debtor_snapshot ?? null
   return {
     state,
@@ -571,6 +611,7 @@ export async function describePaymentSigningLink(service: SupabaseClient, link: 
       status: o.status,
     })),
     signing: batch ? { batch_id: batch.id, status: batch.status } : null,
+    second_signature_here: secondHere,
   }
 }
 
@@ -590,4 +631,13 @@ export async function signingBelongsToLink(service: SupabaseClient, link: Pick<P
 }
 
 /** The batch statuses after which the link has done its work: the BankID signing finalised. */
-export const SIGNING_LINK_FINAL_BATCH_STATUSES: ReadonlySet<PaymentOrderBatchRow['status']> = new Set(['signed', 'awaiting_second_signer', 'rejected'])
+const SIGNING_LINK_FINAL_BATCH_STATUSES: ReadonlySet<PaymentOrderBatchRow['status']> = new Set(['signed', 'awaiting_second_signer', 'rejected'])
+
+/**
+ * Whether a poll's answer finished the link's work: its BankID finalised. A
+ * second signature that failed answers awaiting_second_signer with the
+ * bank's code, and the link stays open for another try.
+ */
+export function signingLinkDone(signing: { status: PaymentOrderBatchRow['status']; failure_code: string | null }): boolean {
+  return SIGNING_LINK_FINAL_BATCH_STATUSES.has(signing.status) && !signing.failure_code
+}

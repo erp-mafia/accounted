@@ -56,7 +56,11 @@ export async function applyProviderState(
         to_status: next,
         provider_status: state.providerStatus,
         actor_user_id: actorUserId,
-        detail: state.messages.length ? { messages: state.messages } : {},
+        detail: {
+          ...(state.messages.length ? { messages: state.messages } : {}),
+          // Where the bank takes the second signature, recorded with the move that asks for one (second-signature.ts).
+          ...(state.secondSignatureViaApi ? { second_signature_via_api: true } : {}),
+        },
       },
     ], log)
     return next

@@ -28,6 +28,7 @@ import {
   previewPaymentSigningLink,
   resolvePaymentSigningLink,
   signingBelongsToLink,
+  signingLinkDone,
   type PaymentSigningLinkRow,
 } from '../signing-links'
 
@@ -125,6 +126,56 @@ describe('issuePaymentSigningLink', () => {
     db.setTable('payment_orders', { data: [order('o1'), order('o2', { status: 'draft' })] })
     expect(await issuePaymentSigningLink(ctx, { orderIds: ['o1', 'o2'] })).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' })
     expect(inserted()).toEqual([])
+  })
+
+  describe('for the second signature (SEB takes it through the API)', () => {
+    const second = [order('o1', { status: 'awaiting_second_signer', batch_id: 'b-seb' }), order('o2', { status: 'awaiting_second_signer', batch_id: 'b-seb', amount: 737.5 })]
+    const API = { second_signature_via_api: true }
+
+    it('covers every order of one signing the bank holds for another signatory, and names that signing', async () => {
+      db.setTable('payment_orders', { data: second })
+      db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1', detail: API }, { payment_order_id: 'o2', detail: API }] })
+      db.setTable('payment_signing_links', [{ data: [] }, { data: { id: LINK_ID } }, { data: null }])
+
+      const result = await issuePaymentSigningLink(ctx, { orderIds: ['o1', 'o2'], recipientEmail: 'anna@example.se' })
+
+      expect(result).toMatchObject({ ok: true, data: { signing_link_id: LINK_ID, order_count: 2 } })
+      expect(inserted()).toEqual([expect.objectContaining({ order_ids: ['o1', 'o2'], batch_id: 'b-seb' })])
+      expect(await previewPaymentSigningLink(ctx, { orderIds: ['o1', 'o2'] })).toMatchObject({ ok: true, preview: { second_signature: true } })
+    })
+
+    it('refuses a bank that takes the second signature in its online bank: nothing to sign on the page', async () => {
+      db.setTable('payment_orders', { data: second })
+      db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1', detail: {} }] })
+      expect(await issuePaymentSigningLink(ctx, { orderIds: ['o1', 'o2'] })).toMatchObject({ ok: false, code: 'PAYMENT_SECOND_SIGNATURE_IN_ONLINE_BANK' })
+      expect(inserted()).toEqual([])
+    })
+
+    it('names every payment of the signing that waits: the second signature signs the whole basket', async () => {
+      db.setTable('payment_orders', [{ data: [second[0]!] }, { data: second }])
+      db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1', detail: API }] })
+      expect(await issuePaymentSigningLink(ctx, { orderIds: ['o1'] })).toMatchObject({
+        ok: false,
+        code: 'PAYMENT_ORDERS_WRONG_STATUS',
+        details: { reason: 'second_signature_names_every_payment', missing: ['o2'] },
+      })
+      expect(inserted()).toEqual([])
+    })
+
+    it('refuses a basket where the bank did not say the API for every payment', async () => {
+      db.setTable('payment_orders', { data: second })
+      db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1', detail: API }, { payment_order_id: 'o2', detail: {} }] })
+      expect(await issuePaymentSigningLink(ctx, { orderIds: ['o1', 'o2'] })).toMatchObject({ ok: false, code: 'PAYMENT_SECOND_SIGNATURE_IN_ONLINE_BANK' })
+      expect(inserted()).toEqual([])
+    })
+
+    it('refuses orders from two signings, or not all waiting for the other signatory', async () => {
+      db.setTable('payment_orders', { data: [second[0]!, { ...second[1]!, batch_id: 'b-other' }] })
+      expect(await issuePaymentSigningLink(ctx, { orderIds: ['o1', 'o2'] })).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' })
+      db.setTable('payment_orders', { data: [second[0]!, { ...second[1]!, status: 'accepted' }] })
+      expect(await issuePaymentSigningLink(ctx, { orderIds: ['o1', 'o2'] })).toMatchObject({ ok: false, code: 'PAYMENT_ORDERS_WRONG_STATUS' })
+      expect(inserted()).toEqual([])
+    })
   })
 
   it('covers one account in one currency', async () => {
@@ -246,6 +297,23 @@ describe('linkState', () => {
     expect(linkState(own, [order('o1', { status: 'accepted', batch_id: 'b-link' }), order('o2', { status: 'executed', batch_id: 'b-link' })], null)).toBe('done')
     expect(linkState({ ...own, consumed_at: new Date().toISOString() }, waiting, null)).toBe('done')
   })
+
+  it('is second_signature while its signing holds every order for another signatory, and done once that signature is given', () => {
+    const own = { ...link, batch_id: 'b-seb' }
+    const second = [order('o1', { status: 'awaiting_second_signer', batch_id: 'b-seb' }), order('o2', { status: 'awaiting_second_signer', batch_id: 'b-seb' })]
+    expect(linkState(own, second, { id: 'b-seb', status: 'awaiting_second_signer' })).toBe('second_signature')
+    expect(linkState({ ...own, consumed_at: new Date().toISOString() }, second, { id: 'b-seb', status: 'awaiting_second_signer' })).toBe('done')
+    expect(linkState(own, second.map((o) => ({ ...o, status: 'accepted' as const })), { id: 'b-seb', status: 'signed' })).toBe('done')
+  })
+})
+
+describe('signingLinkDone', () => {
+  it('is the end of a finalised BankID, never of a second signature that failed', () => {
+    expect(signingLinkDone({ status: 'signed', failure_code: null })).toBe(true)
+    expect(signingLinkDone({ status: 'awaiting_second_signer', failure_code: null })).toBe(true)
+    expect(signingLinkDone({ status: 'awaiting_second_signer', failure_code: 'USER_CANCEL' })).toBe(false)
+    expect(signingLinkDone({ status: 'awaiting_signature', failure_code: null })).toBe(false)
+  })
 })
 
 describe('signingBelongsToLink', () => {
@@ -326,6 +394,14 @@ describe('describePaymentSigningLink', () => {
     db.setTable('payment_orders', { data: [order('o1', { status: 'submitted', batch_id: 'b-link' }), order('o2', { status: 'submitted', batch_id: 'b-link' })] })
     db.setTable('payment_order_batches', { data: { id: 'b-link', status: 'created' } })
     const page = await describePaymentSigningLink(db.supabase as never, linkRow({ batch_id: 'b-link' }))
-    expect(page).toMatchObject({ requester: 'Karin Byråsson', state: 'in_signing', signing: { batch_id: 'b-link', status: 'created' } })
+    expect(page).toMatchObject({ requester: 'Karin Byråsson', state: 'in_signing', signing: { batch_id: 'b-link', status: 'created' }, second_signature_here: false })
+  })
+
+  it('says when the bank waits for another signatory who signs on a page, from its message', async () => {
+    db.setTable('payment_orders', { data: [order('o1', { status: 'awaiting_second_signer', batch_id: 'b-seb' }), order('o2', { status: 'awaiting_second_signer', batch_id: 'b-seb' })] })
+    db.setTable('payment_order_batches', { data: { id: 'b-seb', status: 'awaiting_second_signer' } })
+    db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1', detail: { second_signature_via_api: true } }, { payment_order_id: 'o2', detail: { second_signature_via_api: true } }] })
+    const page = await describePaymentSigningLink(db.supabase as never, linkRow({ batch_id: 'b-seb' }))
+    expect(page).toMatchObject({ state: 'second_signature', signing: { batch_id: 'b-seb', status: 'awaiting_second_signer' }, second_signature_here: true })
   })
 })

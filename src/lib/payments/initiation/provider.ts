@@ -87,6 +87,12 @@ export interface ProviderPaymentState {
   status: PaymentOrderStatus
   /** Provider messages worth showing or logging (codes, not prose). */
   messages: string[]
+  /**
+   * The bank waits for another signatory (awaiting_second_signer) and takes
+   * that signature through the API, as a new authorisation under their own
+   * PSU-ID, not in its online bank. Absent when the bank does not say so.
+   */
+  secondSignatureViaApi?: boolean
 }
 
 export interface CreatedPayment extends ProviderPaymentState {

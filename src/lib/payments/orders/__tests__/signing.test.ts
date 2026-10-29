@@ -23,7 +23,7 @@ vi.mock('@/lib/auth/resource-psu', () => ({
   rememberBatchPsu: (...a: unknown[]) => mock.rememberBatchPsu(...a),
 }))
 
-import { FOLLOW_BANK_CONFIRMATION_MS, PERMANENT_SIGNING_FAILURES, pollPaymentSigning, restartPaymentSigning, startPaymentSigning } from '../signing'
+import { FOLLOW_BANK_CONFIRMATION_MS, PERMANENT_SIGNING_FAILURES, pollPaymentSigning, restartPaymentSigning, startPaymentSigning, startSecondSignature } from '../signing'
 import { PERMANENT_SIGNING_FAILURES as CLIENT_PERMANENT_SIGNING_FAILURES } from '@/components/payments/payment-order-status'
 
 let db: ReturnType<typeof createTableMockSupabase>
@@ -1561,6 +1561,246 @@ describe('pollPaymentSigning', () => {
       expect(result.data).toMatchObject({ follow_up: false })
       expect(result.data.orders[1]).toMatchObject({ bank_confirming: true })
     })
+  })
+})
+
+// SEB (Open Payments' answer, 2026-10-28): the first BankID of a basket
+// finalises within seconds without a signature and leaves the payments PATC
+// with AUTHORISATION_PENDING_API; the other signatory signs the same basket
+// through a new authorisation under their own PSU-ID. Production, 20 Oct: a
+// basket of two whose first BankID finalised in 1.98 s; nobody could give the
+// second signature and SEB rejected the payments on the pay date.
+describe('the second signature at a bank that takes it through the API', () => {
+  /** The other signatory, typed in the dialog. */
+  const SECOND = { personalNumber: '19850505-1238', ipAddress: '203.0.113.20', userAgent: 'UA2' }
+  /** The move to awaiting_second_signer as applyProviderState records it when the adapter read the API from the bank. */
+  const RECORDED = { messages: ['AUTHORISATION_PENDING_API'], second_signature_via_api: true }
+  const recordedFor = (...ids: string[]) => ({ data: ids.map((id) => ({ payment_order_id: id, detail: RECORDED })) })
+  const waiting = batch({
+    status: 'awaiting_second_signer',
+    provider_batch_id: 'basket-at-bank',
+    provider_authorisation_id: 'auth-1',
+    signing_method: 'qr',
+    signer_user_id: USER,
+    signing_started_at: '2026-10-20T12:39:00Z',
+    signed_at: '2026-10-20T12:39:02Z',
+  })
+  /** The second signature started after the first BankID finalised. */
+  const secondOpen = { ...waiting, provider_authorisation_id: 'auth-2', signing_started_at: '2026-10-20T12:45:00Z' }
+  const patc = [
+    waitingOrder('o1', 1, { status: 'awaiting_second_signer', provider_status: 'PATC' }),
+    waitingOrder('o2', 2, { status: 'awaiting_second_signer', provider_status: 'PATC' }),
+  ]
+  const accepted = patc.map((o) => ({ ...o, status: 'accepted' as const, provider_status: 'ACTC' }))
+  /** The adapter's answer for SEB's PATC (connect.ts maps the message). */
+  const PATC_API = { providerStatus: 'PATC', status: 'awaiting_second_signer' as const, messages: ['AUTHORISATION_PENDING_API'], secondSignatureViaApi: true }
+  const ACTC = { providerStatus: 'ACTC', status: 'accepted' as const, messages: [] }
+  const second = () => startSecondSignature(ctx, { batchId: 'batch-1', method: 'qr', signer: SECOND })
+  const batchPatches = () => db.findCalls('payment_order_batches', 'update').map(([patch]) => patch as Record<string, unknown>)
+
+  beforeEach(() => {
+    // The payments were created with the first signatory's number, and the bank said the API for both.
+    mock.storedBatchPsu.mockResolvedValue(KEPT_PSU)
+    db.setTable('payment_order_events', recordedFor('o1', 'o2'))
+  })
+
+  it("starts a new authorisation on the same basket under the other signatory's PSU-ID, creating and cancelling nothing", async () => {
+    const provider = fakeProvider({
+      getPaymentState: vi.fn().mockResolvedValue(PATC_API),
+      startSigning: vi.fn().mockResolvedValue({
+        providerAuthorisationId: 'auth-2',
+        method: 'qr',
+        state: 'pending',
+        challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.second', qrImage: null, redirectUrl: null },
+        failureCode: null,
+      }),
+    })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', [{ data: waiting }, { data: waiting }, { data: secondOpen }])
+    db.setTable('payment_orders', [{ data: patc }, { data: [{ id: 'o1' }] }, { data: [{ id: 'o2' }] }, { data: patc }])
+
+    const result = await second()
+
+    // The screen follows it as a signing in progress, with the other signatory's challenge.
+    expect(result).toMatchObject({ ok: true, data: { batch_id: 'batch-1', status: 'awaiting_signature', challenge: { qrData: 'bankid.qr.second' } } })
+    expect(provider.startSigning).toHaveBeenCalledWith(
+      expect.objectContaining({ signerPersonalNumber: '198505051238', psuIpAddress: '203.0.113.20' }),
+      { kind: 'basket', providerBasketId: 'basket-at-bank' },
+      'qr',
+      null,
+    )
+    // Each payment was read first, with the PSU-ID it was created with.
+    expect(provider.getPaymentState).toHaveBeenCalledTimes(2)
+    expect(provider.getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: KEPT_PSU }), 'pay-1', 'swedish-giro')
+    // The batch stays awaiting_second_signer and names this attempt, against the one it replaced.
+    expect(batchPatches()).toEqual([expect.objectContaining({ provider_authorisation_id: 'auth-2', signing_method: 'qr', signer_user_id: USER, signing_started_at: expect.any(String) })])
+    expect(batchPatches()[0]).not.toHaveProperty('status')
+    expect(db.findCalls('payment_order_batches', 'eq')).toEqual(expect.arrayContaining([['status', 'awaiting_second_signer'], ['provider_authorisation_id', 'auth-1']]))
+    expect(events()).toContainEqual(expect.objectContaining({ event_type: 'signing_started', batch_id: 'batch-1', detail: { method: 'qr', second_signature: true } }))
+    // Nothing at the bank is made or undone, and the payments keep the first PSU-ID.
+    expect(provider.createPayment).not.toHaveBeenCalled()
+    expect(provider.createSigningBasket).not.toHaveBeenCalled()
+    expect(provider.cancelPayment).not.toHaveBeenCalled()
+    expect(mock.rememberBatchPsu).not.toHaveBeenCalled()
+  })
+
+  it('refuses the number the first signature was made with: the bank waits for another person', async () => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', { data: waiting })
+    db.setTable('payment_orders', { data: patc })
+
+    const result = await startSecondSignature(ctx, { batchId: 'batch-1', method: 'qr', signer: { ...SECOND, personalNumber: '19800101-9879' } })
+
+    expect(result).toMatchObject({ ok: false, code: 'PAYMENT_SECOND_SIGNER_SAME_PERSON' })
+    expect(provider.getPaymentState).not.toHaveBeenCalled()
+    expect(provider.startSigning).not.toHaveBeenCalled()
+  })
+
+  it('refuses where the bank takes the second signature in its online bank, before asking the bank anything', async () => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', { data: waiting })
+    db.setTable('payment_orders', { data: patc })
+    db.setTable('payment_order_events', recordedFor('o1'))
+
+    expect(await second()).toMatchObject({ ok: false, code: 'PAYMENT_SECOND_SIGNATURE_IN_ONLINE_BANK' })
+    expect(provider.getPaymentState).not.toHaveBeenCalled()
+    expect(provider.startSigning).not.toHaveBeenCalled()
+  })
+
+  it('refuses a signing that does not wait for another signatory', async () => {
+    const provider = fakeProvider()
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', { data: batch({ status: 'awaiting_signature', provider_batch_id: 'basket-at-bank' }) })
+    db.setTable('payment_orders', { data: patc })
+
+    expect(await second()).toMatchObject({ ok: false, code: 'PAYMENT_SIGNING_NOT_ACTIVE' })
+    expect(provider.startSigning).not.toHaveBeenCalled()
+  })
+
+  it('leaves the payments and the first signature where they were when the bank refuses the start', async () => {
+    const provider = fakeProvider({
+      getPaymentState: vi.fn().mockResolvedValue(PATC_API),
+      startSigning: vi.fn().mockRejectedValue(new PaymentProviderError('No rights', 'PSU_RIGHTS_MISSING', false, 403)),
+    })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', [{ data: waiting }, { data: waiting }])
+    db.setTable('payment_orders', [{ data: patc }, { data: [{ id: 'o1' }] }, { data: [{ id: 'o2' }] }, { data: patc }])
+
+    const result = await second()
+
+    expect(result).toMatchObject({ ok: false, code: 'PAYMENT_PROVIDER_REFUSED', details: { provider_code: 'PSU_RIGHTS_MISSING' } })
+    // A permanent code stops a first signing; here the first signature stands and someone else may sign.
+    expect(provider.cancelPayment).not.toHaveBeenCalled()
+    expect(releases()).toEqual([])
+    expect(batchPatches()).toEqual([])
+  })
+
+  it('ends the signing without a BankID when the payments were signed in the online bank meanwhile', async () => {
+    const provider = fakeProvider({ getPaymentState: vi.fn().mockResolvedValue(ACTC) })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', [{ data: waiting }, { data: waiting }, { data: null }, { data: { ...waiting, status: 'signed' } }])
+    db.setTable('payment_orders', [{ data: patc }, { data: [{ id: 'o1' }] }, { data: [{ id: 'o2' }] }, { data: accepted }, { data: accepted }])
+
+    const result = await second()
+
+    expect(result).toMatchObject({ ok: true, data: { status: 'signed' } })
+    expect(orderPatches().map((p) => p.status)).toEqual(['accepted', 'accepted'])
+    expect(batchPatches()).toEqual([expect.objectContaining({ status: 'signed' })])
+    expect(provider.startSigning).not.toHaveBeenCalled()
+  })
+
+  it("polls the second signature with the other signatory's number, and shows it as a signing in progress", async () => {
+    const provider = fakeProvider({
+      pollSigning: vi.fn().mockResolvedValue({ state: 'pending', challenge: { approach: 'decoupled', autostartToken: null, qrData: 'bankid.qr.3', qrImage: null, redirectUrl: null }, failureCode: null }),
+    })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', { data: secondOpen })
+    db.setTable('payment_orders', { data: patc })
+
+    const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SECOND })
+
+    expect(result).toMatchObject({ ok: true, data: { status: 'awaiting_signature', challenge: { qrData: 'bankid.qr.3' } } })
+    expect(provider.pollSigning).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: '198505051238' }), { kind: 'basket', providerBasketId: 'basket-at-bank' }, 'auth-2', 'qr')
+  })
+
+  it('reads each payment once the second signature finalised and ends the signing signed', async () => {
+    const provider = fakeProvider({
+      pollSigning: vi.fn().mockResolvedValue({ state: 'finalised', challenge: null, failureCode: null }),
+      getPaymentState: vi.fn().mockResolvedValue(ACTC),
+    })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', [{ data: secondOpen }, { data: null }, { data: { ...secondOpen, status: 'signed' } }])
+    db.setTable('payment_orders', [{ data: patc }, { data: [{ id: 'o1' }] }, { data: [{ id: 'o2' }] }, { data: accepted }])
+
+    const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SECOND })
+
+    expect(result).toMatchObject({ ok: true, data: { status: 'signed', second_signature_here: false } })
+    expect(provider.getPaymentState).toHaveBeenCalledWith(expect.objectContaining({ signerPersonalNumber: KEPT_PSU }), 'pay-2', 'swedish-giro')
+    expect(orderPatches().map((p) => p.status)).toEqual(['accepted', 'accepted'])
+    expect(batchPatches()).toEqual([expect.objectContaining({ status: 'signed', signed_at: expect.any(String) })])
+    expect(db.findCalls('payment_order_batches', 'eq')).toContainEqual(['provider_authorisation_id', 'auth-2'])
+  })
+
+  it('leaves the payments and the first signature where they were when the second BankID is cancelled, and ends only that attempt', async () => {
+    const provider = fakeProvider({ pollSigning: vi.fn().mockResolvedValue({ state: 'failed', challenge: null, failureCode: 'USER_CANCEL' }) })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', [{ data: secondOpen }, { data: [{ id: 'batch-1' }] }])
+    db.setTable('payment_orders', { data: patc })
+
+    const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SECOND })
+
+    expect(result).toMatchObject({ ok: true, data: { status: 'awaiting_second_signer', failure_code: 'USER_CANCEL', second_signature_here: true } })
+    // No BankID runs any more: the attempt is closed, its batch still waits for the other signatory.
+    expect(batchPatches()).toEqual([{ signing_started_at: null }])
+    expect(db.findCalls('payment_order_batches', 'eq')).toEqual(expect.arrayContaining([['status', 'awaiting_second_signer'], ['provider_authorisation_id', 'auth-2']]))
+    expect(orderPatches()).toEqual([])
+    expect(provider.cancelPayment).not.toHaveBeenCalled()
+    expect(events().filter((e) => e.event_type === 'error')).toEqual([expect.objectContaining({ detail: { code: 'USER_CANCEL', stage: 'second_signature' } })])
+
+    // A later poll of the closed attempt asks the bank nothing and logs nothing.
+    db.setTable('payment_order_batches', { data: { ...secondOpen, signing_started_at: null } })
+    const later = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SECOND })
+    expect(later).toMatchObject({ ok: true, data: { status: 'awaiting_second_signer', failure_code: null } })
+    expect(provider.pollSigning).toHaveBeenCalledTimes(1)
+    expect(events().filter((e) => e.event_type === 'error')).toHaveLength(1)
+  })
+
+  it("says after the first BankID that the other signatory signs here, from the bank's message", async () => {
+    const provider = fakeProvider({
+      pollSigning: vi.fn().mockResolvedValue({ state: 'finalised', challenge: null, failureCode: null }),
+      getPaymentState: vi.fn().mockResolvedValue(PATC_API),
+    })
+    registerPaymentInitiationProvider(provider)
+    const first = { ...waiting, status: 'awaiting_signature' as const, signed_at: null }
+    db.setTable('payment_order_batches', [{ data: first }, { data: null }, { data: waiting }])
+    db.setTable('payment_orders', [
+      { data: patc.map((o) => ({ ...o, status: 'awaiting_signature' as const, provider_status: 'RCVD' })) },
+      { data: [{ id: 'o1' }] },
+      { data: [{ id: 'o2' }] },
+      { data: patc },
+    ])
+
+    const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+    expect(result).toMatchObject({ ok: true, data: { status: 'awaiting_second_signer', second_signature_here: true } })
+    // The move to awaiting_second_signer keeps the bank's message: the record the signal is read from.
+    expect(events()).toContainEqual(expect.objectContaining({ event_type: 'status_changed', to_status: 'awaiting_second_signer', detail: RECORDED }))
+    expect(db.findCalls('payment_order_events', 'eq')).toEqual(expect.arrayContaining([['to_status', 'awaiting_second_signer'], ['event_type', 'status_changed']]))
+  })
+
+  it('names the online bank when the bank did not say the API, and asks nothing at the bank until a second signature starts', async () => {
+    const provider = fakeProvider({ pollSigning: vi.fn() })
+    registerPaymentInitiationProvider(provider)
+    db.setTable('payment_order_batches', { data: waiting })
+    db.setTable('payment_orders', { data: patc })
+    db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1', detail: { messages: ['SOMETHING_ELSE'] } }] })
+
+    const result = await pollPaymentSigning(ctx, { batchId: 'batch-1', signer: SIGNER })
+
+    expect(result).toMatchObject({ ok: true, data: { status: 'awaiting_second_signer', second_signature_here: false } })
+    expect(provider.pollSigning).not.toHaveBeenCalled()
   })
 })
 

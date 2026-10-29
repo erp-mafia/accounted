@@ -228,6 +228,18 @@ describe('the operations', () => {
     expect(sentBody(fetchMock)).toEqual({ party: toConnectorParty(CTX), providerPaymentId: 'pay-1', product: 'domestic' })
   })
 
+  // SEB (Open Payments, 2026-10-28): PATC with AUTHORISATION_PENDING_API means
+  // the other signatory signs through the API; core never reads the code itself.
+  it('says when the bank takes the second signature through the API, from its message', async () => {
+    const patc = { providerStatus: 'PATC', status: 'awaiting_second_signer', messages: ['AUTHORISATION_PENDING_API'] }
+    expect(await provider(fetchAnswering(200, patc)).getPaymentState(CTX, 'pay-1', 'swedish-giro')).toEqual({ ...patc, secondSignatureViaApi: true })
+    const created = await provider(fetchAnswering(200, { providerPaymentId: 'pay-1', product: 'swedish-giro', sentPayeeName: null, ...patc })).createPayment(CTX, INSTRUCTION)
+    expect(created).toMatchObject({ providerPaymentId: 'pay-1', secondSignatureViaApi: true })
+    // Without the message nothing is said either way: the online bank, as before.
+    const plain = await provider(fetchAnswering(200, { ...patc, messages: [] })).getPaymentState(CTX, 'pay-1', 'swedish-giro')
+    expect(plain).not.toHaveProperty('secondSignatureViaApi')
+  })
+
   it('createSigningBasket keys the basket by its sorted payment ids', async () => {
     const fetchMock = fetchAnswering(200, { providerBasketId: 'bask-1' })
     const basket = await provider(fetchMock).createSigningBasket(CTX, ['p-2', 'p-1'])

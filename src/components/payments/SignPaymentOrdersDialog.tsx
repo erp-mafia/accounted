@@ -4,6 +4,7 @@ import { useRef, useState } from 'react'
 import { useTranslations } from 'next-intl'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
+import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { BankIdSigningFlow, type SigningFlowStage } from './BankIdSigningFlow'
 import type { PaymentOrder } from './payments-client'
 import type { PaymentSigningReturn } from '@/lib/payments/orders/return-url'
@@ -18,13 +19,27 @@ interface SignPaymentOrdersDialogProps {
   resume?: PaymentSigningReturn | null
   /** Signera igen: the signing these orders wait unsigned in, signed again instead of a new one. */
   pendingBatchId?: string | null
+  /** Kontrasignera: the signing the bank holds for another signatory, who signs it here. */
+  secondSignatureBatchId?: string | null
+  /** Kontrasignera, when the other signatory is not at this screen: a signing link to them instead. */
+  onRequestLink?: () => void
   onOpenChange: (open: boolean) => void
   /** Called on close when payments were sent to the bank. */
   onDone: () => void
 }
 
 /** Signera from the Betalningar page: one BankID for the selected approved payments. */
-export function SignPaymentOrdersDialog({ orders, signerKnown, bankName = null, resume = null, pendingBatchId = null, onOpenChange, onDone }: SignPaymentOrdersDialogProps) {
+export function SignPaymentOrdersDialog({
+  orders,
+  signerKnown,
+  bankName = null,
+  resume = null,
+  pendingBatchId = null,
+  secondSignatureBatchId = null,
+  onRequestLink,
+  onOpenChange,
+  onDone,
+}: SignPaymentOrdersDialogProps) {
   const t = useTranslations('bank_payments')
   const [stage, setStage] = useState<SigningFlowStage>(resume ? 'signing' : 'method')
   // A resumed signing was sent to the bank before the page reloaded: the list reloads on close.
@@ -48,6 +63,25 @@ export function SignPaymentOrdersDialog({ orders, signerKnown, bankName = null, 
           bankName={bankName}
           resume={resume}
           pendingBatchId={pendingBatchId}
+          secondSignatureBatchId={secondSignatureBatchId}
+          secondSignatureAside={
+            onRequestLink ? (
+              <p className="text-[12.5px] text-muted-foreground">
+                {t('second_signer_elsewhere')}{' '}
+                <button
+                  type="button"
+                  className={QUIET_LINK_CLASS}
+                  onClick={() => {
+                    // Closed first, so the list reloads only when this dialog sent something to the bank.
+                    close(false)
+                    onRequestLink()
+                  }}
+                >
+                  {t('second_signer_send_link')}
+                </button>
+              </p>
+            ) : null
+          }
           closeButton={
             <Button variant="secondary" onClick={() => close(false)}>
               {t('close')}
