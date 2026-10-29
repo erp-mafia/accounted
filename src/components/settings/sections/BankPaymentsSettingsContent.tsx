@@ -24,11 +24,13 @@ import {
   type BankPaymentsUsage,
   PaymentsClientError,
   startCompanyVerification,
+  withIncludedPayments,
   type CompanyVerification,
   type PaymentsAvailability,
 } from '@/components/payments/payments-client'
 import { VerificationStateText } from '@/components/payments/VerificationStateText'
-import { RequestMorePaymentsDialog } from '@/components/payments/BankPaymentsAllowance'
+import { BuyPaymentPacksDialog, RequestMorePaymentsDialog, usePaymentPacks } from '@/components/payments/BankPaymentsAllowance'
+import { useFormat } from '@/lib/hooks/use-format'
 import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { NEEDS_LINK_STATES } from '@/lib/payments/orders/verification-state'
 
@@ -54,6 +56,12 @@ export function BankPaymentsSettingsContent() {
   const [busy, setBusy] = useState(false)
   const [refreshing, setRefreshing] = useState(false)
   const [requesting, setRequesting] = useState(false)
+  const [buying, setBuying] = useState(false)
+  const { formatDateLong } = useFormat()
+  // The company's packs and whether this person may buy more. Without them
+  // the row keeps today's numbers and Begär fler.
+  const { view: packsView, reload: reloadPacks } = usePaymentPacks(availability?.available === true)
+  const packs = packsView !== null && packsView !== 'failed' ? packsView : null
 
   // The stored answer serves the page (fresh within six hours); Uppdatera
   // asks the provider. checked_at is when the provider was last asked.
@@ -135,6 +143,10 @@ export function BankPaymentsSettingsContent() {
   const usageMonth = usage ? new Date(`${usage.period}-15T12:00:00Z`).toLocaleDateString(locale, { month: 'long' }) : ''
   // The cap is hard: at it, no bank payment goes out this month until it is raised.
   const capReached = usage !== null && usage.payments_sent >= usage.included_payments
+  // An owner where packs are sold buys more; everyone else asks for more.
+  const canBuy = packs?.can_buy === true
+  const moreLabel = canBuy ? t('buy_more') : t('request_more')
+  const askOrBuy = () => (canBuy ? setBuying(true) : setRequesting(true))
   const checkedAtText = checkedAt
     ? t('checked_at', { time: checkedAt.toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' }) })
     : null
@@ -184,21 +196,34 @@ export function BankPaymentsSettingsContent() {
             <SettingsGroup label={t('group_usage')} help={t('usage_help')}>
               <SettingsRow label={t('usage_payments_label', { month: usageMonth })}>
                 <SettingsRowNote className={capReached ? 'text-attn' : 'text-foreground'}>
-                  {t('usage_of', { used: usage.payments_sent, included: usage.included_payments })}
+                  {/* With packs the cap is said with what it is made of: what is included and what was bought. */}
+                  {packs && packs.packs > 0 && packs.included_payments === usage.included_payments
+                    ? t('usage_of_with_packs', {
+                        used: usage.payments_sent,
+                        included: usage.included_payments,
+                        base: packs.base_payments,
+                        bought: packs.packs * packs.pack_size,
+                      })
+                    : t('usage_of', { used: usage.payments_sent, included: usage.included_payments })}
                   {capReached ? `, ${t('usage_limit_reached')}` : ''}
                 </SettingsRowNote>
                 {canWrite && (
                   <SettingsRowEnd>
                     {capReached ? (
-                      <Button size="sm" onClick={() => setRequesting(true)}>
-                        {t('request_more')}
+                      <Button size="sm" onClick={askOrBuy}>
+                        {moreLabel}
                       </Button>
                     ) : (
-                      <button type="button" className={QUIET_LINK_CLASS} onClick={() => setRequesting(true)}>
-                        {t('request_more')}
+                      <button type="button" className={QUIET_LINK_CLASS} onClick={askOrBuy}>
+                        {moreLabel}
                       </button>
                     )}
                   </SettingsRowEnd>
+                )}
+                {packs?.scheduled && (
+                  <SettingsRowNote className="basis-full">
+                    {t('packs_scheduled', { packs: packs.scheduled.packs, date: formatDateLong(packs.scheduled.at) })}
+                  </SettingsRowNote>
                 )}
               </SettingsRow>
               <SettingsRow label={t('usage_accounts_label', { month: usageMonth })}>
@@ -211,6 +236,17 @@ export function BankPaymentsSettingsContent() {
           )}
 
           {requesting && <RequestMorePaymentsDialog included={usage?.included_payments ?? null} onOpenChange={setRequesting} />}
+          {buying && packs?.can_buy && (
+            <BuyPaymentPacksDialog
+              view={packs}
+              onOpenChange={setBuying}
+              onChanged={(result) => {
+                if (!result.scheduled) setUsage((current) => withIncludedPayments(current, result.included_payments))
+                // Whatever changed (now, or at the period end), the row says it.
+                reloadPacks()
+              }}
+            />
+          )}
 
           <SettingsGroup label={t('group_accounts')} help={t('accounts_help')}>
             {availability.accounts.length === 0 ? (

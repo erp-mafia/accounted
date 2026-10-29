@@ -16,6 +16,7 @@ import {
   fetchPaymentsAvailability,
   paymentReadinessFor,
   PaymentsClientError,
+  withIncludedPayments,
   type BankPaymentsUsage,
   type PayableAccount,
   type PaymentsAvailability,
@@ -86,7 +87,11 @@ export function useBankPaymentDialog(open: boolean) {
       <PaymentsVerificationLine verification={availability.verification} />
     ) : null
 
-  return { availability, usage, accountId, setAccountId, payableAccounts, account, unsupportedBank, readiness, verificationLine, fail }
+  // Packs bought from the allowance line raise the cap now: the counter and
+  // the over-the-cap gate follow without a second read.
+  const raiseIncluded = useCallback((included: number) => setUsage((current) => withIncludedPayments(current, included)), [])
+
+  return { availability, usage, raiseIncluded, accountId, setAccountId, payableAccounts, account, unsupportedBank, readiness, verificationLine, fail }
 }
 
 /**

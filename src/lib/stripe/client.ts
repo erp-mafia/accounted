@@ -29,3 +29,18 @@ export function priceIdForPlan(plan: BillingPlan): string | undefined {
 export function isStripeConfigured(): boolean {
   return Boolean(process.env.STRIPE_SECRET_KEY && process.env.STRIPE_PRICE_MONTHLY)
 }
+
+/**
+ * Stripe Price id of the bank payments pack ("+100 betalningar/mån",
+ * recurring monthly, quantity = packs), from env. Undefined until a founder
+ * creates the price: packs are then neither sold nor read off subscriptions,
+ * and "Begär fler" stays the only way to more payments (self-host too).
+ */
+export function paymentPackPriceId(): string | undefined {
+  return process.env.STRIPE_PRICE_PAYMENTS_PACK?.trim() || undefined
+}
+
+/** Whether packs can be bought from this installation: Stripe and the pack price are both set. */
+export function paymentPacksConfigured(): boolean {
+  return isStripeConfigured() && Boolean(paymentPackPriceId())
+}

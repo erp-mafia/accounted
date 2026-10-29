@@ -586,6 +586,9 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     // A member asks for a package switch; an owner or admin approves it (enable_package).
     '/api/packages': staging(BOOK_RECORD),
     '/api/billing': READER_HOUSE,
+    // Bank payment packs charge the company's card: a company decision, and
+    // the owner's alone (the handler checks the role).
+    'POST /api/billing/payment-packs': SETTINGS,
     '/api/calendar': BOOK_HOUSE,
     '/api/deadlines': BOOK_HOUSE,
     '/api/tax-deadlines': BOOK_HOUSE,

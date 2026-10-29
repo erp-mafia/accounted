@@ -328,7 +328,7 @@ export default function PaySalaryViaBankDialog({ open, onOpenChange, salaryRunId
       {preview && (
         <>
           <p className="text-[12.5px] text-muted-foreground">{t('sign_hint')}</p>
-          <BankPaymentsAllowanceLine usage={usage} count={count} canRequest />
+          <BankPaymentsAllowanceLine usage={usage} count={count} canRequest onIncluded={bank.raiseIncluded} />
         </>
       )}
     </BankPaymentDialogFrame>

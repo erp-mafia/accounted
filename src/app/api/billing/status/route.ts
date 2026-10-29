@@ -3,6 +3,7 @@ import { requireAuth } from '@/lib/auth/require-auth'
 import { createServiceClient } from '@/lib/supabase/server'
 import { requireCompanyId } from '@/lib/company/context'
 import { getStripe, isStripeConfigured } from '@/lib/stripe/client'
+import { isCancelling, planItemOf, sekAmountOf } from '@/lib/stripe/subscription-items'
 import { isSandboxCompany } from '@/lib/sandbox/guard'
 import { getTeamAgreement, type TeamAgreement } from '@/lib/entitlements/team-agreement'
 import {
@@ -41,13 +42,9 @@ async function readSubscription(
 ): Promise<{ chargeDue: 'trialing' | 'active' | null; amountExVat: number | null }> {
   try {
     const sub = await getStripe().subscriptions.retrieve(subscriptionId)
-    const price = sub.items?.data?.[0]?.price
-    const amountExVat =
-      price && price.currency === 'sek' && typeof price.unit_amount === 'number'
-        ? price.unit_amount / 100
-        : null
-    const cancelling = Boolean(sub.cancel_at_period_end || sub.cancel_at)
-    const chargeDue = !cancelling && (sub.status === 'trialing' || sub.status === 'active') ? sub.status : null
+    // The plan's own item, by price id: a bank payments pack item can be listed first.
+    const amountExVat = sekAmountOf(planItemOf(sub)?.price)
+    const chargeDue = !isCancelling(sub) && (sub.status === 'trialing' || sub.status === 'active') ? sub.status : null
     return { chargeDue, amountExVat }
   } catch (err) {
     log.warn('subscription read failed', err as Error, { companyId })

@@ -114,6 +114,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/log': machine('machine endpoint: unauthenticated client telemetry sink'),
   'POST /api/billing/checkout': uiOnly('Stripe checkout'),
   'POST /api/billing/portal': uiOnly('Stripe customer portal'),
+  'POST /api/billing/payment-packs': uiOnly('buying bank payment packs on the Stripe subscription: the owner\'s card is charged at once'),
 
   // ── Credentials, OAuth, membership (privilege) ─────────────────────
   'POST /api/settings/api-keys': uiOnly(PRIVILEGE),

@@ -8,8 +8,10 @@
  * Payments are capped (founder decision 2026-10-14, while the provider
  * prices per payment and our own pricing is not set): a company may send
  * BANK_PAYMENTS_INCLUDED_PER_MONTH a month, or the number a founder set for
- * it in company_bank_payment_allowances, and a signing that would pass it is
- * refused (lib/payments/allowance.ts). Accounts are counted for display only.
+ * it in company_bank_payment_allowances, plus BANK_PAYMENTS_PER_PACK for every
+ * pack its owner bought on the subscription (issue #132), and a signing that
+ * would pass it is refused (lib/payments/allowance.ts). Accounts are counted
+ * for display only.
  * Payment files (betalfil) never reach the provider and are not counted.
  */
 
@@ -95,17 +97,45 @@ export function usagePeriodBounds(period: string): { start: string; end: string 
  */
 const MISSING_TABLE_CODES = new Set(['42P01', 'PGRST205'])
 
-/** The payments a company may send a month: the allowance a founder set for it, else the default. */
-export async function includedBankPayments(supabase: SupabaseClient, companyId: string): Promise<number> {
-  const { data, error } = await supabase
-    .from('company_bank_payment_allowances')
-    .select('monthly_payments')
-    .eq('company_id', companyId)
-    .maybeSingle()
-  if (error && MISSING_TABLE_CODES.has((error as { code?: string }).code ?? '')) return BANK_PAYMENTS_INCLUDED_PER_MONTH
+/**
+ * Bank payments a month one bought pack adds (issue #132). The one place the
+ * pack size lives: the cap, the purchase dialog and the billing page all read
+ * it from here. The pack's price is Stripe's (STRIPE_PRICE_PAYMENTS_PACK).
+ */
+export const BANK_PAYMENTS_PER_PACK = 100
+
+/** What a company may send a month, and what it is made of. */
+export interface BankPaymentsAllowance {
+  /** The base: the number a founder set for the company, else the default. */
+  base: number
+  /** Packs on the company's Stripe subscription (the webhook keeps purchased_packs). */
+  packs: number
+  /** The cap: base + packs x BANK_PAYMENTS_PER_PACK. */
+  included: number
+}
+
+/** The allowance a company_bank_payment_allowances row (or its absence) gives. */
+export function allowanceOf(row: { monthly_payments?: number | null; purchased_packs?: number | null } | null): BankPaymentsAllowance {
+  const base = typeof row?.monthly_payments === 'number' ? row.monthly_payments : BANK_PAYMENTS_INCLUDED_PER_MONTH
+  const packs = typeof row?.purchased_packs === 'number' && row.purchased_packs > 0 ? row.purchased_packs : 0
+  return { base, packs, included: base + packs * BANK_PAYMENTS_PER_PACK }
+}
+
+/**
+ * The company's allowance row, read whole: `*` rather than named columns so
+ * a deploy that runs a moment before its migration (purchased_packs not there
+ * yet) reads the row it has instead of failing every signing.
+ */
+export async function readBankPaymentsAllowance(supabase: SupabaseClient, companyId: string): Promise<BankPaymentsAllowance> {
+  const { data, error } = await supabase.from('company_bank_payment_allowances').select('*').eq('company_id', companyId).maybeSingle()
+  if (error && MISSING_TABLE_CODES.has((error as { code?: string }).code ?? '')) return allowanceOf(null)
   if (error) throw error
-  const monthly = (data as { monthly_payments: number | null } | null)?.monthly_payments
-  return typeof monthly === 'number' ? monthly : BANK_PAYMENTS_INCLUDED_PER_MONTH
+  return allowanceOf(data as { monthly_payments?: number | null; purchased_packs?: number | null } | null)
+}
+
+/** The payments a company may send a month: the base (a founder's override, else the default) plus the packs it bought. */
+export async function includedBankPayments(supabase: SupabaseClient, companyId: string): Promise<number> {
+  return (await readBankPaymentsAllowance(supabase, companyId)).included
 }
 
 export async function readBankPaymentsMonth(supabase: SupabaseClient, companyId: string, period?: string): Promise<BankPaymentsMonth> {
