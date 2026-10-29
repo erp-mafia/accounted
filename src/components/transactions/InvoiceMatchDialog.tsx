@@ -105,6 +105,21 @@ export interface ConfirmOpts {
   // exactly that or refuses (MATCH_PAYMENT_FEE_CHANGED).
   fee_account?: string
   fee_amount?: number
+  // Supplier match only: reverse the row's own categorization (storno) and
+  // book the payment instead. Sent only from the already-booked soft block.
+  storno_existing?: boolean
+}
+
+/**
+ * The supplier match was refused because the bank row is already booked
+ * (MATCH_SI_TX_ALREADY_BOOKED): the verifikat that books it, whether it is
+ * the row's own categorization, which the match may reverse, and the
+ * refusal's own sentence in the UI's language.
+ */
+export interface MatchAlreadyBooked {
+  voucher: string | null
+  stornoAllowed: boolean
+  message: string
 }
 
 interface InvoiceMatchDialogProps {
@@ -120,6 +135,8 @@ interface InvoiceMatchDialogProps {
    * (PH 192), instead of only the fee or overpayment this match books.
    */
   onSplitAcrossInvoices?: () => void
+  /** Set after the match was refused for a booked row: a soft block in place of the confirm. */
+  alreadyBooked?: MatchAlreadyBooked | null
 }
 
 /** An exchange rate keeps its decimals: it must not be rounded to the öre. */
@@ -149,6 +166,7 @@ export default function InvoiceMatchDialog({
   onConfirm,
   onLinkToExisting,
   onSplitAcrossInvoices,
+  alreadyBooked = null,
 }: InvoiceMatchDialogProps) {
   const t = useTranslations('tx_invoice_match')
   const uiLocale = useLocale() === 'en' ? ('en' as const) : ('sv' as const)
@@ -327,7 +345,7 @@ export default function InvoiceMatchDialog({
     previewErrorCode: previewFailure?.code ?? null,
   })
 
-  const handleConfirm = (opts?: { force?: boolean; expected_journal_entry_id?: string }) => {
+  const handleConfirm = (opts?: Pick<ConfirmOpts, 'force' | 'expected_journal_entry_id' | 'storno_existing'>) => {
     // What the grid holds is what gets booked, each row's bag included.
     const linesPayload = preview ? editor.payload : undefined
     // Forward manual rate only when the preview indicated Riksbanken
@@ -381,6 +399,31 @@ export default function InvoiceMatchDialog({
 
         {transaction && (isCustomerInvoice || isSupplierInvoice) && (
           <div className="space-y-4">
+            {/* The row is already booked (accounted#58): matching it too would
+                book the payment twice. Only the row's own categorization can
+                be reversed here, and only by this explicit click. */}
+            {!targetBlocked && alreadyBooked && isSupplierInvoice && (
+              <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
+                <div className="flex items-start gap-2">
+                  <ExclamationTriangleIcon className="h-4 w-4 flex-shrink-0 mt-0.5 text-attn" />
+                  <div className="text-sm space-y-1">
+                    <p className="font-medium text-attn">{t('already_booked_title')}</p>
+                    <p className="text-muted-foreground">{alreadyBooked.message}</p>
+                  </div>
+                </div>
+                {alreadyBooked.voucher && alreadyBooked.stornoAllowed && (
+                  <Button
+                    variant="default"
+                    size="sm"
+                    onClick={() => handleConfirm({ storno_existing: true })}
+                    disabled={isConfirming || (editor.isEditing && !editor.validation.isValid)}
+                  >
+                    {t('already_booked_storno_and_match', { label: alreadyBooked.voucher })}
+                  </Button>
+                )}
+              </div>
+            )}
+
             {/* Duplicate-payment warning: customer-side only, only when a candidate exists */}
             {!targetBlocked && candidate && isCustomerInvoice && (
               <div className="rounded-lg border border-border bg-muted/30 p-4 space-y-3">
@@ -975,6 +1018,9 @@ export default function InvoiceMatchDialog({
             disabled={
               isConfirming ||
               isCheckingDuplicate ||
+              // A booked row: the plain match is refused again; the soft
+              // block's own button is the only way on.
+              (isSupplierInvoice && !!alreadyBooked) ||
               // Blocked target: the route rejects this unconditionally, so the
               // button has no reachable success path.
               targetBlocked ||

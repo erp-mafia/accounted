@@ -4475,6 +4475,8 @@
     "duplicate_body_same_date": "Det finns redan en bokförd verifikation {label} på samma belopp ({amount}) på samma datum. Har du redan bokfört denna betalning manuellt?",
     "duplicate_body_window": "Det finns redan en bokförd verifikation {label} på samma belopp ({amount}) inom ±7 dagar ({date}). Har du redan bokfört denna betalning manuellt?",
     "duplicate_body_unverified": "Det finns redan en bokförd verifikation {label} på {amount} nära i tid ({date}). Beloppet kunde inte verifieras eftersom växelkurs saknas. Har du redan bokfört denna betalning manuellt?",
+    "already_booked_title": "Transaktionen är redan bokförd",
+    "already_booked_storno_and_match": "Återför {label} och matcha",
     "link_to_existing": "Koppla till {label}",
     "create_new_anyway": "Skapa ny verifikation ändå",
     "transaction_label": "Transaktion",

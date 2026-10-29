@@ -605,14 +605,21 @@ const FLOWS: Flow[] = [
       const id = transactionIds![0]!
       await expectStatus(
         await v1MatchSupplierInvoiceRoute(
-          v1Request(seed, `/api/v1/companies/${seed.companyId}/transactions/${id}/match-supplier-invoice`, { supplier_invoice_id: invoiceIds![0] }),
+          // The row is booked by its own categorization: the match reverses
+          // it only when asked (storno_existing, accounted#58).
+          v1Request(seed, `/api/v1/companies/${seed.companyId}/transactions/${id}/match-supplier-invoice`, {
+            supplier_invoice_id: invoiceIds![0],
+            storno_existing: true,
+          }),
           params({ companyId: seed.companyId, id }),
         ),
         200,
       )
     },
     events: [
-      { ...STORNO, subject: { type: 'transaction', index: 0 }, link_basis: 'system_derived' },
+      // The caller chose this storno (storno_existing): user_created, as on
+      // the uncategorize doors, which an API key records as client_asserted.
+      { ...STORNO, subject: { type: 'transaction', index: 0 }, link_basis: 'client_asserted' },
       { ...PAID, occurred_on: '2026-06-22', subject: { type: 'supplier_invoice', index: 0 }, direction: 'out', link_basis: 'client_asserted' },
     ],
   },

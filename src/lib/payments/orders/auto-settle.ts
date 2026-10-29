@@ -130,6 +130,8 @@ export async function settleOrderWithDebit(
     }
 
     // The debit, as it is now: unbooked, unlinked, not ignored, an expense.
+    // A row booked only through voucher links passes this read; the booking
+    // below refuses it (MATCH_SI_TX_ALREADY_BOOKED, accounted#58).
     const { data: txData } = await supabase
       .from('transactions')
       .select('*')

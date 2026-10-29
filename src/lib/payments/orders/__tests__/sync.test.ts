@@ -381,7 +381,7 @@ describe('syncPaymentOrderStatuses: the debit sweep', () => {
     db.setTable('transactions', [
       { data: options.debits ?? [arcimDebit()] }, // unbooked debits of the order's shape
       { data: arcimDebit() }, // read again before booking
-      { data: null },
+      { data: [{ id: ARCIM.transactionId }] }, // the row claim (compare-and-set)
     ])
     db.setTable('supplier_invoices', [{ data: arcimInvoice() }, { data: [{ id: ARCIM.invoiceId }] }])
     db.setTable('supplier_invoice_payments', { data: null })

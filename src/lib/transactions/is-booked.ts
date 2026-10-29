@@ -148,12 +148,46 @@ export type TransactionBookableVerdict =
 export async function assertTransactionBookable(
   supabase: SupabaseClient,
   companyId: string,
-  tx: {
-    id: string
-    journal_entry_id: string | null
-    transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
-  },
+  tx: AnchoredTransaction,
 ): Promise<TransactionBookableVerdict> {
+  const anchors = await readPostedAnchors(supabase, companyId, tx)
+  if (anchors === 'read_error') {
+    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: null, via: 'read_error' }
+  }
+  if (anchors.pointer) {
+    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: anchors.pointer.id, via: 'pointer' }
+  }
+  if (anchors.linked[0]) {
+    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: anchors.linked[0].id, via: 'link' }
+  }
+  return { ok: true }
+}
+
+interface AnchoredTransaction {
+  id: string
+  journal_entry_id: string | null
+  transaction_voucher_links?: Array<{ journal_entry_id: string; role?: string | null }> | null
+}
+
+/** A posted verifikat that anchors a bank row, as the gates read it. */
+interface PostedAnchor {
+  id: string
+  source_type: string | null
+  source_id: string | null
+  voucher_series: string | null
+  voucher_number: number | null
+}
+
+/**
+ * The posted verifikat a bank row is anchored to: the pointer's, and every
+ * other one a 'bank_line' junction row names (in link order). 'read_error'
+ * when a read failed: the gates fail closed on it.
+ */
+async function readPostedAnchors(
+  supabase: SupabaseClient,
+  companyId: string,
+  tx: AnchoredTransaction,
+): Promise<{ pointer: PostedAnchor | null; linked: PostedAnchor[] } | 'read_error'> {
   let links = tx.transaction_voucher_links
   if (!Array.isArray(links)) {
     const { data, error } = await supabase
@@ -161,9 +195,7 @@ export async function assertTransactionBookable(
       .select('journal_entry_id, role')
       .eq('company_id', companyId)
       .eq('transaction_id', tx.id)
-    if (error) {
-      return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: null, via: 'read_error' }
-    }
+    if (error) return 'read_error'
     links = (data ?? []) as Array<{ journal_entry_id: string; role?: string | null }>
   }
 
@@ -171,30 +203,110 @@ export async function assertTransactionBookable(
     .filter((row) => (row.role ?? 'bank_line') === 'bank_line')
     .map((row) => row.journal_entry_id)
   const ids = [...new Set([tx.journal_entry_id, ...linkIds].filter((id): id is string => !!id))]
-  if (ids.length === 0) return { ok: true }
+  if (ids.length === 0) return { pointer: null, linked: [] }
 
   const { data: entries, error: entriesError } = await supabase
     .from('journal_entries')
-    .select('id, status')
+    .select('id, status, source_type, source_id, voucher_series, voucher_number')
     .eq('company_id', companyId)
     .in('id', ids)
-  if (entriesError) {
-    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: null, via: 'read_error' }
-  }
+  if (entriesError) return 'read_error'
 
-  const posted = new Set(
-    ((entries ?? []) as Array<{ id: string; status: string }>)
+  const posted = new Map(
+    ((entries ?? []) as Array<PostedAnchor & { status: string }>)
       .filter((entry) => entry.status === 'posted')
-      .map((entry) => entry.id),
+      .map((entry) => [entry.id, entry]),
   )
-  if (tx.journal_entry_id && posted.has(tx.journal_entry_id)) {
-    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: tx.journal_entry_id, via: 'pointer' }
+  const pointer = (tx.journal_entry_id && posted.get(tx.journal_entry_id)) || null
+  const linked = [...new Set(linkIds)]
+    .filter((id) => id !== tx.journal_entry_id)
+    .flatMap((id) => posted.get(id) ?? [])
+  return { pointer, linked }
+}
+
+/**
+ * What a door that books a NEW verifikat on a bank row may do with the row
+ * (decideBankRowRebooking):
+ *
+ *   - open: nothing posted anchors the row; book.
+ *   - replace: the row's own booking, which the caller asked to reverse:
+ *     storno `journalEntryId`, then book.
+ *   - refuse: the row is booked (or a read failed). `replaceable` says the
+ *     booking is the row's own, so the door may offer to reverse it.
+ */
+export type BankRowRebooking =
+  | { outcome: 'open' }
+  | { outcome: 'replace'; journalEntryId: string }
+  | {
+      outcome: 'refuse'
+      /** The pointer, a bank_line link, a reconciliation link on the pointer, or a failed read. */
+      via: 'pointer' | 'link' | 'reconciliation' | 'read_error'
+      /** The posted verifikat that books the row; null when a read failed. */
+      journalEntryId: string | null
+      /** Its voucher label ("A12"), null when unnumbered or unread. */
+      voucher: string | null
+      replaceable: boolean
+    }
+
+/**
+ * The gate a door that books a new verifikat on a bank row asks first: is
+ * the row already booked, and if so, may this request reverse that booking?
+ * Same read as assertTransactionBookable (the pointer and the bank_line links
+ * to a posted verifikat; a failed read refuses).
+ *
+ * Only the row's OWN booking can be reversed, and only when the caller asks
+ * (`replace`): the pointer names a posted verifikat booked from this row
+ * (source_type 'bank_transaction', source_id the row, which the categorize
+ * and book doors write), the row is not a reconciliation link
+ * (reconciliation_method set), and no bank_line link names another posted
+ * verifikat. Everything else always refuses. A link-only row (a bulk-book
+ * samlingsverifikat with N>1, a 1:N split) is booked by a verifikat that
+ * explains other rows too, and a reconciliation link points at an
+ * independent verifikat (an SIE import, a salary run, a hand booking) whose
+ * storno would be an over-broad rättelse (BFL 5 kap 5 §). A pointer with no
+ * method that names another source (a customer payment, an utlägg payout)
+ * is not the row's own booking either: its storno would leave that record
+ * settled without its verifikat.
+ */
+export async function decideBankRowRebooking(
+  supabase: SupabaseClient,
+  companyId: string,
+  tx: AnchoredTransaction & { reconciliation_method?: string | null },
+  opts: { replace: boolean },
+): Promise<BankRowRebooking> {
+  const anchors = await readPostedAnchors(supabase, companyId, tx)
+  if (anchors === 'read_error') {
+    return { outcome: 'refuse', via: 'read_error', journalEntryId: null, voucher: null, replaceable: false }
   }
-  const linked = linkIds.find((id) => posted.has(id))
-  if (linked) {
-    return { ok: false, code: 'TRANSACTION_ALREADY_CATEGORIZED', journalEntryId: linked, via: 'link' }
-  }
-  return { ok: true }
+  const { pointer, linked } = anchors
+  const refuse = (via: 'pointer' | 'link' | 'reconciliation', entry: PostedAnchor, replaceable = false): BankRowRebooking => ({
+    outcome: 'refuse',
+    via,
+    journalEntryId: entry.id,
+    voucher: anchorVoucherLabel(entry),
+    replaceable,
+  })
+  if (!pointer) return linked[0] ? refuse('link', linked[0]) : { outcome: 'open' }
+  if (tx.reconciliation_method) return refuse('reconciliation', pointer)
+  const own = isBookedFromRow(pointer, tx.id) && linked.length === 0
+  if (own && opts.replace) return { outcome: 'replace', journalEntryId: pointer.id }
+  return refuse('pointer', pointer, own)
+}
+
+/**
+ * The verifikat was booked from this bank row (the categorize and book
+ * doors write source_type 'bank_transaction' with the row as source_id):
+ * the row's own booking, not a link to a verifikat that existed before.
+ */
+export function isBookedFromRow(
+  entry: { source_type?: string | null; source_id?: string | null },
+  transactionId: string,
+): boolean {
+  return entry.source_type === 'bank_transaction' && entry.source_id === transactionId
+}
+
+function anchorVoucherLabel(entry: PostedAnchor): string | null {
+  return entry.voucher_number ? formatVoucher(entry) : null
 }
 
 /**

@@ -3,17 +3,27 @@
  * settlement behind the dashboard match door, as one function.
  *
  * The caller has the transaction and the invoice and has refused what it
- * refuses (a non-expense row, a linked row, a paid invoice); this function
- * does the rest in the order the route always did it: the payment plan
- * (planSupplierBankMatch), the open-period gate, the payment verifikat
- * through the engine, the invoice's ledger update behind a status CAS, the
- * supplier_invoice_payments row (which settles a bank payment order through
+ * refuses (a non-expense row, a row linked to a supplier invoice, a paid
+ * invoice); this function does the rest: the booked-row gate, the payment
+ * plan (planSupplierBankMatch), the open-period gate, the payment verifikat
+ * through the engine, the bank row claimed behind a compare-and-set, the
+ * invoice's ledger update behind a status CAS, the supplier_invoice_payments
+ * row (which settles a bank payment order through
  * settle_payment_order_on_supplier_payment), the retired suggestions, the
- * transaction link, the document anchoring, the match log and the events.
+ * document anchoring, the match log and the events.
  *
- * Two callers: a person confirming a suggestion (the match route, action
- * 'matched'), and the debit of a bank payment order the owner already
- * BankID-signed (lib/payments/orders/auto-settle.ts, action 'auto_matched').
+ * A bank row that is already booked is refused here, for every caller
+ * (accounted#58): the pointer or a bank_line link names a posted verifikat,
+ * or the row is a reconciliation link (decideBankRowRebooking). Matching it
+ * used to post a second payment verifikat and leave the first one posted
+ * with no row, so the bank account was credited twice. The one way past is
+ * the row's own categorization with `stornoExisting`, which a person
+ * confirms: that verifikat is reversed (storno), then the payment books.
+ *
+ * Callers: a person confirming a suggestion (the dashboard match route and
+ * its v1 twin, action 'matched'), the Inkorg's register-and-settle, and the
+ * debit of a bank payment order the owner already BankID-signed
+ * (lib/payments/orders/auto-settle.ts, action 'auto_matched').
  *
  * A deferring company's unbooked invoice (defer_invoice_booking) is booked
  * first by the Bokför step, once every check has run, and the payment then
@@ -36,6 +46,10 @@ import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
 import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
 import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
+import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
+import { bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
+import { decideBankRowRebooking } from '@/lib/transactions/is-booked'
+import { todayIsoStockholm } from '@/lib/dates/iso'
 import { planSupplierBankMatch, type SupplierBankMatchPlan } from '@/lib/invoices/apply-supplier-payment'
 import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
 import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
@@ -44,7 +58,7 @@ import {
   type SupplierPaymentPostingContext,
 } from '@/lib/bookkeeping/supplier-invoice-business-events'
 import { postingPort } from '@/lib/posting/port'
-import { isBookkeepingError } from '@/lib/bookkeeping/errors'
+import { AccountsNotInChartError, isBookkeepingError } from '@/lib/bookkeeping/errors'
 import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
 import { logMatchEvent, type MatchAction } from '@/lib/invoices/match-log'
 import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
@@ -68,7 +82,7 @@ import { checkAccountingMethod } from '@/lib/company/accounting-method'
  */
 export type SupplierBankMatchTransactionRow = Pick<
   Transaction,
-  'id' | 'date' | 'amount' | 'currency' | 'amount_sek' | 'cash_account_id' | 'document_id'
+  'id' | 'date' | 'amount' | 'currency' | 'amount_sek' | 'cash_account_id' | 'document_id' | 'journal_entry_id'
 > &
   Partial<Transaction>
 
@@ -96,6 +110,15 @@ export interface BookSupplierBankMatchArgs {
    * rule for the debit of a signed payment order.
    */
   linkBasis: LinkBasisInput
+  /**
+   * A person confirmed reversing the row's own categorization verifikat
+   * (the match dialog's "Återför och matcha", v1's storno_existing): it is
+   * reversed (storno) and the payment books in its place. Unset, a booked
+   * row is refused with MATCH_SI_TX_ALREADY_BOOKED, which says in
+   * details.storno_allowed whether this flag would let it through. Never
+   * reverses a samlingsverifikat, a split or a reconciliation link.
+   */
+  stornoExisting?: boolean
 }
 
 export type BookSupplierBankMatchResult =
@@ -126,6 +149,24 @@ export async function bookSupplierBankMatch(
   const transactionId = transaction.id
   const supplierInvoiceId = invoice.id
 
+  // Already booked? One answer for every caller, before anything else runs.
+  const rebooking = await decideBankRowRebooking(supabase, companyId, transaction, {
+    replace: args.stornoExisting === true,
+  })
+  if (rebooking.outcome === 'refuse') {
+    return {
+      ok: false,
+      code: 'MATCH_SI_TX_ALREADY_BOOKED',
+      details: {
+        journal_entry_id: rebooking.journalEntryId,
+        voucher: rebooking.voucher,
+        via: rebooking.via,
+        storno_allowed: rebooking.replaceable,
+      },
+    }
+  }
+  const replaced = rebooking.outcome === 'replace' ? rebooking : null
+
   // Fail closed (accounted#58): planned as faktureringsmetoden, a
   // kontantmetod invoice that was never booked would only clear 2440 and its
   // cost and ingående moms would never be booked.
@@ -155,6 +196,16 @@ export async function bookSupplierBankMatch(
     transaction.cash_account_id,
     log,
   )
+
+  // A storno cannot be taken back, so every refusal the payment can still
+  // meet runs before it: the account the generated rows credit must be in the
+  // chart (custom lines name their own accounts; the engine checks those).
+  if (replaced && !customLines) {
+    const missingAccounts = await findUnresolvableAccounts(supabase, companyId, [paymentAccount])
+    if (missingAccounts.length > 0) {
+      return { ok: false, code: 'ACCOUNTS_NOT_IN_CHART', error: new AccountsNotInChartError(missingAccounts) }
+    }
+  }
 
   // One payment plan for every door that matches a bank row to a supplier
   // invoice (the dashboard POST, its preview, the v1 POST and the bank
@@ -212,6 +263,35 @@ export async function bookSupplierBankMatch(
   if (!registrationPlan.ok) return registrationPlan
   const registration = await bookRegistrationBeforeSettlement(opCtx, registrationPlan)
   if (!registration.ok) return registration
+
+  // The row's own categorization, which the person asked to replace: reversed
+  // last, once nothing above can refuse. The engine releases the row (its
+  // pointer, is_business and category) with the storno.
+  if (replaced) {
+    try {
+      // Through the posting port: while POSTING_EVENTS is on, the storno
+      // records ledger.storno of the bank line, user_created as on the
+      // uncategorize door (the person chose this storno), dated the day.
+      await postingPort.reverseJournalEntry({
+        supabase,
+        companyId,
+        userId,
+        entryId: replaced.journalEntryId,
+        event: () => bankLineStornoBusinessEvent(transactionId, todayIsoStockholm(), linkBasisColumns('user_created')),
+        role: 'reversal',
+      })
+    } catch (err) {
+      log.error('supplier bank match: storno of the row\'s own booking failed', err as Error, {
+        journalEntryId: replaced.journalEntryId,
+      })
+      return { ok: false, code: 'MATCH_SI_JE_FAILED', error: err }
+    }
+    await logMatchEvent(supabase, userId, transactionId, 'storno_conflict_resolved', {
+      supplierInvoiceId,
+      previousState: { journal_entry_id: replaced.journalEntryId },
+      newState: { journal_entry_id: null },
+    })
+  }
 
   let journalEntryId: string | null = null
   // The door's side of the purchase.paid event, read only while the port is on.
@@ -283,6 +363,99 @@ export async function bookSupplierBankMatch(
   if (!journalEntryId) {
     return { ok: false, code: 'MATCH_SI_JE_FAILED' }
   }
+  const paymentEntryId = journalEntryId
+
+  // Claim the bank row right after its payment verifikat posts, as a
+  // compare-and-set on what the gate read: a concurrent booking or match of
+  // the row (a categorization, the payment order's own debit, a second tab)
+  // makes this a no-op, and the verifikat just posted is cancelled instead
+  // of standing next to the other booking. The pointer the gate let through
+  // is null, a verifikat no longer posted, or the categorization reversed
+  // above, which the storno released to null.
+  const readPointer = transaction.journal_entry_id ?? null
+  // Two literal compare-and-sets, not one interpolated .or(): the pointer
+  // the gate read first, then none. Each is atomic, and the second only runs
+  // when the first matched nothing, so the pair claims exactly what
+  // "null or the pointer read" claims, and the phantom-column guard can
+  // check both.
+  const claimRow = (pointer: string | null) => {
+    const claim = supabase
+      .from('transactions')
+      .update({
+        supplier_invoice_id: supplierInvoiceId,
+        // Clear the suggestion now that it is a confirmed link, mirroring the
+        // customer-invoice route. Leaving it set kept a pointer at an invoice
+        // this very request marks paid, i.e. the stale-pointer state every
+        // read path now has to defend against.
+        potential_supplier_invoice_id: null,
+        journal_entry_id: paymentEntryId,
+        is_business: true,
+        // The payment is the row's booking now, not a reconciliation link. A
+        // literal so the phantom-column scanner can verify the column set.
+        reconciliation_method: null,
+        ...linkBasisColumnsFor(args.linkBasis),
+      })
+      .eq('id', transactionId)
+      .eq('company_id', companyId)
+      .is('supplier_invoice_id', null)
+    return (pointer ? claim.eq('journal_entry_id', pointer) : claim.is('journal_entry_id', null)).select('id')
+  }
+  let claimed = await claimRow(readPointer)
+  if (readPointer && !claimed.error && !claimed.data?.length) claimed = await claimRow(null)
+  const { data: claimedRows, error: claimError } = claimed
+
+  if (claimError || !claimedRows || claimedRows.length === 0) {
+    await cancelOrphanedPaymentEntry(
+      supabase, companyId, userId, paymentEntryId,
+      'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
+    )
+    if (claimError) {
+      log.error('failed to link transaction to supplier invoice', claimError)
+      return { ok: false, code: 'MATCH_SI_LINK_TX_FAILED' }
+    }
+    return {
+      ok: false,
+      code: 'MATCH_SI_TX_ALREADY_BOOKED',
+      details: { journal_entry_id: null, voucher: null, via: 'concurrent', storno_allowed: false },
+    }
+  }
+
+  // Undo what this call wrote after the payment verifikat, newest first, and
+  // cancel the verifikat: a match that stops here must leave neither a
+  // payment verifikat with no payment nor an invoice settled by a cancelled
+  // one. Each write is a compare-and-set on this call's own verifikat, so
+  // nothing a concurrent request wrote is touched. Never throws.
+  const unwind = async (explanation: string, opts: { invoice: boolean }) => {
+    if (opts.invoice) {
+      const { error } = await supabase
+        .from('supplier_invoices')
+        .update({
+          status: invoice.status,
+          remaining_amount: invoice.remaining_amount,
+          paid_amount: invoice.paid_amount,
+          paid_at: invoice.paid_at ?? null,
+          payment_journal_entry_id: invoice.payment_journal_entry_id ?? null,
+          transaction_id: invoice.transaction_id ?? null,
+        })
+        .eq('id', supplierInvoiceId)
+        .eq('company_id', companyId)
+        .eq('payment_journal_entry_id', paymentEntryId)
+      if (error) log.error('supplier bank match: invoice ledger update not undone', error, { journalEntryId: paymentEntryId })
+    }
+    const { error: releaseError } = await supabase
+      .from('transactions')
+      .update({
+        supplier_invoice_id: null,
+        potential_supplier_invoice_id: transaction.potential_supplier_invoice_id ?? null,
+        journal_entry_id: null,
+        is_business: replaced ? null : (transaction.is_business ?? null),
+      })
+      .eq('id', transactionId)
+      .eq('company_id', companyId)
+      .eq('journal_entry_id', paymentEntryId)
+    if (releaseError) log.error('supplier bank match: bank row not released', releaseError, { journalEntryId: paymentEntryId })
+    await cancelOrphanedPaymentEntry(supabase, companyId, userId, paymentEntryId, explanation)
+  }
 
   // Ledger update from the plan computed up front. An öre-absorbed settlement
   // reports remaining 0 / status paid even though the bank paid a sub-krona
@@ -297,26 +470,26 @@ export async function bookSupplierBankMatch(
       remaining_amount: newRemaining,
       paid_amount: newPaidAmount,
       paid_at: paidAt,
-      payment_journal_entry_id: journalEntryId,
+      payment_journal_entry_id: paymentEntryId,
       transaction_id: transactionId,
     })
     .eq('id', supplierInvoiceId)
+    .eq('company_id', companyId)
     .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
     .select('id')
 
   if (updateInvError) {
     log.error('failed to update supplier invoice', updateInvError)
+    await unwind('Automatiskt makulerad: matchningen kunde inte sparas', { invoice: false })
     return { ok: false, code: 'MATCH_SI_INVOICE_UPDATE_FAILED', error: updateInvError }
   }
 
   if (!updatedRows || updatedRows.length === 0) {
     // CAS guard: the invoice was settled by a concurrent request between
     // our read and write. The payment voucher we just posted belongs to no
-    // payment: cancel it and document the gap (mirrors mark-paid).
-    await cancelOrphanedPaymentEntry(
-      supabase, companyId, userId, journalEntryId,
-      'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-    )
+    // payment: release the row, cancel the voucher and document the gap
+    // (mirrors mark-paid).
+    await unwind('Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd', { invoice: false })
     return { ok: false, code: 'MATCH_SI_NOT_OPEN' }
   }
 
@@ -332,12 +505,16 @@ export async function bookSupplierBankMatch(
       // linked bank transaction and the payment account's journal line.
       amount: settledAmount,
       currency: invoice.currency,
-      journal_entry_id: journalEntryId,
+      journal_entry_id: paymentEntryId,
       transaction_id: transactionId,
       ...linkBasisColumnsFor(args.linkBasis),
     })
 
   if (paymentInsertError) {
+    // 23505: this row already pays this invoice. Either way the payment is
+    // not recorded, so nothing this call wrote may stay: it used to leave
+    // the payment verifikat posted and the invoice settled by it.
+    await unwind('Automatiskt makulerad: betalningen kunde inte registreras på leverantörsfakturan', { invoice: true })
     if (paymentInsertError.code === '23505') {
       return { ok: false, code: 'MATCH_SI_DUPLICATE_PAYMENT' }
     }
@@ -347,7 +524,7 @@ export async function bookSupplierBankMatch(
 
   // The invoice is now settled, so every OTHER transaction still carrying a
   // suggestion pointer at it is dead: retire them (issue #1259). This
-  // request's own row is cleared by the update just below.
+  // request's own row was cleared by the claim above.
   if (isFullyPaid) {
     await clearSettledInvoiceSuggestions(
       supabase,
@@ -356,26 +533,6 @@ export async function bookSupplierBankMatch(
       supplierInvoiceId,
       { exceptTransactionId: transactionId },
     )
-  }
-
-  const { error: updateTxError } = await supabase
-    .from('transactions')
-    .update({
-      supplier_invoice_id: supplierInvoiceId,
-      // Clear the suggestion now that it is a confirmed link, mirroring the
-      // customer-invoice route. Leaving it set kept a pointer at an invoice
-      // this very request just marked paid, i.e. the stale-pointer state
-      // every read path now has to defend against.
-      potential_supplier_invoice_id: null,
-      journal_entry_id: journalEntryId,
-      is_business: true,
-      ...linkBasisColumnsFor(args.linkBasis),
-    })
-    .eq('id', transactionId)
-
-  if (updateTxError) {
-    log.error('failed to link transaction to supplier invoice', updateTxError)
-    return { ok: false, code: 'MATCH_SI_LINK_TX_FAILED' }
   }
 
   // Propagate a document pinned to the transaction (via /attach-document or

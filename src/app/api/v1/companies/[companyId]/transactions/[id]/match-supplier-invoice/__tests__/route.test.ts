@@ -385,8 +385,8 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
 
     expect(response.status).toBe(500)
     const body = await response.json()
-    expect(body.error.code).toBe('MATCH_SI_RECORD_PAYMENT_FAILED')
-    expect(body.error.details).toMatchObject({ reason: 'no_journal_entry_created' })
+    // The dashboard door's code since both book through bookSupplierBankMatch.
+    expect(body.error.code).toBe('MATCH_SI_JE_FAILED')
     expect(calls.some((c) => c.table === 'supplier_invoices' && c.method === 'update')).toBe(false)
     expect(calls.some((c) => c.table === 'supplier_invoice_payments' && c.method === 'insert')).toBe(false)
   })
@@ -586,10 +586,17 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     createsAccrualSchedules: false,
   }
 
-  async function match(transaction: Record<string, unknown> = {}) {
+  // The row's own categorization, booked from it by the categorize door.
+  const categorization = {
+    id: 'je-categorised', status: 'posted', source_type: 'bank_transaction', source_id: TX_ID,
+    voucher_series: 'A', voucher_number: 5,
+  }
+
+  async function match(transaction: Record<string, unknown> = {}, body: Record<string, unknown> = {}) {
     const { supabase, calls } = createTableMockSupabase({
       company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
       transactions: { data: { ...TRANSACTION, ...transaction }, error: null },
+      journal_entries: { data: [categorization], error: null },
       supplier_invoices: [
         { data: REGISTERED_INVOICE, error: null },
         { data: [{ id: SI_ID }], error: null },
@@ -598,14 +605,14 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     })
     mockServiceClient.mockReturnValue(supabase)
     const response = await matchSupplierInvoice(
-      makeRequest(url, { supplier_invoice_id: SI_ID }),
+      makeRequest(url, { supplier_invoice_id: SI_ID, ...body }),
       detailParams(COMPANY_ID, TX_ID),
     )
-    const body = await response.json()
+    const json = await response.json()
     const writes = calls.filter(
       (c) => c.table !== 'idempotency_keys' && (c.method === 'update' || c.method === 'insert'),
     )
-    return { response, body, writes }
+    return { response, body: json, writes }
   }
 
   it('books the registration first, then the payment, and names it in the response', async () => {
@@ -639,7 +646,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
       warnings: [],
     })
 
-    const { response } = await match({ journal_entry_id: 'je-categorised' })
+    const { response } = await match({ journal_entry_id: 'je-categorised' }, { storno_existing: true })
 
     expect(response.status).toBe(200)
     const bookOrder = vi.mocked(bookRegistrationBeforeSettlement).mock.invocationCallOrder[0]
@@ -653,7 +660,7 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
       details: { invoice_date: '2026-03-02', registration_first: true, supplier_invoice_id: SI_ID },
     })
 
-    const { response, body, writes } = await match({ journal_entry_id: 'je-categorised' })
+    const { response, body, writes } = await match({ journal_entry_id: 'je-categorised' }, { storno_existing: true })
 
     expect(response.status).toBe(400)
     expect(body.error.code).toBe('PERIOD_LOCKED')
@@ -662,6 +669,44 @@ describe('POST /api/v1/companies/:companyId/transactions/:id/match-supplier-invo
     expect(mockedReverseEntry).not.toHaveBeenCalled()
     expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
     expect(writes).toEqual([])
+  })
+
+  it('refuses a categorized row without storno_existing, before the registration: 409, nothing booked or written', async () => {
+    const { response, body, writes } = await match({ journal_entry_id: 'je-categorised' })
+
+    expect(response.status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_TX_ALREADY_BOOKED')
+    expect(body.error.details).toEqual({
+      journal_entry_id: 'je-categorised',
+      voucher: 'A5',
+      via: 'pointer',
+      storno_allowed: true,
+    })
+    expect(body.error.message_en).toContain('A5')
+    expect(body.error.recovery_hint).toContain('storno_existing')
+    expect(vi.mocked(planRegistrationBeforeSettlement)).not.toHaveBeenCalled()
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(mockCreatePaymentEntry).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+  })
+
+  it('refuses a reconciliation-linked row even with storno_existing: it is never re-pointed', async () => {
+    const { response, body, writes } = await match(
+      { journal_entry_id: 'je-categorised', reconciliation_method: 'manual' },
+      { storno_existing: true },
+    )
+
+    expect(response.status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_TX_ALREADY_BOOKED')
+    expect(body.error.details).toMatchObject({ via: 'reconciliation', storno_allowed: false })
+    expect(mockedReverseEntry).not.toHaveBeenCalled()
+    expect(writes).toEqual([])
+  })
+
+  it('rejects a storno_existing that is not a boolean with 400', async () => {
+    const { response, body } = await match({}, { storno_existing: 'yes' })
+    expect(response.status).toBe(400)
+    expect(body.error.code).toBe('VALIDATION_ERROR')
   })
 
   it('an invoice that needs nothing booked first matches as before: registration_journal_entry_id is null', async () => {

@@ -213,7 +213,7 @@
     }
   },
   {
-    "name": "a categorized row: its verifikat is reversed before the payment is booked",
+    "name": "a categorized row with storno_existing: its verifikat is reversed before the payment is booked",
     "calls": [
       [
         4,
@@ -270,52 +270,14 @@
     }
   },
   {
-    "name": "a reconciliation link is no conflicting booking: nothing is reversed",
-    "calls": [
-      [
-        4,
-        "<supabase>",
-        "00000000-0000-4000-8000-00000000c001",
-        "00000000-0000-4000-8000-00000000a001",
-        {
-          "fiscal_period_id": "00000000-0000-4000-8000-00000000f001",
-          "entry_date": "2026-10-03",
-          "description": "Utbetalning leverantörsfaktura F-7005, Kontorsbolaget AB (ankomstnr 145)",
-          "source_type": "supplier_invoice_paid",
-          "source_id": "00000000-0000-4000-8000-000000000006",
-          "bank_booking_context": [
-            {
-              "transaction_id": "00000000-0000-4000-8000-0000000a0006",
-              "cash_account_id": "00000000-0000-4000-8000-00000000ca01",
-              "settlement_account": "1930",
-              "date": "2026-10-03",
-              "amount": -1500,
-              "currency": "SEK"
-            }
-          ],
-          "lines": [
-            {
-              "account_number": "2440",
-              "debit_amount": 1500,
-              "credit_amount": 0,
-              "line_description": "Kvittning leverantörsskuld"
-            },
-            {
-              "account_number": "1930",
-              "debit_amount": 0,
-              "credit_amount": 1500,
-              "line_description": "Utbetalning från bank"
-            }
-          ]
-        }
-      ]
-    ],
+    "name": "a reconciliation link is refused, even with storno_existing: nothing is reversed or booked",
+    "calls": [],
     "reversals": [],
     "cancels": [],
     "outcome": {
-      "status": 200,
-      "journal_entry_id": "je-5",
-      "error": null
+      "status": 409,
+      "journal_entry_id": null,
+      "error": "MATCH_SI_TX_ALREADY_BOOKED"
     }
   },
   {

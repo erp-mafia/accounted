@@ -254,7 +254,9 @@ function supabaseFor(s: Scenario, opts: RunOptions) {
     company_settings: { data: { accounting_method: s.accountingMethod } },
     supplier_invoices: { data: s.loseRace ? [] : [{ id: s.invoice.id }] },
     supplier_invoice_payments: { data: null },
-    transactions: { data: null },
+    // The row claim's compare-and-set takes the row (the booked-row gate's
+    // links read finds none: transaction_voucher_links answers nothing).
+    transactions: { data: [{ id: 'claimed' }] },
     document_attachments: { data: null },
     chart_of_accounts: { data: [] },
   })
@@ -279,6 +281,7 @@ async function runScenarios(opts: RunOptions = {}): Promise<Run[]> {
         amount_sek: s.row.amount_sek ?? null,
         cash_account_id: CASH_ACCOUNT,
         document_id: s.row.document_id ?? null,
+        journal_entry_id: null,
       },
       invoice: s.invoice,
       userId: USER,

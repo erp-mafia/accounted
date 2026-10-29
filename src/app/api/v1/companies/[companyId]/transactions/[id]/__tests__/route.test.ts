@@ -1155,42 +1155,42 @@ describe('POST :id/match-supplier-invoice', () => {
     })
 
     it('returns 400 ACCOUNTS_NOT_IN_CHART when the linked cash account is deactivated in the kontoplan', async () => {
-      mockServiceClient.mockReturnValue(
-        createTableMockSupabase({
-          company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
-          transactions: {
-            data: {
-              id: TX_ID,
-              amount: -5000,
-              date: '2026-05-12',
-              currency: 'SEK',
-              supplier_invoice_id: null,
-              journal_entry_id: null,
-              cash_account_id: 'ca-1940',
-            },
-            error: null,
-          },
-          supplier_invoices: {
-            data: {
-              id: SI_ID,
-              status: 'approved',
-              total: 5000,
-              paid_amount: 0,
-              remaining_amount: 5000,
-              currency: 'SEK',
-              exchange_rate: null,
-              supplier: { name: 'Acme', supplier_type: 'swedish_business' },
-              items: [],
-            },
-            error: null,
-          },
-          company_settings: { data: { accounting_method: 'accrual' }, error: null },
-          cash_accounts: { data: { ledger_account: '1940' }, error: null },
-        }).supabase,
-      )
       // Simulate the 1940 account existing in cash_accounts but having been
-      // deactivated in chart_of_accounts since.
-      findMissingAccountsMock.mockResolvedValueOnce(['1940'])
+      // deactivated in chart_of_accounts since: the engine refuses the
+      // payment verifikat (the booking is bookSupplierBankMatch's, which
+      // checks the chart up front only before reversing a categorization).
+      const { AccountsNotInChartError } = await import('@/lib/bookkeeping/errors')
+      createSupplierInvPmtJE.mockRejectedValueOnce(new AccountsNotInChartError(['1940']))
+      const supa = createTableMockSupabase({
+        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        transactions: {
+          data: {
+            id: TX_ID,
+            amount: -5000,
+            date: '2026-05-12',
+            currency: 'SEK',
+            supplier_invoice_id: null,
+            journal_entry_id: null,
+            cash_account_id: 'ca-1940',
+          },
+        },
+        supplier_invoices: {
+          data: {
+            id: SI_ID,
+            status: 'approved',
+            total: 5000,
+            paid_amount: 0,
+            remaining_amount: 5000,
+            currency: 'SEK',
+            exchange_rate: null,
+            supplier: { name: 'Acme', supplier_type: 'swedish_business' },
+            items: [],
+          },
+        },
+        company_settings: { data: { accounting_method: 'accrual' } },
+        cash_accounts: { data: { ledger_account: '1940' } },
+      })
+      mockServiceClient.mockReturnValue(supa.supabase)
 
       const res = await matchSIPOST(
         makeRequest(
@@ -1203,9 +1203,10 @@ describe('POST :id/match-supplier-invoice', () => {
       const body = await res.json()
       expect(body.error.code).toBe('ACCOUNTS_NOT_IN_CHART')
       expect(body.error.details.account_numbers).toEqual(['1940'])
-      // Engine and invoice/transaction updates must NOT run: the match stays
-      // retryable rather than posting a payment against a dead account.
-      expect(createSupplierInvPmtJE).not.toHaveBeenCalled()
+      // No invoice or transaction update: the match stays retryable rather
+      // than settling the invoice against a dead account.
+      expect(updatePayloads(supa, 'supplier_invoices')).toEqual([])
+      expect(updatePayloads(supa, 'transactions')).toEqual([])
     })
   })
 
@@ -1442,8 +1443,10 @@ describe('POST :id/match-supplier-invoice', () => {
     it('cash-method branch: rejects with ACCOUNTS_NOT_IN_CHART when the resolved account is deactivated', async () => {
       // The chart pre-validation guard must cover the branches that now
       // consume paymentAccount, not only the pure-SEK accrual path.
-      mockServiceClient.mockReturnValue(createTableMockSupabase(cashMethodTables('ca-1940')).supabase)
-      findMissingAccountsMock.mockResolvedValueOnce(['1940'])
+      const supa = createTableMockSupabase(cashMethodTables('ca-1940'))
+      mockServiceClient.mockReturnValue(supa.supabase)
+      const { AccountsNotInChartError } = await import('@/lib/bookkeeping/errors')
+      createSupplierInvCashJE.mockRejectedValueOnce(new AccountsNotInChartError(['1940']))
       const res = await matchSIPOST(
         makeRequest(
           `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
@@ -1453,7 +1456,7 @@ describe('POST :id/match-supplier-invoice', () => {
       )
       expect(res.status).toBe(400)
       expect((await res.json()).error.code).toBe('ACCOUNTS_NOT_IN_CHART')
-      expect(createSupplierInvCashJE).not.toHaveBeenCalled()
+      expect(updatePayloads(supa, 'supplier_invoices')).toEqual([])
     })
 
     it('does NOT storno an existing conflicting JE when chart validation rejects the request', async () => {
@@ -1464,12 +1467,18 @@ describe('POST :id/match-supplier-invoice', () => {
       // effect on a failed request.
       const tables = cashMethodTables('ca-1940')
       ;(tables.transactions.data as { journal_entry_id: string | null }).journal_entry_id = JE_ID
-      mockServiceClient.mockReturnValue(createTableMockSupabase(tables).supabase)
+      // The row's own categorization, which storno_existing asks to reverse.
+      mockServiceClient.mockReturnValue(createTableMockSupabase({
+        ...tables,
+        journal_entries: {
+          data: [{ id: JE_ID, status: 'posted', source_type: 'bank_transaction', source_id: TX_ID, voucher_series: 'A', voucher_number: 9 }],
+        },
+      }).supabase)
       findMissingAccountsMock.mockResolvedValueOnce(['1940'])
       const res = await matchSIPOST(
         makeRequest(
           `https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-supplier-invoice`,
-          { supplier_invoice_id: SI_ID },
+          { supplier_invoice_id: SI_ID, storno_existing: true },
         ),
         txParams(TX_ID),
       )

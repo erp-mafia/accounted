@@ -2,14 +2,14 @@
  * POST /api/v1/companies/{companyId}/transactions/{id}/match-supplier-invoice
  *
  * Match a negative (expense) bank transaction to an open supplier invoice.
- * Plans and books through the same functions as the dashboard route
- * (planSupplierBankMatch, createSupplierBankMatchEntry), so the same payment
- * gives the same verifikat and ledger update on both doors; same
- * optimistic-lock interlock. A deferring company's unbooked invoice
- * (defer_invoice_booking) is booked first by the Bokför step
+ * Books through the dashboard route's own function (bookSupplierBankMatch),
+ * so the same payment gives the same verifikat and ledger update on both
+ * doors, and a bank row that is already booked is refused on both
+ * (MATCH_SI_TX_ALREADY_BOOKED) unless the caller asks, with storno_existing,
+ * to reverse the row's own categorization. A deferring company's unbooked
+ * invoice (defer_invoice_booking) is booked first by the Bokför step
  * (lib/supplier-invoices/registration-first.ts), as on the dashboard door.
  */
-import { bankBookingContext } from '@/lib/bookkeeping/bank-booking-context'
 import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
@@ -17,37 +17,8 @@ import { withApiV1 } from '@/lib/api/v1/with-api-v1'
 import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { readV1JsonBody } from '@/lib/api/v1/body'
 import { MatchSupplierInvoiceSchema } from '@/lib/api/schemas'
-import { cancelOrphanedPaymentEntry } from '@/lib/bookkeeping/cancel-orphaned-entry'
-import { createSupplierBankMatchEntry } from '@/lib/bookkeeping/supplier-bank-match-entry'
-import { resolveSettlementAccount } from '@/lib/bookkeeping/settlement-account'
-import { findFiscalPeriod } from '@/lib/bookkeeping/engine'
-import { buildSupplierDescription, supplierInvoiceReference } from '@/lib/bookkeeping/supplier-invoice-description'
-import { bankLineStornoBusinessEvent } from '@/lib/bookkeeping/bank-line-business-events'
-import {
-  supplierInvoicePaymentBusinessEvent,
-  type SupplierPaymentPostingContext,
-} from '@/lib/bookkeeping/supplier-invoice-business-events'
-import { todayIsoStockholm } from '@/lib/dates/iso'
-import { postingPort } from '@/lib/posting/port'
-import { AccountsNotInChartError } from '@/lib/bookkeeping/errors'
-import { findUnresolvableAccounts } from '@/lib/bookkeeping/account-validation'
-import { anchorSupplierInvoiceDocument } from '@/lib/core/documents/supplier-invoice-underlag'
-import { getErrorMessage } from '@/lib/errors/get-error-message'
-import { logMatchEvent } from '@/lib/invoices/match-log'
-import { planSupplierBankMatch } from '@/lib/invoices/apply-supplier-payment'
-import { clearSettledInvoiceSuggestions } from '@/lib/invoices/clear-settled-invoice-suggestions'
-import { paidAtFromDate } from '@/lib/invoices/paid-at'
-import { eventBus } from '@/lib/events/bus'
-import { emitSupplierInvoicePaidIfSettled } from '@/lib/invoices/paid-events'
-import type { CreateJournalEntryInput, SupplierInvoice, Transaction } from '@/types'
-import { MATCHABLE_SUPPLIER_INVOICE_STATUSES } from '@/lib/bookkeeping/matchable-statuses'
-import { linkBasisColumns } from '@/lib/links/stamp'
-import {
-  bookRegistrationBeforeSettlement,
-  planRegistrationBeforeSettlement,
-  type RegistrationFirstRefusal,
-} from '@/lib/supplier-invoices/registration-first'
-import { requireAccountingMethod } from '@/lib/company/accounting-method'
+import { bookSupplierBankMatch } from '@/lib/invoices/book-supplier-bank-match'
+import type { SupplierInvoice } from '@/types'
 
 const MatchSIResponse = z.object({
   success: z.boolean(),
@@ -68,15 +39,16 @@ registerEndpoint({
   description:
     'Confirms a supplier invoice payment match. Creates the payment journal entry (accrual: 2440 debit, credit on the transaction\'s own settlement account, 1930 when unlinked; cash-method: collapsed registration+payment), updates supplier_invoices, inserts a supplier_invoice_payments row, and links the transaction. Handles FX differences for cross-currency payments (7960 gain / 3960 loss), a bank fee paid on top of the invoice (6570) and öresavrundning on a whole-krona SEK payment (3740). Same payment plan and verifikat as the dashboard match.',
   useWhen:
-    'You have a bank payment and a known open supplier invoice. The transaction must be negative (expense) and unlinked.',
+    'You have a bank payment and a known open supplier invoice. The transaction must be negative (expense) and not yet booked.',
   doNotUseFor:
     'Categorizing a direct supplier expense without an invoice: use `:categorize`. Matching to a customer invoice: use `:match-invoice`. Bulk auto-match: `POST /reconciliation/bank/run`.',
   pitfalls: [
     'Cash-method companies can settle a foreign invoice in full (booked at the payment-date rate); only a PARTIAL cash-method payment across currencies is rejected (MATCH_SI_CASH_FX_UNSUPPORTED): pay in full, switch to accrual, or book manually.',
     'Öresavrundning (both accounting methods): a SEK bank row less than 1 kr off the remaining balance of a SEK invoice (a whole-krona payment of an öre total) settles it in full. The payment account is credited with the bank amount and the residual is booked on 3740 (no VAT); paid_amount records the debt settled, not the cash moved. A shortfall of 1 kr or more is a partial payment (on a never-booked cash-method invoice it returns SI_CASH_PARTIAL_UNSUPPORTED).',
     'Bank fee on top: a same-currency row that pays more than the remaining balance settles the invoice in full; 2440 is cleared by the remaining balance only and the excess (up to 5 000 kr) is booked on 6570 and returned as bank_fee_sek (0 when there is none, and always 0 with custom lines, which book what they say). paid_amount never exceeds the invoice total. Check bank_fee_sek: a large one usually means the row pays another invoice too.',
-    'A same-currency excess above the fee cap returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING and books nothing: allocate the payment across several invoices with POST /transactions/{id}/match-batch. The check runs before any conflicting categorization is reversed. A cross-currency match is not capped: it settles the remaining balance and books the whole SEK difference as kursdifferens (7960/3960).',
+    'A same-currency excess above the fee cap returns 400 MATCH_SI_AMOUNT_EXCEEDS_REMAINING and books nothing: allocate the payment across several invoices with POST /transactions/{id}/match-batch. Like every refusal, it runs before a categorization is reversed with storno_existing. A cross-currency match is not capped: it settles the remaining balance and books the whole SEK difference as kursdifferens (7960/3960).',
     'Faktureringsmetoden with defer_invoice_booking (Registrera men bokför inte): a supplier invoice registered without its verifikat is booked first by the supplier-invoices :book step (Debit cost + 2641 / Credit 2440, dated on the invoice date), then the payment clears that 2440; registration_journal_entry_id names it (null when nothing was booked first). When the book step refuses (invoice date in a locked period PERIOD_LOCKED, no fiscal year SI_BOOK_NO_FISCAL_PERIOD, a locked accrual month SI_ACCRUED_COST_PERIOD_LOCKED, a partially paid invoice SI_BOOK_INVALID_STATUS), the match is refused with that code, details.registration_first is true, and nothing is booked or reversed.',
+    'A transaction that is already booked is refused with 409 MATCH_SI_TX_ALREADY_BOOKED and nothing is written: its pointer or a bank_line link names a posted verifikat, or it is linked to an existing verifikat. details names it (journal_entry_id, voucher, via: pointer, link, reconciliation, read_error, or concurrent when another booking took the transaction first). When details.storno_allowed is true the booking is the transaction\'s own categorization: resend with storno_existing: true to reverse it (storno) and book the payment, after every other check has passed. A samlingsverifikat, a split or a reconciliation link is never reversed here: unlink or correct it first. Before 2026-10-28 this endpoint reversed a categorization without being asked and re-pointed a reconciliation link.',
     'Transaction must be negative (amount < 0). Positive returns MATCH_SI_NOT_EXPENSE.',
     'Supplier invoice must NOT be paid/credited already. paid/credited returns MATCH_SI_ALREADY_PAID; registered/approved/partially_paid/overdue are matchable.',
     'Idempotency-Key is mandatory.',
@@ -123,7 +95,7 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     const rawBody = rawBodyResult.body
     const parsed = MatchSupplierInvoiceSchema.safeParse(rawBody)
     if (!parsed.success) return v1ValidationError(ctx, parsed.error)
-    const { supplier_invoice_id, lines: customLines } = parsed.data
+    const { supplier_invoice_id, lines: customLines, storno_existing } = parsed.data
     const txLog = ctx.log.child({ transactionId: txId, supplierInvoiceId: supplier_invoice_id })
 
     const { data: transaction, error: fetchTxErr } = await ctx.supabase
@@ -168,476 +140,44 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
       })
     }
 
-    // Credit the cash account THIS transaction actually belongs to, never a
-    // hardcoded 1930: cash_account_id -> cash_accounts.ledger_account is the
-    // only source of truth for which bank account a matched transaction
-    // settled from (mirrors the dashboard route's #985 fix). Threaded through
-    // every booking branch below (pure-SEK accrual, FX, and cash-method);
-    // customLines specify their own accounts directly (#1000).
-    const paymentAccount = await resolveSettlementAccount(
-      ctx.supabase,
-      ctx.companyId!,
-      transaction.cash_account_id,
-      txLog,
-    )
-
-    // Guard the resolved account against the chart (mirrors the categorize
-    // routes): an inactive cash_accounts.ledger_account would otherwise reach
-    // the engine as a generic MATCH_SI_RECORD_PAYMENT_FAILED instead of
-    // ACCOUNTS_NOT_IN_CHART. Gated on !customLines: custom lines specify their
-    // own accounts directly; every other branch consumes paymentAccount.
-    // This MUST run before the conflicting-JE storno below: a request rejected
-    // here must leave no trace, and reversing the existing categorization JE
-    // is an irreversible side effect (posted vouchers are immutable).
-    if (!customLines) {
-      const missingAccounts = await findUnresolvableAccounts(
-        ctx.supabase,
-        ctx.companyId!,
-        [paymentAccount],
-      )
-      if (missingAccounts.length > 0) {
-        txLog.warn('resolved settlement account is inactive/unknown', { missingAccounts })
-        return v1ErrorResponse(new AccountsNotInChartError(missingAccounts), txLog, {
-          requestId: ctx.requestId,
-        })
-      }
-    }
-
-    // The payment plan runs BEFORE the storno below for the same reason the
-    // chart guard does: it can reject the request, and a rejected request must
-    // leave no trace (reversing the transaction's existing categorization
-    // verifikat is irreversible). It is the plan every supplier bank match
-    // books by (planSupplierBankMatch, shared with the dashboard route and its
-    // preview): the bank fee split (6570), the overshoot guard,
-    // öresavrundning (3740), the SEK and kursdifferens resolution and the
-    // kontantmetoden refusals. This door used to derive its own copy, which
-    // cleared the whole bank row off 2440 with no fee or öre line and no
-    // overshoot guard.
-    // Fail closed (accounted#58): planned as faktureringsmetoden, a
-    // kontantmetod refusal would only surface after the storno below.
-    const accountingMethod = requireAccountingMethod(
-      await ctx.supabase
-        .from('company_settings')
-        .select('accounting_method')
-        .eq('company_id', ctx.companyId!)
-        .single(),
-    )
-    const planned = planSupplierBankMatch({
-      invoice,
+    // The booking is the dashboard door's own function (bookSupplierBankMatch):
+    // the booked-row gate, the payment plan, the registration a deferring
+    // company books first, the verifikat, the row claim, the ledger update,
+    // the payment row, the log and the events. This door used to keep its own
+    // copy, which reversed a categorization without being asked and re-pointed
+    // a reconciliation-linked row (accounted#58).
+    const outcome = await bookSupplierBankMatch(ctx.supabase, {
       transaction,
-      accountingMethod,
-    })
-    if (!planned.ok) {
-      return v1ErrorResponseFromCode(planned.code, txLog, {
-        requestId: ctx.requestId,
-        details: planned.details,
-      })
-    }
-    const { plan } = planned
-
-    // A payment date outside an open period leaves the entry generators with
-    // nothing to book (they return null), and the invoice used to be marked
-    // paid with no verifikat. Refuse before any write, the storno below
-    // included, exactly as the dashboard route does.
-    const fiscalPeriodId = await findFiscalPeriod(ctx.supabase, ctx.companyId!, transaction.date)
-    if (!fiscalPeriodId) {
-      return v1ErrorResponseFromCode('INVOICE_PAID_NO_FISCAL_PERIOD', txLog, {
-        requestId: ctx.requestId,
-        details: { payment_date: transaction.date },
-      })
-    }
-
-    // Custom lines must balance, checked before the storno below for the same
-    // reason as the plan: a refused request must not leave a reversal posted.
-    if (customLines) {
-      const totalDebit = customLines.reduce((s, l) => s + l.debit_amount, 0)
-      const totalCredit = customLines.reduce((s, l) => s + l.credit_amount, 0)
-      if (Math.round((totalDebit - totalCredit) * 100) !== 0 || totalDebit <= 0) {
-        return v1ErrorResponseFromCode('INVOICE_PAID_LINES_UNBALANCED', txLog, {
-          requestId: ctx.requestId,
-          details: { totalDebit, totalCredit },
-        })
-      }
-    }
-
-    // Faktureringsmetoden with defer_invoice_booking: an invoice registered
-    // without its verifikat is booked first by the Bokför step, then paid.
-    // Planned and booked BEFORE the storno below: a refusal must leave no
-    // trace, and reversing the row's categorization cannot be undone.
-    const opCtx = { supabase: ctx.supabase, companyId: ctx.companyId!, userId: ctx.userId, log: txLog }
-    const registrationPlan = await planRegistrationBeforeSettlement(opCtx, invoice as SupplierInvoice, {
-      settlementDate: transaction.date,
-    })
-    if (!registrationPlan.ok) return registrationRefusalResponse(registrationPlan, txLog, ctx.requestId)
-    const registration = await bookRegistrationBeforeSettlement(opCtx, registrationPlan)
-    if (!registration.ok) return registrationRefusalResponse(registration, txLog, ctx.requestId)
-
-    // Storno any conflicting auto-categorization JE before booking the
-    // payment. Mirrors the match-invoice path. Without this, an earlier
-    // :categorize of the same transaction (e.g. as expense_office with a
-    // 5460/1930 entry) would leave its JE posted alongside the new
-    // 2440/1930 supplier-invoice payment entry: two verifikationer for
-    // one affärshändelse violates BFL 5 kap 6 §. If storno fails, abort
-    // before any further state change.
-    // A RECONCILIATION link (reconciliation_method set) is not a conflicting
-    // booking: the entry is an independent verifikat that may evidence OTHER
-    // affärshändelser; reversing it wholesale would be an over-broad rättelse
-    // (BFL 5 kap 5 §). Nothing is detached here: the final transaction update
-    // overwrites the pointer and clears reconciliation_method in the same
-    // write, so a failure in between leaves the existing link intact.
-    const priorReconciliationLink =
-      transaction.journal_entry_id && transaction.reconciliation_method
-        ? {
-            journalEntryId: transaction.journal_entry_id as string,
-            method: transaction.reconciliation_method as string,
-          }
-        : null
-
-    if (transaction.journal_entry_id && !priorReconciliationLink) {
-      try {
-        // Through the posting port: while POSTING_EVENTS is on, the storno
-        // records ledger.storno of the bank line, system_derived (the match
-        // replaces the booking; no one chose the storno itself), dated the day.
-        await postingPort.reverseJournalEntry({
-          supabase: ctx.supabase,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-          entryId: transaction.journal_entry_id,
-          event: () => bankLineStornoBusinessEvent(txId, todayIsoStockholm(), linkBasisColumns('system_derived')),
-          role: 'reversal',
-        })
-        const { error: clearErr } = await ctx.supabase
-          .from('transactions')
-          .update({ journal_entry_id: null })
-          .eq('id', txId)
-          .eq('company_id', ctx.companyId!)
-        if (clearErr) {
-          txLog.warn('failed to clear journal_entry_id after storno', clearErr)
-        }
-      } catch (err) {
-        txLog.error('match-supplier-invoice: storno of conflicting JE failed', err as Error, {
-          conflictingJournalEntryId: transaction.journal_entry_id,
-        })
-        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
-      }
-    }
-
-    // Strict-mode for the public API: abort before mutating state if the
-    // payment JE can't be created. See the parallel comment in match-invoice.
-    let journalEntryId: string | null = null
-    // Posting port (step 2e): the door's side of the purchase.paid event,
-    // read only while POSTING_EVENTS is on. The caller named this bank line
-    // for this invoice; on an API key the request scope records client_asserted.
-    const posting = (): SupplierPaymentPostingContext => ({
-      linkBasis: linkBasisColumns('user_confirmed'),
-      settledAmount: plan.settledAmount,
-    })
-    try {
-      if (customLines) {
-        const sourceType = plan.booking.kind === 'cash' ? 'supplier_invoice_cash_payment' : 'supplier_invoice_paid'
-        const desc = buildSupplierDescription(
-          'Utbetalning leverantörsfaktura',
-          supplierInvoiceReference(invoice.supplier_invoice_number, invoice.arrival_number),
-          invoice.supplier?.name || undefined,
-        )
-        const input: CreateJournalEntryInput = {
-          fiscal_period_id: fiscalPeriodId,
-          entry_date: transaction.date,
-          description: desc,
-          source_type: sourceType,
-          source_id: invoice.id,
-          bank_booking_context: [bankBookingContext(transaction, paymentAccount)],
-          lines: customLines,
-        }
-        const je = await postingPort.postJournalEntry({
-          supabase: ctx.supabase,
-          companyId: ctx.companyId!,
-          userId: ctx.userId,
-          event: () =>
-            supplierInvoicePaymentBusinessEvent(
-              invoice as SupplierInvoice,
-              input,
-              { paymentAccount, generated: false, bankLine: true },
-              posting(),
-            ),
-          input,
-        })
-        if (je) journalEntryId = je.id
-      } else {
-        // The generator the plan names, with every input it carries (the 6570
-        // fee and the 3740 SEK clearing debt included), credited to the
-        // transaction's own resolved settlement account: the same call the
-        // dashboard route books with. The internal 1930 default only stands
-        // for unlinked transactions, via resolveSettlementAccount (#1000).
-        const je = await createSupplierBankMatchEntry(ctx.supabase, ctx.companyId!, ctx.userId, {
-          invoice: invoice as SupplierInvoice,
-          booking: plan.booking,
-          paymentAccount,
-          transaction,
-          posting,
-        })
-        if (je) journalEntryId = je.id
-      }
-    } catch (err) {
-      txLog.error('match-supplier-invoice: payment JE creation failed: aborting before state mutation', err as Error)
-      // AccountsNotInChartError means the account was deactivated between our
-      // pre-validation above and the engine call (race): return the same
-      // structured error rather than falling through to the generic
-      // MATCH_SI_RECORD_PAYMENT_FAILED, mirroring the categorize routes.
-      if (err instanceof AccountsNotInChartError) {
-        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
-      }
-      // The cash-method builder converts every leg through toSekOrThrow, so a
-      // foreign invoice with no usable rate surfaces here as
-      // SupplierInvoiceFxRateMissingError. Dispatch on its `code` (not
-      // instanceof: the class is routinely vi.mock'ed away) so the envelope
-      // carries the registered 400 rather than a generic 500. Mirrors the
-      // dashboard route and the preview for the same row.
-      if ((err as { code?: unknown })?.code === 'SI_FX_RATE_MISSING') {
-        return v1ErrorResponse(err, txLog, { requestId: ctx.requestId })
-      }
-      return v1ErrorResponseFromCode('MATCH_SI_RECORD_PAYMENT_FAILED', txLog, {
-        requestId: ctx.requestId,
-        details: { reason: getErrorMessage(err, { context: 'supplier_invoice' }) },
-      })
-    }
-    // Fail closed, as the dashboard route does: a generator that booked
-    // nothing must never leave the invoice marked paid without its verifikat.
-    if (!journalEntryId) {
-      return v1ErrorResponseFromCode('MATCH_SI_RECORD_PAYMENT_FAILED', txLog, {
-        requestId: ctx.requestId,
-        details: { reason: 'no_journal_entry_created' },
-      })
-    }
-
-    // Ledger update from the plan computed up front. An öre-absorbed or
-    // fee-split settlement reports remaining 0 / status paid: the residual
-    // lives on 3740 and the fee on 6570, not on the supplier ledger.
-    const { newRemaining, newPaidAmount, isFullyPaid, newStatus, settledAmount } = plan
-    const paidAt = isFullyPaid ? paidAtFromDate(transaction.date) : null
-
-    const { data: updatedRows, error: updateInvErr } = await ctx.supabase
-      .from('supplier_invoices')
-      .update({
-        status: newStatus,
-        remaining_amount: newRemaining,
-        paid_amount: newPaidAmount,
-        paid_at: paidAt,
-        payment_journal_entry_id: journalEntryId,
-        transaction_id: txId,
-      })
-      .eq('id', supplier_invoice_id)
-      .eq('company_id', ctx.companyId!)
-      // 'overdue' must appear here: the early status guard accepts it as
-      // matchable, so excluding it here would return MATCH_SI_NOT_OPEN
-      // for a legitimately payable invoice.
-      .in('status', [...MATCHABLE_SUPPLIER_INVOICE_STATUSES])
-      .select('id')
-    if (updateInvErr) return v1ErrorResponse(updateInvErr, txLog, { requestId: ctx.requestId })
-    if (!updatedRows || updatedRows.length === 0) {
-      // CAS guard: the invoice was settled by a concurrent request between
-      // our read and write. The payment voucher we just posted belongs to no
-      // payment: cancel it and document the gap (mirrors mark-paid).
-      if (journalEntryId) {
-        await cancelOrphanedPaymentEntry(
-          ctx.supabase, ctx.companyId!, ctx.userId, journalEntryId,
-          'Automatiskt makulerad: dubblettbokning förhindrad av samtidighetsskydd',
-        )
-      }
-      return v1ErrorResponseFromCode('MATCH_SI_NOT_OPEN', txLog, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    const { error: paymentInsertErr } = await ctx.supabase
-      .from('supplier_invoice_payments')
-      .insert({
-        user_id: ctx.userId,
-        company_id: ctx.companyId!,
-        supplier_invoice_id,
-        payment_date: transaction.date,
-        // The debt settled, including any 3740 adjustment (payment rows
-        // reconstruct and reverse paid_amount). Actual cash stays on the
-        // linked bank transaction and the payment account's journal line.
-        amount: settledAmount,
-        currency: invoice.currency,
-        journal_entry_id: journalEntryId,
-        transaction_id: txId,
-        // The caller named this bank line for this supplier invoice.
-        ...linkBasisColumns('user_confirmed'),
-      })
-    if (paymentInsertErr) {
-      if (paymentInsertErr.code === '23505') {
-        return v1ErrorResponseFromCode('MATCH_SI_DUPLICATE_PAYMENT', txLog, {
-          requestId: ctx.requestId,
-        })
-      }
-      txLog.error('failed to record payment', paymentInsertErr)
-      return v1ErrorResponseFromCode('MATCH_SI_RECORD_PAYMENT_FAILED', txLog, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    // The invoice is now settled, so every OTHER transaction still carrying a
-    // suggestion pointer at it is dead: retire them (issue #1259). This
-    // request's own row is cleared by the update just below.
-    if (isFullyPaid) {
-      await clearSettledInvoiceSuggestions(
-        ctx.supabase,
-        ctx.companyId!,
-        'supplier_invoice',
-        supplier_invoice_id,
-        { exceptTransactionId: txId },
-      )
-    }
-
-    const { error: updateTxErr } = await ctx.supabase
-      .from('transactions')
-      .update({
-        supplier_invoice_id,
-        // Parity with the dashboard route: the confirmed link supersedes the
-        // suggestion, so the hint must not survive it (issue #1259).
-        potential_supplier_invoice_id: null,
-        journal_entry_id: journalEntryId,
-        is_business: true,
-        // The supplier-invoice match supersedes any prior reconciliation link
-        // (deferred detach, see the priorReconciliationLink block above).
-        // Unconditional literal on purpose: null is already the value on every
-        // non-reconciliation-linked row, and a literal payload keeps the
-        // phantom-column scanner able to verify the column set.
-        reconciliation_method: null,
-        ...linkBasisColumns('user_confirmed'),
-      })
-      .eq('id', txId)
-      .eq('company_id', ctx.companyId!)
-    if (updateTxErr) {
-      return v1ErrorResponseFromCode('MATCH_SI_LINK_TX_FAILED', txLog, {
-        requestId: ctx.requestId,
-      })
-    }
-
-    // Record the release of the prior reconciliation link now that the
-    // re-point has committed (behandlingshistorik, BFNAR 2013:2 kap 8).
-    if (priorReconciliationLink) {
-      await logMatchEvent(ctx.supabase, ctx.userId, txId, 'unmatched', {
-        supplierInvoiceId: supplier_invoice_id,
-        previousState: {
-          journal_entry_id: priorReconciliationLink.journalEntryId,
-          reconciliation_method: priorReconciliationLink.method,
-        },
-        newState: { journal_entry_id: journalEntryId, reconciliation_method: null },
-      })
-    }
-
-    // Propagate a document pinned to the transaction onto the payment
-    // verifikat, mirroring the dashboard route (BFL 5 kap 6 §). Guarded to
-    // unlinked current-version docs only: a doc already serving another
-    // verifikat (e.g. the supplier invoice's own document on the registration
-    // entry) must not move. Non-fatal: the match is already committed.
-    if (transaction.document_id) {
-      const { error: docLinkErr } = await ctx.supabase
-        .from('document_attachments')
-        .update({
-          journal_entry_id: journalEntryId,
-          // Follows from the row's pinned document and the match, not chosen as a pair.
-          ...linkBasisColumns('system_derived', { rule_id: 'bank_row_document_pin' }),
-        })
-        .eq('id', transaction.document_id)
-        .eq('company_id', ctx.companyId!)
-        .is('journal_entry_id', null)
-        .eq('is_current_version', true)
-      if (docLinkErr) {
-        // Structured fields so the half-linked state (doc retained but not
-        // anchored to the payment JE) can be reconstructed without an audit
-        // trail dig.
-        txLog.warn('failed to link transaction document to payment JE (non-critical)', {
-          error: docLinkErr,
-          documentId: transaction.document_id,
-          journalEntryId,
-        })
-      }
-    }
-
-    // Same requirement for the SUPPLIER INVOICE's own retained document: it
-    // must sit on a posted verifikat or the missing-underlag surfaces (which
-    // only accept an anchored doc) warn on a verifikat that plainly shows the
-    // invoice. No-op when it is already anchored. Never throws.
-    await anchorSupplierInvoiceDocument(ctx.supabase, ctx.companyId!, supplier_invoice_id)
-
-    await logMatchEvent(ctx.supabase, ctx.userId, txId, 'matched', {
-      supplierInvoiceId: supplier_invoice_id,
-      matchConfidence: 1.0,
-      matchMethod: 'manual_confirm',
-      newState: { status: newStatus, paid_amount: newPaidAmount, remaining_amount: newRemaining },
-    })
-
-    const settledInvoice = {
-      ...invoice,
-      status: newStatus,
-      remaining_amount: newRemaining,
-      paid_amount: newPaidAmount,
-      paid_at: paidAt,
-      payment_journal_entry_id: journalEntryId,
-      transaction_id: txId,
-    } as SupplierInvoice
-    try {
-      await eventBus.emit({
-        type: 'supplier_invoice.match_confirmed',
-        payload: {
-          supplierInvoice: settledInvoice,
-          transaction: {
-            ...transaction,
-            supplier_invoice_id,
-            potential_supplier_invoice_id: null,
-            journal_entry_id: journalEntryId,
-            is_business: true,
-          } as Transaction,
-          userId: ctx.userId,
-          companyId: ctx.companyId!,
-        },
-      })
-    } catch (err) {
-      txLog.warn('event emit failed (non-critical)', err as Error)
-    }
-    // A match that settles the invoice in full is its supplier_invoice.paid
-    // transition; a partial match is not. Same helper as every other
-    // settlement door; paymentAmount is the debt settled, as on the payment row.
-    await emitSupplierInvoicePaidIfSettled({
-      newStatus,
-      supplierInvoice: settledInvoice,
-      paymentAmount: settledAmount,
+      invoice: invoice as SupplierInvoice,
       userId: ctx.userId,
       companyId: ctx.companyId!,
+      log: txLog,
+      customLines,
+      match: { action: 'matched', method: 'manual_confirm', confidence: 1.0 },
+      // The caller named this bank line for this invoice; on an API key the
+      // request scope records client_asserted.
+      linkBasis: { basis: 'user_confirmed' },
+      stornoExisting: storno_existing,
     })
+    if (!outcome.ok) {
+      if (outcome.error !== undefined) return v1ErrorResponse(outcome.error, txLog, { requestId: ctx.requestId })
+      return v1ErrorResponseFromCode(outcome.code, txLog, { requestId: ctx.requestId, details: outcome.details })
+    }
 
     return ok(
       {
         success: true,
-        invoice_status: newStatus,
-        paid_amount: newPaidAmount,
-        remaining_amount: newRemaining,
-        journal_entry_id: journalEntryId,
+        invoice_status: outcome.plan.newStatus,
+        paid_amount: outcome.plan.newPaidAmount,
+        remaining_amount: outcome.plan.newRemaining,
+        journal_entry_id: outcome.journalEntryId,
         // No preview on this door: the caller learns here what went to 6570.
         // Custom lines book what they say, so the plan's fee is not theirs.
-        bank_fee_sek: customLines ? 0 : plan.bankFeeSek,
-        registration_journal_entry_id: registration.bookedHere ? registration.journalEntryId : null,
+        bank_fee_sek: customLines ? 0 : outcome.plan.bankFeeSek,
+        registration_journal_entry_id: outcome.registrationJournalEntryId,
       },
       { requestId: ctx.requestId },
     )
   },
   { requireIdempotencyKey: true },
 )
-
-/**
- * The match's refusal when the registration it books first was refused: the
- * Bokför step's own code (or its typed bookkeeping error), with
- * details.registration_first.
- */
-function registrationRefusalResponse(
-  refusal: RegistrationFirstRefusal,
-  log: Parameters<typeof v1ErrorResponse>[1],
-  requestId: string,
-) {
-  if (refusal.error) return v1ErrorResponse(refusal.error, log, { requestId })
-  return v1ErrorResponseFromCode(refusal.code, log, { requestId, details: refusal.details })
-}

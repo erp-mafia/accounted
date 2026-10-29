@@ -56,6 +56,7 @@ import {
   type DeferredDuplicateBooking,
 } from '@/lib/transactions/batch-duplicates'
 import type { BatchDuplicateRow } from '@/components/transactions/BatchDuplicateDialog'
+import type { ConfirmOpts, MatchAlreadyBooked } from '@/components/transactions/InvoiceMatchDialog'
 
 import { DialogLoadingSkeleton } from '@/components/ui/dialog-loading-skeleton'
 import type { BookingTemplate } from '@/lib/bookkeeping/booking-templates'
@@ -516,6 +517,9 @@ export default function TransactionsPage() {
   const [matchDialogOpen, setMatchDialogOpen] = useState(false)
   const [selectedTransaction, setSelectedTransaction] = useState<TransactionWithInvoice | null>(null)
   const [isConfirmingMatch, setIsConfirmingMatch] = useState(false)
+  // The supplier match refused a booked row (MATCH_SI_TX_ALREADY_BOOKED): the
+  // dialog's soft block, for the row it was refused for.
+  const [siAlreadyBooked, setSiAlreadyBooked] = useState<(MatchAlreadyBooked & { transactionId: string }) | null>(null)
   // ROT/RUT payout confirm (Skatteverkets utbetalning for an open begäran):
   // its own dialog, same selectedTransaction / isConfirmingMatch plumbing.
   const [rotRutMatchDialogOpen, setRotRutMatchDialogOpen] = useState(false)
@@ -2520,20 +2524,7 @@ export default function TransactionsPage() {
     }
   }
 
-  async function handleConfirmInvoiceMatch(opts?: {
-    force?: boolean
-    expected_journal_entry_id?: string
-    lines?: Array<{
-      account_number: string
-      debit_amount: number
-      credit_amount: number
-      line_description?: string
-    }>
-    overpayment_account?: string
-    overpayment_amount?: number
-    fee_account?: string
-    fee_amount?: number
-  }) {
+  async function handleConfirmInvoiceMatch(opts?: ConfirmOpts) {
     if (!selectedTransaction) return
     const isSupplier = !!selectedTransaction.potential_supplier_invoice
     const isCustomer = !!selectedTransaction.potential_invoice
@@ -2576,6 +2567,11 @@ export default function TransactionsPage() {
         body.fee_account = opts.fee_account
         body.fee_amount = opts.fee_amount
       }
+      // Reverse the row's own categorization and match: only from the soft
+      // block's button, after the refusal named the verifikat.
+      if (isSupplier && opts?.storno_existing) {
+        body.storno_existing = true
+      }
 
       const response = await fetch(url, {
         method: 'POST',
@@ -2584,6 +2580,19 @@ export default function TransactionsPage() {
       })
       const result = await response.json()
       if (!response.ok) {
+        // A booked row is not a failure to toast: the dialog says which
+        // verifikat books it and offers to reverse the row's own booking.
+        const refusal = (result as { error?: { code?: unknown; details?: { voucher?: unknown; storno_allowed?: unknown } } })?.error
+        if (isSupplier && refusal?.code === 'MATCH_SI_TX_ALREADY_BOOKED') {
+          setSiAlreadyBooked({
+            transactionId: selectedTransaction.id,
+            voucher: typeof refusal.details?.voucher === 'string' ? refusal.details.voucher : null,
+            stornoAllowed: refusal.details?.storno_allowed === true,
+            message: getErrorMessage(result, { locale: errorLocale }),
+          })
+          setIsConfirmingMatch(false)
+          return
+        }
         toast({
           title: isSupplier ? 'Leverantörsfakturamatchning misslyckades' : 'Fakturamatchning misslyckades',
           description: getErrorMessage(result, { context: 'transaction' }),
@@ -2601,6 +2610,7 @@ export default function TransactionsPage() {
         : `Faktura ${selectedTransaction.potential_invoice!.invoice_number} markerad som betald`
       toast({ title: isSupplier ? 'Leverantörsfaktura matchad' : 'Faktura matchad', description: label })
       setMatchDialogOpen(false)
+      setSiAlreadyBooked(null)
 
       // Mark as exiting for animation
       setExitingIds((prev) => new Set(prev).add(selectedTransaction.id))
@@ -4846,12 +4856,16 @@ export default function TransactionsPage() {
       {matchDialogOpen && (
         <InvoiceMatchDialog
           open
-          onOpenChange={setMatchDialogOpen}
+          onOpenChange={(open) => {
+            setMatchDialogOpen(open)
+            if (!open) setSiAlreadyBooked(null)
+          }}
           transaction={selectedTransaction}
           isConfirming={isConfirmingMatch}
           onConfirm={handleConfirmInvoiceMatch}
           onLinkToExisting={handleLinkToExistingVoucher}
           onSplitAcrossInvoices={handleSplitFromMatchDialog}
+          alreadyBooked={siAlreadyBooked && siAlreadyBooked.transactionId === selectedTransaction?.id ? siAlreadyBooked : null}
         />
       )}
 
