@@ -16,6 +16,7 @@ import { SettingsLoadError } from '@/components/settings/SettingsLoadError'
 import { SettingsLoadingSkeleton } from '@/components/settings/SettingsLoadingSkeleton'
 import { SettingsGroup, SettingsRow, SettingsRowEnd, SettingsSectionHeader } from '@/components/settings/SettingsRows'
 import { SwedbankFileIdsSettings, swedbankFileIdUpdates } from '@/components/settings/SwedbankFileIdsSettings'
+import { NordeaSignerIdSettings, nordeaSignerIdUpdates } from '@/components/settings/NordeaSignerIdSettings'
 import { useSettings } from '@/components/settings/useSettings'
 import type { CompanySettings } from '@/types'
 
@@ -39,6 +40,7 @@ export function InvoicingSettingsContent() {
       invoice_default_notes: (formData.get('invoice_default_notes') as string) || null,
       default_our_reference: (formData.get('default_our_reference') as string) || null,
       ...(settings ? swedbankFileIdUpdates(formData, settings) : {}),
+      ...(settings ? nordeaSignerIdUpdates(formData, settings) : {}),
       ...selfBillingSettingsUpdates(formData),
     }
     return {
@@ -61,9 +63,11 @@ export function InvoicingSettingsContent() {
       <InvoicePaymentAccountsSettings settings={settings} onUpdate={updateSettings} />
 
       <SettingsFormWrapper onSave={handleSave}>
-        {/* Swedbank's ids for payment files, next to the bank details above:
-            owner/admin of a Swedbank company only, saved with this form. */}
+        {/* Swedbank's ids and Nordea's Signer ID for payment files, next to
+            the bank details above: owner/admin of a company at that bank
+            only, saved with this form. */}
         <SwedbankFileIdsSettings settings={settings} />
+        <NordeaSignerIdSettings settings={settings} />
         <InvoiceSettingsForm
           settings={settings}
           // Invoice kinds on/off, right after Fakturainställningar: each

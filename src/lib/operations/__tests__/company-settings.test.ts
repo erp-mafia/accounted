@@ -99,6 +99,16 @@ describe('settings operations: field split', () => {
     }
   })
 
+  it('lets the API and MCP read and write the Nordea Signer ID, letters and digits only (crm#1530)', () => {
+    const schema = (settingsUpdate.input as unknown as z.ZodObject<z.ZodRawShape>).shape.nordea_signer_id as z.ZodType
+    expect(keys(settingsUpdate.input)).toContain('nordea_signer_id')
+    expect(schema.safeParse('nb 10000 123456').data).toBe('NB10000123456')
+    expect(schema.safeParse('NB1000/0123').success).toBe(false)
+    expect(schema.description).toMatch(/assigned by Nordea/)
+    expect(toSettingsResource('c1', { nordea_signer_id: 'NB10000123456' } as never).nordea_signer_id).toBe('NB10000123456')
+    expect(toSettingsResource('c1', {} as never).nordea_signer_id).toBeNull()
+  })
+
   it('puts every tax-relevant field the API writes in the tax profile, never in settings.update', () => {
     const general = keys(settingsUpdate.input)
     for (const field of TAX_RELEVANT_FIELDS) {

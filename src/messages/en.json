@@ -1417,6 +1417,7 @@
     "debtor_account_missing_bic": "The payment file pays from {account}, the company's primary bank account, but the account's bank (BIC) could not be determined.",
     "debtor_missing_org": "The company organisation number is missing and must be stated as the sender identity in the payment file.",
     "debtor_missing_swedbank": "Swedbank requires your SignerID and Corporate Pay agreement ID in the payment file. Swedbank gives you both.",
+    "debtor_missing_nordea": "Nordea requires the company's Signer ID in the payment file. Nordea gives it to you, and Nordea also shows it when it refuses a file for the wrong Signer ID.",
     "debtor_missing_bankgiro": "Your bank only takes Bankgirot's LB file, which is sent from the company's bankgiro number. Add the bankgiro number.",
     "debtor_missing_link": "Open Settings → Invoices",
     "debtor_missing_org_link": "Open Settings → Company",
@@ -3140,6 +3141,12 @@
     "signer_id_help": "Format 123456789ORI0001. Assigned by Swedbank and written into the payment file as the sender.",
     "corporate_pay_id_label": "Agreement id (Corporate Pay)",
     "corporate_pay_id_help": "Format 123456789CPO0001. Assigned by Swedbank and names the agreement the payments are made under."
+  },
+  "settings_nordea_signer_id": {
+    "heading": "Payment files to Nordea",
+    "help": "Nordea recognises the sender of a payment file by your Signer ID, not by the organisation number. Without the right Signer ID Nordea refuses the file. Nordea gives it to you, and Nordea also shows it when it refuses a file for the wrong Signer ID.",
+    "signer_id_label": "Signer ID",
+    "signer_id_help": "Letters and digits, for example NB10000123456. Assigned by Nordea and written into the payment file as the sender."
   },
   "settings_payment_links": {
     "heading": "Payment link",

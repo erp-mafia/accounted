@@ -290,6 +290,23 @@ describe('POST /supplier-payment-batches/preview', () => {
     expect(body.data).toMatchObject({ debtor_ok: false, debtor_missing: 'iban' })
   })
 
+  it("reports a Nordea company's missing Signer ID as debtor_missing (crm#1530)", async () => {
+    const preview = async (settings: Record<string, unknown>) => {
+      mockServiceClient.mockReturnValue(
+        makeClient({
+          company_members: MEMBER,
+          supplier_invoices: { data: [invoiceRow()], error: null },
+          supplier_payment_batch_items: { data: [], error: null },
+          companies: COMPANY,
+          company_settings: { data: { ...SETTINGS.data, bic: 'NDEASESS', ...settings }, error: null },
+        }),
+      )
+      return (await (await post({ supplier_invoice_ids: [INVOICE_A] })).json()).data
+    }
+    expect(await preview({})).toMatchObject({ debtor_ok: false, debtor_missing: 'nordea_signer_id' })
+    expect(await preview({ nordea_signer_id: 'NB10000123456' })).toMatchObject({ debtor_ok: true, debtor_missing: null })
+  })
+
   it('leaves a bankgiro payee out of a Swedbank ISO 2.0 file (crm#1156)', async () => {
     mockServiceClient.mockReturnValue(
       makeClient({

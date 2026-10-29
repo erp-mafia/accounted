@@ -393,3 +393,22 @@ describe('generatePain001 for a Danske Bank or Nordea debtor', () => {
     expect(routing(generatePain001({ ...company, bic: 'HANDSESS' }, employees, options))[0]).toEqual(['1344', '2045678'])
   })
 })
+
+// Nordea checks InitgPty against the file agreement: the Signer ID with
+// SchmeNm CUST, never the org number (crm#1530).
+describe('generatePain001 for a Nordea debtor with its Signer ID', () => {
+  const company = { name: 'Test AB', orgNumber: '556123-4567', iban: 'SE4530000000031234567890', bic: 'NDEASESS' }
+  const employees = [{ name: 'Anna Andersson', clearingNumber: '1344', bankAccountNumber: '2045678', netSalary: 28000 }]
+  const options = { messageId: 'ACCOUNTED-5561234567-2026-10', paymentDate: '2026-10-23', periodLabel: '2026-10' }
+
+  it('identifies the sender by the Signer ID with SchmeNm CUST; the debtor keeps the org number', () => {
+    const xml = generatePain001({ ...company, nordeaSignerId: 'NB10000123456' }, employees, options)
+    expect(block(xml, 'InitgPty')).toContain('<Othr><Id>NB10000123456</Id><SchmeNm><Cd>CUST</Cd></SchmeNm></Othr>')
+    expect(block(xml, 'InitgPty')).not.toContain('5561234567')
+    expect(block(xml, 'Dbtr')).toContain('<Othr><Id>5561234567</Id></Othr>')
+  })
+
+  it('without a Signer ID keeps the org number, as before', () => {
+    expect(block(generatePain001(company, employees, options), 'InitgPty')).toContain('<Othr><Id>5561234567</Id></Othr>')
+  })
+})

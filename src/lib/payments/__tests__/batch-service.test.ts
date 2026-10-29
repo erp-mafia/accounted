@@ -1277,6 +1277,81 @@ describe('createSupplierPaymentBatch', () => {
     expect(args.p_debtor_snapshot).not.toHaveProperty('swedbank_signer_id')
     expect(args.p_debtor_snapshot).not.toHaveProperty('swedbank_corporate_pay_id')
   })
+
+  it('refuses a Nordea debtor without its Signer ID, since Nordea refuses that file (crm#1530)', async () => {
+    for (const ids of [{}, { nordea_signer_id: null }, { nordea_signer_id: '  ' }, SWEDBANK_IDS]) {
+      const mock = createQueuedMockSupabase()
+      mock.enqueueMany([{ data: companyRow }, { data: { ...settingsRow, bic: 'NDEASESS', ...ids } }])
+
+      const result = await createSupplierPaymentBatch(
+        mock.supabase as unknown as SupabaseClient,
+        COMPANY_ID,
+        USER_ID,
+        { items: [{ supplier_invoice_id: 'inv-1' }] },
+      )
+
+      expect(result).toEqual({ ok: false, code: 'debtor_incomplete', missing: 'nordea_signer_id' })
+      expect(mock.supabase.rpc).not.toHaveBeenCalled()
+    }
+  })
+
+  it('snapshots the Nordea Signer ID, and the file names the sender by it with SchmeNm CUST', async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: { ...settingsRow, bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' } },
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
+      { data: { ok: true, batch: batchRow() } },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result.ok).toBe(true)
+    const args = mock.supabase.rpc.mock.calls[0][1] as {
+      p_debtor_snapshot: SupplierPaymentBatch['debtor_snapshot']
+    }
+    expect(args.p_debtor_snapshot).toMatchObject({ bic: 'NDEASESS', nordea_signer_id: 'NB10000123456' })
+    expect(args.p_debtor_snapshot).not.toHaveProperty('swedbank_signer_id')
+
+    const flat = renderSupplierPaymentBatchFile(batchRow({ debtor_snapshot: args.p_debtor_snapshot }), [
+      storedBankgiroItem(),
+    ]).content.replace(/\s+/g, '')
+    const initiator = flat.match(/<InitgPty>.*?<\/InitgPty>/)![0]
+    expect(initiator).toContain('<Othr><Id>NB10000123456</Id><SchmeNm><Cd>CUST</Cd></SchmeNm></Othr>')
+    expect(initiator).not.toContain('5566778899')
+  })
+
+  it("leaves a saved Nordea Signer ID out of another bank's snapshot", async () => {
+    const mock = createQueuedMockSupabase()
+    mock.enqueueMany([
+      { data: companyRow },
+      { data: { ...settingsRow, nordea_signer_id: 'NB10000123456' } }, // ESSESESS: the company moved to SEB
+      { data: [invoiceRow()] },
+      { data: [] },
+      { data: [] }, // open bank payment orders: none
+      { data: null }, // attest policy: none
+      { data: { ok: true, batch: batchRow() } },
+    ])
+
+    const result = await createSupplierPaymentBatch(
+      mock.supabase as unknown as SupabaseClient,
+      COMPANY_ID,
+      USER_ID,
+      { items: [{ supplier_invoice_id: 'inv-1' }] },
+    )
+
+    expect(result.ok).toBe(true)
+    const args = mock.supabase.rpc.mock.calls[0][1] as { p_debtor_snapshot: Record<string, unknown> }
+    expect(args.p_debtor_snapshot).not.toHaveProperty('nordea_signer_id')
+  })
 })
 
 /** One stored batch line paying a bankgiro number by invoice number. */
@@ -1528,5 +1603,28 @@ describe('renderSupplierPaymentBatchFile', () => {
     // The MIG 1.0 bankgiro debit it was created with.
     const debtorAccount = file.content.match(/<DbtrAcct>[\s\S]*?<\/DbtrAcct>/)![0]
     expect(debtorAccount).toContain('<SchmeNm><Prtry>BGNR</Prtry></SchmeNm>')
+  })
+  it('re-renders a Nordea batch made before the Signer ID exactly as it was first downloaded', () => {
+    const debtor = {
+      name: 'Testbolaget AB',
+      org_number: '556677-8899',
+      iban: 'SE4530000000031234567890',
+      bic: 'NDEASESS',
+      bankgiro: '9912346',
+      city: 'Stockholm',
+    }
+    const before = renderSupplierPaymentBatchFile(batchRow({ debtor_snapshot: debtor }), [storedBankgiroItem()])
+    const initiator = before.content.match(/<InitgPty>[\s\S]*?<\/InitgPty>/)![0]
+    expect(initiator).toContain('<Othr><Id>5566778899</Id></Othr>')
+    expect(before.content).not.toContain('<Cd>CUST</Cd>')
+
+    // The same batch with the Signer ID differs in InitgPty alone.
+    const after = renderSupplierPaymentBatchFile(
+      batchRow({ debtor_snapshot: { ...debtor, nordea_signer_id: 'NB10000123456' } }),
+      [storedBankgiroItem()],
+    )
+    const strip = (xml: string) => xml.replace(/<InitgPty>[\s\S]*?<\/InitgPty>/, '')
+    expect(strip(after.content)).toBe(strip(before.content))
+    expect(after.content).toContain('<Cd>CUST</Cd>')
   })
 })

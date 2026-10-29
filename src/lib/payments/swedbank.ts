@@ -16,12 +16,7 @@
  */
 
 import { luhnCheckDigit } from '@/lib/bankgiro/luhn'
-import {
-  lookupBicByBankName,
-  lookupBicByClearing,
-  normalizeBankNumber,
-  payeeAccountParts,
-} from '@/lib/payments/bank-account'
+import { normalizeBankNumber, payeeAccountParts, settingsBankBic } from '@/lib/payments/bank-account'
 
 /** The only DbtrAgt BIC MIG 2.0 allows besides NOTPROVIDED. */
 export const SWEDBANK_BIC = 'SWEDSESS'
@@ -40,16 +35,8 @@ export function isSwedbankBic(bic: string | null | undefined): boolean {
  * The savings banks (clearing 8xxx) resolve to SWEDSESS as well: they run on
  * Swedbank's file service.
  */
-export function isSwedbankCompany(settings: {
-  bic?: string | null
-  clearing_number?: string | null
-  bank_name?: string | null
-}): boolean {
-  const bic =
-    settings.bic?.trim() ||
-    lookupBicByClearing(normalizeBankNumber(settings.clearing_number)) ||
-    lookupBicByBankName(settings.bank_name)
-  return isSwedbankBic(bic)
+export function isSwedbankCompany(settings: Parameters<typeof settingsBankBic>[0]): boolean {
+  return isSwedbankBic(settingsBankBic(settings))
 }
 
 export interface SwedbankFileIds {

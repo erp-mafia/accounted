@@ -20,6 +20,7 @@ import {
   type PayingAccountMissing,
   type PayingAccountSummary,
 } from '@/lib/payments/paying-account'
+import { isNordeaBic } from '@/lib/payments/nordea'
 import { isSwedbankBic } from '@/lib/payments/swedbank'
 import { bookedNetPayAccount } from '@/lib/salary/posted-run-entries'
 import { salaryInstructionBank, type SalaryInstructionBank } from './instruction-bank'
@@ -38,6 +39,8 @@ export interface PaymentFileAccountView {
   instruction_bank: SalaryInstructionBank | null
   /** The account's bank is Swedbank (a savings bank included): its files need Swedbank's SignerID and Corporate Pay id. */
   swedbank: boolean
+  /** The account's bank is Nordea: its files need Nordea's Signer ID. */
+  nordea: boolean
 }
 
 export type PaymentFileAccountViewResult =
@@ -84,6 +87,7 @@ export async function loadPaymentFileAccountView(
       missing: paying.ok ? null : paying.missing,
       instruction_bank: salaryInstructionBank(paying.ok ? paying.account.iban : null, stored?.salary_default_bank),
       swedbank: paying.ok && isSwedbankBic(paying.account.bic),
+      nordea: paying.ok && isNordeaBic(paying.account.bic),
     },
   }
 }

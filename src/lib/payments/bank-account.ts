@@ -387,3 +387,20 @@ export function lookupBicByBankName(nameRaw: string | null | undefined): string 
   const hit = BANK_NAME_BIC.find((b) => name.includes(b.match))
   return hit ? hit.bic : null
 }
+
+/**
+ * The BIC of the bank company settings name, by the chain the payment files
+ * use: the saved BIC, else the clearing number, else the bank name. Null when
+ * none of them names a bank.
+ */
+export function settingsBankBic(settings: {
+  bic?: string | null
+  clearing_number?: string | null
+  bank_name?: string | null
+}): string | null {
+  return (
+    settings.bic?.trim() ||
+    lookupBicByClearing(normalizeBankNumber(settings.clearing_number)) ||
+    lookupBicByBankName(settings.bank_name)
+  )
+}

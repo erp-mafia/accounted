@@ -2541,6 +2541,33 @@ describe('UpdateSettingsSchema', () => {
       }
     })
   })
+
+  // Nordea's Signer ID for payment files (crm#1530, lib/payments/nordea.ts).
+  describe('Nordea Signer ID', () => {
+    it('stores what was typed normalised: spaces, hyphens, lower case', () => {
+      for (const typed of ['NB10000123456', 'nb 1000 0123 456', 'NB-10000-123456']) {
+        const result = UpdateSettingsSchema.safeParse({ nordea_signer_id: typed })
+        expect(result.success, typed).toBe(true)
+        if (result.success) expect(result.data.nordea_signer_id).toBe('NB10000123456')
+      }
+    })
+
+    it('clears it with an empty string or null', () => {
+      for (const value of ['', '  ', null]) {
+        const result = UpdateSettingsSchema.safeParse({ nordea_signer_id: value })
+        expect(result.success).toBe(true)
+        if (result.success) expect(result.data.nordea_signer_id).toBeNull()
+      }
+    })
+
+    it('refuses other characters and more than 35, naming the rule', () => {
+      for (const value of ['NB1000/0123', 'Å1234', 'N'.repeat(36)]) {
+        const result = UpdateSettingsSchema.safeParse({ nordea_signer_id: value })
+        expect(result.success, value).toBe(false)
+        if (!result.success) expect(result.error.issues[0].message).toContain('bokstäver och siffror')
+      }
+    })
+  })
 })
 
 // ============================================================

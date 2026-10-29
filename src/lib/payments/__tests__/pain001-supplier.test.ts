@@ -783,3 +783,65 @@ describe('Swedbank ISO 2.0: a Swedbank debtor with its SignerID and Corporate Pa
     expect(generateSupplierPain001({ ...preFix, swedbank: null }, payments, options)).toBe(xml)
   })
 })
+
+/**
+ * Nordea "Corporate Access Payables, MIG pain.001.001.09" v1.4 and "Corporate
+ * eGateway, MIG pain.001.001.03" v3.3 (both 2026-09-16): InitgPty/Id/OrgId/
+ * Othr/Id is the Signer ID agreed with Nordea, SchmeNm/Cd CUST. Nordea's
+ * upload refused a file naming the org number there ("fel Signer ID",
+ * crm#1530).
+ */
+describe('Nordea: the Signer ID as the initiating party', () => {
+  const nordea = {
+    name: 'Testbolaget AB',
+    orgNumber: '556677-8899',
+    iban: 'SE4530000000031234567890',
+    bic: 'NDEASESS',
+    bankgiro: '9912346',
+    city: 'Uppsala',
+  }
+  const signerId = 'NB10000123456'
+
+  function block(xml: string, name: string): string {
+    return xml.match(new RegExp(`<${name}>[\\s\\S]*?</${name}>`))![0]
+  }
+
+  it('states the Signer ID with SchmeNm CUST in InitgPty, never the org number (the refused file)', () => {
+    // The refused file: one supplier payment of 146.00 from a Nordea account.
+    const xml = generateSupplierPain001(
+      { ...nordea, nordeaSignerId: signerId },
+      [bgPayment({ amount: 146 })],
+      options,
+    )
+    const initgPty = block(xml, 'InitgPty')
+    expect(initgPty).toContain('<Id>NB10000123456</Id>')
+    expect(initgPty).toContain('<SchmeNm><Cd>CUST</Cd></SchmeNm>')
+    expect(initgPty).not.toContain('5566778899')
+    expect(shape(findAll(parseXml(xml), 'InitgPty')[0])).toBe('InitgPty(Nm,Id(OrgId(Othr(Id,SchmeNm(Cd)))))')
+  })
+
+  it('changes nothing but InitgPty: the debtor keeps the org number and the Nordea form', () => {
+    const payments = mixedBatch()
+    const withId = generateSupplierPain001({ ...nordea, nordeaSignerId: signerId }, payments, options)
+    const without = generateSupplierPain001(nordea, payments, options)
+    const strip = (xml: string) => xml.replace(/<InitgPty>[\s\S]*?<\/InitgPty>/, '')
+    expect(strip(withId)).toBe(strip(without))
+    expect(block(withId, 'Dbtr')).toContain('<Othr><Id>5566778899</Id></Othr>')
+    expect(withId).not.toContain('<SvcLvl>')
+  })
+
+  it('renders a Nordea batch created before the Signer ID (no id) with the org number, as it was first downloaded', () => {
+    for (const debtor of [nordea, { ...nordea, nordeaSignerId: null }]) {
+      const initgPty = block(generateSupplierPain001(debtor, [bgPayment()], options), 'InitgPty')
+      expect(initgPty).toContain('<Othr><Id>5566778899</Id></Othr>')
+      expect(initgPty).not.toContain('SchmeNm')
+    }
+  })
+
+  it('leaves a Swedbank debtor on its own SignerID even with a stray Nordea id', () => {
+    const swedbank = { ...nordea, bic: 'SWEDSESS', swedbank: { signerId: '260637712ORI0003', corporatePayId: '260637712CPO0001' } }
+    const initgPty = block(generateSupplierPain001({ ...swedbank, nordeaSignerId: signerId }, [bgPayment()], options), 'InitgPty')
+    expect(initgPty).toContain('<Id>260637712ORI0003</Id>')
+    expect(initgPty).toContain('<SchmeNm><Cd>BANK</Cd></SchmeNm>')
+  })
+})

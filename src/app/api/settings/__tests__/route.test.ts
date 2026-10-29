@@ -845,6 +845,53 @@ describe('PUT /api/settings', () => {
     expect(findCall('company_settings', 'update')).toBeUndefined()
   })
 
+  // Nordea's Signer ID (crm#1530): who Nordea sees as the sender, so owner/admin only.
+  it('saves the Nordea Signer ID normalised, for an admin', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'admin' } },
+      { data: { id: 's1', nordea_signer_id: 'NB10000123456' } },
+      { data: null, count: 5 },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_signer_id: 'nb 10000-123456' },
+    }), { params: Promise.resolve({}) })
+
+    expect((await parseJsonResponse(response)).status).toBe(200)
+    expect(findCall('company_settings', 'update')?.[0]).toEqual({ nordea_signer_id: 'NB10000123456' })
+  })
+
+  it('rejects a Nordea Signer ID change from a regular member', async () => {
+    enqueueMany([
+      { data: { entity_type: 'aktiebolag', onboarding_complete: true } },
+      { data: { role: 'member' }, error: null },
+    ])
+
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_signer_id: 'NB10000123456' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse<{ error: { code: string } }>(response)
+
+    expect(status).toBe(403)
+    expect(body.error.code).toBe('FORBIDDEN')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
+  it('rejects a Nordea Signer ID with other characters than letters and digits', async () => {
+    const response = await PUT(createMockRequest('/api/settings', {
+      method: 'PUT',
+      body: { nordea_signer_id: 'NB1000/0123' },
+    }), { params: Promise.resolve({}) })
+    const { status, body } = await parseJsonResponse(response)
+
+    expect(status).toBe(400)
+    expect(JSON.stringify(body)).toContain('bokstäver och siffror')
+    expect(findCall('company_settings', 'update')).toBeUndefined()
+  })
+
   it('rejects invalid invoice recipients with otherwise valid payment accounts', async () => {
     enqueue({ data: { entity_type: 'aktiebolag', onboarding_complete: true } })
 
