@@ -369,7 +369,7 @@ describe('describePaymentSigningLink', () => {
       ],
     })
     db.setTable('companies', { data: { name: 'Bolaget AB', team_id: 'team-1' } })
-    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: 'Byrån AB' } } })
+    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: 'Byrån AB', kind: 'byra' } } })
     const page = await describePaymentSigningLink(db.supabase as never, linkRow())
     expect(page).toMatchObject({
       state: 'ready',
@@ -403,5 +403,13 @@ describe('describePaymentSigningLink', () => {
     db.setTable('payment_order_events', { data: [{ payment_order_id: 'o1', detail: { second_signature_via_api: true } }, { payment_order_id: 'o2', detail: { second_signature_via_api: true } }] })
     const page = await describePaymentSigningLink(db.supabase as never, linkRow({ batch_id: 'b-seb' }))
     expect(page).toMatchObject({ state: 'second_signature', signing: { batch_id: 'b-seb', status: 'awaiting_second_signer' }, second_signature_here: true })
+  })
+
+  it('names the sender, not their personal team, when the company sits in a personal team', async () => {
+    db.setTable('payment_orders', { data: [order('o1')] })
+    db.setTable('companies', { data: { name: 'Bolaget AB', team_id: 'team-1' } })
+    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: 'Personal', kind: 'personal' } } })
+    const page = await describePaymentSigningLink(db.supabase as never, linkRow())
+    expect(page.requester).toBe('Karin Byråsson')
   })
 })

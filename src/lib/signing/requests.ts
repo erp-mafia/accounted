@@ -19,6 +19,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import { encryptPersonalNumberForStorage, hashPersonalNumber } from '@/lib/auth/bankid'
 import { hasBankIdLogin, normalizeSignerPersonalNumber } from '@/lib/auth/bankid-signer'
 import { getCompanyRole } from '@/lib/auth/require-write'
+import { actingByraName } from '@/lib/attribution/acting-byra'
 import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { sendSigningRequestMail } from '@/lib/email/send-signing-request'
 import { eventBus } from '@/lib/events/bus'
@@ -223,24 +224,15 @@ function expiresAt(input: CreateSigningRequestInput, now: number): string {
 
 /**
  * Who asks, for the mail and the signer's page: the byrå's team name when
- * the sender is a member of the company's team, else the sender's own name,
- * else the company's.
+ * the sender acts through the company's byrå team, else the sender's own
+ * name, else the company's.
  */
 export async function describeRequester(service: SupabaseClient, companyId: string, userId: string): Promise<{ companyName: string; requester: string }> {
   const { data: companyRow } = await service.from('companies').select('name, team_id').eq('id', companyId).maybeSingle()
   const company = (companyRow as { name: string | null; team_id: string | null } | null) ?? null
   const companyName = company?.name?.trim() || 'Företaget'
-  if (company?.team_id) {
-    const { data: membership } = await service
-      .from('team_members')
-      .select('team_id, teams(name)')
-      .eq('team_id', company.team_id)
-      .eq('user_id', userId)
-      .maybeSingle()
-    const team = (membership as { teams?: { name?: string | null } | { name?: string | null }[] | null } | null)?.teams
-    const teamName = (Array.isArray(team) ? team[0]?.name : team?.name)?.trim()
-    if (teamName) return { companyName, requester: teamName }
-  }
+  const byra = await actingByraName(service, company?.team_id, userId)
+  if (byra) return { companyName, requester: byra }
   const { data: profile } = await service.from('profiles').select('full_name').eq('id', userId).maybeSingle()
   const name = (profile as { full_name?: string | null } | null)?.full_name?.trim()
   return { companyName, requester: name || companyName }

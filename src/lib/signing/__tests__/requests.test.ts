@@ -450,10 +450,16 @@ describe('createSigningRequest', () => {
 describe('describeRequester', () => {
   it('names the byrå team when the sender is a member of the company\'s team', async () => {
     db.setTable('companies', { data: { name: 'Bolaget AB', team_id: 'team-1' } })
-    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: ' Byrån AB ' } } })
+    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: ' Byrån AB ', kind: 'byra' } } })
     expect(await describeRequester(db.supabase as never, COMPANY, SENDER)).toEqual({ companyName: 'Bolaget AB', requester: 'Byrån AB' })
-    db.setTable('team_members', { data: { team_id: 'team-1', teams: [{ name: 'Byrån i lista AB' }] } })
+    db.setTable('team_members', { data: { team_id: 'team-1', teams: [{ name: 'Byrån i lista AB', kind: 'byra' }] } })
     expect(await describeRequester(db.supabase as never, COMPANY, SENDER)).toEqual({ companyName: 'Bolaget AB', requester: 'Byrån i lista AB' })
+  })
+
+  it('names the sender, not their personal team, when the company sits in the sender\'s personal team', async () => {
+    db.setTable('companies', { data: { name: 'Bolaget AB', team_id: 'team-1' } })
+    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: 'Personal', kind: 'personal' } } })
+    expect(await describeRequester(db.supabase as never, COMPANY, SENDER)).toEqual({ companyName: 'Bolaget AB', requester: 'Karin Byråsson' })
   })
 
   it('names the sender, else the company, else says Företaget', async () => {

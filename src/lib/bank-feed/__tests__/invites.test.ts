@@ -143,7 +143,7 @@ describe('resolveInviteToken', () => {
 describe('describeInvite', () => {
   it('names the company, the byrå when the sender acts through its team, and the connection being replaced', async () => {
     db.setTable('companies', { data: { name: 'Bolaget AB', team_id: 'team-1' } })
-    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: 'Byrån AB' } } })
+    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: 'Byrån AB', kind: 'byra' } } })
     db.setTable('bank_connections', { data: { id: ID, bank_name: 'Swedbank', bic: 'SWEDSESS', aggregator: 'enable_banking', status: 'active' } })
     const described = await describeInvite(service, { company_id: COMPANY, created_by: SENDER, replace_connection_id: ID })
     expect(described).toEqual({
@@ -160,5 +160,12 @@ describe('describeInvite', () => {
     expect(described.requester).toBe('Bolaget AB')
     expect(described.replaced?.kind).toBe('renew')
     expect(db.supabase.from).not.toHaveBeenCalledWith('team_members')
+  })
+
+  it('names the company, not the sender\'s personal team, when the company sits in a personal team', async () => {
+    db.setTable('companies', { data: { name: 'Bolaget AB', team_id: 'team-1' } })
+    db.setTable('team_members', { data: { team_id: 'team-1', teams: { name: 'Personal', kind: 'personal' } } })
+    const described = await describeInvite(service, { company_id: COMPANY, created_by: SENDER, replace_connection_id: null })
+    expect(described.requester).toBe('Bolaget AB')
   })
 })
