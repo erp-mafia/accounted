@@ -517,7 +517,7 @@ export async function enrichCommittedParties(supabase: SupabaseClient, job: Prov
 }
 
 async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, chunks: MigrationChunk[],
-  connection: ResolvedConsent, deadline: number): Promise<void> {
+  connection: ResolvedConsent, deadline: number, onCommit: () => void): Promise<void> {
   let batch: Record<string, unknown>[] = []
   let bytes = 0
   const parties = new Map<string, PartyCandidate>()
@@ -533,6 +533,7 @@ async function importBatch(supabase: SupabaseClient, job: ProviderMigrationJob, 
     })
     await adoptExistingCustomers(supabase, job, written, promise => withinMigrationDeadline(promise, deadline))
     await migrationRpc(supabase, job, 'commit_provider_migration_records', { p_records: batch }, deadline)
+    onCommit()
     const committed = batch
     batch = []; bytes = 0
     await enrichCommittedParties(supabase, job, committed, partyChunkIds, deadline)
@@ -722,6 +723,10 @@ export async function runProviderMigrationWorker(options: {
     let job = data as ProviderMigrationJob
     jobs++
     let started = Date.now()
+    // This claim moved the job: a checkpoint, or records an import batch
+    // committed before the deadline cut it short. Running out of time is a
+    // deferral only then (see the catch).
+    let moved = false
     try {
       if (!job.consent_id) throw new Error('PROVIDER_AUTH_EXPIRED')
       const connection = await withinMigrationDeadline(resolveConsent(job.company_id, job.consent_id), deadline - 5000)
@@ -767,10 +772,11 @@ export async function runProviderMigrationWorker(options: {
           if (!chunks.length) {
             await migrationRpc(supabase, job, 'advance_provider_migration_job', {}, deadline - 5000)
           }
-          else if (job.phase === 'import') await importBatch(supabase, job, chunks, connection, deadline - 5000)
+          else if (job.phase === 'import') await importBatch(supabase, job, chunks, connection, deadline - 5000, () => { moved = true })
           else await withinMigrationDeadline(followupBatch(supabase, job, chunks, deadline - 5000), deadline - 5000)
         }
         batches++
+        moved = true
         log.info('migration phase checkpointed', { jobId: job.id, phase: job.phase, elapsedMs: Date.now() - started })
         const { data: current, error: currentError } = await withinMigrationDeadline(supabase.from('migration_jobs').select('*')
           .eq('id', job.id).eq('company_id', job.company_id)
@@ -779,10 +785,19 @@ export async function runProviderMigrationWorker(options: {
         if (!current) return { jobs, batches }
         job = current as ProviderMigrationJob
       }
-      if (job.state === 'running') await migrationRpc(supabase, job, 'release_provider_migration_job', {}, deadline)
+      if (job.state === 'running') {
+        if (!moved) throw new Error('MIGRATION_STALLED')
+        await migrationRpc(supabase, job, 'release_provider_migration_job', {}, deadline)
+      }
     } catch (error) {
       const failedAt = Date.now()
-      const code = failureCode(error)
+      // Out of time after moving the job is a deferral: the next claim resumes
+      // where this one stopped. Out of time with nothing moved is a stall and
+      // counts like a failure. A release without a code resets the streak, so
+      // a step that always overran the budget looped as "running" every
+      // minute and never asked the user to act (#115).
+      const failed = failureCode(error)
+      const code = failed === 'MIGRATION_DEADLINE' && !moved ? 'MIGRATION_STALLED' : failed
       const deferred = code === 'MIGRATION_DEADLINE'
       const attention = !deferred && (['PROVIDER_AUTH_EXPIRED','PROVIDER_RESOURCE_FORBIDDEN','PROVIDER_LICENSE_MISSING','PROVIDER_API_MODULE_INACTIVE',
         'MIGRATION_WRITE_FORBIDDEN','MIGRATION_SOURCE_IDENTITY_CHANGED','PERSONNUMMER_ENCRYPTION_NOT_CONFIGURED'].includes(code) || job.failures >= 4)
@@ -796,7 +811,9 @@ export async function runProviderMigrationWorker(options: {
       })
       // The code alone hid a 15 s timeout behind MIGRATION_RETRY for hours:
       // name the step and the error so the next one reads itself.
-      log.warn('migration yielded', { jobId: job.id, code, needsAttention: attention, phase: job.phase,
+      // A stall that parks the job reaches error tracking; the user sees the retry card.
+      const report = code === 'MIGRATION_STALLED' && attention ? log.error : log.warn
+      report('migration yielded', { jobId: job.id, code, needsAttention: attention, phase: job.phase,
         resource: job.resources[job.resource_index - 1], page: job.next_page, elapsedMs: failedAt - started,
         ...failureDetails(error) })
       break

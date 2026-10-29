@@ -26,6 +26,8 @@ describe('migrationIssueKind', () => {
 
   it('falls back to a retry for transient or unknown codes', () => {
     expect(migrationIssueKind('MIGRATION_DETAIL_RETRY')).toBe('retry')
+    // A job parked after five claims that ran out of time with nothing saved (#115).
+    expect(migrationIssueKind('MIGRATION_STALLED')).toBe('retry')
     expect(migrationIssueKind('40001')).toBe('retry')
     expect(migrationIssueKind(null)).toBe('retry')
   })

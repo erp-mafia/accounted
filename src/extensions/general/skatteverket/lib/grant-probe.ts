@@ -1,6 +1,13 @@
 import { skvRequestWithAuth, SkatteverketAuthError } from './api-client'
 import { getSkattekontoBaseUrl } from './skattekonto-client'
-import { getConnectionOrThrow, recordProbeResult, type GrantStatus, type SkvCompanyConnection } from './connection-store'
+import {
+  getConnection,
+  getConnectionOrThrow,
+  recordProbeResult,
+  type GrantStatus,
+  type SkvBehorighet,
+  type SkvCompanyConnection,
+} from './connection-store'
 import type { SkvAuditActor } from './audit'
 import { currentSkvEnvironment } from './resolve-auth'
 import {
@@ -271,4 +278,50 @@ export async function probeCompanyGrants(
   })
 
   return { connection, lasombud, momsOmbud, source }
+}
+
+/** last_error of a connection whose reads Skatteverket refuses while the ombudsregister lists the grant. */
+const GRANT_ACTIVE_REFUSAL = 'SKV_403_GRANT_ACTIVE'
+
+/**
+ * A background read on system credentials was refused for this behorighet
+ * (OMBUD_GRANT_MISSING). The api client names every unexplained system-mode
+ * 403 so, which proves nothing about the grant by itself: the ombudsregister
+ * decides, as in the nightly sync, and the outcome is recorded through
+ * recordProbeResult like any probe.
+ *   - Withdrawn there: the behorighet is denied and the status follows the
+ *     grants, so the next run uses the user token if there is one.
+ *   - Still listed: the grant stays. Skatteverket then refuses a grant it
+ *     lists, which only we can chase, so the first such refusal reaches error
+ *     tracking and last_error keeps it.
+ *   - Register unreachable or unreadable: nothing changes; the next run asks
+ *     again.
+ * It never writes 'revoked', the status of the user's own "Koppla från",
+ * which the nightly sync skips for good (#115), and never grants anything.
+ */
+export async function recordGrantRefusal(
+  companyId: string,
+  behorighet: SkvBehorighet
+): Promise<'withdrawn' | 'active' | 'unverified'> {
+  const environment = currentSkvEnvironment()
+  const connection = await getConnection(companyId, environment)
+  if (!connection) return 'unverified'
+  const registry = await probeViaOmbudsregister(
+    connection.org_number,
+    isoDate(new Date(connection.created_at)),
+    { companyId, userId: null }
+  )
+  const key = behorighet === 'lasombud' ? 'lasombud' : 'momsOmbud'
+  const probe = registry.result?.[key]
+  const record = { companyId, environment, orgNumber: connection.org_number }
+  if (probe?.status === 'denied') {
+    await recordProbeResult({ ...record, ...(key === 'lasombud' ? { lasombud: probe } : { momsOmbud: probe }), error: 'OMBUD_GRANT_MISSING' })
+    return 'withdrawn'
+  }
+  if (probe?.status !== 'granted') return 'unverified'
+  if (connection.last_error !== GRANT_ACTIVE_REFUSAL) {
+    log.error('Skatteverket refused a system read on a grant the ombudsregister lists', { companyId, behorighet })
+    await recordProbeResult({ ...record, error: GRANT_ACTIVE_REFUSAL })
+  }
+  return 'active'
 }

@@ -70,7 +70,10 @@ vi.mock('@/extensions/general/skatteverket/lib/system-auth/config', () => ({
 
 vi.mock('@/extensions/general/skatteverket/lib/connection-store', () => ({
   listVerifiedCompanies: vi.fn().mockResolvedValue([]),
-  markGrantRevoked: vi.fn(),
+}))
+
+vi.mock('@/extensions/general/skatteverket/lib/grant-probe', () => ({
+  recordGrantRefusal: vi.fn(),
 }))
 
 vi.mock('@/extensions/general/skatteverket/lib/resolve-auth', () => ({
@@ -85,6 +88,7 @@ vi.mock('@/lib/errors/get-error-message', () => ({
 import { GET } from '../route'
 import { getSystemAuthMode, isSystemAuthConfigured } from '@/extensions/general/skatteverket/lib/system-auth/config'
 import { listVerifiedCompanies } from '@/extensions/general/skatteverket/lib/connection-store'
+import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 import { SkatteverketAuthError } from '@/extensions/general/skatteverket/lib/api-client'
 
 function makeRequest(): Request {
@@ -248,6 +252,30 @@ describe('GET /api/extensions/skatteverket/skattekonto/sync/cron', () => {
       'system token minting/authentication failed; skipping remaining system-mode entries this run',
       expect.objectContaining({ message: 'certificate rejected' }),
     )
+    vi.mocked(getSystemAuthMode).mockReturnValue('off')
+    vi.mocked(isSystemAuthConfigured).mockReturnValue(false)
+    vi.mocked(listVerifiedCompanies).mockResolvedValue([])
+  })
+
+  it.each([
+    ['withdrawn', 'grant_withdrawn', { grantWithdrawn: 1, grantRefused: 0 }],
+    ['active', 'grant_refused', { grantWithdrawn: 0, grantRefused: 1 }],
+    ['unverified', 'grant_refused', { grantWithdrawn: 0, grantRefused: 1 }],
+  ] as const)('a refused system read asks the register; register says %s: %s (#115)', async (verdict, status, counts) => {
+    const companyId = '11111111-1111-4111-8111-111111111111'
+    vi.mocked(getSystemAuthMode).mockReturnValue('on')
+    vi.mocked(isSystemAuthConfigured).mockReturnValue(true)
+    vi.mocked(listVerifiedCompanies).mockResolvedValue([{ company_id: companyId, created_by: 'u1' }] as never)
+    vi.mocked(recordGrantRefusal).mockResolvedValue(verdict)
+    mocks.createClient.mockReturnValue(makeSupabaseStub([]))
+    mocks.getCompanyIdsWithCapability.mockResolvedValue(new Set([companyId]))
+    mocks.syncSkattekonto.mockRejectedValue(new (SkatteverketAuthError as any)('Ombud saknas.', 'OMBUD_GRANT_MISSING'))
+
+    const body = await (await GET(makeRequest())).json()
+
+    expect(recordGrantRefusal).toHaveBeenCalledWith(companyId, 'lasombud')
+    expect(body.results[0]).toMatchObject({ companyId, source: 'system', status, error: 'OMBUD_GRANT_MISSING' })
+    expect(body).toMatchObject({ processed: 1, errors: 0, ...counts })
     vi.mocked(getSystemAuthMode).mockReturnValue('off')
     vi.mocked(isSystemAuthConfigured).mockReturnValue(false)
     vi.mocked(listVerifiedCompanies).mockResolvedValue([])

@@ -176,9 +176,10 @@ export async function recordProbeResult(
     lasombud_status: lasombudStatus,
     moms_ombud_status: momsOmbudStatus,
     last_probe_at: now,
+    // A behorighet this probe did not ask about keeps its detail, as it keeps its status.
     last_probe_detail: {
-      lasombud: input.lasombud ?? null,
-      moms_ombud: input.momsOmbud ?? null,
+      lasombud: input.lasombud ?? existing?.last_probe_detail?.lasombud ?? null,
+      moms_ombud: input.momsOmbud ?? existing?.last_probe_detail?.moms_ombud ?? null,
     },
     last_error: input.error ?? null,
   }
@@ -205,41 +206,6 @@ export async function recordProbeResult(
     return null
   }
   return data as unknown as SkvCompanyConnection
-}
-
-/**
- * Downgrade a behorighet after a company-level OMBUD_GRANT_MISSING observed
- * during background work (companies can withdraw the grant at any time).
- */
-export async function markGrantRevoked(
-  companyId: string,
-  environment: SkvEnvironment,
-  behorighet: SkvBehorighet,
-  errorCode?: string
-): Promise<void> {
-  const existing = await getConnection(companyId, environment)
-  if (!existing) return
-
-  const now = new Date().toISOString()
-  const lasombudStatus = behorighet === 'lasombud' ? 'denied' : existing.lasombud_status
-  const momsOmbudStatus = behorighet === 'moms_ombud' ? 'denied' : existing.moms_ombud_status
-  const anyGranted = lasombudStatus === 'granted' || momsOmbudStatus === 'granted'
-
-  const { error } = await getServiceClient()
-    .from('skatteverket_company_connections')
-    .update({
-      lasombud_status: lasombudStatus,
-      moms_ombud_status: momsOmbudStatus,
-      ...(behorighet === 'lasombud'
-        ? { lasombud_checked_at: now }
-        : { moms_ombud_checked_at: now }),
-      status: anyGranted ? 'partial' : 'revoked',
-      last_error: errorCode ?? 'OMBUD_GRANT_MISSING',
-    })
-    .eq('id', existing.id)
-  if (error) {
-    log.warn('markGrantRevoked failed', { companyId, behorighet, error: error.message })
-  }
 }
 
 /** Set the whole connection revoked (explicit user disconnect). */

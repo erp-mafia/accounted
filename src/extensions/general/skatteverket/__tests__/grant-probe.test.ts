@@ -27,10 +27,17 @@ vi.mock('../lib/connection-store', async (importOriginal) => {
     ...actual,
     recordProbeResult: (...a: unknown[]) => mockRecordProbeResult(...a),
     getConnectionOrThrow: (...a: unknown[]) => mockGetConnection(...a),
+    getConnection: (...a: unknown[]) => mockGetConnection(...a),
   }
 })
 
-import { probeCompanyGrants, probeViaOmbudsregister } from '../lib/grant-probe'
+const log = vi.hoisted(() => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn(), child: vi.fn() }))
+vi.mock('@/lib/logger', async (importOriginal) => ({
+  ...((await importOriginal()) as Record<string, unknown>),
+  createLogger: () => log,
+}))
+
+import { probeCompanyGrants, probeViaOmbudsregister, recordGrantRefusal } from '../lib/grant-probe'
 import { SkatteverketAuthError } from '../lib/api-client'
 
 const ORG = '165560000000'
@@ -358,5 +365,62 @@ describe('probeCompanyGrants service-probe fallback', () => {
         error: expect.stringContaining('signeringsdag okänd'),
       })
     )
+  })
+})
+
+describe('recordGrantRefusal: a refused system read asks the register before touching the grant (#115)', () => {
+  const CONNECTION = { id: 'conn-1', company_id: 'company-1', org_number: ORG, created_at: OPT_IN_AT, last_error: null }
+  const LASOMBUD = { huvudman: ORG, roll: 'JLO', rollbeskrivning: 'Juridiskt läsombud', ombud: '165590000000', giltigFrom: '2026-07-19' }
+  const recorded = () => mockRecordProbeResult.mock.calls.map(([input]) => input)
+
+  beforeEach(() => {
+    mockGetConnection.mockResolvedValue(CONNECTION)
+  })
+
+  it('withdrawn in the register: that behörighet alone is recorded denied, the other is not asked about', async () => {
+    registryAnswers([LASOMBUD])
+    await expect(recordGrantRefusal('company-1', 'moms_ombud')).resolves.toBe('withdrawn')
+    expect(mockSkvRequestWithAuth.mock.calls[0][2]).toBe(`/ombud/autentisieratOmbud?huvudman=${ORG}`)
+    expect(recorded()).toEqual([{
+      companyId: 'company-1', environment: 'test', orgNumber: ORG,
+      momsOmbud: expect.objectContaining({ status: 'denied' }),
+      error: 'OMBUD_GRANT_MISSING',
+    }])
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('still listed: the grant stays, and the first such refusal reaches error tracking', async () => {
+    registryAnswers([LASOMBUD])
+    await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('active')
+    expect(recorded()).toEqual([{ companyId: 'company-1', environment: 'test', orgNumber: ORG, error: 'SKV_403_GRANT_ACTIVE' }])
+    expect(log.error).toHaveBeenCalledTimes(1)
+    expect(log.error).toHaveBeenCalledWith(expect.stringContaining('grant the ombudsregister lists'), { companyId: 'company-1', behorighet: 'lasombud' })
+  })
+
+  it('still listed and already recorded: nothing is written or reported again', async () => {
+    mockGetConnection.mockResolvedValue({ ...CONNECTION, last_error: 'SKV_403_GRANT_ACTIVE' })
+    registryAnswers([LASOMBUD])
+    await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('active')
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+    expect(log.error).not.toHaveBeenCalled()
+  })
+
+  it('register unreachable: nothing changes, and no read probe stands in for it', async () => {
+    registryUnavailable()
+    await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('unverified')
+    expect(mockSkvRequestWithAuth).toHaveBeenCalledTimes(1)
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('roles the register lists but we cannot name: nothing changes', async () => {
+    registryAnswers([{ huvudman: ORG, roll: 'ZZ1', rollbeskrivning: 'Okänd roll', giltigFrom: '2026-07-19' }])
+    await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('unverified')
+    expect(mockRecordProbeResult).not.toHaveBeenCalled()
+  })
+
+  it('no connection row: the register is not asked', async () => {
+    mockGetConnection.mockResolvedValue(null)
+    await expect(recordGrantRefusal('company-1', 'lasombud')).resolves.toBe('unverified')
+    expect(mockSkvRequestWithAuth).not.toHaveBeenCalled()
   })
 })

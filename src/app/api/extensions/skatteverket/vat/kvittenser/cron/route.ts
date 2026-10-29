@@ -5,8 +5,8 @@ import { skvRequestWithAuth, SkatteverketAuthError } from '@/extensions/general/
 import { auditUserIdFor } from '@/extensions/general/skatteverket/lib/audit'
 import { markNeedsReconsent, RECONSENT_ERROR_CODES } from '@/extensions/general/skatteverket/lib/token-store'
 import { sendKvittensNotification } from '@/extensions/general/skatteverket/lib/kvittens-notification'
-import { resolveReadAuth, currentSkvEnvironment, findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
-import { markGrantRevoked } from '@/extensions/general/skatteverket/lib/connection-store'
+import { resolveReadAuth, findCompanyTokenUser } from '@/extensions/general/skatteverket/lib/resolve-auth'
+import { recordGrantRefusal } from '@/extensions/general/skatteverket/lib/grant-probe'
 import { recordVatFilingConfirmed } from '@/lib/vat/filing-record-store'
 import { hasCapability } from '@/lib/entitlements/has-capability'
 import { CAPABILITY } from '@/lib/entitlements/keys'
@@ -253,13 +253,14 @@ export async function GET(request: Request) {
       const message = err instanceof Error ? err.message : 'Unknown error'
 
       if (err instanceof SkatteverketAuthError && err.code === 'OMBUD_GRANT_MISSING') {
-        // System-mode read rejected: downgrade the connection row so the
-        // next run falls back to the user token (if any). Best-effort: a
-        // failure here must not abort the remaining companies' rows.
+        // System-mode read rejected: the ombudsregister decides whether the
+        // grant is gone, and only then is the row downgraded so the next run
+        // falls back to the user token (if any). Best-effort: a failure here
+        // must not abort the remaining companies' rows.
         try {
-          await markGrantRevoked(companyId, currentSkvEnvironment(), 'moms_ombud', err.code)
+          await recordGrantRefusal(companyId, 'moms_ombud')
         } catch (revokeErr) {
-          console.warn('[vat-kvittenser-cron] Failed to mark grant revoked', {
+          console.warn('[vat-kvittenser-cron] Failed to record the grant refusal', {
             companyId,
             period,
             message: revokeErr instanceof Error ? revokeErr.message : 'Unknown error',

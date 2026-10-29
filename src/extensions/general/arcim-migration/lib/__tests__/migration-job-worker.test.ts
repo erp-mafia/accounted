@@ -9,13 +9,13 @@ import { mapBokioToSalesInvoice, mapBokioToSupplierInvoice } from '@/lib/provide
 import { mapFortnoxToSupplierInvoice } from '@/lib/providers/fortnox/mapper'
 import { enrichBokioSupplierInvoice } from '@/lib/providers/bokio/supplier-evidence'
 import { encryptCustomerPersonalNumber } from '@/lib/customers/protect-personal-number'
-const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), probe: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn(),
+const mocks = vi.hoisted(() => ({ resolve: vi.fn(), page: vi.fn(), hydrate: vi.fn(), probe: vi.fn(), link: vi.fn(), reconcile: vi.fn(), warn: vi.fn(), error: vi.fn(),
   // A provider whose customer list carries the terms: the pass hands the list form back untouched.
   hydrateCustomers: vi.fn(async (_provider: string, _token: string, _company: unknown, customers: unknown[], _budgetMs?: number) =>
     ({ customers, unhydratedIds: new Set<string>(), hydration: {} })),
   hydrateSuppliers: vi.fn(async (_provider: string, _token: string, _company: unknown, suppliers: unknown[], _budgetMs?: number) =>
     ({ suppliers, unhydratedIds: new Set<string>(), hydration: {} })) }))
-vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: vi.fn() }) }))
+vi.mock('@/lib/logger', () => ({ createLogger: () => ({ info: vi.fn(), warn: mocks.warn, error: mocks.error }) }))
 vi.mock('@/lib/auth/api-keys', () => ({ createServiceClientNoCookies: vi.fn() }))
 vi.mock('@/lib/providers/resolve-consent', () => ({ resolveConsent: mocks.resolve }))
 vi.mock('@/lib/providers/provider-data-fetcher', () => ({ fetchMigrationPage: mocks.page, hydrateSalesInvoices: mocks.hydrate, hydrateSupplierInvoices: mocks.hydrate,
@@ -311,14 +311,14 @@ describe('bounded durable worker', () => {
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
     expect(db.job.state).toBe('completed')
   })
-  it('yields a hung provider request at the worker deadline without advancing its cursor', async () => {
+  it('yields a hung provider request at the worker deadline without advancing its cursor, as a stall', async () => {
     vi.useFakeTimers()
     const db = database()
     mocks.page.mockReturnValue(new Promise(() => {}))
     const run = runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 20_000 })
     await vi.advanceTimersByTimeAsync(16_000)
     await run
-    expect(db.job).toMatchObject({ state: 'queued', next_page: 1 })
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED', failures: 1, next_page: 1 })
     expect(db.rows).toHaveLength(0)
   })
   it('names the step and the error class when a register page times out', async () => {
@@ -331,14 +331,43 @@ describe('bounded durable worker', () => {
       errorName: 'TimeoutError', elapsedMs: expect.any(Number),
     }))
   })
-  it('treats its own exhausted budget as a deferral even on a long failure streak', async () => {
+  it('treats its own exhausted budget as a deferral after a saved page, even on a long failure streak', async () => {
     const db = database({ failures: 4, next_page: 4 })
-    mocks.page.mockRejectedValue(new ExecutionBudgetExceeded('migration-list'))
+    mocks.page.mockResolvedValueOnce({ items: [customer(1)], nextPage: 5, total: 2 })
+      .mockRejectedValue(new ExecutionBudgetExceeded('migration-list'))
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
-    expect(db.job).toMatchObject({ state: 'queued', error_code: null, failures: 0, next_page: 4 })
+    expect(db.job).toMatchObject({ state: 'queued', error_code: null, failures: 0, next_page: 5 })
     expect(mocks.warn).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
       code: 'MIGRATION_DEADLINE', needsAttention: false, errorName: 'ExecutionBudgetExceeded',
     }))
+  })
+  it('counts a claim that ran out of time with nothing saved as a stall, and parks the job after five in a row (#115)', async () => {
+    const db = database({ next_page: 4 })
+    mocks.page.mockRejectedValue(new ExecutionBudgetExceeded('migration-list'))
+    for (let claim = 1; claim <= 4; claim++) {
+      await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+      expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED', failures: claim, next_page: 4 })
+    }
+    expect(db.rpc).toHaveBeenLastCalledWith('release_provider_migration_job', expect.objectContaining({
+      p_error_code: 'MIGRATION_STALLED', p_retry_seconds: 120,
+    }))
+    expect(mocks.error).not.toHaveBeenCalled()
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id })
+    expect(db.job).toMatchObject({ state: 'needs_attention', error_code: 'MIGRATION_STALLED', failures: 5, next_page: 4 })
+    expect(mocks.error).toHaveBeenCalledWith('migration yielded', expect.objectContaining({
+      code: 'MIGRATION_STALLED', needsAttention: true, phase: 'discover', page: 4,
+    }))
+  })
+  it('reports a claim whose time ran out before the first step as a stall', async () => {
+    vi.useFakeTimers()
+    const db = database()
+    mocks.resolve.mockImplementationOnce(async () => {
+      vi.setSystemTime(Date.now() + 15_000)
+      return { accessToken: 'token', consent: { provider: 'visma', org_number: '556000-0000' } }
+    })
+    await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 20_000 })
+    expect(mocks.page).not.toHaveBeenCalled()
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED', failures: 1 })
   })
   it('logs a database failure by its code and keeps the message out', async () => {
     const db = database()
@@ -504,7 +533,7 @@ describe('Fortnox customers take their terms from the detail form (crm#1245)', (
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 15000 })
     expect(committed(db)).toEqual([])
     expect(db.rows.map(row => row.state)).toEqual(['pending'])
-    expect(db.job.state).toBe('queued')
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED' })
   })
 })
 
@@ -549,7 +578,7 @@ describe('Fortnox suppliers take their country and VAT number from the detail fo
     await runProviderMigrationWorker({ supabase: db.supabase, jobId: db.job.id, budgetMs: 15000 })
     expect(committed(db)).toEqual([])
     expect(db.rows.map(row => row.state)).toEqual(['pending'])
-    expect(db.job.state).toBe('queued')
+    expect(db.job).toMatchObject({ state: 'retry_wait', error_code: 'MIGRATION_STALLED' })
   })
 
   it('skips a supplier its detail form names inactive', async () => {
