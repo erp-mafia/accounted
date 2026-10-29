@@ -14,6 +14,7 @@ import {
   equalOre,
   isZeroOre,
   sumOre,
+  multiplyOre,
 } from '@/lib/money'
 import { getBASReference } from '@/lib/bookkeeping/bas-reference'
 
@@ -105,6 +106,30 @@ describe('roundOre', () => {
       if (!Object.is(actual, expected)) failures.push(`${literal} → ${actual}, expected ${expected}`)
     }
     expect(failures).toEqual([])
+  })
+})
+
+describe('multiplyOre', () => {
+  it('rounds the decimal product, not the float one, half away from zero: what round(a * b, 2) answers in PostgreSQL', () => {
+    // 33.33 * 11.5 is 383.29499999999996 as a double and 383.295 in decimals.
+    expect(roundOre(33.33 * 11.5)).toBe(383.29)
+    expect(multiplyOre(33.33, 11.5)).toBe(383.3)
+    expect(multiplyOre(79999.99, 11.5)).toBe(919999.89)
+    expect(multiplyOre(80000.01, 10.25)).toBe(820000.1)
+    expect(multiplyOre(1.005, 10.25)).toBe(10.3)
+    expect(multiplyOre(1.005, 1)).toBe(1.01)
+    expect(multiplyOre(100, 11.4532871)).toBe(1145.33)
+  })
+
+  it('keeps exact products, signs, zero and large or exponent-written numbers', () => {
+    expect(multiplyOre(500, 11.5)).toBe(5750)
+    expect(multiplyOre(-33.33, 11.5)).toBe(-383.3)
+    expect(multiplyOre(33.33, -11.5)).toBe(-383.3)
+    expect(multiplyOre(0, 11.5)).toBe(0)
+    expect(multiplyOre(1e21, 2)).toBe(2e21)
+    expect(multiplyOre(1e-7, 1)).toBe(0)
+    expect(multiplyOre(123456789.12, 9.87654321)).toBe(1219326312.31)
+    expect(Number.isNaN(multiplyOre(Number.NaN, 1))).toBe(true)
   })
 })
 

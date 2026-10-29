@@ -11,7 +11,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Textarea } from '@/components/ui/textarea'
 import { useToast } from '@/components/ui/use-toast'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
-import { formatDate } from '@/lib/utils'
+import { formatCurrency, formatDate } from '@/lib/utils'
 
 interface AttestPerson {
   user_id: string
@@ -22,14 +22,28 @@ interface AttestPerson {
 /** GET /api/supplier-invoices/:id/attestations (lib/supplier-invoices/attest-service.ts getSupplierInvoiceAttestState). */
 export interface SupplierInvoiceAttestState {
   supplier_invoice_id: string
-  policy: { enabled: boolean; mode: 'any' | 'all'; threshold_amount: number | null; preparer_may_attest: boolean }
+  policy: {
+    enabled: boolean
+    mode: 'any' | 'all'
+    threshold_amount: number | null
+    preparer_may_attest: boolean
+    two_step_from_sek: number | null
+  }
   required: boolean
   satisfied: boolean
   blocked: boolean
   approved_at: string | null
   approved_by: AttestPerson | null
   approved: AttestPerson[]
-  remaining: AttestPerson[]
+  /** Who may give a missing approval, with their attest limits (null = no limit). */
+  remaining: Array<AttestPerson & { limit_sek: number | null }>
+  /** The SEK total the limits are judged against; null for a foreign invoice without a rate. */
+  amount_sek: number | null
+  /** How many different attesters the invoice needs. */
+  steps: 1 | 2
+  approvals_needed: number
+  /** One missing approval must come from someone whose limit covers amount_sek. */
+  needs_covering: boolean
   latest_rejection: { user: AttestPerson; comment: string | null; decided_at: string } | null
   attestations: Array<{
     attestation_id: string
@@ -38,6 +52,8 @@ export interface SupplierInvoiceAttestState {
     comment: string | null
     source: 'app' | 'email_link' | 'api' | 'mcp'
     decided_at: string
+    /** The approval's place in its round under the policy; null otherwise. */
+    step: number | null
   }>
   viewer: { may_approve: boolean; may_reject: boolean; reason: string | null }
 }
@@ -77,6 +93,7 @@ export function SupplierInvoiceAttestPanel({
 }) {
   const t = useTranslations('supplier_invoice_attest')
   const locale = useLocale() as ErrorLocale
+  const listLocale = locale === 'en' ? 'en-US' : 'sv-SE'
   const { toast } = useToast()
   const [busy, setBusy] = useState<'reject' | null>(null)
   const [rejectOpen, setRejectOpen] = useState(false)
@@ -86,6 +103,13 @@ export function SupplierInvoiceAttestPanel({
 
   const someone = t('someone')
   const remainingNames = state.remaining.map((p) => nameOf(p, someone)).join(', ')
+  // "Anna Ek eller Bo Lind": one of them is what is missing.
+  const eitherNames = new Intl.ListFormat(listLocale, { style: 'long', type: 'disjunction' }).format(
+    state.remaining.map((p) => nameOf(p, someone)),
+  )
+  // Levels are on: two attesters from an amount, or someone left has a limit.
+  const levels = state.policy.two_step_from_sek !== null || state.remaining.some((p) => p.limit_sek !== null)
+  const coveringAmount = levels && state.needs_covering && state.amount_sek !== null ? formatCurrency(state.amount_sek) : null
 
   async function reject() {
     setBusy('reject')
@@ -111,6 +135,24 @@ export function SupplierInvoiceAttestPanel({
     }
   }
 
+  /** Who is still needed under the policy, with the limit that is missing when that is what is left. */
+  function waitingStatus(): string {
+    if (state.policy.mode === 'all') return t('status_waiting_all', { names: remainingNames })
+    if (state.steps === 2 && state.approved.length === 0) {
+      return coveringAmount
+        ? t('status_two_step_none_covering', { amount: coveringAmount, names: remainingNames })
+        : t('status_two_step_none', { names: remainingNames })
+    }
+    if (state.steps === 2) {
+      return coveringAmount
+        ? t('status_two_step_one_covering', { amount: coveringAmount, names: eitherNames })
+        : t('status_two_step_one', { names: eitherNames })
+    }
+    return coveringAmount
+      ? t('status_waiting_covering', { amount: coveringAmount, names: eitherNames })
+      : t('status_waiting_any', { names: remainingNames })
+  }
+
   const status = state.satisfied
     ? state.approved_by
       ? t('status_attested_by', { name: nameOf(state.approved_by, someone), date: state.approved_at ? formatDate(state.approved_at) : '' })
@@ -118,9 +160,7 @@ export function SupplierInvoiceAttestPanel({
     : state.blocked
       ? null
       : state.required
-        ? state.policy.mode === 'all'
-          ? t('status_waiting_all', { names: remainingNames })
-          : t('status_waiting_any', { names: remainingNames })
+        ? waitingStatus()
         : t('status_not_required')
 
   const sourceLabel = (source: SupplierInvoiceAttestState['attestations'][number]['source']) => t(`source_${source}`)
@@ -148,6 +188,9 @@ export function SupplierInvoiceAttestPanel({
         {!state.satisfied && state.viewer.reason === 'already_given' && (
           <p className="text-[12.5px] text-muted-foreground">{t('reason_already_given')}</p>
         )}
+        {!state.satisfied && (state.viewer.reason === 'limit' || state.viewer.reason === 'key_limit') && (
+          <p className="text-[12.5px] text-muted-foreground">{t(state.viewer.reason === 'limit' ? 'reason_limit' : 'reason_key_limit')}</p>
+        )}
         {state.latest_rejection && !state.satisfied && (
           <p className="text-[12.5px] text-muted-foreground" data-ph-mask="">
             {state.latest_rejection.comment
@@ -169,6 +212,9 @@ export function SupplierInvoiceAttestPanel({
                 </span>
                 <span className="shrink-0 text-[12.5px] tabular-nums text-muted-foreground">
                   {formatDate(a.decided_at)} · {sourceLabel(a.source)}
+                  {a.decision === 'approved' && a.step !== null && a.step !== undefined && state.steps === 2
+                    ? ` · ${t('trail_step', { step: a.step, steps: state.steps })}`
+                    : null}
                 </span>
               </li>
             ))}

@@ -1430,6 +1430,9 @@ export const MASTER_DATA_DUMP_TABLES: MasterDataTableSpec[] = [
   { name: 'company_settings', file: 'company_settings.json' },
   // The attest policy the trail above was decided under.
   { name: 'company_attest_policies', file: 'company_attest_policies.json', pageKey: 'company_id' },
+  // The attesters' limits under that policy (20261030140000): how much one
+  // approval covered. The trail keeps each approval's own snapshot too.
+  { name: 'company_attest_limits', file: 'company_attest_limits.json', orderBy: 'created_at' },
 ]
 
 /**

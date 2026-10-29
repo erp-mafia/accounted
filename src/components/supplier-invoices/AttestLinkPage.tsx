@@ -30,7 +30,11 @@ export function AttestLinkPage({
   const t = useTranslations('attest_link_page')
   const locale = useLocale() as ErrorLocale
   const data = initial
-  const [choice, setChoice] = useState<'approve' | 'reject'>(preselected ?? 'approve')
+  const [picked, setPicked] = useState<'approve' | 'reject'>(preselected ?? 'approve')
+  // An attester whose limit does not cover the invoice may still say no: only Neka is offered then.
+  const choice: 'approve' | 'reject' = data.may_approve ? picked : 'reject'
+  const setChoice = setPicked
+  const overLimit = data.reason === 'limit' || data.reason === 'key_limit'
   const [comment, setComment] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -139,7 +143,9 @@ export function AttestLinkPage({
             ? 'state_already_given'
             : data.reason === 'registrant'
               ? 'state_registrant'
-              : 'state_not_allowed'
+              : overLimit
+                ? 'state_limit'
+                : 'state_not_allowed'
     decisionBlock = (
       <section className="space-y-2 rounded-lg border border-border p-6">
         <p className="text-[13px] text-muted-foreground">{t(key)}</p>
@@ -148,6 +154,7 @@ export function AttestLinkPage({
   } else {
     decisionBlock = (
       <section className="space-y-4 rounded-lg border border-border p-6">
+        {!data.may_approve && overLimit && <p className="text-[13px] text-muted-foreground">{t('limit_reject_only')}</p>}
         <div className="flex flex-wrap items-center gap-2" role="radiogroup" aria-label={t('decision_label')}>
           {data.may_approve && (
             <Button type="button" size="sm" variant={choice === 'approve' ? 'default' : 'outline'} role="radio" aria-checked={choice === 'approve'} onClick={() => setChoice('approve')}>

@@ -72,6 +72,47 @@ export function roundOre(n: number): number {
   return shiftDecimal(Math.round(shiftDecimal(n, 2)), -2)
 }
 
+/** A finite number's shortest round-trip decimal as an integer and its count of decimals: 1.005 → [1005n, 3]. */
+function decimalDigits(n: number): [bigint, number] {
+  const [mantissa, e] = String(Math.abs(n)).split('e')
+  const [whole, fraction = ''] = mantissa.split('.')
+  const scale = fraction.length - (e ? Number(e) : 0)
+  return scale < 0 ? [BigInt(whole + fraction) * pow10(-scale), 0] : [BigInt(whole + fraction), scale]
+}
+
+/** 10 to the power of a non-negative integer, as a bigint (no bigint literals: the build targets ES2017). */
+function pow10(exponent: number): bigint {
+  return BigInt(`1${'0'.repeat(exponent)}`)
+}
+
+/**
+ * `a × b` rounded to the öre, half away from zero, computed on the decimals
+ * the two numbers are written with rather than on their binary floats: what
+ * PostgreSQL's `round(a * b, 2)` on numeric answers. A foreign invoice's SEK
+ * total (total × exchange rate) is judged by both the attest rules here and
+ * in SQL, and the float product can land on the wrong side of a half öre
+ * (33.33 × 11.5 is 383.29499… as a double, 383.295 in decimals: 383.30).
+ */
+export function multiplyOre(a: number, b: number): number {
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return Number.NaN
+  if (a === 0 || b === 0) return 0
+  const [da, sa] = decimalDigits(a)
+  const [db, sb] = decimalDigits(b)
+  const product = da * db
+  const scale = sa + sb
+  let ore: bigint
+  if (scale <= 2) {
+    ore = product * pow10(2 - scale)
+  } else {
+    const divisor = pow10(scale - 2)
+    ore = product / divisor
+    if ((product % divisor) * BigInt(2) >= divisor) ore += BigInt(1)
+  }
+  const negative = a < 0 !== b < 0
+  // Parsed from the decimal string: the nearest double to the exact öre amount.
+  return (negative ? -1 : 1) * Number(`${ore.toString()}e-2`)
+}
+
 /**
  * Truncate a SEK amount to whole kronor, dropping the öre (öretal bortfaller:
  * the whole-krona rule in SFF 2011:1261 22 kap. 1 §).

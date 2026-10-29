@@ -312,6 +312,9 @@ export const AUDITED_TABLES = [
   // required, from what amount, by whom, any or all, and whether the person
   // who registered an invoice may attest it. It decides what may be paid.
   'company_attest_policies',
+  // Attest limits per person (migration 20261030140000): how much one
+  // attester's approval covers, which decides who may release a payment.
+  'company_attest_limits',
 ] as const
 
 /**
@@ -1412,6 +1415,9 @@ function attestRuleValue(key: string, value: unknown): string {
     case 'threshold_amount':
       if (value === null || value === undefined) return 'alla fakturor'
       return Number.isFinite(Number(value)) ? `${fmtKronor(Number(value))} kr` : fmtValue(value)
+    case 'two_step_from_sek':
+      if (value === null || value === undefined) return 'aldrig'
+      return Number.isFinite(Number(value)) ? `${fmtKronor(Number(value))} kr` : fmtValue(value)
     case 'mode':
       return value === 'all' ? 'alla attestanter' : 'en attestant räcker'
     case 'attesters':
@@ -1427,6 +1433,7 @@ const ATTEST_POLICY_RULES: Record<string, string> = {
   mode: 'Attest av',
   attesters: 'Attestanter',
   preparer_may_attest: 'Den som registrerat får attestera',
+  two_step_from_sek: 'Två attestanter från',
 }
 
 /**
@@ -1440,7 +1447,8 @@ function attestPolicyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent
   for (const [key, label] of Object.entries(ATTEST_POLICY_RULES)) {
     const after = attestRuleValue(key, row.new_state?.[key])
     if (row.action === 'INSERT') {
-      details.push(`${label}: ${after}`)
+      // A rule newer than the row (two_step_from_sek before 20261030140000) is not stated.
+      if (row.new_state && key in row.new_state) details.push(`${label}: ${after}`)
       continue
     }
     const before = attestRuleValue(key, row.old_state?.[key])
@@ -1455,6 +1463,48 @@ function attestPolicyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent
     object: 'Leverantörsfakturor',
     details,
   })
+}
+
+/** An attest limit as the report states it. */
+function attestLimitValue(value: unknown): string {
+  if (value === null || value === undefined) return 'ingen gräns'
+  return Number.isFinite(Number(value)) ? `${fmtKronor(Number(value))} kr` : fmtValue(value)
+}
+
+/**
+ * An attest limit per person (migration 20261030140000): how much one
+ * attester's approval covers. The trigger logs a limit set, changed or
+ * removed; the person it is for stays an id in the row, as the attesters do
+ * in the policy's rows.
+ */
+function attestLimitAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  const review = (row.new_state?.scope ?? row.old_state?.scope) === 'booking_review'
+  const scope = review ? 'granskning av bokningar' : 'leverantörsfakturor'
+  const fields = { category: 'installningar' as const, object: review ? 'Bokföring' : 'Leverantörsfakturor' }
+  switch (row.action) {
+    case 'INSERT':
+      return auditEvent(row, {
+        ...fields,
+        code: 'attest_limit.set',
+        event: `Attestgräns satt för ${scope}`,
+        details: [`Gräns: ${attestLimitValue(row.new_state?.max_amount_sek)}`],
+      })
+    case 'UPDATE': {
+      const before = attestLimitValue(row.old_state?.max_amount_sek)
+      const after = attestLimitValue(row.new_state?.max_amount_sek)
+      if (before === after) return null
+      return auditEvent(row, { ...fields, code: 'attest_limit.changed', event: `Attestgräns ändrad för ${scope}`, details: [`Gräns: ${before} → ${after}`] })
+    }
+    case 'DELETE':
+      return auditEvent(row, {
+        ...fields,
+        code: 'attest_limit.removed',
+        event: `Attestgräns borttagen för ${scope}`,
+        details: [`Gräns: ${attestLimitValue(row.old_state?.max_amount_sek)}`],
+      })
+    default:
+      return null
+  }
 }
 
 /**
@@ -1788,6 +1838,8 @@ export function auditRowToEvent(
       return grantSettingsAuditEvent(row)
     case 'company_attest_policies':
       return attestPolicyAuditEvent(row)
+    case 'company_attest_limits':
+      return attestLimitAuditEvent(row)
     case 'dimensions':
       return genericAuditEvent(row, {
         category: 'installningar',

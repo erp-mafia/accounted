@@ -68,7 +68,7 @@ import {
   type InvoicePaymentPostingContext,
 } from '@/lib/bookkeeping/invoice-business-events'
 import { postingPort } from '@/lib/posting/port'
-import { approveSupplierInvoice } from '@/lib/supplier-invoices/attest-service'
+import { approveSupplierInvoice, personalAttestCap } from '@/lib/supplier-invoices/attest-service'
 import { CreditSupplierInvoiceInputSchema, creditSupplierInvoice } from '@/lib/supplier-invoices/credit'
 import { resolveInboxKind } from '@/lib/documents/inbox-kind'
 import { claimInboxItemOrReverseEntry, readInboxItemBookingState } from '@/lib/documents/inbox-item-claim'
@@ -7529,9 +7529,21 @@ async function commitPendingOperationInner(
   //    actor.type === 'api_key' AND a positive limit on that key. In-app
   //    approvals pass {type:'user'}, cron passes 'cron', and the
   //    cookie-session routes commit with no actor at all.
+  //
+  //    An attest with attest levels on is capped by the lower of the key's
+  //    ceiling and the person's attest limit (#135): over it, the op stays
+  //    pending for a person, as over the ceiling. The database's ruling caps
+  //    it too, but only after the claim.
+  const keyActor = opts.actor?.type === 'api_key' || opts.actor?.type === 'mcp_oauth' || opts.actor?.type === 'service_account'
+  const attestInvoiceId = pendingOp.params?.supplier_invoice_id
+  const attestCap =
+    keyActor && pendingOp.operation_type === 'approve_supplier_invoice' && typeof attestInvoiceId === 'string'
+      ? await personalAttestCap(supabase, companyId, userId, attestInvoiceId)
+      : null
+  const keyCeiling = opts.actor?.unattendedCommitLimit ?? null
   const unattended = exceedsUnattendedLimit({
     actorType: opts.actor?.type,
-    limit: opts.actor?.unattendedCommitLimit,
+    limit: attestCap !== null && (keyCeiling === null || keyCeiling <= 0 || attestCap < keyCeiling) ? attestCap : keyCeiling,
     operationType: pendingOp.operation_type,
     previewData: pendingOp.preview_data,
   })

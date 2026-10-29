@@ -49,7 +49,7 @@ function auth(unattendedCommitLimit: number | null) {
   })
 }
 
-/** A registered invoice, attested by its update; the key's user keeps the books. */
+/** A registered invoice, attested by the database's attest_supplier_invoice; the key's user keeps the books. */
 function client(invoice: Record<string, unknown>) {
   const row = {
     id: SI_ID,
@@ -68,10 +68,14 @@ function client(invoice: Record<string, unknown>) {
     supplier_invoice_number: 'F-1',
     ...invoice,
   }
-  const supplierInvoices: TableMockResolver = (calls) =>
-    calls.some((c) => c.method === 'update')
-      ? { data: { ...row, status: 'approved', approved_at: '2026-10-28T10:00:00.000Z', approved_by: 'user-1' } }
-      : { data: row }
+  // Read back as attested once the database's attest ran.
+  let attestRan = false
+  const attest: TableMockResolver = () => {
+    attestRan = true
+    return { data: { ok: true, approved: true, attestation_id: 'att-1', status: 'approved', approved_at: '2026-10-28T10:00:00.000Z' } }
+  }
+  const supplierInvoices: TableMockResolver = () =>
+    attestRan ? { data: { ...row, status: 'approved', approved_at: '2026-10-28T10:00:00.000Z', approved_by: 'user-1' } } : { data: row }
   // The gate's membership read is single-row; the attest service lists who keeps the books.
   const members: TableMockResolver = (calls) =>
     calls.some((c) => c.method === 'maybeSingle' || c.method === 'single')
@@ -84,6 +88,7 @@ function client(invoice: Record<string, unknown>) {
     supplier_invoices: supplierInvoices,
     supplier_invoice_attestations: attestations,
     company_settings: { data: { accounting_method: 'faktureringsmetoden' } },
+    'rpc:attest_supplier_invoice': attest,
   })
 }
 
@@ -96,7 +101,7 @@ const send = (query = '') =>
     { params: Promise.resolve({ companyId: COMPANY_ID, id: SI_ID }) },
   )
 
-const attested = (c: ReturnType<typeof client>) => c.findCalls('supplier_invoices', 'update').length > 0
+const attested = (c: ReturnType<typeof client>) => c.findCalls('rpc:attest_supplier_invoice', 'rpc').length > 0
 
 beforeEach(() => {
   vi.clearAllMocks()

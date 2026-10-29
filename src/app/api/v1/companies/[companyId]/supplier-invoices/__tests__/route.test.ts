@@ -1807,20 +1807,20 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
       ? { data: [{ user_id: USER_ID, role: 'owner' }], error: null }
       : { data: { company_id: COMPANY_ID, role: 'owner' }, error: null }
 
-  it('flips registered → approved', async () => {
+  it('flips registered → approved, through the database\'s attest as the key\'s user', async () => {
     const registered = { ...SAMPLE_SI, status: 'registered' }
     const approved = { ...SAMPLE_SI, status: 'approved' }
-    mockServiceClient.mockReturnValue(
-      supabaseFor({
-        company_members: ownerMembership,
-        // Queue: 1st = pre-flight (registered), 2nd = post-update (approved).
-        supplier_invoices: [
-          { data: registered, error: null },
-          { data: approved, error: null },
-        ],
-        idempotency_keys: { data: null, error: null },
-      }).supabase,
-    )
+    const mock = supabaseFor({
+      company_members: ownerMembership,
+      // Queue: 1st = pre-flight (registered), 2nd = after the attest (approved).
+      supplier_invoices: [
+        { data: registered, error: null },
+        { data: approved, error: null },
+      ],
+      'rpc:attest_supplier_invoice': { data: { ok: true, approved: true, attestation_id: 'att-1', status: 'approved' }, error: null },
+      idempotency_keys: { data: null, error: null },
+    })
+    mockServiceClient.mockReturnValue(mock.supabase)
     const res = await approveSI(
       makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/approve`, {
         method: 'POST',
@@ -1830,6 +1830,38 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
     expect(res.status).toBe(200)
     const body = await res.json()
     expect(body.data.status).toBe('approved')
+    expect(body.data.attest).toMatchObject({ approved: true, required: false })
+    // Through a key: the database caps the attest by the key when attest levels are on.
+    expect(mock.findCall('rpc:attest_supplier_invoice', 'rpc')?.[0]).toMatchObject({
+      p_company_id: COMPANY_ID,
+      p_invoice_id: SI_ID,
+      p_user_id: USER_ID,
+      p_source: 'api',
+      p_via_key: true,
+      // The key here has no ceiling; the route hands the database whatever its context holds.
+      p_key_ceiling: null,
+    })
+  })
+
+  it('answers 403 ATTEST_LIMIT_EXCEEDED when the attest levels cap the key', async () => {
+    mockServiceClient.mockReturnValue(
+      supabaseFor({
+        company_members: ownerMembership,
+        supplier_invoices: { data: { ...SAMPLE_SI, status: 'registered' }, error: null },
+        'rpc:attest_supplier_invoice': {
+          data: { ok: false, code: 'ATTEST_LIMIT_EXCEEDED', reason: 'key_limit', limit_sek: 1000, amount_sek: 1250 },
+          error: null,
+        },
+        idempotency_keys: { data: null, error: null },
+      }).supabase,
+    )
+    const res = await approveSI(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/supplier-invoices/${SI_ID}/approve`, { method: 'POST' }),
+      detailParams(COMPANY_ID, SI_ID),
+    )
+    expect(res.status).toBe(403)
+    const body = await res.json()
+    expect(body.error).toMatchObject({ code: 'ATTEST_LIMIT_EXCEEDED', details: { reason: 'key_limit', limit_sek: 1000, amount_sek: 1250 } })
   })
 
   it('attests an overdue SI, which stays overdue while it is still late (#1206)', async () => {
@@ -1843,6 +1875,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
           { data: overdue, error: null },
           { data: { ...overdue, approved_at: '2026-07-27T08:00:00Z' }, error: null },
         ],
+        'rpc:attest_supplier_invoice': { data: { ok: true, approved: true, attestation_id: 'att-1', status: 'overdue' }, error: null },
         idempotency_keys: { data: null, error: null },
       }).supabase,
     )

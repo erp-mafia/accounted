@@ -17,8 +17,19 @@ import {
 } from '../supplier-invoice-attest'
 
 const ANNA = '0b8f3e9a-2b1c-4c47-9a39-3a0f6f4f1d11'
+const BO = '6d2a1c3e-8f4b-4a5d-9e7f-1a2b3c4d5e6f'
 const log = createLogger('test')
-const POLICY = { company_id: 'c1', enabled: true, threshold_amount: '5000.00', mode: 'any', attesters: [ANNA], preparer_may_attest: false, updated_by: ANNA, updated_at: '2026-10-14T09:00:00Z' }
+const POLICY = {
+  company_id: 'c1',
+  enabled: true,
+  threshold_amount: '5000.00',
+  mode: 'any',
+  attesters: [ANNA],
+  preparer_may_attest: false,
+  two_step_from_sek: null,
+  updated_by: ANNA,
+  updated_at: '2026-10-14T09:00:00Z',
+}
 
 function ctx(tables: Record<string, unknown>) {
   const mock = createTableMockSupabase(tables as never)
@@ -26,8 +37,12 @@ function ctx(tables: Record<string, unknown>) {
 }
 
 describe('supplier-invoices.attest-policy.get', () => {
-  it('answers the policy with its attesters named', async () => {
-    const { ctx: c } = ctx({ company_attest_policies: { data: POLICY }, profiles: { data: [{ id: ANNA, email: 'anna@example.se', full_name: 'Anna Ek' }] } })
+  it('answers the policy with its attesters named and their limits', async () => {
+    const { ctx: c } = ctx({
+      company_attest_policies: { data: { ...POLICY, attesters: [ANNA, BO], two_step_from_sek: '100000.00' } },
+      company_attest_limits: { data: [{ user_id: ANNA, max_amount_sek: '50000.00' }] },
+      profiles: { data: [{ id: ANNA, email: 'anna@example.se', full_name: 'Anna Ek' }] },
+    })
     const outcome = await supplierInvoicesAttestPolicyGet.run(c, {}, { dryRun: false })
     expect(outcome).toEqual({
       ok: true,
@@ -35,8 +50,12 @@ describe('supplier-invoices.attest-policy.get', () => {
         enabled: true,
         threshold_amount: 5000,
         mode: 'any',
-        attesters: [{ user_id: ANNA, name: 'Anna Ek', email: 'anna@example.se' }],
+        attesters: [
+          { user_id: ANNA, name: 'Anna Ek', email: 'anna@example.se', limit_sek: 50000 },
+          { user_id: BO, name: null, email: null, limit_sek: null },
+        ],
         preparer_may_attest: false,
+        two_step_from_sek: 100000,
         updated_at: '2026-10-14T09:00:00Z',
       },
     })
@@ -65,15 +84,26 @@ describe('supplier-invoices.attest-policy.update', () => {
       profiles: { data: [] },
     })
     expect(await supplierInvoicesAttestPolicyUpdate.run(c, input, { dryRun: true })).toMatchObject({ ok: true, dryRun: true })
-    expect(mock.payloads('company_attest_policies', 'upsert')).toEqual([])
+    expect(mock.findCalls('rpc:save_company_attest_policy', 'rpc')).toEqual([])
     mock.setTable('company_members', [{ data: { role: 'owner' } }, { data: [{ user_id: ANNA, role: 'owner' }] }])
-    expect(await supplierInvoicesAttestPolicyUpdate.run(c, input, { dryRun: false })).toMatchObject({ ok: true, data: { enabled: true, threshold_amount: 5000 } })
-    expect(mock.payloads('company_attest_policies', 'upsert')[0]).toMatchObject({ attesters: [ANNA], updated_by: ANNA })
+    expect(
+      await supplierInvoicesAttestPolicyUpdate.run(c, { ...input, limits: [{ user_id: ANNA, max_amount_sek: 50000 }] }, { dryRun: false }),
+    ).toMatchObject({ ok: true, data: { enabled: true, threshold_amount: 5000 } })
+    // The door's own (service-role) client saves the policy and the limits in one call.
+    expect(mock.findCall('rpc:save_company_attest_policy', 'rpc')?.[0]).toMatchObject({
+      p_attesters: [ANNA],
+      p_updated_by: ANNA,
+      p_limits: [{ user_id: ANNA, max_amount_sek: 50000 }],
+    })
   })
 
-  it('validates its input: a negative threshold and an unknown mode are refused by the schema', () => {
+  it('validates its input: a negative threshold, an unknown mode, a limit of zero and a bad two-step amount are refused by the schema', () => {
     expect(supplierInvoicesAttestPolicyUpdate.input.safeParse({ ...input, threshold_amount: -1 }).success).toBe(false)
     expect(supplierInvoicesAttestPolicyUpdate.input.safeParse({ ...input, mode: 'some' }).success).toBe(false)
+    expect(supplierInvoicesAttestPolicyUpdate.input.safeParse({ ...input, limits: [{ user_id: ANNA, max_amount_sek: 0 }] }).success).toBe(false)
+    expect(supplierInvoicesAttestPolicyUpdate.input.safeParse({ ...input, limits: [{ user_id: 'anna', max_amount_sek: 10 }] }).success).toBe(false)
+    expect(supplierInvoicesAttestPolicyUpdate.input.safeParse({ ...input, two_step_from_sek: -1 }).success).toBe(false)
+    expect(supplierInvoicesAttestPolicyUpdate.input.safeParse({ ...input, two_step_from_sek: null, limits: [{ user_id: ANNA, max_amount_sek: null }] }).success).toBe(true)
   })
 })
 

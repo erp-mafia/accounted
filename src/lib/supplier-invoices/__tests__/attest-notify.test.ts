@@ -68,6 +68,19 @@ describe('notifyAttestersOfInvoice', () => {
     expect(String(data.approveUrl)).not.toContain(String(inserted.token_hash))
   })
 
+  it('levels (#135): mails only whom the invoice needs, those whose limit covers it unless it needs two', async () => {
+    // Anna attests up to 10 000 kr, Bo without a limit (and has the mail on here); the invoice is 12 500 kr.
+    const limits = { company_attest_limits: { data: [{ user_id: 'anna', max_amount_sek: 10000 }] } }
+    seed({ ...limits, notification_settings: { data: [] } })
+    expect(await notifyAttestersOfInvoice(service.supabase as unknown as SupabaseClient, 'c1', 'inv-1')).toMatchObject({ mailed: 1 })
+    expect(sendAttestRequestMail.mock.calls.map(([call]) => (call as { email: string }).email)).toEqual(['bo@example.se'])
+
+    sendAttestRequestMail.mockClear()
+    seed({ ...limits, notification_settings: { data: [] }, company_attest_policies: { data: { ...POLICY, two_step_from_sek: 10000 } } })
+    expect(await notifyAttestersOfInvoice(service.supabase as unknown as SupabaseClient, 'c1', 'inv-1')).toMatchObject({ mailed: 2 })
+    expect(sendAttestRequestMail.mock.calls.map(([call]) => (call as { email: string }).email).sort()).toEqual(['anna@example.se', 'bo@example.se'])
+  })
+
   it('sends nothing when the policy is off, the invoice is under the threshold, or it is attested already', async () => {
     seed({ company_attest_policies: { data: { ...POLICY, enabled: false } } })
     expect((await notifyAttestersOfInvoice(service.supabase as unknown as SupabaseClient, 'c1', 'inv-1')).mailed).toBe(0)

@@ -8,6 +8,7 @@ import { listSupplierInvoiceAttestsDue } from '../categories'
  * invoice waiting for this person's attest under the attest policy.
  */
 
+const MEMBERS = ['anna', 'bo', 'cilla'].map((user_id) => ({ user_id, role: 'member' }))
 const POLICY = { company_id: 'c1', enabled: true, threshold_amount: 1000, mode: 'all', attesters: ['anna', 'bo'], preparer_may_attest: false, updated_by: null, updated_at: null }
 const invoice = (id: string, overrides: Record<string, unknown> = {}) => ({
   id,
@@ -28,7 +29,7 @@ function db(overrides: Record<string, unknown> = {}) {
   return createTableMockSupabase({
     company_attest_policies: { data: POLICY },
     company_settings: { data: { accounting_method: 'accrual' } },
-    company_members: { data: { role: 'member' } },
+    company_members: { data: MEMBERS },
     supplier_invoices: { data: [invoice('due'), invoice('small', { total: 10 }), invoice('mine', { user_id: 'anna' }), invoice('given')] },
     supplier_invoice_attestations: { data: [{ supplier_invoice_id: 'given', user_id: 'anna', decision: 'approved', decided_at: '2026-10-01T09:00:00Z' }] },
     ...Object.fromEntries(Object.entries(overrides).map(([k, v]) => [k, v as never])),
@@ -61,10 +62,23 @@ describe('listSupplierInvoiceAttestsDue', () => {
 
   it('is empty for someone who is not an attester, a viewer, a cash-method company and a policy that is off', async () => {
     expect(await list(db(), 'cilla')).toEqual([])
-    expect(await list(db({ company_members: { data: { role: 'viewer' } } }))).toEqual([])
+    expect(await list(db({ company_members: { data: [{ user_id: 'anna', role: 'viewer' }, { user_id: 'bo', role: 'member' }] } }))).toEqual([])
     expect(await list(db({ company_settings: { data: { accounting_method: 'cash' } } }))).toEqual([])
     expect(await list(db({ company_attest_policies: { data: { ...POLICY, enabled: false } } }))).toEqual([])
     expect(await list(db({ company_attest_policies: { data: null } }))).toEqual([])
+  })
+
+  it('levels (#135): an invoice above my limit is the row of someone whose limit covers it', async () => {
+    // Anna attests up to 1 000 kr, Bo without a limit; the invoice is 5 000 kr.
+    const levels = { company_attest_limits: { data: [{ user_id: 'anna', max_amount_sek: 1000 }] } }
+    const anyPolicy = { company_attest_policies: { data: { ...POLICY, mode: 'any' } } }
+    expect(await list(db({ ...levels, ...anyPolicy }), 'anna')).toEqual([])
+    expect((await list(db({ ...levels, ...anyPolicy }), 'bo')).map((r) => r.supplier_invoice_id)).toEqual(['due', 'mine', 'given'])
+    // With two attesters from 1 000 kr, Anna's approval counts as one of the two.
+    const twoStep = { company_attest_policies: { data: { ...POLICY, mode: 'any', two_step_from_sek: 1000 } } }
+    expect((await list(db({ ...levels, ...twoStep }), 'anna')).map((r) => r.supplier_invoice_id)).toEqual(['due'])
+    // Once Anna gave hers, the invoice waits for Bo, not for a second limited approval.
+    expect((await list(db({ ...levels, ...twoStep }), 'bo')).map((r) => r.supplier_invoice_id)).toEqual(['due', 'mine', 'given'])
   })
 
   it('soft-fails to an empty list', async () => {

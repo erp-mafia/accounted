@@ -81,6 +81,8 @@ const RETAINED = new Set([
   'signing_requests.created_by', // Who sent a document for BankID signing; the company keeps the record with the signatures.
   'signing_request_signers.user_id', // The member asked to sign; a signature is evidence the company keeps.
   'company_attest_policies.updated_by', // Who last changed the attest policy; the company keeps the record.
+  'company_attest_limits.user_id', // The attester a limit is for; company configuration, a departed member stops counting.
+  'company_attest_limits.updated_by', // Who last changed an attest limit; the company keeps the record.
   'company_capability_config.decided_by', // Who approved a package switch (a processing-rule change); the company keeps the record.
   'legal_acceptances.user_id', // Which document version a person accepted and when: the evidence of the agreement outlives the account.
   'company_grants.accepted_by', // Who accepted a rule for automatic booking (a dated processing rule); the company keeps the record.

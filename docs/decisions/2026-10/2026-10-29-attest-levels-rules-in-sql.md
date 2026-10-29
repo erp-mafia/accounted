@@ -1,0 +1,1 @@
+[2026-10-29] Approvals of supplier invoices go through attest_supplier_invoice, which holds the attest rules (limits, two steps) in SQL beside attest-policy.ts (accounted#135): only the database can lock the invoice, judge and set the marker at once; a pg test proves the two copies agree.

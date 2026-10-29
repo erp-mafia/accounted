@@ -11,9 +11,12 @@ vi.mock('@/lib/supabase/server', () => ({
   }),
 }))
 
+import { createServiceClient } from '@/lib/supabase/server'
+import { runWithActor } from '@/lib/bookkeeping/actor-context-node'
 import {
   approveSupplierInvoice,
   loadAttestBlockedInvoiceIds,
+  personalAttestCap,
   rejectSupplierInvoice,
   saveAttestPolicy,
 } from '../attest-service'
@@ -72,130 +75,161 @@ describe('approveSupplierInvoice', () => {
     eventBus.clear()
   })
 
-  it('without a policy approves as before, records the trail and sets approved_by', async () => {
+  const attested = { ok: true, approved: true, attestation_id: 'att-1', status: 'approved' }
+
+  it('the dashboard attests through the database on the member\'s own session, which names nobody else', async () => {
     const { session, writer, ctx, writerClient } = setup({})
+    // The service role still reads who keeps the books.
+    vi.mocked(createServiceClient).mockReturnValue(writerClient as never)
+    session.setTable('supplier_invoices', [{ data: makeSupplierInvoice({ id: 'inv-1', user_id: CILLA, due_date: FUTURE }) }, { data: { id: 'inv-1', status: 'approved' } }])
+    session.setTable('rpc:attest_supplier_invoice', { data: attested })
     const emit = vi.spyOn(eventBus, 'emit')
-    const outcome = await approveSupplierInvoice(ctx(CILLA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
-    expect(outcome).toMatchObject({ ok: true, data: { approved: true, attestation_id: 'att-1', attest: { required: false } } })
-    // The marker is written as the service role, never with the session's client.
-    expect(session.payloads('supplier_invoices', 'update')).toEqual([])
-    const update = writer.payloads('supplier_invoices', 'update')[0] as Record<string, unknown>
-    expect(update).toMatchObject({ status: 'approved', approved_by: CILLA })
-    expect(update.approved_at).toEqual(expect.any(String))
-    expect(writer.payloads('supplier_invoice_attestations', 'insert')[0]).toMatchObject({ decision: 'approved', source: 'app', user_id: CILLA })
+    const outcome = await approveSupplierInvoice(ctx(CILLA), { invoiceId: 'inv-1', source: 'app' })
+    expect(outcome).toMatchObject({ ok: true, data: { approved: true, attestation_id: 'att-1', invoice: { status: 'approved' }, attest: { required: false } } })
+    expect(session.findCall('rpc:attest_supplier_invoice', 'rpc')).toEqual([{ p_company_id: 'company-1', p_invoice_id: 'inv-1' }])
+    // Nobody writes the marker or the trail past the database's function.
+    for (const client of [session, writer]) {
+      expect(client.payloads('supplier_invoices', 'update')).toEqual([])
+      expect(client.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
+    }
+    expect(writer.findCalls('rpc:attest_supplier_invoice', 'rpc')).toEqual([])
+    expect(emit).toHaveBeenCalledTimes(1)
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'supplier_invoice.approved' }))
   })
 
-  it('without a policy still refuses someone who does not keep the books, writing nothing', async () => {
-    const { writer, ctx, writerClient } = setup({})
-    expect(await approveSupplierInvoice(ctx('viewer-or-gone'), { invoiceId: 'inv-1', source: 'api', writer: writerClient })).toMatchObject({
+  it('a service door names the attester, its source and the key it comes through', async () => {
+    const { writer, ctx, writerClient } = setup({ policy: policyRow() })
+    writer.setTable('rpc:attest_supplier_invoice', { data: attested })
+    // The key's ceiling rides on the commit actor (every v1 door binds it); the database caps by it with levels on.
+    await runWithActor({ type: 'api_key', label: 'Agent', unattendedCommitLimit: 50000 }, () =>
+      approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'api', writer: writerClient }),
+    )
+    expect(writer.findCall('rpc:attest_supplier_invoice', 'rpc')).toEqual([
+      { p_company_id: 'company-1', p_invoice_id: 'inv-1', p_user_id: ANNA, p_source: 'api', p_via_key: true, p_key_ceiling: 50000 },
+    ])
+
+    // Above the ceiling the key attests nothing, whatever the levels: refused before the database is asked.
+    const over = setup({ policy: policyRow() })
+    expect(
+      await runWithActor({ type: 'api_key', label: 'Agent', unattendedCommitLimit: 5000 }, () =>
+        approveSupplierInvoice(over.ctx(ANNA), { invoiceId: 'inv-1', source: 'api', writer: over.writerClient }),
+      ),
+    ).toMatchObject({ ok: false, code: 'UNATTENDED_COMMIT_LIMIT_EXCEEDED', details: { attempted: 10000, limit: 5000 } })
+    expect(over.writer.findCalls('rpc:attest_supplier_invoice', 'rpc')).toEqual([])
+
+    const link = setup({ policy: policyRow() })
+    link.writer.setTable('rpc:attest_supplier_invoice', { data: attested })
+    await approveSupplierInvoice(link.ctx(ANNA), { invoiceId: 'inv-1', source: 'email_link', writer: link.writerClient })
+    expect(link.writer.findCall('rpc:attest_supplier_invoice', 'rpc')).toEqual([
+      { p_company_id: 'company-1', p_invoice_id: 'inv-1', p_user_id: ANNA, p_source: 'email_link', p_via_key: false, p_key_ceiling: null },
+    ])
+  })
+
+  it('answers the database\'s refusals in the doors\' codes, and emits nothing', async () => {
+    const emit = vi.spyOn(eventBus, 'emit')
+    const refusals: Array<[Record<string, unknown>, Record<string, unknown>]> = [
+      [{ ok: false, code: 'FORBIDDEN', reason: 'not_member' }, { code: 'FORBIDDEN', details: { reason: 'not_member' }, messageSv: expect.stringMatching(/bokföring/) }],
+      [{ ok: false, code: 'ATTEST_NOT_ALLOWED', reason: 'registrant' }, { code: 'ATTEST_NOT_ALLOWED', details: { reason: 'registrant' } }],
+      [{ ok: false, code: 'ATTEST_ALREADY_GIVEN' }, { code: 'ATTEST_ALREADY_GIVEN' }],
+      [
+        { ok: false, code: 'ATTEST_LIMIT_EXCEEDED', reason: 'limit', limit_sek: 10000, amount_sek: 30000 },
+        { code: 'ATTEST_LIMIT_EXCEEDED', details: { reason: 'limit', limit_sek: 10000, amount_sek: 30000 } },
+      ],
+      // Pending when read, attested by someone else under the lock.
+      [{ ok: false, code: 'SI_APPROVE_NOT_REGISTERED', current_status: 'approved' }, { code: 'SI_APPROVE_NOT_REGISTERED', details: { reason: 'race' } }],
+    ]
+    for (const [answer, expected] of refusals) {
+      const { writer, ctx, writerClient } = setup({ policy: policyRow() })
+      writer.setTable('rpc:attest_supplier_invoice', { data: answer })
+      expect(await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'api', writer: writerClient }), String(answer.code)).toMatchObject({
+        ok: false,
+        ...expected,
+      })
+    }
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('answers SI_NOT_FOUND and SI_APPROVE_NOT_REGISTERED before asking the database', async () => {
+    const missing = setup({ invoice: null })
+    expect(await approveSupplierInvoice(missing.ctx(ANNA), { invoiceId: 'x', source: 'api', writer: missing.writerClient })).toMatchObject({ ok: false, code: 'SI_NOT_FOUND' })
+    const done = setup({ invoice: makeSupplierInvoice({ status: 'approved', approved_at: '2026-10-01T09:00:00Z' }) })
+    expect(await approveSupplierInvoice(done.ctx(ANNA), { invoiceId: 'x', source: 'api', writer: done.writerClient })).toMatchObject({
+      ok: false,
+      code: 'SI_APPROVE_NOT_REGISTERED',
+    })
+    expect(missing.writer.findCalls('rpc:attest_supplier_invoice', 'rpc')).toEqual([])
+    expect(done.writer.findCalls('rpc:attest_supplier_invoice', 'rpc')).toEqual([])
+  })
+
+  it('an approval that does not complete the policy says who is left and emits nothing', async () => {
+    const mine = { user_id: ANNA, decision: 'approved', decided_at: '2026-10-01T09:00:00Z' }
+    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [mine] })
+    writer.setTable('rpc:attest_supplier_invoice', { data: { ok: true, approved: false, attestation_id: 'att-1', status: 'registered' } })
+    const emit = vi.spyOn(eventBus, 'emit')
+    const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'api', writer: writerClient })
+    expect(outcome).toMatchObject({ ok: true, data: { approved: false, attest: { required: true, satisfied: false, remaining: [BO], approvals_needed: 1 } } })
+    expect(emit).not.toHaveBeenCalled()
+  })
+
+  it('emits the event of a committed attest even when the invoice cannot be read back', async () => {
+    const { session, writer, ctx, writerClient } = setup({})
+    session.setTable('supplier_invoices', [{ data: makeSupplierInvoice({ id: 'inv-1', user_id: CILLA, due_date: FUTURE }) }, { error: { message: 'timeout' } }])
+    writer.setTable('rpc:attest_supplier_invoice', { data: { ...attested, approved_at: '2026-10-29T10:00:00Z' } })
+    const emit = vi.spyOn(eventBus, 'emit')
+    const outcome = await approveSupplierInvoice(ctx(CILLA), { invoiceId: 'inv-1', source: 'api', writer: writerClient })
+    expect(outcome).toMatchObject({ ok: true, data: { approved: true, invoice: { id: 'inv-1', status: 'approved', approved_at: '2026-10-29T10:00:00Z', approved_by: CILLA } } })
+    expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'supplier_invoice.approved' }))
+  })
+
+  it('a failed call answers SI_APPROVE_UPDATE_FAILED', async () => {
+    const { writer, ctx, writerClient } = setup({ policy: policyRow() })
+    writer.setTable('rpc:attest_supplier_invoice', { error: { message: 'boom' } })
+    expect(await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'api', writer: writerClient })).toMatchObject({
+      ok: false,
+      code: 'SI_APPROVE_UPDATE_FAILED',
+    })
+  })
+
+  it('a dry run reads the rules and writes nothing: who is left, and a limit that does not cover', async () => {
+    const all = setup({ policy: policyRow({ mode: 'all' }) })
+    const outcome = await approveSupplierInvoice(all.ctx(ANNA), { invoiceId: 'inv-1', source: 'api', dryRun: true, writer: all.writerClient })
+    expect(outcome).toMatchObject({
+      ok: true,
+      dryRun: true,
+      preview: { attest_required: true, completes_attest: false, attest_remaining_user_ids: [BO], status: 'registered', attest_step: 1 },
+    })
+    expect(all.writer.findCalls('rpc:attest_supplier_invoice', 'rpc')).toEqual([])
+
+    // Anna attests up to 5 000 kr; the invoice is 10 000 kr and needs one attester.
+    const capped = setup({ policy: policyRow() })
+    capped.session.setTable('company_attest_limits', { data: [{ user_id: ANNA, max_amount_sek: '5000.00' }] })
+    expect(await approveSupplierInvoice(capped.ctx(ANNA), { invoiceId: 'inv-1', source: 'api', dryRun: true, writer: capped.writerClient })).toMatchObject({
+      ok: false,
+      code: 'ATTEST_LIMIT_EXCEEDED',
+      details: { reason: 'limit', limit_sek: 5000, amount_sek: 10000 },
+    })
+
+    const outsider = setup({})
+    expect(await approveSupplierInvoice(outsider.ctx('viewer-or-gone'), { invoiceId: 'inv-1', source: 'api', dryRun: true, writer: outsider.writerClient })).toMatchObject({
       ok: false,
       code: 'FORBIDDEN',
-      details: { reason: 'not_member' },
-    })
-    expect(writer.payloads('supplier_invoices', 'update')).toEqual([])
-    expect(writer.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
-  })
-
-  it('answers SI_NOT_FOUND and SI_APPROVE_NOT_REGISTERED before any rule', async () => {
-    const missing = setup({ invoice: null })
-    expect(await approveSupplierInvoice(missing.ctx(ANNA), { invoiceId: 'x', source: 'app', writer: missing.writerClient })).toMatchObject({ ok: false, code: 'SI_NOT_FOUND' })
-    const done = setup({ invoice: makeSupplierInvoice({ status: 'approved', approved_at: '2026-10-01T09:00:00Z' }) })
-    expect(await approveSupplierInvoice(done.ctx(ANNA), { invoiceId: 'x', source: 'app', writer: done.writerClient })).toMatchObject({
-      ok: false,
-      code: 'SI_APPROVE_NOT_REGISTERED',
     })
   })
+})
 
-  it('refuses the registrant and a non-attester under the policy, writing nothing', async () => {
-    const registrant = setup({ policy: policyRow(), invoice: makeSupplierInvoice({ user_id: ANNA, due_date: FUTURE }) })
-    expect(await approveSupplierInvoice(registrant.ctx(ANNA), { invoiceId: 'inv-1', source: 'app', writer: registrant.writerClient })).toMatchObject({
-      ok: false,
-      code: 'ATTEST_NOT_ALLOWED',
-      details: { reason: 'registrant' },
-    })
-    expect(registrant.writer.payloads('supplier_invoices', 'update')).toEqual([])
-    expect(registrant.writer.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
+describe('personalAttestCap', () => {
+  it("is the person's limit while levels govern the invoice, else nothing", async () => {
+    const levels = setup({ policy: policyRow() })
+    levels.session.setTable('company_attest_limits', { data: [{ user_id: ANNA, max_amount_sek: 5000 }] })
+    expect(await personalAttestCap(levels.session.supabase as unknown as SupabaseClient, 'company-1', ANNA, 'inv-1')).toBe(5000)
+    expect(await personalAttestCap(levels.session.supabase as unknown as SupabaseClient, 'company-1', BO, 'inv-1')).toBeNull()
 
-    const outsider = setup({ policy: policyRow() })
-    expect(await approveSupplierInvoice(outsider.ctx(CILLA), { invoiceId: 'inv-1', source: 'app', writer: outsider.writerClient })).toMatchObject({
-      ok: false,
-      code: 'ATTEST_NOT_ALLOWED',
-      details: { reason: 'not_attester' },
-    })
-  })
+    const plain = setup({ policy: policyRow() })
+    expect(await personalAttestCap(plain.session.supabase as unknown as SupabaseClient, 'company-1', ANNA, 'inv-1')).toBeNull()
 
-  it('any: the first attester attests the invoice', async () => {
-    const { writer, ctx, writerClient } = setup({ policy: policyRow() })
-    const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'email_link', writer: writerClient })
-    expect(outcome).toMatchObject({ ok: true, data: { approved: true } })
-    expect(writer.payloads('supplier_invoice_attestations', 'insert')[0]).toMatchObject({ source: 'email_link', user_id: ANNA })
-    expect(writer.payloads('supplier_invoices', 'update')[0]).toMatchObject({ approved_by: ANNA })
-  })
-
-  it('all: the first approval is recorded and the invoice waits for the rest', async () => {
-    // The round read back after the insert holds Anna's approval.
-    const mine = { user_id: ANNA, decision: 'approved', decided_at: '2026-10-01T09:00:00Z' }
-    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [[], [mine]] })
-    const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
-    expect(outcome).toMatchObject({ ok: true, data: { approved: false, attest: { required: true, satisfied: false, remaining: [BO] } } })
-    expect(writer.payloads('supplier_invoices', 'update')).toEqual([])
-  })
-
-  it('all: the last approval sets approved_at', async () => {
-    const earlier = { user_id: ANNA, decision: 'approved', decided_at: '2026-10-01T09:00:00Z' }
-    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [earlier] })
-    const outcome = await approveSupplierInvoice(ctx(BO), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
-    expect(outcome).toMatchObject({ ok: true, data: { approved: true } })
-    expect(writer.payloads('supplier_invoices', 'update')[0]).toMatchObject({ approved_by: BO })
-  })
-
-  it('all: an approval that lands while another completes the round still sets the marker', async () => {
-    // Read before the insert: nobody yet. Read after it: both.
-    const both = [
-      { user_id: BO, decision: 'approved', decided_at: '2026-10-01T09:00:00Z' },
-      { user_id: ANNA, decision: 'approved', decided_at: '2026-10-01T09:00:01Z' },
-    ]
-    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [[], both] })
-    const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
-    expect(outcome).toMatchObject({ ok: true, data: { approved: true } })
-    expect(writer.payloads('supplier_invoices', 'update')).toHaveLength(1)
-  })
-
-  it('all: refuses a second approval by the same attester in the round', async () => {
-    const earlier = { user_id: ANNA, decision: 'approved', decided_at: '2026-10-01T09:00:00Z' }
-    const { ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [earlier] })
-    expect(await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })).toMatchObject({
-      ok: false,
-      code: 'ATTEST_ALREADY_GIVEN',
-    })
-  })
-
-  it('without a policy: a lost race answers SI_APPROVE_NOT_REGISTERED and emits nothing', async () => {
-    const { ctx, writerClient, writer } = setup({ updated: null })
-    const emit = vi.spyOn(eventBus, 'emit')
-    expect(await approveSupplierInvoice(ctx(CILLA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })).toMatchObject({
-      ok: false,
-      code: 'SI_APPROVE_NOT_REGISTERED',
-      details: { reason: 'race' },
-    })
-    expect(emit).not.toHaveBeenCalled()
-    expect(writer.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
-  })
-
-  it('keeps an overdue invoice overdue when it is still late', async () => {
-    const overdue = makeSupplierInvoice({ status: 'overdue', due_date: '2000-01-01', remaining_amount: 1000 })
-    const { writer, ctx, writerClient } = setup({ invoice: overdue })
-    await approveSupplierInvoice(ctx(CILLA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
-    expect(writer.payloads('supplier_invoices', 'update')[0]).toMatchObject({ status: 'overdue' })
-  })
-
-  it('a dry run writes nothing and says whether the approval completes the attest', async () => {
-    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }) })
-    const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'api', dryRun: true, writer: writerClient })
-    expect(outcome).toMatchObject({ ok: true, dryRun: true, preview: { attest_required: true, completes_attest: false, attest_remaining_user_ids: [BO], status: 'registered' } })
-    expect(writer.payloads('supplier_invoices', 'update')).toEqual([])
-    expect(writer.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
+    const below = setup({ policy: policyRow({ threshold_amount: 50000 }) })
+    below.session.setTable('company_attest_limits', { data: [{ user_id: ANNA, max_amount_sek: 5000 }] })
+    expect(await personalAttestCap(below.session.supabase as unknown as SupabaseClient, 'company-1', ANNA, 'inv-1')).toBeNull()
   })
 })
 
@@ -267,26 +301,79 @@ describe('loadCompanyAttestsSupplierInvoices', () => {
 })
 
 describe('saveAttestPolicy', () => {
+  const base = { enabled: true, threshold_amount: null, mode: 'any' as const, preparer_may_attest: false }
+
   it('needs an attester when on and refuses someone who may not write', async () => {
     const { ctx, writerClient } = setup({})
-    expect(await saveAttestPolicy(ctx(ANNA), { enabled: true, threshold_amount: null, mode: 'any', attesters: [], preparer_may_attest: false }, { writer: writerClient })).toMatchObject({
+    expect(await saveAttestPolicy(ctx(ANNA), { ...base, attesters: [] }, { writer: writerClient })).toMatchObject({
       ok: false,
       code: 'ATTEST_POLICY_NO_ATTESTERS',
     })
-    expect(
-      await saveAttestPolicy(ctx(ANNA), { enabled: true, threshold_amount: null, mode: 'any', attesters: ['stranger'], preparer_may_attest: false }, { writer: writerClient }),
-    ).toMatchObject({ ok: false, code: 'ATTEST_POLICY_ATTESTER_NOT_MEMBER', details: { user_ids: ['stranger'] } })
+    expect(await saveAttestPolicy(ctx(ANNA), { ...base, attesters: ['stranger'] }, { writer: writerClient })).toMatchObject({
+      ok: false,
+      code: 'ATTEST_POLICY_ATTESTER_NOT_MEMBER',
+      details: { user_ids: ['stranger'] },
+    })
   })
 
-  it('upserts the policy with who changed it, and a dry run writes nothing', async () => {
+  it('needs two attesters for two steps, and gives limits only to attesters', async () => {
     const { writer, ctx, writerClient } = setup({})
-    writer.setTable('company_attest_policies', { data: policyRow({ threshold_amount: '5000.00' }) })
-    const input = { enabled: true, threshold_amount: 5000, mode: 'any' as const, attesters: [ANNA, ANNA, BO], preparer_may_attest: false }
-    const dry = await saveAttestPolicy(ctx(ANNA), input, { writer: writerClient, dryRun: true })
-    expect(dry).toMatchObject({ ok: true, dryRun: true })
-    expect(writer.payloads('company_attest_policies', 'upsert')).toEqual([])
+    expect(await saveAttestPolicy(ctx(ANNA), { ...base, attesters: [ANNA], two_step_from_sek: 50000 }, { writer: writerClient })).toMatchObject({
+      ok: false,
+      code: 'ATTEST_POLICY_TWO_STEP_NEEDS_TWO',
+    })
+    expect(
+      await saveAttestPolicy(ctx(ANNA), { ...base, attesters: [ANNA], limits: [{ user_id: CILLA, max_amount_sek: 1000 }] }, { writer: writerClient }),
+    ).toMatchObject({ ok: false, code: 'ATTEST_LIMIT_NOT_ATTESTER', details: { user_ids: [CILLA] } })
+    expect(writer.findCalls('rpc:save_company_attest_policy', 'rpc')).toEqual([])
+  })
+
+  it('saves the policy and the limits in one call, with who changed them; a dry run writes nothing', async () => {
+    const { session, writer, ctx, writerClient } = setup({})
+    session.setTable('company_attest_policies', { data: policyRow({ threshold_amount: '5000.00', two_step_from_sek: '50000.00' }) })
+    const input = {
+      ...base,
+      threshold_amount: 5000,
+      attesters: [ANNA, ANNA, BO],
+      two_step_from_sek: 50000,
+      limits: [
+        { user_id: ANNA, max_amount_sek: 20000.004 },
+        { user_id: BO, max_amount_sek: null },
+      ],
+    }
+    expect(await saveAttestPolicy(ctx(ANNA), input, { writer: writerClient, dryRun: true })).toMatchObject({ ok: true, dryRun: true })
+    expect(writer.findCalls('rpc:save_company_attest_policy', 'rpc')).toEqual([])
+
     const saved = await saveAttestPolicy(ctx(ANNA), input, { writer: writerClient })
-    expect(saved).toMatchObject({ ok: true, data: { enabled: true, threshold_amount: 5000 } })
-    expect(writer.payloads('company_attest_policies', 'upsert')[0]).toMatchObject({ attesters: [ANNA, BO], updated_by: ANNA, company_id: 'company-1' })
+    expect(saved).toMatchObject({ ok: true, data: { enabled: true, threshold_amount: 5000, two_step_from_sek: 50000 } })
+    expect(writer.findCall('rpc:save_company_attest_policy', 'rpc')).toEqual([
+      {
+        p_company_id: 'company-1',
+        p_enabled: true,
+        p_threshold_amount: 5000,
+        p_mode: 'any',
+        p_attesters: [ANNA, BO],
+        p_preparer_may_attest: false,
+        p_two_step_from_sek: 50000,
+        p_limits: [
+          { user_id: ANNA, max_amount_sek: 20000 },
+          { user_id: BO, max_amount_sek: null },
+        ],
+        p_updated_by: ANNA,
+      },
+    ])
+  })
+
+  it('leaves two steps and the limits as they are when the caller leaves them out', async () => {
+    const { session, writer, ctx, writerClient } = setup({ policy: policyRow({ two_step_from_sek: '80000.00' }) })
+    session.setTable('company_attest_policies', { data: policyRow({ two_step_from_sek: '80000.00' }) })
+    await saveAttestPolicy(ctx(ANNA), { ...base, attesters: [ANNA, BO] }, { writer: writerClient })
+    expect(writer.findCall('rpc:save_company_attest_policy', 'rpc')?.[0]).toMatchObject({ p_two_step_from_sek: 80000, p_limits: null })
+  })
+
+  it('answers FORBIDDEN when the RLS policies refuse a session that is no owner or admin', async () => {
+    const { writer, ctx, writerClient } = setup({})
+    writer.setTable('rpc:save_company_attest_policy', { error: { code: '42501', message: 'new row violates row-level security policy' } })
+    expect(await saveAttestPolicy(ctx(ANNA), { ...base, attesters: [ANNA] }, { writer: writerClient })).toMatchObject({ ok: false, code: 'FORBIDDEN' })
   })
 })
