@@ -1174,7 +1174,7 @@ Example response `200`:
 **Issue a credit note (kreditfaktura) against an invoice.**
 `scope:invoices:write · risk:high · idempotent · dry-run`
 
-Creates and issues a credit note referencing the original invoice. The credit note mirrors the original line for line with reversed-sign amounts (the same VAT, revenue accounts, ROT/RUT and periodisering fields, and payee) and gets invoice_number=KR-<original> (a self-billed original: KR-<its external number>). Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510; on ROT/RUT Credit 1513 for Skatteverket's share and 1510 for the customer's; Debit 29xx where revenue is still deferred, and the accrual schedule stops) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. Under deferred booking (defer_invoice_booking) an original that was never booked is booked first on its own invoice date, exactly as POST /invoices/{id}/book does (original_journal_entry_id), then credited; when that booking is refused the credit is refused before anything is written (400 INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED or INVOICE_CREDIT_ORIGINAL_BOOK_FAILED). The original transitions to status=credited once the entry exists. The credit note is dated today (Europe/Stockholm); a locked or closed period, or no fiscal period for today, returns 400 INVOICE_CREDIT_PERIOD_LOCKED before anything is written. Idempotent and dry-runnable. Emits credit_note.created.
+Creates and issues a credit note referencing the original invoice. The credit note mirrors the original line for line with reversed-sign amounts (the same VAT, revenue accounts, ROT/RUT and periodisering fields, and payee) and gets invoice_number=KR-<original> (a self-billed original: KR-<its external number>). Posts a reversing journal entry (Debit revenue + Debit output VAT / Credit AR 1510; on ROT/RUT Credit 1513 for Skatteverket's share and 1510 for the customer's; Debit 29xx where revenue is still deferred, and the accrual schedule stops) whenever the original sale reached the ledger: always under faktureringsmetoden, and under kontantmetoden once the original was paid or otherwise booked (status paid, a linked verifikat, a payment date, or a non-zero paid amount). Only a kontantmetod invoice carrying none of those signals is credited without an entry, because nothing has been recognised yet. Under deferred booking (defer_invoice_booking) an original that was never booked is booked first on its own invoice date, exactly as POST /invoices/{id}/book does (original_journal_entry_id), then credited; when that booking is refused the credit is refused before anything is written (400 INVOICE_CREDIT_ORIGINAL_PERIOD_LOCKED or INVOICE_CREDIT_ORIGINAL_BOOK_FAILED). The original transitions to status=credited once the entry exists. The credit note keeps the credited invoice's öresavrundning choice (ore_rounding), so its amount_to_pay and ore_rounding_amount mirror the original's with the opposite sign whatever the company setting is today. The credit note is dated today (Europe/Stockholm); a locked or closed period, or no fiscal period for today, returns 400 INVOICE_CREDIT_PERIOD_LOCKED before anything is written. Idempotent and dry-runnable. Emits credit_note.created.
 
 **Use when:** You need to legally cancel an issued invoice (ML 17 kap 22-23§). The original invoice cannot be edited once issued: credit it and reissue corrected.
 **Do not use for:** Cancelling a draft (DELETE the draft instead). Refunding a partial payment without invalidating the whole invoice (book the refund manually via the journal-entries API in a future PR).
@@ -1214,6 +1214,9 @@ Response `200`:
     credited_invoice_id: string,
     status: "sent",
     total: number,
+    amount_to_pay: number,
+    ore_rounding_amount: number,
+    ore_rounding: boolean | null,
     journal_entry_id: string | null,
     original_journal_entry_id?: string,
     warnings?: { code: string, message: string }[]
@@ -1239,6 +1242,9 @@ Example response `200`:
     "credited_invoice_id": "0e9c…",
     "status": "sent",
     "total": -12500,
+    "amount_to_pay": -12500,
+    "ore_rounding_amount": 0,
+    "ore_rounding": true,
     "journal_entry_id": "8b4b…"
   },
   "meta": {
