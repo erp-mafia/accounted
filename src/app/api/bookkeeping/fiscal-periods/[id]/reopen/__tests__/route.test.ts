@@ -110,6 +110,7 @@ describe('GET /api/bookkeeping/fiscal-periods/[id]/reopen', () => {
       companyId: 'company-1',
       timeoutMs: 10_000,
       requireKeys: ['financialReports', 'financialReportsComplete'],
+      purpose: 'refresh',
     })
   })
 

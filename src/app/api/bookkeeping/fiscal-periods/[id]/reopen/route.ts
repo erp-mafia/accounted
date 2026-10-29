@@ -29,6 +29,7 @@ function registryDeps(supabase: SupabaseClient, companyId: string): FiscalYearRe
         companyId,
         timeoutMs: 10_000,
         requireKeys: FISCAL_YEAR_REOPEN_REGISTRY_KEYS,
+        purpose: 'refresh',
       }),
   }
 }

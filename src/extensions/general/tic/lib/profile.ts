@@ -10,6 +10,7 @@ import {
 import type { TICCompanyProfile, TICFinancialReportSummary } from './tic-types'
 import { pickCompanyName, registrationDateToMs } from './lookup'
 import { isLensDocumentCeased } from './lens-status'
+import type { TicCallContext } from '@/lib/tic-budget/budget'
 
 /**
  * The company profile behind the extension's `fetchCompanyProfile` service:
@@ -54,9 +55,13 @@ function toFinancialReportSummary(
 export async function buildCompanyProfile(
   orgNumber: string,
   log: ProfileLog,
+  ctx: TicCallContext = {},
 ): Promise<TICCompanyProfile | null> {
   const cleanedOrgNumber = orgNumber.replace(/[\s-]/g, '')
-  const doc = await searchCompanyByOrgNumber(orgNumber)
+  // Every call of the fan-out is charged to the caller's purpose ('profile'
+  // when it named none).
+  const callCtx: TicCallContext = { ...ctx, purpose: ctx.purpose ?? 'profile' }
+  const doc = await searchCompanyByOrgNumber(orgNumber, callCtx)
 
   if (!doc) return null
 
@@ -76,12 +81,12 @@ export async function buildCompanyProfile(
     statusResult,
     beneficialOwnersResult,
   ] = await Promise.allSettled([
-    getCompanyDocuments(companyId),
-    getFiscalYears(companyId),
-    getPayrolls(companyId),
-    getRepresentatives(companyId),
-    getCompanyStatus(companyId),
-    getBeneficialOwners(companyId),
+    getCompanyDocuments(companyId, callCtx),
+    getFiscalYears(companyId, callCtx),
+    getPayrolls(companyId, callCtx),
+    getRepresentatives(companyId, callCtx),
+    getCompanyStatus(companyId, callCtx),
+    getBeneficialOwners(companyId, callCtx),
   ])
 
   // Bankgiro list from search-doc (v2 `bankAccounts` array with

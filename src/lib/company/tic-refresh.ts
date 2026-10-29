@@ -103,6 +103,7 @@ export async function refreshCompanyProfileAction(
     // The user is watching a spinner; give the ~7-13 call Lens fan-out room to
     // finish (the 5s default aborted every fetch during the May quota incident).
     timeoutMs: 10_000,
+    purpose: 'refresh',
   })
 
   // 'fetched' = a fresh live fetch was persisted. 'fallback' = TIC returned

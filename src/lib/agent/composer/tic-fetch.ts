@@ -1,5 +1,6 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { createLogger } from '@/lib/logger'
+import type { TicCallPurpose } from '@/lib/tic-budget/budget'
 
 const log = createLogger('agent.composer.tic-fetch')
 
@@ -70,8 +71,18 @@ export async function ensureTicSnapshot(opts: {
   // financialReportsComplete, without which it cannot tell "no annual report
   // registered" from "could not ask".
   requireKeys?: readonly string[]
+  // What the Lens calls of a live fetch are charged to in the monthly TIC
+  // budget (lib/tic-budget). A spent purpose degrades to the cached snapshot.
+  purpose?: TicCallPurpose
 }): Promise<TicSnapshotResult> {
-  const { supabase, companyId, upgradeV1 = false, timeoutMs = FETCH_TIMEOUT_MS, requireKeys = [] } = opts
+  const {
+    supabase,
+    companyId,
+    upgradeV1 = false,
+    timeoutMs = FETCH_TIMEOUT_MS,
+    requireKeys = [],
+    purpose = 'profile',
+  } = opts
 
   const { data: companyRow } = await supabase
     .from('companies')
@@ -114,7 +125,7 @@ export async function ensureTicSnapshot(opts: {
     return { snapshot: (companyRow.tic_snapshot as Record<string, unknown> | null) ?? null, source: 'fallback' }
   }
 
-  const profile = await fetchTicProfile(orgNumber, timeoutMs)
+  const profile = await fetchTicProfile(orgNumber, timeoutMs, purpose)
   if (!profile) {
     // Fall through with whatever (possibly stale) snapshot we already have.
     return {
@@ -152,6 +163,7 @@ function isStale(fetchedAt: string | null): boolean {
 async function fetchTicProfile(
   orgNumber: string,
   timeoutMs: number,
+  purpose: TicCallPurpose,
 ): Promise<Record<string, unknown> | null> {
   // Loaded on use, not statically: the settings panel's refresh action reaches
   // this module from a client component, and a static registry import would
@@ -171,7 +183,7 @@ async function fetchTicProfile(
       timer = setTimeout(() => resolve('timeout'), timeoutMs)
     })
     const result = await Promise.race([
-      provider.services![FETCH_COMPANY_PROFILE_SERVICE](orgNumber) as Promise<Record<string, unknown> | null>,
+      provider.services![FETCH_COMPANY_PROFILE_SERVICE](orgNumber, { purpose }) as Promise<Record<string, unknown> | null>,
       timeout,
     ])
     if (result === 'timeout') {

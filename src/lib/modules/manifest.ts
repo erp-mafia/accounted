@@ -664,6 +664,10 @@ export const INFRA_LIB_FOLDERS: readonly string[] = Object.freeze([
   'supabase',
   'support',
   'theme',
+  // The paid registry (TIC Lens) call budget and shared response cache:
+  // a quota counter used by onboarding, the agent composer and the TIC
+  // extension alike.
+  'tic-budget',
   'ui-state',
   'vendor-marks',
   // The unexplained queue: expected-zero checks that read across the ledger

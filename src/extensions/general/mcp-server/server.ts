@@ -5914,7 +5914,7 @@ export const tools: McpTool[] = [
       required: ['status', 'company', 'suggested_create_company_input', 'still_to_ask', 'warnings', 'instructions'],
     },
     annotations: ANNOTATIONS_READ_ONLY_OPEN_WORLD,
-    async execute(args) {
+    async execute(args, _companyId, userId, _supabase, actor) {
       const raw = String((args as { org_number: string }).org_number ?? '')
       const normalized = normalizeOrgNumber(raw)
       if (!normalized) {
@@ -5936,7 +5936,13 @@ export const tools: McpTool[] = [
 
       let lookup
       try {
-        lookup = await lookupCompanyByOrgNumber(normalized)
+        // Charged to the mcp_lookup share of the monthly registry budget and
+        // to this key's daily cap (TIC_MCP_LOOKUP_DAILY_PER_KEY); either one
+        // spent lands in the 'unavailable' branch below.
+        lookup = await lookupCompanyByOrgNumber(normalized, {
+          purpose: 'mcp_lookup',
+          subject: actor?.id ?? userId,
+        })
       } catch (error) {
         if (error instanceof TICAPIError) {
           return {
