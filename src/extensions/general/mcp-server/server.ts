@@ -2979,6 +2979,35 @@ function documentNotFound(documentId: string): Error {
   return codedRefusal('NOT_FOUND', `Document not found: no document with id ${documentId} in this company.`)
 }
 
+/**
+ * The document behind each inbox item id among `ids`. An upload's document
+ * shares its inbox item's id, but a mail or WhatsApp arrival gives its
+ * document an id of its own, so an agent that read ids off
+ * gnubok_list_inbox_items sent inbox item ids as document_id and every
+ * forwarded receipt missed as document_not_found (Kvittojakten run,
+ * 2026-10-29). Called with the ids no document answered to; an id that is
+ * neither stays a miss.
+ */
+async function documentIdsForInboxItems(
+  supabase: SupabaseClient,
+  companyId: string,
+  ids: string[],
+): Promise<Map<string, string>> {
+  if (ids.length === 0) return new Map()
+  const { data, error } = await supabase
+    .from('invoice_inbox_items')
+    .select('id, document_id')
+    .eq('company_id', companyId)
+    .in('id', ids)
+    .not('document_id', 'is', null)
+  if (error) {
+    if (isLookupMiss(error)) return new Map()
+    throw dbError(error)
+  }
+  const rows = (data ?? []) as Array<{ id: string; document_id: string }>
+  return new Map(rows.filter((r) => r.document_id !== r.id).map((r) => [r.id, r.document_id]))
+}
+
 /** NOT_FOUND for the operation id sent to approve or reject. */
 function pendingOperationNotFound(operationId: string): Error {
   return codedRefusal(
@@ -18227,12 +18256,13 @@ export const tools: McpTool[] = [
     outputSchema: STAGED_OPERATION_SCHEMA,
     annotations: ANNOTATIONS_IDEMPOTENT_WRITE,
     async execute(args, companyId, userId, supabase, actor) {
-      const documentId = args.document_id as string
+      let documentId = args.document_id as string
       const journalEntryId = args.journal_entry_id as string
       const journalEntryLineId = typeof args.journal_entry_line_id === 'string' ? args.journal_entry_line_id : undefined
       const wantsCopy = args.copy === true
       if (!documentId) throw badArgument('document_id', 'document_id is required')
       if (!journalEntryId) throw badArgument('journal_entry_id', 'journal_entry_id is required')
+      const sentId = documentId
 
       // The rules the approval runs (lib/documents/link-document.ts, shared
       // with v1 and the dashboard): ownership, the line on the verifikat, a
@@ -18246,6 +18276,15 @@ export const tools: McpTool[] = [
         journal_entry_line_id: journalEntryLineId ?? null,
       }
       let check = await checkDocumentLink(supabase, companyId, linkInput)
+      // An inbox item id where the document id belongs: link the document it holds.
+      if (!check.ok && check.code === 'NOT_FOUND' && check.details.resource === 'document') {
+        const held = (await documentIdsForInboxItems(supabase, companyId, [documentId])).get(documentId)
+        if (held) {
+          documentId = held
+          linkInput.document_id = held
+          check = await checkDocumentLink(supabase, companyId, linkInput)
+        }
+      }
       // Held by another verifikat and copy asked for: every other rule still
       // applies to this verifikat, and approval archives a copy (crm#1171 item 9).
       let copy = false
@@ -18326,6 +18365,7 @@ export const tools: McpTool[] = [
           ...(copy ? { copy: true } : {}),
         },
         preview: {
+          ...(sentId !== documentId ? { document_id: documentId, resolved_from_inbox_item_id: sentId } : {}),
           document_file_name: doc.file_name,
           document_mime_type: doc.mime_type,
           document_already_linked: currentlyLinkedToSameJe,
@@ -18403,7 +18443,7 @@ export const tools: McpTool[] = [
     // search over raising the budget.
     catalogVisibility: 'search',
     async execute(args, companyId, userId, supabase, actor) {
-      const rawLinks = args.links as Array<{
+      let rawLinks = args.links as Array<{
         document_id: string
         journal_entry_id?: string
         voucher_series: string
@@ -18454,16 +18494,36 @@ export const tools: McpTool[] = [
       }
 
       // ── Batch-fetch documents.
-      const documentIds = [...new Set(rawLinks.map((l) => l.document_id))]
-      const { data: docs, error: docsError } = await supabase
-        .from('document_attachments')
-        .select('id, file_name, mime_type, journal_entry_id')
-        .in('id', documentIds)
-        .eq('company_id', companyId)
-      if (docsError) throw dbError(docsError)
-      const docsById = new Map((docs ?? []).map((d) => [d.id as string, d as {
-        id: string; file_name: string; mime_type: string; journal_entry_id: string | null
-      }]))
+      type LinkDoc = { id: string; file_name: string; mime_type: string; journal_entry_id: string | null }
+      const fetchDocs = async (ids: string[]) => {
+        const { data, error } = await supabase
+          .from('document_attachments')
+          .select('id, file_name, mime_type, journal_entry_id')
+          .in('id', ids)
+          .eq('company_id', companyId)
+        if (error) throw dbError(error)
+        return (data ?? []) as LinkDoc[]
+      }
+      let documentIds = [...new Set(rawLinks.map((l) => l.document_id))]
+      const docsById = new Map((await fetchDocs(documentIds)).map((d) => [d.id, d]))
+      // Rows naming an inbox item instead of its document take the document
+      // it holds; the row's result says which inbox item it came from.
+      const inboxItemOfRow = new Map<typeof rawLinks[number], string>()
+      const heldDocuments = await documentIdsForInboxItems(
+        supabase, companyId, documentIds.filter((id) => !docsById.has(id)),
+      )
+      if (heldDocuments.size > 0) {
+        const unread = [...new Set(heldDocuments.values())].filter((id) => !docsById.has(id))
+        if (unread.length > 0) for (const d of await fetchDocs(unread)) docsById.set(d.id, d)
+        rawLinks = rawLinks.map((l) => {
+          const held = heldDocuments.get(l.document_id)
+          if (!held) return l
+          const row = { ...l, document_id: held }
+          inboxItemOfRow.set(row, l.document_id)
+          return row
+        })
+        documentIds = [...new Set(rawLinks.map((l) => l.document_id))]
+      }
       // Waiting proposals that already link a document to a verifikat: a row
       // whose document another proposal sends to a different verifikat is a
       // miss, since only one of the two could ever commit (crm#1158).
@@ -18538,20 +18598,26 @@ export const tools: McpTool[] = [
         document_file_name?: string
         /** For proposed_elsewhere: the waiting operation that links the document to another verifikat. */
         conflicting_operation_id?: string
+        /** The inbox item id the row sent, when document_id is the document that item holds. */
+        resolved_from_inbox_item_id?: string
         voucher_label?: string
         voucher_date?: string
       }
       // Identifying fields only: spreading the raw row would leak
       // journal_entry_line_id into a response shape that does not declare it.
-      const rowKey = (l: typeof rawLinks[number]) =>
-        l.journal_entry_id
-          ? { document_id: l.document_id, journal_entry_id: l.journal_entry_id }
+      const rowKey = (l: typeof rawLinks[number]) => {
+        const inboxItemId = inboxItemOfRow.get(l)
+        const from = inboxItemId ? { resolved_from_inbox_item_id: inboxItemId } : {}
+        return l.journal_entry_id
+          ? { document_id: l.document_id, journal_entry_id: l.journal_entry_id, ...from }
           : {
               document_id: l.document_id,
               voucher_series: l.voucher_series,
               voucher_number: l.voucher_number,
               fiscal_year: l.fiscal_year,
+              ...from,
             }
+      }
 
       // ── A document already attached to ANOTHER verifikat previews as
       //    already_linked, whatever that verifikat's status: the executor's
