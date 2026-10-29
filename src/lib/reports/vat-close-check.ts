@@ -43,6 +43,7 @@ import { countUnbookedBankTransactions } from '@/lib/transactions/unbooked'
 import type { KontantmetodCutoffVatFacts, VatDeclaration, VatDeclarationRutor } from '@/types'
 import { createLogger } from '@/lib/logger'
 import { parseVatPeriodArgs } from './vat-period-args'
+import { compareVatPeriods, type VatCloseSanity, type VatSanityRutor } from './vat-period-comparison'
 
 const log = createLogger('reports/vat-close-check')
 
@@ -757,15 +758,6 @@ const RC_COMPLETENESS_CODES = new Set<VatDeclarationCheck['code']>([
   'RC_INPUT_VAT_MISMATCH',
 ])
 
-interface VatCloseSanityAnomaly {
-  kind: 'output_vat_ratio_drift' | 'input_vat_ratio_drift' | 'revenue_drop' | 'revenue_spike'
-  rate?: '25' | '12' | '6'
-  current: number
-  previous: number
-  delta_pct: number
-  message: string
-}
-
 interface VatCloseCheckResult {
   /**
    * `source` discloses whether the range is a resolved räkenskapsår or the
@@ -791,15 +783,8 @@ interface VatCloseCheckResult {
    * it says nothing about the other blockers.
    */
   declaration_checks: VatCompletenessFinding[]
-  sanity: {
-    anomalies: VatCloseSanityAnomaly[]
-    ratios: {
-      output_vat_ratio_25: number  // ruta10 / domestic 25% revenue
-      output_vat_ratio_12: number
-      output_vat_ratio_6: number
-      previous_period_compared: boolean
-    }
-  }
+  /** The comparison with the previous period (./vat-period-comparison.ts). Advisory. */
+  sanity: VatCloseSanity
   ready_to_close: boolean
   summary: string
 }
@@ -1361,66 +1346,24 @@ export async function computeVatCloseCheck(
     })
   }
 
-  // 5) Sanity ratios: current period output VAT to revenue per rate, vs prior period
-  const ratios = {
-    output_vat_ratio_25: vatReport.rutor.ruta05 > 0
-      ? Math.round((vatReport.rutor.ruta10 / vatReport.rutor.ruta05) * 10000) / 100
-      : 0,
-    output_vat_ratio_12: 0,  // no per-rate revenue split available from VAT report
-    output_vat_ratio_6: 0,
-    previous_period_compared: false,
-  }
-  const anomalies: VatCloseSanityAnomaly[] = []
-
-  // Compare to previous same-length period
+  // 5) Sanity: this period's sales per rate against the previous period of
+  //    the same length (compareVatPeriods). Advisory, never a blocker, so a
+  //    failed read of the previous period leaves the comparison out; it is
+  //    logged, and previous_period_compared says so.
+  let previousRutor: VatSanityRutor | null = null
   const prevArgs = previousPeriodArgs(periodType as 'monthly' | 'quarterly' | 'yearly', Number(year), Number(period))
   if (prevArgs) {
     try {
-      const prev = await computeVatReport(prevArgs, companyId, supabase)
-      ratios.previous_period_compared = true
-      // Output VAT ratio 25% drift
-      if (vatReport.rutor.ruta05 > 0 && prev.rutor.ruta05 > 0) {
-        const cur = vatReport.rutor.ruta10 / vatReport.rutor.ruta05
-        const prv = prev.rutor.ruta10 / prev.rutor.ruta05
-        if (prv > 0) {
-          const deltaPct = Math.round(((cur - prv) / prv) * 10000) / 100
-          if (Math.abs(deltaPct) > 20) {
-            anomalies.push({
-              kind: 'output_vat_ratio_drift',
-              rate: '25',
-              current: Math.round(cur * 10000) / 100,
-              previous: Math.round(prv * 10000) / 100,
-              delta_pct: deltaPct,
-              message: `Utgående moms 25% / försäljning ändrades ${deltaPct > 0 ? '+' : ''}${deltaPct}% jämfört med föregående period: kontrollera momssatser`,
-            })
-          }
-        }
-      }
-      // Revenue spike/drop
-      if (prev.rutor.ruta05 > 0) {
-        const revDelta = Math.round(((vatReport.rutor.ruta05 - prev.rutor.ruta05) / prev.rutor.ruta05) * 10000) / 100
-        if (revDelta < -50) {
-          anomalies.push({
-            kind: 'revenue_drop',
-            current: vatReport.rutor.ruta05,
-            previous: prev.rutor.ruta05,
-            delta_pct: revDelta,
-            message: `Försäljning föll ${revDelta}%: bekräfta att alla fakturor är bokförda`,
-          })
-        } else if (revDelta > 200) {
-          anomalies.push({
-            kind: 'revenue_spike',
-            current: vatReport.rutor.ruta05,
-            previous: prev.rutor.ruta05,
-            delta_pct: revDelta,
-            message: `Försäljning steg ${revDelta}%: kontrollera att inget bokats två gånger`,
-          })
-        }
-      }
-    } catch {
-      // Previous period unavailable: skip comparison silently
+      previousRutor = (await computeVatReport(prevArgs, companyId, supabase)).rutor
+    } catch (err) {
+      log.warn('previous VAT period unavailable, sanity comparison skipped', {
+        companyId,
+        previousPeriod: prevArgs,
+        error: err instanceof Error ? err.message : String(err),
+      })
     }
   }
+  const sanity = compareVatPeriods(vatReport.rutor, previousRutor)
 
   // Moms earlier periods left on 2650/1650 after Skatteverket charged or paid
   // it (lib/reports/vat-settlement-account-drift.ts). Read last, as today's
@@ -1458,10 +1401,10 @@ export async function computeVatCloseCheck(
       ? ` Periodisk sammanställning: ${psWarning.count} EU-försäljning${psWarning.count === 1 ? '' : 'ar'} i ruta 39 saknar köpare.`
       : ' Periodisk sammanställning kunde inte stämmas av.'
   let summary: string
-  if (readyToClose && anomalies.length === 0) {
+  if (readyToClose && sanity.anomalies.length === 0) {
     summary = `Klart för stängning. ${direction === 'pay' ? `Moms att betala: ${netDue} kr` : direction === 'refund' ? `Moms att få tillbaka: ${Math.abs(netDue)} kr` : 'Noll i moms'}.${deadline ? ` Inlämning senast ${deadline.label}.` : ''}${psNote}`
   } else if (readyToClose) {
-    summary = `Klart för stängning men ${anomalies.length} avvikelse(r) att granska.${psNote}`
+    summary = `Klart för stängning men ${sanity.anomalies.length} avvikelse(r) att granska.${psNote}`
   } else if (declarationBlocked) {
     summary = `Inte klart: deklarationsunderlaget är ofullständigt (${declarationErrors} fel), ${highBlockers} kritiska blockerare totalt.`
   } else {
@@ -1481,7 +1424,7 @@ export async function computeVatCloseCheck(
     },
     blockers,
     declaration_checks: toCompletenessFindings(declarationChecks, reviewInputs),
-    sanity: { anomalies, ratios },
+    sanity,
     ready_to_close: readyToClose,
     summary,
   }

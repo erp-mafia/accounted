@@ -650,7 +650,8 @@ Generalised pre-flight that consolidates the Accounted pre-close validators unde
 - year_end_readiness and voucher_gaps require fiscal_period_id (UUID); vat_close requires period_type, year and period.
 - voucher_gaps covers EVERY voucher series registered for the period (A, B, F, ...), not only series A.
 - A passing check is a SNAPSHOT: the state can change between the check and the action. The same blocker logic runs again on commit.
-- vat_close: details carries the rutor signed exactly as the momsdeklaration files them (ruta49 = to pay, negative = refund; a box whose credit notes exceed its sales is negative), the payment block with the deadline, and the sanity ratios.
+- vat_close: details carries the rutor signed exactly as the momsdeklaration files them (ruta49 = to pay, negative = refund; a box whose credit notes exceed its sales is negative), the payment block with the deadline, and sanity, a comparison with the previous period of the same length.
+- vat_close: details.sanity is advisory and never changes ready. ratios.rate_shares gives each rate's share (25/12/6, percent) of the taxable base derived from output VAT (ruta 10/11/12 divided by the rate), for the current and previous period, null when a period has no sales or a negative rate. anomalies: rate_share_shift (one per rate whose share moved at least 15 percentage points while its base moved at least max(25000 kr, 10 % of the larger total); delta_pct is in percentage points), revenue_drop and revenue_spike (ruta 05 down more than 50 % or up more than 200 %, skipped when both periods are below 25000 kr). ratios.output_vat_ratio_25/12/6 are deprecated: read rate_shares.
 
 | Parameter | In | Type | Required | Notes |
 |---|---|---|---|---|

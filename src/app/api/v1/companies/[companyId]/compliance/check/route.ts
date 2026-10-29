@@ -28,6 +28,13 @@ import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { validateYearEndReadiness } from '@/lib/core/bookkeeping/year-end-service'
 import { listVoucherGaps } from '@/lib/core/bookkeeping/voucher-gaps'
 import { computeVatCloseCheck } from '@/lib/reports/vat-close-check'
+import {
+  RATE_BASE_CHANGE_MIN_PCT_OF_TOTAL,
+  RATE_SHARE_SHIFT_MIN_POINTS,
+  REVENUE_DROP_PCT,
+  REVENUE_SPIKE_PCT,
+  VAT_SANITY_FLOOR_KRONOR,
+} from '@/lib/reports/vat-period-comparison'
 
 // --------------------------------------------------------------------
 // Response envelope: identical shape across check types so agents learn
@@ -297,7 +304,8 @@ registerEndpoint({
     'year_end_readiness and voucher_gaps require fiscal_period_id (UUID); vat_close requires period_type, year and period.',
     'voucher_gaps covers EVERY voucher series registered for the period (A, B, F, ...), not only series A.',
     'A passing check is a SNAPSHOT: the state can change between the check and the action. The same blocker logic runs again on commit.',
-    'vat_close: details carries the rutor signed exactly as the momsdeklaration files them (ruta49 = to pay, negative = refund; a box whose credit notes exceed its sales is negative), the payment block with the deadline, and the sanity ratios.',
+    'vat_close: details carries the rutor signed exactly as the momsdeklaration files them (ruta49 = to pay, negative = refund; a box whose credit notes exceed its sales is negative), the payment block with the deadline, and sanity, a comparison with the previous period of the same length.',
+    `vat_close: details.sanity is advisory and never changes ready. ratios.rate_shares gives each rate's share (25/12/6, percent) of the taxable base derived from output VAT (ruta 10/11/12 divided by the rate), for the current and previous period, null when a period has no sales or a negative rate. anomalies: rate_share_shift (one per rate whose share moved at least ${RATE_SHARE_SHIFT_MIN_POINTS} percentage points while its base moved at least max(${VAT_SANITY_FLOOR_KRONOR} kr, ${RATE_BASE_CHANGE_MIN_PCT_OF_TOTAL} % of the larger total); delta_pct is in percentage points), revenue_drop and revenue_spike (ruta 05 down more than ${REVENUE_DROP_PCT} % or up more than ${REVENUE_SPIKE_PCT} %, skipped when both periods are below ${VAT_SANITY_FLOOR_KRONOR} kr). ratios.output_vat_ratio_25/12/6 are deprecated: read rate_shares.`,
   ],
   example: {
     response: {
