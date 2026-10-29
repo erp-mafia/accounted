@@ -29,7 +29,7 @@ import { COMPANY_ADMIN_ROLES } from '@/lib/operations/access'
 import type { OperationContext, OperationOutcome } from '@/lib/operations/types'
 import { createServiceClient } from '@/lib/supabase/server'
 import { resolveBankIdSigning } from './bankid-provider'
-import { loadSignableDocument } from './document'
+import { loadSignableDocument, pdfPageCount } from './document'
 import { generateSigningToken, signingUrl } from './tokens'
 import {
   SIGNING_DEFAULT_TTL_DAYS,
@@ -325,6 +325,8 @@ export async function createSigningRequest(ctx: OperationContext, input: CreateS
   const baseUrl = await getBaseUrlForCompany(ctx.companyId)
   const sendEmail = input.sendEmail ?? true
   const sender = sendEmail && signers.some((s) => s.email) ? await describeRequester(service, ctx.companyId, ctx.userId) : null
+  // The bytes are in hand already: the mail's document card says how many pages.
+  const pageCount = sender ? await pdfPageCount(document.document.bytes) : null
   const results: CreatedSigner[] = []
   for (const [i, s] of signers.entries()) {
     const signerId = idByPosition.get(s.position)!
@@ -340,6 +342,8 @@ export async function createSigningRequest(ctx: OperationContext, input: CreateS
         url,
         expiresAt: expires,
         message: clean(input.message),
+        pageCount,
+        signerCount: signers.length,
         log: ctx.log,
       })
       emailSent = sent.emailSent
@@ -713,6 +717,7 @@ export async function remindSigner(
   const url = signingUrl(await getBaseUrlForCompany(ctx.companyId), token)
   if (!signer.email) return { ok: true, data: { signing_request_id: request.id, signer_id: signer.id, email_sent: false, url } }
   const sender = await describeRequester(service, ctx.companyId, request.created_by)
+  const { count: signerCount } = await service.from('signing_request_signers').select('id', { count: 'exact', head: true }).eq('signing_request_id', request.id)
   const sent = await sendSigningRequestMail({
     companyId: ctx.companyId,
     companyName: sender.companyName,
@@ -723,6 +728,7 @@ export async function remindSigner(
     expiresAt: request.expires_at,
     message: request.message,
     reminder: true,
+    signerCount,
     log: ctx.log,
   })
   return { ok: true, data: { signing_request_id: request.id, signer_id: signer.id, email_sent: sent.emailSent, url: sent.emailSent ? null : url } }

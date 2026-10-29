@@ -370,6 +370,9 @@ describe('createSigningRequest', () => {
         email,
         expiresAt: new Date(NOW + 14 * DAY).toISOString(),
         message: 'Hej',
+        // The document card: the pages of the archived PDF and everyone asked to sign.
+        pageCount: 1,
+        signerCount: 3,
       })
       expect(hashSigningToken(tokenOf(String(sent.url)))).toBe(insertedSigners()[index]!.token_hash)
     }
@@ -603,6 +606,8 @@ describe('remindSigner', () => {
   })
 
   it('rotates the link: a new token hash, the session dropped, and the mail carries the new link', async () => {
+    const counted = (calls: Array<{ method: string; args: unknown[] }>) => calls.some((c) => c.method === 'select' && (c.args[1] as { head?: boolean } | undefined)?.head)
+    db.setTable('signing_request_signers', (calls) => (calls.some((c) => c.method === 'update') ? { data: rotated } : counted(calls) ? { data: null, count: 2 } : { data: signer }))
     const result = await remind()
     if (!result.ok || result.dryRun) throw new Error('unexpected')
     expect(result.data).toEqual({ signing_request_id: REQ, signer_id: SIGNER, email_sent: true, url: null })
@@ -610,7 +615,7 @@ describe('remindSigner', () => {
     expect(update).toEqual({ token_hash: expect.stringMatching(/^[0-9a-f]{64}$/), last_reminded_at: new Date(NOW).toISOString(), bankid_session_id: null, poll_lease_until: null })
     expect(db.findCalls('signing_request_signers', 'eq')).toEqual(expect.arrayContaining([['status', 'pending']]))
     const sent = mail.sendSigningRequestMail.mock.calls[0]![0] as Record<string, unknown>
-    expect(sent).toMatchObject({ email: 'anna@example.se', reminder: true, title: 'Hyresavtal', message: 'Hej', requester: 'Karin Byråsson', expiresAt: request!.expires_at })
+    expect(sent).toMatchObject({ email: 'anna@example.se', reminder: true, title: 'Hyresavtal', message: 'Hej', requester: 'Karin Byråsson', expiresAt: request!.expires_at, signerCount: 2 })
     expect(hashSigningToken(tokenOf(String(sent.url)))).toBe(update!.token_hash)
     expect(JSON.stringify(update)).not.toContain(tokenOf(String(sent.url)))
   })

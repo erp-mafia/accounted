@@ -1,26 +1,29 @@
 import { getEmailService } from '@/lib/email/service'
-import { getSenderForCompany } from '@/lib/email/brand-sender'
+import { resolveSigningMailIdentity } from '@/lib/email/signing-mail-sender'
 import {
   SIGNING_COMPLETED_TEMPLATE,
   generateSigningCompletedEmailHtml,
   generateSigningCompletedEmailSubject,
   generateSigningCompletedEmailText,
+  type SigningCompletedSigner,
 } from '@/lib/email/signing-completed-templates'
 import type { Logger } from '@/lib/logger'
 
 /**
  * Mail the signed copy of a completed signing request (lib/signing/seal.ts)
  * to each address, one mail per recipient so no one sees the others'
- * addresses. Brand mail (WL-13), like the request mail. A send failure never
- * throws: the copy is in the archive, and a signer with the link can still
- * fetch it there.
+ * addresses. The same sender as the request mail (./signing-mail-sender.ts).
+ * A send failure never throws: the copy is in the archive, and a signer
+ * with the link can still fetch it there.
  */
 export async function sendSigningCompletedMail(params: {
   companyId: string
   companyName: string
   title: string
   completedAt: string
-  signers: string[]
+  signers: SigningCompletedSigner[]
+  /** Pages in the original document. */
+  pageCount?: number | null
   verifyUrl: string
   recipients: string[]
   pdf: { filename: string; bytes: Uint8Array }
@@ -33,14 +36,16 @@ export async function sendSigningCompletedMail(params: {
     log.warn('email service not configured: signed copy mail skipped', { template: SIGNING_COMPLETED_TEMPLATE })
     return { sent: 0 }
   }
-  const sender = await getSenderForCompany(companyId)
+  const sender = await resolveSigningMailIdentity(companyId, params.companyName)
   const data = {
     companyName: params.companyName,
     title: params.title,
     completedAt: params.completedAt,
     signers: params.signers,
+    pageCount: params.pageCount ?? null,
     verifyUrl: params.verifyUrl,
-    appName: sender.brand?.appName,
+    logo: sender.logo,
+    platformName: sender.platformName,
   }
   const subject = generateSigningCompletedEmailSubject(data)
   const html = generateSigningCompletedEmailHtml(data)

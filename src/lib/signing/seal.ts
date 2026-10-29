@@ -1,9 +1,11 @@
 /**
  * Sealing a completed signing request: two documents into the archive.
  *
- *   - The signed PDF: the original pages plus a "Signeringsbevis" page (who
- *     signed, as what, when, with BankID, the masked personnummer and the
- *     document's SHA-256). Shareable: it carries no full personnummer.
+ *   - The signed PDF: the original pages, each with a stamp in its bottom
+ *     margin ("Signerat med BankID av JW, EM · ID 1569BCE7 · <verify URL>"),
+ *     plus the Signeringsbevis page(s): who signed, as what, when, with
+ *     BankID, the masked personnummer and the document's SHA-256
+ *     (./certificate-pdf.tsx). Shareable: it carries no full personnummer.
  *   - Bevispaket.zip: the original PDF, each signer's BankID signature
  *     (XML-DSig, which carries the full personnummer) and OCSP response, and
  *     a manifest. With it anyone can extract the original, hash it and match
@@ -22,12 +24,16 @@
  * looks up (./verify.ts), and its evidence page says so.
  */
 import type { SupabaseClient } from '@supabase/supabase-js'
+import { getBranding } from '@/lib/branding/service'
 import { uploadDocument } from '@/lib/core/documents/document-service'
 import { getBaseUrlForCompany } from '@/lib/email/brand-sender'
 import { sendSigningCompletedMail } from '@/lib/email/send-signing-completed'
 import type { Logger } from '@/lib/logger'
+import { signingSenderBrand } from './brand'
+import type { SigningCertificateData } from './certificate-pdf'
 import { downloadDocumentBytes, sha256Hex } from './document'
-import { formatSigningMoment, stockholmDay } from './format'
+import { stockholmDay } from './format'
+import { resolveSigningLogo } from './logo'
 import { describeRequester } from './requests'
 import { type SigningRequestRow } from './types'
 
@@ -52,11 +58,6 @@ interface SealPrivate {
   ocsp_response: string
 }
 
-/** pdf-lib's standard fonts encode WinAnsi: anything outside it prints as "?". */
-function winAnsi(value: string): string {
-  return value.normalize('NFC').replace(/[^\x20-\x7E\xA0-\xFF]/g, '?')
-}
-
 function slug(value: string): string {
   return value.normalize('NFKD').replace(/[^\w\s-]/g, '').trim().replace(/\s+/g, '-').toLowerCase().slice(0, 60) || 'dokument'
 }
@@ -66,111 +67,103 @@ export interface SealedCopies {
   evidenceDocumentId: string
 }
 
-interface EvidenceLine {
-  text: string
-  bold?: boolean
-  size?: number
-  gapAfter?: number
+/** Where the stamp goes on a page, given its visible box and rotation. */
+export interface StampPlacement {
+  /** Width of the strip to draw, in the strip's own points. */
+  stripWidth: number
+  /** The strip is drawn at this scale (below 1 only on pages narrower than STAMP_MIN_WIDTH). */
+  scale: number
+  x: number
+  y: number
+  /** Counter-clockwise degrees, so the strip reads upright on the page as displayed. */
+  rotate: 0 | 90 | 180 | 270
 }
 
-async function buildSignedPdf(original: Uint8Array, lines: EvidenceLine[], title: string): Promise<Uint8Array> {
-  const { PDFDocument, StandardFonts, rgb } = await import('pdf-lib')
+/**
+ * The stamp sits centred in the bottom margin of the page as a reader sees
+ * it: along the crop box's bottom edge for an upright page, along its right
+ * edge for a page shown turned 90 degrees, and so on. The strip's own
+ * bottom-left corner lands on the displayed page's bottom-left corner,
+ * lifted STAMP_BOTTOM_OFFSET off the edge.
+ */
+export function stampPlacement(
+  box: { x: number; y: number; width: number; height: number },
+  rotation: number,
+  constants: { minWidth: number; bottomOffset: number },
+): StampPlacement {
+  const turn = (((Math.round(rotation / 90) * 90) % 360) + 360) % 360
+  const visibleWidth = turn === 90 || turn === 270 ? box.height : box.width
+  const scale = Math.min(1, visibleWidth / constants.minWidth)
+  const stripWidth = scale < 1 ? constants.minWidth : visibleWidth
+  const lift = constants.bottomOffset * scale
+  const [x0, y0, x1, y1] = [box.x, box.y, box.x + box.width, box.y + box.height]
+  if (turn === 90) return { stripWidth, scale, rotate: 90, x: x1 - lift, y: y0 }
+  if (turn === 180) return { stripWidth, scale, rotate: 180, x: x1, y: y1 - lift }
+  if (turn === 270) return { stripWidth, scale, rotate: 270, x: x0 + lift, y: y1 }
+  return { stripWidth, scale, rotate: 0, x: x0, y: y0 + lift }
+}
+
+type CertificateInput = Omit<SigningCertificateData, 'originalPageCount' | 'fonts'>
+
+/**
+ * The original's pages, each stamped in its bottom margin, then the
+ * Signeringsbevis pages. The stamp is drawn after the page's own content,
+ * which pdf-lib wraps in q/Q first, so a page that leaves its graphics
+ * state changed cannot move or scale it. Nothing of the original is
+ * covered: the stamp has no background.
+ */
+async function buildSignedPdf(
+  original: Uint8Array,
+  input: { certificate: CertificateInput; title: string },
+): Promise<{ bytes: Uint8Array; originalPageCount: number }> {
+  const [{ PDFDocument, degrees }, certificateModule] = await Promise.all([import('pdf-lib'), import('./certificate-pdf')])
+  const { STAMP_BOTTOM_OFFSET, STAMP_MIN_WIDTH, prepareSigningFonts, renderSigningCertificate, renderStampStrips, signersInitials, stampLine } = certificateModule
   const pdf = await PDFDocument.load(original, { updateMetadata: false })
-  const regular = await pdf.embedFont(StandardFonts.Helvetica)
-  const bold = await pdf.embedFont(StandardFonts.HelveticaBold)
-  const [width, height] = [595.28, 841.89]
-  const margin = 56
-  const maxWidth = width - margin * 2
-  let page = pdf.addPage([width, height])
-  let y = height - margin
+  const pages = pdf.getPages()
+  const fonts = await prepareSigningFonts()
 
-  const wrap = (text: string, font: typeof regular, size: number): string[] => {
-    const words = winAnsi(text).split(' ')
-    const out: string[] = []
-    let current = ''
-    for (const word of words) {
-      const next = current ? `${current} ${word}` : word
-      if (font.widthOfTextAtSize(next, size) <= maxWidth) {
-        current = next
-        continue
-      }
-      if (current) out.push(current)
-      // A single token wider than the line (a hash): break it by characters.
-      let rest = word
-      while (font.widthOfTextAtSize(rest, size) > maxWidth) {
-        let cut = rest.length - 1
-        while (cut > 1 && font.widthOfTextAtSize(rest.slice(0, cut), size) > maxWidth) cut--
-        out.push(rest.slice(0, cut))
-        rest = rest.slice(cut)
-      }
-      current = rest
-    }
-    if (current) out.push(current)
-    return out.length > 0 ? out : ['']
-  }
+  const placements = pages.map((page) => stampPlacement(page.getCropBox(), page.getRotation().angle, { minWidth: STAMP_MIN_WIDTH, bottomOffset: STAMP_BOTTOM_OFFSET }))
+  const widths = [...new Set(placements.map((p) => p.stripWidth))]
+  const strips = await pdf.embedPdf(
+    await renderStampStrips({
+      text: stampLine({
+        initials: signersInitials(input.certificate.signers.map((s) => ({ givenName: s.bankidGivenName, surname: s.bankidSurname }))),
+        requestId: input.certificate.requestId,
+        verifyUrl: input.certificate.verifyUrl,
+      }),
+      widths,
+      fonts,
+    }),
+    widths.map((_, i) => i),
+  )
+  pages.forEach((page, i) => {
+    const p = placements[i]!
+    page.drawPage(strips[widths.indexOf(p.stripWidth)]!, { x: p.x, y: p.y, xScale: p.scale, yScale: p.scale, rotate: degrees(p.rotate) })
+  })
 
-  for (const line of lines) {
-    const size = line.size ?? 10
-    const font = line.bold ? bold : regular
-    for (const part of wrap(line.text, font, size)) {
-      if (y - size < margin) {
-        page = pdf.addPage([width, height])
-        y = height - margin
-      }
-      page.drawText(part, { x: margin, y: y - size, size, font, color: rgb(0.13, 0.13, 0.13) })
-      y -= size * 1.45
-    }
-    y -= line.gapAfter ?? 0
-  }
+  const certificate = await PDFDocument.load(await renderSigningCertificate({ ...input.certificate, originalPageCount: pages.length, fonts }))
+  for (const page of await pdf.copyPages(certificate, certificate.getPageIndices())) pdf.addPage(page)
 
-  pdf.setTitle(winAnsi(`${title} (signerad)`))
+  pdf.setTitle(`${input.title} (signerad)`)
   pdf.setProducer('Accounted')
   pdf.setModificationDate(new Date())
-  return pdf.save()
+  return { bytes: await pdf.save(), originalPageCount: pages.length }
 }
 
-function evidenceLines(input: {
-  request: SigningRequestRow
-  companyName: string
-  requester: string
-  fileName: string
-  signers: SealSigner[]
-  privates: Map<string, SealPrivate>
-  verifyUrl: string
-}): EvidenceLine[] {
-  const { request, signers, privates } = input
-  const lines: EvidenceLine[] = [
-    { text: 'Signeringsbevis', bold: true, size: 18, gapAfter: 6 },
-    { text: request.title, bold: true, size: 12, gapAfter: 10 },
-    { text: `Företag: ${input.companyName}` },
-    { text: `Dokument: ${input.fileName}` },
-    { text: `Kontrollsumma (SHA-256): ${request.document_sha256}` },
-    { text: `Signerings-id: ${request.id}` },
-    { text: `Skickad för signering av ${input.requester}, ${formatSigningMoment(request.created_at)}` },
-    { text: `Signeringen slutfördes ${formatSigningMoment(request.completed_at ?? new Date().toISOString())}`, gapAfter: 14 },
-    { text: 'Underskrifter', bold: true, size: 12, gapAfter: 4 },
-  ]
-  for (const s of signers) {
-    const bankidName = `${s.bankid_given_name} ${s.bankid_surname}`.trim()
-    const masked = privates.get(s.id)?.personnummer_masked
-    lines.push({ text: `${s.position}. ${bankidName}${s.role_label ? `, ${s.role_label}` : ''}`, bold: true })
-    lines.push({ text: `Signerade med BankID ${formatSigningMoment(s.signed_at)}${masked ? `, personnummer ${masked}` : ''}` })
-    if (bankidName.toLowerCase() !== s.name.trim().toLowerCase()) lines.push({ text: `Namn i signeringen: ${s.name}` })
-    lines[lines.length - 1]!.gapAfter = 6
+/** The company's logo and platform for the evidence page; a lookup that fails draws initials, never blocks the seal. */
+async function certificateBrand(service: SupabaseClient, companyId: string, log: Logger) {
+  const warn = (what: string) => (err: unknown) => {
+    log.warn(`signing certificate ${what} unavailable, sealing without it`, { companyId, error: err instanceof Error ? err.message : String(err) })
+    return null
   }
-  if (request.annual_report_version_id && signers.length > 0) {
-    const first = signers.map((s) => s.signed_at).sort()[0]!
-    lines.push({ text: `Årsredovisningens datering: ${stockholmDay(first)} (dagen för den första underskriften)`, gapAfter: 6 })
-  }
-  lines.push({
-    text:
-      'Varje underskrift är en BankID-signatur, en avancerad elektronisk underskrift enligt eIDAS, som innehåller dokumentets kontrollsumma ovan. ' +
-      'Signaturerna, bevisen på att certifikaten var giltiga när de användes och originalfilen finns i bevispaketet (Bevispaket.zip) i företagets arkiv.',
-    size: 9,
-    gapAfter: 6,
-  })
-  lines.push({ text: `Kontrollera att en kopia av den här filen är äkta: ladda upp den på ${input.verifyUrl}`, size: 9 })
-  return lines
+  const brand = (await signingSenderBrand(service, companyId).catch(warn('brand'))) ?? { logoUrl: null, platformName: getBranding().appName }
+  const logo = await resolveSigningLogo(brand.logoUrl).catch(warn('logo'))
+  return { logo, platformName: brand.platformName }
+}
+
+async function companyOrgNumber(service: SupabaseClient, companyId: string): Promise<string | null> {
+  const { data } = await service.from('companies').select('org_number').eq('id', companyId).maybeSingle()
+  return (data as { org_number?: string | null } | null)?.org_number?.trim() || null
 }
 
 async function loadSealInput(service: SupabaseClient, requestId: string) {
@@ -216,12 +209,38 @@ export async function sealSigningRequest(service: SupabaseClient, requestId: str
   if (sha256Hex(original) !== request.document_sha256) throw new Error('Original document no longer matches the signed hash')
 
   const sender = await describeRequester(service, request.company_id, request.created_by)
-  const verifyUrl = `${await getBaseUrlForCompany(request.company_id)}/verifiera`
-  const signed = await buildSignedPdf(
-    original,
-    evidenceLines({ request, companyName: sender.companyName, requester: sender.requester, fileName: document.file_name, signers, privates, verifyUrl }),
-    request.title,
-  )
+  const [baseUrl, brand, orgNumber] = await Promise.all([
+    getBaseUrlForCompany(request.company_id),
+    certificateBrand(service, request.company_id, log),
+    companyOrgNumber(service, request.company_id),
+  ])
+  const verifyUrl = `${baseUrl}/verifiera`
+  const { bytes: signed, originalPageCount } = await buildSignedPdf(original, {
+    title: request.title,
+    certificate: {
+      requestId: request.id,
+      title: request.title,
+      companyName: sender.companyName,
+      orgNumber,
+      logo: brand.logo,
+      requester: sender.requester,
+      createdAt: request.created_at,
+      completedAt: request.completed_at ?? new Date().toISOString(),
+      fileName: document.file_name,
+      sha256: request.document_sha256,
+      signers: signers.map((s) => ({
+        name: s.name,
+        role: s.role_label,
+        bankidGivenName: s.bankid_given_name,
+        bankidSurname: s.bankid_surname,
+        personnummerMasked: privates.get(s.id)?.personnummer_masked ?? null,
+        signedAt: s.signed_at,
+      })),
+      annualReportDate: request.annual_report_version_id && signers.length > 0 ? stockholmDay(signers.map((s) => s.signed_at).sort()[0]!) : null,
+      verifyUrl,
+      platformName: brand.platformName,
+    },
+  })
 
   const { default: JSZip } = await import('jszip')
   const zip = new JSZip()
@@ -295,7 +314,7 @@ export async function sealSigningRequest(service: SupabaseClient, requestId: str
     return null
   }
   log.info('signing request sealed', { signingRequestId: request.id, signedDocumentId: signedDoc.id, evidenceDocumentId: evidenceDoc.id })
-  await mailSignedCopy(service, { request, companyName: sender.companyName, signers, verifyUrl, pdf: { filename: `${base}-signerad.pdf`, bytes: signed }, log }).catch((err) =>
+  await mailSignedCopy(service, { request, companyName: sender.companyName, signers, pageCount: originalPageCount, verifyUrl, pdf: { filename: `${base}-signerad.pdf`, bytes: signed }, log }).catch((err) =>
     log.error('signed copy mail failed', err instanceof Error ? err : new Error(String(err)), { signingRequestId: request.id }),
   )
   return { signedDocumentId: signedDoc.id, evidenceDocumentId: evidenceDoc.id }
@@ -316,7 +335,7 @@ export function signedCopyRecipients(signerEmails: Array<string | null>, senderE
 
 async function mailSignedCopy(
   service: SupabaseClient,
-  input: { request: SigningRequestRow; companyName: string; signers: SealSigner[]; verifyUrl: string; pdf: { filename: string; bytes: Uint8Array }; log: Logger },
+  input: { request: SigningRequestRow; companyName: string; signers: SealSigner[]; pageCount: number; verifyUrl: string; pdf: { filename: string; bytes: Uint8Array }; log: Logger },
 ): Promise<void> {
   const { request, signers } = input
   const { data } = await service.auth.admin.getUserById(request.created_by)
@@ -326,7 +345,8 @@ async function mailSignedCopy(
     companyName: input.companyName,
     title: request.title,
     completedAt: request.completed_at ?? new Date().toISOString(),
-    signers: signers.map((s) => `${s.bankid_given_name} ${s.bankid_surname}`.trim() + (s.role_label ? `, ${s.role_label}` : '')),
+    signers: signers.map((s) => ({ name: `${s.bankid_given_name} ${s.bankid_surname}`.trim(), role: s.role_label, signedAt: s.signed_at })),
+    pageCount: input.pageCount,
     verifyUrl: input.verifyUrl,
     recipients,
     pdf: input.pdf,
