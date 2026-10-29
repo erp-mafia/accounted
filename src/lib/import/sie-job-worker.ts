@@ -4,7 +4,8 @@ import { createLogger } from '@/lib/logger'
 import { commitSIEImportChunk, reverseSIEImportChunk } from '@/lib/bookkeeping/engine'
 import { createServiceClientNoCookies } from '@/lib/auth/api-keys'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
-import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, readSIESourceVouchers, SIE_CHECKPOINTS, sieJobRPC } from './sie-job-preparation'
+import { applyMetadata, jobInput, prepareSIEJob, readCheckpoint, readSIESourceVouchers, SIE_CHECKPOINTS, sieJobRPC,
+  type SIEAppendCounts } from './sie-job-preparation'
 import { getSIEJob, runsSIEJobs, SIEJobValidationError } from './sie-jobs'
 import { isSIEJobUnresolved, type SIEChunkResult, type SIEJob } from './sie-job-contract'
 import { getMappingStats } from './account-mapper'
@@ -29,6 +30,9 @@ interface FinalizeLearning { completed?:boolean; vouchers?:SIEVoucher[] }
 
 async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number, learning: FinalizeLearning): Promise<boolean> {
   const { options, mappings } = jobInput(job)
+  // An append books the file's new vouchers and nothing else: the year's
+  // chart, VAT defaults and year-level diagnoses stay the base import's.
+  const appending = options.onExistingPeriod === 'append'
   const done = await fetchAllRows<{chunk_no:number}>(({from,to}) => supabase.from('sie_import_chunks')
     .select('chunk_no').eq('company_id',job.company_id).eq('import_id',job.id).eq('phase','prepare')
     .eq('state','completed').gte('chunk_no',40_000).lt('chunk_no',80_000).order('chunk_no').range(from,to))
@@ -57,7 +61,7 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
       await applyMetadata(supabase,job,'account_names',SIE_CHECKPOINTS.names+n/100,names.slice(n,n+100))
     }
   }
-  const defaults = [...buildSIEVatDefaults(mappings)].map(([account_number,value]) => ({account_number,...value}))
+  const defaults = appending ? [] : [...buildSIEVatDefaults(mappings)].map(([account_number,value]) => ({account_number,...value}))
   for (let n = 0; n < defaults.length; n += 100) {
     if (Date.now() > deadline) return false
     if (!completed.has(70_000+n/100)) await applyMetadata(supabase,job,'vat_defaults',70_000+n/100,defaults.slice(n,n+100))
@@ -108,7 +112,8 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
   // every import. Its finding belongs in the stored result: before completion.
   if (Date.now() > deadline) return false
   const isImport = (job.job_kind ?? 'import') === 'import'
-  const untransferred = isImport ? await diagnoseUntransferredResults(supabase,job.company_id,isoDay(job.fiscal_year_start))
+  const diagnoses = isImport && !appending
+  const untransferred = diagnoses ? await diagnoseUntransferredResults(supabase,job.company_id,isoDay(job.fiscal_year_start))
     : {results:[],warnings:[],notices:[]}
   warnings.push(...untransferred.warnings)
   notices.push(...untransferred.notices)
@@ -119,12 +124,12 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
   // held no vouchers is missing its bookkeeping.
   const yearStart = isoDay(job.fiscal_year_start)
   const yearEnd = parsed.stats.fiscalYearEnd
-  const ibDifferences = isImport && job.manifest.prior_activity && yearStart
+  const ibDifferences = diagnoses && job.manifest.prior_activity && yearStart
     ? await diagnoseCarriedForwardDifferences(supabase,job.company_id,yearStart,job.manifest.effectiveOpeningBalances,mappings,
       job.fiscal_period_id)
     : []
   const continuity = continuityNotices({differences:ibDifferences,
-    noVouchers:isImport && parsed.stats.totalVouchers === 0 && yearStart && yearEnd && yearEnd < todayIsoStockholm()
+    noVouchers:diagnoses && parsed.stats.totalVouchers === 0 && yearStart && yearEnd && yearEnd < todayIsoStockholm()
       ? {from:yearStart,to:yearEnd} : null})
   warnings.push(...continuity.warnings)
   notices.push(...continuity.notices)
@@ -152,6 +157,8 @@ async function finalize(supabase: SupabaseClient, job: SIEJob, deadline: number,
       openingBalanceDifferences:ibDifferences.length ? ibDifferences.slice(0,200) : undefined,
       migrationAdjustment:{created:!!adjustment,accountsAdjusted:Number(job.manifest.migrationAdjustmentAccounts ?? 0)},
       untransferredResults:untransferred.results.length ? untransferred.results : undefined,
+      ...(appending && job.base_import_id ? {append:{baseImportId:job.base_import_id,
+        ...(job.manifest.appendCounts as SIEAppendCounts),added:entries.length}} : {}),
       retriedBatches:0,failedBatches:0}}
   // The learning after completion reads the source vouchers, and
   // complete_sie_import_job deletes them. Unreadable only costs the learning.

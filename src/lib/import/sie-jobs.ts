@@ -18,6 +18,7 @@ import { getActor, type CommitActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
 import { appSIEArrivalDoor, recordSIEImportArrival, type SIEArchivedOriginal, type SIEArrivalDoor } from './sie-arrival'
 import { findLiveCorrections, liveCorrectionSentence } from './sie-live-corrections'
+import { planSIEAppend, type SIEAppendRefusal } from './sie-append'
 
 export interface SIEJobOptions {
   filename: string
@@ -32,8 +33,13 @@ export interface SIEJobOptions {
    *  other #KONTO definition are dropped at submit, so the sealed input and
    *  every resumed preparation create the same accounts. */
   onlyUsedAccounts?: boolean
-  onExistingPeriod?: 'block' | 'replace'
+  /** 'append' adds only the file's vouchers the year's import does not hold, as their own batch (sie-append.ts). */
+  onExistingPeriod?: 'block' | 'replace' | 'append'
   supersedesImportId?: string
+  /** Append: also book the possible duplicates (same date and lines as a posted entry). */
+  includePossibleDuplicates?: boolean
+  /** Append: a source series booked in another series ({ K: 'A' }). */
+  seriesMap?: Record<string, string>
   /** Import a file whose #ORGNR is not the company's (ombildning, a company
    *  registered under the wrong number). Checked at submit, never stored in
    *  the job's input: that input is the identity an identical retry matches. */
@@ -177,6 +183,11 @@ const JOB_REFUSALS: Record<string,string> = {
   'Legacy SIE import requires reviewed reconciliation before replacement':'SIE_IMPORT_LEGACY_REVIEW_REQUIRED',
   // request_sie_import_undo, also run by replace_sie_import_job (PH 223).
   'SIE undo requires review: an imported voucher has a live correction':'SIE_IMPORT_HAS_LIVE_CORRECTION',
+  // request_sie_import_undo (also run by replace_sie_import_job): the import
+  // has an append that is not undone (issue #108).
+  'SIE undo requires review: an append batch is live':'SIE_IMPORT_HAS_LIVE_APPEND',
+  // start_sie_append_job: the year's import is gone or not finished.
+  'SIE append requires a completed base import of the year':'SIE_IMPORT_APPEND_NO_BASE',
 }
 
 /**
@@ -403,6 +414,9 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
     )
   }
   await resolveSIEFiscalYear(supabase,companyId,parsed)
+  const appending = options.onExistingPeriod === 'append'
+  if (appending) options = appendJobOptions(options)
+  else { delete options.includePossibleDuplicates; delete options.seriesMap }
   validateSIEJobInput(content, parsed, mappings, options)
   // Every door passes here (dashboard, onboarding, v1, MCP approval, provider
   // migration), so this is where another organisation's books are stopped.
@@ -417,6 +431,10 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
         file_company_name: parsed.header.companyName },
     )
   }
+  // The append's verdicts, refused before anything is archived or queued.
+  // The job plans again per voucher group and writes what that plan keeps.
+  const appendPlan = appending ? await planSIEAppend(supabase, companyId, parsed, mappings, options) : null
+  if (appendPlan?.refusal) throw sieAppendRefusalError(appendPlan.refusal)
   const sourceHash = await calculateFileHash(content)
   const input: SIEJobInput = { version: SIE_JOB_VERSION, sourceHash, mappings, options,
     fiscalYear:{start:parsed.stats.fiscalYearStart!,end:parsed.stats.fiscalYearEnd!} }
@@ -452,7 +470,9 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
       mime:originalFile.type || 'application/octet-stream'}
   }
   let periodId: string
-  if (options.createFiscalPeriod) {
+  if (appendPlan?.fiscalPeriodId) {
+    periodId = appendPlan.fiscalPeriodId
+  } else if (options.createFiscalPeriod) {
     periodId = await ensureFiscalPeriod(supabase,companyId,parsed.stats.fiscalYearStart!,parsed.stats.fiscalYearEnd!)
   } else {
     const { data, error } = await supabase.from('fiscal_periods').select('id').eq('company_id',companyId)
@@ -472,7 +492,12 @@ export async function submitSIEJob(supabase: SupabaseClient, companyId: string, 
   // commit_actor lives beside input, not in it: an identical retry by
   // another actor is still the same import.
   const commitActor = sieImportCommitActor(getActor(), source)
-  const { data, error } = await supabase.rpc(replacing ? 'replace_sie_import_job' : 'start_sie_import_job', {
+  const { data, error } = appendPlan ? await supabase.rpc('start_sie_append_job', {
+    p_company_id: companyId, p_actor: userId, p_period_id: periodId, p_filename: options.filename,
+    p_file_hash: sourceHash, p_manifest: { input, file_storage_path: path, originalSource,
+      source_program: parsed.header.program ?? null, ...(commitActor ? { commit_actor: commitActor } : {}) },
+    p_base_import_id: appendPlan.baseImportId,
+  }) : await supabase.rpc(replacing ? 'replace_sie_import_job' : 'start_sie_import_job', {
     p_company_id: companyId, p_actor: userId, p_period_id: periodId, p_filename: options.filename,
     p_file_hash: sourceHash, p_manifest: { input, file_storage_path: path, originalSource,
       ...(commitActor ? { commit_actor: commitActor } : {}) },
@@ -510,6 +535,26 @@ export async function requestSIEJobAction(supabase: SupabaseClient, companyId: s
     : await supabase.rpc('resume_sie_import_job', params)
   if (error) throw await nameLiveCorrections(jobDatabaseError(error), supabase, companyId, importId, 'undo')
   return data as SIEJob
+}
+
+/**
+ * An append refusal (sie-append.ts) as the error every door answers with:
+ * the planner's sentence names the vouchers, so it is the message.
+ */
+export function sieAppendRefusalError(refusal: SIEAppendRefusal): SIEJobValidationError {
+  return userFacing(new SIEJobValidationError(refusal.message, refusal.code, refusal.details), refusal.code)
+}
+
+/**
+ * The options an append seals: it never creates a year, never books the
+ * file's IB and never renames the year's accounts; it books vouchers. The
+ * same input for an identical retry, whatever the door sent.
+ */
+export function appendJobOptions(options: SIEJobOptions): SIEJobOptions {
+  // A series-less voucher goes to B like the plan's preview; seriesMap moves it.
+  const { supersedesImportId: _replaced, voucherSeries: _series, openingBalanceSeries: _ibSeries, ...rest } = options
+  return { ...rest, onExistingPeriod: 'append', createFiscalPeriod: false, importOpeningBalances: false,
+    importTransactions: true, updateAccountNames: false }
 }
 
 /** A worker never downloads a caller-selected arbitrary storage path. */

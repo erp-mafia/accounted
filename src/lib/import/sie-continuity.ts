@@ -293,6 +293,24 @@ export async function diagnoseCarriedForwardDifferences(
   }
 }
 
+/**
+ * An append to an imported year (sie-append.ts): the accounts where the
+ * file's IB differs from what the year opens on in the books (its own IB
+ * verifikat, else the balance carried forward). Unlike the diagnoses above it
+ * throws on a failed read: the answer refuses or admits the append.
+ */
+export async function appendOpeningBalanceDifferences(
+  supabase: SupabaseClient,
+  companyId: string,
+  year: { periodId: string; start: string },
+  parsed: ParsedSIEFile,
+  mappings: AccountMapping[],
+): Promise<OpeningBalanceDifference[]> {
+  const booked = await findBookedOpeningBalance(supabase, companyId, { periodId: year.periodId }, null)
+  return compareWithBooks(supabase, companyId, year.start, getEffectiveOpeningBalances(parsed).balances, mappings,
+    booked?.entryId ?? null)
+}
+
 /** Sum of the absolute differences: one figure for a notice line. */
 export function totalDifference(rows: readonly { difference: number }[]): number {
   return roundOre(rows.reduce((sum, row) => sum + Math.abs(row.difference), 0))

@@ -19,6 +19,8 @@ import type { ParsedSIEFile, SIEVoucher } from './types'
 import { scanSieForCp1252Artifacts, formatSieArtifactWarning } from './sie-artifact-scan'
 import { SIEJobMappingsSchema, SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { resolveCompanyEntityType, resultClosingAccounts } from '@/lib/company/entity-type'
+import { appendConflictRefusal, appendInvalidRefusal, appendNothingNewRefusal, invalidSkippedVouchers,
+  readSIEAppendVerdicts, selectSIEAppendEntries } from './sie-append'
 
 // Disjoint namespaces keep immutable receipts stable when work resumes.
 export const SIE_CHECKPOINTS = { accounts: 0, dimensions: 10_000, values: 20_000,
@@ -38,7 +40,10 @@ interface PreparationTotals {
   entries:number; movements:Array<[string,number]>; skippedSample:VoucherPreparation['skippedDetails']
   openingEntries?:number
   skippedCounts:{empty:number;unbalanced:number;unmapped:number;singleLine:number;total:number}
+  /** An append (sie-append.ts): the file's vouchers left out because the books hold them. */
+  append?:SIEAppendCounts
 }
+export interface SIEAppendCounts { present:number; possibleDuplicatesSkipped:number; possibleDuplicatesIncluded:number }
 
 export async function sieJobRPC<T = unknown>(supabase: SupabaseClient, job: SIEJob, name: string, args: Record<string, unknown> = {}): Promise<T> {
   if (Buffer.byteLength(JSON.stringify(args), 'utf8') > SIE_LIMITS.chunkBytes) {
@@ -304,6 +309,12 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   }
   let chunkNo = Number(job.manifest.preparedChunks ?? 0)
   let sourceOrdinal = job.prepared_through
+  // An append writes only what the books do not hold, planned per group
+  // against the books as they are now (sie-append.ts): a conflict or a
+  // voucher that cannot be booked exactly as in the source fails the
+  // preparation, so nothing of the file is written.
+  const append = input.options.onExistingPeriod === 'append'
+  const sourceProgram = typeof job.manifest.source_program === 'string' ? job.manifest.source_program : null
   for (let group = Number(job.manifest.preparedGroups ?? 0); group < snapshot.voucherGroups; group++) {
     if (Date.now() > deadline) return false
     const raw = await readCheckpoint<SIEVoucher[]>(supabase,job,SIE_CHECKPOINTS.snapshot+1+group)
@@ -313,7 +324,20 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     const prepared = input.options.importTransactions ? prepareSIEVouchers({...snapshot.parsed,vouchers},
       accountMap,input.options.voucherSeries ?? 'B',job.id,{startOrdinal:sourceOrdinal,
         hasCurrentYearIb:snapshot.hasCurrentYearIb,accountIds}) : null
-    const entries = prepared?.preparedEntries ?? []
+    let entries = prepared?.preparedEntries ?? []
+    if (append && prepared) {
+      const groupStart = sourceOrdinal
+      const verdicts = await readSIEAppendVerdicts(supabase,job.company_id,job.fiscal_period_id,sourceProgram,entries)
+      const selected = selectSIEAppendEntries(entries,verdicts,ordinal => vouchers[ordinal-groupStart],accountMap,input.options)
+      if (selected.conflicts.length) throw new SIEJobValidationError(appendConflictRefusal(selected.conflicts).message)
+      const invalid = [...invalidSkippedVouchers(prepared.skippedDetails),...selected.invalid]
+      if (invalid.length) throw new SIEJobValidationError(appendInvalidRefusal(invalid).message)
+      entries = selected.entries
+      const counts = totals.append ?? {present:0,possibleDuplicatesSkipped:0,possibleDuplicatesIncluded:0}
+      totals.append = {present:counts.present+selected.present,
+        possibleDuplicatesSkipped:counts.possibleDuplicatesSkipped+selected.possibleDuplicatesSkipped,
+        possibleDuplicatesIncluded:counts.possibleDuplicatesIncluded+selected.possibleDuplicatesIncluded}
+    }
     totals.openingEntries = (totals.openingEntries ?? 0)+entries.filter(entry => entry.sourceType === 'opening_balance').length
     if (totals.openingEntries > 1) throw new SIEJobValidationError('Filen innehåller flera ingående balansverifikationer. Granska dem före import.')
     const summary: PreparedSummary = {entries:entries.length,skipped:prepared?.skippedDetails ?? [],movements:[],firstChunk:chunkNo,chunkCount:0}
@@ -393,6 +417,9 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
   const adjustment = adjustmentCount ? buildSIEMigrationAdjustmentEntry(job.fiscal_period_id,parsed,accountMap,movements,totals.skippedSample,adjustmentCount) : null
   if (adjustment?.input) finalEntries.push(toPrepared(adjustment.input,job,50_001,accountIds))
   assertSIEReportingAccounts(finalEntries.flatMap(entry => entry.lines.map(line => line.account_number)))
+  if (append && totals.entries === 0) {
+    throw new SIEJobValidationError(appendNothingNewRefusal(totals.append?.present ?? 0,totals.append?.possibleDuplicatesSkipped ?? 0).message)
+  }
   if (input.options.importTransactions && snapshot.parsed.stats.totalVouchers > 0 && totals.entries === 0 && !finalEntries.length) {
     throw new SIEJobValidationError('Importen skulle skapa 0 verifikationer. Granska kontomappningen och filen.')
   }
@@ -406,7 +433,8 @@ export async function prepareSIEJob(supabase: SupabaseClient, job: SIEJob, deadl
     migrationAdjustmentAccounts:adjustment?.deltaAccounts ?? 0,
     preparationWarnings:[...(adjustment?.warnings ?? []),...(snapshot.artifactWarning ? [snapshot.artifactWarning] : [])],finalChunks:finalChunk,
     skippedCounts:totals.skippedCounts,
-    preparedEntries:totals.entries,approvedInputHash:hashSIEPayload(input)}
+    preparedEntries:totals.entries,approvedInputHash:hashSIEPayload(input),
+    ...(append ? {appendCounts:totals.append ?? {present:0,possibleDuplicatesSkipped:0,possibleDuplicatesIncluded:0}} : {})}
   await sieJobRPC(supabase,job,'seal_sie_import_preparation',{p_manifest:manifest,p_chunks_total:chunkNo})
   job.manifest = manifest
   return true

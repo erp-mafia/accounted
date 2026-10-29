@@ -319,6 +319,8 @@ export interface SIEImport {
   migration_documentation: MigrationDocumentation | null
   file_storage_path: string | null
   replaced_at: string | null
+  /** The import this batch appends to (issue #108); null for every import. */
+  base_import_id?: string | null
   created_at: string
   updated_at: string
 }
@@ -410,6 +412,20 @@ export interface ImportResultDetails {
     /** Class 3-8 net (credit-positive = profit), rounded to öre. */
     pl_net: number
   }>
+
+  /**
+   * An append to the year's import (issue #108): the import it adds to and
+   * what became of the file's vouchers. Absent for every other import.
+   */
+  append?: {
+    baseImportId: string
+    /** Already in the books with the same content: skipped. */
+    present: number
+    /** Same date and lines as a posted entry: skipped unless included. */
+    possibleDuplicatesSkipped: number
+    possibleDuplicatesIncluded: number
+    added: number
+  }
 
   /** Number of batches that needed retries (0 = clean run) */
   retriedBatches: number

@@ -208,7 +208,9 @@ export async function checkDuplicatePeriodImport(
   const overlapping = await findOverlappingPeriodImports(
     supabase, companyId, fiscalYearStart, fiscalYearEnd
   )
-  return overlapping[0] ?? null
+  // The year's own import, not an append to it (issue #108): replacing or
+  // appending names the base, and an append is undone on its own.
+  return overlapping.find((row) => !row.base_import_id) ?? overlapping[0] ?? null
 }
 
 interface ClosedPeriodState {

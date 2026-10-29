@@ -183,7 +183,7 @@ import { classifyError, isPeriodLockRefusal } from '@/lib/errors/get-structured-
 import { requiresWebApproval, webOnlyRefusalCode } from '@/lib/pending-operations/risk-tiers'
 import { invoiceLacksCustomer } from '@/lib/invoices/invoice-customer'
 import { createDimensionValue } from '@/lib/dimensions/registry-service'
-import { SIEJobDatabaseError, submitSIEJob } from '@/lib/import/sie-jobs'
+import { SIEJobDatabaseError, SIEJobValidationError, submitSIEJob } from '@/lib/import/sie-jobs'
 import { userFacingCode } from '@/lib/errors/user-facing'
 import type { AccountMapping } from '@/lib/import/types'
 import { AccountsNotInChartError, isBookkeepingError, ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
@@ -5692,6 +5692,10 @@ async function commitImportSie(
   const confirmOrgNumberMismatch = params.confirm_org_number_mismatch === true
   // Only a literal true leaves the file's unused #KONTO definitions out (#63).
   const onlyUsedAccounts = params.only_used_accounts === true
+  // Append the file's new vouchers to the year's import (issue #108): only
+  // the literal value; the job plans again and refuses what changed since.
+  const append = params.on_existing_year === 'append'
+  const includePossibleDuplicates = params.include_possible_duplicates === true
 
   if (!fileContent || !filename || !Array.isArray(mappings)) {
     return { error: 'file_content, filename, and mappings are required', status: 400 }
@@ -5703,6 +5707,7 @@ async function commitImportSie(
     job = await submitSIEJob(supabase,companyId,userId,fileContent,mappings,{
       filename,createFiscalPeriod,importOpeningBalances,importTransactions,voucherSeries,openingBalanceSeries,updateAccountNames,
       confirmOrgNumberMismatch,...(onlyUsedAccounts ? { onlyUsedAccounts } : {}),
+      ...(append ? { onExistingPeriod: 'append' as const, ...(includePossibleDuplicates ? { includePossibleDuplicates } : {}) } : {}),
     },undefined,'sie_file',{source:'sie',via:'mcp',fetchedBy:{type:'user',user_id:userId,label:'mcp-approval'}})
   } catch (err) {
     // A refusal the job RPC raised rolled back: nothing started. It answers
@@ -5710,12 +5715,16 @@ async function commitImportSie(
     // not the database's English: an agent that read "Existing SIE import
     // requires reviewed replacement or reconciliation" had nothing to act on
     // (crm#1272).
-    const entry = err instanceof SIEJobDatabaseError && err.code?.startsWith('SIE_') ? getErrorEntry(err.code) : undefined
-    if (entry && err instanceof SIEJobDatabaseError) {
+    // An append refusal (a user-facing SIEJobValidationError, sie-append.ts)
+    // answers the same way, its sentence naming the vouchers.
+    const coded = err instanceof SIEJobDatabaseError || (err instanceof SIEJobValidationError && userFacingCode(err))
+      ? err as SIEJobDatabaseError | SIEJobValidationError : null
+    const entry = coded?.code?.startsWith('SIE_') ? getErrorEntry(coded.code) : undefined
+    if (entry && coded) {
       return {
-        error: userFacingCode(err) ? err.message : entry.message_sv,
+        error: userFacingCode(coded) ? coded.message : entry.message_sv,
         status: entry.httpStatus,
-        errorCode: err.code,
+        errorCode: coded.code,
         ...(entry.remediation ? { data: { remediation: entry.remediation } } : {}),
       }
     }

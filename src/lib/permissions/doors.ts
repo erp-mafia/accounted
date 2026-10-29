@@ -633,6 +633,8 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     'POST /api/import/skattekonto-file/parse': READ,
     'POST /api/import/opening-balance/parse': READ,
     'POST /api/import/sie/parse': READ,
+    // The append preview (issue #108): reads the file and the books, writes nothing.
+    'POST /api/import/sie/append-plan': READ,
     'POST /api/import/sie/upload': BOOK_HOUSE,
     'POST /api/import/documents/preview': READ,
     'POST /api/import/documents/attach': BOOK_HOUSE,

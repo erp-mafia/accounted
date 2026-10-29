@@ -78,6 +78,8 @@ export interface SIEJob {
   manifest: Record<string, unknown>
   job_result: Record<string, unknown> | null
   supersedes_import_id: string | null
+  /** The import this batch appends to (issue #108); null for every import. */
+  base_import_id?: string | null
   file_storage_path: string
   file_hash: string
   prepared_through: number

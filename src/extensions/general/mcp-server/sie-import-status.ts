@@ -1,3 +1,4 @@
+import type { SIEAppendPlan } from '@/lib/import/sie-append'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { getSIEJob } from '@/lib/import/sie-jobs'
 import { assessLegacySIEImport } from '@/lib/import/sie-legacy-recovery'
@@ -57,6 +58,8 @@ export const SIE_IMPORT_LIST_SCHEMA = {
         properties: {
           import_id: { type: 'string' }, filename: { type: ['string', 'null'] }, status: { type: ['string', 'null'] },
           job_state: { type: ['string', 'null'] }, created_at: { type: 'string' }, replaced_at: { type: ['string', 'null'] },
+          // An append's base import (issue #108): undo appends before their base.
+          base_import_id: { type: ['string', 'null'] },
         },
         required: ['import_id', 'filename', 'status', 'job_state', 'created_at', 'replaced_at'],
       },
@@ -84,23 +87,40 @@ export function isImportId(value: unknown): value is string {
 export async function listRecentSIEImports(supabase: SupabaseClient, companyId: string, limit = 10) {
   const { data, error } = await supabase
     .from('sie_imports')
-    .select('id, filename, status, job_state, created_at, replaced_at')
+    .select('id, filename, status, job_state, created_at, replaced_at, base_import_id')
     .eq('company_id', companyId)
     .order('created_at', { ascending: false })
     .limit(limit)
   if (error) throw new Error(`Kunde inte läsa SIE-importer: ${error.message}`)
   const rows = (data ?? []) as Array<{
     id: string; filename: string | null; status: string | null; job_state: string | null; created_at: string; replaced_at: string | null
+    base_import_id?: string | null
   }>
   const imports = rows.map((row) => ({
     import_id: row.id, filename: row.filename, status: row.status, job_state: row.job_state,
-    created_at: row.created_at, replaced_at: row.replaced_at,
+    created_at: row.created_at, replaced_at: row.replaced_at, base_import_id: row.base_import_id ?? null,
   }))
   return {
     kind: 'list', imports, count: imports.length,
     hint: imports.length === 0
       ? 'No SIE imports for this company yet.'
       : 'Pass import_id for durable progress or a legacy recovery assessment.',
+  }
+}
+
+/**
+ * What appending a file to its imported year would do (issue #108), as the
+ * preflight and the staging preview show it. Undeclared in outputSchema
+ * (tools/list budget).
+ */
+export function sieAppendSummary(plan: SIEAppendPlan) {
+  return {
+    base_import_id: plan.baseImportId,
+    counts: plan.counts,
+    vouchers: plan.vouchers.slice(0, 50),
+    series: plan.series,
+    warnings: plan.warnings,
+    refusal: plan.refusal ? { code: plan.refusal.code, message: plan.refusal.message } : null,
   }
 }
 

@@ -58,6 +58,8 @@ interface ImportReviewStepProps {
   error?: string | null
   /** The preview step's "only the accounts the file uses" switch is on (#63). */
   onlyUsedAccounts?: boolean
+  /** An append whose plan refuses it, or is still being read (issue #108): nothing to submit. */
+  blocked?: boolean
 }
 
 export interface ImportExecuteOptions {
@@ -84,6 +86,7 @@ export default function ImportReviewStep({
   theaterModel = null,
   error = null,
   onlyUsedAccounts = false,
+  blocked = false,
 }: ImportReviewStepProps) {
   const { canWrite } = useCanWrite()
   const { company } = useCompany()
@@ -604,7 +607,7 @@ export default function ImportReviewStep({
         </Button>
         <Button
           onClick={handleExecute}
-          disabled={!canWrite || isLoading || (orgMismatch && !orgConfirmed)}
+          disabled={!canWrite || isLoading || blocked || (orgMismatch && !orgConfirmed)}
           title={!canWrite ? tStep('read_only') : undefined}
         >
           {!canWrite && <LockClosedIcon className="mr-2 h-4 w-4" />}

@@ -19,6 +19,7 @@ import { loadMappings } from '@/lib/import/sie-import'
 import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-message'
 import { SIEJobOptionsSchema } from '@/lib/api/schemas'
 import { apiKeyArrivalActor } from '@/lib/intake/arrivals'
+import { userFacingCode } from '@/lib/errors/user-facing'
 
 const SieImportAccepted = z.object({
   operation_id: z.string().uuid(),
@@ -47,11 +48,12 @@ registerEndpoint({
     'Files up to 50 MB use POST /imports/sie/upload, then upload bytes to Storage and submit storagePath + filename. Inline multipart is limited by the hosting gateway.',
     'An identical retry returns the same execution. Deliberate replacement requires options.onExistingPeriod=replace and options.supersedesImportId naming the reviewed predecessor, and uses a new batch after storno.',
     'A fiscal year that already has a posted ingående balans booked outside an import (by hand or by a year-end close) answers 409 SIE_IMPORT_PERIOD_HAS_OPENING_BALANCE when the import would book the file\'s IB on top of it (importOpeningBalances true and no earlier bookkeeping): resend with options.importOpeningBalances=false to import the vouchers on top of the posted IB. A year that already holds an import answers 409 SIE_IMPORT_PERIOD_ALREADY_IMPORTED.',
-    'A file with #VER and no #IB, #UB or #RES (a card provider, payroll or POS export) is never a replacement of an imported year: 409 SIE_IMPORT_VOUCHERS_ONLY_FILE. Never undo the year\'s import for it: create its vouchers with POST /journal-entries.',
+    'To add only the file\'s vouchers the year does not hold yet (the last weeks booked in the old system, a card provider, payroll or POS export), send options.onExistingPeriod=append: they post as their own batch beside the year\'s import, numbers continuing per series, and undo alone. A voucher with the same source series and number as a posted one is skipped when identical and refuses the whole append when changed (409 SIE_IMPORT_APPEND_CONFLICT, details.conflicts). One with the same date and lines as a posted entry but no matching number is a possible duplicate, skipped unless options.includePossibleDuplicates=true. Also 409: an #IB unlike the year\'s (SIE_IMPORT_APPEND_OPENING_BALANCE_DIFFERS), an unbalanced or unmapped new voucher (SIE_IMPORT_APPEND_INVALID_VOUCHERS), nothing new (SIE_IMPORT_APPEND_NOTHING_NEW), a closed or locked period (SIE_IMPORT_PERIOD_LOCKED). options.seriesMap books a source series in another ({"K":"A"}). The year\'s import cannot be undone or replaced while an append is live (409 SIE_IMPORT_HAS_LIVE_APPEND).',
+    'A file with #VER and no #IB, #UB or #RES (a card provider, payroll or POS export) is never a replacement of an imported year: 409 SIE_IMPORT_VOUCHERS_ONLY_FILE. Never undo the year\'s import for it: append it (options.onExistingPeriod=append).',
     'A file whose #ORGNR is not the company\'s organisation number answers 409 SIE_IMPORT_ORG_NUMBER_MISMATCH with both numbers in details. Check with the user, then resend with options.confirmOrgNumberMismatch=true to import it anyway. A file without #ORGNR is not checked.',
     'The operation can take 1-5 minutes for multi-year files. The HTTP response returns immediately with operation_id; poll /operations/{id} every ~2s for status.',
     'Chunks are visible while importing. Filing and export are held until completion. Undo uses batch storno and retains accounting history.',
-    'options (a JSON string field) takes createFiscalPeriod, importOpeningBalances, importTransactions, updateAccountNames (each default true), voucherSeries (for vouchers the file gives no series; default B, as the dashboard), openingBalanceSeries (default: a series the file does not use), markImportedNoDocRequired (default false), onlyUsedAccounts (default false; true leaves out the BAS accounts with no balance and no voucher line in the file, while the file\'s own non-BAS accounts are still created and the archived file keeps everything), onExistingPeriod, supersedesImportId and confirmOrgNumberMismatch; any other key is 400.',
+    'options (a JSON string field) takes createFiscalPeriod, importOpeningBalances, importTransactions, updateAccountNames (each default true), voucherSeries (for vouchers the file gives no series; default B, as the dashboard), openingBalanceSeries (default: a series the file does not use), markImportedNoDocRequired (default false), onlyUsedAccounts (default false; true leaves out the BAS accounts with no balance and no voucher line in the file, while the file\'s own non-BAS accounts are still created and the archived file keeps everything), onExistingPeriod (block, replace or append), supersedesImportId, includePossibleDuplicates, seriesMap and confirmOrgNumberMismatch; any other key is 400.',
     'Account mappings are generated server-side from the file\'s #KONTO records (plus stored per-company overrides), by the same rules as the dashboard upload: a class 9 account carrying amounts is mapped to 2999 OBS-konto, also over a stored class 9 mapping. By default the file\'s account names are carried into the chart, renaming existing accounts whose names differ: pass options.updateAccountNames=false to keep BAS default names.',
   ],
   example: {
@@ -205,6 +207,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string }> }>(
         (err.code === 'SIE_IMPORT_ORG_NUMBER_MISMATCH' || err.code === 'SIE_IMPORT_VOUCHERS_ONLY_FILE')
       ) {
         return v1ErrorResponseFromCode(err.code, ctx.log, { requestId: ctx.requestId, details: err.details })
+      }
+      // An append refusal (issue #108): its sentence names the vouchers, and
+      // details carries the list.
+      if (err instanceof SIEJobValidationError && err.code !== 'VALIDATION_ERROR' && userFacingCode(err)) {
+        return v1ErrorResponseFromCode(err.code, ctx.log, { requestId: ctx.requestId, details: err.details,
+          messageSv: getUserErrorMessage(err) })
       }
       throw err
     }

@@ -4522,20 +4522,21 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
     message_en: 'An SIE import for an overlapping fiscal period already exists.',
   },
   // crm#1049: a file with verifikat and no balances (SIE 4I shape: a card
-  // provider's, payroll's or POS system's export) for a year that already
-  // holds an import. The import reads whole years, and replacing the year's
-  // import with it would drop every verifikat it does not carry.
+  // provider's, payroll's or POS system's export) offered as the replacement
+  // of a year's import: it would drop every verifikat it does not carry.
+  // Such a file is appended instead (issue #108).
   SIE_IMPORT_VOUCHERS_ONLY_FILE: {
     httpStatus: 409,
     message_sv:
-      'Filen innehåller bara verifikationer, till exempel från ett kortföretag eller ett lönesystem, och räkenskapsåret är redan importerat. SIE-importen läser in hela räkenskapsår och kan inte lägga till verifikationer i ett importerat år. Ångra inte den tidigare importen: bokför filens verifikationer som vanliga verifikationer under Bokföring i stället.',
+      'Filen innehåller bara verifikationer, till exempel från ett kortföretag eller ett lönesystem, och kan inte ersätta räkenskapsårets import: allt den inte innehåller skulle försvinna. Ångra inte den tidigare importen: välj Lägg till nya verifikat, så bokförs bara filens verifikationer som inte redan finns.',
     message_en:
-      'The file holds only vouchers, for example from a card provider or a payroll system, and the fiscal year is already imported. The SIE import reads whole fiscal years and cannot add vouchers to an imported year. Do not undo the earlier import: book the file\'s vouchers as ordinary vouchers under Bookkeeping instead.',
+      'The file holds only vouchers, for example from a card provider or a payroll system, and cannot replace the fiscal year\'s import: everything it does not hold would be lost. Do not undo the earlier import: choose Add new vouchers, which books only the file\'s vouchers that are not already posted.',
     retryable: false,
     remediation: {
       description:
-        'Do not undo or replace the year\'s import (details.existing_import_id). Create each #VER of the file as an ordinary voucher (gnubok_create_voucher), checking first that it is not already booked (same date, amount and text).',
-      tool: 'gnubok_create_voucher',
+        'Do not undo or replace the year\'s import (details.existing_import_id). Stage gnubok_import_sie again with on_existing_year=append: only the file\'s vouchers that are not already posted are added, as their own batch.',
+      tool: 'gnubok_import_sie',
+      args: { on_existing_year: 'append' },
     },
   },
   // start_sie_import_job's guard 'Existing SIE import requires reviewed
@@ -4545,11 +4546,11 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
   // (crm#1272).
   SIE_IMPORT_PERIOD_ALREADY_IMPORTED: {
     httpStatus: 409,
-    message_sv: 'Räkenskapsåret har redan importerats, och SIE-importen läser in hela räkenskapsår. Ska året ersättas: öppna importhistoriken och ångra den tidigare importen först. Ska verifikationer från en annan fil läggas till: bokför dem som vanliga verifikationer i stället.',
-    message_en: 'This fiscal year has already been imported, and the SIE import reads whole fiscal years. To replace the year: open import history and undo the earlier import first. To add vouchers from another file: book them as ordinary vouchers instead.',
+    message_sv: 'Räkenskapsåret har redan importerats, och SIE-importen läser in hela räkenskapsår. Ska året ersättas: öppna importhistoriken och ångra den tidigare importen först. Ska bara filens nya verifikationer läggas till: välj Lägg till nya verifikat.',
+    message_en: 'This fiscal year has already been imported, and the SIE import reads whole fiscal years. To replace the year: open import history and undo the earlier import first. To add only the file\'s new vouchers: choose Add new vouchers.',
     retryable: false,
     remediation: {
-      description: 'Only when the file replaces the whole year: read gnubok_sie_import_status for the earlier import of this fiscal year, undo it (gnubok_undo_sie_import or import history in the app), then import the year again. When the file only adds verifikat (a card provider, payroll or POS export), never undo: create them as vouchers (gnubok_create_voucher).',
+      description: 'Only when the file replaces the whole year: read gnubok_sie_import_status for the earlier import of this fiscal year, undo it (gnubok_undo_sie_import or import history in the app), then import the year again. When the file only adds verifikat (the last weeks from the old system, a card provider, payroll or POS export), never undo: stage gnubok_import_sie with on_existing_year=append, which adds only the vouchers not already posted.',
       tool: 'gnubok_sie_import_status',
       resource: '/import?mode=sie',
     },
@@ -4587,6 +4588,58 @@ const SIE_IMPORT: Record<string, StructuredErrorEntry> = {
       resource: '/import?mode=sie',
     },
     thrown_message_sv: true,
+  },
+  // Appending a file's new vouchers to an imported year (issue #108,
+  // lib/import/sie-append.ts). The planner writes the Swedish sentence that
+  // names the vouchers; these are the fallbacks and the remediation.
+  SIE_IMPORT_APPEND_NO_BASE: {
+    httpStatus: 409,
+    message_sv: 'Räkenskapsåret har ingen färdig SIE-import att lägga till verifikationer i. Importera filen som en vanlig import i stället.',
+    message_en: 'The fiscal year has no completed SIE import to add vouchers to. Import the file as an ordinary import instead.',
+    retryable: false,
+    remediation: { description: 'Import the file without on_existing_year (or onExistingPeriod=block): the year holds no import yet.', tool: 'gnubok_import_sie' },
+    thrown_message_sv: true,
+  },
+  SIE_IMPORT_APPEND_CONFLICT: {
+    httpStatus: 409,
+    message_sv: 'Filen har verifikationer med samma nummer som bokförda verifikationer men annat innehåll. En påfyllnad lägger bara till nya verifikationer och ändrar aldrig bokförda. Är filen den rätta: ersätt räkenskapsårets import i stället.',
+    message_en: 'The file has vouchers with the same numbers as posted vouchers but different content. Appending only adds new vouchers and never changes posted ones. If the file is the correct one, replace the fiscal year\'s import instead.',
+    retryable: false,
+    remediation: { description: 'details.conflicts names each source voucher and the posted verifikat it differs from. Nothing was imported. Ask the user whether the file or the books are right; replacing the year is their decision.', tool: 'gnubok_sie_import_status' },
+    thrown_message_sv: true,
+  },
+  SIE_IMPORT_APPEND_OPENING_BALANCE_DIFFERS: {
+    httpStatus: 409,
+    message_sv: 'Filens ingående balans skiljer sig från räkenskapsårets bokförda. En påfyllnad kan inte ändra ingående balansen. Är filen den rätta: rätta ingående balansen eller ersätt räkenskapsårets import.',
+    message_en: 'The file\'s opening balance differs from the fiscal year\'s posted one. Appending cannot change the opening balance. If the file is right, correct the opening balance or replace the year\'s import.',
+    retryable: false,
+    remediation: { description: 'details.differences lists each account. Nothing was imported.', tool: 'gnubok_correct_opening_balances' },
+    thrown_message_sv: true,
+  },
+  SIE_IMPORT_APPEND_INVALID_VOUCHERS: {
+    httpStatus: 409,
+    message_sv: 'Några av filens nya verifikationer balanserar inte eller har konton utan mappning. En påfyllnad bokför verifikationerna exakt som i källsystemet. Rätta dem där eller mappa kontona, och försök igen.',
+    message_en: 'Some of the file\'s new vouchers do not balance or use unmapped accounts. Appending books vouchers exactly as in the source system. Fix them there or map the accounts, then retry.',
+    retryable: false,
+    remediation: { description: 'details.vouchers names each voucher and why. Nothing was imported.' },
+    thrown_message_sv: true,
+  },
+  SIE_IMPORT_APPEND_NOTHING_NEW: {
+    httpStatus: 409,
+    message_sv: 'Filen innehåller inga verifikationer som inte redan är bokförda.',
+    message_en: 'The file holds no vouchers that are not already posted.',
+    retryable: false,
+    thrown_message_sv: true,
+  },
+  // request_sie_import_undo's guard 'SIE undo requires review: an append
+  // batch is live' (55000), mapped by jobDatabaseError. A replacement undoes
+  // the previous import first, so it is refused too.
+  SIE_IMPORT_HAS_LIVE_APPEND: {
+    httpStatus: 409,
+    message_sv: 'Verifikationer har lagts till i importen från en annan fil. Ångra de tilläggen först i importhistoriken, och sedan importen.',
+    message_en: 'Vouchers were appended to this import from another file. Undo those appends first in import history, then the import.',
+    retryable: false,
+    remediation: { description: 'Nothing was queued. Read gnubok_sie_import_status (no import_id) for the appends of this import (base_import_id); each undoes alone.', tool: 'gnubok_sie_import_status', resource: '/import?mode=sie' },
   },
   SIE_IMPORT_UNMAPPED_ACCOUNTS: {
     httpStatus: 400,

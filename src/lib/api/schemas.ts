@@ -125,8 +125,16 @@ export const SIEJobOptionsSchema = z.object({
   // stay in the archived original. Optional, not defaulted: a job submitted
   // without it keeps its input (an identical retry's identity) byte for byte.
   onlyUsedAccounts: z.boolean().optional(),
-  onExistingPeriod: z.enum(['block','replace']).default('block'),
+  // 'append' adds only the file's vouchers the year's import does not hold,
+  // as their own batch (issue #108, lib/import/sie-append.ts).
+  onExistingPeriod: z.enum(['block','replace','append']).default('block'),
   supersedesImportId: z.string().uuid().optional(),
+  // Append only: also book the vouchers that match a posted entry's date and
+  // lines but carry no matching source number (skipped by default).
+  includePossibleDuplicates: z.boolean().optional(),
+  // Append only: a source series the year does not use yet, booked in
+  // another series instead ({ "K": "A" }). Unmapped series keep their letter.
+  seriesMap: z.record(z.string().trim().min(1).max(16), z.string().trim().min(1).max(16)).optional(),
   // The file's #ORGNR is not the company's and the user said import anyway.
   // A submit-time gate only: submitSIEJob keeps it out of the job's input.
   confirmOrgNumberMismatch: z.boolean().optional(),

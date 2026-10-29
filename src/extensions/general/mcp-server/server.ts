@@ -1,6 +1,6 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import { CASH_OR_CARD_LEDGER_PATTERN } from '@/lib/cash-accounts/card-ledger'
-import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA } from './sie-import-status'
+import { isImportId, listRecentSIEImports, readSIEImportStatus, SIE_IMPORT_STATUS_TOOL_SCHEMA, sieAppendSummary } from './sie-import-status'
 import { MIGRATION_PROVIDER_IDS } from '@/lib/providers/catalog'
 import { isAnyUnattended, markUnattended, unattendedMarks, unattendedScopes } from './unattended'
 import { UUID_RE } from '@/lib/invariants/uuid'
@@ -131,6 +131,7 @@ import {
   type PrintedLineAmount,
 } from '@/lib/bookkeeping/supplier-invoice-line-totals'
 import { getErrorEntry, siCreateInvalidInputMessages } from '@/lib/errors/structured-errors'
+import type { SIEAppendPlan } from '@/lib/import/sie-append'
 import { ACCOUNTS_NOT_IN_CHART } from '@/lib/bookkeeping/errors'
 import { dbError, errorCauseTag } from '@/lib/errors/db-error'
 import { errorResponseFromCode, getStructuredError } from '@/lib/errors/get-structured-error'
@@ -24562,17 +24563,23 @@ export const tools: McpTool[] = [
       // What would refuse the import now although the file is fine: the
       // fiscal year conflicts with the company's years, or another import is
       // not finished. Swedish, for the widget and the user.
-      // A verifikat-only file (card provider, payroll, POS) over an imported
-      // year: neither an import nor a replacement of the year (crm#1049).
+      // A year that already holds an import takes the file's new vouchers
+      // as an append (issue #108): the plan says what would be added. A
+      // verifikat-only file (card provider, payroll, POS) can only be
+      // appended, never replace the year (crm#1049).
       const { isVoucherOnlySIE } = await import('@/lib/import/sie-voucher-only')
-      const voucherOnlyOverImport =
-        Boolean(duplicatePeriod || refusal?.reason === 'existing_import') && isVoucherOnlySIE(parsed)
+      const yearImported = Boolean(duplicatePeriod || refusal?.reason === 'existing_import')
+      const voucherOnlyOverImport = yearImported && isVoucherOnlySIE(parsed)
+      let appendPlan: SIEAppendPlan | null = null
+      if (yearImported && !unfinishedImport && parsed.stats.fiscalYearStart && parsed.stats.fiscalYearEnd) {
+        const { planSIEAppend } = await import('@/lib/import/sie-append')
+        appendPlan = await planSIEAppend(supabase, companyId, parsed, mappings)
+      }
       const blockingTexts = [
         ...(fiscalYearRefusal ? [fiscalYearRefusal] : []),
         ...(unfinishedImport
           ? ['En annan SIE-import för företaget är inte klar. Låt den bli klar, eller ångra den, innan den här filen importeras.']
           : []),
-        ...(voucherOnlyOverImport ? [getErrorEntry('SIE_IMPORT_VOUCHERS_ONLY_FILE')?.message_sv ?? ''] : []),
       ]
       const bookedIbTexts = bookedIb
         ? [
@@ -24583,7 +24590,7 @@ export const tools: McpTool[] = [
       const allWarnings = [...validation.warnings, ...encodingWarnings, ...bookedIbTexts, ...continuityTexts]
       const verdict = !validation.valid
         ? 'invalid'
-        : duplicate && !voucherOnlyOverImport
+        : duplicate
           ? 'duplicate'
           : blockingTexts.length > 0
             ? 'blocked'
@@ -24642,11 +24649,24 @@ export const tools: McpTool[] = [
         // only without the file's. The drop widget passes it on as is.
         // Undeclared in outputSchema, like target_company on the upload tool.
         ...(bookedIb ? { import_opening_balances: false } : {}),
+        // What an append of this file to the imported year would do (issue
+        // #108). Undeclared in outputSchema (tools/list budget).
+        ...(appendPlan ? { append: { ...sieAppendSummary(appendPlan), vouchers_only_file: voucherOnlyOverImport } } : {}),
         instructions:
           verdict === 'invalid'
             ? 'The file has blocking errors: report them to the user and do not import. A fresh export from the source system usually fixes them.'
             : verdict === 'duplicate'
-              ? 'This file or fiscal year has import history. Read gnubok_sie_import_status for the import before proposing replacement. Legacy imports need outcome review; do not retry or undo them automatically.'
+              ? (appendPlan?.refusal === null
+                  ? `This fiscal year is already imported. ${voucherOnlyOverImport ? 'The file holds only vouchers: never replace or undo the year for it. ' : ''}` +
+                    `To add only the vouchers the books do not hold, call gnubok_import_sie with this file, the returned mappings and on_existing_year='append': ` +
+                    `${appendPlan.counts.toAdd} would be added, ${appendPlan.counts.present} are already booked` +
+                    (appendPlan.counts.possibleDuplicates > 0
+                      ? `, ${appendPlan.counts.possibleDuplicates} look like duplicates of posted entries (append.vouchers, verdict possible_duplicate) and are skipped; ask the user, and only on their word use on_existing_year='append_with_duplicates'`
+                      : '') +
+                    '. Summarize append.vouchers and append.warnings for the user first.'
+                  : appendPlan?.refusal
+                    ? `This fiscal year is already imported, and adding the file's new vouchers would be refused: ${appendPlan.refusal.message} Tell the user; do not undo or replace the year unless they decide the file replaces it.`
+                    : 'This file or fiscal year has import history. Read gnubok_sie_import_status for the import before proposing replacement. Legacy imports need outcome review; do not retry or undo them automatically.')
               : verdict === 'blocked'
                 ? (fiscalYearRefusal
                     ? `The import would be refused: the file's fiscal year does not fit the company's fiscal years (${fiscalYearRefusal}). Tell the user what to change; do not stage the import until it is resolved.`
@@ -24692,6 +24712,7 @@ export const tools: McpTool[] = [
         update_account_names: { type: 'boolean', description: 'Use #KONTO names from the file for created and existing accounts (default true). Set false to keep BAS default names.' },
         only_used_accounts: { type: 'boolean' },
         confirm_org_number_mismatch: { type: 'boolean' },
+        on_existing_year: { enum: ['append', 'append_with_duplicates'], description: 'Imported year: add only new vouchers' },
       },
       required: ['filename', 'mappings'],
     },
@@ -24730,7 +24751,7 @@ export const tools: McpTool[] = [
       // default (import everything, as the dashboard and v1 do). It used to
       // stage Boolean(undefined), so omitting the flags imported nothing (the
       // job refused after approval) or a first year without its IB.
-      const { validateSIEJobInput, resolveSIEFiscalYear } = await import('@/lib/import/sie-jobs')
+      const { validateSIEJobInput, resolveSIEFiscalYear, appendJobOptions } = await import('@/lib/import/sie-jobs')
       const { SIEImportFlagsSchema, SIEJobMappingsSchema } = await import('@/lib/api/schemas')
       const flagsParse = SIEImportFlagsSchema.safeParse({
         createFiscalPeriod: args.create_fiscal_period,
@@ -24745,6 +24766,14 @@ export const tools: McpTool[] = [
         )
       }
       const flags = flagsParse.data
+      // Top up an imported year with only the file's new vouchers (issue #108):
+      // its own batch beside the year's import. 'append_with_duplicates' also
+      // books the possible duplicates (same date and lines as a posted entry).
+      const onExistingYear = args.on_existing_year
+      if (onExistingYear !== undefined && onExistingYear !== 'append' && onExistingYear !== 'append_with_duplicates') {
+        throw badArgument('on_existing_year', "on_existing_year must be 'append' or 'append_with_duplicates' when given")
+      }
+      const append = onExistingYear !== undefined
       const mappingsParse = SIEJobMappingsSchema.safeParse(mappings)
       if (!mappingsParse.success) {
         // submitSIEJob refuses the same mappings at approval.
@@ -24767,7 +24796,19 @@ export const tools: McpTool[] = [
       // import), voucher dates inside the fiscal year, amounts and limits.
       // submitSIEJob runs it again at approval on the same content.
       await resolveSIEFiscalYear(supabase, companyId, parsed)
-      validateSIEJobInput(fileContent, parsed, mappingsParse.data, { filename, ...flags })
+      validateSIEJobInput(fileContent, parsed, mappingsParse.data,
+        append ? appendJobOptions({ filename, ...flags }) : { filename, ...flags })
+      // The append's verdicts, as submitSIEJob reads them at approval: a
+      // refusal (a changed voucher, another IB, a lock) stops staging here.
+      let appendPlan: SIEAppendPlan | null = null
+      if (append) {
+        const { planSIEAppend } = await import('@/lib/import/sie-append')
+        const { sieAppendRefusalError } = await import('@/lib/import/sie-jobs')
+        appendPlan = await planSIEAppend(supabase, companyId, parsed, mappingsParse.data, {
+          includePossibleDuplicates: onExistingYear === 'append_with_duplicates',
+        })
+        if (appendPlan.refusal) throw sieAppendRefusalError(appendPlan.refusal)
+      }
 
       const sourceAccountsInFile = new Set<string>()
       for (const v of parsed.vouchers) for (const l of v.lines) sourceAccountsInFile.add(l.account)
@@ -24825,6 +24866,7 @@ export const tools: McpTool[] = [
           ...(onlyUsedAccounts ? { only_used_accounts: true } : {}),
           // Confirms only the mismatch seen here; absent when there was none.
           ...(orgCheck.mismatch ? { confirm_org_number_mismatch: true } : {}),
+          ...(append ? { on_existing_year: 'append', include_possible_duplicates: onExistingYear === 'append_with_duplicates' } : {}),
         },
         preview: {
           filename,
@@ -24846,7 +24888,10 @@ export const tools: McpTool[] = [
           import_opening_balances: flags.importOpeningBalances,
           import_transactions: flags.importTransactions,
           ...(usedMappings ? { only_used_accounts: { mappings_kept: usedMappings.length, mappings_left_out: mappingsParse.data.length - usedMappings.length } } : {}),
-          will: 'create fiscal period + opening balances + journal entries from the parsed SIE',
+          ...(appendPlan ? { append: sieAppendSummary(appendPlan) } : {}),
+          will: appendPlan
+            ? `add ${appendPlan.counts.toAdd} new vouchers to the imported year as their own batch; ${appendPlan.counts.present} already booked are skipped`
+            : 'create fiscal period + opening balances + journal entries from the parsed SIE',
         },
         actor,
         next: {

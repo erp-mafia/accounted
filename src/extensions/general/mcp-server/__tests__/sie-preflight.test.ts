@@ -6,6 +6,15 @@
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+// The append planner reads the books (sie-append.test.ts covers it); here
+// only what the preflight does with its answer.
+const appendPlan = vi.hoisted(() => ({
+  fiscalPeriodId: 'period-1', baseImportId: 'imp-2', fiscalYear: null,
+  counts: { total: 1, present: 0, conflicts: 0, possibleDuplicates: 0, new: 1, toAdd: 1 },
+  vouchers: [], vouchersTruncated: false, series: [], yearSeries: [], warnings: [], refusal: null as null | { code: string; message: string },
+}))
+vi.mock('@/lib/import/sie-append', () => ({ planSIEAppend: vi.fn(async () => appendPlan) }))
+
 import { tools } from '../server'
 
 const tool = tools.find((t) => t.name === 'gnubok_sie_preflight')!
@@ -261,7 +270,7 @@ describe('gnubok_sie_preflight', () => {
     expect((result.duplicate as Record<string, unknown>).kind).toBe('period')
   })
 
-  it('blocks a verifikat-only file over an imported year instead of offering the replacement (crm#1049)', async () => {
+  it('offers a verifikat-only file over an imported year as an append, never the replacement (crm#1049, #108)', async () => {
     const result = await run(
       { file_content: VALID_SIE },
       {
@@ -274,8 +283,25 @@ describe('gnubok_sie_preflight', () => {
       }
     )
 
-    expect(result.verdict).toBe('blocked')
-    expect(JSON.stringify(result)).toContain('Ångra inte den tidigare importen')
+    expect(result.verdict).toBe('duplicate')
+    expect(result.append).toMatchObject({ base_import_id: 'imp-2', vouchers_only_file: true, refusal: null })
+    expect(result.instructions).toContain("on_existing_year='append'")
+    expect(result.instructions).toContain('never replace or undo the year')
+  })
+
+  it('says why an append would be refused instead of offering it', async () => {
+    appendPlan.refusal = { code: 'SIE_IMPORT_APPEND_CONFLICT', message: '1 av filens verifikationer har samma nummer: A1.' }
+    try {
+      const result = await run(
+        { file_content: WHOLE_YEAR_SIE },
+        { duplicatePeriod: { id: 'imp-2', fiscal_year_start: `${YEAR}-01-01`, fiscal_year_end: `${YEAR}-12-31` } },
+      )
+      expect(result.verdict).toBe('duplicate')
+      expect(result.instructions).toContain('would be refused: 1 av filens verifikationer har samma nummer: A1.')
+      expect(result.instructions).not.toContain("on_existing_year='append'")
+    } finally {
+      appendPlan.refusal = null
+    }
   })
 
   // crm#1099: on top of earlier bookkeeping the file's #IB is not booked, so

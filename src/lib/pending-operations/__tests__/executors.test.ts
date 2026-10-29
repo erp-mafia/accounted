@@ -1119,6 +1119,39 @@ describe('commitPendingOperation: import_sie', () => {
     expect(result.error).toMatch(/^Räkenskapsåret har redan importerats/)
     expect(result.data).toMatchObject({ remediation: { tool: 'gnubok_sie_import_status' } })
   })
+
+  // Issue #108: an append staged with on_existing_year reaches the job as
+  // onExistingPeriod 'append'; its refusal answers with the planner's sentence.
+  const appendOp = (extra: Record<string, unknown> = {}) => makePendingOp({
+    operation_type: 'import_sie',
+    params: { file_content: '#FLAGGA 0\n', filename: 'append.se', mappings: [], on_existing_year: 'append', ...extra },
+  })
+
+  it('submits an append with its possible-duplicate choice', async () => {
+    vi.mocked(submitSIEJob).mockResolvedValueOnce({ id: 'imp-2', fiscal_period_id: 'fp-1', job_state: 'queued' } as never)
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's update
+
+    await commitPendingOperation(supabase as never, 'user-1', 'company-1', appendOp({ include_possible_duplicates: true }))
+
+    expect(vi.mocked(submitSIEJob).mock.calls[0][5]).toMatchObject({ onExistingPeriod: 'append', includePossibleDuplicates: true })
+  })
+
+  it('answers an append refusal with its code and the sentence naming the vouchers', async () => {
+    const { SIEJobValidationError: RealError } = await vi.importActual<typeof import('@/lib/import/sie-jobs')>('@/lib/import/sie-jobs')
+    const { userFacing } = await import('@/lib/errors/user-facing')
+    const sentence = '1 av filens verifikationer har samma nummer som bokförda verifikationer men annat innehåll: A2.'
+    vi.mocked(submitSIEJob).mockRejectedValueOnce(
+      userFacing(new RealError(sentence, 'SIE_IMPORT_APPEND_CONFLICT', { conflicts: [] }), 'SIE_IMPORT_APPEND_CONFLICT'))
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: { id: 'op-1' }, error: null }) // CAS claim
+    enqueue({ data: null, error: null }) // dispatcher's reject update
+
+    const result = await commitPendingOperation(supabase as never, 'user-1', 'company-1', appendOp())
+
+    expect(result).toMatchObject({ status: 'rejected', http_status: 409, code: 'SIE_IMPORT_APPEND_CONFLICT', error: sentence })
+  })
 })
 
 // ─── credit_invoice ─────────────────────────────────────────────────

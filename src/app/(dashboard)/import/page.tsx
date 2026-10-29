@@ -50,6 +50,8 @@ import type { OpeningBalanceParseResult, OpeningBalanceExecuteResult, DetectedCo
 
 
 import type { ImportExecuteOptions } from '@/components/import/ImportReviewStep'
+import type { ExistingYearMode } from '@/components/import/SIEExistingYearChoice'
+import type { SIEAppendPlan } from '@/lib/import/sie-append'
 import { applyMappingOverride, getMappingStats, isValidBASRange } from '@/lib/import/account-mapper'
 import { decodeFileContent } from '@/lib/import/shared/encoding'
 import type { BankFileParseResult, BankFileFormatId, BankFileDuplicateInfo, GenericCSVColumnMapping } from '@/lib/import/bank-file/types'
@@ -132,6 +134,7 @@ const AccountMappingStep = dynamic(() => import('@/components/import/AccountMapp
 const ImportReviewStep = dynamic(() => import('@/components/import/ImportReviewStep'), { loading: ImportStepLoading })
 const ImportResultStep = dynamic(() => import('@/components/import/ImportResultStep'), { loading: ImportStepLoading })
 const SIEImportHistory = dynamic(() => import('@/components/import/SIEImportHistory'), { loading: ImportStepLoading })
+const SIEExistingYearChoice = dynamic(() => import('@/components/import/SIEExistingYearChoice').then((m) => m.SIEExistingYearChoice), { loading: ImportStepLoading })
 const BankFileImportHistory = dynamic(() => import('@/components/import/BankFileImportHistory'), { loading: ImportStepLoading })
 const RegisterImportHistory = dynamic(() => import('@/components/import/RegisterImportHistory'), { loading: ImportStepLoading })
 const UnderlagImportWizard = dynamic(() => import('@/components/import/UnderlagImportWizard'), { loading: ImportStepLoading })
@@ -815,9 +818,14 @@ function SIEImportWizard({
     else params.delete('job')
     jobRouter.replace(`/import?${params.toString()}`, { scroll: false })
   }, [jobRouter, jobSearch])
-  const [replaceExisting,setReplaceExisting] = useState(false)
+  // A year that already holds an import (issue #108): add only the file's
+  // new vouchers (the default), or replace the import after review.
+  const [existingYearMode,setExistingYearMode] = useState<ExistingYearMode>('append')
+  const [appendOnly,setAppendOnly] = useState(false)
+  const [includePossibleDuplicates,setIncludePossibleDuplicates] = useState(false)
+  const [seriesMap,setSeriesMap] = useState<Record<string,string>>({})
+  const [appendPlan,setAppendPlan] = useState<SIEAppendPlan | null>(null)
   const [storagePath,setStoragePath] = useState<string|null>(null)
-  const jobT = useTranslations('import.sie_job')
   const flowT = useTranslations('import.sie_flow')
   const locale = useLocale() === 'en' ? 'en' : 'sv'
   const stepLabel = (s: ImportWizardStep) => flowT(`step_${s}`)
@@ -915,9 +923,7 @@ function SIEImportWizard({
         } else {
           setErrorType('parse')
           setError(message)
-          // crm#1049: the file was read; it only cannot become the year's import.
-          const title = code === 'SIE_IMPORT_VOUCHERS_ONLY_FILE' ? flowT('vouchers_only_title') : flowT('parse_failed_title')
-          toast({ title, description: message, variant: 'destructive' })
+          toast({ title: flowT('parse_failed_title'), description: message, variant: 'destructive' })
         }
         return
       }
@@ -936,6 +942,7 @@ function SIEImportWizard({
       })
       setPreview(data.preview)
       if (data.existingImport?.id) setDuplicateImportId(data.existingImport.id)
+      setAppendOnly(data.appendOnly === true)
       setIssues(data.parsed.issues)
       setSieAccounts(data.parsed.accounts)
 
@@ -999,7 +1006,7 @@ function SIEImportWizard({
   },[showJob, locale])
 
   const handleReplace = useCallback(async (_importId:string) => {
-    setReplaceExisting(true)
+    setExistingYearMode('replace')
     setDuplicateImportId(null)
     setError(null)
     if (file) await handleFileSelect(file)
@@ -1233,8 +1240,10 @@ function SIEImportWizard({
       formData.append('storagePath',storagePath)
       formData.append('filename',file.name)
       formData.append('mappings', JSON.stringify(effectiveMappings))
-      formData.append('options', JSON.stringify({...options,onExistingPeriod:replaceExisting ? 'replace' : 'block',
-        supersedesImportId:replaceExisting ? duplicateImportId : undefined,
+      const mode: ExistingYearMode = duplicateImportId ? existingYearMode : 'block'
+      formData.append('options', JSON.stringify({...options,onExistingPeriod:mode,
+        supersedesImportId:mode === 'replace' ? duplicateImportId : undefined,
+        ...(mode === 'append' ? { includePossibleDuplicates, ...(Object.keys(seriesMap).length ? { seriesMap } : {}) } : {}),
         ...(leavesOutUnused ? { onlyUsedAccounts: true } : {})}))
 
       const res = await fetch('/api/import/sie/execute', { method: 'POST', body: formData })
@@ -1259,13 +1268,14 @@ function SIEImportWizard({
     } finally {
       setIsLoading(false)
     }
-  }, [file, effectiveMappings, leavesOutUnused, storagePath, replaceExisting, duplicateImportId, showJob, toast, flowT, locale])
+  }, [file, effectiveMappings, leavesOutUnused, storagePath, existingYearMode, includePossibleDuplicates, seriesMap, duplicateImportId, showJob, toast, flowT, locale])
 
   const goToStep = (targetStep: ImportWizardStep) => { setStep(targetStep); setError(null); setValidationErrors([]); setValidationWarnings([]) }
   const goBack = () => { const i = sieSteps.indexOf(step); if (i > 0) setStep(sieSteps[i - 1]) }
 
   const handleNewImport = () => {
-    showJob(null); setReplaceExisting(false);setStoragePath(null)
+    showJob(null); setExistingYearMode('append'); setAppendOnly(false); setIncludePossibleDuplicates(false)
+    setSeriesMap({}); setAppendPlan(null); setStoragePath(null)
     setStep('upload'); setFile(null); setParsed(null); setMappings([])
     setPreview(null); setIssues([]); setImportResult(null); setError(null); setErrorType(undefined)
     setValidationErrors([]); setValidationWarnings([]); setDuplicateImportId(null)
@@ -1305,14 +1315,17 @@ function SIEImportWizard({
           onSourceChartSelected={handleSourceChartSelected} sourceChart={sourceChart}
           onContinue={confirmVatReview} onBack={goBack} />
       )}
-      {duplicateImportId && <label className="flex items-center gap-3 text-sm">
-        <input type="checkbox" checked={replaceExisting} onChange={event => setReplaceExisting(event.target.checked)}/>
-        {jobT('replace')}
-      </label>}
+      {duplicateImportId && (step === 'mapping' || step === 'review') && (
+        <SIEExistingYearChoice mode={existingYearMode} onModeChange={setExistingYearMode} appendOnly={appendOnly}
+          storagePath={storagePath} filename={file?.name ?? null} mappings={effectiveMappings}
+          includePossibleDuplicates={includePossibleDuplicates} onIncludePossibleDuplicatesChange={setIncludePossibleDuplicates}
+          seriesMap={seriesMap} onSeriesMapChange={setSeriesMap} onPlan={setAppendPlan} />
+      )}
       {step === 'review' && effectivePreview && (
         <ImportReviewStep preview={effectivePreview} mappings={effectiveMappings} onlyUsedAccounts={leavesOutUnused}
           onExecute={handleExecuteImport} onBack={goBack} isLoading={isLoading}
-          theaterModel={theaterModel} error={error} />
+          theaterModel={theaterModel} error={error}
+          blocked={Boolean(duplicateImportId) && existingYearMode === 'append' && (!appendPlan || appendPlan.refusal !== null)} />
       )}
       {step === 'result' && importResult && (
         <ImportResultStep result={importResult} onNewImport={handleNewImport} onUndo={handleUndo}
