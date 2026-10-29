@@ -5150,6 +5150,109 @@ Example response `200`:
 
 ---
 
+### `POST /api/v1/companies/{companyId}/webshop-orders/book-day`
+
+**Book a store's orders and refunds of one day and one payment method as one verifikat, with a day summary as underlag.**
+`scope:bookkeeping:write · risk:high · idempotent · dry-run`
+
+Posts one verifikat (source_type webshop_order, dated the day) for every unbooked, paid order and refund of the store whose paid date (else order date) is the day and whose payment method is the one given. The lines are the server's, never the caller's: each order's lines are derived exactly as the Orders page's bulk booking derives them (the store's payment-method mapping and country rules), then summed per account and side, so sales and refunds are separate lines. Every order is linked to the verifikat and stops showing as unbooked, and a dagssammanställning listing each order (number, date, country, amount, VAT) is archived on it. An order that cannot be booked without review (no VAT split, a country no store rule covers, an unknown destination, a non-Swedish rate on the Swedish accounts, an invoice-flow payment method, a rounding gap over 1 kr) is left out, listed in skipped with the reason, and stays unbooked. Dry-runnable.
+
+**Use when:** The company books its webshop sales per day and payment method (e.g. one verifikat for Shopify Payments and one for PayPal), not per order.
+**Do not use for:** Payouts and fees from the payment provider (book those against the clearing account from the bank row), one order (POST /webshop-orders/{orderId}/book), or correcting a booked day (storno, then book the orders again).
+
+**Pitfalls:**
+- Pass order_ids and lines_sha256 from the dry run as expected_order_ids and expected_lines_sha256: an order booked or changed since answers 409 WEBSHOP_DAY_CHANGED instead of booking figures you did not review.
+- payment_method is the order's payment_method from GET /webshop-orders, e.g. shopify_payments or paypal. Orders without one cannot be booked per day.
+- Orders that sync after the day is booked stay unbooked: booking the day again posts a second verifikat for them.
+- skipped orders stay in Att bokföra: book them one by one with POST /webshop-orders/{orderId}/book.
+- A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  platform: "woocommerce" | "shopify" | "zettle",
+  store_scope: string,
+  date: string,
+  payment_method: string,
+  expected_order_ids?: string[],
+  expected_lines_sha256?: string
+}
+```
+
+Example request:
+```json
+{
+  "platform": "shopify",
+  "store_scope": "exempel.myshopify.com",
+  "date": "2026-10-14",
+  "payment_method": "shopify_payments"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    journal_entry_id: string,
+    voucher_series: string | null,
+    voucher_number: number | null,
+    entry_date: string,
+    booked: { webshop_order_id: string, order_number: string, row_type: "order" | "refund", total_sek: number }[],
+    skipped: { webshop_order_id: string, order_number: string, row_type: "order" | "refund", code: string, message_sv: string, message_en: string, details?: Record<string, unknown> }[],
+    underlag_document_id: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "journal_entry_id": "9a0b…",
+    "voucher_series": "L",
+    "voucher_number": 41,
+    "entry_date": "2026-10-14",
+    "booked": [
+      {
+        "webshop_order_id": "3f2a…",
+        "order_number": "#1042",
+        "row_type": "order",
+        "total_sek": 1250
+      },
+      {
+        "webshop_order_id": "7c1d…",
+        "order_number": "#1043",
+        "row_type": "order",
+        "total_sek": 499
+      }
+    ],
+    "skipped": [],
+    "underlag_document_id": "5d2c…"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
 ### `GET /api/v1/companies/{companyId}/webshop-orders/oss-underlag`
 
 **Underlag for the OSS declaration (unionsordningen): a quarter's webshop sales to consumers in other EU countries, per country and VAT rate, in euro.**

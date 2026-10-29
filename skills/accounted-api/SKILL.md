@@ -8,7 +8,7 @@ description: >-
   transactions and reconciliation, payroll (lön), VAT/moms and financial
   reports, SIE import/export, documents, webhooks. Covers auth with
   gnubok_sk_ API keys, conventions (dry-run, idempotency, cursor
-  pagination, scopes), and all 390 endpoints.
+  pagination, scopes), and all 391 endpoints.
 ---
 
 <!-- GENERATED FILE, do not edit. Source: lib/api/v1 registry + scripts/api-skill/overlays. Regenerate with `npm run apiskill:generate`. -->
@@ -223,7 +223,7 @@ call can undo it, e.g. invoice credit).
 
 ## Endpoint index
 
-API version `2026-05-12`, 390 operations. Paths are shown without
+API version `2026-05-12`, 391 operations. Paths are shown without
 their `/api/v1` prefix (full base URL: `https://app.gnubok.se/api/v1`).
 
 ### Core (24)
@@ -479,7 +479,7 @@ POST /companies/{companyId}/signing-requests/{id}/cancel : Cancel an open signin
 POST /companies/{companyId}/signing-requests/{id}/signers/{signerId}/remind : Mail a pending signer again, once a day at most; the mail carries a new link and the old one stops working [scope:documents:write risk:low idempotent dry-run]
 ```
 
-### Banking (64)
+### Banking (65)
 
 Full detail: [references/banking.md](references/banking.md)
 
@@ -547,6 +547,7 @@ POST /companies/{companyId}/transactions/ingest : Bulk-ingest transactions (up t
 GET /companies/{companyId}/webshop-orders : The order and refund rows synced from the company's webshops, newest first [scope:transactions:read risk:low idempotent]
 GET /companies/{companyId}/webshop-orders/{orderId} : One webshop order row with its line items and the booking the Orders page would prefill [scope:transactions:read risk:low idempotent]
 POST /companies/{companyId}/webshop-orders/{orderId}/book : Book one webshop order or refund with your own lines, linked to the order with its orderunderlag [scope:bookkeeping:write risk:high idempotent dry-run]
+POST /companies/{companyId}/webshop-orders/book-day : Book a store's orders and refunds of one day and one payment method as one verifikat, with a day summary as underlag [scope:bookkeeping:write risk:high idempotent dry-run]
 GET /companies/{companyId}/webshop-orders/oss-underlag : Underlag for the OSS declaration (unionsordningen): a quarter's webshop sales to consumers in other EU countries, per country and VAT rate, in euro [scope:reports:read risk:low idempotent]
 ```
 

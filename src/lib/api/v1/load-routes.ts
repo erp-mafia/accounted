@@ -340,6 +340,7 @@ import '@/app/api/v1/companies/[companyId]/pos-sales/fetch/route'
 import '@/app/api/v1/companies/[companyId]/webshop-orders/route'
 import '@/app/api/v1/companies/[companyId]/webshop-orders/[orderId]/route'
 import '@/app/api/v1/companies/[companyId]/webshop-orders/[orderId]/book/route'
+import '@/app/api/v1/companies/[companyId]/webshop-orders/book-day/route'
 import '@/app/api/v1/companies/[companyId]/webshop-orders/oss-underlag/route'
 
 // Collections (reminders and debt collection through the company's provider): lib/operations/collections.ts

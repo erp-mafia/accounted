@@ -180,7 +180,8 @@ export function orderUnderlagFilename(model: Pick<OrderUnderlagModel, 'isRefund'
   return `${kind}_${model.orderNumber}_${model.orderDate}.pdf`
 }
 
-const styles = StyleSheet.create({
+/** Shared with the day summary (day-underlag.tsx), so both underlag look alike. */
+export const styles = StyleSheet.create({
   page: {
     paddingTop: 40,
     paddingHorizontal: 40,

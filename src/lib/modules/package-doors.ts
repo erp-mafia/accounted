@@ -686,6 +686,7 @@ const POS_AND_WEBSHOP: PackageDoors = {
     'op:pos-sales.fetch',
     'op:pos-sales.update-settings',
     'op:webshop-orders.book',
+    'op:webshop-orders.book-day',
   ],
 }
 /** Every switchable package's doors. */

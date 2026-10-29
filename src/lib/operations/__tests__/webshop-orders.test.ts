@@ -9,7 +9,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { createQueuedMockSupabase } from '@/tests/helpers'
 import { createLogger } from '@/lib/logger'
-import { webshopOrdersBook, webshopOrdersGet, webshopOrdersList } from '../webshop-orders'
+import { webshopOrdersBook, webshopOrdersBookDay, webshopOrdersGet, webshopOrdersList } from '../webshop-orders'
 import { webshopOrderBookingStatus } from '@/lib/webshop-orders/booking-status'
 import { webshopOrderWarnings } from '@/lib/webshop-orders/service'
 import { resolveOrderFx } from '@/lib/webshop-orders/book-order'
@@ -97,6 +97,31 @@ describe('webshop-orders: contract', () => {
     })
     expect(webshopOrdersBook.mcp?.name).toBe('gnubok_book_webshop_order')
     expect(webshopOrdersBook.mcp?.stage?.pendingType).toBe('book_webshop_order')
+  })
+
+  it('books a day as a high-risk, irreversible bookkeeping:write staged as book_webshop_day, pinning the reviewed rows', () => {
+    expect(webshopOrdersBookDay.kind).toBe('write')
+    expect(webshopOrdersBookDay.scope).toBe('bookkeeping:write')
+    expect(webshopOrdersBookDay.risk).toBe('high')
+    expect(webshopOrdersBookDay.reversible).toBe(false)
+    expect(webshopOrdersBookDay.http).toMatchObject({ method: 'POST', path: '/api/v1/companies/:companyId/webshop-orders/book-day' })
+    expect(webshopOrdersBookDay.mcp?.name).toBe('gnubok_book_webshop_day')
+    const stage = webshopOrdersBookDay.mcp?.stage
+    expect(stage?.pendingType).toBe('book_webshop_day')
+    const input = { platform: 'shopify', store_scope: 'butik.myshopify.com', date: '2026-10-14', payment_method: 'paypal' }
+    expect(stage?.pinParams?.(input, { order_ids: ['a', 'b'], lines_sha256: 'f'.repeat(64) })).toEqual({
+      ...input,
+      expected_order_ids: ['a', 'b'],
+      expected_lines_sha256: 'f'.repeat(64),
+    })
+  })
+
+  it('requires a store, a day and a payment method for a day', () => {
+    const day = { platform: 'shopify', store_scope: 'butik.myshopify.com', date: '2026-10-14', payment_method: 'paypal' }
+    expect(webshopOrdersBookDay.input.safeParse(day).success).toBe(true)
+    expect(webshopOrdersBookDay.input.safeParse({ ...day, date: '14/10/2026' }).success).toBe(false)
+    expect(webshopOrdersBookDay.input.safeParse({ ...day, payment_method: '' }).success).toBe(false)
+    expect(webshopOrdersBookDay.input.safeParse({ ...day, expected_order_ids: ['nope'] }).success).toBe(false)
   })
 
   it('requires the order id and at least two lines', () => {

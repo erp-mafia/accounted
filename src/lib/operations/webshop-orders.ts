@@ -1,7 +1,8 @@
 /**
  * Webshop orders (Shopify, WooCommerce, Zettle): the synced order and refund
  * rows, one order with the booking the dialog would prefill, booking one
- * order with the caller's own lines, and the OSS underlag the booked orders
+ * order with the caller's own lines, booking a day and payment method as one
+ * verifikat with the server's lines, and the OSS underlag the booked orders
  * add up to. Rules live in lib/webshop-orders/; the dashboard's booking route
  * calls the same bookWebshopOrder(), so a booking from an agent gets the
  * order link and the orderunderlag exactly like one from the Orders page.
@@ -18,6 +19,7 @@ import { defineOperation } from './types'
 // which the registry's importers do not otherwise need.
 const service = () => import('@/lib/webshop-orders/service')
 const ossUnderlag = () => import('@/lib/webshop-orders/oss-underlag')
+const bookDay = () => import('@/lib/webshop-orders/book-day')
 
 const META = { request_id: 'req_…', api_version: '2026-05-12' }
 
@@ -410,6 +412,121 @@ export const webshopOrdersBook = defineOperation({
     },
   },
   run: async (ctx, input, { dryRun }) => (await service()).bookWebshopOrderWithLines(ctx, input, { dryRun }),
+})
+
+// ---------------------------------------------------------------------------
+// Book a day
+// ---------------------------------------------------------------------------
+
+const DayOrder = z.object({
+  webshop_order_id: z.string().uuid(),
+  order_number: z.string(),
+  row_type: z.enum(['order', 'refund']),
+  total_sek: z.number(),
+})
+
+const SkippedOrder = DayOrder.omit({ total_sek: true }).extend({
+  code: z.string(),
+  message_sv: z.string(),
+  message_en: z.string(),
+  details: z.record(z.string(), z.unknown()).optional(),
+})
+
+export const webshopOrdersBookDay = defineOperation({
+  id: 'webshop-orders.book-day',
+  kind: 'write',
+  scope: 'bookkeeping:write',
+  risk: 'high',
+  reversible: false,
+  docs: {
+    summary: 'Book a store\'s orders and refunds of one day and one payment method as one verifikat, with a day summary as underlag.',
+    description:
+      'Posts one verifikat (source_type webshop_order, dated the day) for every unbooked, paid order and refund of the store whose paid date (else order date) is the day and whose payment method is the one given. The lines are the server\'s, never the caller\'s: each order\'s lines are derived exactly as the Orders page\'s bulk booking derives them (the store\'s payment-method mapping and country rules), then summed per account and side, so sales and refunds are separate lines. Every order is linked to the verifikat and stops showing as unbooked, and a dagssammanställning listing each order (number, date, country, amount, VAT) is archived on it. An order that cannot be booked without review (no VAT split, a country no store rule covers, an unknown destination, a non-Swedish rate on the Swedish accounts, an invoice-flow payment method, a rounding gap over 1 kr) is left out, listed in skipped with the reason, and stays unbooked. Dry-runnable.',
+    useWhen: 'The company books its webshop sales per day and payment method (e.g. one verifikat for Shopify Payments and one for PayPal), not per order.',
+    doNotUseFor: 'Payouts and fees from the payment provider (book those against the clearing account from the bank row), one order (POST /webshop-orders/{orderId}/book), or correcting a booked day (storno, then book the orders again).',
+    pitfalls: [
+      'Pass order_ids and lines_sha256 from the dry run as expected_order_ids and expected_lines_sha256: an order booked or changed since answers 409 WEBSHOP_DAY_CHANGED instead of booking figures you did not review.',
+      'payment_method is the order\'s payment_method from GET /webshop-orders, e.g. shopify_payments or paypal. Orders without one cannot be booked per day.',
+      'Orders that sync after the day is booked stay unbooked: booking the day again posts a second verifikat for them.',
+      'skipped orders stay in Att bokföra: book them one by one with POST /webshop-orders/{orderId}/book.',
+      'A posted verifikat is permanent: undo it with storno (POST /journal-entries/{id}/reverse), never by editing.',
+    ],
+    example: {
+      request: { platform: 'shopify', store_scope: 'exempel.myshopify.com', date: '2026-10-14', payment_method: 'shopify_payments' },
+      response: {
+        data: {
+          journal_entry_id: '9a0b…',
+          voucher_series: 'L',
+          voucher_number: 41,
+          entry_date: '2026-10-14',
+          booked: [
+            { webshop_order_id: '3f2a…', order_number: '#1042', row_type: 'order', total_sek: 1250 },
+            { webshop_order_id: '7c1d…', order_number: '#1043', row_type: 'order', total_sek: 499 },
+          ],
+          skipped: [],
+          underlag_document_id: '5d2c…',
+        },
+        meta: META,
+      },
+    },
+  },
+  input: z.object({
+    platform: z.enum(['woocommerce', 'shopify', 'zettle']),
+    store_scope: z.string().min(1).describe('The store, store_scope from GET /webshop-orders, e.g. exempel.myshopify.com.'),
+    date: isoDateSchema.describe('The day: the orders\' paid date, else their order date.'),
+    payment_method: z.string().min(1).describe('The orders\' payment_method from GET /webshop-orders, e.g. shopify_payments or paypal.'),
+    expected_order_ids: z
+      .array(z.string().uuid())
+      .min(1)
+      .max(500)
+      .optional()
+      .describe('The order rows you reviewed (order_ids from the dry run). Refused if any of them was booked or no longer books.'),
+    expected_lines_sha256: z
+      .string()
+      .regex(/^[0-9a-f]{64}$/)
+      .optional()
+      .describe('lines_sha256 from the dry run. Refused if the verifikat lines differ, e.g. an order changed in the store since.'),
+  }),
+  output: z.object({
+    journal_entry_id: z.string().uuid(),
+    voucher_series: z.string().nullable(),
+    voucher_number: z.number().nullable(),
+    entry_date: z.string(),
+    booked: z.array(DayOrder),
+    skipped: z.array(SkippedOrder),
+    underlag_document_id: z.string().uuid().nullable(),
+  }),
+  errorCodes: [
+    'WEBSHOP_DAY_EMPTY',
+    'WEBSHOP_DAY_NOTHING_BOOKABLE',
+    'WEBSHOP_DAY_CHANGED',
+    'WEBSHOP_DAY_TOO_MANY_ROWS',
+    'WEBSHOP_ORDER_READ_FAILED',
+    'FISCAL_PERIOD_NOT_FOUND',
+    'PERIOD_LOCKED',
+    'ACCOUNTS_NOT_IN_CHART',
+    'WEBSHOP_DAY_BOOKING_FAILED',
+  ],
+  http: { method: 'POST', path: '/api/v1/companies/:companyId/webshop-orders/book-day' },
+  mcp: {
+    name: 'gnubok_book_webshop_day',
+    title: 'Book Webshop Day (one verifikat per day and payment method)',
+    description:
+      'Stage booking a store\'s unbooked orders and refunds of one day and payment method (shopify_payments, paypal) as ONE verifikat: server-derived lines summed per account, every order linked, day summary as underlag. Orders needing review are skipped. Approval books it.',
+    keywords: ['bokför dag', 'dagsverifikat', 'samlingsverifikat', 'sammandrag', 'dagsförsäljning', 'shopify', 'woocommerce', 'webshop', 'e-handel', 'paypal'],
+    stage: {
+      pendingType: 'book_webshop_day',
+      title: (input) => `Bokför webshopdag ${String(input.date ?? '')} (${String(input.payment_method ?? '')})`,
+      // The approver saw these orders and these lines: the commit books exactly them.
+      pinParams: (input, preview) => ({
+        ...input,
+        ...(Array.isArray(preview.order_ids) && preview.order_ids.length > 0 ? { expected_order_ids: preview.order_ids } : {}),
+        ...(typeof preview.lines_sha256 === 'string' ? { expected_lines_sha256: preview.lines_sha256 } : {}),
+      }),
+      extras: (input) => (typeof input.date === 'string' ? { periodDate: input.date } : {}),
+    },
+  },
+  run: async (ctx, input, { dryRun }) => (await bookDay()).bookWebshopDay(ctx, input, { dryRun }),
 })
 
 // ---------------------------------------------------------------------------
