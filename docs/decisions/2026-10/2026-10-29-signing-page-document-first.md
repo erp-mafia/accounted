@@ -1,0 +1,1 @@
+[2026-10-29] The signing page is document first (founder pick, design A): we draw the PDF ourselves with unpdf's pdf.js, and Signera med BankID unlocks once the last page has been in view; a client-side reading aid only, and a document we cannot draw unlocks when the file is opened.

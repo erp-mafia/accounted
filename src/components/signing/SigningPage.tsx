@@ -1,11 +1,13 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import Link from 'next/link'
 import { useFormatter, useLocale, useTranslations } from 'next-intl'
+import { ArrowDownIcon, ArrowDownTrayIcon, CheckCircleIcon } from '@/components/icons'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { AttnLine } from '@/components/ui/attn-line'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { HelpPopover } from '@/components/ui/help-popover'
 import { PageHeader } from '@/components/ui/page-header'
 import { Textarea } from '@/components/ui/textarea'
@@ -13,10 +15,11 @@ import { QUIET_LINK_CLASS } from '@/components/ui/dry-table'
 import { BankIdQrCode } from '@/components/auth/BankIdQrCode'
 import { BankIdMark } from '@/components/bankid/BankIdMark'
 import { bankIdAutostartHref, detectBankIdDevice } from '@/components/bankid/autostart'
-import { BrandWordmark } from '@/components/branding/BrandWordmark'
 import { getErrorMessage, type ErrorLocale } from '@/lib/errors/get-error-message'
 import type { SignerPageData } from '@/lib/signing/ceremony'
 import { SIGNING_DECLINE_REASON_MAX } from '@/lib/signing/types'
+import { cn } from '@/lib/utils'
+import { SigningDocument } from './SigningDocument'
 import { createSignerClient, SigningClientError, signingErrorBody, signingErrorCode } from './signing-client'
 
 /** How often the page asks where the BankID signing stands: the animated QR changes every second. */
@@ -145,9 +148,9 @@ export interface SigningPageProps {
   /** What the server read for this request (lib/signing/ceremony.ts describeForSigner). */
   initial: SignerPageData
   /**
-   * 'public': the standalone page behind the mailed link (wordmark, one
-   * calm column, the link's footer). 'member': inside the dashboard panel,
-   * with the page title in the top bar and the document beside the details.
+   * 'public': the standalone page behind the mailed link, under the sending
+   * company's own name and logo. 'member': inside the dashboard panel, with
+   * the page title in the top bar.
    */
   variant: 'public' | 'member'
   /**
@@ -160,15 +163,19 @@ export interface SigningPageProps {
 }
 
 /**
- * The signer's page: what is asked (title, company, who asks, the message),
- * the PDF itself with its SHA-256 fingerprint (the first 16 characters are
- * what the BankID app shows), everyone asked to sign and where each stands,
- * then Signera med BankID (the animated QR, or the BankID app on this
- * device), polled about once a second until it signs or fails. The signer
- * can stop a signing in progress, or decline with an optional reason after
- * a confirm step. End states: signed (also when opened again later),
- * declined, the request closed (completed, declined by someone else,
- * cancelled, expired) and a link that no longer opens.
+ * The signer's page, document first: the PDF itself is the page, drawn sheet
+ * by sheet (SigningDocument), under the sending company's name and logo, with
+ * everyone asked to sign, the details and the SHA-256 fingerprint beside it
+ * (below it on a phone; the first 16 characters are what the BankID app
+ * shows). Signera med BankID waits in a bar at the bottom until the reader
+ * has scrolled to the end of the last page (a reading aid, nothing more: if
+ * the document cannot be drawn here, opening the file unlocks it). BankID
+ * then runs in a dialog (the animated QR, or the BankID app on this device),
+ * polled about once a second until it signs or fails. The signer can stop a
+ * signing in progress, or decline with an optional reason after a confirm
+ * step. End states: signed (also when opened again later), declined, the
+ * request closed (completed, declined by someone else, cancelled, expired)
+ * and a link that no longer opens.
  */
 export function SigningPage({ basePath, initial, variant, nextStep = null }: SigningPageProps) {
   const t = useTranslations('signing_page')
@@ -185,8 +192,17 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
   const mobile = useSyncExternalStore(noSubscription, () => detectBankIdDevice().mobile, () => false)
   const [methodChoice, setMethodChoice] = useState<Method | null>(null)
   const method: Method = methodChoice ?? (mobile ? 'same_device' : 'qr')
-  /** The method of the start in flight, so only its button spins and the labels hold still. */
-  const [startingWith, setStartingWith] = useState<Method | null>(null)
+
+  // The document and the read-to-the-end gate.
+  const [pageCount, setPageCount] = useState<number | null>(null)
+  const [currentPage, setCurrentPage] = useState(1)
+  const [reachedEnd, setReachedEnd] = useState(false)
+  const [renderFailed, setRenderFailed] = useState(false)
+  const [openedFile, setOpenedFile] = useState(false)
+  const documentRef = useRef<HTMLDivElement>(null)
+  const gateId = useId()
+  /** A UX gate only: the signature itself binds the document's hash, whatever was scrolled. */
+  const unlocked = reachedEnd || (renderFailed && openedFile)
 
   const { request, signer } = data
   const requester = request.requester
@@ -217,7 +233,6 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
   )
 
   async function begin(chosen: Method) {
-    setStartingWith(chosen)
     setBusy('start')
     try {
       const started = await client.start()
@@ -232,7 +247,6 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
       setStage(refused(error, 'start'))
     } finally {
       setBusy(null)
-      setStartingWith(null)
     }
   }
 
@@ -263,6 +277,21 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
     } finally {
       setBusy(null)
     }
+  }
+
+  function leaveDecline() {
+    setDeclineError(null)
+    setStage({ kind: 'ready' })
+  }
+
+  /** About one screen further down the document, in whatever scrolls it (the window, or the dashboard panel). */
+  function scrollOn() {
+    const from = documentRef.current
+    if (!from) return
+    const scroller = scrollParent(from)
+    const height = scroller ? scroller.clientHeight : window.innerHeight
+    const behavior: ScrollBehavior = window.matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth'
+    ;(scroller ?? window).scrollBy({ top: Math.round(height * SCROLL_STEP), behavior })
   }
 
   // Poll while BankID is open. One request at a time (the next is scheduled
@@ -345,277 +374,493 @@ export function SigningPage({ basePath, initial, variant, nextStep = null }: Sig
 
   const open = request.state === 'open'
   const pending = signer.status === 'pending'
-  const others = data.signers
-  // The signer's own row among everyone's.
-  const myPosition = signer.position
+  /** Still to be read and signed: everything else is an end state. */
+  const reading = stage.kind !== 'link_gone' && pending && open
   const otherMethod: Method = method === 'qr' ? 'same_device' : 'qr'
+  const isPublic = variant === 'public'
 
   // ---------------------------------------------------------------------------
   // The parts
   // ---------------------------------------------------------------------------
 
-  const intro = (
-    <p className="text-[13px] text-muted-foreground" data-ph-mask="">
-      {requester === request.company_name ? t('asked_by_company', { company: request.company_name }) : t('asked_by', { requester, company: request.company_name })}
-    </p>
+  const pageCounter =
+    pageCount && !renderFailed ? (
+      <span className="text-[13px] tabular-nums text-muted-foreground">
+        <span className="hidden sm:inline">{t('page_of', { page: currentPage, count: pageCount })}</span>
+        <span className="sm:hidden">{t('page_of_short', { page: currentPage, count: pageCount })}</span>
+      </span>
+    ) : null
+
+  const downloadButtons = (
+    <>
+      <Button asChild variant="secondary" size="sm" className="hidden gap-2 sm:inline-flex">
+        <a href={client.documentUrl} download={request.file_name}>
+          <ArrowDownTrayIcon className="h-4 w-4" />
+          {t('download')}
+        </a>
+      </Button>
+      <Button asChild variant="ghost" size="icon-sm" className="sm:hidden">
+        <a href={client.documentUrl} download={request.file_name} aria-label={t('download_label')}>
+          <ArrowDownTrayIcon className="h-4 w-4" />
+        </a>
+      </Button>
+    </>
   )
 
-  const message = request.message ? (
-    <div className="space-y-1">
-      <p className="text-[12.5px] text-muted-foreground">{t('message_heading', { requester })}</p>
-      <p className="whitespace-pre-line border-l-2 border-border pl-3 text-[13px]" data-ph-mask="">
-        {request.message}
+  const lead = (
+    <div className="space-y-3">
+      {isPublic && (
+        <h1 className="font-display text-2xl leading-tight tracking-tight sm:text-3xl" data-ph-mask="">
+          {request.title}
+        </h1>
+      )}
+      <p className="text-sm text-foreground/80 sm:text-[15px]" data-ph-mask="">
+        {requester === request.company_name ? t('lead_company', { company: request.company_name }) : t('lead', { requester })}
+        {pageCount ? ` ${t('lead_pages', { count: pageCount })}` : null}
       </p>
+      {request.message && (
+        <p className="whitespace-pre-line text-sm italic text-muted-foreground" data-ph-mask="">
+          {t('message_quoted', { message: request.message })}
+        </p>
+      )}
+    </div>
+  )
+
+  const documentView = (
+    <SigningDocument
+      url={client.documentUrl}
+      fileName={request.file_name}
+      onLoaded={setPageCount}
+      onPage={setCurrentPage}
+      onReachedEnd={() => setReachedEnd(true)}
+      onFailed={() => setRenderFailed(true)}
+      onOpened={() => setOpenedFile(true)}
+    />
+  )
+
+  const endNote = pageCount && !renderFailed ? <p className="text-center text-[13px] text-muted-foreground">{t('end_of_document')}</p> : null
+
+  const details = (
+    <>
+      <section className="space-y-4">
+        <h2 className="font-sans text-xs font-medium text-muted-foreground">{t('signers_heading')}</h2>
+        <ul className="space-y-3" data-ph-mask="">
+          {data.signers.map((s) => {
+            const mine = s.position === signer.position
+            const sub = [mine ? t('you_label') : null, s.role_label].filter(Boolean).join(', ')
+            return (
+              <li key={s.position} className="flex items-center gap-3">
+                <span
+                  aria-hidden="true"
+                  className={cn(
+                    'flex h-8 w-8 shrink-0 items-center justify-center rounded-full text-xs font-medium',
+                    mine ? 'bg-primary text-primary-foreground' : 'bg-secondary text-secondary-foreground',
+                  )}
+                >
+                  {initials(s.name)}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm">{s.name}</div>
+                  {sub && <div className="truncate text-xs text-muted-foreground">{sub}</div>}
+                </div>
+                <SignerStatus status={s.status} />
+              </li>
+            )
+          })}
+        </ul>
+        {signer.locked && <p className="text-xs text-muted-foreground">{t('locked_note')}</p>}
+      </section>
+      <dl className="space-y-3 border-t border-border pt-6 text-[13px]">
+        <DetailRow label={t('detail_sent')}>
+          <span data-ph-mask="">{t('detail_sent_value', { date: format.dateTime(new Date(request.sent_at), { day: 'numeric', month: 'long' }), requester })}</span>
+        </DetailRow>
+        <DetailRow label={t('detail_expires')}>{day(request.expires_at)}</DetailRow>
+        <DetailRow label={t('detail_file')}>
+          <span className="break-all" data-ph-mask="">
+            {pageCount ? t('detail_file_value', { file: request.file_name, count: pageCount }) : request.file_name}
+          </span>
+        </DetailRow>
+        <Fingerprint sha256={request.sha256} />
+      </dl>
+      <div className="space-y-3 lg:mt-auto">
+        <button type="button" className={cn(QUIET_LINK_CLASS, 'text-[13px]')} onClick={() => setStage({ kind: 'declining' })}>
+          {t('decline_link')}
+        </button>
+        <p className="text-xs leading-5 text-muted-foreground">{isPublic ? `${t('footer_personal')} ${t('nothing_signed_until')}` : t('nothing_signed_until')}</p>
+      </div>
+    </>
+  )
+
+  // Ready, or the last try failed: the reason sits in the bar beside the way in.
+  const failedNow = stage.kind === 'failed' ? failureText(stage.failure) : null
+  const failedBefore = !failedNow && signer.last_error_code ? t(codeKey(signer.last_error_code, 'poll') ?? 'error_sign_again', { requester }) : null
+  let gateText: React.ReactNode
+  if (!unlocked) {
+    gateText = renderFailed ? t('gate_open_file') : pageCount ? t('gate_scroll', { count: pageCount }) : t('gate_loading')
+  } else if (failedNow ?? failedBefore) {
+    gateText = <AttnLine>{failedNow ?? failedBefore}</AttnLine>
+  } else {
+    gateText = t('gate_read')
+  }
+
+  const signButton = (
+    <Button
+      size="lg"
+      variant={unlocked ? 'default' : 'secondary'}
+      onClick={() => begin(method)}
+      loading={busy === 'start'}
+      disabled={!unlocked || busy !== null}
+      aria-describedby={gateId}
+      className={cn('w-full gap-2 sm:w-auto', !unlocked && 'disabled:text-muted-foreground disabled:opacity-100')}
+    >
+      {/* Always mounted (hidden while the spinner runs), so no node comes and goes beside the label. */}
+      <BankIdMark size={22} className={cn(unlocked ? 'invert dark:invert-0' : 'opacity-50', busy === 'start' && 'hidden')} />
+      {stage.kind === 'failed' ? t('try_again') : t('sign_with_bankid')}
+    </Button>
+  )
+
+  const gate = (
+    <div id={gateId} className="text-center text-[13px] text-muted-foreground sm:text-left sm:text-sm" aria-live="polite">
+      {gateText}
+    </div>
+  )
+
+  const showArrow = pageCount !== null && !renderFailed && !reachedEnd
+  const arrow = showArrow ? (
+    <div className="pointer-events-none flex justify-center pb-6">
+      <Button size="lg" onClick={scrollOn} aria-label={t('scroll_next_label')} className="pointer-events-auto gap-2 shadow-[var(--shadow-lg)] max-sm:w-11 max-sm:px-0">
+        <ArrowDownIcon className="h-5 w-5" />
+        <span className="max-sm:hidden">{t('scroll_next')}</span>
+      </Button>
     </div>
   ) : null
 
-  const documentView =
-    stage.kind === 'link_gone' ? null : (
-      <section className="space-y-3">
-        <div className="flex items-baseline justify-between gap-4">
-          <p className="min-w-0 truncate text-[13px]" data-ph-mask="">
-            {request.file_name}
-          </p>
-          <a href={client.documentUrl} target="_blank" rel="noopener noreferrer" className={`${QUIET_LINK_CLASS} shrink-0`}>
-            {t('open_document')}
-          </a>
+  const scanned = stage.kind === 'signing' && stage.hint === 'userSign'
+  const dialogs = (
+    <>
+      <Dialog
+        open={stage.kind === 'signing'}
+        onOpenChange={(next) => {
+          if (!next) void cancelSigning()
+        }}
+      >
+        <DialogContent className="max-w-sm">
+          {stage.kind === 'signing' && (
+            <div className="flex flex-col items-center gap-4 text-center">
+              <div className="flex items-center gap-2">
+                <BankIdMark />
+                <DialogTitle className="font-display text-xl tracking-tight">{t('signing_title')}</DialogTitle>
+              </div>
+              <DialogDescription className="text-[13px]" data-ph-mask="">
+                {signer.role_label ? t('sign_intro_role', { name: signer.name, role: signer.role_label }) : t('sign_intro', { name: signer.name })}
+              </DialogDescription>
+              {method === 'qr' && !scanned && <BankIdQrCode qrStartToken={stage.session.qrStartToken} qrStartSecret={stage.session.qrStartSecret} />}
+              <p className="text-[13px]" role="status" aria-live="polite">
+                {t(pendingHintKey(stage.hint, method))}
+              </p>
+              {method === 'same_device' && !scanned && (
+                <Button asChild size="lg">
+                  <a href={bankIdAutostartHref(stage.session.autoStartToken)}>{t('open_bankid')}</a>
+                </Button>
+              )}
+              <Button variant="secondary" onClick={cancelSigning} loading={busy === 'cancel'} disabled={busy !== null}>
+                {t('cancel_signing')}
+              </Button>
+              {!scanned && (
+                <button type="button" className={QUIET_LINK_CLASS} onClick={() => setMethodChoice(otherMethod)}>
+                  {method === 'qr' ? t('switch_to_same_device') : t('switch_to_qr')}
+                </button>
+              )}
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+      <Dialog
+        open={stage.kind === 'declining'}
+        onOpenChange={(next) => {
+          if (!next && busy !== 'decline') leaveDecline()
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="font-display text-xl tracking-tight">{t('decline_title')}</DialogTitle>
+            <DialogDescription className="text-[13px]">{t('decline_body', { requester })}</DialogDescription>
+          </DialogHeader>
+          <label className="block space-y-2 text-[13px]">
+            <span className="text-muted-foreground">{t('decline_reason_label')}</span>
+            <Textarea value={reason} maxLength={SIGNING_DECLINE_REASON_MAX} rows={3} onChange={(e) => setReason(e.target.value)} placeholder={t('decline_reason_placeholder')} />
+          </label>
+          {declineError && <AttnLine>{getErrorMessage(declineError.body, { locale, fallback: t('error_generic') })}</AttnLine>}
+          <DialogFooter>
+            <Button variant="secondary" onClick={leaveDecline} disabled={busy !== null}>
+              {t('decline_back')}
+            </Button>
+            <Button variant="destructive" onClick={decline} loading={busy === 'decline'} disabled={busy !== null}>
+              {t('decline_confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </>
+  )
+
+  // ---------------------------------------------------------------------------
+  // End states: signed, declined, closed, the link gone
+  // ---------------------------------------------------------------------------
+
+  function endState(): { title: string; lines: string[]; closing: string | null; check: boolean } {
+    if (stage.kind === 'link_gone') return { title: t('link_gone_title'), lines: [t('link_gone_body', { requester })], closing: null, check: false }
+    if (signer.status === 'signed') {
+      const when = signer.signed_at
+        ? signer.bankid_name
+          ? t('signed_body_named', { moment: moment(signer.signed_at), name: signer.bankid_name })
+          : t('signed_body', { moment: moment(signer.signed_at) })
+        : t('signed_body_now')
+      return {
+        title: t('signed_title'),
+        lines: [`${withStop(request.title)} ${when}`],
+        closing: request.state === 'completed' ? t('signed_all', { requester }) : t('signed_waiting_others', { requester }),
+        check: true,
+      }
+    }
+    if (signer.status === 'declined') return { title: t('declined_title'), lines: [t('declined_body', { requester })], closing: null, check: false }
+    const key = request.state === 'expired' ? 'expired' : request.state === 'cancelled' ? 'cancelled' : request.state === 'declined' ? 'declined_by_other' : 'completed'
+    return { title: t(`closed_${key}_title`), lines: [t(`closed_${key}_body`, { requester, date: day(request.expires_at) })], closing: null, check: false }
+  }
+
+  if (!reading) {
+    const end = endState()
+    const Heading = isPublic ? 'h1' : 'h2'
+    const showList = stage.kind !== 'link_gone'
+    const offerCopy = showList && request.state === 'completed' && request.signed_copy && signer.status !== 'declined'
+    const times = data.signers.map((s) => s.signed_at).filter((v): v is string => Boolean(v))
+    const oneDay = new Set(times.map((iso) => format.dateTime(new Date(iso), { dateStyle: 'short' }))).size <= 1
+    const when = (iso: string) => format.dateTime(new Date(iso), oneDay ? { timeStyle: 'short' } : { day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' })
+
+    const column = (
+      <div className="flex flex-1 flex-col">
+        <div className="space-y-4">
+          {end.check && <CheckCircleIcon className="h-11 w-11 text-foreground" aria-hidden="true" />}
+          <Heading className="font-display text-3xl leading-tight tracking-tight">{end.title}</Heading>
+          {end.lines.map((line) => (
+            <p key={line} className="text-[15px] text-foreground/80" data-ph-mask="">
+              {line}
+            </p>
+          ))}
         </div>
-        <object
-          data={client.documentUrl}
-          type="application/pdf"
-          aria-label={request.file_name}
-          className={variant === 'member' ? 'h-[72vh] w-full rounded-lg border border-border bg-white' : 'h-[60vh] w-full rounded-lg border border-border bg-white md:h-[70vh]'}
-        >
-          <div className="flex h-full flex-col items-center justify-center gap-2 p-6 text-center text-[13px] text-muted-foreground">
-            <p>{t('document_no_preview')}</p>
-            <a href={client.documentUrl} target="_blank" rel="noopener noreferrer" className={QUIET_LINK_CLASS}>
-              {t('open_document')}
-            </a>
-          </div>
-        </object>
-        <Fingerprint sha256={request.sha256} />
-      </section>
-    )
-
-  const signerList = (
-    <section className="space-y-2">
-      <h2 className="text-sm font-medium">{t('signers_heading')}</h2>
-      <ul className="text-[13px]" data-ph-mask="">
-        {others.map((s) => (
-          <li key={s.position} className="flex items-baseline justify-between gap-4 border-b border-border py-2 last:border-b-0">
-            <span className="min-w-0 truncate">
-              {s.name}
-              {s.role_label ? <span className="text-muted-foreground">{`, ${s.role_label}`}</span> : null}
-              {s.position === myPosition ? <span className="text-muted-foreground">{` (${t('you')})`}</span> : null}
-            </span>
-            {s.status === 'declined' ? (
-              <Badge variant="warning">{t('status_declined')}</Badge>
-            ) : (
-              <span className="shrink-0 text-xs text-muted-foreground">{s.status === 'signed' ? t('status_signed') : t('status_pending')}</span>
-            )}
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-
-  const declineLink = (
-    <button type="button" className={QUIET_LINK_CLASS} onClick={() => setStage({ kind: 'declining' })}>
-      {t('decline_link')}
-    </button>
-  )
-
-  const startButtons = (primaryLabel: string) => (
-    <div className="flex flex-wrap gap-2">
-      <Button onClick={() => begin(method)} loading={startingWith === method} disabled={busy !== null}>
-        {primaryLabel}
-      </Button>
-      <Button variant="secondary" onClick={() => begin(otherMethod)} loading={startingWith === otherMethod} disabled={busy !== null}>
-        {otherMethod === 'qr' ? t('method_qr') : t('method_same_device')}
-      </Button>
-    </div>
-  )
-
-  let action: React.ReactNode
-  if (stage.kind === 'link_gone') {
-    action = <EndState title={t('link_gone_title')} body={t('link_gone_body', { requester })} />
-  } else if (signer.status === 'signed') {
-    action = (
-      <div className="space-y-4">
-        <EndState
-          title={t('signed_title')}
-          body={[
-            signer.signed_at
-              ? signer.bankid_name
-                ? t('signed_body_named', { moment: moment(signer.signed_at), name: signer.bankid_name })
-                : t('signed_body', { moment: moment(signer.signed_at) })
-              : t('signed_body_now'),
-            request.state === 'completed' ? t('signed_all', { requester }) : t('signed_waiting_others', { requester }),
-          ]}
-        />
-        {request.state === 'completed' && request.signed_copy && (
-          <a href={client.signedCopyUrl} className={QUIET_LINK_CLASS}>
-            {t('download_signed_copy')}
-          </a>
+        {showList && (
+          <ul className="mt-8 border-t border-border text-sm" data-ph-mask="">
+            {data.signers.map((s) => (
+              <li key={s.position} className="flex items-baseline justify-between gap-4 border-b border-border py-3">
+                <span className="min-w-0 truncate">
+                  {s.name}
+                  {s.role_label ? `, ${s.role_label}` : null}
+                  {s.position === signer.position ? <span className="text-muted-foreground">{` (${t('you')})`}</span> : null}
+                </span>
+                {s.status === 'signed' && s.signed_at ? (
+                  <span className="shrink-0 tabular-nums text-muted-foreground">{when(s.signed_at)}</span>
+                ) : (
+                  <SignerStatus status={s.status} />
+                )}
+              </li>
+            ))}
+          </ul>
         )}
-        {nextStep && (
-          <div className="space-y-3 border-t border-border pt-4">
+        {end.closing && (
+          <p className="mt-8 text-sm text-foreground/80" data-ph-mask="">
+            {end.closing}
+          </p>
+        )}
+        {nextStep && signer.status === 'signed' && (
+          <div className="mt-8 space-y-3 border-t border-border pt-6">
             <p className="text-[13px]">{nextStep.body}</p>
             <Button asChild>
               <Link href={nextStep.href}>{nextStep.label}</Link>
             </Button>
           </div>
         )}
-      </div>
-    )
-  } else if (signer.status === 'declined') {
-    action = <EndState title={t('declined_title')} body={t('declined_body', { requester })} />
-  } else if (!open) {
-    const key = request.state === 'expired' ? 'expired' : request.state === 'cancelled' ? 'cancelled' : request.state === 'declined' ? 'declined_by_other' : 'completed'
-    action = (
-      <div className="space-y-4">
-        <EndState title={t(`closed_${key}_title`)} body={t(`closed_${key}_body`, { requester, date: day(request.expires_at) })} />
-        {key === 'completed' && request.signed_copy && (
-          <a href={client.signedCopyUrl} className={QUIET_LINK_CLASS}>
-            {t('download_signed_copy')}
-          </a>
-        )}
-      </div>
-    )
-  } else if (stage.kind === 'declining') {
-    action = (
-      <div className="space-y-4">
-        <h2 className="font-display text-xl tracking-tight">{t('decline_title')}</h2>
-        <p className="text-[13px] text-muted-foreground">{t('decline_body', { requester })}</p>
-        <label className="block space-y-2 text-[13px]">
-          <span className="text-muted-foreground">{t('decline_reason_label')}</span>
-          <Textarea value={reason} maxLength={SIGNING_DECLINE_REASON_MAX} rows={3} onChange={(e) => setReason(e.target.value)} placeholder={t('decline_reason_placeholder')} />
-        </label>
-        {declineError && <AttnLine>{getErrorMessage(declineError.body, { locale, fallback: t('error_generic') })}</AttnLine>}
-        <div className="flex flex-wrap gap-2">
-          <Button variant="destructive" onClick={decline} loading={busy === 'decline'} disabled={busy !== null}>
-            {t('decline_confirm')}
-          </Button>
-          <Button
-            variant="secondary"
-            onClick={() => {
-              setDeclineError(null)
-              setStage({ kind: 'ready' })
-            }}
-            disabled={busy !== null}
-          >
-            {t('decline_back')}
-          </Button>
+        <div className="mt-auto space-y-4 pt-10 sm:mt-0">
+          {offerCopy ? (
+            <Button asChild size="lg" className="w-full">
+              <a href={client.signedCopyUrl}>{t('download_signed_copy')}</a>
+            </Button>
+          ) : (
+            showList && (
+              <a href={client.documentUrl} target="_blank" rel="noopener noreferrer" className={cn(QUIET_LINK_CLASS, 'block text-center text-[13px]')}>
+                {t('open_document')}
+              </a>
+            )
+          )}
+          {signer.status === 'signed' && isPublic && <p className="text-center text-xs text-muted-foreground">{t('signed_via', { platform: request.platform_name })}</p>}
         </div>
       </div>
     )
-  } else if (stage.kind === 'signing') {
-    const scanned = stage.hint === 'userSign'
-    action = (
-      <div className="flex flex-col items-center gap-4 text-center">
-        <div className="flex items-center gap-2">
-          <BankIdMark />
-          <h2 className="font-display text-xl tracking-tight">{t('signing_title')}</h2>
+
+    if (!isPublic) {
+      return (
+        <div className="space-y-8">
+          <PageHeader title={<span data-ph-mask="">{request.title}</span>} meta={<span data-ph-mask="">{request.company_name}</span>} />
+          <div className="flex max-w-lg flex-col">{column}</div>
         </div>
-        {method === 'qr' && !scanned && <BankIdQrCode qrStartToken={stage.session.qrStartToken} qrStartSecret={stage.session.qrStartSecret} />}
-        <p className="text-[13px]" role="status" aria-live="polite">
-          {t(pendingHintKey(stage.hint, method))}
-        </p>
-        {method === 'same_device' && !scanned && (
-          <Button asChild size="lg">
-            <a href={bankIdAutostartHref(stage.session.autoStartToken)}>{t('open_bankid')}</a>
-          </Button>
-        )}
-        <Button variant="secondary" onClick={cancelSigning} loading={busy === 'cancel'} disabled={busy !== null}>
-          {t('cancel_signing')}
-        </Button>
-        {!scanned && (
-          <button type="button" className={QUIET_LINK_CLASS} onClick={() => setMethodChoice(otherMethod)}>
-            {method === 'qr' ? t('switch_to_same_device') : t('switch_to_qr')}
-          </button>
-        )}
-      </div>
-    )
-  } else {
-    // Ready, or the last try failed: the same way in, with the reason above it.
-    const failedNow = stage.kind === 'failed' ? failureText(stage.failure) : null
-    const failedBefore = !failedNow && signer.last_error_code ? t(codeKey(signer.last_error_code, 'poll') ?? 'error_sign_again', { requester }) : null
-    action = (
-      <div className="space-y-4">
-        <div className="flex items-center gap-2">
-          <BankIdMark />
-          <h2 className="font-display text-xl tracking-tight">{t('sign_title')}</h2>
-        </div>
-        <p className="text-[13px] text-muted-foreground" data-ph-mask="">
-          {signer.role_label ? t('sign_intro_role', { name: signer.name, role: signer.role_label }) : t('sign_intro', { name: signer.name })}
-        </p>
-        {signer.locked && <p className="text-[12.5px] text-muted-foreground">{t('locked_note')}</p>}
-        {(failedNow ?? failedBefore) && <AttnLine>{failedNow ?? failedBefore}</AttnLine>}
-        {startButtons(stage.kind === 'failed' ? t('try_again') : t('sign_with_bankid'))}
-        {declineLink}
+      )
+    }
+    return (
+      <div className="flex min-h-dvh flex-col bg-background text-foreground">
+        <SigningHeader company={request.company_name} logoUrl={request.logo_url} via={t('via', { platform: request.platform_name })} />
+        <main className="mx-auto flex w-full max-w-lg flex-1 flex-col px-6 pb-8 pt-12 sm:pt-16">{column}</main>
       </div>
     )
   }
 
-  const actionCard = <section className="space-y-4 rounded-lg border border-border p-6">{action}</section>
-  const expiresLine = open && pending && stage.kind !== 'link_gone' ? t('expires', { date: day(request.expires_at) }) : null
+  // ---------------------------------------------------------------------------
+  // Reading: the document, the details, the bar
+  // ---------------------------------------------------------------------------
 
-  if (variant === 'member') {
+  if (!isPublic) {
     return (
       <div className="space-y-8">
-        <PageHeader title={<span data-ph-mask="">{request.title}</span>} meta={<span data-ph-mask="">{request.company_name}</span>} />
-        <div className="grid gap-8 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,1fr)]">
-          <div className="lg:sticky lg:top-4 lg:self-start">{documentView}</div>
-          <div className="space-y-8">
-            <div className="space-y-4">
-              {intro}
-              {message}
+        <PageHeader
+          title={<span data-ph-mask="">{request.title}</span>}
+          meta={<span data-ph-mask="">{request.company_name}</span>}
+          action={
+            <div className="flex items-center gap-4">
+              {pageCounter}
+              {downloadButtons}
             </div>
-            {actionCard}
-            {signerList}
-            {expiresLine && <p className="text-[12.5px] text-muted-foreground">{expiresLine}</p>}
+          }
+        />
+        <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_18rem]">
+          <div ref={documentRef} className="min-w-0 space-y-6">
+            {lead}
+            <div className="flex flex-col items-center gap-6 rounded-lg bg-frame p-4 md:p-6">
+              <div className="w-full max-w-3xl">{documentView}</div>
+              {endNote}
+            </div>
+            <div className="sticky bottom-[calc(var(--bottom-nav-h)+1rem)] z-10 md:bottom-4">
+              {arrow}
+              <div className="flex flex-col gap-2 rounded-xl border border-border bg-background px-4 py-3 shadow-[var(--shadow-md)] sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:pl-6">
+                {gate}
+                {signButton}
+              </div>
+            </div>
           </div>
+          <aside className="flex flex-col gap-6 lg:sticky lg:top-16 lg:self-start">{details}</aside>
         </div>
+        {dialogs}
       </div>
     )
   }
 
   return (
-    <main className="min-h-dvh bg-background px-4 py-10 md:px-6">
-      <div className="mx-auto w-full max-w-2xl space-y-8">
-        <header className="space-y-4">
-          <BrandWordmark size="inline" />
-          <div className="space-y-1">
-            <h1 className="font-display text-2xl tracking-tight" data-ph-mask="">
-              {request.title}
-            </h1>
-            {intro}
-          </div>
-          {message}
-        </header>
-        {documentView}
-        {signerList}
-        {actionCard}
-        <p className="text-[12.5px] text-muted-foreground">
-          {expiresLine ? `${expiresLine} ` : ''}
-          {t('footer_personal')}
-        </p>
+    <div className="min-h-dvh bg-frame pb-40 text-foreground lg:pb-0">
+      <SigningHeader company={request.company_name} logoUrl={request.logo_url} via={t('via', { platform: request.platform_name })}>
+        {pageCounter}
+        {downloadButtons}
+      </SigningHeader>
+      <div className="lg:mr-80">
+        <main ref={documentRef} className="mx-auto flex w-full max-w-3xl flex-col gap-6 px-4 pb-6 pt-6 sm:pt-10 md:px-6 lg:pb-48">
+          {lead}
+          {documentView}
+          {endNote}
+        </main>
       </div>
-    </main>
+      <div className="mx-auto w-full max-w-3xl px-4 md:px-6">
+        <aside className="flex flex-col gap-6 rounded-lg border border-border bg-background p-6 lg:fixed lg:bottom-0 lg:right-0 lg:top-16 lg:w-80 lg:gap-8 lg:overflow-y-auto lg:rounded-none lg:border-0 lg:border-l lg:px-6 lg:py-8">
+          {details}
+        </aside>
+      </div>
+      <div className="pointer-events-none fixed inset-x-0 bottom-0 z-20 lg:right-80">
+        {arrow}
+        <div className="pointer-events-auto border-t border-border bg-background">
+          <div className="mx-auto flex max-w-3xl flex-col gap-2 px-4 pb-[calc(1.5rem+env(safe-area-inset-bottom,0px))] pt-3 sm:h-20 sm:flex-row sm:items-center sm:justify-between sm:gap-6 sm:py-0 md:px-6 lg:max-w-none lg:px-10">
+            {gate}
+            {signButton}
+          </div>
+        </div>
+      </div>
+      {dialogs}
+    </div>
   )
 }
 
-/** One end state: a serif title and one or two plain sentences. */
-function EndState({ title, body }: { title: string; body: string | string[] }) {
-  const lines = Array.isArray(body) ? body : [body]
+/** How far "Bläddra vidare" scrolls: three quarters of a screen, so the last lines stay in sight. */
+const SCROLL_STEP = 0.75
+
+/** The nearest ancestor that scrolls (the dashboard panel), or null for the window. */
+function scrollParent(element: HTMLElement): HTMLElement | null {
+  for (let node = element.parentElement; node; node = node.parentElement) {
+    const { overflowY } = getComputedStyle(node)
+    if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) return node
+  }
+  return null
+}
+
+/** A title as the start of a sentence: a full stop after it, unless it ends in one already. */
+function withStop(title: string): string {
+  return /[.!?]$/.test(title.trim()) ? title.trim() : `${title.trim()}.`
+}
+
+/** Legal-form suffixes that say nothing about who the company is. */
+const FORM_SUFFIXES = new Set(['ab', 'hb', 'kb', '(publ)'])
+
+/** Up to two initials for a name: "Arcim Technology AB" is AT, "Jakob Wennberg" JW. */
+function initials(name: string): string {
+  const words = name
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word && !FORM_SUFFIXES.has(word.toLowerCase()))
+  const letters = (words.length > 0 ? words : [name.trim()]).slice(0, 2).map((word) => Array.from(word)[0] ?? '')
+  return letters.join('').toUpperCase()
+}
+
+/** The sending company: its own logo, or its initials on a tile when it has none (or it does not load). */
+function SenderMark({ name, logoUrl }: { name: string; logoUrl: string | null }) {
+  const [broken, setBroken] = useState(false)
+  if (logoUrl && !broken) {
+    return (
+      // A company's uploaded logo, any size and shape: a plain img, sized by height (next/image needs its host configured).
+      // eslint-disable-next-line @next/next/no-img-element
+      <img src={logoUrl} alt="" onError={() => setBroken(true)} className="h-8 w-auto max-w-32 shrink-0 rounded-lg object-contain sm:h-9" />
+    )
+  }
   return (
-    <div className="space-y-2">
-      <h2 className="font-display text-xl tracking-tight">{title}</h2>
-      {lines.map((line) => (
-        <p key={line} className="text-[13px] text-muted-foreground" data-ph-mask="">
-          {line}
-        </p>
-      ))}
+    <span aria-hidden="true" className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-secondary text-[13px] font-medium text-secondary-foreground sm:h-9 sm:w-9">
+      {initials(name)}
+    </span>
+  )
+}
+
+/** The public page's header: who sends the document (logo, name, the platform it went through), and the reading tools. */
+function SigningHeader({ company, logoUrl, via, children }: { company: string; logoUrl: string | null; via: string; children?: React.ReactNode }) {
+  return (
+    <header className="sticky top-0 z-30 flex h-14 items-center justify-between gap-4 border-b border-border bg-background px-4 sm:h-16 md:px-8">
+      <div className="flex min-w-0 items-center gap-3">
+        <SenderMark name={company} logoUrl={logoUrl} />
+        <div className="min-w-0">
+          <div className="truncate text-sm font-medium" data-ph-mask="">
+            {company}
+          </div>
+          <div className="hidden truncate text-xs text-muted-foreground sm:block">{via}</div>
+        </div>
+      </div>
+      {children && <div className="flex shrink-0 items-center gap-4">{children}</div>}
+    </header>
+  )
+}
+
+/** Where one signer stands: muted text, a chip only for the exception (a decline). */
+function SignerStatus({ status }: { status: SignerPageData['signers'][number]['status'] }) {
+  const t = useTranslations('signing_page')
+  if (status === 'declined') return <Badge variant="warning">{t('status_declined')}</Badge>
+  return <span className="shrink-0 text-xs text-muted-foreground">{status === 'signed' ? t('status_signed') : t('status_pending')}</span>
+}
+
+/** One fact about the request: the label left, the value right. */
+function DetailRow({ label, children }: { label: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <dt className="shrink-0 text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 text-right">{children}</dd>
     </div>
   )
 }
@@ -628,15 +873,20 @@ function Fingerprint({ sha256 }: { sha256: string }) {
   const t = useTranslations('signing_page')
   const [full, setFull] = useState(false)
   return (
-    <div className="space-y-1">
-      <div className="flex items-center gap-2">
-        <span className="text-[12.5px] text-muted-foreground">{t('fingerprint_label')}</span>
-        <HelpPopover>{t('fingerprint_help')}</HelpPopover>
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between gap-3">
+        <dt className="flex shrink-0 items-center gap-1 text-muted-foreground">
+          {t('fingerprint_label')}
+          <HelpPopover>{t('fingerprint_help')}</HelpPopover>
+        </dt>
+        {!full && <dd className="font-mono text-xs">{sha256.slice(0, SHORT_FINGERPRINT)}</dd>}
       </div>
-      <p className="break-all font-mono text-[12.5px]">{full ? sha256 : sha256.slice(0, SHORT_FINGERPRINT)}</p>
-      <button type="button" className={QUIET_LINK_CLASS} onClick={() => setFull((v) => !v)} aria-expanded={full}>
-        {full ? t('fingerprint_short') : t('fingerprint_full')}
-      </button>
+      {full && <dd className="break-all font-mono text-xs">{sha256}</dd>}
+      <dd className="text-right">
+        <button type="button" className={QUIET_LINK_CLASS} onClick={() => setFull((v) => !v)} aria-expanded={full}>
+          {full ? t('fingerprint_short') : t('fingerprint_full')}
+        </button>
+      </dd>
     </div>
   )
 }

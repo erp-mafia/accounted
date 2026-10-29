@@ -38,6 +38,8 @@ const bankIdEnabled = vi.hoisted(() => vi.fn())
 vi.mock('@/lib/auth/bankid-flags', () => ({ isBankIdEnabled: bankIdEnabled }))
 const seal = vi.hoisted(() => ({ sealSigningRequest: vi.fn() }))
 vi.mock('../seal', () => seal)
+const resolveBrandForCompany = vi.hoisted(() => vi.fn())
+vi.mock('@/lib/branding/resolve', () => ({ resolveBrandForCompany }))
 
 import {
   cancelSignatureSession,
@@ -73,7 +75,12 @@ const signers: TableMockResolver = (calls) => {
   if (calls.some((c) => c.method === 'or')) return { data: leaseRows }
   if (calls.some((c) => c.method === 'update')) return { data: calls.some((c) => c.method === 'select') ? startRows : null }
   if (calls.some((c) => c.method === 'order')) {
-    return { data: [{ position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending' }, { position: 2, name: 'Erik Eriksson', role_label: null, status: 'signed' }] }
+    return {
+      data: [
+        { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending', signed_at: null },
+        { position: 2, name: 'Erik Eriksson', role_label: null, status: 'signed', signed_at: iso(NOW - HOUR) },
+      ],
+    }
   }
   return { data: lookupSigner }
 }
@@ -96,6 +103,7 @@ beforeEach(() => {
     companies: { data: { name: 'Bolaget AB', team_id: null, archived_at: null } },
     profiles: { data: { full_name: 'Karin Byråsson' } },
     document_attachments: { data: { file_name: 'hyresavtal.pdf' } },
+    company_settings: { data: { logo_url: 'https://cdn.example.test/bolaget.png' } },
     annual_report_versions: { data: { status: 'ready_for_signature', content_hash: CONTENT_HASH } },
     signing_signer_private: { data: null },
     bankid_identities: { data: null },
@@ -107,6 +115,7 @@ beforeEach(() => {
   bankIdEnabled.mockReturnValue(true)
   registryGet.mockResolvedValue({ id: 'tic', services })
   seal.sealSigningRequest.mockResolvedValue({ signedDocumentId: 'signed-doc', evidenceDocumentId: 'evidence-doc' })
+  resolveBrandForCompany.mockResolvedValue(null)
 })
 
 afterEach(() => {
@@ -171,7 +180,7 @@ describe('resolveMemberSigner', () => {
 })
 
 describe('describeForSigner', () => {
-  it('shows the document, who asks, the signer and everyone asked, without an address or a personnummer', async () => {
+  it('shows the document, who sends it, the signer and everyone asked, without an address or a personnummer', async () => {
     const page = await describeForSigner(
       scope({ signer: signerRow({ lock_kind: 'personnummer', role_label: 'VD', email: 'anna@example.se' }), request: requestRow({ ...request, message: 'Hej' }) }),
       NOW,
@@ -181,7 +190,10 @@ describe('describeForSigner', () => {
         title: 'Hyresavtal',
         message: 'Hej',
         company_name: 'Bolaget AB',
+        logo_url: 'https://cdn.example.test/bolaget.png',
+        platform_name: 'Accounted',
         requester: 'Karin Byråsson',
+        sent_at: iso(NOW - DAY),
         file_name: 'hyresavtal.pdf',
         sha256: SHA,
         state: 'open',
@@ -190,12 +202,21 @@ describe('describeForSigner', () => {
       },
       signer: { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending', signed_at: null, bankid_name: null, locked: true, last_error_code: null },
       signers: [
-        { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending' },
-        { position: 2, name: 'Erik Eriksson', role_label: null, status: 'signed' },
+        { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending', signed_at: null },
+        { position: 2, name: 'Erik Eriksson', role_label: null, status: 'signed', signed_at: iso(NOW - HOUR) },
       ],
     })
     expect(JSON.stringify(page)).not.toContain('anna@example.se')
-    expect(db.findCall('signing_request_signers', 'select')).toEqual(['position, name, role_label, status'])
+    expect(db.findCall('signing_request_signers', 'select')).toEqual(['position, name, role_label, status, signed_at'])
+    expect(db.findCalls('company_settings', 'eq')).toEqual([['company_id', request.company_id]])
+  })
+
+  it('names the brand as the platform and draws initials for a company without a logo', async () => {
+    resolveBrandForCompany.mockResolvedValue({ appName: 'Byrån Ekonomi' })
+    db.setTable('company_settings', { data: { logo_url: null } })
+    const page = await describeForSigner(scope(), NOW)
+    expect(page.request).toMatchObject({ logo_url: null, platform_name: 'Byrån Ekonomi' })
+    expect(resolveBrandForCompany).toHaveBeenCalledWith(request.company_id)
   })
 
   it('reads an open request past its expiry as expired, and names the BankID signer', async () => {

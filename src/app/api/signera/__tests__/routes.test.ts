@@ -40,6 +40,8 @@ const REQ = '77777777-7777-4777-8777-777777777777'
 const SIGNER = '88888888-8888-4888-8888-888888888888'
 const DAY = 24 * 60 * 60 * 1000
 const EXPIRES = new Date(Date.now() + 14 * DAY).toISOString()
+const SENT = new Date(Date.now() - DAY).toISOString()
+const SIGNED_AT = new Date(Date.now() - DAY / 2).toISOString()
 
 let tokenCounter = 0
 function freshToken(): string {
@@ -65,7 +67,7 @@ function requestRow(overrides: Record<string, unknown> = {}) {
     cancelled_at: null,
     signed_document_id: null,
     evidence_document_id: null,
-    created_at: new Date(Date.now() - DAY).toISOString(),
+    created_at: SENT,
     ...overrides,
   }
 }
@@ -114,13 +116,19 @@ beforeEach(() => {
   signer = signerRow()
   db.setTable('signing_request_signers', (calls) =>
     calls.some((c) => c.method === 'order')
-      ? { data: [{ position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending' }, { position: 2, name: 'Erik Eriksson', role_label: null, status: 'signed' }] }
+      ? {
+          data: [
+            { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending', signed_at: null },
+            { position: 2, name: 'Erik Eriksson', role_label: null, status: 'signed', signed_at: SIGNED_AT },
+          ],
+        }
       : { data: signer },
   )
   db.setTable('signing_requests', { data: requestRow() })
   db.setTable('companies', { data: { name: 'Bolaget AB', team_id: null, archived_at: null } })
   db.setTable('profiles', { data: { full_name: 'Karin Byråsson' } })
   db.setTable('document_attachments', { data: { file_name: 'hyresavtal.pdf', storage_path: `documents/${COMPANY}/${DOC}.pdf` } })
+  db.setTable('company_settings', { data: { logo_url: 'https://cdn.example.test/bolaget.png' } })
   downloaded = { data: new Blob([new Uint8Array([0x25, 0x50, 0x44, 0x46])]), error: null }
   Object.assign(db.supabase, { storage: { from: vi.fn(() => ({ download: vi.fn(async () => downloaded) })) } })
   ceremony.startSignature.mockResolvedValue({ ok: true, data: { auto_start_token: 'auto', qr_start_token: 'qr', qr_start_secret: 'secret', expires_at: '2026-10-25T10:03:00.000Z' } })
@@ -165,7 +173,7 @@ describe('the signing token routes refuse what is not a live link', () => {
 })
 
 describe('GET /api/signera/:token', () => {
-  it('shows the signer\'s page: the document, who asks, everyone asked, without an address or a personnummer', async () => {
+  it('shows the signer\'s page: the document, who sends it, everyone asked, without an address or a personnummer', async () => {
     const token = freshToken()
     const res = await describeRoute(get(`/api/signera/${token}`), params(token))
     expect(res.headers.get('Cache-Control')).toBe('private, no-store')
@@ -176,7 +184,10 @@ describe('GET /api/signera/:token', () => {
         title: 'Hyresavtal',
         message: 'Hej, skriv under',
         company_name: 'Bolaget AB',
+        logo_url: 'https://cdn.example.test/bolaget.png',
+        platform_name: 'Accounted',
         requester: 'Karin Byråsson',
+        sent_at: SENT,
         file_name: 'hyresavtal.pdf',
         sha256: 'ab'.repeat(32),
         state: 'open',
@@ -185,8 +196,8 @@ describe('GET /api/signera/:token', () => {
       },
       signer: { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending', signed_at: null, bankid_name: null, locked: true, last_error_code: null },
       signers: [
-        { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending' },
-        { position: 2, name: 'Erik Eriksson', role_label: null, status: 'signed' },
+        { position: 1, name: 'Anna Andersson', role_label: 'VD', status: 'pending', signed_at: null },
+        { position: 2, name: 'Erik Eriksson', role_label: null, status: 'signed', signed_at: SIGNED_AT },
       ],
     })
     expect(JSON.stringify(body)).not.toContain('anna@example.se')
