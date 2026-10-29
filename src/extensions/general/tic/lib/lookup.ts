@@ -1,4 +1,5 @@
 import { searchCompaniesByName, searchCompanyByOrgNumber } from './tic-client'
+import type { TicCallContext } from '@/lib/tic-budget/budget'
 import { isLensDocumentCeased } from './lens-status'
 import type { TICCompanyDocument } from './tic-types'
 import type { CompanyLookupResult, CompanySearchHit } from '@/lib/company-lookup/types'
@@ -125,9 +126,10 @@ export function mapDocumentToLookupResult(doc: TICCompanyDocument): CompanyLooku
 
 /** Null means no company matched the org number (a clean "not found"). */
 export async function lookupCompanyByOrgNumber(
-  orgNumber: string
+  orgNumber: string,
+  ctx: TicCallContext = {}
 ): Promise<CompanyLookupResult | null> {
-  const doc = await searchCompanyByOrgNumber(orgNumber)
+  const doc = await searchCompanyByOrgNumber(orgNumber, ctx)
   if (!doc) return null
   return mapDocumentToLookupResult(doc)
 }
@@ -141,8 +143,11 @@ export const COMPANY_SEARCH_LIMIT = 5
  * call per distinct query; a picked hit reuses its result, so the whole
  * search-and-pick flow costs the same as an org-number lookup.
  */
-export async function searchCompaniesForLookup(query: string): Promise<CompanySearchHit[]> {
-  const docs = await searchCompaniesByName(query, COMPANY_SEARCH_LIMIT)
+export async function searchCompaniesForLookup(
+  query: string,
+  ctx: TicCallContext = {}
+): Promise<CompanySearchHit[]> {
+  const docs = await searchCompaniesByName(query, COMPANY_SEARCH_LIMIT, ctx)
   const hits: CompanySearchHit[] = []
   for (const doc of docs) {
     const orgNumber = lensRegistrationToOrgNumber(doc.registrationNumber)

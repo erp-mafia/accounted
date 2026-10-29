@@ -5,7 +5,19 @@
   "entryPoint": "@/extensions/general/tic",
   "workspace": null,
   "requiredEnvVars": ["TIC_API_PROXY_URL"],
-  "optionalEnvVars": [],
+  "optionalEnvVars": [
+    "TIC_API_PROXY_SECRET",
+    "TIC_MONTHLY_CALL_BUDGET",
+    "TIC_BUDGET_ONBOARDING_RESERVE",
+    "TIC_BUDGET_CAP_COMPOSER",
+    "TIC_BUDGET_CAP_REFRESH",
+    "TIC_BUDGET_CAP_MCP_LOOKUP",
+    "TIC_BUDGET_CAP_PROFILE",
+    "TIC_BUDGET_CAP_OTHER",
+    "TIC_MCP_LOOKUP_DAILY_PER_KEY",
+    "TIC_BUDGET_CYCLE_DAY",
+    "TIC_CACHE_TTL_HOURS"
+  ],
   "npmDependencies": [],
   "definition": {
     "name": "Bolagsuppgifter",

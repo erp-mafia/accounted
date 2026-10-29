@@ -75,7 +75,7 @@ describe('searchCompaniesForLookup', () => {
   it('maps each document to a hit with a cleaned org number', async () => {
     mockSearch.mockResolvedValue([doc({ registrationNumber: '556036-0793' })])
     const hits = await searchCompaniesForLookup('Testbrand')
-    expect(mockSearch).toHaveBeenCalledWith('Testbrand', 5)
+    expect(mockSearch).toHaveBeenCalledWith('Testbrand', 5, {})
     expect(hits).toHaveLength(1)
     expect(hits[0].orgNumber).toBe('5560360793')
     expect(hits[0].result.companyName).toBe('Testbrand AB')

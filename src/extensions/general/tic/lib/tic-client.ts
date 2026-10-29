@@ -10,6 +10,9 @@ import type {
 } from './tic-types'
 import { TICAPIError } from './tic-types'
 import { isLensDocumentCeased } from './lens-status'
+import { reserveTicCall, type TicCallContext } from '@/lib/tic-budget/budget'
+import { readTicResponseCache, writeTicResponseCache } from '@/lib/tic-budget/cache'
+import { ticProxyHeaders } from '@/lib/tic-budget/proxy'
 
 const TIC_API_TIMEOUT = 15_000
 
@@ -61,8 +64,14 @@ export function __resetTicCacheForTest(): void {
  * codebase). The proxy targets `lens-api.tic.io` (v2 "Lens API") and adds
  * `x-api-key` server-side. v1 (`api.tic.io`) is retired: all paths below
  * are Lens paths (no `/datasets/` prefix, `id` instead of `companyId`).
+ *
+ * Every call that reaches the proxy spends one unit of the monthly Lens
+ * budget (lib/tic-budget), charged to `ctx.purpose`. The in-process cache and
+ * then the shared database cache answer first and cost nothing. A spent
+ * budget throws the same RATE_LIMIT_EXCEEDED error as TIC's own 429, so every
+ * caller degrades the way it already does.
  */
-export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
+export async function ticApiFetch<T>(endpoint: string, ctx: TicCallContext = {}): Promise<T | null> {
   const proxyUrl = process.env.TIC_API_PROXY_URL
   if (!proxyUrl) {
     throw new TICAPIError('TIC_API_PROXY_URL is not configured', undefined, 'NOT_CONFIGURED')
@@ -77,11 +86,27 @@ export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
     return cached
   }
 
+  // Another instance may already have paid for this answer.
+  const shared = await readTicResponseCache<T>(endpoint)
+  if (shared.hit) {
+    cacheSet(endpoint, shared.value)
+    return shared.value
+  }
+
+  const reservation = await reserveTicCall(ctx)
+  if (!reservation.ok) {
+    throw new TICAPIError(
+      `TIC call budget exhausted (${reservation.scope})`,
+      429,
+      'RATE_LIMIT_EXCEEDED'
+    )
+  }
+
   const url = `${proxyUrl}?endpoint=${encodeURIComponent(endpoint)}`
 
   try {
     const response = await fetch(url, {
-      headers: { Accept: 'application/json' },
+      headers: ticProxyHeaders(),
       signal: AbortSignal.timeout(TIC_API_TIMEOUT),
     })
 
@@ -102,6 +127,7 @@ export async function ticApiFetch<T>(endpoint: string): Promise<T | null> {
 
     const body = await response.json()
     cacheSet(endpoint, body)
+    await writeTicResponseCache(endpoint, body)
     return body
   } catch (error: unknown) {
     if (error instanceof Error && (error.name === 'TimeoutError' || error.name === 'AbortError')) {
@@ -162,11 +188,13 @@ function toLensQueryNumber(cleaned: string): string {
  * what every working lookup already uses; we only tighten which hit we accept.
  */
 export async function searchCompanyByOrgNumber(
-  orgNumber: string
+  orgNumber: string,
+  ctx: TicCallContext = {}
 ): Promise<TICCompanyDocument | null> {
   const cleaned = orgNumber.replace(/[\s-]/g, '')
   const data = await ticApiFetch<TICCompanyResponse>(
-    `/search-public/companies?q=${toLensQueryNumber(cleaned)}&query_by=registrationNumber`
+    `/search-public/companies?q=${toLensQueryNumber(cleaned)}&query_by=registrationNumber`,
+    ctx
   )
 
   if (!data || data.found === 0 || !data.hits?.length) {
@@ -224,12 +252,14 @@ function pickPreferredRegistration(docs: TICCompanyDocument[]): TICCompanyDocume
  */
 export async function searchCompaniesByName(
   query: string,
-  limit = 5
+  limit = 5,
+  ctx: TicCallContext = {}
 ): Promise<TICCompanyDocument[]> {
   const trimmed = query.trim()
   if (!trimmed) return []
   const data = await ticApiFetch<TICCompanyResponse>(
-    `/search-public/companies?q=${encodeURIComponent(trimmed)}&query_by=names.nameOrIdentifier&per_page=${limit}`
+    `/search-public/companies?q=${encodeURIComponent(trimmed)}&query_by=names.nameOrIdentifier&per_page=${limit}`,
+    ctx
   )
   if (!data || data.found === 0 || !data.hits?.length) return []
   return data.hits
@@ -245,8 +275,11 @@ export async function searchCompaniesByName(
  * result by `type === 'annualReport'` to recover the financial-report
  * subset.
  */
-export async function getCompanyDocuments(companyId: number): Promise<TICDocument[] | null> {
-  return ticApiFetch<TICDocument[]>(`/companies/${companyId}/documents`)
+export async function getCompanyDocuments(
+  companyId: number,
+  ctx: TicCallContext = {}
+): Promise<TICDocument[] | null> {
+  return ticApiFetch<TICDocument[]>(`/companies/${companyId}/documents`, ctx)
 }
 
 /**
@@ -254,8 +287,11 @@ export async function getCompanyDocuments(companyId: number): Promise<TICDocumen
  * equivalent: used to auto-fill fiscal-year selection during Accounted
  * onboarding so the user doesn't have to enter MM-DD manually.
  */
-export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[] | null> {
-  return ticApiFetch<TICFiscalYear[]>(`/companies/${companyId}/fiscal-years`)
+export async function getFiscalYears(
+  companyId: number,
+  ctx: TicCallContext = {}
+): Promise<TICFiscalYear[] | null> {
+  return ticApiFetch<TICFiscalYear[]>(`/companies/${companyId}/fiscal-years`, ctx)
 }
 
 /**
@@ -264,8 +300,11 @@ export async function getFiscalYears(companyId: number): Promise<TICFiscalYear[]
  * is the modern per-period breakdown and `payrolls` is the legacy
  * Skatteverket MOMS/AG totals.
  */
-export async function getPayrolls(companyId: number): Promise<TICPayrollSummary | null> {
-  return ticApiFetch<TICPayrollSummary>(`/companies/${companyId}/payrolls`)
+export async function getPayrolls(
+  companyId: number,
+  ctx: TicCallContext = {}
+): Promise<TICPayrollSummary | null> {
+  return ticApiFetch<TICPayrollSummary>(`/companies/${companyId}/payrolls`, ctx)
 }
 
 /**
@@ -275,9 +314,10 @@ export async function getPayrolls(companyId: number): Promise<TICPayrollSummary 
  * counts plus the per-person list.
  */
 export async function getRepresentatives(
-  companyId: number
+  companyId: number,
+  ctx: TicCallContext = {}
 ): Promise<TICRepresentatives | null> {
-  return ticApiFetch<TICRepresentatives>(`/companies/${companyId}/representatives`)
+  return ticApiFetch<TICRepresentatives>(`/companies/${companyId}/representatives`, ctx)
 }
 
 /**
@@ -287,9 +327,10 @@ export async function getRepresentatives(
  * an `isCeased` flag inside `companyStatusDescription`.
  */
 export async function getCompanyStatus(
-  companyId: number
+  companyId: number,
+  ctx: TicCallContext = {}
 ): Promise<TICCompanyStatusEntry[] | null> {
-  return ticApiFetch<TICCompanyStatusEntry[]>(`/companies/${companyId}/status`)
+  return ticApiFetch<TICCompanyStatusEntry[]>(`/companies/${companyId}/status`, ctx)
 }
 
 /**
@@ -303,8 +344,10 @@ export async function getCompanyStatus(
  */
 export async function getBeneficialOwners(
   companyId: number,
+  ctx: TicCallContext = {},
 ): Promise<TICBeneficialOwnerResponse | null> {
   return ticApiFetch<TICBeneficialOwnerResponse>(
     `/companies/${companyId}/beneficial-owners`,
+    ctx,
   )
 }

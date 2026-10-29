@@ -196,4 +196,30 @@ describe('gnubok_lookup_company', () => {
     mocks.lookupCompanyByOrgNumber.mockRejectedValue(new Error('boom'))
     await expect(run('5560000001')).rejects.toThrow('boom')
   })
+  it('charges the lookup to mcp_lookup and to the calling API key', async () => {
+    mocks.lookupCompanyByOrgNumber.mockResolvedValue(found())
+    await tool.execute({ org_number: '5560000001' }, '', 'user-1', {} as never, { type: 'api_key', id: 'key-9' })
+    expect(mocks.lookupCompanyByOrgNumber).toHaveBeenCalledWith('5560000001', {
+      purpose: 'mcp_lookup',
+      subject: 'key-9',
+    })
+
+    // No key id (a session caller): the user is the subject.
+    await run('5560000001')
+    expect(mocks.lookupCompanyByOrgNumber).toHaveBeenLastCalledWith('5560000001', {
+      purpose: 'mcp_lookup',
+      subject: 'user-1',
+    })
+  })
+
+  it('degrades to unavailable when the key daily cap or the budget is spent', async () => {
+    mocks.lookupCompanyByOrgNumber.mockRejectedValue(
+      new TICAPIError('TIC call budget exhausted (subject)', 429, 'RATE_LIMIT_EXCEEDED')
+    )
+    const result = await run('5560000001')
+
+    expect(result.status).toBe('unavailable')
+    expect((result.warnings as string[])[0]).toContain('RATE_LIMIT_EXCEEDED')
+    expect((result.still_to_ask as string[]).length).toBeGreaterThanOrEqual(6)
+  })
 })

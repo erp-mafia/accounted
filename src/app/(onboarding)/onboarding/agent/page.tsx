@@ -80,7 +80,7 @@ export default async function AgentOnboardingPage() {
   // beneficialOwners, payrolls, …) materially drive the composer, and it's
   // a deliberate once-per-company action: safe to spend the TIC calls to
   // bring a pre-v2 snapshot up to date.
-  await ensureTicSnapshot({ supabase, companyId, upgradeV1: true })
+  await ensureTicSnapshot({ supabase, companyId, upgradeV1: true, purpose: 'composer' })
 
   // Fetch the small handful of fields we render directly into Phase B so the
   // user sees real values (not "Laddar…") the moment the stream finishes.

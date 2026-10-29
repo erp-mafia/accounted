@@ -156,6 +156,7 @@ export async function POST(request: Request) {
             companyId,
             upgradeV1: true,
             timeoutMs: TIC_BUDGET_MS,
+            purpose: 'composer',
           }),
           TIC_BUDGET_MS,
         ).catch(() => ({ snapshot: null, source: 'fallback' as const }))

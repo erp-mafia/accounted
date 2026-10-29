@@ -20,6 +20,7 @@ import {
 } from './lib/bankid-flow-cookie'
 import { lookupCompanyByOrgNumber, searchCompaniesForLookup } from './lib/lookup'
 import { buildCompanyProfile } from './lib/profile'
+import { toTicCallPurpose } from '@/lib/tic-budget/budget'
 import { COMPANY_SEARCH_MIN_CHARS } from '@/lib/company-lookup/types'
 import type { RegistryHint } from '@/lib/company-lookup/types'
 import { createScbClient } from '@/lib/parties/scb/client'
@@ -524,7 +525,11 @@ export const ticExtension: Extension = {
   // signing ceremony (lib/signing/bankid-provider) starts and polls sign
   // sessions here.
   services: {
-    fetchCompanyProfile: (orgNumber: string) => buildCompanyProfile(orgNumber, console),
+    // opts.purpose: what the Lens calls are charged to (lib/tic-budget).
+    fetchCompanyProfile: (orgNumber: string, opts?: { purpose?: unknown }) =>
+      buildCompanyProfile(orgNumber, console, {
+        purpose: opts?.purpose === undefined ? undefined : toTicCallPurpose(opts.purpose),
+      }),
     ...bankIdSigningServices,
   },
 
@@ -562,7 +567,7 @@ export const ticExtension: Extension = {
           // newly-registered companies without a financial summary return
           // fiscalYear: null and the client-side first-year derivation
           // takes over (see deriveFirstYearDefaults).
-          const result = await lookupCompanyByOrgNumber(orgNumber)
+          const result = await lookupCompanyByOrgNumber(orgNumber, { purpose: 'onboarding_lookup' })
 
           if (!result) {
             // Bolagsverket does not list ideella föreningar (Skatteverket
@@ -1534,7 +1539,7 @@ export const ticExtension: Extension = {
 
         try {
           const [found, ownHash] = await Promise.all([
-            searchCompaniesForLookup(query),
+            searchCompaniesForLookup(query, { purpose: 'onboarding_lookup' }),
             ownPersonalNumberHash(auth.supabase, auth.user.id),
           ])
           const hits = offerableSearchHits(

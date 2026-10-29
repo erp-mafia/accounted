@@ -31,6 +31,7 @@
 0 0 * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/tax-deadlines/cron
 0 * * * *           curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/enable-banking/sync/cron
 30 4 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/enable-banking/health-probe/cron
+20 6 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/tic/budget/cron
 */10 * * * *        curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bank/open-payments/sync/cron
 30 6 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/bank/open-payments/switch-reminders/cron
 30 3 * * *          curl -sf -H "Authorization: Bearer ${CRON_SECRET}" ${APP_URL}/api/extensions/stripe/transactions/cron

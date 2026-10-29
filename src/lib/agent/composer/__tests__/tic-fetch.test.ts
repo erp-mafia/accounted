@@ -141,7 +141,7 @@ describe('ensureTicSnapshot: cache miss & refetch', () => {
     expect(result.snapshot).toEqual(profile)
     // Asked the TIC extension's profile service for the company's org number
     expect(profileService).toHaveBeenCalledTimes(1)
-    expect(profileService).toHaveBeenCalledWith('5560125790')
+    expect(profileService).toHaveBeenCalledWith('5560125790', { purpose: 'profile' })
     // Persisted via UPDATE
     expect(updateCalls).toHaveLength(1)
     const persisted = updateCalls[0][0] as Record<string, unknown>
@@ -269,7 +269,7 @@ describe('ensureTicSnapshot: degraded paths', () => {
 
     expect(result.source).toBe('fetched')
     // Org number from company_settings flowed into the profile call
-    expect(profileService).toHaveBeenCalledWith('8001011231')
+    expect(profileService).toHaveBeenCalledWith('8001011231', { purpose: 'profile' })
   })
 
   it('returns fallback null when no org_number is available anywhere', async () => {

@@ -35,6 +35,10 @@
       "schedule": "30 4 * * *"
     },
     {
+      "path": "/api/extensions/tic/budget/cron",
+      "schedule": "20 6 * * *"
+    },
+    {
       "path": "/api/bank/open-payments/sync/cron",
       "schedule": "*/10 * * * *"
     },
