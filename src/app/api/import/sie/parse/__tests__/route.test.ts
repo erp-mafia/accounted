@@ -144,22 +144,23 @@ describe('POST /api/import/sie/parse', () => {
     expect(response.status).toBe(200)
   })
 
-  // crm#1049: CLEAN_SIE carries verifikat and no balances (a card provider's
-  // or payroll's export). Over a year that already holds an import it is
-  // refused before mapping, so "Ersätt" is never offered for it.
-  it('refuses a verifikat-only file for an already imported year with 409', async () => {
+  // crm#1049, issue #108: CLEAN_SIE carries verifikat and no balances (a card
+  // provider's or payroll's export). Over a year that already holds an import
+  // it is parsed and offered as an append only, never as the replacement.
+  it('offers a verifikat-only file for an already imported year as an append only', async () => {
     const { checkDuplicatePeriodImport } = await import('@/lib/import/sie-import')
-    const existing = { id: 'import-2024', fiscal_year_start: '2024-01-01', fiscal_year_end: '2024-12-31' } as never
-    // Read twice: the route's own existingImport and the refusal's check.
-    vi.mocked(checkDuplicatePeriodImport).mockResolvedValueOnce(existing).mockResolvedValueOnce(existing)
+    vi.mocked(checkDuplicatePeriodImport).mockResolvedValueOnce({
+      id: 'import-2024', fiscal_year_start: '2024-01-01', fiscal_year_end: '2024-12-31',
+    } as never)
+    enqueue({ data: [] }) // company chart
+    enqueue({ data: { id: 'p-2024' } }) // containing fiscal period
 
     const response = await POST(fileRequest(CLEAN_SIE), emptyParams)
-    const body = (await response.json()) as { error?: { code?: string; message?: string; details?: Record<string, unknown> } }
+    const body = (await response.json()) as { existingImport?: { id: string }; appendOnly?: boolean }
 
-    expect(response.status).toBe(409)
-    expect(body.error?.code).toBe('SIE_IMPORT_VOUCHERS_ONLY_FILE')
-    expect(body.error?.message).toContain('Ångra inte den tidigare importen')
-    expect(body.error?.details).toMatchObject({ existing_import_id: 'import-2024', vouchers: 1 })
+    expect(response.status).toBe(200)
+    expect(body.existingImport?.id).toBe('import-2024')
+    expect(body.appendOnly).toBe(true)
   })
 
   it('still parses a whole-year file for an imported year (the replacement path)', async () => {
@@ -178,6 +179,7 @@ describe('POST /api/import/sie/parse', () => {
 
     expect(response.status).toBe(200)
     expect(body.existingImport?.id).toBe('import-2024')
+    expect((body as { appendOnly?: boolean }).appendOnly).toBe(false)
   })
 
   it('returns 400 for a file extension that is not SIE', async () => {

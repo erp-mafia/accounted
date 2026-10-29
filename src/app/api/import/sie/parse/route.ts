@@ -27,7 +27,7 @@ import { readSIERequestFile } from '@/lib/import/sie-intake'
 import { resolveSIEFiscalYear } from '@/lib/import/sie-jobs'
 import { checkSIEOrgNumber } from '@/lib/import/sie-org-number'
 import { diagnoseOpeningBalanceContinuity } from '@/lib/import/sie-continuity'
-import { voucherOnlyFileRefusal } from '@/lib/import/sie-voucher-only'
+import { isVoucherOnlySIE } from '@/lib/import/sie-voucher-only'
 
 /**
  * POST /api/import/sie/parse
@@ -111,13 +111,6 @@ export const POST = withRouteContext(
         })
       }
 
-      // A verifikat-only file over an imported year is refused before the
-      // mapping step, so "Ersätt" is never offered for it (crm#1049).
-      const voucherOnly = await voucherOnlyFileRefusal(supabase, companyId!, parsed)
-      if (voucherOnly) {
-        return errorResponseFromCode(voucherOnly.code, opLog, { requestId, details: voucherOnly.details })
-      }
-
       const storedMappings = await loadMappings(supabase, companyId!)
 
       const { mappings, archivedOnlyAccounts, excludedSystemAccounts, unusedAccounts, unusedOwnAccounts } = suggestSIEMappings(
@@ -188,6 +181,10 @@ export const POST = withRouteContext(
       return NextResponse.json({
         success: true,
         existingImport: duplicate ?? periodDuplicate,
+        // A verifikat-only file over an imported year can only be appended:
+        // replacing the year with it would drop every verifikat it does not
+        // carry (crm#1049). The wizard offers only "Lägg till verifikationerna".
+        appendOnly: Boolean(periodDuplicate) && isVoucherOnlySIE(parsed),
         encoding,
         fileHash,
         parsed: {

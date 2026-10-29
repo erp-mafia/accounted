@@ -358,6 +358,9 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
 
   // ── Imports ────────────────────────────────────────────────────────
   'POST /api/import/sie/parse': covered(['gnubok_sie_preflight']),
+  // The append preview (issue #108): the MCP preflight and staging carry the
+  // same plan; v1 refuses at submit with the same verdicts.
+  'POST /api/import/sie/append-plan': covered(['gnubok_sie_preflight', 'gnubok_import_sie', `POST ${V}/imports/sie`]),
   'POST /api/import/sie/upload': covered([`POST ${V}/imports/sie/upload`, 'gnubok_create_sie_upload']),
   'POST /api/import/sie/execute': covered([`POST ${V}/imports/sie`, 'gnubok_import_sie']),
   'POST /api/import/sie/create-accounts': covered(['gnubok_import_sie'], 'the API import creates missing accounts itself'),

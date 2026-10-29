@@ -1,29 +1,19 @@
 import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest'
 import type { SupabaseClient } from '@supabase/supabase-js'
-
-vi.mock('../sie-import', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('../sie-import')>()),
-  checkDuplicatePeriodImport: vi.fn(),
-}))
-
-import { checkDuplicatePeriodImport } from '../sie-import'
 import { parseSIEFile } from '../sie-parser'
-import { isVoucherOnlySIE, voucherOnlyFileRefusal } from '../sie-voucher-only'
+import { isVoucherOnlySIE } from '../sie-voucher-only'
 import { SIEJobValidationError, submitSIEJob } from '../sie-jobs'
 import type { AccountMapping } from '../types'
 
 // crm#1049: a card provider's SIE file (verifikat, no balances) for a year
-// that is already imported is refused before the import or its replacement
-// can touch the year.
+// that is already imported is appended (issue #108, sie-append.test.ts),
+// never offered as the year's replacement.
 
 const HEADER = ['#FLAGGA 0', '#SIETYP 4', '#RAR 0 20260101 20261231']
 const VOUCHER = ['#VER "" "" 20260315 "Kortköp"', '{', '#TRANS 6110 {} 250.00', '#TRANS 2890 {} -250.00', '}']
 
 const CARD_FILE = [...HEADER, ...VOUCHER].join('\n')
 const FULL_YEAR = [...HEADER, '#IB 0 1930 1000.00', '#UB 0 1930 1000.00', '#RES 0 6110 250.00', ...VOUCHER].join('\n')
-
-const supabase = {} as SupabaseClient
-const existingImport = { id: 'import-1', fiscal_year_start: '2026-01-01', fiscal_year_end: '2026-12-31' }
 
 describe('isVoucherOnlySIE', () => {
   it('is true for verifikat without any balance (the SIE 4I shape)', () => {
@@ -36,33 +26,6 @@ describe('isVoucherOnlySIE', () => {
 
   it('is false for a file without verifikat', () => {
     expect(isVoucherOnlySIE(parseSIEFile([...HEADER, '#UB 0 1930 1000.00'].join('\n')))).toBe(false)
-  })
-})
-
-describe('voucherOnlyFileRefusal', () => {
-  beforeEach(() => {
-    vi.clearAllMocks()
-  })
-
-  it('refuses a verifikat-only file whose year already holds an import, naming the import', async () => {
-    vi.mocked(checkDuplicatePeriodImport).mockResolvedValue(existingImport as never)
-    const refusal = await voucherOnlyFileRefusal(supabase, 'company-1', parseSIEFile(CARD_FILE))
-    expect(refusal).toEqual({
-      code: 'SIE_IMPORT_VOUCHERS_ONLY_FILE',
-      details: { existing_import_id: 'import-1', fiscal_year_start: '2026-01-01', fiscal_year_end: '2026-12-31', vouchers: 1 },
-    })
-    expect(checkDuplicatePeriodImport).toHaveBeenCalledWith(supabase, 'company-1', '2026-01-01', '2026-12-31')
-  })
-
-  it('leaves a verifikat-only file for a year with no import to the existing rules', async () => {
-    vi.mocked(checkDuplicatePeriodImport).mockResolvedValue(null)
-    expect(await voucherOnlyFileRefusal(supabase, 'company-1', parseSIEFile(CARD_FILE))).toBeNull()
-  })
-
-  it('never refuses a whole-year file, so replacing a year keeps working', async () => {
-    vi.mocked(checkDuplicatePeriodImport).mockResolvedValue(existingImport as never)
-    expect(await voucherOnlyFileRefusal(supabase, 'company-1', parseSIEFile(FULL_YEAR))).toBeNull()
-    expect(checkDuplicatePeriodImport).not.toHaveBeenCalled()
   })
 })
 

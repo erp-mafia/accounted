@@ -1,0 +1,1 @@
+[2026-10-28] Appending an SIE file's new vouchers to an imported year is its own import batch beside the year's import (write_sie_job_entries), superseding the staged-vouchers follow-up of 2026-10-28-sie-verifikat-only-file-over-imported-year: one write path, undo per batch (#108).

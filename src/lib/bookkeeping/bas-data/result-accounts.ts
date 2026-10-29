@@ -10,3 +10,15 @@
 export function isAretsResultatAccount(account: string): boolean {
   return account >= '8990' && account <= '8999'
 }
+
+/**
+ * Whether a BAS account is one a bokslut books to: 88xx bokslutsdispositioner
+ * (periodiseringsfond, överavskrivningar), 89xx skatt och årets resultat, or
+ * the legal form's result account (`resultAccount`, 2099 for an aktiebolag,
+ * from the form profile). An SIE append flags vouchers that carry one (issue
+ * #108): they change the year's closing balance, which a next year with a
+ * posted IB then no longer matches.
+ */
+export function isYearEndAccount(account: string, resultAccount: string): boolean {
+  return account.startsWith('88') || account.startsWith('89') || account === resultAccount
+}

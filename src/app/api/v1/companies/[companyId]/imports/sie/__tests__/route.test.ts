@@ -218,6 +218,30 @@ describe('POST /imports/sie', () => {
     expect(body.error.details).toMatchObject({ file_org_number: '5566778899', company_org_number: '5599887766' })
   })
 
+  // Issue #108: an append is the job's option; its refusal names the vouchers.
+  it('passes an append with its duplicate choice and series map through to the job', async () => {
+    const res = await callRoute({ onExistingPeriod: 'append', includePossibleDuplicates: true, seriesMap: { K: 'A' } })
+    expect(res.status).toBe(202)
+    expect(submitSIEJobMock.mock.calls[0][5]).toMatchObject({
+      onExistingPeriod: 'append', includePossibleDuplicates: true, seriesMap: { K: 'A' },
+    })
+  })
+
+  it('answers an append refusal with 409, its sentence and the vouchers in details', async () => {
+    const { userFacing } = await import('@/lib/errors/user-facing')
+    const sentence = '1 av filens verifikationer har samma nummer som bokförda verifikationer men annat innehåll: A1.'
+    submitSIEJobMock.mockRejectedValueOnce(userFacing(new SIEJobValidationError(sentence, 'SIE_IMPORT_APPEND_CONFLICT', {
+      conflicts: [{ sourceId: 'A1', voucher: 'A1' }],
+    }), 'SIE_IMPORT_APPEND_CONFLICT'))
+
+    const res = await callRoute({ onExistingPeriod: 'append' })
+
+    expect(res.status).toBe(409)
+    const body = await res.json()
+    expect(body.error).toMatchObject({ code: 'SIE_IMPORT_APPEND_CONFLICT', message: sentence })
+    expect(body.error.details).toEqual({ conflicts: [{ sourceId: 'A1', voucher: 'A1' }] })
+  })
+
   // #3312: the dashboard upload's class 9 decision, not suggestMappings alone.
   const WITH_OBS = VALID_SIE.replace('#KONTO 6110 "Kontorsmaterial"', '#KONTO 6110 "Kontorsmaterial"\n#KONTO 9999 "OBS-konto"') +
     '\n#VER A 2 20240120 "Okänd inbetalning"\n{\n#TRANS 1930 {} 500.00\n#TRANS 9999 {} -500.00\n}'
