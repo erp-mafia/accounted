@@ -122,6 +122,22 @@ describe('buildBokslutChecklist', () => {
     expect(readinessMock).toHaveBeenCalledWith(supabase, COMPANY, USER, 'fy-2026')
   })
 
+  it('links the inventory step to the stock count page only where the stock count is on', async () => {
+    const build = async () => {
+      const { supabase, enqueue } = createQueuedMockSupabase()
+      enqueue({ data: PERIOD })
+      enqueue({ data: [] })
+      listAccountsMock.mockResolvedValue([])
+      const list = await buildBokslutChecklist(supabase as never, COMPANY, USER, 'fy-2026', { readiness: null })
+      return list!.items.find((i) => i.key === 'inventory_valued')!
+    }
+    vi.stubEnv('BOLAGET_COMPANY_IDS', '')
+    expect((await build()).href).toBeUndefined()
+    vi.stubEnv('BOLAGET_COMPANY_IDS', COMPANY)
+    expect((await build()).href).toBe('/bookkeeping/year-end/inventering')
+    vi.unstubAllEnvs()
+  })
+
   it('skips the readiness computation when told to, and returns null for a foreign period', async () => {
     const { supabase, enqueue } = createQueuedMockSupabase()
     enqueue({ data: PERIOD })

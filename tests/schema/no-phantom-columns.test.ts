@@ -302,7 +302,12 @@ const KNOWN_STALE_ON_CONFLICT: Record<string, string> = {}
 // the signing request list filtered by document (lib/signing/requests.ts)
 // matches original, signed copy or evidence package with the same .or() as
 // lib/documents/deletion.ts. Surfaced when main grew to its own ceiling.
-const UNRESOLVED_CEILING = 444
+// 445 (2026-10-29): +1 for the year-end stock count (lib/bokslut/stock-count/
+// register.ts insertRows): the rows of an inventeringslista (up to 5 000)
+// are inserted in one request built by a map, so a failed insert leaves no
+// half list behind and a pasted list is not thousands of requests. Every
+// other stock count select and payload is a literal.
+const UNRESOLVED_CEILING = 445
 
 /**
  * Floor on statically resolved column references. Guards the guard: if a change

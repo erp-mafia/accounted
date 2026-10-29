@@ -415,7 +415,9 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     layer: 'composite',
     uses: ['import', 'parties', 'payroll', 'transactions'],
     libFolders: ['bokslut'],
-    operationPrefixes: ['arsredovisning'],
+    // inventory-counts: the year-end stock count (lib/bokslut/stock-count,
+    // Bolaget, behind BOLAGET_COMPANY_IDS); session routes and MCP only.
+    operationPrefixes: ['arsredovisning', 'inventory-counts'],
     v1Segments: ['fiscal-periods/:id/arsredovisning'],
     jurisdictions: SE,
   },

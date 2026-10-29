@@ -132,6 +132,10 @@ export const MAPPING_SOURCES = {
   // Finansiella leasingavtal on balansdagen (lib/bokslut/leasing): the
   // year's payments as interest and amortisation, and the depreciation.
   financeLease: 'se.finance-lease',
+  // The lagerförändring on balansdagen from a signed inventeringslista
+  // (lib/bokslut/stock-count): counted value against the 14xx balance per
+  // kind of stock, booked against its 49xx förändring account.
+  inventoryCount: 'se.inventory-count',
 } as const
 
 export type MappingSource = keyof typeof MAPPING_SOURCES

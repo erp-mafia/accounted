@@ -75,6 +75,7 @@ const PREVIEW = 'preview/parse helper for an unsaved form or import wizard; the 
 const EXT_SYNC = 'webshop/payment integration sync is cron-driven; manual trigger has no API'
 const COLLECTIONS_AGREEMENT = "entering or ending the company's agreement with a collection provider: a person consents, accepts and signs"
 const CONSENT = 'a person accepts the terms or gives or withdraws consent in person (terms, analytics, the company\'s data choices); an agent or API key never decides what may be done with the data'
+const STOCK_COUNT_SIGNATURE = 'the inventeringslista is signed på heder och samvete (LIV 2 §) by a person, by hand or with their own BankID; agents prepare and book it, no machine door signs'
 
 export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   // ── Auth, account, user preferences ────────────────────────────────
@@ -238,6 +239,13 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/accruals/post-due/cron': machine(CRON),
   'POST /api/bookkeeping/finance-leases': gap('P3', 'register a finansiellt leasingavtal (K3 kapitel 20, behind NEXT_PUBLIC_FINANCE_LEASE_ENABLED), dashboard first'),
   'POST /api/bookkeeping/finance-leases/book': gap('P3', 'book the year of the finansiella leasingavtal (start and year-end adjustment), dashboard first'),
+  // The year-end stock count (inventeringslista, LIV 1955:257), behind BOLAGET_COMPANY_IDS.
+  'POST /api/bookkeeping/inventory-counts': covered(['gnubok_save_inventory_count'], 'served while BOLAGET_COMPANY_IDS is set'),
+  'PUT /api/bookkeeping/inventory-counts/:id': covered(['gnubok_save_inventory_count'], 'served while BOLAGET_COMPANY_IDS is set'),
+  'DELETE /api/bookkeeping/inventory-counts/:id': gap('P3', 'delete a draft stock count; a signed count is kept'),
+  'POST /api/bookkeeping/inventory-counts/:id/sign': uiOnly(STOCK_COUNT_SIGNATURE),
+  'POST /api/bookkeeping/inventory-counts/:id/bankid': uiOnly(STOCK_COUNT_SIGNATURE),
+  'POST /api/bookkeeping/inventory-counts/:id/book': covered(['gnubok_book_inventory_count'], 'served while BOLAGET_COMPANY_IDS is set'),
 
   // ── Fiscal periods, year-end, årsredovisning ───────────────────────
   'POST /api/bookkeeping/fiscal-periods': covered([`POST ${V}/fiscal-periods`, 'gnubok_create_fiscal_period']),
@@ -979,4 +987,4 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * dashboard only: the switch posts a catch-up verifikat behind a previewed
  * confirm; stäm av per datum has its v1 door.
  */
-export const GAP_CEILING = 167
+export const GAP_CEILING = 168

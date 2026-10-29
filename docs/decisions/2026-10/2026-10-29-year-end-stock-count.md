@@ -1,0 +1,1 @@
+[2026-10-29] The year-end stock count (LIV 1955:257) is a register under bokslut behind BOLAGET_COMPANY_IDS: a signed inventeringslista is frozen by trigger and only a signed count books the lagerförändring (14xx against 49xx per kind, once per year); articles stay stockless.
