@@ -17978,5 +17978,55 @@
     "booked_voucher": "Bokförd som verifikat",
     "open_voucher": "Visa verifikatet",
     "earlier_counts": "Fler inventeringar för året"
+  },
+  "permissions": {
+    "bookkeeping_read": {
+      "label": "Läsa bokföring och rapporter",
+      "description": "Se verifikat, register och rapporter, och fråga assistenten."
+    },
+    "bookkeeping_write": {
+      "label": "Bokföra",
+      "description": "Bokföra transaktioner och verifikat, och hålla underlag, konton och register i ordning."
+    },
+    "invoicing": {
+      "label": "Fakturera",
+      "description": "Skapa och skicka offerter, order och fakturor, och hantera kunder och artiklar."
+    },
+    "payments_prepare": {
+      "label": "Förbereda betalningar",
+      "description": "Förbereda och godkänna betalningar från företagets konto. Betalningarna signeras alltid med BankID."
+    },
+    "payroll_read": {
+      "label": "Se löner",
+      "description": "Se anställda, lönekörningar och lönebesked. Lönesummorna i bokföringen syns ändå för den som läser bokföringen."
+    },
+    "payroll_write": {
+      "label": "Hantera löner",
+      "description": "Lägga upp anställda, köra löner och bokföra dem."
+    },
+    "tax_prepare": {
+      "label": "Moms och deklarationer",
+      "description": "Förbereda och lämna momsdeklaration och arbetsgivardeklaration."
+    },
+    "periods": {
+      "label": "Perioder och bokslut",
+      "description": "Låsa och stänga perioder, och göra bokslut och årsredovisning."
+    },
+    "agents_connect": {
+      "label": "Ansluta agenter",
+      "description": "Koppla Claude och andra agenter till företaget. En agent får aldrig mer än personen den agerar åt."
+    },
+    "agents_autonomy": {
+      "label": "Ge agenter Gör själv",
+      "description": "Låta en agent göra saker själv, utan att en person godkänner varje förslag."
+    },
+    "members": {
+      "label": "Bjuda in och ändra behörigheter",
+      "description": "Bjuda in personer, ändra roller och behörigheter, och skapa API-nycklar."
+    },
+    "settings": {
+      "label": "Företagsinställningar",
+      "description": "Ändra företagsuppgifter, paket och inställningar som gäller hela företaget."
+    }
   }
 }
