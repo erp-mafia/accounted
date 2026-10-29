@@ -231,6 +231,9 @@ async function loadAgreements(supabase: SupabaseClient, companyId: string): Prom
     .from('agreements')
     .select('id, kind, title, status, starts_on, ends_on, amount, principal, notice_months, counterparty_party_id, counterparty_name')
     .eq('company_id', companyId)
+    // The archive lints what it read from documents; agreements a person
+    // registered by hand (Avtal och åtaganden) are not its findings.
+    .not('source_document_id', 'is', null)
     .limit(1000)
   if (error) throw new Error(`agreements fetch failed: ${error.message}`)
   return (data ?? []) as AgreementForLint[]

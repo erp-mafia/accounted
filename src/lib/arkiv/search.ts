@@ -61,6 +61,9 @@ export async function searchRecords(
       .from('agreements')
       .select('id, title, counterparty_name, kind, ends_on')
       .eq('company_id', companyId)
+      // The archive's agreements: read from its documents. Manual ones are
+      // listed by gnubok_list_agreements (Avtal och åtaganden).
+      .not('source_document_id', 'is', null)
       .or(`title.ilike.${like},counterparty_name.ilike.${like}`)
       .limit(limit)
     if (error) throw dbError(error)

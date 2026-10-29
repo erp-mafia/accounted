@@ -683,6 +683,13 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
   gnubok_hold_corporate_meeting: {
     rows: { companies: { entity_type: 'aktiebolag' }, corporate_meetings: CORPORATE_MEETING_DRAFT },
   },
+  // Avtal och åtaganden (Bolaget, generated only while BOLAGET_COMPANY_IDS
+  // names a company): a manual agreement is changed or ended here, a derived
+  // one only by the archive; the group structure is for an aktiebolag.
+  gnubok_update_agreement: { rows: { agreements: { origin: 'manual', status: 'active', title: 'Hyresavtal', starts_on: null, ends_on: null, amount: null, period: null } } },
+  gnubok_end_agreement: { rows: { agreements: { origin: 'manual', status: 'active', title: 'Hyresavtal', starts_on: null, ends_on: null } } },
+  gnubok_create_group_link: { rows: { companies: { entity_type: 'aktiebolag' } } },
+  gnubok_update_group_link: { rows: { companies: { entity_type: 'aktiebolag' } } },
   // amount is optional in the schema (a text row has none) but a money row
   // needs one, so the synthesized arguments carry it (crm#1076). The first
   // type in the enum is Grundlön, which a payslip of unknown pay type refuses

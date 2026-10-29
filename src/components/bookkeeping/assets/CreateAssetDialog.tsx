@@ -29,6 +29,13 @@ import { getErrorMessage as getUserErrorMessage } from '@/lib/errors/get-error-m
 import { roundOre } from '@/lib/money'
 import { validateOpeningDepreciation } from '@/lib/bokslut/assets/opening-depreciation'
 import { todayIsoStockholm } from '@/lib/dates/iso'
+import {
+  AssetIdentificationFields,
+  identificationFrom,
+  identificationPayload,
+  saveAssetIdentification,
+  useAssetIdentification,
+} from './AssetIdentificationFields'
 
 interface CreateAssetDialogProps {
   open: boolean
@@ -109,6 +116,10 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
   const [componentRows, setComponentRows] = useState<ComponentRow[]>([])
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Building and vehicle identification (Bolaget rollout only).
+  const tIdentification = useTranslations('bolaget_commitments.asset')
+  const identification = useAssetIdentification(category)
+  const [identificationValue, setIdentificationValue] = useState(identificationFrom())
 
   const handleCategoryChange = (next: AssetCategory) => {
     setCategory(next)
@@ -228,6 +239,14 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
       return
     }
 
+    const identificationChanges = identification.available
+      ? identificationPayload(category, identificationValue, identificationFrom())
+      : null
+    if (identificationChanges === 'invalid') {
+      setError(tIdentification('taxeringsvarde_invalid'))
+      return
+    }
+
     setSubmitting(true)
     try {
       const res = await fetch('/api/assets', {
@@ -253,7 +272,18 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
         setError(getUserErrorMessage(body?.error) ?? 'Kunde inte spara tillgången')
         return
       }
+      if (identificationChanges && body?.data?.id) {
+        const saved = await saveAssetIdentification(body.data.id, identificationChanges)
+        if (!saved.ok) {
+          toast({
+            title: tIdentification('save_failed'),
+            description: getUserErrorMessage(saved.body),
+            variant: 'destructive',
+          })
+        }
+      }
       toast({ title: 'Tillgång sparad', description: name.trim() })
+      setIdentificationValue(identificationFrom())
       // Reset form for next entry
       setName('')
       setAcquisitionCost('')
@@ -315,6 +345,14 @@ export function CreateAssetDialog({ open, onOpenChange, onCreated }: CreateAsset
               </p>
             )}
           </div>
+          <AssetIdentificationFields
+            category={category}
+            value={identificationValue}
+            onChange={setIdentificationValue}
+            available={identification.available}
+            benefits={identification.benefits}
+            idPrefix="asset"
+          />
           <div className="grid grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="asset-date">Anskaffat</Label>

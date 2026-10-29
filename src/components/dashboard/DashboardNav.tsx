@@ -90,6 +90,8 @@ interface DashboardNavProps {
   arkivEnabled?: boolean
   // Whether BankID document signing is switched on (the Signeringar page). Computed by the layout.
   signingEnabled?: boolean
+  // Whether the company is in the Bolaget rollout (Avtal och åtaganden). Computed by the layout.
+  commitmentsEnabled?: boolean
   agentsEnabled?: boolean
   // Whether the company is in the new Inkorg page's rollout (INKORG_V2_COMPANY_IDS): Inkorg
   // at the top, Underlag out of Inköp. Computed by the layout.
@@ -128,7 +130,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, bolagetEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, commitmentsEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, bolagetEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const { company, capabilities, byraTeam, role } = useCompany()
@@ -328,6 +330,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     hasPosSales,
     arkivEnabled,
     signingEnabled,
+    commitmentsEnabled,
     agentsEnabled,
     inkorgV2Enabled,
     autogiroEnabled,

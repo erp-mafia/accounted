@@ -415,13 +415,17 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
       'The bokslut workspace (accruals, reserves, tax provision, readiness) and the årsredovisning with its signatures and iXBRL.',
     dependsOn: ['assets'],
     layer: 'composite',
-    uses: ['import', 'parties', 'payroll', 'transactions'],
-    libFolders: ['bokslut'],
+    // inbox: commitments (lib/commitments) shares the agreement store, its
+    // schedule dates and its Viktiga datum sync with the Arkiv pipeline.
+    uses: ['import', 'inbox', 'parties', 'payroll', 'transactions'],
+    // commitments: agreements, ställda säkerheter and eventualförpliktelser,
+    // the group structure (Bolaget, behind BOLAGET_COMPANY_IDS).
+    libFolders: ['bokslut', 'commitments'],
     // tax-loss-carryforwards: the underskottsregister (lib/bokslut/loss-carryforward).
     // inventory-counts: the year-end stock count (lib/bokslut/stock-count,
     // Bolaget, behind BOLAGET_COMPANY_IDS); session routes and MCP only.
-    operationPrefixes: ['arsredovisning', 'tax-loss-carryforwards', 'inventory-counts'],
-    v1Segments: ['fiscal-periods/:id/arsredovisning', 'tax-loss-carryforwards'],
+    operationPrefixes: ['arsredovisning', 'tax-loss-carryforwards', 'agreements', 'securities', 'group-links', 'inventory-counts'],
+    v1Segments: ['fiscal-periods/:id/arsredovisning', 'tax-loss-carryforwards', 'agreements', 'agreement-obligations', 'securities', 'group-links'],
     jurisdictions: SE,
   },
   {

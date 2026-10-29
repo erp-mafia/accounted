@@ -502,6 +502,18 @@ export const TOOL_SCOPE_MAP: Record<string, ApiKeyScope> = {
   gnubok_update_corporate_meeting: 'companies:write',
   gnubok_record_corporate_decision: 'companies:write',
   gnubok_hold_corporate_meeting: 'companies:write',
+  // Commitments and holdings (lib/operations/commitments.ts, Bolaget rollout).
+  gnubok_list_agreements: 'companies:read',
+  gnubok_list_agreement_obligations: 'companies:read',
+  gnubok_create_agreement: 'companies:write',
+  gnubok_update_agreement: 'companies:write',
+  gnubok_end_agreement: 'companies:write',
+  gnubok_list_securities: 'companies:read',
+  gnubok_create_security: 'companies:write',
+  gnubok_update_security: 'companies:write',
+  gnubok_list_group_links: 'companies:read',
+  gnubok_create_group_link: 'companies:write',
+  gnubok_update_group_link: 'companies:write',
   // The attest policy for supplier invoices (lib/operations/supplier-invoice-attest.ts).
   gnubok_get_attest_policy: 'suppliers:read',
   // Changed supplier bank details: stages a person's approval (web UI only).

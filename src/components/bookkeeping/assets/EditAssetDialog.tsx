@@ -27,6 +27,13 @@ import { roundOre } from '@/lib/money'
 import { formatCurrency } from '@/lib/utils'
 import { validateOpeningDepreciation } from '@/lib/bokslut/assets/opening-depreciation'
 import type { Asset, AssetCategory } from '@/types'
+import {
+  AssetIdentificationFields,
+  identificationFrom,
+  identificationPayload,
+  saveAssetIdentification,
+  useAssetIdentification,
+} from './AssetIdentificationFields'
 
 /** The list route annotates each asset with whether any depreciation has been
  *  posted against it. When true, the acquisition-basis fields are locked. */
@@ -84,6 +91,11 @@ export function EditAssetDialog({
   const [openingDate, setOpeningDate] = useState(storedOpeningDate)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // Building and vehicle identification (Bolaget rollout only): saved
+  // beside the asset, never part of the depreciation basis, so never locked.
+  const tIdentification = useTranslations('bolaget_commitments.asset')
+  const identification = useAssetIdentification(category)
+  const [identificationValue, setIdentificationValue] = useState(identificationFrom(asset))
 
   const parsedCost = parseFloat(acquisitionCost)
   const parsedOpening = openingAmount.trim() === '' ? 0 : parseFloat(openingAmount)
@@ -152,7 +164,15 @@ export function EditAssetDialog({
     const months = years * 12
     if (months !== asset.useful_life_months) patch.useful_life_months = months
 
-    if (Object.keys(patch).length === 0) {
+    const identificationChanges = identification.available
+      ? identificationPayload(category, identificationValue, identificationFrom(asset))
+      : null
+    if (identificationChanges === 'invalid') {
+      setError(tIdentification('taxeringsvarde_invalid'))
+      return
+    }
+
+    if (Object.keys(patch).length === 0 && !identificationChanges) {
       toast({ title: 'Inga ändringar', description: 'Inget att spara.' })
       onOpenChange(false)
       return
@@ -160,15 +180,24 @@ export function EditAssetDialog({
 
     setSubmitting(true)
     try {
-      const res = await fetch(`/api/assets/${asset.id}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(patch),
-      })
-      const body = await res.json()
-      if (!res.ok) {
-        setError(getErrorMessage(body?.error ?? body) || 'Kunde inte spara ändringen.')
-        return
+      if (Object.keys(patch).length > 0) {
+        const res = await fetch(`/api/assets/${asset.id}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(patch),
+        })
+        const body = await res.json()
+        if (!res.ok) {
+          setError(getErrorMessage(body?.error ?? body) || 'Kunde inte spara ändringen.')
+          return
+        }
+      }
+      if (identificationChanges) {
+        const saved = await saveAssetIdentification(asset.id, identificationChanges)
+        if (!saved.ok) {
+          setError(getErrorMessage(saved.body) || tIdentification('save_failed'))
+          return
+        }
       }
       toast({ title: 'Tillgång uppdaterad', description: trimmedName })
       onSaved()
@@ -242,6 +271,16 @@ export function EditAssetDialog({
               />
             </div>
           </div>
+
+          <AssetIdentificationFields
+            category={category}
+            value={identificationValue}
+            onChange={setIdentificationValue}
+            available={identification.available}
+            benefits={identification.benefits}
+            idPrefix="edit-asset"
+            disabled={!canWrite}
+          />
 
           {basisLocked && (
             <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/30 p-3 text-xs text-muted-foreground">

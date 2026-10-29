@@ -616,6 +616,14 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/betala/:token/signing/:id/restart': uiOnly(PAYMENT_SIGNING_LINK),
   // BankID document signing (lib/signing): agents and API clients request,
   // chase and cancel; each signer still signs in person with BankID.
+  // Commitments and holdings (Bolaget): the same services as lib/operations/commitments.ts.
+  'POST /api/commitments/agreements': covered([`POST ${V}/agreements`, 'gnubok_create_agreement']),
+  'PATCH /api/commitments/agreements/:id': covered([`PATCH ${V}/agreements/:id`, 'gnubok_update_agreement']),
+  'POST /api/commitments/agreements/:id/end': covered([`POST ${V}/agreements/:id/end`, 'gnubok_end_agreement']),
+  'POST /api/commitments/securities': covered([`POST ${V}/securities`, 'gnubok_create_security']),
+  'PATCH /api/commitments/securities/:id': covered([`PATCH ${V}/securities/:id`, 'gnubok_update_security']),
+  'POST /api/commitments/group-links': covered([`POST ${V}/group-links`, 'gnubok_create_group_link']),
+  'PATCH /api/commitments/group-links/:id': covered([`PATCH ${V}/group-links/:id`, 'gnubok_update_group_link']),
   'POST /api/signing-requests': covered([`POST ${V}/signing-requests`, 'gnubok_request_signature']),
   'POST /api/signing-requests/:id/cancel': covered([`POST ${V}/signing-requests/:id/cancel`]),
   'POST /api/signing-requests/:id/signers/:signerId/remind': covered([`POST ${V}/signing-requests/:id/signers/:signerId/remind`, 'gnubok_remind_signer']),
@@ -711,6 +719,7 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'PATCH /api/assets/:id': covered([`PATCH ${V}/assets/:id`, 'gnubok_update_asset']),
   'DELETE /api/assets/:id': covered([`DELETE ${V}/assets/:id`, 'gnubok_delete_asset']),
   'POST /api/assets/:id/dispose': covered([`POST ${V}/assets/:id/dispose`, 'gnubok_dispose_asset']),
+  'PATCH /api/assets/:id/identification': gap('P3', 'a building\'s fastighetsbeteckning and taxeringsvärde, a vehicle\'s registration number and bilförmån; dashboard first behind BOLAGET_COMPANY_IDS'),
 
   // ── Payroll ────────────────────────────────────────────────────────
   'POST /api/salary/employees': covered([`POST ${V}/employees`, 'gnubok_create_employee']),
@@ -1046,5 +1055,10 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
  * 166 -> 167 (2026-10-27): switching how the semesterlöneskuld is booked,
  * dashboard only: the switch posts a catch-up verifikat behind a previewed
  * confirm; stäm av per datum has its v1 door.
+ * 167 -> 168 (2026-10-29, Bolaget W5): a building's or vehicle's
+ * identification fields on the asset register, dashboard first behind
+ * BOLAGET_COMPANY_IDS.
+ * 168 -> 169 (2026-10-29, merge with the year-end stock count): deleting a
+ * draft stock count, dashboard only; a signed count is kept.
  */
-export const GAP_CEILING = 168
+export const GAP_CEILING = 169

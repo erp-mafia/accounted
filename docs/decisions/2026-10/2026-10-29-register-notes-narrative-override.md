@@ -1,0 +1,1 @@
+[2026-10-29] ÅR notes for ställda säkerheter, eventualförpliktelser and moderföretag: a filled-in narrative text overrides the register's generated text, with a warning when they differ: existing reports keep what the person wrote.

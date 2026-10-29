@@ -37,6 +37,8 @@ export interface NavGateContext {
    * the Signeringar page under Dokument. Absent reads as off.
    */
   signingEnabled?: boolean
+  /** The company is in the Bolaget rollout (lib/env/commitments-switch.ts): Avtal och åtaganden. Absent reads as off. */
+  commitmentsEnabled?: boolean
   agentsEnabled: boolean
   /** The company is in the new Inkorg page's rollout (lib/inkorg/flag.ts). */
   inkorgV2Enabled: boolean
@@ -94,6 +96,8 @@ export function passesNavGates(item: NavGateFlags, ctx: NavGateContext): boolean
   if (item.requiresArkiv && !ctx.arkivEnabled) return false
   // Signeringar follows the signing switch, as every other signing affordance does.
   if (item.requiresSigning && !ctx.signingEnabled) return false
+  // Avtal och åtaganden rolls out per company with the rest of Bolaget.
+  if (item.requiresCommitments && !ctx.commitmentsEnabled) return false
   // The Agenter page is hidden in production while it is finished.
   if (item.requiresAgents && !ctx.agentsEnabled) return false
   // The new Inkorg page rolls out per company, and Underlag under Inköp

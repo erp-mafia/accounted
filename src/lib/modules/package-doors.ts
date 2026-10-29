@@ -101,6 +101,9 @@ export const SESSION_SEGMENT_PACKAGES: Readonly<Record<string, SwitchablePackage
   bookkeeping: null,
   byra: null,
   calendar: null,
+  // Avtal och åtaganden (Bolaget, lib/commitments): registers beside the
+  // books that feed the årsredovisning notes, so part of Bokföring.
+  commitments: null,
   'cash-accounts': null,
   clients: null,
   community: null,
@@ -640,6 +643,8 @@ const ASSETS: PackageDoors = {
   continue: [
     'DELETE /api/assets/:id',
     'PATCH /api/assets/:id',
+    // A building's or vehicle's identification fields (Bolaget): an edit of an existing asset.
+    'PATCH /api/assets/:id/identification',
     'POST /api/assets/:id/dispose',
     'DELETE /api/v1/companies/:companyId/assets/:id',
     'PATCH /api/v1/companies/:companyId/assets/:id',

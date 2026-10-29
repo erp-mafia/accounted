@@ -2,7 +2,7 @@
 
 # Periods and registers endpoints
 
-Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, reading filed VAT declarations (and beslut) from Skatteverket, and the register of prior years' tax losses (underskott, IL 40 kap.) per fiscal year.
+Fiscal periods and their lock/close/year-end lifecycle (async operations), accrual schedules (periodiseringar: re-plan the months not yet posted), the BAS chart of accounts, cost-center/project dimensions, the compliance pre-flight check, reading filed VAT declarations (and beslut) from Skatteverket, the register of prior years' tax losses (underskott, IL 40 kap.) per fiscal year, and the company's commitments: agreements with their expected payments, ställda säkerheter and eventualförpliktelser, and the group structure.
 
 Conventions (auth, envelope, pagination, dry-run, idempotency, standard errors)
 are in SKILL.md and are not repeated per endpoint.
@@ -626,6 +626,575 @@ Example response `200`:
       }
     ],
     "posted_now": 0
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/agreement-obligations`
+
+**List the payments the agreements say fall due, oldest first, with whether each arrived in the bank.**
+`scope:companies:read · risk:low · idempotent`
+
+From 60 days back by default (from, to narrow it). status expected: not seen yet; matched: a bank transaction (transaction_id) has the amount and date; missed: nothing arrived two weeks after the due date. Observation only: nothing is booked from these rows.
+
+**Use when:** You need the upcoming payments of the company's agreements, or to see which rent or instalment was missed.
+**Do not use for:** Supplier invoices or bank payments (they have their own lists).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- AGREEMENT_NOT_FOUND: agreement_id is not an agreement of the company.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `agreement_id` | query | `string` | no | Only this agreement's payments. |
+| `status` | query | `"expected" \| "matched" \| "missed" \| "waived"` | no |  |
+| `from` | query | `string` | no | yyyy-MM-dd, default 60 days back. |
+| `to` | query | `string` | no | yyyy-MM-dd, inclusive. |
+
+Response `200`:
+```ts
+{
+  data: {
+    obligations: { obligation_id: string, agreement_id: string, agreement_title: string, kind: string, due_on: string, amount: number, currency: string, direction: "out" | "in", status: "expected" | "matched" | "missed" | "waived", amount_is_estimate: boolean, transaction_id: string | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "obligations": [
+      {
+        "obligation_id": "c1d2…",
+        "agreement_id": "6b2e…",
+        "agreement_title": "Hyresavtal kontor Vasagatan",
+        "kind": "payment",
+        "due_on": "2026-11-01",
+        "amount": 12500,
+        "currency": "SEK",
+        "direction": "out",
+        "status": "expected",
+        "amount_is_estimate": false,
+        "transaction_id": null
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/agreements`
+
+**List the company's agreements (rent, leases, loans, subscriptions, insurance, permits, IP, domains, guarantees and more) with the next payment and the notice and end dates.**
+`scope:companies:read · risk:low · idempotent`
+
+Both the agreements registered by hand (origin manual) and the ones the archive read from documents (origin derived). next_payment is observed against the bank daily and never booked from; notice_deadline and end_deadline are the dates in Viktiga datum.
+
+**Use when:** You need to know what the company has signed: what it pays and when, and when something must be terminated or renewed.
+**Do not use for:** Booking payments (the agreements never post) or reading the agreement text (read the linked document).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `status` | query | `"active" \| "ended"` | no | Only active or ended agreements. |
+| `kind` | query | `"rental" \| "lease" \| "loan" \| "subscription" \| "insurance" \| "employment" \| "shareholder" \| "investment" \| "customer" \| "permit" \| "ip_right" \| "domain" \| "guarantee" \| "other"` | no | Only this kind. |
+| `origin` | query | `"derived" \| "manual"` | no | Only derived or manual agreements. |
+
+Response `200`:
+```ts
+{
+  data: {
+    agreements: { agreement_id: string, kind: string, origin: "derived" | "manual", title: string, status: "active" | "ended", counterparty_party_id: string | null, counterparty_name: string | null, starts_on: string | null, ends_on: string | null, notice_months: number | null, renewal_terms: string | null, amount: number | null, currency: string, period: "monthly" | "quarterly" | "yearly" | "one_time" | null, first_due_on: string | null, principal: number | null, interest_rate: number | null, document_id: string | null, source_document_id: string | null, notes: string | null, next_payment: { due_on: string, amount: number, currency: string, status: "expected" | "matched" | "missed" | "waived", direction: "out" | "in" } | null, notice_deadline: { due_date: string, title: string } | null, end_deadline: { due_date: string, title: string } | null }[]
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "agreements": [
+      {
+        "agreement_id": "6b2e…",
+        "kind": "rental",
+        "origin": "manual",
+        "title": "Hyresavtal kontor Vasagatan",
+        "status": "active",
+        "counterparty_party_id": null,
+        "counterparty_name": "Fastighets AB Kvarnen",
+        "starts_on": "2026-01-01",
+        "ends_on": "2028-12-31",
+        "notice_months": 9,
+        "renewal_terms": "Förlängs tre år i taget",
+        "amount": 12500,
+        "currency": "SEK",
+        "period": "monthly",
+        "first_due_on": null,
+        "principal": null,
+        "interest_rate": null,
+        "document_id": null,
+        "source_document_id": null,
+        "notes": null,
+        "next_payment": {
+          "due_on": "2026-11-01",
+          "amount": 12500,
+          "currency": "SEK",
+          "status": "expected",
+          "direction": "out"
+        },
+        "notice_deadline": {
+          "due_date": "2028-03-31",
+          "title": "Sista dag att säga upp: Hyresavtal kontor Vasagatan"
+        },
+        "end_deadline": {
+          "due_date": "2028-12-31",
+          "title": "Hyresavtal kontor Vasagatan löper ut, förlängs annars"
+        }
+      }
+    ]
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/agreements`
+
+**Register an agreement by hand: what it is, the counterparty, the dates, notice and what it costs.**
+`scope:companies:write · risk:low · idempotent · dry-run`
+
+With amount and period, the expected payments a year ahead are written and compared with the bank daily. With ends_on, the end (or a loan's maturity) goes to Viktiga datum, and with notice_months also the last day to give notice. A document is linked by document_id, never read into fields. Dry-runnable.
+
+**Use when:** The company has an agreement the books should remember: rent, a lease, a loan, a subscription, an insurance, a permit, an IP right, a domain, a guarantee.
+**Do not use for:** Booking anything (agreements never post) or changing an agreement the archive read from a document (origin derived).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- VALIDATION_ERROR: an amount needs a period, and ends_on cannot be before starts_on.
+- COMMITMENTS_REFERENCE_NOT_FOUND: counterparty_party_id or document_id is not the company's (details.field).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  kind: "rental" | "lease" | "loan" | "subscription" | "insurance" | "employment" | "shareholder" | "investment" | "customer" | "permit" | "ip_right" | "domain" | "guarantee" | "other",
+  title: string,
+  counterparty_name?: string | null,
+  counterparty_party_id?: string | null,
+  starts_on?: string | null,
+  ends_on?: string | null,
+  notice_months?: number | null,
+  renewal_terms?: string | null,
+  amount?: number | null,
+  currency?: string,
+  period?: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+  first_due_on?: string | null,
+  principal?: number | null,
+  interest_rate?: number | null,
+  document_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "kind": "rental",
+  "title": "Hyresavtal kontor Vasagatan",
+  "counterparty_name": "Fastighets AB Kvarnen",
+  "starts_on": "2026-01-01",
+  "ends_on": "2028-12-31",
+  "notice_months": 9,
+  "amount": 12500,
+  "period": "monthly"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    agreement_id: string,
+    kind: string,
+    origin: "derived" | "manual",
+    title: string,
+    status: "active" | "ended",
+    counterparty_party_id: string | null,
+    counterparty_name: string | null,
+    starts_on: string | null,
+    ends_on: string | null,
+    notice_months: number | null,
+    renewal_terms: string | null,
+    amount: number | null,
+    currency: string,
+    period: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+    first_due_on: string | null,
+    principal: number | null,
+    interest_rate: number | null,
+    document_id: string | null,
+    source_document_id: string | null,
+    notes: string | null,
+    next_payment: { due_on: string, amount: number, currency: string, status: "expected" | "matched" | "missed" | "waived", direction: "out" | "in" } | null,
+    notice_deadline: { due_date: string, title: string } | null,
+    end_deadline: { due_date: string, title: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "agreement_id": "6b2e…",
+    "kind": "rental",
+    "origin": "manual",
+    "title": "Hyresavtal kontor Vasagatan",
+    "status": "active",
+    "counterparty_party_id": null,
+    "counterparty_name": "Fastighets AB Kvarnen",
+    "starts_on": "2026-01-01",
+    "ends_on": "2028-12-31",
+    "notice_months": 9,
+    "renewal_terms": "Förlängs tre år i taget",
+    "amount": 12500,
+    "currency": "SEK",
+    "period": "monthly",
+    "first_due_on": null,
+    "principal": null,
+    "interest_rate": null,
+    "document_id": null,
+    "source_document_id": null,
+    "notes": null,
+    "next_payment": {
+      "due_on": "2026-11-01",
+      "amount": 12500,
+      "currency": "SEK",
+      "status": "expected",
+      "direction": "out"
+    },
+    "notice_deadline": {
+      "due_date": "2028-03-31",
+      "title": "Sista dag att säga upp: Hyresavtal kontor Vasagatan"
+    },
+    "end_deadline": {
+      "due_date": "2028-12-31",
+      "title": "Hyresavtal kontor Vasagatan löper ut, förlängs annars"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/agreements/{id}`
+
+**Change a manual agreement; its expected payments and its dates follow.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Send only the fields that change; null clears one. Payments already matched or missed stay. Dry-runnable.
+
+**Use when:** The rent changed, the agreement was extended, the notice period was wrong.
+**Do not use for:** Ending an agreement (POST /agreements/{id}/end) or an agreement the archive read from a document.
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- AGREEMENT_DERIVED: the agreement was read from an archived document; correct the reading there.
+- AGREEMENT_NOT_FOUND
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  kind?: "rental" | "lease" | "loan" | "subscription" | "insurance" | "employment" | "shareholder" | "investment" | "customer" | "permit" | "ip_right" | "domain" | "guarantee" | "other",
+  title?: string,
+  counterparty_name?: string | null,
+  counterparty_party_id?: string | null,
+  starts_on?: string | null,
+  ends_on?: string | null,
+  notice_months?: number | null,
+  renewal_terms?: string | null,
+  amount?: number | null,
+  currency?: string,
+  period?: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+  first_due_on?: string | null,
+  principal?: number | null,
+  interest_rate?: number | null,
+  document_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "amount": 13000
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    agreement_id: string,
+    kind: string,
+    origin: "derived" | "manual",
+    title: string,
+    status: "active" | "ended",
+    counterparty_party_id: string | null,
+    counterparty_name: string | null,
+    starts_on: string | null,
+    ends_on: string | null,
+    notice_months: number | null,
+    renewal_terms: string | null,
+    amount: number | null,
+    currency: string,
+    period: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+    first_due_on: string | null,
+    principal: number | null,
+    interest_rate: number | null,
+    document_id: string | null,
+    source_document_id: string | null,
+    notes: string | null,
+    next_payment: { due_on: string, amount: number, currency: string, status: "expected" | "matched" | "missed" | "waived", direction: "out" | "in" } | null,
+    notice_deadline: { due_date: string, title: string } | null,
+    end_deadline: { due_date: string, title: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "agreement_id": "6b2e…",
+    "kind": "rental",
+    "origin": "manual",
+    "title": "Hyresavtal kontor Vasagatan",
+    "status": "active",
+    "counterparty_party_id": null,
+    "counterparty_name": "Fastighets AB Kvarnen",
+    "starts_on": "2026-01-01",
+    "ends_on": "2028-12-31",
+    "notice_months": 9,
+    "renewal_terms": "Förlängs tre år i taget",
+    "amount": 13000,
+    "currency": "SEK",
+    "period": "monthly",
+    "first_due_on": null,
+    "principal": null,
+    "interest_rate": null,
+    "document_id": null,
+    "source_document_id": null,
+    "notes": null,
+    "next_payment": {
+      "due_on": "2026-11-01",
+      "amount": 12500,
+      "currency": "SEK",
+      "status": "expected",
+      "direction": "out"
+    },
+    "notice_deadline": {
+      "due_date": "2028-03-31",
+      "title": "Sista dag att säga upp: Hyresavtal kontor Vasagatan"
+    },
+    "end_deadline": {
+      "due_date": "2028-12-31",
+      "title": "Hyresavtal kontor Vasagatan löper ut, förlängs annars"
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/agreements/{id}/end`
+
+**End a manual agreement: no more expected payments after the day it ended, its dates leave Viktiga datum.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+ended_on defaults to today; an earlier ends_on stays. Ending twice answers the same. Dry-runnable.
+
+**Use when:** The agreement was terminated, expired or replaced.
+**Do not use for:** Removing an agreement that never existed (end it with the day it started) or an agreement the archive read from a document.
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- AGREEMENT_DERIVED
+- AGREEMENT_NOT_FOUND
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{ ended_on?: string }
+```
+
+Example request:
+```json
+{
+  "ended_on": "2026-10-31"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    agreement_id: string,
+    kind: string,
+    origin: "derived" | "manual",
+    title: string,
+    status: "active" | "ended",
+    counterparty_party_id: string | null,
+    counterparty_name: string | null,
+    starts_on: string | null,
+    ends_on: string | null,
+    notice_months: number | null,
+    renewal_terms: string | null,
+    amount: number | null,
+    currency: string,
+    period: "monthly" | "quarterly" | "yearly" | "one_time" | null,
+    first_due_on: string | null,
+    principal: number | null,
+    interest_rate: number | null,
+    document_id: string | null,
+    source_document_id: string | null,
+    notes: string | null,
+    next_payment: { due_on: string, amount: number, currency: string, status: "expected" | "matched" | "missed" | "waived", direction: "out" | "in" } | null,
+    notice_deadline: { due_date: string, title: string } | null,
+    end_deadline: { due_date: string, title: string } | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "agreement_id": "6b2e…",
+    "kind": "rental",
+    "origin": "manual",
+    "title": "Hyresavtal kontor Vasagatan",
+    "status": "ended",
+    "counterparty_party_id": null,
+    "counterparty_name": "Fastighets AB Kvarnen",
+    "starts_on": "2026-01-01",
+    "ends_on": "2026-10-31",
+    "notice_months": 9,
+    "renewal_terms": "Förlängs tre år i taget",
+    "amount": 12500,
+    "currency": "SEK",
+    "period": "monthly",
+    "first_due_on": null,
+    "principal": null,
+    "interest_rate": null,
+    "document_id": null,
+    "source_document_id": null,
+    "notes": null,
+    "next_payment": {
+      "due_on": "2026-11-01",
+      "amount": 12500,
+      "currency": "SEK",
+      "status": "expected",
+      "direction": "out"
+    },
+    "notice_deadline": {
+      "due_date": "2028-03-31",
+      "title": "Sista dag att säga upp: Hyresavtal kontor Vasagatan"
+    },
+    "end_deadline": {
+      "due_date": "2028-12-31",
+      "title": "Hyresavtal kontor Vasagatan löper ut, förlängs annars"
+    }
   },
   "meta": {
     "request_id": "req_…",
@@ -3813,6 +4382,568 @@ Example response `200`:
     "status": "queued",
     "poll_url": "/api/v1/operations/0e9c…",
     "webhook_event": "operation.completed"
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/group-links`
+
+**List the company's group structure: its parent, subsidiaries and associates with ownership and votes over time.**
+`scope:companies:read · risk:low · idempotent`
+
+applies is false for a legal form that prepares no årsredovisning (an enskild firma). The parent link that holds on the balance date prefills the koncernförhållanden note.
+
+**Use when:** You need the parent company for the årsredovisning, or which companies the company owns.
+**Do not use for:** Consolidated accounts (koncernredovisning is not prepared here).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+
+Response `200`:
+```ts
+{
+  data: {
+    group_links: { group_link_id: string, relation: "parent" | "subsidiary" | "associate", counterparty_name: string, counterparty_org_number: string | null, counterparty_registered_office: string | null, party_id: string | null, ownership_percent: number | null, voting_percent: number | null, valid_from: string | null, valid_to: string | null, bas_account: string | null, linked_company_id: string | null, notes: string | null }[],
+    applies: boolean
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "group_links": [
+      {
+        "group_link_id": "3a77…",
+        "relation": "parent",
+        "counterparty_name": "Ägarbolaget AB",
+        "counterparty_org_number": "559000-0000",
+        "counterparty_registered_office": "Stockholm",
+        "party_id": null,
+        "ownership_percent": 100,
+        "voting_percent": 100,
+        "valid_from": "2024-01-01",
+        "valid_to": null,
+        "bas_account": null,
+        "linked_company_id": null,
+        "notes": null
+      }
+    ],
+    "applies": true
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/group-links`
+
+**Register a parent, subsidiary or associate of the company.**
+`scope:companies:write · risk:low · idempotent · dry-run`
+
+counterparty_registered_office (säte) and counterparty_org_number go into the koncernförhållanden note for a parent. linked_company_id names the same company in Accounted when it is in the caller's team. Dry-runnable.
+
+**Use when:** The company is owned by another company, or owns shares in one.
+**Do not use for:** Individual shareholders (the aktiebok) or an enskild firma (no group structure).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- GROUP_LINKS_NOT_FOR_LEGAL_FORM: only companies that prepare an årsredovisning have a group structure here.
+- GROUP_LINK_COMPANY_NOT_IN_TEAM: linked_company_id must be another company in the same team.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  relation: "parent" | "subsidiary" | "associate",
+  counterparty_name: string,
+  counterparty_org_number?: string | null,
+  counterparty_registered_office?: string | null,
+  party_id?: string | null,
+  ownership_percent?: number | null,
+  voting_percent?: number | null,
+  valid_from?: string | null,
+  valid_to?: string | null,
+  bas_account?: string | null,
+  linked_company_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "relation": "parent",
+  "counterparty_name": "Ägarbolaget AB",
+  "counterparty_org_number": "559000-0000",
+  "counterparty_registered_office": "Stockholm",
+  "ownership_percent": 100,
+  "voting_percent": 100,
+  "valid_from": "2024-01-01"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    group_link_id: string,
+    relation: "parent" | "subsidiary" | "associate",
+    counterparty_name: string,
+    counterparty_org_number: string | null,
+    counterparty_registered_office: string | null,
+    party_id: string | null,
+    ownership_percent: number | null,
+    voting_percent: number | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    bas_account: string | null,
+    linked_company_id: string | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "group_link_id": "3a77…",
+    "relation": "parent",
+    "counterparty_name": "Ägarbolaget AB",
+    "counterparty_org_number": "559000-0000",
+    "counterparty_registered_office": "Stockholm",
+    "party_id": null,
+    "ownership_percent": 100,
+    "voting_percent": 100,
+    "valid_from": "2024-01-01",
+    "valid_to": null,
+    "bas_account": null,
+    "linked_company_id": null,
+    "notes": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/group-links/{id}`
+
+**Change a group link, or end it with valid_to.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Send only the fields that change; null clears one. Dry-runnable.
+
+**Use when:** Ownership changed, the parent sold the company, a subsidiary was wound up.
+**Do not use for:** Removing history: an ended relation keeps its row with valid_to.
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- GROUP_LINK_NOT_FOUND
+- GROUP_LINKS_NOT_FOR_LEGAL_FORM
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  relation?: "parent" | "subsidiary" | "associate",
+  counterparty_name?: string,
+  counterparty_org_number?: string | null,
+  counterparty_registered_office?: string | null,
+  party_id?: string | null,
+  ownership_percent?: number | null,
+  voting_percent?: number | null,
+  valid_from?: string | null,
+  valid_to?: string | null,
+  bas_account?: string | null,
+  linked_company_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "ownership_percent": 60
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    group_link_id: string,
+    relation: "parent" | "subsidiary" | "associate",
+    counterparty_name: string,
+    counterparty_org_number: string | null,
+    counterparty_registered_office: string | null,
+    party_id: string | null,
+    ownership_percent: number | null,
+    voting_percent: number | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    bas_account: string | null,
+    linked_company_id: string | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "group_link_id": "3a77…",
+    "relation": "parent",
+    "counterparty_name": "Ägarbolaget AB",
+    "counterparty_org_number": "559000-0000",
+    "counterparty_registered_office": "Stockholm",
+    "party_id": null,
+    "ownership_percent": 60,
+    "voting_percent": 100,
+    "valid_from": "2024-01-01",
+    "valid_to": null,
+    "bas_account": null,
+    "linked_company_id": null,
+    "notes": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `GET /api/v1/companies/{companyId}/securities`
+
+**List ställda säkerheter and eventualförpliktelser, with the årsredovisning note texts they give on a balance date.**
+`scope:companies:read · risk:low · idempotent`
+
+Rows are dated (valid_from, valid_to); the note texts count the rows that hold on balance_date (default today), per K2 type, with borgen always stated and what was given for group companies apart. A manual text on the årsredovisning overrides them.
+
+**Use when:** You prepare the årsredovisning notes, or need to know what the company has pledged or guaranteed.
+**Do not use for:** Loans themselves (agreements of kind loan).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `balance_date` | query | `string` | no | yyyy-MM-dd the note texts are stated per; default today. |
+
+Response `200`:
+```ts
+{
+  data: {
+    securities: { security_id: string, kind: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency", pledged: boolean, description: string, amount: number, in_favour_of_party_id: string | null, in_favour_of_name: string | null, for_group_company: boolean, agreement_id: string | null, valid_from: string | null, valid_to: string | null, document_id: string | null, notes: string | null }[],
+    balance_date: string,
+    note_texts: { securities_pledged: string | null, contingent_liabilities: string | null }
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "securities": [
+      {
+        "security_id": "91c0…",
+        "kind": "foretagsinteckning",
+        "pledged": true,
+        "description": "Företagsinteckning för checkkredit",
+        "amount": 500000,
+        "in_favour_of_party_id": null,
+        "in_favour_of_name": "Handelsbanken",
+        "for_group_company": false,
+        "agreement_id": null,
+        "valid_from": "2025-03-01",
+        "valid_to": null,
+        "document_id": null,
+        "notes": null
+      }
+    ],
+    "balance_date": "2026-12-31",
+    "note_texts": {
+      "securities_pledged": "Företagsinteckningar 500 000 kr.",
+      "contingent_liabilities": null
+    }
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `POST /api/v1/companies/{companyId}/securities`
+
+**Register a ställd säkerhet or an eventualförpliktelse.**
+`scope:companies:write · risk:low · idempotent · dry-run`
+
+amount is the mortgage amount (pantbrev, företagsinteckning), the book value of the pledged asset or the guaranteed amount, in SEK. for_group_company marks what was given for a group company (stated apart). A released one gets valid_to through PATCH; rows are never deleted. Dry-runnable.
+
+**Use when:** The bank took a företagsinteckning, a property is mortgaged, an asset was bought under äganderättsförbehåll, the company signed a borgen.
+**Do not use for:** The loan itself (POST /agreements, kind loan; link it with agreement_id).
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- COMMITMENTS_REFERENCE_NOT_FOUND: in_favour_of_party_id, agreement_id or document_id is not the company's (details.field).
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  kind: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency",
+  description: string,
+  amount: number,
+  in_favour_of_name?: string | null,
+  in_favour_of_party_id?: string | null,
+  for_group_company?: boolean,
+  agreement_id?: string | null,
+  valid_from?: string | null,
+  valid_to?: string | null,
+  document_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "kind": "foretagsinteckning",
+  "description": "Företagsinteckning för checkkredit",
+  "amount": 500000,
+  "in_favour_of_name": "Handelsbanken",
+  "valid_from": "2025-03-01"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    security_id: string,
+    kind: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency",
+    pledged: boolean,
+    description: string,
+    amount: number,
+    in_favour_of_party_id: string | null,
+    in_favour_of_name: string | null,
+    for_group_company: boolean,
+    agreement_id: string | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    document_id: string | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "security_id": "91c0…",
+    "kind": "foretagsinteckning",
+    "pledged": true,
+    "description": "Företagsinteckning för checkkredit",
+    "amount": 500000,
+    "in_favour_of_party_id": null,
+    "in_favour_of_name": "Handelsbanken",
+    "for_group_company": false,
+    "agreement_id": null,
+    "valid_from": "2025-03-01",
+    "valid_to": null,
+    "document_id": null,
+    "notes": null
+  },
+  "meta": {
+    "request_id": "req_…",
+    "api_version": "2026-05-12"
+  }
+}
+```
+
+---
+
+### `PATCH /api/v1/companies/{companyId}/securities/{id}`
+
+**Change a ställd säkerhet or an eventualförpliktelse, or release it with valid_to.**
+`scope:companies:write · risk:low · idempotent · dry-run · reversible`
+
+Send only the fields that change; null clears one. Dry-runnable.
+
+**Use when:** A mortgage was raised, a borgen released, the book value of a pledged asset changed.
+**Do not use for:** Removing history: a released security keeps its row with valid_to.
+
+**Pitfalls:**
+- COMMITMENTS_UNAVAILABLE: Avtal och åtaganden is not switched on for this company yet.
+- SECURITY_NOT_FOUND
+
+| Parameter | In | Type | Required | Notes |
+|---|---|---|---|---|
+| `companyId` | path | `string` | yes |  |
+| `id` | path | `string` | yes |  |
+| `dry_run` | query | `string` | no | true (any case) previews the write without committing it, like the X-Dry-Run: true header. Any other value commits. |
+| `stage` | query | `string` | no | true stages the write for approval instead of committing it: 202 with the pending operation to approve via POST /pending-operations/{id}/approve. Absent or false commits; other values are 400. A `reason` in the body (why you propose it, at most 500 characters) is shown to the approver as agent_reason and kept with the decision. |
+
+Request body:
+```ts
+{
+  kind?: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency",
+  description?: string,
+  amount?: number,
+  in_favour_of_name?: string | null,
+  in_favour_of_party_id?: string | null,
+  for_group_company?: boolean,
+  agreement_id?: string | null,
+  valid_from?: string | null,
+  valid_to?: string | null,
+  document_id?: string | null,
+  notes?: string | null
+}
+```
+
+Example request:
+```json
+{
+  "valid_to": "2026-06-30"
+}
+```
+
+Response `200`:
+```ts
+{
+  data: {
+    security_id: string,
+    kind: "foretagsinteckning" | "fastighetsinteckning" | "aganderattsforbehall" | "belanad_fordran" | "other_security" | "borgen" | "other_contingency",
+    pledged: boolean,
+    description: string,
+    amount: number,
+    in_favour_of_party_id: string | null,
+    in_favour_of_name: string | null,
+    for_group_company: boolean,
+    agreement_id: string | null,
+    valid_from: string | null,
+    valid_to: string | null,
+    document_id: string | null,
+    notes: string | null
+  },
+  meta: {
+    request_id: string,
+    api_version: string,
+    next_cursor?: string | null,
+    audit?: { voucher_number?: string, voucher_url?: string, audit_trail_url?: string, immutable_at?: string },
+    warnings?: { code: string, message_sv: string, message_en: string, remediation?: { description: string, tool?: string, args?: Record<string, unknown>, resource?: string } }[],
+    partial_expansions?: string[],
+    coverage?: Record<string, unknown>
+  }
+}
+```
+
+Example response `200`:
+```json
+{
+  "data": {
+    "security_id": "91c0…",
+    "kind": "foretagsinteckning",
+    "pledged": true,
+    "description": "Företagsinteckning för checkkredit",
+    "amount": 500000,
+    "in_favour_of_party_id": null,
+    "in_favour_of_name": "Handelsbanken",
+    "for_group_company": false,
+    "agreement_id": null,
+    "valid_from": "2025-03-01",
+    "valid_to": "2026-06-30",
+    "document_id": null,
+    "notes": null
   },
   "meta": {
     "request_id": "req_…",

@@ -4,6 +4,7 @@ import { isInkorgV2Enabled } from '@/lib/inkorg/flag'
 import { isAutogiroEnabled } from '@/lib/invoices/autogiro/flag'
 import { signingSwitchedOn } from '@/lib/signing/switched-on'
 import { isBolagetEnabled } from '@/lib/env/bolaget-switch'
+import { commitmentsEnabledFor } from '@/lib/env/commitments-switch'
 import type { NavGateContext } from '@/lib/navigation/nav-gates'
 
 /**
@@ -15,7 +16,7 @@ import type { NavGateContext } from '@/lib/navigation/nav-gates'
  * stays in the block that owns its page; this composition layer only
  * gathers them.
  */
-export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled'>
+export type NavRollouts = Pick<NavGateContext, 'arkivEnabled' | 'agentsEnabled' | 'inkorgV2Enabled' | 'autogiroEnabled' | 'signingEnabled' | 'bolagetEnabled' | 'commitmentsEnabled'>
 
 export function navRollouts(companyId: string | null | undefined): NavRollouts {
   return {
@@ -29,5 +30,7 @@ export function navRollouts(companyId: string | null | undefined): NavRollouts {
     signingEnabled: signingSwitchedOn(companyId),
     // The Bolaget section (Ägare och aktiebok, Styrelse och firmateckning).
     bolagetEnabled: isBolagetEnabled(companyId),
+    // Avtal och åtaganden (Bolaget rollout, BOLAGET_COMPANY_IDS).
+    commitmentsEnabled: commitmentsEnabledFor(companyId),
   }
 }

@@ -11785,6 +11785,58 @@ const BOLAGET: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Commitments and holdings (lib/commitments, Bolaget rollout)
+// ─────────────────────────────────────────────────────────────────
+
+const COMMITMENTS: Record<string, StructuredErrorEntry> = {
+  COMMITMENTS_UNAVAILABLE: {
+    httpStatus: 404,
+    message_sv: 'Avtal och åtaganden finns inte här ännu.',
+    message_en: 'Agreements and commitments are not available here yet.',
+  },
+  COMMITMENTS_REFERENCE_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Det som anges (motpart, dokument eller avtal) finns inte i företaget.',
+    message_en: 'The referenced party, document or agreement does not exist in this company.',
+  },
+  AGREEMENT_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Avtalet hittades inte.',
+    message_en: 'The agreement was not found.',
+  },
+  AGREEMENT_DERIVED: {
+    httpStatus: 409,
+    message_sv: 'Avtalet är läst ur ett dokument i arkivet och ändras där, inte här.',
+    message_en: 'The agreement was read from an archived document and is changed there, not here.',
+  },
+  SECURITY_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Säkerheten eller eventualförpliktelsen hittades inte.',
+    message_en: 'The security or contingent liability was not found.',
+  },
+  GROUP_LINK_NOT_FOUND: {
+    httpStatus: 404,
+    message_sv: 'Koncernkopplingen hittades inte.',
+    message_en: 'The group link was not found.',
+  },
+  GROUP_LINKS_NOT_FOR_LEGAL_FORM: {
+    httpStatus: 409,
+    message_sv: 'Koncernstruktur registreras bara för företag som upprättar årsredovisning.',
+    message_en: 'A group structure is registered only for companies that prepare an annual report.',
+  },
+  GROUP_LINK_COMPANY_NOT_IN_TEAM: {
+    httpStatus: 409,
+    message_sv: 'Det kopplade företaget måste vara ett annat företag i samma team.',
+    message_en: 'The linked company must be another company in the same team.',
+  },
+  ASSET_IDENTIFICATION_INVALID: {
+    httpStatus: 400,
+    message_sv: 'Fastighetsbeteckning och taxeringsvärde hör till byggnader, registreringsnummer och bilförmån till fordon.',
+    message_en: 'Property designation and tax value belong to buildings, registration number and car benefit to vehicles.',
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // BankID document signing (lib/signing)
 // ─────────────────────────────────────────────────────────────────
 
@@ -12243,6 +12295,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...SETOFF,
   ...PAYMENT_SIGNING_LINKS,
   ...SIGNING,
+  ...COMMITMENTS,
   ...PENDING_OPERATIONS,
   ...AUTOGIRO,
   ...BOLAGET_MEETINGS,

@@ -57,8 +57,20 @@ interface TransactionRow {
   merchant_name: string | null
 }
 
-export async function observeObligations(supabase: SupabaseClient, companyId: string, today: string): Promise<ObserveSummary> {
-  const obligations = await loadObligations(supabase, companyId, today)
+/**
+ * `agreementIds` narrows the run to those agreements' obligations: the
+ * manual agreements of a company outside the brain rollout (the Bolaget
+ * rollout, lib/env/commitments-switch.ts) are observed without its derived
+ * ones. Without it every obligation of the company is compared, as before.
+ */
+export async function observeObligations(
+  supabase: SupabaseClient,
+  companyId: string,
+  today: string,
+  opts: { agreementIds?: readonly string[] } = {},
+): Promise<ObserveSummary> {
+  if (opts.agreementIds && opts.agreementIds.length === 0) return { checked: 0, matched: 0, missed: 0 }
+  const obligations = await loadObligations(supabase, companyId, today, opts.agreementIds)
   const summary: ObserveSummary = { checked: obligations.length, matched: 0, missed: 0 }
   if (obligations.length === 0) return summary
   const agreements = await loadAgreements(supabase, [...new Set(obligations.map((o) => o.agreement_id))])
@@ -135,15 +147,16 @@ function textTokens(t: TransactionRow): Set<string> {
   )
 }
 
-async function loadObligations(supabase: SupabaseClient, companyId: string, today: string): Promise<ObligationRow[]> {
-  const { data, error } = await supabase
+async function loadObligations(supabase: SupabaseClient, companyId: string, today: string, agreementIds?: readonly string[]): Promise<ObligationRow[]> {
+  let query = supabase
     .from('agreement_obligations')
     .select('id, agreement_id, due_on, amount, currency, amount_is_estimate, status, direction')
     .eq('company_id', companyId)
     .in('status', ['expected', 'missed'])
     .gte('due_on', addDays(today, -LOOKBACK_DAYS))
     .lte('due_on', addDays(today, LOOKAHEAD_DAYS))
-    .order('due_on', { ascending: true })
+  if (agreementIds) query = query.in('agreement_id', [...agreementIds])
+  const { data, error } = await query.order('due_on', { ascending: true })
   if (error) throw new Error(`obligations fetch failed: ${error.message}`)
   return (data ?? []) as ObligationRow[]
 }

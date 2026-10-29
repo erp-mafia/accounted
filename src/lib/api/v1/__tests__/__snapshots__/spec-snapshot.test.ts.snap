@@ -1,6 +1,6 @@
 // Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
 
-exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `423`;
+exports[`v1 spec snapshot > matches the recorded endpoint count > endpoint-count 1`] = `434`;
 
 exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-keys 1`] = `
 [
@@ -37,6 +37,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/api-key",
   "GET /api/v1/companies",
   "GET /api/v1/companies/:companyId/accounts",
+  "GET /api/v1/companies/:companyId/agreement-obligations",
+  "GET /api/v1/companies/:companyId/agreements",
   "GET /api/v1/companies/:companyId/articles",
   "GET /api/v1/companies/:companyId/assets",
   "GET /api/v1/companies/:companyId/assets/:id",
@@ -80,6 +82,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/pdf",
   "GET /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures",
   "GET /api/v1/companies/:companyId/fiscal-periods/:id/opening-balances/split-per-project",
+  "GET /api/v1/companies/:companyId/group-links",
   "GET /api/v1/companies/:companyId/inbox-items",
   "GET /api/v1/companies/:companyId/inbox-items/:id",
   "GET /api/v1/companies/:companyId/invoices",
@@ -163,6 +166,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/companies/:companyId/salary/fora-report",
   "GET /api/v1/companies/:companyId/salary/premium-rules",
   "GET /api/v1/companies/:companyId/salary/settings",
+  "GET /api/v1/companies/:companyId/securities",
   "GET /api/v1/companies/:companyId/service-accounts",
   "GET /api/v1/companies/:companyId/service-accounts/:id",
   "GET /api/v1/companies/:companyId/setoffs/counterparty",
@@ -200,6 +204,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "GET /api/v1/operations/:id",
   "GET /api/v1/portfolio/overview",
   "PATCH /api/v1/companies/:companyId/accounts/:number",
+  "PATCH /api/v1/companies/:companyId/agreements/:id",
   "PATCH /api/v1/companies/:companyId/assets/:id",
   "PATCH /api/v1/companies/:companyId/cash-accounts/:id",
   "PATCH /api/v1/companies/:companyId/corporate-meetings/:id",
@@ -213,6 +218,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/fiscal-periods/:id",
   "PATCH /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/compliance",
   "PATCH /api/v1/companies/:companyId/fiscal-periods/:id/arsredovisning/signatures/:signatureId",
+  "PATCH /api/v1/companies/:companyId/group-links/:id",
   "PATCH /api/v1/companies/:companyId/inbox-items/:id",
   "PATCH /api/v1/companies/:companyId/invoices/:id",
   "PATCH /api/v1/companies/:companyId/journal-entries/:id",
@@ -224,6 +230,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "PATCH /api/v1/companies/:companyId/salary-runs/:id/lines/:lineId",
   "PATCH /api/v1/companies/:companyId/salary/premium-rules/:id",
   "PATCH /api/v1/companies/:companyId/salary/settings",
+  "PATCH /api/v1/companies/:companyId/securities/:id",
   "PATCH /api/v1/companies/:companyId/settings",
   "PATCH /api/v1/companies/:companyId/settings/bookkeeping-lock",
   "PATCH /api/v1/companies/:companyId/settings/skattekonto-account",
@@ -239,6 +246,8 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/accounts/activate",
   "POST /api/v1/companies/:companyId/accounts/deactivate",
   "POST /api/v1/companies/:companyId/accrual-schedules/:id/replan",
+  "POST /api/v1/companies/:companyId/agreements",
+  "POST /api/v1/companies/:companyId/agreements/:id/end",
   "POST /api/v1/companies/:companyId/assets",
   "POST /api/v1/companies/:companyId/assets/:id/dispose",
   "POST /api/v1/companies/:companyId/bank-connections/:connectionId/sync",
@@ -289,6 +298,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/reopen-external",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/unlock",
   "POST /api/v1/companies/:companyId/fiscal-periods/:id/year-end",
+  "POST /api/v1/companies/:companyId/group-links",
   "POST /api/v1/companies/:companyId/imports/bank",
   "POST /api/v1/companies/:companyId/imports/bank/:id/undo",
   "POST /api/v1/companies/:companyId/imports/sie",
@@ -367,6 +377,7 @@ exports[`v1 spec snapshot > matches the recorded endpoint key set > endpoint-key
   "POST /api/v1/companies/:companyId/salary/premium-rules",
   "POST /api/v1/companies/:companyId/salary/vacation-liability/reconcile",
   "POST /api/v1/companies/:companyId/salary/vacation-year-close",
+  "POST /api/v1/companies/:companyId/securities",
   "POST /api/v1/companies/:companyId/service-accounts",
   "POST /api/v1/companies/:companyId/service-accounts/:id/keys",
   "POST /api/v1/companies/:companyId/service-accounts/:id/keys/:keyId/revoke",
@@ -452,7 +463,7 @@ exports[`v1 spec snapshot > matches the recorded module catalogue > endpoint-mod
   "transactions": 31,
   "vat": 1,
   "webshop": 5,
-  "year-end": 14,
+  "year-end": 25,
 }
 `;
 

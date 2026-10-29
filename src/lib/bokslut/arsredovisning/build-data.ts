@@ -17,6 +17,12 @@ import {
 } from '@/lib/bokslut/ixbrl/k2-mapper'
 import { buildBrRows, buildRrRows } from './statement-rows'
 import { getNarrative, type NarrativeRow } from './narrative-service'
+import { loadRegisterNoteTexts } from '@/lib/commitments/disclosures'
+import {
+  effectiveDisclosureTexts,
+  registerOverrideWarnings,
+  type RegisterDisclosureTexts,
+} from './register-disclosures'
 import { applyNoteOverrides, normalizeNoteOverrides } from './note-overrides'
 import {
   anyAssetHasComponents,
@@ -208,6 +214,12 @@ export async function buildArsredovisningReport(
   const period = periodResult.data
   const accountingFramework = yearFramework.framework
   const settings = settingsResult.data
+  // Avtal och åtaganden (Bolaget rollout): the registers write the
+  // säkerheter, eventualförpliktelser and parent texts; the narrative's
+  // free text overrides them (register-disclosures.ts). Null outside the
+  // rollout and when nothing is registered, which leaves the document as
+  // it was.
+  const registerTexts = await loadRegisterNoteTexts(supabase, companyId, period.period_end)
   const companyRow = companyResult.data as { entity_type?: string | null } | null
   const companyName = settings?.company_name ?? 'Bolaget'
   const orgNumber = settings?.org_number ?? ''
@@ -409,6 +421,7 @@ export async function buildArsredovisningReport(
         tbFull.rows,
         fiscalPeriodId,
         (periodList ?? []) as PeriodRow[],
+        registerTexts,
       ),
       generateKassaflodesanalys(supabase, companyId, fiscalPeriodId).then(
         (cashFlow) => ({ ok: true as const, cashFlow }),
@@ -455,6 +468,7 @@ export async function buildArsredovisningReport(
       fiscalPeriodId,
       (periodList ?? []) as PeriodRow[],
       yearFramework.change_reason,
+      registerTexts,
     )
     noter = k2Noter.notes
     noterWarnings = k2Noter.warnings
@@ -503,6 +517,7 @@ export async function buildArsredovisningReport(
     ...balanceSheetMapping.warnings,
     ...noterWarnings,
     ...equity_specification.warnings,
+    ...registerOverrideWarnings(narrative, registerTexts),
   ]
   if (registeredOffice.fromCity && registeredOffice.value) {
     warnings.push(registeredOfficeFallbackWarning(registeredOffice.value))
@@ -629,6 +644,9 @@ export async function buildArsredovisningReport(
       parent_company_name: narrative?.parent_company_name ?? null,
       parent_company_org_number: narrative?.parent_company_org_number ?? null,
       parent_company_city: narrative?.parent_company_city ?? null,
+      // Present only when a register has something to say: an absent key
+      // keeps the content hash of every other report unchanged.
+      ...(registerTexts ? { from_registers: registerTexts } : {}),
       medelantal_anstallda_override: narrative?.medelantal_anstallda_override ?? null,
       ...(memberDisclosures
         ? {
@@ -943,6 +961,7 @@ async function buildK2Noter(
   allPeriods: PeriodRow[],
   /** BFNAR 2012:4 punkt 3: the stated reasons when the year switched from K3 to K2. */
   frameworkSwitchReason: string | null = null,
+  registerTexts: RegisterDisclosureTexts | null = null,
 ): Promise<{ notes: NoteEntry[]; warnings: string[]; shareCapital: ShareCapital | null }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
@@ -1145,30 +1164,32 @@ async function buildK2Noter(
   })
 
   // Ställda säkerheter (ÅRL 5:14 §): separate disclosure from
-  // eventualförpliktelser. Manual override on arsredovisning_narratives,
-  // defaulting to "Inga.".
+  // eventualförpliktelser. The register in Avtal och åtaganden writes it;
+  // the manual text on arsredovisning_narratives overrides; "Inga." when
+  // neither says anything (register-disclosures.ts).
+  const disclosed = effectiveDisclosureTexts(narrative, registerTexts)
   notes.push({
     number: notes.length + 1,
     title: 'Ställda säkerheter',
-    body: narrative?.securities_pledged?.trim() || 'Inga.',
+    body: disclosed.securities_pledged || 'Inga.',
   })
 
   // Eventualförpliktelser (ÅRL 5:15 §)
   notes.push({
     number: notes.length + 1,
     title: 'Eventualförpliktelser',
-    body: narrative?.contingent_liabilities?.trim() || 'Inga.',
+    body: disclosed.contingent_liabilities || 'Inga.',
   })
 
   // Koncernförhållanden (BFNAR 2016:10 kap. 19). Emitted only when a parent
-  // company is configured: companies without a parent skip this note.
-  const parentName = narrative?.parent_company_name?.trim()
+  // company is configured or registered: companies without one skip it.
+  const parentName = disclosed.parent_company_name
   if (parentName) {
     const parts: string[] = [`Moderföretag: ${parentName}.`]
-    if (narrative?.parent_company_org_number)
-      parts.push(`Organisationsnummer: ${narrative.parent_company_org_number}.`)
-    if (narrative?.parent_company_city)
-      parts.push(`Säte: ${narrative.parent_company_city}.`)
+    if (disclosed.parent_company_org_number)
+      parts.push(`Organisationsnummer: ${disclosed.parent_company_org_number}.`)
+    if (disclosed.parent_company_city)
+      parts.push(`Säte: ${disclosed.parent_company_city}.`)
     notes.push({
       number: notes.length + 1,
       title: 'Koncernförhållanden',
@@ -1310,6 +1331,7 @@ async function buildK3Noter(
   tbFullRows: TrialBalanceRow[],
   fiscalPeriodId: string,
   allPeriods: PeriodRow[],
+  registerTexts: RegisterDisclosureTexts | null = null,
 ): Promise<{ notes: NoteEntry[]; warnings: string[]; assets: Asset[]; fixedAssetNoteFromRegister: boolean }> {
   const notes: NoteEntry[] = []
   const warnings: string[] = []
@@ -1558,29 +1580,31 @@ async function buildK3Noter(
         : 'Inga skulder förfaller till betalning senare än fem år efter balansdagen.',
   })
 
-  // 7. Eventualförpliktelser (K3 punkt 21: separate disclosure).
+  // 7. Eventualförpliktelser (K3 punkt 21: separate disclosure). The
+  // register writes it, the manual text overrides (register-disclosures.ts).
+  const disclosed = effectiveDisclosureTexts(narrative, registerTexts)
   notes.push({
     number: notes.length + 1,
     title: 'Eventualförpliktelser',
-    body: narrative?.contingent_liabilities?.trim() || 'Inga.',
+    body: disclosed.contingent_liabilities || 'Inga.',
   })
 
   // 8. Ställda säkerheter (ÅRL 5:14 §).
   notes.push({
     number: notes.length + 1,
     title: 'Ställda säkerheter',
-    body: narrative?.securities_pledged?.trim() || 'Inga.',
+    body: disclosed.securities_pledged || 'Inga.',
   })
 
   // 9. Koncernförhållanden (BFNAR 2012:1 kap. 8: moderföretagets namn,
-  // organisationsnummer och säte). Emitted only when configured.
-  const parentName = narrative?.parent_company_name?.trim()
+  // organisationsnummer och säte). Emitted only when configured or registered.
+  const parentName = disclosed.parent_company_name
   if (parentName) {
     const parts: string[] = [`Moderföretag: ${parentName}.`]
-    if (narrative?.parent_company_org_number)
-      parts.push(`Organisationsnummer: ${narrative.parent_company_org_number}.`)
-    if (narrative?.parent_company_city)
-      parts.push(`Säte: ${narrative.parent_company_city}.`)
+    if (disclosed.parent_company_org_number)
+      parts.push(`Organisationsnummer: ${disclosed.parent_company_org_number}.`)
+    if (disclosed.parent_company_city)
+      parts.push(`Säte: ${disclosed.parent_company_city}.`)
     notes.push({
       number: notes.length + 1,
       title: 'Koncernförhållanden',

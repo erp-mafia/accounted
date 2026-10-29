@@ -259,6 +259,8 @@ import { CUSTOMER_LOSS_OPERATION_LIST } from './customer-loss'
 import { COUNTERPARTY_SETOFF_OPERATION_LIST } from './counterparty-setoff'
 import { counterpartySetoffEnabled } from '@/lib/env/counterparty-setoff-switch'
 import { customerLossEnabled } from '@/lib/env/customer-loss-switch'
+import { COMMITMENTS_OPERATIONS } from './commitments'
+import { commitmentsRolloutConfigured } from '@/lib/env/commitments-switch'
 import { TAX_LOSS_CARRYFORWARD_OPERATIONS } from './tax-loss-carryforwards'
 import { lossCarryforwardDiscoverable } from '@/lib/env/loss-carryforward-switch'
 import { STOCK_COUNT_OPERATION_LIST } from './inventory-counts'
@@ -530,6 +532,7 @@ export const ALL_OPERATIONS: readonly AnyOperation[] = [
   ...BOLAGET_CAPITAL_OPERATIONS,
   ...BOLAGET_OWNER_TAX_OPERATIONS,
   ...CORPORATE_MEETING_OPERATIONS,
+  ...COMMITMENTS_OPERATIONS,
   ...TAX_LOSS_CARRYFORWARD_OPERATIONS,
   ...STOCK_COUNT_OPERATION_LIST,
 ]
@@ -553,6 +556,9 @@ export const OPERATIONS: readonly AnyOperation[] = [
   ...(bolagetRollout() === 'all' || bolagetRollout().length > 0 ? BOLAGET_OWNER_TAX_OPERATIONS : []),
   // Meetings and minutes roll out with the registers (same switch, same per-company check in run()).
   ...(bolagetRollout() === 'all' || bolagetRollout().length > 0 ? CORPORATE_MEETING_OPERATIONS : []),
+  // Avtal och åtaganden (Bolaget) only while BOLAGET_COMPANY_IDS names a
+  // company; each run() still refuses a company outside the list.
+  ...(commitmentsRolloutConfigured() ? COMMITMENTS_OPERATIONS : []),
   // The underskottsregister only while BOLAGET_COMPANY_IDS opens it for some
   // company; each run still checks the company (lib/bokslut/loss-carryforward).
   ...(lossCarryforwardDiscoverable() ? TAX_LOSS_CARRYFORWARD_OPERATIONS : []),
