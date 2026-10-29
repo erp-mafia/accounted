@@ -14,7 +14,7 @@ import { z } from 'zod'
 import { ok } from '@/lib/api/v1/response'
 import { registerEndpoint, dataEnvelope } from '@/lib/api/v1/registry'
 import { withApiV1 } from '@/lib/api/v1/with-api-v1'
-import { v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
+import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/lib/api/v1/errors'
 import { ownsFiscalPeriod } from '@/lib/api/v1/owns-fiscal-period'
 import { generateOpeningBalances } from '@/lib/core/bookkeeping/year-end-service'
 import { OpeningBalanceExistsError } from '@/lib/import/opening-balance/existing'
@@ -137,6 +137,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
               '/year-end already generates the opening balance entry. If you ran /year-end first, no further call is needed. Inspect existing IB via GET /journal-entries?fiscal_period_id={next_period_id}&source_type=opening_balance.',
           },
         })
+      }
+      // Above the API key's unattended ceiling: its own 403 and remediation.
+      if ((err as { code?: unknown })?.code === 'UNATTENDED_COMMIT_LIMIT_EXCEEDED') {
+        return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
       }
       const msg = err instanceof Error ? err.message : 'unknown'
       ctx.log.warn('opening-balances refused', { reason: msg })

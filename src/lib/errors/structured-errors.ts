@@ -225,7 +225,7 @@ const BOOKKEEPING: Record<string, StructuredErrorEntry> = {
     retryable: false,
     remediation: {
       description:
-        'Do not retry, and do not split the entry into smaller ones: one affärshändelse is one verifikat (BFL 5 kap. 6 §). Ask a human to approve the staged operation in Accounted, or have the key owner raise the limit in API key settings. details.attempted and details.limit carry the numbers.',
+        'Do not retry, and do not split the entry into smaller ones: one affärshändelse is one verifikat (BFL 5 kap. 6 §). Nothing was posted. Ask a human to approve the staged operation in Accounted (on the v1 API, resend a write with ?stage=true where the endpoint stages, or let a person do it in the app), or have the key owner raise the limit in API key settings. details.attempted and details.limit carry the numbers.',
     },
   },
   ACCOUNTS_NOT_IN_CHART: {

@@ -1489,3 +1489,77 @@ describe('POST :id/match-supplier-invoice', () => {
     })
   })
 })
+
+// #125: an API key's unattended ceiling, priced on the payment verifikat
+// before the route posts anything else (the storno of the row's earlier
+// booking, a deferred sale), so a refused payment never leaves those behind.
+describe('POST :id/match-invoice: unattended ceiling', () => {
+  const client = (journalEntryId: string | null) =>
+    createTableMockSupabase({
+      company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+      transactions: {
+        data: { id: TX_ID, amount: 12500, date: '2026-05-12', currency: 'SEK', invoice_id: null, journal_entry_id: journalEntryId },
+        error: null,
+      },
+      invoices: [
+        {
+          data: {
+            id: INV_ID,
+            status: 'sent',
+            document_type: 'invoice',
+            total: 12500,
+            paid_amount: 0,
+            remaining_amount: 12500,
+            currency: 'SEK',
+            exchange_rate: null,
+            customer: { name: 'Acme' },
+            items: [],
+            journal_entry_id: null,
+          },
+          error: null,
+        },
+        { data: [{ id: INV_ID }], error: null },
+      ],
+      company_settings: { data: { accounting_method: 'accrual', entity_type: 'enskild_firma' }, error: null },
+      invoice_payments: [
+        { data: [], error: null },
+        { data: { id: 'ip-1' }, error: null },
+      ],
+    }).supabase
+  const capped = (unattendedCommitLimit: number) =>
+    mockValidate.mockResolvedValue({
+      userId: 'user-1',
+      companyId: COMPANY_ID,
+      apiKeyId: 'ak_1',
+      apiKeyName: 'Bokföringsrobot',
+      scopes: ['transactions:write'],
+      mode: 'live',
+      unattendedCommitLimit,
+    })
+  const send = () =>
+    matchInvoicePOST(
+      makeRequest(`https://x.test/api/v1/companies/${COMPANY_ID}/transactions/${TX_ID}/match-invoice`, { invoice_id: INV_ID }),
+      txParams(TX_ID),
+    )
+
+  it('refuses a 12 500 kr payment on a key capped at 10 000 before the storno of the row\'s earlier booking', async () => {
+    capped(10000)
+    mockServiceClient.mockReturnValue(client(JE_ID))
+
+    const res = await send()
+    const body = await res.json()
+
+    expect(res.status).toBe(403)
+    expect(body.error).toMatchObject({ code: 'UNATTENDED_COMMIT_LIMIT_EXCEEDED', details: { attempted: 12500, limit: 10000 } })
+    expect(reverseEntryMock).not.toHaveBeenCalled()
+    expect(createJEMock).not.toHaveBeenCalled()
+  })
+
+  it('books it on a key capped at 15 000', async () => {
+    capped(15000)
+    mockServiceClient.mockReturnValue(client(null))
+
+    expect((await send()).status).toBe(200)
+    expect(createJEMock).toHaveBeenCalledTimes(1)
+  })
+})

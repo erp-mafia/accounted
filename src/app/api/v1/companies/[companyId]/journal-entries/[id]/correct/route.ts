@@ -30,6 +30,7 @@ import { checkPeriodLock } from '@/lib/api/v1/check-period-lock'
 import { CorrectJournalEntrySchema } from '@/lib/api/schemas'
 import { validateBalance } from '@/lib/bookkeeping/engine'
 import { assertCorrectedImportVatBase } from '@/lib/bookkeeping/import-vat-base'
+import { debitTotal, unattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { correctionBusinessEvents } from '@/lib/bookkeeping/ledger-business-events'
 import { todayIsoStockholm } from '@/lib/dates/iso'
 import { linkBasisColumns } from '@/lib/links/stamp'
@@ -208,6 +209,12 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
     } catch (err) {
       return v1ErrorResponse(err, ctx.log, { requestId: ctx.requestId })
     }
+
+    // An API key's unattended ceiling, which correctEntry asks for the storno
+    // and the corrected verifikat before either is drafted: here before the
+    // dry-run return too.
+    const overCeiling = unattendedCeilingRefusal(Math.max(debitTotal(typed.lines ?? []), debitTotal(lines)))
+    if (overCeiling) return v1ErrorResponse(overCeiling, ctx.log, { requestId: ctx.requestId })
 
     // The object the verifikat books, if any (advice, never a refusal): the
     // correction is a new verifikat it does not point at, so name it.

@@ -24,6 +24,7 @@ import {
   JournalLineNegativeAmountError,
   JournalLineBothSidesNonZeroError,
   JournalEntryNotFoundError,
+  UnattendedCommitLimitExceededError,
 } from '@/lib/bookkeeping/errors'
 import {
   correctionChainDepth,
@@ -50,6 +51,7 @@ import { selectReversalHooks, type ReversalHookAfterContext, type ReversalHookCo
 import { REVERSAL_HOOKS } from '@/lib/composition/reversal-hooks'
 import { defaultCommitMethod, getActor } from '@/lib/bookkeeping/actor-context'
 import { rpcWithActor } from '@/lib/bookkeeping/actor-rpc'
+import { assertLinesWithinUnattendedCeiling, entryUnattendedCeilingRefusal } from '@/lib/bookkeeping/unattended-ceiling'
 import { linkBusinessEventToDraft, type BusinessEventLink, type SqlBusinessEventLink } from '@/lib/bookkeeping/business-event-link'
 import { callWithBusinessEvents } from '@/lib/bookkeeping/business-event-rpc'
 import type { PayoutFeeLine } from '@/lib/bookkeeping/payout-fee-lines'
@@ -900,7 +902,9 @@ export async function cancelDraftEntry(
  * forwarded to the RPC, which stamps journal_entries.committed_actor_* and
  * the audit_log COMMIT row (migration 20260619120000). No scope → NULLs.
  * A caller that passes no commitMethod records the one its actor implies
- * (defaultCommitMethod), so WHO and HOW are stamped together.
+ * (defaultCommitMethod), so WHO and HOW are stamped together. An actor that
+ * is an API key with an unattended ceiling commits nothing above it
+ * (UnattendedCommitLimitExceededError, ./unattended-ceiling.ts).
  *
  * Event: the RPC itself writes the journal_entry.committed row to event_log,
  * in the commit transaction (migration 20261016001100), so the event cannot
@@ -918,6 +922,11 @@ export async function commitEntry(
 ): Promise<JournalEntry> {
   const actor = getActor()
   const method = commitMethod ?? defaultCommitMethod(actor)
+
+  // An API key's unattended ceiling (./unattended-ceiling.ts): before the
+  // number is drawn, so a refusal leaves the draft a draft.
+  const overCeiling = await entryUnattendedCeilingRefusal(supabase, entryId, actor)
+  if (overCeiling) throw overCeiling
 
   // Mandatory dimension rules (dimensions PR10): 'required' rules bite when
   // the verifikat is about to become immutable — drafts may be incomplete,
@@ -1036,7 +1045,9 @@ export async function commitEntry(
  * correction paths announce the reversal or correction themselves.
  *
  * Returns the RPC error instead of throwing, so each caller keeps its own
- * cleanup and error translation.
+ * cleanup and error translation. A draft above the acting API key's
+ * unattended ceiling is not committed: the error is then the typed
+ * UnattendedCommitLimitExceededError, which the callers rethrow as it is.
  */
 export async function commitStornoOrCorrectionDraft(
   supabase: SupabaseClient,
@@ -1044,6 +1055,8 @@ export async function commitStornoOrCorrectionDraft(
   entryId: string,
 ): Promise<{ error: { message: string; code?: string } | null }> {
   const actor = getActor()
+  const overCeiling = await entryUnattendedCeilingRefusal(supabase, entryId, actor)
+  if (overCeiling) return { error: overCeiling }
   const { error } = await supabase.rpc('commit_journal_entry', {
     p_company_id: companyId,
     p_entry_id: entryId,
@@ -1097,6 +1110,9 @@ export async function commitAssetDisposal(
   input: CommitAssetDisposalInput,
 ): Promise<JournalEntry | null> {
   const actor = getActor()
+  // The caller cancels its draft on a throw, as on any refusal below.
+  const overCeiling = entryId ? await entryUnattendedCeilingRefusal(supabase, entryId, actor) : null
+  if (overCeiling) throw overCeiling
   const { error } = await supabase.rpc('commit_asset_disposal', {
     p_company_id: companyId,
     p_asset_id: input.asset_id,
@@ -1241,6 +1257,17 @@ export async function commitAssetDepreciation(
 ): Promise<{ entry: JournalEntry; scheduleId: string }> {
   const actor = getActor()
 
+  const overCeiling = await entryUnattendedCeilingRefusal(supabase, draft.id, actor)
+  if (overCeiling) {
+    // Never strand the draft: cancelled as on any refusal of the RPC below.
+    await supabase
+      .from('journal_entries')
+      .update({ status: 'cancelled' })
+      .eq('id', draft.id)
+      .eq('status', 'draft')
+    throw overCeiling
+  }
+
   const { data, error } = await supabase.rpc('commit_asset_depreciation', {
     p_company_id: companyId,
     p_asset_id: link.asset_id,
@@ -1364,6 +1391,9 @@ export async function createJournalEntry(
   rubricVersion?: string,
   options: CreateEntryOptions = {}
 ): Promise<JournalEntry> {
+  // The commit refuses it too; asked first so no draft is written for a
+  // verifikat an API key may not post unattended.
+  assertLinesWithinUnattendedCeiling(input.lines)
   const draft = await createDraftEntry(supabase, companyId, userId, input, options)
   try {
     return await commitEntry(supabase, companyId, userId, draft.id, commitMethod, rubricVersion)
@@ -2511,6 +2541,7 @@ export async function reverseEntry(
     // error), so this goes through the gated cleanup door, which cancels a
     // draft or a fresh posted orphan alike and keeps its lines.
     await cancelOrphanedEntry(supabase, companyId, userId, reversalEntry.id)
+    if (postError instanceof UnattendedCommitLimitExceededError) throw postError
     throw new BookkeepingDatabaseError('post_reversal_entry', postError.message, postError.code)
   }
 

@@ -214,14 +214,18 @@ export type ApiKeyRefusalCode = 'AGENT_PAUSED' | 'SERVICE_ACCOUNT_SUSPENDED'
  * WHO a validated key acts as on the v1 surface: a service account's key as
  * `service_account`, labelled with the account's name (the rows it writes
  * carry its sponsor as user_id, the person it acts for), every other key as
- * `api_key` labelled with its own name.
+ * `api_key` labelled with its own name. The key's unattended ceiling rides
+ * along when it has one: the engine and the attest service read it off the
+ * actor of the request's scope (lib/bookkeeping/unattended-ceiling.ts).
  */
 export function apiKeyCommitActor(auth: {
   apiKeyName?: string
   serviceAccount: ApiKeyServiceAccount | null
-}): { type: 'service_account' | 'api_key'; label: string } {
-  if (auth.serviceAccount) return { type: 'service_account', label: auth.serviceAccount.name }
-  return { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key' }
+  unattendedCommitLimit?: number | null
+}): { type: 'service_account' | 'api_key'; label: string; unattendedCommitLimit?: number } {
+  const ceiling = typeof auth.unattendedCommitLimit === 'number' ? { unattendedCommitLimit: auth.unattendedCommitLimit } : {}
+  if (auth.serviceAccount) return { type: 'service_account', label: auth.serviceAccount.name, ...ceiling }
+  return { type: 'api_key', label: auth.apiKeyName ?? 'Unnamed API key', ...ceiling }
 }
 
 export async function validateApiKey(

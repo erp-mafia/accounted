@@ -190,8 +190,11 @@ export interface ApiV1Context {
   /**
    * Largest amount in SEK this key may commit with no human approving it, or
    * null for no ceiling (the default, and what every key predating the column
-   * has). Enforced at the two places an API key can post money: this surface's
-   * journal-entries.commit, and commitPendingOperation for the MCP path.
+   * has). It also rides on `actor`, which the handler runs under, so it binds
+   * every door without the door reading it: the engine refuses any verifikat
+   * above it, the attest service any attest above it
+   * (lib/bookkeeping/unattended-ceiling.ts), and an operation write is priced
+   * on its preview as its staged twin would be (lib/operations/v1.ts).
    */
   unattendedCommitLimit: number | null
   /**
@@ -1191,6 +1194,11 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       // token. A service account's key acts as `service_account`, labelled
       // with the account's name (its sponsor is the user the rows carry). The
       // OAuth/MCP surfaces set their own actor and are unaffected.
+      //
+      // The same scope carries the key's unattended ceiling, for the same
+      // reason: every door that posts (categorize, batch-categorize, mark-paid,
+      // a storno, ...) is bound by it in the engine, including a door added
+      // later that never heard of it (#125).
       let response: Response = await runWithActor(
         ctx.actor,
         () => withSIEExternalReport(supabase,companyId,operation,()=>handler(workingRequest,ctx,handlerParams)),

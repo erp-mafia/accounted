@@ -33,6 +33,7 @@ import type { SupplierInvoice } from '@/types'
 import {
   ATTEST_COMMENT_MAX,
   attestProgress,
+  invoiceTotalSek,
   latestRejection,
   ruleOnApproval,
   ruleOnRejection,
@@ -46,6 +47,7 @@ import {
 import { canApproveSupplierInvoice, resolveUnsettledStatus } from './lifecycle'
 import { loadAttestBlockedInvoiceIds, loadAttestPolicy, POLICY_COLUMNS, toPolicy, type PolicyRow } from './attest-policy-read'
 import { isBookkeepingWriterRole } from '@/lib/auth/invoicer-role'
+import { actorUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 
 export { loadAttestBlockedInvoiceIds, loadAttestPolicy }
 
@@ -191,6 +193,23 @@ export async function approveSupplierInvoice(
   // by aging (#1206). approved_at, not the status, makes approval idempotent.
   if (!canApproveSupplierInvoice(invoice)) {
     return { ok: false, code: 'SI_APPROVE_NOT_REGISTERED', details: { current_status: invoice.status } }
+  }
+  // An attest releases the invoice for payment: an API key attests nothing
+  // above its unattended ceiling (lib/bookkeeping/unattended-ceiling.ts), its
+  // dry run included. Priced in SEK; a foreign invoice without a SEK value
+  // cannot be priced and waits for a person, as the attest policy treats it.
+  // A credit note releases nothing.
+  const ceiling = actorUnattendedCeiling()
+  if (ceiling !== null && !invoice.is_credit_note) {
+    const totalSek = invoiceTotalSek(invoice)
+    const attempted = totalSek === null ? null : roundOre(totalSek)
+    if (attempted === null || attempted > ceiling) {
+      return {
+        ok: false,
+        code: 'UNATTENDED_COMMIT_LIMIT_EXCEEDED',
+        details: { attempted, limit: ceiling, ...(attempted === null ? { reason: 'sek_total_unknown' } : {}) },
+      }
+    }
   }
 
   const [policy, accountingMethod, attestations] = await Promise.all([

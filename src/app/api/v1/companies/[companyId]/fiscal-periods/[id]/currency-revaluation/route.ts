@@ -173,7 +173,10 @@ export const POST = withApiV1<{ params: Promise<{ companyId: string; id: string 
         {
           id: operationId,
           error: {
-            code: msg.includes('already exists') ? 'CURRENCY_REVALUATION_ALREADY_EXISTS' : 'CURRENCY_REVALUATION_FAILED',
+            code:
+              (err as { code?: unknown })?.code === 'UNATTENDED_COMMIT_LIMIT_EXCEEDED'
+                ? 'UNATTENDED_COMMIT_LIMIT_EXCEEDED'
+                : msg.includes('already exists') ? 'CURRENCY_REVALUATION_ALREADY_EXISTS' : 'CURRENCY_REVALUATION_FAILED',
             message: getErrorMessage(err, { locale: 'en' }),
           },
         },

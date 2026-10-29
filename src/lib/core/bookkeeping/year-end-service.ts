@@ -1,6 +1,7 @@
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { eventBus } from '@/lib/events'
-import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { BookkeepingDatabaseError, UnattendedCommitLimitExceededError } from '@/lib/bookkeeping/errors'
+import { actorUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { postingPort } from '@/lib/posting/port'
 import { roundOre, ORE_TOLERANCE } from '@/lib/bokslut/rounding'
 import { createLogger } from '@/lib/logger'
@@ -834,6 +835,14 @@ export async function executeYearEndClosing(
   fiscalPeriodId: string,
   posting?: () => YearEndPostingContext,
 ): Promise<YearEndResult> {
+  // An API key with an unattended ceiling never closes a year: the close
+  // posts the year's whole result and the next year's IB (the balance sheet),
+  // and it closes the year in step 8 before the IB is posted, so a refusal of
+  // the IB there would leave a closed year without one. Refused before
+  // anything is read or posted; a person closes the year in the app.
+  const ceiling = actorUnattendedCeiling()
+  if (ceiling !== null) throw new UnattendedCommitLimitExceededError(null, ceiling)
+
   // 1. Validate readiness
   const validation = await validateYearEndReadiness(supabase, companyId, userId, fiscalPeriodId)
   if (!validation.ready) {

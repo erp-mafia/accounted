@@ -8,6 +8,7 @@ import {
   isDimensionRuleExemptSource,
 } from '@/lib/bookkeeping/dimension-rules'
 import { BookkeepingDatabaseError } from '@/lib/bookkeeping/errors'
+import { assertLinesWithinUnattendedCeiling } from '@/lib/bookkeeping/unattended-ceiling'
 import { createLogger } from '@/lib/logger'
 import type { CreateJournalEntryInput, JournalEntry } from '@/types'
 
@@ -37,6 +38,9 @@ const log = createLogger('bookkeeping.journal-entry-batch')
  *   3. commitEntry() per draft, in order (numbers assigned atomically, and
  *      commitEntry re-checks the required rules as the authority).
  *
+ * An API key's unattended ceiling is asked per voucher before step 1 too
+ * (lib/bookkeeping/unattended-ceiling.ts).
+ *
  * What remains is non-deterministic: a transient database error, a rule or
  * lock changed between the phases, the function stopped mid-commit. The
  * vouchers committed by then stay posted (a posted verifikat is never
@@ -62,6 +66,10 @@ export async function createJournalEntries(
 ): Promise<JournalEntry[]> {
   if (inputs.length === 0) return []
 
+  // An API key's unattended ceiling, per verifikat, for the whole set before
+  // the first number: commitEntry asks again, but by then a refusal of
+  // voucher k would leave 1..k-1 posted.
+  for (const input of inputs) assertLinesWithinUnattendedCeiling(input.lines)
   await assertRequiredDimensions(supabase, companyId, inputs)
 
   const { businessEvent } = options

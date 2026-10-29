@@ -29,6 +29,12 @@
  * operation runs; its dry run and its staging work as for any write. A
  * direct commit would skip exactly the approval the staged one waits for.
  *
+ * Unattended ceiling: a key with one (api_keys.unattended_commit_limit) has
+ * every write priced on its dry run's preview, as the same write staged is
+ * priced at approval. Above the ceiling the write and its dry run answer 403
+ * UNATTENDED_COMMIT_LIMIT_EXCEEDED and write nothing; `?stage=true` stages
+ * it for a person instead.
+ *
  * Pinned previews (./preview-token.ts): every write's dry run answers a
  * `preview_token` beside its preview. A commit (or a staging) that sends it
  * back in the Preview-Token header first recomputes the dry run for the same
@@ -50,9 +56,10 @@ import { v1ErrorResponse, v1ErrorResponseFromCode, v1ValidationError } from '@/l
 import { addHandles, STAGED_PENDING_OPERATION_HANDLES } from '@/lib/api/v1/handles'
 import { moduleForOperationId } from '@/lib/modules/resolve'
 import { requiresWebApproval } from '@/lib/pending-operations/risk-tiers'
+import { exceedsUnattendedLimit, unattendedCeiling } from '@/lib/pending-operations/unattended-limit'
 import { toPendingOperationView } from '@/lib/pending-operations/view'
 import { operationPreviewToken, previewStaleFailure } from './preview-token'
-import { splitStagedAgentReason, stageOperation } from './stage'
+import { planStagedOperation, splitStagedAgentReason, stageOperation } from './stage'
 import type { AnyOperation, OperationContext, OperationOutcome } from './types'
 
 type RouteParams = { params: Promise<Record<string, string>> }
@@ -176,14 +183,22 @@ export function v1OperationHandler(op: AnyOperation) {
 
       // A write's dry run, and the dry run a pinned commit recomputes first:
       // the preview answers with its token, and a sent token that no longer
-      // matches refuses before anything is written.
-      if (isWrite && (ctx.dryRun || ctx.previewToken)) {
+      // matches refuses before anything is written. A key with an unattended
+      // ceiling gets the dry run too, to price the write on its preview.
+      const priced = isWrite && unattendedCeiling(ctx.actor.type, ctx.unattendedCommitLimit) !== null
+      if (isWrite && (ctx.dryRun || ctx.previewToken || priced)) {
         const dry = await op.run(opCtx, input, { dryRun: true })
         if (!dry.ok || !dry.dryRun) return v1OutcomeResponse(dry, ctx)
         const previewToken = operationPreviewToken(op, opCtx.companyId, input, dry.preview)
         if (ctx.previewToken && ctx.previewToken !== previewToken) {
           ctx.log.info('preview token stale', { operation: op.id })
           return v1OutcomeResponse(previewStaleFailure(dry.preview, previewToken), ctx)
+        }
+        // Before the dry run answers, so a preview never promises a write
+        // the key may not make.
+        if (priced) {
+          const refusal = overUnattendedCeiling(op, input, dry.preview, ctx)
+          if (refusal) return refusal
         }
         if (ctx.dryRun) return dryRunPreview(dry.preview, { requestId: ctx.requestId, log: ctx.log, previewToken })
       }
@@ -282,6 +297,37 @@ async function v1StageResponse(
     STAGED_PENDING_OPERATION_HANDLES,
   ).value
   return ok(staged202, { requestId: ctx.requestId, status: 202 })
+}
+
+/**
+ * The 403 for a write above the key's unattended ceiling, or null. Priced
+ * exactly as commitPendingOperation prices the same write staged
+ * (lib/pending-operations/unattended-limit.ts, on the preview its staged
+ * twin carries), so a key reaches no further over REST than over MCP. A type
+ * the price list leaves out is not priced here either; any verifikat it
+ * posts still meets the engine's own check (lib/bookkeeping/unattended-ceiling.ts).
+ * Nothing is written: `?stage=true` stages the same write for a person.
+ */
+function overUnattendedCeiling(
+  op: AnyOperation,
+  input: Record<string, unknown>,
+  preview: Record<string, unknown>,
+  ctx: Pick<ApiV1Context, 'requestId' | 'log' | 'actor' | 'unattendedCommitLimit'>,
+): Promise<NextResponse> | null {
+  const stage = op.kind === 'write' ? op.mcp?.stage : undefined
+  if (!stage) return null
+  const plan = planStagedOperation(stage, input, preview)
+  const verdict = exceedsUnattendedLimit({
+    actorType: ctx.actor.type,
+    limit: ctx.unattendedCommitLimit,
+    operationType: plan.pendingType,
+    previewData: plan.preview,
+  })
+  if (!verdict.exceeded) return null
+  return v1ErrorResponseFromCode('UNATTENDED_COMMIT_LIMIT_EXCEEDED', ctx.log, {
+    requestId: ctx.requestId,
+    details: { attempted: verdict.attempted, limit: verdict.limit, operation_type: plan.pendingType, stage_supported: true },
+  })
 }
 
 /**
