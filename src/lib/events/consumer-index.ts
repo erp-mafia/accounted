@@ -58,6 +58,7 @@ const INDEX: Partial<Record<CoreEventType, readonly string[]>> = {
   'mcp.tool_searched': ['event-log'],
   'mcp.tools_list_called': ['event-log'],
   'mcp.workflow_started': ['event-log'],
+  'period.lock_date_changed': ['event-log', 'webhooks'],
   'period.locked': ['event-log', 'webhooks'],
   'period.unlocked': ['event-log', 'webhooks'],
   'period.year_closed': ['event-log', 'webhooks'],

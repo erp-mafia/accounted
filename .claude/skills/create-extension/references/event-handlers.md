@@ -36,6 +36,7 @@ Source: `lib/events/types.ts`. Every payload includes `userId`.
 | `transaction.reconciled` | `{ transaction, journalEntryId, method, userId }` |
 | `period.locked` | `{ period: FiscalPeriod, userId }` |
 | `period.year_closed` | `{ period: FiscalPeriod, userId }` |
+| `period.lock_date_changed` | `{ previousLockDate, lockDate, direction, via, reopenedFiledVatPeriods, userId }` |
 | `customer.created` | `{ customer: Customer, userId }` |
 | `receipt.extracted` | `{ receipt, documentId, confidence, userId }` |
 | `receipt.matched` | `{ receipt, transaction, confidence, autoMatched, userId }` |

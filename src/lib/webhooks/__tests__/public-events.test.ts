@@ -29,6 +29,20 @@ describe('public webhook event catalogue', () => {
     )
   })
 
+  it('delivers the lock date move in the Periods group, documented with every payload field (#128)', () => {
+    const periods = PUBLIC_WEBHOOK_EVENT_GROUPS.find((group) => group.title === 'Periods')
+    const entry = periods?.events.find((event) => event.type === 'period.lock_date_changed') as
+      | { type: string; description?: string }
+      | undefined
+    expect(entry?.description).toBeDefined()
+    for (const field of ['previousLockDate', 'lockDate', 'direction', 'via', 'reopenedFiledVatPeriods']) {
+      expect(entry?.description, field).toContain(`\`${field}\``)
+    }
+    // The door, never the person: the payload names no user.
+    expect(entry?.description).not.toMatch(/user/i)
+    expect(WEBHOOKS_MD).toContain('- `period.lock_date_changed`: ')
+  })
+
   it('is exactly the event_type enum the v1 create endpoint advertises in the OpenAPI spec', () => {
     const spec = generateOpenApiSpec('https://unit.test')
     const op = (spec.paths['/api/v1/companies/{companyId}/webhooks'] as Record<string, unknown>).post as {
