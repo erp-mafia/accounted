@@ -47,17 +47,17 @@ function setup(options: {
 }) {
   const invoice = options.invoice === undefined ? makeSupplierInvoice({ id: 'inv-1', user_id: CILLA, due_date: FUTURE }) : options.invoice
   const session = createTableMockSupabase({
-    supplier_invoices: [
-      { data: invoice },
-      { data: options.updated === undefined ? (invoice ? { ...invoice, status: 'approved', approved_at: 'now' } : null) : options.updated },
-    ],
+    // The first read, then the re-read when the marker is not (or not by this call) set.
+    supplier_invoices: { data: invoice },
     company_attest_policies: { data: options.policy ?? null },
     company_settings: { data: { accounting_method: 'accrual' } },
     supplier_invoice_attestations: Array.isArray(options.attestations?.[0])
       ? (options.attestations as Array<Array<Record<string, unknown>>>).map((data) => ({ data }))
       : { data: options.attestations ?? [] },
   })
+  // The service role: the trail and the attest marker (a session may not write it).
   const writer = createTableMockSupabase({
+    supplier_invoices: { data: options.updated === undefined ? (invoice ? { ...invoice, status: 'approved', approved_at: 'now' } : null) : options.updated },
     company_members: members,
     supplier_invoice_attestations: { data: { id: 'att-1' } },
     supplier_invoice_attest_links: { data: null },
@@ -77,11 +77,24 @@ describe('approveSupplierInvoice', () => {
     const emit = vi.spyOn(eventBus, 'emit')
     const outcome = await approveSupplierInvoice(ctx(CILLA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
     expect(outcome).toMatchObject({ ok: true, data: { approved: true, attestation_id: 'att-1', attest: { required: false } } })
-    const update = session.payloads('supplier_invoices', 'update')[0] as Record<string, unknown>
+    // The marker is written as the service role, never with the session's client.
+    expect(session.payloads('supplier_invoices', 'update')).toEqual([])
+    const update = writer.payloads('supplier_invoices', 'update')[0] as Record<string, unknown>
     expect(update).toMatchObject({ status: 'approved', approved_by: CILLA })
     expect(update.approved_at).toEqual(expect.any(String))
     expect(writer.payloads('supplier_invoice_attestations', 'insert')[0]).toMatchObject({ decision: 'approved', source: 'app', user_id: CILLA })
     expect(emit).toHaveBeenCalledWith(expect.objectContaining({ type: 'supplier_invoice.approved' }))
+  })
+
+  it('without a policy still refuses someone who does not keep the books, writing nothing', async () => {
+    const { writer, ctx, writerClient } = setup({})
+    expect(await approveSupplierInvoice(ctx('viewer-or-gone'), { invoiceId: 'inv-1', source: 'api', writer: writerClient })).toMatchObject({
+      ok: false,
+      code: 'FORBIDDEN',
+      details: { reason: 'not_member' },
+    })
+    expect(writer.payloads('supplier_invoices', 'update')).toEqual([])
+    expect(writer.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
   })
 
   it('answers SI_NOT_FOUND and SI_APPROVE_NOT_REGISTERED before any rule', async () => {
@@ -101,7 +114,7 @@ describe('approveSupplierInvoice', () => {
       code: 'ATTEST_NOT_ALLOWED',
       details: { reason: 'registrant' },
     })
-    expect(registrant.session.payloads('supplier_invoices', 'update')).toEqual([])
+    expect(registrant.writer.payloads('supplier_invoices', 'update')).toEqual([])
     expect(registrant.writer.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
 
     const outsider = setup({ policy: policyRow() })
@@ -113,28 +126,28 @@ describe('approveSupplierInvoice', () => {
   })
 
   it('any: the first attester attests the invoice', async () => {
-    const { session, writer, ctx, writerClient } = setup({ policy: policyRow() })
+    const { writer, ctx, writerClient } = setup({ policy: policyRow() })
     const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'email_link', writer: writerClient })
     expect(outcome).toMatchObject({ ok: true, data: { approved: true } })
     expect(writer.payloads('supplier_invoice_attestations', 'insert')[0]).toMatchObject({ source: 'email_link', user_id: ANNA })
-    expect(session.payloads('supplier_invoices', 'update')[0]).toMatchObject({ approved_by: ANNA })
+    expect(writer.payloads('supplier_invoices', 'update')[0]).toMatchObject({ approved_by: ANNA })
   })
 
   it('all: the first approval is recorded and the invoice waits for the rest', async () => {
     // The round read back after the insert holds Anna's approval.
     const mine = { user_id: ANNA, decision: 'approved', decided_at: '2026-10-01T09:00:00Z' }
-    const { session, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [[], [mine]] })
+    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [[], [mine]] })
     const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
     expect(outcome).toMatchObject({ ok: true, data: { approved: false, attest: { required: true, satisfied: false, remaining: [BO] } } })
-    expect(session.payloads('supplier_invoices', 'update')).toEqual([])
+    expect(writer.payloads('supplier_invoices', 'update')).toEqual([])
   })
 
   it('all: the last approval sets approved_at', async () => {
     const earlier = { user_id: ANNA, decision: 'approved', decided_at: '2026-10-01T09:00:00Z' }
-    const { session, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [earlier] })
+    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [earlier] })
     const outcome = await approveSupplierInvoice(ctx(BO), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
     expect(outcome).toMatchObject({ ok: true, data: { approved: true } })
-    expect(session.payloads('supplier_invoices', 'update')[0]).toMatchObject({ approved_by: BO })
+    expect(writer.payloads('supplier_invoices', 'update')[0]).toMatchObject({ approved_by: BO })
   })
 
   it('all: an approval that lands while another completes the round still sets the marker', async () => {
@@ -143,10 +156,10 @@ describe('approveSupplierInvoice', () => {
       { user_id: BO, decision: 'approved', decided_at: '2026-10-01T09:00:00Z' },
       { user_id: ANNA, decision: 'approved', decided_at: '2026-10-01T09:00:01Z' },
     ]
-    const { session, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [[], both] })
+    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }), attestations: [[], both] })
     const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
     expect(outcome).toMatchObject({ ok: true, data: { approved: true } })
-    expect(session.payloads('supplier_invoices', 'update')).toHaveLength(1)
+    expect(writer.payloads('supplier_invoices', 'update')).toHaveLength(1)
   })
 
   it('all: refuses a second approval by the same attester in the round', async () => {
@@ -172,16 +185,16 @@ describe('approveSupplierInvoice', () => {
 
   it('keeps an overdue invoice overdue when it is still late', async () => {
     const overdue = makeSupplierInvoice({ status: 'overdue', due_date: '2000-01-01', remaining_amount: 1000 })
-    const { session, ctx, writerClient } = setup({ invoice: overdue })
+    const { writer, ctx, writerClient } = setup({ invoice: overdue })
     await approveSupplierInvoice(ctx(CILLA), { invoiceId: 'inv-1', source: 'app', writer: writerClient })
-    expect(session.payloads('supplier_invoices', 'update')[0]).toMatchObject({ status: 'overdue' })
+    expect(writer.payloads('supplier_invoices', 'update')[0]).toMatchObject({ status: 'overdue' })
   })
 
   it('a dry run writes nothing and says whether the approval completes the attest', async () => {
-    const { session, writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }) })
+    const { writer, ctx, writerClient } = setup({ policy: policyRow({ mode: 'all' }) })
     const outcome = await approveSupplierInvoice(ctx(ANNA), { invoiceId: 'inv-1', source: 'api', dryRun: true, writer: writerClient })
     expect(outcome).toMatchObject({ ok: true, dryRun: true, preview: { attest_required: true, completes_attest: false, attest_remaining_user_ids: [BO], status: 'registered' } })
-    expect(session.payloads('supplier_invoices', 'update')).toEqual([])
+    expect(writer.payloads('supplier_invoices', 'update')).toEqual([])
     expect(writer.payloads('supplier_invoice_attestations', 'insert')).toEqual([])
   })
 })

@@ -307,6 +307,10 @@ export const AUDITED_TABLES = [
   // and set_company_grants_paused, which log every change here.
   'company_grants',
   'company_grant_settings',
+  // Attest of supplier invoices (migration 20261028214917): whether attest is
+  // required, from what amount, by whom, any or all, and whether the person
+  // who registered an invoice may attest it. It decides what may be paid.
+  'company_attest_policies',
 ] as const
 
 /**
@@ -1403,6 +1407,57 @@ function grantSettingsAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEven
   })
 }
 
+/** One rule of the attest policy, as the report states it. */
+function attestRuleValue(key: string, value: unknown): string {
+  switch (key) {
+    case 'threshold_amount':
+      if (value === null || value === undefined) return 'alla fakturor'
+      return Number.isFinite(Number(value)) ? `${fmtKronor(Number(value))} kr` : fmtValue(value)
+    case 'mode':
+      return value === 'all' ? 'alla attestanter' : 'en attestant räcker'
+    case 'attesters':
+      return `${Array.isArray(value) ? value.length : 0} st`
+    default:
+      return fmtValue(value)
+  }
+}
+
+const ATTEST_POLICY_RULES: Record<string, string> = {
+  enabled: 'Attest krävs',
+  threshold_amount: 'Från belopp',
+  mode: 'Attest av',
+  attesters: 'Attestanter',
+  preparer_may_attest: 'Den som registrerat får attestera',
+}
+
+/**
+ * The attest policy for supplier invoices (migration 20261028214917): who
+ * must attest before an invoice may be paid. The trigger logs only saves
+ * that change a rule; the attesters are counted (their ids stay in the row).
+ */
+function attestPolicyAuditEvent(row: AuditLogEntry): RawBehandlingshistorikEvent | null {
+  if (row.action !== 'INSERT' && row.action !== 'UPDATE') return null
+  const details: string[] = []
+  for (const [key, label] of Object.entries(ATTEST_POLICY_RULES)) {
+    const after = attestRuleValue(key, row.new_state?.[key])
+    if (row.action === 'INSERT') {
+      details.push(`${label}: ${after}`)
+      continue
+    }
+    const before = attestRuleValue(key, row.old_state?.[key])
+    const changed = key === 'attesters' ? !same(row.old_state?.[key], row.new_state?.[key]) : before !== after
+    if (changed) details.push(`${label}: ${before} → ${after}`)
+  }
+  if (row.action === 'UPDATE' && details.length === 0) return null
+  return auditEvent(row, {
+    category: 'installningar',
+    code: row.action === 'INSERT' ? 'attest_policy.created' : 'attest_policy.updated',
+    event: row.action === 'INSERT' ? 'Attestregler för leverantörsfakturor sparade' : 'Attestregler för leverantörsfakturor ändrade',
+    object: 'Leverantörsfakturor',
+    details,
+  })
+}
+
 /**
  * A mailbox the receipt hunt reads underlag from: who connected it, with
  * which access, and when it was disconnected (and whether the provider
@@ -1732,6 +1787,8 @@ export function auditRowToEvent(
       return grantAuditEvent(row)
     case 'company_grant_settings':
       return grantSettingsAuditEvent(row)
+    case 'company_attest_policies':
+      return attestPolicyAuditEvent(row)
     case 'dimensions':
       return genericAuditEvent(row, {
         category: 'installningar',

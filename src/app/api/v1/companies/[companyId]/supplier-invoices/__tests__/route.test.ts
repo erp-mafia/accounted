@@ -107,7 +107,7 @@ import { GET as getSI, PATCH as updateSI } from '../[id]/route'
 import { POST as approveSI } from '../[id]/approve/route'
 import { POST as markPaidSI } from '../[id]/mark-paid/route'
 import { POST as creditSI } from '../[id]/credit/route'
-import { createTableMockSupabase } from '@/tests/helpers'
+import { createTableMockSupabase, type TableMockResolver } from '@/tests/helpers'
 
 const mockValidate = validateApiKey as ReturnType<typeof vi.fn>
 const mockServiceClient = createServiceClientNoCookies as ReturnType<typeof vi.fn>
@@ -119,7 +119,7 @@ interface TableResp {
 }
 
 // Every client here also answers the arrival-number RPC the create path claims.
-function supabaseFor(byTable: Record<string, TableResp | TableResp[]>) {
+function supabaseFor(byTable: Record<string, TableResp | TableResp[] | TableMockResolver>) {
   return createTableMockSupabase({
     'rpc:get_next_arrival_number': { data: 42, error: null },
     ...byTable,
@@ -1797,12 +1797,22 @@ describe('PATCH /api/v1/companies/:companyId/supplier-invoices/:id', () => {
 })
 
 describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () => {
+  /**
+   * company_members as two readers ask: the key's membership for the company
+   * gate (one row), and the company's writers for the attest service, which
+   * checks the key's owner keeps the books before it writes the marker.
+   */
+  const ownerMembership: TableMockResolver = (calls) =>
+    calls.some((c) => c.method === 'select' && String(c.args[0]).includes('user_id'))
+      ? { data: [{ user_id: USER_ID, role: 'owner' }], error: null }
+      : { data: { company_id: COMPANY_ID, role: 'owner' }, error: null }
+
   it('flips registered → approved', async () => {
     const registered = { ...SAMPLE_SI, status: 'registered' }
     const approved = { ...SAMPLE_SI, status: 'approved' }
     mockServiceClient.mockReturnValue(
       supabaseFor({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        company_members: ownerMembership,
         // Queue: 1st = pre-flight (registered), 2nd = post-update (approved).
         supplier_invoices: [
           { data: registered, error: null },
@@ -1828,7 +1838,7 @@ describe('POST /api/v1/companies/:companyId/supplier-invoices/:id/approve', () =
     const overdue = { ...SAMPLE_SI, status: 'overdue', due_date: '2000-01-01', approved_at: null }
     mockServiceClient.mockReturnValue(
       supabaseFor({
-        company_members: { data: { company_id: COMPANY_ID, role: 'owner' }, error: null },
+        company_members: ownerMembership,
         supplier_invoices: [
           { data: overdue, error: null },
           { data: { ...overdue, approved_at: '2026-07-27T08:00:00Z' }, error: null },

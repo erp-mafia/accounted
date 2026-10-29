@@ -1743,6 +1743,47 @@ describe('rules for automatic booking (grants)', () => {
   })
 })
 
+describe('auditRowToEvent: the attest policy for supplier invoices (#124)', () => {
+  const policy = {
+    company_id: 'company-1',
+    enabled: true,
+    threshold_amount: 5000,
+    mode: 'any',
+    attesters: ['user-anna'],
+    preparer_may_attest: false,
+    updated_by: 'user-1',
+  }
+
+  it('states every rule when the policy is first saved', () => {
+    expect(auditRowToEvent(auditRow({ table_name: 'company_attest_policies', action: 'INSERT', new_state: policy }))).toMatchObject({
+      category: 'installningar',
+      code: 'attest_policy.created',
+      event: 'Attestregler för leverantörsfakturor sparade',
+      object: 'Leverantörsfakturor',
+      details: [
+        'Attest krävs: Ja',
+        'Från belopp: 5 000 kr',
+        'Attest av: en attestant räcker',
+        'Attestanter: 1 st',
+        'Den som registrerat får attestera: Nej',
+      ],
+    })
+  })
+
+  it('lists only the rules a change touched, an attester swapped included', () => {
+    const changed = { ...policy, threshold_amount: null, mode: 'all', attesters: ['user-bo'] }
+    expect(auditRowToEvent(auditRow({ table_name: 'company_attest_policies', action: 'UPDATE', old_state: policy, new_state: changed }))).toMatchObject({
+      code: 'attest_policy.updated',
+      event: 'Attestregler för leverantörsfakturor ändrade',
+      details: ['Från belopp: 5 000 kr → alla fakturor', 'Attest av: en attestant räcker → alla attestanter', 'Attestanter: 1 st → 1 st'],
+    })
+  })
+
+  it('renders nothing for an update that changed no rule', () => {
+    expect(auditRowToEvent(auditRow({ table_name: 'company_attest_policies', action: 'UPDATE', old_state: policy, new_state: { ...policy, updated_by: 'user-2' } }))).toBeNull()
+  })
+})
+
 describe('decisionEvents', () => {
   const rule = {
     source: 'rule',

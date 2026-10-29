@@ -189,6 +189,7 @@ import {
   companyAttestsSupplierInvoices,
   payableSupplierInvoiceStatuses,
 } from '@/lib/supplier-invoices/lifecycle'
+import { invoiceTotalSek } from '@/lib/supplier-invoices/attest-policy'
 import { inboxStatedPaymentDetails, planSupplierPaymentBackfill, type SupplierPaymentColumns } from '@/lib/supplier-invoices/payment-details-backfill'
 import { loadOpenPaymentInstructions } from '@/lib/supplier-invoices/lifecycle-stages'
 import { SETTLED_SUPPLIER_INVOICE_STATUSES } from '@/lib/supplier-invoices/stages'
@@ -23182,7 +23183,7 @@ export const tools: McpTool[] = [
 
       const { data: inv } = await supabase
         .from('supplier_invoices')
-        .select('id, arrival_number, supplier_invoice_number, invoice_date, total, currency, status, approved_at, supplier:suppliers(name)')
+        .select('id, arrival_number, supplier_invoice_number, invoice_date, total, total_sek, exchange_rate, currency, status, approved_at, supplier:suppliers(name)')
         .eq('id', id).eq('company_id', companyId).single()
       if (!inv) throw new Error('Supplier invoice not found')
       // 'overdue' is approvable: the daily cron puts unbooked invoices there
@@ -23191,6 +23192,7 @@ export const tools: McpTool[] = [
         throw new Error('Fakturan är redan godkänd eller kan inte godkännas i nuvarande status')
       }
 
+      const totalSek = invoiceTotalSek(inv)
       return stage({
         supabase,
         companyId,
@@ -23203,6 +23205,9 @@ export const tools: McpTool[] = [
           supplier_name: (inv.supplier as { name?: string } | null)?.name,
           total: inv.total,
           currency: inv.currency,
+          // What the key's unattended ceiling prices (lib/pending-operations/unattended-limit.ts):
+          // attest releases the invoice for payment.
+          total_sek: totalSek === null ? null : roundOre(totalSek),
           invoice_date: inv.invoice_date,
         },
         actor,

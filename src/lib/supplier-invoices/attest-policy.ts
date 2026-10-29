@@ -75,7 +75,7 @@ export interface AttestationRecord {
  * total itself for a SEK invoice, the total at the invoice's rate otherwise.
  * Null when a foreign invoice has no rate: the threshold cannot be judged.
  */
-export function invoiceTotalSek(invoice: AttestInvoiceFacts): number | null {
+export function invoiceTotalSek(invoice: Pick<AttestInvoiceFacts, 'currency' | 'total' | 'total_sek' | 'exchange_rate'>): number | null {
   if (invoice.total_sek !== null && invoice.total_sek !== undefined && Number.isFinite(Number(invoice.total_sek))) {
     return Math.abs(Number(invoice.total_sek))
   }
