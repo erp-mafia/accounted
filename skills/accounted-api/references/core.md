@@ -1710,7 +1710,7 @@ Example response `200`:
 **Set, move or remove the company-wide bookkeeping lock date.**
 `scope:companies:write · risk:high · idempotent · dry-run · reversible`
 
-Sets bookkeeping_locked_through (nothing dated on or before it can be booked, corrected or attached) and auto_lock_period_days. Moving the date back or clearing it reopens those dates, exactly as the settings page allows; the response then carries the warning BOOKKEEPING_LOCK_MOVED_BACKWARDS. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
+Sets bookkeeping_locked_through (nothing dated on or before it can be booked, corrected or attached) and auto_lock_period_days. Moving the date back or clearing it reopens those dates, exactly as the settings page allows; the response then carries the warning BOOKKEEPING_LOCK_MOVED_BACKWARDS. A change of the stored date emits the period.lock_date_changed webhook. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.
 
 **Use when:** A period is reconciled and filed and should be protected, or a locked date must be reopened for a correction.
 **Do not use for:** Locking or closing a single fiscal period (POST /fiscal-periods/{id}/lock, /close), or correcting a posted verifikat (storno or rättelse).

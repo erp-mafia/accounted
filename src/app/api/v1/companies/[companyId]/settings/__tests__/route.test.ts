@@ -637,10 +637,9 @@ describe('PATCH /api/v1/companies/:companyId/settings/bookkeeping-lock', () => {
   it('moving it back is allowed, as on the settings page, and says it reopened dates', async () => {
     const client = makeClient({
       company_members: OWNER,
-      // The lock op reads the current lock date first (filed-VAT check), and
-      // the filing record reads the fiscal year that places a yearly period.
+      // The service reads the stored row, the filing record reads the fiscal
+      // year that places a yearly period (filed-VAT check), then the update.
       company_settings: [
-        { data: STORED },
         { data: STORED },
         { data: STORED },
         { data: { ...STORED, bookkeeping_locked_through: '2026-03-31' } },

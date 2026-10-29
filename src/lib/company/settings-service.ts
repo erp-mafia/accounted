@@ -40,11 +40,17 @@
  *   - a save that changes the company's name, legal form, org number,
  *     address or VAT registration writes them onto its Stripe customer, so
  *     the next subscription invoice is made out to the company as it now
- *     stands (crm#1378). A failed sync never fails the save.
+ *     stands (crm#1378). A failed sync never fails the save;
+ *   - a lock date move (bookkeeping_locked_through) works out which filed
+ *     momsdeklaration periods it reopens. The API and MCP doors refuse that
+ *     unless the caller acknowledged them; the settings page does not ask
+ *     (decision 2026-09-26). A failed read fails closed;
+ *   - a save that really moves the stored lock date emits
+ *     period.lock_date_changed (awaited), naming the door, not the person.
  *
  * A dry run performs every read and every check and writes nothing: no payee
  * write-through, no settings update, no deadline regeneration, no code
- * registration.
+ * registration, no event.
  */
 import type { z } from 'zod'
 import type { UpdateSettingsSchema } from '@/lib/api/schemas'
@@ -65,11 +71,28 @@ import {
   checkAccountingMethodChange,
   recordAccountingMethodCorrection,
 } from '@/lib/company/accounting-method-change'
+import type { SupabaseClient } from '@supabase/supabase-js'
+import type { ReopenedVatPeriod } from '@/lib/vat/filed-periods-reopened'
+import { eventBus } from '@/lib/events/bus'
+import type { LockDateChangeVia } from '@/lib/events/types'
 
 /** The dashboard's settings body after validation: column names, all optional. */
 export type CompanySettingsChanges = z.output<typeof UpdateSettingsSchema>
 
 type SettingsRow = Record<string, unknown>
+
+/**
+ * Which filed momsdeklaration periods a move of the lock date from `before`
+ * to `after` reopens: lib/vat/filed-periods-reopened.ts. The door passes it
+ * in, because the ledger kernel (this service) may not import the VAT block
+ * (lib/modules boundary ratchet).
+ */
+export type ReopenedFiledVatLookup = (
+  supabase: SupabaseClient,
+  companyId: string,
+  before: string | null,
+  after: string | null,
+) => Promise<ReopenedVatPeriod[]>
 
 export interface UpdateCompanySettingsOptions {
   dryRun?: boolean
@@ -79,6 +102,21 @@ export interface UpdateCompanySettingsOptions {
    * key, MCP) leave this false and the service reads the membership role.
    */
   adminVerified?: boolean
+  /**
+   * Which door the save came through: the settings page ('app'), a direct v1
+   * call ('api'), or the approval of a staged change ('approval').
+   * period.lock_date_changed carries it in place of the person.
+   */
+  via: LockDateChangeVia
+  /** filedVatPeriodsReopenedBy, passed in by the door (see ReopenedFiledVatLookup). */
+  findReopenedFiledVatPeriods: ReopenedFiledVatLookup
+  /**
+   * Refuse a lock date move that reopens a filed momsdeklaration period
+   * (BOOKKEEPING_LOCK_REOPENS_FILED_VAT, naming the periods). The API and MCP
+   * doors set it unless the caller sent acknowledge_filed_vat_periods; the
+   * settings page does not ask (decision 2026-09-26).
+   */
+  refuseReopeningFiledVat?: boolean
 }
 
 export interface UpdateCompanySettingsResult {
@@ -300,7 +338,7 @@ export async function checkVacationBasisChange(
 export async function updateCompanySettings(
   ctx: OperationContext,
   input: CompanySettingsChanges,
-  options: UpdateCompanySettingsOptions = {},
+  options: UpdateCompanySettingsOptions,
 ): Promise<OperationOutcome<UpdateCompanySettingsResult>> {
   const { supabase, companyId, log } = ctx
   const body: CompanySettingsChanges = { ...input }
@@ -506,6 +544,38 @@ export async function updateCompanySettings(
     return refuse('SETTINGS_PS_REQUIRES_VAT_AND_EU_TRADE')
   }
 
+  // The filed momsdeklaration periods a lock date move reopens, worked out
+  // once for every door: the API and MCP doors refuse them unacknowledged,
+  // and period.lock_date_changed names them whichever door moved the date.
+  // A failed read fails closed.
+  const previousLockDate = (oldSettings?.bookkeeping_locked_through as string | null | undefined) ?? null
+  let reopenedFiledVatPeriods: ReopenedVatPeriod[] = []
+  if (body.bookkeeping_locked_through !== undefined) {
+    try {
+      reopenedFiledVatPeriods = await options.findReopenedFiledVatPeriods(
+        supabase,
+        companyId,
+        previousLockDate,
+        body.bookkeeping_locked_through,
+      )
+    } catch (error) {
+      log.error('filed VAT periods read failed before a lock date move', error as Error)
+      return { ok: false, code: 'UNKNOWN_ERROR', error }
+    }
+  }
+  if (reopenedFiledVatPeriods.length > 0 && options.refuseReopeningFiledVat) {
+    const names = reopenedFiledVatPeriods.map((p) => p.tax_period).join(', ')
+    return refuse(
+      'BOOKKEEPING_LOCK_REOPENS_FILED_VAT',
+      `Låsdatumet skulle öppna momsperioder som redan är deklarerade (${names}). Bekräfta med acknowledge_filed_vat_periods om en rättelse ska bokföras där.`,
+      { filed_periods: reopenedFiledVatPeriods, acknowledge_with: 'acknowledge_filed_vat_periods' },
+    )
+  }
+  const lockMoveWarnings = [
+    ...lockWarnings(oldSettings, body),
+    ...reopenedFiledVatWarnings(reopenedFiledVatPeriods),
+  ]
+
   const payload = toUpdatePayload(body)
 
   // Regenerate when the save touches tax-relevant fields: the statutory
@@ -554,7 +624,7 @@ export async function updateCompanySettings(
         proposed: { ...oldSettings, ...changes },
         deadlines_will_regenerate: willRegenerate,
         dimension_codes_will_import: turnsDimensionsOn,
-        warnings: [...lockWarnings(oldSettings, body), ...methodWarnings],
+        warnings: [...lockMoveWarnings, ...methodWarnings],
       },
     }
   }
@@ -587,6 +657,25 @@ export async function updateCompanySettings(
     return { ok: false, code: 'UNKNOWN_ERROR', error }
   }
 
+  // The monthly close an integration waits for: only when the save touched
+  // the lock date and the stored date really moved (the settings page resends
+  // the unchanged date on every save). Removing the lock is a move backward.
+  const lockDate = ((data as SettingsRow).bookkeeping_locked_through as string | null | undefined) ?? null
+  if (body.bookkeeping_locked_through !== undefined && lockDate !== previousLockDate) {
+    await eventBus.emit({
+      type: 'period.lock_date_changed',
+      payload: {
+        previousLockDate,
+        lockDate,
+        direction: lockDate !== null && (previousLockDate === null || lockDate > previousLockDate) ? 'forward' : 'backward',
+        via: options.via,
+        reopenedFiledVatPeriods,
+        userId: ctx.userId,
+        companyId,
+      },
+    })
+  }
+
   // A filled-in org number goes to the company row too, which the duplicate
   // check and the company lists read. The settings copy just written leads
   // for every bank and payment call (lib/company/org-number.ts), so a failed
@@ -616,7 +705,7 @@ export async function updateCompanySettings(
     }
   }
 
-  const warnings = [...lockWarnings(oldSettings, body), ...methodWarnings]
+  const warnings = [...lockMoveWarnings, ...methodWarnings]
   if (methodChange.kind === 'correction') {
     const notRecorded = await recordAccountingMethodCorrection(
       ctx,
@@ -703,6 +792,19 @@ function lockWarnings(oldSettings: SettingsRow | null, body: CompanySettingsChan
       message_en: after === null
         ? `The bookkeeping lock (locked through ${before}) was removed: previously locked dates are writable again.`
         : `The bookkeeping lock moved back from ${before} to ${after}: the dates in between are writable again.`,
+    },
+  ]
+}
+
+/** A lock date move reopened filed momsdeklaration periods: book the correction and file again. */
+function reopenedFiledVatWarnings(periods: ReopenedVatPeriod[]): OperationWarning[] {
+  if (periods.length === 0) return []
+  const names = periods.map((p) => p.tax_period).join(', ')
+  return [
+    {
+      code: 'BOOKKEEPING_LOCK_REOPENED_FILED_VAT',
+      message_sv: `Deklarerade momsperioder öppnades igen (${names}). Bokför rättelsen och lämna en rättad momsdeklaration för perioden.`,
+      message_en: `Filed VAT periods were reopened (${names}). Book the correction and file a corrected VAT return for the period.`,
     },
   ]
 }

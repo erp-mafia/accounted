@@ -117,6 +117,10 @@
   "mcp.workflow_started": [
     "event-log"
   ],
+  "period.lock_date_changed": [
+    "event-log",
+    "webhooks"
+  ],
   "period.locked": [
     "event-log",
     "webhooks"

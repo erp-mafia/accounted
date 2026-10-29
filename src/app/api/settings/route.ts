@@ -7,6 +7,7 @@ import { getErrorEntry } from '@/lib/errors/structured-errors'
 import { updateCompanySettings, withEntityTypeFallback } from '@/lib/company/settings-service'
 import { sessionFailureResponse } from '@/lib/operations/session'
 import { withdrawPendingReminderBatches } from '@/lib/reminders/withdraw'
+import { filedVatPeriodsReopenedBy } from '@/lib/vat/filed-periods-reopened'
 import type { OperationOutcome } from '@/lib/operations/types'
 import type { Logger } from '@/lib/logger'
 
@@ -69,7 +70,7 @@ export const PUT = withRouteContext(
     const outcome = await updateCompanySettings(
       { supabase, companyId, userId: user.id, log },
       validation.data,
-      { adminVerified: true },
+      { adminVerified: true, via: 'app', findReopenedFiledVatPeriods: filedVatPeriodsReopenedBy },
     )
     if (!outcome.ok) return settingsFailureResponse(outcome, log, requestId)
     if (outcome.dryRun) return NextResponse.json({ data: outcome.preview })

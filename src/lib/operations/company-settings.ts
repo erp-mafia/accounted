@@ -32,6 +32,7 @@ import {
   getCompanySettings,
   updateCompanySettings,
   type CompanySettingsChanges,
+  type UpdateCompanySettingsOptions,
 } from '@/lib/company/settings-service'
 import {
   refineInvoiceSettings,
@@ -281,8 +282,16 @@ async function runSettingsWrite(
   ctx: OperationContext,
   changes: CompanySettingsChanges,
   dryRun: boolean,
+  options: Pick<UpdateCompanySettingsOptions, 'refuseReopeningFiledVat'> = {},
 ): Promise<OperationOutcome<{ resource: Record<string, unknown>; deadlines_regenerated: boolean }>> {
-  const outcome = await updateCompanySettings(ctx, changes, { dryRun })
+  // A staged change (MCP, ?stage=true) runs here when it is approved.
+  const via = ctx.pendingOperationId ? 'approval' : 'api'
+  const outcome = await updateCompanySettings(ctx, changes, {
+    ...options,
+    dryRun,
+    via,
+    findReopenedFiledVatPeriods: filedVatPeriodsReopenedBy,
+  })
   if (!outcome.ok) return outcome
   if (outcome.dryRun) {
     const preview = outcome.preview
@@ -572,7 +581,7 @@ export const settingsUpdateBookkeepingLock = defineOperation({
   docs: {
     summary: 'Set, move or remove the company-wide bookkeeping lock date.',
     description:
-      'Sets bookkeeping_locked_through (nothing dated on or before it can be booked, corrected or attached) and auto_lock_period_days. Moving the date back or clearing it reopens those dates, exactly as the settings page allows; the response then carries the warning BOOKKEEPING_LOCK_MOVED_BACKWARDS. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
+      'Sets bookkeeping_locked_through (nothing dated on or before it can be booked, corrected or attached) and auto_lock_period_days. Moving the date back or clearing it reopens those dates, exactly as the settings page allows; the response then carries the warning BOOKKEEPING_LOCK_MOVED_BACKWARDS. A change of the stored date emits the period.lock_date_changed webhook. Owner or admin only. Idempotent (mandatory Idempotency-Key). Dry-runnable.',
     useWhen: 'A period is reconciled and filed and should be protected, or a locked date must be reopened for a correction.',
     doNotUseFor:
       'Locking or closing a single fiscal period (POST /fiscal-periods/{id}/lock, /close), or correcting a posted verifikat (storno or rättelse).',
@@ -614,45 +623,18 @@ export const settingsUpdateBookkeepingLock = defineOperation({
     },
   },
   run: async (ctx, { acknowledge_filed_vat_periods: acknowledged, ...input }, { dryRun }) => {
-    let reopenedWarning: OperationWarning | null = null
-    if (input.bookkeeping_locked_through !== undefined) {
-      const { data: current } = await ctx.supabase
-        .from('company_settings')
-        .select('bookkeeping_locked_through')
-        .eq('company_id', ctx.companyId)
-        .maybeSingle()
-      const before = (current?.bookkeeping_locked_through as string | null | undefined) ?? null
-      const reopened = await filedVatPeriodsReopenedBy(
-        ctx.supabase,
-        ctx.companyId,
-        before,
-        input.bookkeeping_locked_through ?? null,
-      )
-      if (reopened.length > 0) {
-        const names = reopened.map((p) => p.tax_period).join(', ')
-        if (acknowledged !== true) {
-          return {
-            ok: false,
-            code: 'BOOKKEEPING_LOCK_REOPENS_FILED_VAT',
-            details: { filed_periods: reopened, acknowledge_with: 'acknowledge_filed_vat_periods' },
-            messageSv: `Låsdatumet skulle öppna momsperioder som redan är deklarerade (${names}). Bekräfta med acknowledge_filed_vat_periods om en rättelse ska bokföras där.`,
-          }
-        }
-        reopenedWarning = {
-          code: 'BOOKKEEPING_LOCK_REOPENED_FILED_VAT',
-          message_sv: `Deklarerade momsperioder öppnades igen (${names}). Bokför rättelsen och lämna en rättad momsdeklaration för perioden.`,
-          message_en: `Filed VAT periods were reopened (${names}). Book the correction and file a corrected VAT return for the period.`,
-        }
-      }
-    }
-    const outcome = await runSettingsWrite(ctx, input, dryRun)
+    // The service works out the filed periods a move reopens; this door
+    // refuses them until the caller acknowledges them.
+    const outcome = await runSettingsWrite(ctx, input, dryRun, { refuseReopeningFiledVat: acknowledged !== true })
     if (!outcome.ok) return outcome
     if (outcome.dryRun) {
-      return reopenedWarning
-        ? { ...outcome, preview: { ...outcome.preview, reopened_filed_vat_periods: reopenedWarning.message_en } }
+      const reopened = (outcome.preview.warnings as OperationWarning[] | undefined)?.find(
+        (warning) => warning.code === 'BOOKKEEPING_LOCK_REOPENED_FILED_VAT',
+      )
+      return reopened
+        ? { ...outcome, preview: { ...outcome.preview, reopened_filed_vat_periods: reopened.message_en } }
         : outcome
     }
-    const warnings = [...(outcome.warnings ?? []), ...(reopenedWarning ? [reopenedWarning] : [])]
-    return { ok: true, data: outcome.data.resource, ...(warnings.length > 0 ? { warnings } : {}) }
+    return { ok: true, data: outcome.data.resource, ...(outcome.warnings ? { warnings: outcome.warnings } : {}) }
   },
 })

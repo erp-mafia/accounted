@@ -12,6 +12,14 @@ import type {
   InvoiceInboxItem,
   SupplierInvoice,
 } from '@/types'
+import type { ReopenedVatPeriod } from '@/lib/vat/filed-periods-reopened'
+
+/**
+ * The door a lock date change came through: the settings page ('app'), a
+ * direct v1 API call ('api'), or the approval of a staged change, from MCP
+ * or ?stage=true ('approval').
+ */
+export type LockDateChangeVia = 'app' | 'api' | 'approval'
 
 // ============================================================
 // Core Event Types: discriminated union of all system events
@@ -193,6 +201,12 @@ export type CoreEvent =
   | { type: 'period.locked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.unlocked'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
   | { type: 'period.year_closed'; payload: { period: FiscalPeriod; userId: string; companyId: string } }
+  // The company-wide lock date ("Bokföring låst t.o.m.",
+  // company_settings.bookkeeping_locked_through) was set, moved or removed
+  // (lib/company/settings-service.ts). lockDate is null when the lock was
+  // removed, which is a move backward. `via` names the door, never the person
+  // (the webhook payload carries no personal data).
+  | { type: 'period.lock_date_changed'; payload: { previousLockDate: string | null; lockDate: string | null; direction: 'forward' | 'backward'; via: LockDateChangeVia; reopenedFiledVatPeriods: ReopenedVatPeriod[]; userId: string; companyId: string } }
   // Customers
   | { type: 'customer.created'; payload: { customer: Customer; userId: string; companyId: string } }
   // Articles (artikelregister)

@@ -1307,7 +1307,10 @@ describe('a tool that declares the staged envelope only stages', () => {
     // below, where named tools MUST reach the insert through this same
     // observe(): if the harness breaks, those fail.
     expect(reached).toBeGreaterThan(0)
-  })
+    // It runs every staging tool in turn: a quarter of a second on an idle
+    // machine, past the default 5 s on a loaded CI runner (MRs !1037, !1048
+    // and !1059 timed out here with no offender, 2026-10-28).
+  }, 60_000)
 
   it('has no mutation or committing engine call in its execute() source', () => {
     const offenders = stagingTools
