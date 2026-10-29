@@ -20,6 +20,8 @@
 import { formatVoucher } from '@/lib/bookkeeping/voucher-series-resolver'
 import type { SupabaseClient } from '@supabase/supabase-js'
 import { fetchAllRows } from '@/lib/supabase/fetch-all'
+import { fetchLinesByEntryIds } from '@/lib/bookkeeping/entry-lines'
+import { booksPurchase, type PlausibilityLine } from '@/lib/bookkeeping/voucher-plausibility'
 import { resolveInboxAddress } from '@/lib/documents/inbox-address'
 import { fetchCandidateTransactions } from './hunt'
 import { resolvePortal, type CompanyPortal } from './company-portals'
@@ -49,8 +51,10 @@ export interface AgentWorklistItem {
   search_from: string
   search_to: string
   /**
-   * False for rows that never have a mailed receipt (salary, tax, bank fees):
-   * the agent skips the mail search and reports them as needing a human.
+   * False for rows that never have a mailed receipt (salary, tax, bank fees)
+   * and for verifikat that bought nothing (money in, a transfer between the
+   * company's own accounts): the agent skips the mail search and reports them
+   * as needing a human.
    */
   mail_searchable: boolean
   /** Where the invoice lives when the vendor does not mail it. */
@@ -129,6 +133,9 @@ const KIVRA_DESCRIPTOR =
 const IN_PERSON_DESCRIPTOR =
   /parkering|easypark|parkster|circle k|preem|okq8|\bshell\b|\bst1\b|\btaxi\b|uber|pressbyrån|7-eleven|zettle|izettle/i
 
+/** As much of a posted verifikat's line as the classifier reads. */
+export type BookedLine = Pick<PlausibilityLine, 'account_number' | 'debit_amount'>
+
 interface VerifikatRow {
   journal_entry_id: string
   voucher_series: string | null
@@ -146,24 +153,40 @@ function shiftDate(isoDate: string, days: number): string {
 }
 
 /**
- * Which errand a missing underlag actually needs, from its descriptor alone.
+ * Which errand a missing underlag actually needs, from its descriptor and,
+ * for a posted verifikat, the accounts it books on.
  *
  * Ordered by how a receipt reaches a Swedish company: a vendor that withholds
  * its invoice behind a login, a chain that sends to Kivra, a counter purchase
- * that only exists on paper, and otherwise the mailbox.
+ * that only exists on paper, and otherwise the mailbox. Before all of them,
+ * what has no receipt at all: salary and tax, and a verifikat that bought
+ * nothing.
  *
  * Exported because this is derived, never stored: the app can classify the
  * rows it already has without an agent having run, and the agent's sentence
  * and the app's summary then say the same thing by construction.
  */
-export type NextStepKind = 'not_mail' | 'portal' | 'kivra' | 'paper' | 'mail'
+export type NextStepKind = 'not_mail' | 'no_purchase' | 'portal' | 'kivra' | 'paper' | 'mail'
 
 /**
  * `companyPortals` are the company's own (public.company_portals); without
  * them only the portal directory says where an invoice waits behind a login.
+ *
+ * `lines` are a posted verifikat's; absent for an unbooked bank row, which has
+ * only its words. They catch what no word does: a verifikat that bought
+ * nothing (booksPurchase), such as a share issue, a transfer between the
+ * company's own accounts or a sales samlingsverifikat. In a trial run
+ * (2026-10-28) those, sorted largest first, filled the whole first page of a
+ * mail search. The words go first: a tax payment says so, and the sentence
+ * for it names the skattekonto.
  */
-export function nextStepKind(descriptor: string | null, companyPortals: readonly CompanyPortal[] = []): NextStepKind {
+export function nextStepKind(
+  descriptor: string | null,
+  companyPortals: readonly CompanyPortal[] = [],
+  lines?: readonly BookedLine[],
+): NextStepKind {
   if (!canHaveEmailReceipt(descriptor)) return 'not_mail'
+  if (lines && !booksPurchase(lines)) return 'no_purchase'
   if (resolvePortal(companyPortals, descriptor)) return 'portal'
   if (KIVRA_DESCRIPTOR.test(descriptor ?? '')) return 'kivra'
   if (TIP_DESCRIPTOR.test(descriptor ?? '') || IN_PERSON_DESCRIPTOR.test(descriptor ?? '')) return 'paper'
@@ -175,14 +198,12 @@ export function nextStepKind(descriptor: string | null, companyPortals: readonly
  * one place, one action. Never mentions searching, agents or what failed. By
  * the time this is read, the reader only wants the errand.
  */
-function nextStep(
-  descriptor: string | null,
-  portal: AgentWorklistItem['portal'],
-  companyPortals: readonly CompanyPortal[],
-): string {
-  switch (nextStepKind(descriptor, companyPortals)) {
+function nextStep(kind: NextStepKind, portal: AgentWorklistItem['portal']): string {
+  switch (kind) {
     case 'not_mail':
       return 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.'
+    case 'no_purchase':
+      return 'Inget inköp, så inget kvitto: underlaget är kontoutdraget eller betalleverantörens rapport.'
     case 'portal':
       return `Logga in på ${portal?.vendor ?? 'leverantören'} och ladda ner fakturan: ${portal?.url ?? ''}`.trim()
     case 'kivra':
@@ -200,11 +221,13 @@ function withSearchHints(
     'search_from' | 'search_to' | 'mail_searchable' | 'portal' | 'tip_possible' | 'next_step'
   >,
   companyPortals: readonly CompanyPortal[],
+  lines?: readonly BookedLine[],
 ): AgentWorklistItem {
   const descriptor = base.counterparty ?? base.description
+  const kind = nextStepKind(descriptor, companyPortals, lines)
+  const mailSearchable = kind !== 'not_mail' && kind !== 'no_purchase'
   // The company's own portal for the supplier first, then the directory's.
-  const portal = resolvePortal(companyPortals, descriptor)
-  const mailSearchable = canHaveEmailReceipt(descriptor)
+  const portal = mailSearchable ? resolvePortal(companyPortals, descriptor) : null
   // A payment that settles an invoice opens the window earlier: the invoice was
   // mailed when it was issued, the payment happens on the due date. The window
   // never closes later, because a document dated well after the charge belongs
@@ -218,7 +241,7 @@ function withSearchHints(
     mail_searchable: mailSearchable,
     portal: portalHint,
     tip_possible: TIP_DESCRIPTOR.test(descriptor ?? ''),
-    next_step: nextStep(descriptor, portalHint, companyPortals),
+    next_step: nextStep(kind, portalHint),
   }
 }
 
@@ -379,11 +402,22 @@ export async function resolveAgentWorklist(
   const verifikat = verifikatWindow.rows.filter(
     (v) => !claimed.journalEntryIds.has(v.journal_entry_id),
   )
-  const context = await fetchVerifikatContext(
-    supabase,
-    companyId,
-    verifikat.map((v) => v.journal_entry_id),
-  )
+  const verifikatIds = verifikat.map((v) => v.journal_entry_id)
+  const [context, lines] = await Promise.all([
+    fetchVerifikatContext(supabase, companyId, verifikatIds),
+    // What each verifikat booked: whether it bought anything at all.
+    fetchLinesByEntryIds<BookedLine & { id: string; journal_entry_id: string }>(
+      supabase,
+      verifikatIds,
+      'account_number, debit_amount',
+    ),
+  ])
+  const linesByEntry = new Map<string, BookedLine[]>()
+  for (const line of lines) {
+    const entryLines = linesByEntry.get(line.journal_entry_id)
+    if (entryLines) entryLines.push(line)
+    else linesByEntry.set(line.journal_entry_id, [line])
+  }
 
   // Ranked on the SEK value: `amount` is in the row's own currency, and a
   // USD 90 subscription must not sort under a 100 kr parking receipt.
@@ -403,7 +437,7 @@ export async function resolveAgentWorklist(
         counterparty: ctx?.counterparty ?? null,
         description: v.description,
         invoice_number: ctx?.invoice_number ?? null,
-      }, companyPortals),
+      }, companyPortals, linesByEntry.get(v.journal_entry_id)),
     })
   }
   for (const tx of transactions) {

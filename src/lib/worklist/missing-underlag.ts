@@ -87,8 +87,10 @@ export async function listMissingUnderlagSample(
  *
  * The RPC gives the entry description; the agent worklist classifies on the
  * counterparty when it has resolved one, and falls back to the same
- * description. A summary line is therefore never more specific than the
- * per-item sentence, which is the right direction to be wrong in.
+ * description. It also reads each verifikat's lines, which this summary does
+ * not: a row that bought nothing counts here under its words, usually as
+ * mail. A summary line is therefore never more specific than the per-item
+ * sentence, which is the right direction to be wrong in.
  */
 export function summariseMissingUnderlag(
   total: number,

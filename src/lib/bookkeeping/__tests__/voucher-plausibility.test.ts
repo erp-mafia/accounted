@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { checkVoucherPlausibility, type PlausibilityLine } from '../voucher-plausibility'
+import { booksPurchase, checkVoucherPlausibility, type PlausibilityLine } from '../voucher-plausibility'
 
 const D = (account_number: string, amount: number): PlausibilityLine => ({ account_number, debit_amount: amount, credit_amount: 0 })
 const C = (account_number: string, amount: number): PlausibilityLine => ({ account_number, debit_amount: 0, credit_amount: amount })
@@ -92,5 +92,22 @@ describe('checkVoucherPlausibility', () => {
   it('passes an ordinary purchase and an ordinary sale', () => {
     expect(codes([D('5410', 800), D('2641', 200), C('1930', 1000)])).toEqual([])
     expect(codes([D('1510', 1250), C('3001', 1000), C('2611', 250)])).toEqual([])
+  })
+})
+
+describe('booksPurchase', () => {
+  it('finds the purchase in a cost, an asset, a supplier payment, a refund or a lone input VAT debit', () => {
+    expect(booksPurchase([D('5890', 12000), C('1930', 12000)])).toBe(true)
+    expect(booksPurchase([D('1220', 30000), C('1930', 30000)])).toBe(true)
+    expect(booksPurchase([D('2440', 1249), C('1930', 1249)])).toBe(true)
+    expect(booksPurchase([D('1930', 1120), C('5890', 1000), C('2641', 120)])).toBe(true)
+    expect(booksPurchase([D('2641', 2400), C('1935', 2400)])).toBe(true)
+  })
+
+  it('finds none in a share issue, a transfer, a sale or a VAT settlement', () => {
+    expect(booksPurchase([D('1931', 100000), C('2082', 100000)])).toBe(false)
+    expect(booksPurchase([D('1940', 80000), C('1930', 80000)])).toBe(false)
+    expect(booksPurchase([D('1686', 5000), C('2611', 1000), C('3001', 4000)])).toBe(false)
+    expect(booksPurchase([D('2611', 2500), C('2641', 900), C('2650', 1600)])).toBe(false)
   })
 })

@@ -306,3 +306,128 @@ describe('resolveAgentWorklist', () => {
     await expect(resolveAgentWorklist(supabase, 'co-1')).rejects.toThrow('forbidden')
   })
 })
+
+/**
+ * Shaped like the rows of a trial run (2026-10-28): the bank rows behind them
+ * had no merchant name, so each verifikat was read by its description, and
+ * the lines say what it actually booked.
+ */
+describe('resolveAgentWorklist: what a verifikat booked', () => {
+  const verifikat = (n: number, description: string, gross: number) => ({
+    journal_entry_id: `je-${n}`,
+    voucher_series: 'A',
+    voucher_number: n,
+    entry_date: '2026-09-29',
+    description,
+    source_type: 'bank_transaction',
+    gross_amount: gross,
+  })
+  const line = (n: number, account_number: string, debit: number, credit = 0) => ({
+    journal_entry_id: `je-${n}`,
+    account_number,
+    debit_amount: debit,
+    credit_amount: credit,
+  })
+
+  async function worklist(rows: ReturnType<typeof verifikat>[], lines: Row[]) {
+    mockFetchCandidateTransactions.mockResolvedValue([])
+    const supabase = mockSupabase(
+      {
+        ...fixture(),
+        pending_operations: [],
+        supplier_invoices: [],
+        // The bank row exists but names nobody: Swedbank leaves merchant_name empty.
+        transactions: rows.map((r) => ({ journal_entry_id: r.journal_entry_id, merchant_name: null, amount: -r.gross_amount, currency: 'SEK' })),
+        journal_entry_lines: lines,
+      },
+      { ok: true, total_count: rows.length, verifikat: rows },
+    )
+    const { items } = await resolveAgentWorklist(supabase, 'co-1')
+    return (n: number) => items.find((i) => i.journal_entry_id === `je-${n}`)!
+  }
+
+  it('searches mail for a purchase whose description notes its VAT', async () => {
+    const item = await worklist(
+      [
+        verifikat(1, 'Flyg SF KLM · KLM flyg Stockholm-New York, tjänsteresa. Utrikes flyg 0% moms. Kvitto saknas i Accounted.', 12000),
+        verifikat(2, 'Partners on Booking BV K1234 · Booking.com, logi tjänsteresa. Utländsk logi, ingen avdragsgill moms.', 9000),
+        verifikat(3, 'ANTHROPIC* CLAUDE SUB SAN FRANCISCO · Claude-abonnemang. Omvänd skattskyldighet.', 2000),
+        verifikat(4, 'OPENAI *CHATGPT SUBSCR K1234 · ChatGPT Pro. 0% debiterad moms: omvänd skattskyldighet.', 1800),
+      ],
+      [
+        line(1, '1930', 0, 12000), line(1, '5890', 12000),
+        line(2, '1930', 0, 9000), line(2, '5890', 9000),
+        line(3, '1930', 0, 2000), line(3, '2614', 0, 500), line(3, '2645', 500), line(3, '5420', 2000),
+        line(4, '1930', 0, 1800), line(4, '2614', 0, 450), line(4, '2645', 450), line(4, '5420', 1800),
+      ],
+    )
+
+    for (const n of [1, 2, 3]) {
+      expect(item(n)).toMatchObject({ mail_searchable: true, next_step: 'Leta i mejlen och vidarebefordra kvittot till kvittoadressen.' })
+    }
+    expect(item(4)).toMatchObject({ mail_searchable: true, portal: { vendor: 'OpenAI' } })
+  })
+
+  it('skips a share issue, a transfer between own accounts and a Stripe sales verifikat: they bought nothing', async () => {
+    const item = await worklist(
+      [
+        verifikat(11, 'SWED260727ABCDEF · Inbetalning nyemission. Omförs till 2081/2097 vid registrering.', 100000),
+        verifikat(12, 'Omklassificering av intern överföring sparkonto till företagskonto.', 80000),
+        verifikat(13, 'Överföring internt · Intern överföring 1931 -> 1930, motsvarande insättning bokad mot 2082.', 60000),
+        verifikat(14, 'Stripe kortförsäljning 2026-10-27, samlingsverifikat (6 betalningar)', 5000),
+      ],
+      [
+        line(11, '1931', 100000), line(11, '2082', 0, 100000),
+        line(12, '1930', 0, 80000), line(12, '1940', 80000),
+        line(13, '1931', 0, 60000), line(13, '2082', 60000),
+        line(14, '1686', 5000), line(14, '2611', 0, 1000), line(14, '3001', 0, 4000),
+      ],
+    )
+
+    for (const n of [11, 12, 13, 14]) {
+      expect(item(n)).toMatchObject({
+        mail_searchable: false,
+        portal: null,
+        next_step: 'Inget inköp, så inget kvitto: underlaget är kontoutdraget eller betalleverantörens rapport.',
+      })
+    }
+  })
+
+  it('keeps the skattekonto errand for a tax payment, and lets the words decide on salary', async () => {
+    const item = await worklist(
+      [
+        verifikat(21, 'Inbetalning skat BG 0000050501055 · Inbetalning till skattekontot, avser AGI juli', 30000),
+        verifikat(22, 'Löneutbetalning: 2026.K.08 - anställd: 1', 40000),
+      ],
+      [
+        line(21, '1630', 30000), line(21, '1930', 0, 30000),
+        line(22, '7210', 52000), line(22, '2710', 0, 12000), line(22, '1930', 0, 40000),
+      ],
+    )
+
+    for (const n of [21, 22]) {
+      expect(item(n)).toMatchObject({
+        mail_searchable: false,
+        next_step: 'Hämtas inte ur mejlen: underlaget är lönespecifikationen, skattekontot eller kontoutdraget.',
+      })
+    }
+  })
+
+  it('counts a refund and a verifikat that debits only input VAT as purchases', async () => {
+    const item = await worklist(
+      [
+        // Money in, but a cost is credited: the vendor's credit note is the underlag.
+        verifikat(31, 'BOOKING.COM · Återbetalning avbokat hotell', 1120),
+        // A ledger mirrored from another system books the purchase's VAT and nothing else.
+        verifikat(32, 'PAYPAL *MICROSOFT,4029357733,IE · spegling av annan kontering', 2400),
+      ],
+      [
+        line(31, '1930', 1120), line(31, '5890', 0, 1000), line(31, '2641', 0, 120),
+        line(32, '1935', 0, 2400), line(32, '2641', 2400),
+      ],
+    )
+
+    expect(item(31).mail_searchable).toBe(true)
+    expect(item(32)).toMatchObject({ mail_searchable: true, portal: { vendor: 'Microsoft 365' } })
+  })
+})

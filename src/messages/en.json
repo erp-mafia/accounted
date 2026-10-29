@@ -10369,6 +10369,7 @@
     "missing_underlag_next_paper": "{count, plural, =1 {One is a paper receipt: photograph it} other {# are paper receipts: photograph them}}",
     "missing_underlag_next_portal": "{count, plural, =1 {One needs a sign-in at the vendor} other {# need a sign-in at the vendor}}",
     "missing_underlag_next_not_mail": "{count, plural, =1 {One is not in your mail: payslip, tax account or statement} other {# are not in your mail: payslip, tax account or statement}}",
+    "missing_underlag_next_no_purchase": "{count, plural, =1 {One is not a purchase: bank or payment provider statement} other {# are not purchases: bank or payment provider statement}}",
     "row_pending_ops": "To review",
     "row_overdue_invoices": "Overdue customer invoices",
     "row_overdue_invoices_group": "{count, plural, =1 {1 customer invoice is past due} other {# customer invoices are past due}}",

@@ -249,6 +249,20 @@ const NO_EMAIL_RECEIPT_EXISTS =
   /\bl[oö]n\b|\bl[oö]ner\b|\bl[oö]ne(?:utb|spec|k[oö]rn)|skatt|\bskat\b|\bprel\b|arbetsgivaravg|\bmoms\b|utdelning|amortering|\br[aä]nta\b|egen ins[aä]ttning/i
 
 /**
+ * How a bookkeeper notes the VAT on a purchase, which reads like a tax word
+ * and is not one: a rate ("25% moms", "12 % moms", "0 USD moms", "moms 25%"),
+ * a qualifier ("ingen moms", "inkl. moms", "omvänd moms", "ej avdragsgill
+ * moms", "utan debiterad moms") or the liability itself ("omvänd
+ * skattskyldighet"). A verifikat whose bank row has no merchant name is
+ * described by its description, where the note sits, and in a trial run the
+ * note sent flights, hotels and subscriptions to the salary-and-tax errand
+ * (2026-10-28). A payment of VAT ("Betalning moms", "Skattekonto: moms") is
+ * no such note and still matches.
+ */
+const VAT_NOTE =
+  /skattskyldig[a-zåäö]*|\bmoms\s+\d+(?:[.,]\d+)?\s*%|(?:\d\s*(?:%|kr|sek|usd|eur)|\b(?:ingen|ej|utan|inkl|exkl|med|omv[aä]nd|svensk|utl[aä]ndsk|(?:s[aä]ljar)?debiterad|avdragsgill|ing[aä]ende))\.?(?:\s+(?:svensk|utl[aä]ndsk|(?:s[aä]ljar)?debiterad|avdragsgill|ing[aä]ende))*\s+moms\b/gi
+
+/**
  * Whether it is worth spending a mailbox search on this purchase.
  *
  * Only gates the mail leg: the Underlag pairing is scored on amount and
@@ -256,7 +270,7 @@ const NO_EMAIL_RECEIPT_EXISTS =
  */
 export function canHaveEmailReceipt(description: string | null | undefined): boolean {
   if (!description) return true
-  return !NO_EMAIL_RECEIPT_EXISTS.test(description)
+  return !NO_EMAIL_RECEIPT_EXISTS.test(description.replace(VAT_NOTE, ' '))
 }
 
 /** Vendor names this alike are treated as the same merchant. */
