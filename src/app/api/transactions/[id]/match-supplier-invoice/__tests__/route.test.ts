@@ -94,13 +94,16 @@ vi.mock('@/lib/bookkeeping/supplier-invoice-entries', async (importOriginal) => 
 // engine so no path hits the queued Supabase mock.
 const mockCreateJournalEntry = vi.fn()
 const mockFindFiscalPeriod = vi.fn()
+const mockReverseEntry = vi.fn()
 vi.mock('@/lib/bookkeeping/engine', () => ({
   createJournalEntry: (...args: unknown[]) => mockCreateJournalEntry(...args),
   findFiscalPeriod: (...args: unknown[]) => mockFindFiscalPeriod(...args),
+  reverseEntry: (...args: unknown[]) => mockReverseEntry(...args),
 }))
 
 import { POST } from '../route'
 import { eventBus } from '@/lib/events/bus'
+import { logMatchEvent } from '@/lib/invoices/match-log'
 import {
   bookRegistrationBeforeSettlement,
   planRegistrationBeforeSettlement,
@@ -181,9 +184,12 @@ function enqueueHappyPath(opts: {
     },
     error: null,
   })
-  // 3. company_settings fetch
+  // 3. transaction_voucher_links: the booked-row gate (accounted#58); no
+  // pointer and no links, so no journal_entries read follows.
+  enqueue({ data: [], error: null })
+  // 4. company_settings fetch
   enqueue({ data: { accounting_method: opts.accountingMethod ?? 'accrual' }, error: null })
-  // 4. cash_accounts lookup: by id when the transaction is linked to one,
+  // 5. cash_accounts lookup: by id when the transaction is linked to one,
   // otherwise the currency-fallback listing (issue #1722), empty here so the
   // 1930 fallback applies.
   if (opts.transaction.cash_account_id) {
@@ -191,11 +197,11 @@ function enqueueHappyPath(opts: {
   } else {
     enqueue({ data: [], error: null })
   }
-  // 5. supplier_invoices update (CAS)
+  // 6. transactions update: the row claim (CAS), right after the verifikat
+  enqueue({ data: [{ id: TX_UUID }], error: null })
+  // 7. supplier_invoices update (CAS)
   enqueue({ data: [{ id: SI_UUID }], error: null })
-  // 6. supplier_invoice_payments insert
-  enqueue({ data: null, error: null })
-  // 7. transactions update (link)
+  // 8. supplier_invoice_payments insert
   enqueue({ data: null, error: null })
 }
 
@@ -444,10 +450,11 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
     })
     // Stale sticky setting from an earlier private-funds payment: must be
     // ignored now that the route no longer selects it.
+    enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
     enqueue({ data: { accounting_method: 'accrual', last_supplier_payment_account: '2893' }, error: null })
     enqueue({ data: { ledger_account: '1930' }, error: null }) // cash_accounts lookup
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // transactions claim (CAS)
     enqueue({ data: [{ id: SI_UUID }], error: null })
-    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
 
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
@@ -487,10 +494,11 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
       },
       error: null,
     })
+    enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: { ledger_account: '1940' }, error: null }) // cash_accounts lookup
+    enqueue({ data: [{ id: TX_UUID }], error: null }) // transactions claim (CAS)
     enqueue({ data: [{ id: SI_UUID }], error: null })
-    enqueue({ data: null, error: null })
     enqueue({ data: null, error: null })
 
     await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
@@ -546,6 +554,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: settlement account
       },
       error: null,
     })
+    enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
     enqueue({ data: null, error: { message: 'connection reset' } }) // cash_accounts lookup errors
 
@@ -780,6 +789,7 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: non-FX paths', () 
       },
       error: null,
     })
+    enqueue({ data: [], error: null }) // transaction_voucher_links (booked-row gate)
     enqueue({ data: { accounting_method: 'accrual' }, error: null })
 
     const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
@@ -1342,5 +1352,92 @@ describe('POST /api/transactions/[id]/match-supplier-invoice: a deferred invoice
     expect(status).toBe(200)
     expect(body).not.toHaveProperty('registration_journal_entry_id')
     expect(mockCreateJournalEntry).toHaveBeenCalledTimes(1)
+  })
+})
+
+// accounted#58: matching a row that is already booked posted a second payment
+// verifikat. The refusal names the verifikat; the dialog's "Återför och
+// matcha" resends with storno_existing, which reverses the row's own
+// categorization first.
+describe('POST /api/transactions/[id]/match-supplier-invoice: a bank row that is already booked', () => {
+  const OWN_ENTRY = {
+    id: 'je-own', status: 'posted', source_type: 'bank_transaction', source_id: TX_UUID,
+    voucher_series: 'A', voucher_number: 12,
+  }
+
+  function enqueueBookedRow() {
+    enqueue({
+      data: {
+        id: TX_UUID, company_id: 'company-1', amount: -225, currency: 'SEK', amount_sek: null,
+        supplier_invoice_id: null, journal_entry_id: 'je-own', reconciliation_method: null,
+        cash_account_id: null, document_id: null, date: '2026-05-12',
+      },
+    })
+    enqueue({
+      data: {
+        id: SI_UUID, currency: 'SEK', exchange_rate: null, status: 'registered', remaining_amount: 225,
+        paid_amount: 0, supplier: { supplier_type: 'swedish_business' }, items: [],
+      },
+    })
+    enqueue({ data: [] }) // transaction_voucher_links
+    enqueue({ data: [OWN_ENTRY] }) // journal_entries: the pointer's verifikat
+  }
+
+  function makeStornoReq(body: Record<string, unknown>) {
+    return new Request(`http://localhost/api/transactions/${TX_UUID}/match-supplier-invoice`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ supplier_invoice_id: SI_UUID, ...body }),
+    })
+  }
+
+  it('answers 409 MATCH_SI_TX_ALREADY_BOOKED naming the verifikat, and books nothing', async () => {
+    enqueueBookedRow()
+
+    const res = await POST(makeReq(), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{
+      error: { code: string; message: string; details: Record<string, unknown> }
+    }>(res)
+
+    expect(status).toBe(409)
+    expect(body.error.code).toBe('MATCH_SI_TX_ALREADY_BOOKED')
+    expect(body.error.details).toEqual({ journal_entry_id: 'je-own', voucher: 'A12', via: 'pointer', storno_allowed: true })
+    expect(body.error.message).toContain('verifikat A12')
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(mockReverseEntry).not.toHaveBeenCalled()
+    expect(findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(findCalls('transactions', 'update')).toEqual([])
+  })
+
+  it('with storno_existing reverses the row\'s own categorization, then books the payment on the row', async () => {
+    enqueueBookedRow()
+    enqueue({ data: { accounting_method: 'accrual' } }) // company_settings
+    enqueue({ data: [] }) // cash_accounts listing: 1930
+    enqueue({ data: [{ account_number: '1930' }] }) // chart check before the storno
+    enqueue({ data: [{ id: TX_UUID }] }) // transactions claim (CAS)
+    enqueue({ data: [{ id: SI_UUID }] }) // supplier_invoices update (CAS)
+    enqueue({ data: null }) // supplier_invoice_payments insert
+    mockReverseEntry.mockResolvedValue({ id: 'je-storno' })
+
+    const res = await POST(makeStornoReq({ storno_existing: true }), createMockRouteParams({ id: TX_UUID }))
+    const { status, body } = await parseJsonResponse<{ journal_entry_id: string }>(res)
+
+    expect(status).toBe(200)
+    expect(body.journal_entry_id).toBe('je-1')
+    expect(mockReverseEntry).toHaveBeenCalledTimes(1)
+    expect(mockReverseEntry.mock.calls[0].slice(1, 4)).toEqual(['company-1', 'user-1', 'je-own'])
+    expect(mockReverseEntry.mock.invocationCallOrder[0]).toBeLessThan(mockCreateJournalEntry.mock.invocationCallOrder[0])
+    expect(logMatchEvent).toHaveBeenCalledWith(expect.anything(), 'user-1', TX_UUID, 'storno_conflict_resolved', expect.anything())
+    // The claim accepts the pointer it read, or the null the storno released:
+    // literal compare-and-sets, no interpolated .or().
+    expect(findCalls('transactions', 'or')).toEqual([])
+    expect(findCalls('transactions', 'eq')).toContainEqual(['journal_entry_id', 'je-own'])
+    expect(findCalls('transactions', 'update')[0][0]).toMatchObject({ supplier_invoice_id: SI_UUID, journal_entry_id: 'je-1' })
+  })
+
+  it('rejects a storno_existing that is not a boolean with 400', async () => {
+    const res = await POST(makeStornoReq({ storno_existing: 'yes' }), createMockRouteParams({ id: TX_UUID }))
+    expect(res.status).toBe(400)
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
   })
 })

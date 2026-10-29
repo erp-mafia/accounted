@@ -20,7 +20,7 @@ import {
   shouldRepointToSibling,
   type CashAccountSiblings,
 } from '@/lib/cash-accounts/service'
-import { hasBankLineJunctionRow } from '@/lib/transactions/is-booked'
+import { hasBankLineJunctionRow, isBookedFromRow } from '@/lib/transactions/is-booked'
 import {
   bankLegConsumedMessage,
   bankLegRoom,
@@ -443,7 +443,7 @@ export async function prepareBankLink(
 
 /** The reconciliation_method writeBankLink records for a row on this verifikat. */
 export function bankLinkMethod(entry: BankLinkEntry, transactionId: string): 'manual' | null {
-  return entry.source_type === 'bank_transaction' && entry.source_id === transactionId ? null : 'manual'
+  return isBookedFromRow(entry, transactionId) ? null : 'manual'
 }
 
 export type BankLinkWrite =

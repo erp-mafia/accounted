@@ -6,6 +6,7 @@ import {
   getLinkedJournalEntryIds,
   embeddedVoucherLabel,
   assertTransactionBookable,
+  decideBankRowRebooking,
 } from '../is-booked'
 
 describe('isTransactionBooked', () => {
@@ -221,6 +222,107 @@ describe('assertTransactionBookable', () => {
     expect(await assertTransactionBookable(entriesDown.supabase as never, 'company-1', TX)).toMatchObject({
       ok: false,
       via: 'read_error',
+    })
+  })
+})
+
+describe('decideBankRowRebooking', () => {
+  // A row's own categorization: booked from this row by the categorize door.
+  const OWN = { id: 'je-own', status: 'posted', source_type: 'bank_transaction', source_id: 'tx-1', voucher_series: 'A', voucher_number: 12 }
+  const BOOKED = { id: 'tx-1', journal_entry_id: 'je-own', reconciliation_method: null }
+
+  it('lets an unbooked row through', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: null }, { replace: false }))
+      .toEqual({ outcome: 'open' })
+  })
+
+  it("refuses the row's own categorization unless asked, and says it may be reversed", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [OWN] })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: false })).toEqual({
+      outcome: 'refuse',
+      via: 'pointer',
+      journalEntryId: 'je-own',
+      voucher: 'A12',
+      replaceable: true,
+    })
+  })
+
+  it("replaces the row's own categorization when asked", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [OWN] })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: true })).toEqual({
+      outcome: 'replace',
+      journalEntryId: 'je-own',
+    })
+  })
+
+  it('replaces a bulk-book N=1 booking (pointer and link name the same own verifikat) as one booking', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-own', role: 'bank_line' }] })
+    enqueue({ data: [OWN] })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: true }))
+      .toMatchObject({ outcome: 'replace', journalEntryId: 'je-own' })
+  })
+
+  it('never replaces a reconciliation link, even when asked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ ...OWN, id: 'je-sie', source_type: 'import', source_id: null, voucher_number: 7 }] })
+    expect(
+      await decideBankRowRebooking(
+        supabase as never,
+        'company-1',
+        { id: 'tx-1', journal_entry_id: 'je-sie', reconciliation_method: 'manual' },
+        { replace: true },
+      ),
+    ).toEqual({ outcome: 'refuse', via: 'reconciliation', journalEntryId: 'je-sie', voucher: 'A7', replaceable: false })
+  })
+
+  it('never replaces a link-only row (a samlingsverifikat with N>1), even when asked', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }] })
+    enqueue({ data: [{ ...OWN, id: 'je-samling', source_type: 'manual', source_id: null, voucher_number: 40 }] })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', { id: 'tx-1', journal_entry_id: null }, { replace: true }))
+      .toEqual({ outcome: 'refuse', via: 'link', journalEntryId: 'je-samling', voucher: 'A40', replaceable: false })
+  })
+
+  it('never replaces a pointer booked from another source (a customer payment, an utlägg payout)', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ ...OWN, source_type: 'supplier_invoice_paid', source_id: 'si-1' }] })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: true }))
+      .toMatchObject({ outcome: 'refuse', via: 'pointer', replaceable: false })
+  })
+
+  it("never replaces the row's own verifikat while a link names another posted one (a 1:N split)", async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [{ journal_entry_id: 'je-own', role: 'bank_line' }, { journal_entry_id: 'je-other', role: 'bank_line' }] })
+    enqueue({ data: [OWN, { ...OWN, id: 'je-other', source_type: 'manual', source_id: null, voucher_number: 13 }] })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: true }))
+      .toMatchObject({ outcome: 'refuse', via: 'pointer', journalEntryId: 'je-own', replaceable: false })
+  })
+
+  it('lets a row through whose pointer names a reversed verifikat', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ data: [] })
+    enqueue({ data: [{ ...OWN, status: 'reversed' }] })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: false })).toEqual({ outcome: 'open' })
+  })
+
+  it('fails closed on a read error, and never offers a storno then', async () => {
+    const { supabase, enqueue } = createQueuedMockSupabase()
+    enqueue({ error: { message: 'timeout' } })
+    expect(await decideBankRowRebooking(supabase as never, 'company-1', BOOKED, { replace: true })).toEqual({
+      outcome: 'refuse',
+      via: 'read_error',
+      journalEntryId: null,
+      voucher: null,
+      replaceable: false,
     })
   })
 })

@@ -1,0 +1,1 @@
+[2026-10-28] A supplier match refuses a bank row already booked (MATCH_SI_TX_ALREADY_BOOKED, all four doors, v1 included) instead of silently replacing it, as the founder chose over the plan; only an explicit storno_existing reverses the row's own categorization (accounted#58).

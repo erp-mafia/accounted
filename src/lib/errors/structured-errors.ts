@@ -1503,6 +1503,19 @@ const MATCH_SI: Record<string, StructuredErrorEntry> = {
     message_sv: 'Transaktionen är redan kopplad till en leverantörsfaktura.',
     message_en: 'Transaction is already linked to a supplier invoice.',
   },
+  // accounted#58: a supplier match on a booked bank row posted a second
+  // payment verifikat. The envelope names the verifikat
+  // (matchSiTxAlreadyBookedMessages, match-si-tx-already-booked.ts); details
+  // carry journal_entry_id, voucher, via and storno_allowed.
+  MATCH_SI_TX_ALREADY_BOOKED: {
+    httpStatus: 409,
+    message_sv: 'Banktransaktionen är redan bokförd, så betalningen skulle bokföras två gånger. Inget har sparats.',
+    message_en: 'The bank transaction is already booked, so matching it would book the payment twice. Nothing was saved.',
+    remediation: {
+      description:
+        'When details.storno_allowed is true the booking is the transaction\'s own categorization: resend with storno_existing: true to reverse it (storno) and book the payment. Otherwise the transaction is booked through a samlingsverifikat, a split or a link to an existing verifikat: unlink or correct that booking first, or link the invoice to the existing verifikat.',
+    },
+  },
   MATCH_SI_ALREADY_PAID: {
     httpStatus: 400,
     message_sv: 'Leverantörsfakturan är redan betald eller krediterad.',

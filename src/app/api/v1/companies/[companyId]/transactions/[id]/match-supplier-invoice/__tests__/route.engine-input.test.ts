@@ -3,8 +3,10 @@
  * (POST /api/v1/companies/{companyId}/transactions/{id}/match-supplier-invoice)
  * hands the engine, recorded call by call and compared with a committed
  * fixture (route.engine-input.json) that was taken before the door went
- * through the port. A row that was categorized first has that verifikat
- * reversed with a storno before the payment is booked; the payment verifikat
+ * through the port. A row that was categorized first is refused
+ * (MATCH_SI_TX_ALREADY_BOOKED, accounted#58) unless the caller sends
+ * storno_existing, which reverses that verifikat with a storno before the
+ * payment is booked; a reconciliation link is always refused. The payment verifikat
  * comes from the caller's own rows or the generator the plan names; a payment
  * that loses the settlement race is cancelled through the engine's cleanup
  * door. Every argument is recorded, an absent one as '<undefined>'; trailing
@@ -154,6 +156,8 @@ interface Scenario {
   accountingMethod: 'accrual' | 'cash'
   lines?: Array<{ account_number: string; debit_amount: number; credit_amount: number; line_description?: string }>
   loseRace?: boolean
+  /** Extra request body fields (storno_existing). */
+  body?: Record<string, unknown>
 }
 
 const SCENARIOS: Scenario[] = [
@@ -186,16 +190,18 @@ const SCENARIOS: Scenario[] = [
     ],
   },
   {
-    name: 'a categorized row: its verifikat is reversed before the payment is booked',
+    name: 'a categorized row with storno_existing: its verifikat is reversed before the payment is booked',
     invoice: invoice(4),
     transaction: transaction(4, { date: '2026-10-02', journal_entry_id: CATEGORIZED }),
     accountingMethod: 'accrual',
+    body: { storno_existing: true },
   },
   {
-    name: 'a reconciliation link is no conflicting booking: nothing is reversed',
+    name: 'a reconciliation link is refused, even with storno_existing: nothing is reversed or booked',
     invoice: invoice(5),
     transaction: transaction(5, { date: '2026-10-03', journal_entry_id: CATEGORIZED, reconciliation_method: 'manual' }),
     accountingMethod: 'accrual',
+    body: { storno_existing: true },
   },
   {
     name: 'a concurrent settlement wins: the payment verifikat is cancelled',
@@ -234,7 +240,12 @@ function supabaseFor(s: Scenario, opts: RunOptions) {
   return createTableMockSupabase({
     business_events: opts.refuseEvent ? { error: { message: 'business_events refused', code: '42501' } } : { data: null },
     company_members: { data: { company_id: COMPANY, role: 'owner' } },
-    transactions: [{ data: s.transaction }, { data: null }],
+    // The read, then the row claim's compare-and-set.
+    transactions: [{ data: s.transaction }, { data: [{ id: s.transaction.id }] }],
+    // The verifikat a categorized row points at: booked from transaction(4).
+    journal_entries: {
+      data: [{ id: CATEGORIZED, status: 'posted', source_type: 'bank_transaction', source_id: transactionId(4), voucher_series: 'A', voucher_number: 12 }],
+    },
     supplier_invoices: [{ data: s.invoice }, { data: s.loseRace ? [] : [{ id: s.invoice.id }] }],
     company_settings: { data: { accounting_method: s.accountingMethod } },
     supplier_invoice_payments: { data: null },
@@ -267,7 +278,7 @@ async function runScenarios(opts: RunOptions = {}): Promise<Run[]> {
           'Content-Type': 'application/json',
           'Idempotency-Key': `engine-input-v1-match-si-${++idempotency}-${Date.now()}`,
         },
-        body: JSON.stringify({ supplier_invoice_id: s.invoice.id, ...(s.lines ? { lines: s.lines } : {}) }),
+        body: JSON.stringify({ supplier_invoice_id: s.invoice.id, ...(s.lines ? { lines: s.lines } : {}), ...(s.body ?? {}) }),
       },
     )
     const response = await POST(request, { params: Promise.resolve({ companyId: COMPANY, id: s.transaction.id }) })
@@ -391,15 +402,16 @@ describe('v1 supplier bank match engine input (posting port parity)', () => {
     expect(events('cash: a never-booked invoice')[0]).toMatchObject({ tax_amounts: [{ tax: 'vat', treatment: 'standard_25', amount_sek: 300 }] })
     expect(events("custom lines: the caller's own rows")[0]).toMatchObject({ amount_sek: 1500, mapping_version: null })
     const [storno, paid] = events('a categorized row')
+    // The caller chose this storno (storno_existing): on an API key, client_asserted.
     expect(storno).toMatchObject({
       kind: 'ledger.storno',
       subject_type: 'transaction',
       subject_id: transactionId(4),
       party_type: null,
       amount: null,
-      evidence: { link_basis: 'system_derived' },
+      evidence: { link_basis: 'client_asserted' },
     })
     expect(paid).toMatchObject({ kind: 'purchase.paid', subject_id: invoiceId(4) })
-    expect(events('a reconciliation link')).toHaveLength(1)
+    expect(events('a reconciliation link')).toHaveLength(0)
   })
 })

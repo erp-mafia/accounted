@@ -75,7 +75,7 @@ function seed(options: { order?: Record<string, unknown>; linkedAfter?: boolean 
       { data: { id: order.id, status: order.status, supplier_invoice_payment_id: options.linkedAfter === false ? null : 'sip-1' } },
       { data: [{ id: order.id }] }, // the link, when this code writes it
     ],
-    transactions: [{ data: arcimDebit() }, { data: null }],
+    transactions: [{ data: arcimDebit() }, { data: [{ id: ARCIM.transactionId }] }], // read again, then the row claim
     supplier_invoices: [{ data: arcimInvoice() }, { data: [{ id: ARCIM.invoiceId }] }],
     company_settings: { data: { accounting_method: 'accrual' } },
     cash_accounts: { data: { ledger_account: '1930' } },
@@ -188,6 +188,25 @@ describe('settleOrderWithDebit', () => {
     db.setTable('transactions', { data: arcimDebit({ is_ignored: true }) })
     expect(await settle()).toEqual({ ok: false, reason: 'transaction_not_open' })
     expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+  })
+
+  it('refuses a debit booked only through a voucher link (a samlingsverifikat), booking nothing (accounted#58)', async () => {
+    // The pointer is empty, so the read above lets it through; the booking's
+    // own gate sees the bank_line link to a posted verifikat.
+    db.setTable('transaction_voucher_links', { data: [{ journal_entry_id: 'je-samling', role: 'bank_line' }] })
+    db.setTable('journal_entries', {
+      data: [{ id: 'je-samling', status: 'posted', source_type: 'manual', source_id: null, voucher_series: 'A', voucher_number: 40 }],
+    })
+
+    expect(await settle()).toEqual({
+      ok: false,
+      reason: 'booking_failed',
+      code: 'MATCH_SI_TX_ALREADY_BOOKED',
+      details: { journal_entry_id: 'je-samling', voucher: 'A40', via: 'link', storno_allowed: false },
+    })
+    expect(mockCreateJournalEntry).not.toHaveBeenCalled()
+    expect(db.findCalls('supplier_invoices', 'update')).toEqual([])
+    expect(db.findCalls('transactions', 'update')).toEqual([])
   })
 
   it('refuses amounts apart: an end-to-end match of another amount stays a suggestion for a person', async () => {

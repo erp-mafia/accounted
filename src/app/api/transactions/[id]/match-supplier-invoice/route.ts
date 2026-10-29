@@ -10,10 +10,13 @@ import type { SupplierInvoice } from '@/types'
  * POST /api/transactions/[id]/match-supplier-invoice
  *
  * Match a negative transaction (expense) to a supplier invoice: a person
- * confirms a suggestion. The booking itself (plan, verifikat, ledger update,
- * payment row, link, log, events) is bookSupplierBankMatch, shared with the
- * debit of a bank payment order, which books without this door. A deferring
- * company's unbooked invoice is booked first there, by the Bokför step.
+ * confirms a suggestion. The booking itself (the booked-row gate, plan,
+ * verifikat, ledger update, payment row, link, log, events) is
+ * bookSupplierBankMatch, shared with the v1 door, the Inkorg and the debit of
+ * a bank payment order. A deferring company's unbooked invoice is booked
+ * first there, by the Bokför step. A row that is already booked answers 409
+ * MATCH_SI_TX_ALREADY_BOOKED; the dialog then offers to reverse the row's own
+ * categorization and resends with storno_existing.
  */
 export const POST = withRouteContext(
   'transaction.match_supplier_invoice',
@@ -26,7 +29,7 @@ export const POST = withRouteContext(
       operation: 'transaction.match_supplier_invoice',
     })
     if (!validation.success) return validation.response
-    const { supplier_invoice_id, lines: customLines } = validation.data
+    const { supplier_invoice_id, lines: customLines, storno_existing } = validation.data
 
     const txLog = log.child({ transactionId, supplierInvoiceId: supplier_invoice_id })
 
@@ -82,6 +85,8 @@ export const POST = withRouteContext(
       customLines,
       match: { action: 'matched', method: 'manual_confirm', confidence: 1.0 },
       linkBasis: { basis: 'user_confirmed' },
+      // Sent only by the dialog's "Återför och matcha", after a refusal named the verifikat.
+      stornoExisting: storno_existing,
     })
     if (!outcome.ok) {
       if (outcome.error !== undefined) return errorResponse(outcome.error, txLog, { requestId })

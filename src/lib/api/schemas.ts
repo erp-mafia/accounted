@@ -3302,6 +3302,11 @@ export const MatchSupplierInvoiceSchema = z.object({
     // User-edited payment lines keep their tags, as on mark-paid.
     dimensions: DimensionsBagSchema.optional(),
   })).min(2).optional(),
+  // A bank row already booked is refused with MATCH_SI_TX_ALREADY_BOOKED
+  // (accounted#58). true reverses the row's own categorization verifikat
+  // (storno) and books the payment in its place; only that booking, never a
+  // samlingsverifikat, a split or a reconciliation link (details.storno_allowed).
+  storno_existing: z.boolean().optional(),
 })
 
 // The Inkorg's "Registrera och koppla till betalningen": the inbox convert
