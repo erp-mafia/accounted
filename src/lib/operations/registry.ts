@@ -248,6 +248,11 @@ import { PACKAGE_OPERATIONS } from './packages'
 import { BANK_FEED_OPERATIONS } from './bank-feed'
 import { PAYMENT_SIGNING_LINK_OPERATIONS } from './payment-signing-links'
 import { SIGNING_REQUEST_OPERATIONS } from './signing-requests'
+import { BOLAGET_OPERATIONS } from './bolaget'
+import { BOLAGET_CAPITAL_OPERATIONS } from './bolaget-capital'
+import { BOLAGET_OWNER_TAX_OPERATIONS } from './bolaget-owner-tax'
+import { CORPORATE_MEETING_OPERATIONS } from './corporate-meetings'
+import { bolagetRollout } from '@/lib/env/bolaget-switch'
 import { SUPPLIER_INVOICE_ATTEST_OPERATIONS } from './supplier-invoice-attest'
 import { readCollectionsEnv } from '@/lib/collections/flags'
 import { CUSTOMER_LOSS_OPERATION_LIST } from './customer-loss'
@@ -521,6 +526,10 @@ export const ALL_OPERATIONS: readonly AnyOperation[] = [
   ...COLLECTIONS_OPERATION_LIST,
   ...CUSTOMER_LOSS_OPERATION_LIST,
   ...COUNTERPARTY_SETOFF_OPERATION_LIST,
+  ...BOLAGET_OPERATIONS,
+  ...BOLAGET_CAPITAL_OPERATIONS,
+  ...BOLAGET_OWNER_TAX_OPERATIONS,
+  ...CORPORATE_MEETING_OPERATIONS,
   ...TAX_LOSS_CARRYFORWARD_OPERATIONS,
   ...STOCK_COUNT_OPERATION_LIST,
 ]
@@ -538,6 +547,12 @@ export const OPERATIONS: readonly AnyOperation[] = [
   ...(customerLossEnabled() ? CUSTOMER_LOSS_OPERATION_LIST : []),
   // Kvittning likewise only while COUNTERPARTY_SETOFF_ENABLED is set.
   ...(counterpartySetoffEnabled() ? COUNTERPARTY_SETOFF_OPERATION_LIST : []),
+  // The Bolaget registers only while BOLAGET_COMPANY_IDS names a company; each run() checks the company too.
+  ...(bolagetRollout() === 'all' || bolagetRollout().length > 0 ? BOLAGET_OPERATIONS : []),
+  ...(bolagetRollout() === 'all' || bolagetRollout().length > 0 ? BOLAGET_CAPITAL_OPERATIONS : []),
+  ...(bolagetRollout() === 'all' || bolagetRollout().length > 0 ? BOLAGET_OWNER_TAX_OPERATIONS : []),
+  // Meetings and minutes roll out with the registers (same switch, same per-company check in run()).
+  ...(bolagetRollout() === 'all' || bolagetRollout().length > 0 ? CORPORATE_MEETING_OPERATIONS : []),
   // The underskottsregister only while BOLAGET_COMPANY_IDS opens it for some
   // company; each run still checks the company (lib/bokslut/loss-carryforward).
   ...(lossCarryforwardDiscoverable() ? TAX_LOSS_CARRYFORWARD_OPERATIONS : []),

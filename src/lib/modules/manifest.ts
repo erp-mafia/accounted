@@ -59,6 +59,8 @@ export const MODULE_IDS = [
   'deadlines',
   'import',
   'parties',
+  'corporate',
+  'capital',
   'agent',
   'byra',
 ] as const
@@ -564,6 +566,38 @@ const DEFINITIONS: readonly ModuleDefinition[] = [
     libFolders: ['parties', 'company-lookup', 'vendor-logos'],
     operationPrefixes: [],
     v1Segments: [],
+    jurisdictions: SE,
+  },
+  {
+    id: 'corporate',
+    kind: 'block',
+    name: 'Corporate registers',
+    nameSv: 'Bolaget',
+    summary:
+      'The company as a legal entity: the share register (aktiebok) with its history, the board and other roles over time, the signatory rule and the beneficial owners.',
+    dependsOn: [],
+    layer: 'foundation',
+    uses: ['parties'],
+    libFolders: ['bolaget'],
+    operationPrefixes: ['share-register', 'share-classes', 'company-roles', 'signatory-rules', 'beneficial-owners', 'corporate-meetings'],
+    v1Segments: ['share-register', 'share-classes', 'company-roles', 'signatory-rules', 'beneficial-owners', 'corporate-meetings'],
+    jurisdictions: SE,
+  },
+  {
+    id: 'capital',
+    kind: 'block',
+    name: 'Capital events',
+    nameSv: 'Kapital och utdelning',
+    summary:
+      'The company\'s capital events wired to the books: dividends from the stämma decision to the payout with the split per holder and KU31, shareholder contributions, and issues and reductions of share capital.',
+    dependsOn: ['corporate', 'year-end'],
+    layer: 'composite',
+    uses: ['parties'],
+    // bolaget/owner-tax: what the owners need from the company (the K10
+    // underlag, loans with owners, board and VD under ABL 21 kap., KU20).
+    libFolders: ['bolaget/capital', 'bolaget/owner-tax'],
+    operationPrefixes: ['capital-events', 'ku31', 'dividends', 'shareholder-contributions', 'capital-changes', 'k10', 'k10-inputs', 'owner-loans', 'ku20'],
+    v1Segments: ['capital-events', 'ku31', 'dividends', 'shareholder-contributions', 'capital-changes', 'k10', 'owner-loans', 'ku20'],
     jurisdictions: SE,
   },
   {

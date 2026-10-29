@@ -279,6 +279,11 @@ export function requiresAuditorRegardlessOfSize(entityType: EntityType): boolean
   return legalFormProfile(entityType).filings.auditorAlwaysRequired
 }
 
+/** The company keeps an aktiebok (ABL 5 kap.): aktiebolag only. */
+export function keepsShareRegister(entityType: EntityType): boolean {
+  return legalFormProfile(entityType).equity.shareRegister
+}
+
 /**
  * The provision behind the revisorspåteckning (the revisor's hänvisning to
  * the revisionsberättelse on the årsredovisning) for the form, as the PDF

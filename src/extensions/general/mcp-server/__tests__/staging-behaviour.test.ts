@@ -122,6 +122,7 @@ vi.mock('@/lib/bokslut/arsredovisning/version-service', async (importOriginal) =
 })
 
 import { tools, isStagingTool, STAGE_BRIDGE_TARGETS } from '../server'
+import { createServiceClient } from '@/lib/supabase/server'
 import { makeCompanySettings, makeCustomer, makeInvoice } from '@/tests/helpers'
 import { registerPeppolTransport } from '@/lib/invoices/peppol-transport'
 import { registerPaymentInitiationProvider, type PaymentInitiationProvider } from '@/lib/payments/initiation/provider'
@@ -208,6 +209,13 @@ const ALLOWED_MUTATION_TABLES = new Set(['pending_operations', 'idempotency_keys
  * refuses to let modify data. A VOLATILE function cannot be listed here.
  */
 const READ_ONLY_RPCS = new Set([
+  // The trial balance (generateTrialBalance, both STABLE): the dividend
+  // previews (gnubok_create_dividend, gnubok_book_dividend) read fritt eget
+  // kapital on the last balance sheet for the ABL 17:3 check, and the
+  // gnubok_book_inventory_count preview compares the counted stock with the
+  // 14xx ledger balance at balansdagen; the verifikat is booked at approval.
+  'compute_prior_opening_balances',
+  'get_trial_balance_aggregates',
   'sales_order_invoiced_quantities',
   // The kontoplan usage count: the account delete/deactivate previews read it.
   'get_account_usage_counts',
@@ -242,12 +250,6 @@ const READ_ONLY_RPCS = new Set([
   // the gnubok_delete_fiscal_period preview reads it; the delete itself runs
   // at approval.
   'delete_empty_fiscal_period_preview',
-  // The trial balance at balansdagen (its period aggregates and the derived
-  // IB of the year): STABLE, the gnubok_book_inventory_count preview compares
-  // the counted stock with the 14xx ledger balance; the verifikat is booked
-  // at approval.
-  'get_trial_balance_aggregates',
-  'compute_prior_opening_balances',
 ])
 
 /**
@@ -379,6 +381,11 @@ interface Fixture {
 
 async function observe(tool: Tool, fixture: Fixture = {}): Promise<BehaviourVerdict> {
   const { client, recording } = createRecordingClient(fixture.rows, fixture.counts, fixture.empty)
+  // A service that reads a service-role-only table (the aktiebok's party
+  // identities) asks createServiceClient for its client: it gets the same
+  // recording client, so its reads find the fixture rows and any write it
+  // made would be recorded too.
+  vi.mocked(createServiceClient).mockReturnValue(client)
   const args = {
     ...(synthesize(tool.inputSchema as Record<string, unknown>) as Record<string, unknown>),
     ...(fixture.args ?? {}),
@@ -482,7 +489,54 @@ const SETTLED_SKATTEKONTO_ROW = {
   transaktionstext: 'Moms jan 2026',
   belopp_skatteverket: -5000,
 }
+// A draft board meeting dated in the past (lib/bolaget/meetings): open to
+// changes, decisions and the hold.
+const CORPORATE_MEETING_DRAFT = {
+  kind: 'styrelsemote',
+  organ: 'styrelse',
+  status: 'draft',
+  meeting_date: '2026-01-15',
+  sequence_number: null,
+  signing_request_id: null,
+  signed_document_id: null,
+  fiscal_period_id: null,
+  chair_party_id: null,
+  secretary_party_id: null,
+  adjuster_party_ids: [],
+  attendees: [],
+  voting_list: {},
+  kallelse_date: null,
+  held_at: null,
+}
 const LIMITED_COMPANY = { entity_type: 'aktiebolag' }
+// Kapital och utdelning: one owner holding A-shares 1-1 000 since bildande.
+const CAPITAL_OWNER = '00000000-0000-4000-8000-0000000b0001'
+const CAPITAL_CLASS = '00000000-0000-4000-8000-0000000ca001'
+const CAPITAL_ROWS: Record<string, Record<string, unknown>> = {
+  companies: { entity_type: 'aktiebolag', name: 'Exempel AB', org_number: '5560160680' },
+  company_settings: { aktiekapital: 25_000, antal_aktier: 1_000, kontrolluppgifter_enabled: false },
+  share_register_settings: { is_avstamningsbolag: false },
+  share_classes: { id: CAPITAL_CLASS, code: 'A', name: null, votes_per_share: 1 },
+  share_register_events: {
+    id: SOME_UUID, event_number: 1, event_date: '2020-01-10', kind: 'bildande', share_class_id: CAPITAL_CLASS,
+    to_share_class_id: null, from_party_id: null, to_party_id: CAPITAL_OWNER, range_start: 1, range_end: 1_000,
+    corrects_event_id: null, ratio: null, counterparty_party_id: null, note_status: null, aktiebrev_number: null, aktiebrev_action: null,
+  },
+  parties: { id: CAPITAL_OWNER, display_name: 'Anna Ek', kind: 'person', org_number: null },
+  fiscal_periods: { ...FISCAL_YEAR_2026, period_end: '2025-12-31', locked_at: null },
+  company_members: { role: 'owner' },
+}
+const CAPITAL_DIVIDEND = {
+  decided_on: '2026-05-01', decided_by: 'arsstamma', origin: 'register', share_class_ids: null, amount_per_share: 100,
+  total_amount: 100_000, record_date: '2026-05-01', record_date_basis: 'decision_date', payment_date: '2026-05-15',
+  source_account: null, prudence_confirmed: true, equity_check: {}, status: 'decided', decision_entry_id: null, payout_entry_id: null, paid_on: null,
+}
+// An owner loan from Anna to the company on 2893 (Ägarskatt och närstående).
+const OWNER_LOAN = {
+  party_id: CAPITAL_OWNER, kind: 'loan', direction: 'borrows', relation: 'none', related_to_party_id: null, relation_detail: null, account: '2893',
+  principal: 200_000, outstanding: 200_000, interest_rate: 5, start_date: '2026-03-01', maturity_date: null, terms: null, document_id: null,
+  exception: 'none', exception_note: null, status: 'active', repaid_on: null, note: null,
+}
 const CONFIRMED_ORDER = { status: 'confirmed', customer_id: SOME_UUID }
 
 const DEFERRED_BOOKING_ROWS: Record<string, Record<string, unknown>> = {
@@ -556,6 +610,79 @@ const PEPPOL_ROWS: Record<string, Record<string, unknown>> = {
 }
 
 const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
+  // Kapital och utdelning (Bolaget, generated only while BOLAGET_COMPANY_IDS
+  // names a company): an aktiebolag whose aktiebok holds one owner of 1 000
+  // A-shares, a dividend decided at the årsstämma (booked for the payout), a
+  // nyemission decided and not yet paid, and a kvotvärde of 25 kr.
+  gnubok_create_dividend: {
+    args: { decided_on: '2026-05-01', amount_per_share: 100, prudence_confirmed: true },
+    rows: CAPITAL_ROWS,
+  },
+  // No earlier fiscal year in the books: the ABL 17:3 check answers a warning
+  // (the generic trial balance would read as zero fritt eget kapital and refuse).
+  gnubok_book_dividend: { args: { source_account: '2098' }, rows: { ...CAPITAL_ROWS, dividends: CAPITAL_DIVIDEND }, empty: ['fiscal_periods'] },
+  gnubok_pay_dividend: { rows: { ...CAPITAL_ROWS, dividends: { ...CAPITAL_DIVIDEND, status: 'booked', source_account: '2098' } } },
+  gnubok_create_shareholder_contribution: {
+    args: { holder_name: 'Anna Ek', promised_on: '2026-03-01', amount: 50_000, conditional: true },
+    rows: CAPITAL_ROWS,
+  },
+  gnubok_create_capital_change: {
+    args: { decided_on: '2026-09-01', decided_by: 'extra_stamma', share_count: 100, price_per_share: 1_000 },
+    rows: CAPITAL_ROWS,
+  },
+  gnubok_book_capital_change: {
+    args: { step: 'payment', date: '2026-09-10' },
+    rows: {
+      ...CAPITAL_ROWS,
+      capital_changes: {
+        kind: 'nyemission', decided_on: '2026-09-01', decided_by: 'extra_stamma', share_count: 100, share_capital_amount: 2_500,
+        price_per_share: 1_000, premium_amount: 97_500, status: 'decided', payment_entry_id: null, registration_entry_id: null, allotments: [],
+      },
+    },
+  },
+  // Ägarskatt och närstående (Bolaget, generated only while BOLAGET_COMPANY_IDS
+  // names a company): the same aktiebolag and owner, no payroll, dividends or
+  // tillskott (an owner with only the grundbelopp), and an owner loan from Anna
+  // on 2893 in a confirmed fåmansföretag.
+  gnubok_set_k10_owner_inputs: {
+    args: { party_id: CAPITAL_OWNER, income_year: 2026, saved_dividend_space: 100_000 },
+    rows: CAPITAL_ROWS,
+    empty: ['dividends', 'k10_owner_inputs', 'salary_runs', 'employee_opening_balances', 'shareholder_contributions', 'ku31_filings'],
+  },
+  gnubok_create_owner_loan: {
+    args: { party_id: CAPITAL_OWNER, direction: 'borrows', principal: 200_000, start_date: '2026-03-01', account: '2893' },
+    rows: CAPITAL_ROWS,
+    empty: ['company_roles'],
+  },
+  gnubok_update_owner_loan: {
+    args: { outstanding: 150_000 },
+    rows: { ...CAPITAL_ROWS, owner_loans: OWNER_LOAN },
+    empty: ['company_roles'],
+  },
+  gnubok_set_owner_loan_interest: {
+    args: { income_year: 2026, interest_amount: 8_000, tax_withheld: 2_400 },
+    rows: { ...CAPITAL_ROWS, owner_loans: OWNER_LOAN, ku31_filings: { famansforetag: true } },
+  },
+  // Möten och protokoll (Bolaget, generated only while BOLAGET_COMPANY_IDS
+  // names a company; aktiebolag only): a draft board meeting held in the
+  // past, so a change, a decision and the hold all reach staging. The new
+  // board meeting and the hold read the board's names from the register
+  // (service role), which observe() answers with the same recording client.
+  gnubok_create_corporate_meeting: {
+    args: { kind: 'styrelsemote', meeting_date: '2026-01-15' },
+    rows: { companies: { entity_type: 'aktiebolag' } },
+  },
+  gnubok_update_corporate_meeting: {
+    args: { meeting_date: '2026-01-15' },
+    rows: { companies: { entity_type: 'aktiebolag' }, corporate_meetings: CORPORATE_MEETING_DRAFT },
+  },
+  gnubok_record_corporate_decision: {
+    args: { kind: 'ovrigt', payload: { topic: 'oppnande' } },
+    rows: { companies: { entity_type: 'aktiebolag' }, corporate_meetings: CORPORATE_MEETING_DRAFT },
+  },
+  gnubok_hold_corporate_meeting: {
+    rows: { companies: { entity_type: 'aktiebolag' }, corporate_meetings: CORPORATE_MEETING_DRAFT },
+  },
   // amount is optional in the schema (a text row has none) but a money row
   // needs one, so the synthesized arguments carry it (crm#1076). The first
   // type in the enum is Grundlön, which a payslip of unknown pay type refuses
@@ -1315,6 +1442,20 @@ const BRIDGE_TARGET_FIXTURES: Record<string, Fixture> = {
         requested_total: 1000, decided_total: null, settlement_journal_entry_id: null,
       },
     },
+  },
+  // Ägare och aktiebok (Bolaget, generated only while BOLAGET_COMPANY_IDS
+  // names a company): the register is kept for an aktiebolag, its dates are
+  // real days and a new holder or role is named. The beneficial-owner
+  // assessment reads the owners as register parties (kind person).
+  gnubok_register_share_event: { args: { to_name: 'Bo Ek', share_count: 100 }, rows: { companies: { entity_type: 'aktiebolag' } } },
+  gnubok_create_share_class: { args: { code: 'B' }, rows: { companies: { entity_type: 'aktiebolag' }, share_classes: { code: 'A', votes_per_share: 1 } } },
+  gnubok_update_share_class: { rows: { companies: { entity_type: 'aktiebolag' } } },
+  gnubok_add_company_role: { args: { name: 'Bo Ek', valid_from: '2026-01-15' }, rows: { companies: { entity_type: 'aktiebolag' } } },
+  gnubok_end_company_role: { args: { valid_to: '2026-06-30' }, rows: { companies: { entity_type: 'aktiebolag' }, company_roles: { valid_from: '2026-01-15', valid_to: null } } },
+  gnubok_set_signatory_rule: { args: { valid_from: '2026-01-15' }, rows: { companies: { entity_type: 'aktiebolag' }, company_signatory_rules: { valid_from: '2025-01-01', valid_to: null } } },
+  gnubok_confirm_beneficial_owners: {
+    args: { assessed_on: '2026-01-15' },
+    rows: { companies: { entity_type: 'aktiebolag' }, parties: { kind: 'person', display_name: 'Bo Ek', org_number: null } },
   },
   // One paid, unbooked SEK order at 25 % on the day and an open, unlocked
   // 2026: the preview derives and sums the lines and never reaches the engine.

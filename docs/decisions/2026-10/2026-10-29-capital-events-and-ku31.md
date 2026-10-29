@@ -1,0 +1,1 @@
+[2026-10-29] Capital events (Bolaget, W3): dividends split per holder from the aktiebok, booked through the engine after the ABL 17:3 check shared with the annual report; KU31 XML per Skatteverket schema 12.0, field 574 öre dropped; recipients decided by the decision day unless set.

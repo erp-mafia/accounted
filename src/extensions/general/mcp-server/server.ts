@@ -85,6 +85,7 @@ import {
 } from './public-tools'
 import { isEagerAuthRequested } from './auth-mode'
 import { createLogger } from '@/lib/logger'
+import { briefBolaget } from '@/lib/bolaget/briefing'
 import {
   planSaleBeforeSettlement,
   planSaleBeforeSettlementById,
@@ -7558,6 +7559,10 @@ export const tools: McpTool[] = [
       // The unexplained queue's count and top rows (briefUnexplained): started
       // with the other best-effort reads, bounded by its own time budget.
       const unexplainedRead = briefUnexplained(supabase, companyId)
+      // Bolaget: owners with their share, the board, the VD and the
+      // firmateckning (lib/bolaget/briefing.ts). Fail-open and only for a
+      // company in BOLAGET_COMPANY_IDS; absent otherwise.
+      const bolagetRead = briefBolaget({ supabase, companyId, userId, log })
 
       // The document inbox address (crm#1174): an agent asked to route a
       // card provider's receipts into Accounted looked here and in the inbox
@@ -7774,6 +7779,7 @@ export const tools: McpTool[] = [
       const capabilities = await safeCapabilities
       const openSuggestions = await openSuggestionsRead
       const unexplainedBlock = await unexplainedRead
+      const bolagetBlock = await bolagetRead
       const grantReview = await grantReviewRead
       const capabilityDigestRows = capabilities ? capabilityDigest(capabilities) : null
       // The company's profile beside the digest: which starting point decides
@@ -7841,6 +7847,8 @@ export const tools: McpTool[] = [
         ...(dimensionsBlock ? { dimensions: dimensionsBlock } : {}),
         ...(ledgerDigest ? { ledger_context: ledgerDigest } : {}),
         ...(arkivDigest ? { arkiv: arkivDigest } : {}),
+        // Declared in no outputSchema (catalog ceiling), like the arkiv digest.
+        ...(bolagetBlock ? { bolaget: bolagetBlock } : {}),
         ...(skvConnection ? { skatteverket_connection: skvConnection } : {}),
         ...(capabilityDigestRows ? { capabilities: capabilityDigestRows } : {}),
         ...(capabilitiesProfile ? { capabilities_profile: capabilitiesProfile } : {}),

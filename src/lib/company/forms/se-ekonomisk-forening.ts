@@ -37,6 +37,7 @@ export const SE_EKONOMISK_FORENING: LegalFormProfile = {
     settlement: { withdrawal: '2890', contribution: '2890' },
     memberCapital: true,
     maintenanceFund: null,
+    shareRegister: false,
   },
   filings: {
     incomeReturn: 'INK2',

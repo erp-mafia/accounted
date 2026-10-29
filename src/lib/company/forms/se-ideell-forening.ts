@@ -34,6 +34,7 @@ export const SE_IDEELL_FORENING: LegalFormProfile = {
     settlement: { withdrawal: '2890', contribution: '2890' },
     memberCapital: false,
     maintenanceFund: null,
+    shareRegister: false,
   },
   filings: {
     incomeReturn: 'INK3',

@@ -81,6 +81,11 @@ export interface LegalFormProfile {
      * bostadsrättsförening, null for a form without one.
      */
     maintenanceFund: string | null
+    /**
+     * The company keeps an aktiebok (ABL 5 kap.), with shareholders whose
+     * votes decide the verkliga huvudmän: aktiebolag only.
+     */
+    shareRegister: boolean
   }
   filings: {
     /** The income return the product prepares for the form; null when none is modelled. */

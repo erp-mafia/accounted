@@ -79,6 +79,20 @@ const RETAINED = new Set([
   'bank_connect_invites.created_by', // Who sent the firmatecknare a signatory link; the company keeps the record.
   'payment_signing_links.created_by', // Who asked the firmatecknare to sign a basket of payments; the company keeps the record.
   'signing_requests.created_by', // Who sent a document for BankID signing; the company keeps the record with the signatures.
+  'share_register_events.created_by', // Who entered an aktiebok entry; the aktiebok is kept 10 years after dissolution (ABL 5:3).
+  'company_roles.created_by', // Who registered a role; the company keeps the roles over time.
+  'company_signatory_rules.created_by', // Who registered the firmateckning; the company keeps it over time.
+  'beneficial_owner_assessments.assessed_by', // Who made the LRVH 2:1 assessment; kept five years after a change.
+  'dividends.created_by', // Who recorded a dividend decision; part of the books (the verifikat it posted), the company keeps it.
+  'shareholder_contributions.created_by', // Who registered an aktieägartillskott; part of the books, the company keeps it.
+  'capital_changes.created_by', // Who recorded a change of aktiekapital; the company keeps it with its registration.
+  'ku31_filings.famansforetag_confirmed_by', // Who confirmed the fåmansföretag answer a KU31 filing rests on; the company keeps the record.
+  'ku31_filings.last_generated_by', // Who last made the KU31 file; the company keeps the record of its filing.
+  'k10_owner_inputs.updated_by', // Who last entered an owner's K10 figures; the company keeps the record behind the underlag.
+  'owner_loans.created_by', // Who registered an owner loan; the company keeps the register (the ABL 21:10 list ten years).
+  'owner_loan_interest.updated_by', // Who entered a year's interest on an owner loan; the company keeps the record KU20 rests on.
+  'corporate_meetings.created_by', // Who recorded a meeting; the minutes are kept (ABL 7:49, 8:26 "betryggande sätt").
+  'corporate_decisions.created_by', // Who recorded a decision in the minutes; kept with them.
   'signing_request_signers.user_id', // The member asked to sign; a signature is evidence the company keeps.
   'company_attest_policies.updated_by', // Who last changed the attest policy; the company keeps the record.
   'company_attest_limits.user_id', // The attester a limit is for; company configuration, a departed member stops counting.

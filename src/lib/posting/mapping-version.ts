@@ -132,6 +132,10 @@ export const MAPPING_SOURCES = {
   // Finansiella leasingavtal on balansdagen (lib/bokslut/leasing): the
   // year's payments as interest and amortisation, and the depreciation.
   financeLease: 'se.finance-lease',
+  // Capital events in Bolaget (lib/bolaget/capital/postings.ts): the
+  // dividend decision and payout (2098/2091, 2898), aktieägartillskott
+  // (2093), and the emissions and minskning (2081, 2082, 2097).
+  capitalEvents: 'se.capital-events',
   // The lagerförändring on balansdagen from a signed inventeringslista
   // (lib/bokslut/stock-count): counted value against the 14xx balance per
   // kind of stock, booked against its 49xx förändring account.

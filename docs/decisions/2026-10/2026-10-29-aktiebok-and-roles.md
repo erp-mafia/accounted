@@ -1,0 +1,1 @@
+[2026-10-29] The aktiebok is an append-only, numbered event log replayed in the database at commit (no share held twice, transfers only of held shares): a mistake is voided by a rattelse entry. Personnummer live only in party_person_private (service role, no audit); roles seed from tic_snapshot.

@@ -117,6 +117,36 @@ const GROUPS: Array<{ file: string; title: string; members: string[]; blurb: str
       'Signing requests send an archived PDF for BankID signing; each signer signs in person, and the signed copy and evidence package land in the archive.',
   },
   {
+    file: 'company-registers.md',
+    title: 'Company registers (Bolaget)',
+    members: ['share-register', 'share-classes', 'company-roles', 'signatory-rules', 'beneficial-owners', 'corporate-meetings'],
+    blurb:
+      'The aktiebok (share register, ABL 5 kap.) as of any date with its dated history, the share classes and their förbehåll, ' +
+      'the board, VD, firmatecknare and revisor over time with the firmateckning, and the verkliga huvudmän derived from the aktiebok. ' +
+      'Entries are permanent (a mistake is voided by a rattelse entry); a personnummer is never sent here, it is completed in Accounted. ' +
+      'Meetings (corporate-meetings) hold the stämmor and board meetings with their decisions and minutes; an adopted election changes the roles when a person signs the minutes in Accounted. ' +
+      'Every endpoint answers 404 BOLAGET_DISABLED outside the rollout.',
+  },
+  {
+    file: 'capital-events.md',
+    title: 'Capital events (Bolaget)',
+    members: ['capital-events', 'ku31', 'dividends', 'shareholder-contributions', 'capital-changes'],
+    blurb:
+      'Dividends from the stämma decision to the payout, split per holder from the aktiebok and checked against fritt eget kapital (ABL 17:3), ' +
+      'the KU31 status per income year, aktieägartillskott (K2 15.5-15.6) and nyemission, fondemission and minskning av aktiekapitalet with their Bolagsverket deadlines. ' +
+      'Every booking posts through the bookkeeping engine and is high risk. The KU31 file itself carries personnummer and is downloaded in Accounted only. ' +
+      'Every endpoint answers 404 BOLAGET_DISABLED outside the rollout.',
+  },
+  {
+    file: 'owner-tax.md',
+    title: 'Owner tax (Bolaget)',
+    members: ['k10', 'owner-loans', 'ku20'],
+    blurb:
+      'The K10 underlag per owner and income year under the 3:12 rules from 2026 (grundbelopp, lönebaserat utrymme, interest on the omkostnadsbelopp, dividend and sparat utdelningsutrymme, each line with its source), ' +
+      'the owner loan register with the loan prohibition check (ABL 21 kap.), the 21:10 special list and the ledger reconciliation, and the KU20 status for interest paid to owners. ' +
+      'Nothing books. The KU20 file carries personnummer and is downloaded in Accounted only. Every endpoint answers 404 BOLAGET_DISABLED outside the rollout.',
+  },
+  {
     file: 'banking.md',
     title: 'Banking',
     members: ['transactions', 'cash-accounts', 'bank-connections', 'bank-feed', 'reconciliation', 'imports', 'pos-sales', 'webshop-orders'],

@@ -15,6 +15,7 @@ import { disclosureIssues } from './disclosures'
 import { k3ArsredovisningEnabled } from './k3-release'
 import { normalizeOrgNumber } from '@/lib/company-lookup/normalize-org-number'
 import { isEntityType, requiresAuditorRegardlessOfSize } from '@/lib/company/entity-type'
+import { dividendExceedsFreeEquity } from './dividend-equity'
 
 const ISO_DATE = /^\d{4}-\d{2}-\d{2}$/
 
@@ -333,9 +334,7 @@ export function validateAnnualReportCompleteness(
     push(issues, 'AR-MANAGEMENT-DISPOSITION', 'error', 'management_report', 'Styrelsens förslag till resultatdisposition saknas.')
   }
   const disposition = report.forvaltningsberattelse.resultatdisposition_amounts
-  const proposedDividendCents = Math.round(disposition.proposed_dividend * 100)
-  const distributableEquityCents = Math.round(disposition.total * 100)
-  if (proposedDividendCents > 0 && proposedDividendCents > distributableEquityCents) {
+  if (dividendExceedsFreeEquity(disposition.proposed_dividend, disposition.total)) {
     push(
       issues,
       'AR-DIVIDEND-EXCEEDS-EQUITY',

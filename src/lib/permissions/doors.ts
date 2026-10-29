@@ -665,6 +665,29 @@ export const SESSION_DOOR_RULES: Readonly<Record<string, DoorSpec | StagingSpec 
     'POST /api/webshop-orders/:id/create-invoice': INVOICING,
     'PUT /api/webshop-orders/settings': BOOK_RECORD,
 
+    // ── Bolaget: the company's statutory registers (requireWrite routes) ──
+    '/api/bolaget/share-register': BOOK_RECORD,
+    '/api/bolaget/share-classes': BOOK_RECORD,
+    '/api/bolaget/roles': BOOK_RECORD,
+    // Meetings and minutes: an adopted election changes the roles when the
+    // minutes are signed; nothing posts to the ledger.
+    '/api/bolaget/meetings': BOOK_RECORD,
+    '/api/bolaget/signatory-rules': BOOK_RECORD,
+    '/api/bolaget/beneficial-owners': BOOK_RECORD,
+    '/api/bolaget/people': BOOK_RECORD,
+    '/api/bolaget/settings': BOOK_RECORD,
+    // Capital events: recording a decision, cancelling it, the KU31 answer
+    // and linking a payout already booked write the register; booking a
+    // decision, paying a dividend and a shareholder contribution post
+    // through the engine.
+    '/api/bolaget/capital': BOOK_RECORD,
+    'POST /api/bolaget/capital/dividends/:id/book': BOOK,
+    'POST /api/bolaget/capital/dividends/:id/pay': BOOK,
+    'POST /api/bolaget/capital/contributions': BOOK,
+    'POST /api/bolaget/capital/changes/:id/book': BOOK,
+    // Owner tax: the K10 inputs and the owner loan register; nothing posts.
+    '/api/bolaget/owner-tax': BOOK_RECORD,
+
     // ── Invoicing ──────────────────────────────────────────────────────
     '/api/invoices': INVOICING,
     'POST /api/invoices/preview-pdf': INVOICING_READ,

@@ -40,6 +40,7 @@ export function gateContext(overrides: Partial<NavGateContext> = {}): NavGateCon
     agentsEnabled: true,
     inkorgV2Enabled: false,
     autogiroEnabled: true,
+    bolagetEnabled: true,
     capabilities: [CAPABILITY.ai],
     hiddenNavHrefs: new Set(),
     ...overrides,

@@ -28,6 +28,14 @@ import { getPool } from './setup'
  * record of an exchange with a party outside Accounted, or a link between two
  * companies that only an operator should unwind.
  */
+const BOLAGET_REGISTERS =
+  'the aktiebok and the roles (ABL 5:3, never deleted) keep the party or class they name; both go in the same companies cascade, where the NO ACTION check runs after the cascade removed the referrer'
+const CAPITAL_REGISTERS =
+  'a dividend\'s split per holder and a shareholder contribution (never deleted; the KU31 and the books rest on them) keep the party they name; both go in the same companies cascade, where the NO ACTION check runs after the cascade removed the referrer'
+
+const OWNER_LOANS =
+  'the owner loan register (never deleted; the ABL 21:10 special list is kept ten years) keeps the party it names; it goes in the same companies cascade, where the NO ACTION check runs after the cascade removed the referrer'
+
 const REFUSED_ON_PURPOSE: Record<string, string> = {
   'arsredovisning_submissions.annual_report_version_id':
     'a filing sent to Bolagsverket; its WORM trail outranks a demo teardown',
@@ -59,6 +67,16 @@ const REFUSED_ON_PURPOSE: Record<string, string> = {
   'peppol_delivery_evidence.company_id': 'append-only Peppol delivery trail, see peppol_deliveries',
   'peppol_inbound_documents.company_id':
     'an e-invoice received from the Peppol network; the registration it needs is refused for sandbox companies',
+  'company_roles.party_id': BOLAGET_REGISTERS,
+  'dividend_distributions.party_id': CAPITAL_REGISTERS,
+  'shareholder_contributions.party_id': CAPITAL_REGISTERS,
+  'owner_loans.party_id': OWNER_LOANS,
+  'owner_loans.related_to_party_id': OWNER_LOANS,
+  'share_register_events.counterparty_party_id': BOLAGET_REGISTERS,
+  'share_register_events.from_party_id': BOLAGET_REGISTERS,
+  'share_register_events.share_class_id': BOLAGET_REGISTERS,
+  'share_register_events.to_party_id': BOLAGET_REGISTERS,
+  'share_register_events.to_share_class_id': BOLAGET_REGISTERS,
   'skatteverket_api_audit_log.company_id':
     'WORM log of calls made to Skatteverket on the company\'s behalf',
 }

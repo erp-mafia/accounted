@@ -97,6 +97,8 @@ interface DashboardNavProps {
   // Whether the company is in the Autogiro rollout (AUTOGIRO_COMPANY_IDS): the
   // Autogiro row under Fakturering. Computed by the layout.
   autogiroEnabled?: boolean
+  /** The Bolaget registers are rolled out to this company (lib/env/bolaget-switch.ts). */
+  bolagetEnabled?: boolean
   isSandbox?: boolean
   extensionNavItems?: ExtensionNavItem[]
   // Signed-in user's full name + email: drives the bottom-left account
@@ -126,7 +128,7 @@ const groupLabelKey: Record<Exclude<GroupKey, 'top'>, string> = {
   skatt: 'group_tax',
 }
 
-export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
+export default function DashboardNav({ companyName: _companyName, entityType, capabilitySurface, dimensionsEnabled = false, salesOrdersEnabled = false, quotesEnabled = true, hasWebshop = false, hasMileage = false, hasExpenseClaims = false, hasPosSales = false, arkivEnabled = false, signingEnabled = false, agentsEnabled = false, inkorgV2Enabled = false, autogiroEnabled = false, bolagetEnabled = false, isSandbox = false, extensionNavItems = [], userName = null, userEmail = null }: DashboardNavProps) {
   const pathname = usePathname()
   const navRowClaim = useNavRowClaim(pathname)
   const { company, capabilities, byraTeam, role } = useCompany()
@@ -329,6 +331,7 @@ export default function DashboardNav({ companyName: _companyName, entityType, ca
     agentsEnabled,
     inkorgV2Enabled,
     autogiroEnabled,
+    bolagetEnabled,
     capabilities,
     hiddenNavHrefs,
     role,

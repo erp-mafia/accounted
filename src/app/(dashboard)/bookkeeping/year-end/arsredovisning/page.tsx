@@ -103,6 +103,7 @@ export default function ArsredovisningPage() {
   const tSteps = useTranslations('annualReportSteps')
   const tHelp = useTranslations('annualReportHelp')
   const tSign = useTranslations('annualReportSigning')
+  const tBoard = useTranslations('bolaget_roles')
   const { appName } = useBranding()
   const { periods: fiscalPeriods, isLoading: periodsLoading } = useFiscalPeriods()
 
@@ -180,6 +181,10 @@ export default function ArsredovisningPage() {
 
   // Add-signer form
   const [signerName, setSignerName] = useState('')
+  // Board members and VD from Styrelse och firmateckning not yet on the
+  // roster; empty outside the Bolaget rollout (the route answers 404).
+  const [boardCandidates, setBoardCandidates] = useState(0)
+  const [addingBoard, setAddingBoard] = useState(false)
   const [signerRole, setSignerRole] = useState('Styrelseledamot')
   const [versions, setVersions] = useState<AnnualReportVersionSummary[]>([])
   const [selectedSignatureVersionId, setSelectedSignatureVersionId] = useState('')
@@ -731,6 +736,40 @@ export default function ArsredovisningPage() {
       })
     }
   }, [periodId, refreshCompliance, signerName, signerRole, toast])
+
+  // Ask the roles which board members and VD are missing from the roster.
+  useEffect(() => {
+    if (!periodId) return
+    let cancelled = false
+    fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures/from-roles`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((body: { data?: { candidates?: unknown[] } } | null) => {
+        if (!cancelled) setBoardCandidates(Array.isArray(body?.data?.candidates) ? body!.data!.candidates!.length : 0)
+      })
+      .catch(() => undefined) // a convenience: without it the roster is typed by hand
+    return () => {
+      cancelled = true
+    }
+  }, [periodId, signatures.length])
+
+  const handleAddFromBoard = useCallback(async () => {
+    if (!periodId) return
+    setAddingBoard(true)
+    try {
+      const res = await fetch(`/api/bookkeeping/fiscal-periods/${periodId}/arsredovisning/signatures/from-roles`, { method: 'POST' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast({ title: tBoard('roster_failed'), description: getUserErrorMessage(body?.error) ?? '', variant: 'destructive' })
+        return
+      }
+      const added = (body?.data?.added ?? []) as SignatureRequest[]
+      setSignatures((prev) => [...prev, ...added])
+      refreshCompliance()
+      toast({ title: tBoard('roster_added', { count: added.length }) })
+    } finally {
+      setAddingBoard(false)
+    }
+  }, [periodId, refreshCompliance, tBoard, toast])
 
   const handleRemoveSigner = useCallback(
     async (signatureId: string) => {
@@ -1580,6 +1619,11 @@ export default function ArsredovisningPage() {
               >
                 <PlusIcon className="mr-1 h-4 w-4" /> Lägg till
               </Button>
+              {boardCandidates > 0 && (
+                <Button variant="outline" className="w-full sm:w-auto" onClick={handleAddFromBoard} loading={addingBoard}>
+                  {tBoard('roster_from_board', { count: boardCandidates })}
+                </Button>
+              )}
             </div>
           </div>
         }

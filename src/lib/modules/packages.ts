@@ -56,7 +56,7 @@ const DEFINITIONS: readonly PackageDefinition[] = [
     name: 'Bookkeeping',
     nameSv: 'Bokföring',
     switchable: false,
-    modules: ['ledger', 'transactions', 'vat', 'year-end', 'skatteverket', 'deadlines', 'import', 'parties'],
+    modules: ['ledger', 'transactions', 'vat', 'year-end', 'skatteverket', 'deadlines', 'import', 'parties', 'corporate', 'capital'],
   },
   { id: 'bank', name: 'Bank', nameSv: 'Bank', switchable: true, modules: ['bank-feed'] },
   {

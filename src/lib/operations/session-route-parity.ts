@@ -282,6 +282,60 @@ export const SESSION_ROUTE_PARITY: Record<string, ParityEntry> = {
   'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures': covered([`POST ${V}/fiscal-periods/:id/arsredovisning/signatures`, 'gnubok_add_arsredovisning_signature']),
   'PATCH /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures/:signatureId': covered([`PATCH ${V}/fiscal-periods/:id/arsredovisning/signatures/:signatureId`], 'v1 only: an agent never attests that a person signed'),
   'DELETE /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures/:signatureId': covered([`DELETE ${V}/fiscal-periods/:id/arsredovisning/signatures/:signatureId`]),
+  'POST /api/bookkeeping/fiscal-periods/:id/arsredovisning/signatures/from-roles': covered(
+    [`POST ${V}/fiscal-periods/:id/arsredovisning/signatures`, 'gnubok_add_arsredovisning_signature'],
+    'the board and VD from Styrelse och firmateckning, added one by one through the same roster rules',
+  ),
+  // Bolaget registers (lib/operations/bolaget.ts).
+  'POST /api/bolaget/share-register/events': covered([`POST ${V}/share-register/events`, 'gnubok_register_share_event']),
+  'POST /api/bolaget/share-classes': covered([`POST ${V}/share-classes`, 'gnubok_create_share_class']),
+  'PATCH /api/bolaget/share-classes/:id': covered([`PATCH ${V}/share-classes/:id`, 'gnubok_update_share_class']),
+  'POST /api/bolaget/roles': covered([`POST ${V}/company-roles`, 'gnubok_add_company_role']),
+  'POST /api/bolaget/roles/:id/end': covered([`POST ${V}/company-roles/:id/end`, 'gnubok_end_company_role']),
+  'POST /api/bolaget/signatory-rules': covered([`POST ${V}/signatory-rules`, 'gnubok_set_signatory_rule']),
+  'POST /api/bolaget/beneficial-owners/assessments': covered([`POST ${V}/beneficial-owners/assessments`, 'gnubok_confirm_beneficial_owners']),
+  'PATCH /api/bolaget/people/:partyId': uiOnly(
+    'a holder\'s personnummer and postal address for the aktiebok (ABL 5:5): collected in the app only, never through an API key or an agent',
+  ),
+  'PATCH /api/bolaget/settings': uiOnly(
+    'the avstämningsbolag status, stated once in the app: the central securities depository then keeps the aktiebok and this register takes no entries',
+  ),
+  // Bolaget capital events (lib/operations/bolaget-capital.ts).
+  'POST /api/bolaget/capital/dividends': covered([`POST ${V}/dividends`, 'gnubok_create_dividend']),
+  'POST /api/bolaget/capital/dividends/:id/book': covered([`POST ${V}/dividends/:id/book`, 'gnubok_book_dividend']),
+  'POST /api/bolaget/capital/dividends/:id/pay': covered([`POST ${V}/dividends/:id/pay`, 'gnubok_pay_dividend']),
+  'POST /api/bolaget/capital/dividends/:id/cancel': uiOnly(
+    'withdraws a dividend the person recorded by mistake before anything is booked; an agent stages a new decision instead',
+  ),
+  'POST /api/bolaget/capital/dividends/ledger': uiOnly(
+    'the one-time "who received" step for a dividend booked before the aktiebok existed: the recipients are people whose personnummer is collected in the app only',
+  ),
+  'PUT /api/bolaget/capital/ku31/:year': uiOnly(
+    'the fåmansföretag answer (KU31 field 061 or 062) a person confirms for the year, and the KU31 contact person',
+  ),
+  'POST /api/bolaget/capital/contributions': covered([`POST ${V}/shareholder-contributions`, 'gnubok_create_shareholder_contribution']),
+  'POST /api/bolaget/capital/changes': covered([`POST ${V}/capital-changes`, 'gnubok_create_capital_change']),
+  'POST /api/bolaget/capital/changes/:id/book': covered([`POST ${V}/capital-changes/:id/book`, 'gnubok_book_capital_change']),
+  // Bolaget owner tax: K10 underlag, owner loans, KU20 (lib/operations/bolaget-owner-tax.ts).
+  'PUT /api/bolaget/owner-tax/k10/:year/owners/:partyId': covered([`PUT ${V}/k10/:year/owners/:partyId`, 'gnubok_set_k10_owner_inputs']),
+  'POST /api/bolaget/owner-tax/loans': covered([`POST ${V}/owner-loans`, 'gnubok_create_owner_loan']),
+  'PATCH /api/bolaget/owner-tax/loans/:id': covered([`PATCH ${V}/owner-loans/:id`, 'gnubok_update_owner_loan']),
+  'POST /api/bolaget/owner-tax/loans/:id/interest': covered([`POST ${V}/owner-loans/:id/interest`, 'gnubok_set_owner_loan_interest']),
+  // Bolaget meetings and minutes (lib/operations/corporate-meetings.ts).
+  'POST /api/bolaget/meetings': covered([`POST ${V}/corporate-meetings`, 'gnubok_create_corporate_meeting']),
+  'PATCH /api/bolaget/meetings/:id': covered([`PATCH ${V}/corporate-meetings/:id`, 'gnubok_update_corporate_meeting']),
+  'DELETE /api/bolaget/meetings/:id': uiOnly('deleting a draft meeting is a person\'s call in the app; held and signed minutes are never deleted'),
+  'POST /api/bolaget/meetings/:id/decisions': covered([`POST ${V}/corporate-meetings/:id/decisions`, 'gnubok_record_corporate_decision']),
+  'DELETE /api/bolaget/meetings/:id/decisions/:decisionId': uiOnly(
+    'removing a paragraph from unsigned minutes in the app; an agent changes it or records it as bordlagd through POST /corporate-meetings/{id}/decisions',
+  ),
+  'POST /api/bolaget/meetings/:id/hold': covered([`POST ${V}/corporate-meetings/:id/hold`, 'gnubok_hold_corporate_meeting']),
+  'POST /api/bolaget/meetings/:id/sign': uiOnly(
+    'a person attests that the minutes were signed on paper and uploads the signed copy; an agent never attests a signature',
+  ),
+  'POST /api/bolaget/meetings/:id/bankid': uiOnly(
+    'sending the minutes for BankID signing: each signer signs in person (the machine door for any archived PDF is POST /signing-requests)',
+  ),
   'POST /api/bookkeeping/proposal-preview': uiOnly('preview of an unsaved booking proposal (read-only, POST for its body); agents get the same lines from the categorize dry run'),
 
   // ── Dimensions ─────────────────────────────────────────────────────
