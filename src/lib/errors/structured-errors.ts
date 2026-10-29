@@ -7720,6 +7720,28 @@ const SERVICE_ACCOUNT: Record<string, StructuredErrorEntry> = {
 }
 
 // ─────────────────────────────────────────────────────────────────
+// Agent identities (migration 20261029100000)
+// ─────────────────────────────────────────────────────────────────
+
+const AGENT_IDENTITY: Record<string, StructuredErrorEntry> = {
+  // Answered at authentication for every key of a paused agent, on every
+  // door (MCP, REST v1, /api/events). The key itself is live: only the
+  // sponsor can lift it, so the message is written for the agent to relay.
+  AGENT_PAUSED: {
+    httpStatus: 403,
+    message_sv:
+      'Den här agenten är pausad i Accounted. Den som ansvarar för den kan återuppta den under Inställningar.',
+    message_en:
+      'This agent is paused in Accounted. The person responsible for it can resume it under Settings.',
+    retryable: false,
+    remediation: {
+      description:
+        'Stop and tell the user the agent is paused; do not retry or reconnect. The person responsible for the agent resumes it under Settings in Accounted.',
+    },
+  },
+}
+
+// ─────────────────────────────────────────────────────────────────
 // Package switches (enable_package, disable_package; lib/suggestions)
 // ─────────────────────────────────────────────────────────────────
 
@@ -11504,6 +11526,7 @@ const REGISTRY: Record<string, StructuredErrorEntry> = {
   ...COMPANY,
   ...API_KEY,
   ...SERVICE_ACCOUNT,
+  ...AGENT_IDENTITY,
   ...PACKAGE,
   ...GRANT,
   ...PROVIDER,

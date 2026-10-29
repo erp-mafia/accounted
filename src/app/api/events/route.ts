@@ -96,8 +96,8 @@ export async function GET(request: Request) {
     const authResult = await validateApiKey(token)
     if ('error' in authResult) {
       // validateApiKey returns 401 (bad/unknown/refresh token), 429 (rate
-      // limit) or a coded refusal (a suspended service account): map them
-      // onto the canonical envelope, same as v1.
+      // limit) or a coded refusal (a paused agent, a suspended service
+      // account): map them onto the canonical envelope, same as v1.
       return errorResponseFromCode(
         authResult.code ?? (authResult.status === 429 ? 'RATE_LIMITED' : 'UNAUTHORIZED'),
         log,

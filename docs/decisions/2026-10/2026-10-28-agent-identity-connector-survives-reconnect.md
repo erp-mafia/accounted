@@ -1,0 +1,1 @@
+[2026-10-28] A connector agent identity (one per sponsor and OAuth client) stays live when its keys are revoked, so a reconnect lands on the same identity and a pause outlives it; only the one-time backfill revokes a connector whose keys were all revoked, as specified for history mapping.

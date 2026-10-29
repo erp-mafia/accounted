@@ -863,8 +863,9 @@ export function withApiV1<P extends DynamicParams = { params: Promise<Record<str
       if ('error' in auth) {
         log.warn('api key validation failed', { status: auth.status, reason: auth.error, ...forensic })
         const rateLimited = auth.status === 429
-        // A coded refusal (a suspended service account) answers its own
-        // structured error; everything else is the bare 401 or 429.
+        // A coded refusal (a paused agent, a suspended service account)
+        // answers its own structured error; everything else is the bare 401
+        // or 429.
         const code = auth.code ?? (rateLimited ? 'RATE_LIMITED' : 'UNAUTHORIZED')
         return await v1ErrorResponseFromCode(code, log, {
           requestId,

@@ -369,4 +369,24 @@ describe('MCP lazy authentication', () => {
     expect(body.error).toMatchObject({ code: 'SERVICE_ACCOUNT_SUSPENDED', message: expect.any(String), message_en: expect.any(String) })
     expect(body.error.message_en).toContain('suspended')
   })
+
+  it("answers a paused agent's key with the structured 403 AGENT_PAUSED, not the 401 challenge", async () => {
+    mocks.validateApiKey.mockResolvedValueOnce({
+      error: 'Agent paused: the person responsible for it can resume it under Settings in Accounted',
+      status: 403,
+      code: 'AGENT_PAUSED',
+    })
+    const response = await handleMcpRequest(
+      rpc('tools/call', { name: 'gnubok_list_companies', arguments: {} }, { token: 'gnubok_sk_paused' })
+    )
+    expect(response.status).toBe(403)
+    // No sign-in challenge: a reconnect lands on the same paused agent.
+    expect(response.headers.get('WWW-Authenticate')).toBeNull()
+    const body = await response.json()
+    expect(body.error).toMatchObject({
+      code: 'AGENT_PAUSED',
+      message: 'Den här agenten är pausad i Accounted. Den som ansvarar för den kan återuppta den under Inställningar.',
+      message_en: expect.stringContaining('paused'),
+    })
+  })
 })

@@ -28710,10 +28710,11 @@ export async function handleMcpRequest(request: Request): Promise<Response> {
           },
         })
       }
-      // A coded refusal (a suspended service account) answers its own
-      // structured error, the same 403 envelope v1 and /api/events give: the
-      // key itself is live, so a 401 challenge would only send the client
-      // into a sign-in that cannot fix it. Everything else is the challenge.
+      // A coded refusal (a paused agent, a suspended service account)
+      // answers its own structured error, the same 403 envelope v1 and
+      // /api/events give: the key itself is live, so a 401 challenge would
+      // only send the client into a sign-in that cannot fix it (a reconnect
+      // lands on the same paused agent). Everything else is the challenge.
       if (authResult.code) {
         return errorResponseFromCode(authResult.code, log, { reason: authResult.error })
       }
